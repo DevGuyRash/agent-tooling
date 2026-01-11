@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+set -eu
+
+script_path="$0"
+
+# If invoked via PATH (`mpcr`), resolve to an absolute path so we can find `mpcr-src/`.
+case "$script_path" in
+  */*) : ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    case "$resolved" in
+      */*) script_path="$resolved" ;;
+    esac
+    ;;
+esac
+
+# If the script is symlinked (common for shims in `$PATH`), resolve links so relative
+# paths (like `mpcr-src/`) are found next to the real script file.
+if command -v readlink >/dev/null 2>&1; then
+  while [ -L "$script_path" ]; do
+    link="$(readlink "$script_path" 2>/dev/null || true)"
+    [ -n "$link" ] || break
+    case "$link" in
+      /*) script_path="$link" ;;
+      *) script_path="$(dirname -- "$script_path")/$link" ;;
+    esac
+  done
+fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
+src_dir="${script_dir}/mpcr-src"
+bin="${src_dir}/target/release/mpcr"
+
+if [ ! -f "${src_dir}/Cargo.lock" ]; then
+  echo "error: missing ${src_dir}/Cargo.lock (skill is expected to be shipped with a lockfile)" >&2
+  exit 2
+fi
+
+if [ ! -x "${bin}" ]; then
+  cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release
+fi
+
+exec "${bin}" "$@"

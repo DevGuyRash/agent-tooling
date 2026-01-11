@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+
+# Local outputs / packaging
+dist/
+out/
+tmp/
+*.tmp
+*.skill
+
+# Local coordination artifacts (if you run skills in this repo)
+.local/
+
