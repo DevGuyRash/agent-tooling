@@ -20,7 +20,7 @@ jobs:
       matrix: ${{ steps.detect.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # -----------------------------
       # Optional: cargo metadata (opt-in)
@@ -268,7 +268,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # -----------------------------------------------------------------------
       # Config step: ALL toggles are opt-in via optional env vars, with defaults.
