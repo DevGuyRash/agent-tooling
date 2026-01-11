@@ -2,10 +2,12 @@
 
 use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
-    finalize_review, register_reviewer, FinalizeReviewParams, RegisterReviewerParams,
-    set_initiator_status, InitiatorStatus, ReviewVerdict, SessionFile, SessionLocator,
-    SetInitiatorStatusParams, SeverityCounts,
+    collect_reports, finalize_review, register_reviewer, set_initiator_status, FinalizeReviewParams,
+    InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions,
+    ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionFile,
+    SessionLocator, SessionNote, SetInitiatorStatusParams, SeverityCounts,
 };
+use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use time::format_description::well_known::Rfc3339;
@@ -125,14 +127,15 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         now,
     })?;
 
-    set_initiator_status(SetInitiatorStatusParams {
+    let params = SetInitiatorStatusParams {
         session: session.clone(),
         reviewer_id: "deadbeef".to_string(),
         session_id: "sess0001".to_string(),
         initiator_status: InitiatorStatus::Applied,
         now,
         lock_owner: "lock0001".to_string(),
-    })?;
+    };
+    set_initiator_status(&params)?;
 
     finalize_review(FinalizeReviewParams {
         session: session.clone(),
@@ -185,15 +188,15 @@ fn applicator_lock_owner_must_be_id8() -> anyhow::Result<()> {
         now,
     })?;
 
-    let err = set_initiator_status(SetInitiatorStatusParams {
+    let params = SetInitiatorStatusParams {
         session: session.clone(),
         reviewer_id: "deadbeef".to_string(),
         session_id: "sess0001".to_string(),
         initiator_status: InitiatorStatus::Reviewed,
         now,
         lock_owner: "not/ok".to_string(),
-    })
-    .expect_err("invalid lock_owner should be rejected");
+    };
+    let err = set_initiator_status(&params).expect_err("invalid lock_owner should be rejected");
     assert!(
         err.to_string().contains("lock_owner"),
         "unexpected error: {err:?}"
@@ -236,5 +239,258 @@ fn register_reviewer_is_idempotent_for_same_reviewer_and_session() -> anyhow::Re
     let raw = fs::read_to_string(session.session_file())?;
     let session_json: SessionFile = serde_json::from_str(&raw)?;
     assert_eq!(session_json.reviews.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn reports_views_and_filters() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let session_locator = SessionLocator::new(dir.path().to_path_buf());
+    let started_at = "2026-01-11T00:00:00Z".to_string();
+    let updated_at = "2026-01-11T01:00:00Z".to_string();
+    let note = SessionNote {
+        role: NoteRole::Reviewer,
+        timestamp: "2026-01-11T01:30:00Z".to_string(),
+        note_type: NoteType::Question,
+        content: Value::String("need context".to_string()),
+    };
+
+    let in_progress = ReviewEntry {
+        reviewer_id: "deadbeef".to_string(),
+        session_id: "sess0001".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::InProgress,
+        parent_id: None,
+        started_at: started_at.clone(),
+        updated_at: updated_at.clone(),
+        finished_at: None,
+        current_phase: Some(ReviewPhase::Ingestion),
+        verdict: None,
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: vec![note],
+    };
+
+    let blocked = ReviewEntry {
+        reviewer_id: "cafebabe".to_string(),
+        session_id: "sess0002".to_string(),
+        target_ref: "refs/heads/dev".to_string(),
+        initiator_status: InitiatorStatus::Observing,
+        status: ReviewerStatus::Blocked,
+        parent_id: None,
+        started_at: started_at.clone(),
+        updated_at: updated_at.clone(),
+        finished_at: None,
+        current_phase: None,
+        verdict: None,
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+    };
+
+    let finished = ReviewEntry {
+        reviewer_id: "feedface".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Received,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: started_at.clone(),
+        updated_at: updated_at.clone(),
+        finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::Approve),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
+        notes: Vec::new(),
+    };
+
+    let session = SessionFile {
+        schema_version: "1.0.0".to_string(),
+        session_date: "2026-01-11".to_string(),
+        repo_root: dir.path().to_string_lossy().to_string(),
+        reviewers: vec![
+            "deadbeef".to_string(),
+            "cafebabe".to_string(),
+            "feedface".to_string(),
+        ],
+        reviews: vec![in_progress, blocked, finished],
+    };
+
+    let open = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters::default(),
+        ReportsOptions::default(),
+    );
+    assert_eq!(open.total_reviews, 3);
+    assert_eq!(open.matching_reviews, 2);
+
+    let closed = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Closed,
+        ReportsFilters::default(),
+        ReportsOptions::default(),
+    );
+    assert_eq!(closed.matching_reviews, 1);
+
+    let in_progress_view = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::InProgress,
+        ReportsFilters::default(),
+        ReportsOptions::default(),
+    );
+    assert_eq!(in_progress_view.matching_reviews, 1);
+
+    let filtered = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters {
+            target_ref: Some("refs/heads/main".to_string()),
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(filtered.matching_reviews, 1);
+
+    let status_filtered = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: vec![ReviewerStatus::Blocked],
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(status_filtered.matching_reviews, 1);
+
+    let initiator_filtered = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: vec![InitiatorStatus::Observing],
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(initiator_filtered.matching_reviews, 1);
+
+    let verdict_filtered = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Closed,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: Vec::new(),
+            verdicts: vec![ReviewVerdict::Approve],
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(verdict_filtered.matching_reviews, 1);
+
+    let phase_filtered = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: vec![ReviewPhase::Ingestion],
+            only_with_report: false,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(phase_filtered.matching_reviews, 1);
+
+    let only_notes = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Open,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: true,
+        },
+        ReportsOptions { include_notes: true },
+    );
+    assert_eq!(only_notes.matching_reviews, 1);
+    assert!(
+        only_notes.reviews[0].notes.as_ref().is_some(),
+        "expected notes to be included"
+    );
+
+    let only_reports = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Closed,
+        ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: Vec::new(),
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: true,
+            only_with_notes: false,
+        },
+        ReportsOptions::default(),
+    );
+    assert_eq!(only_reports.matching_reviews, 1);
+    assert!(
+        only_reports.reviews[0].report_path.is_some(),
+        "expected report_path to be populated"
+    );
+
     Ok(())
 }
