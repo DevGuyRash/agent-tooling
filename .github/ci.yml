@@ -1,0 +1,466 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Keep only truly harmless, universal defaults here.
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect-rust:
+    name: Detect Rust workspaces
+    runs-on: ubuntu-latest
+    outputs:
+      has_rust: ${{ steps.detect.outputs.has_rust }}
+      matrix: ${{ steps.detect.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # Optional: cargo metadata (opt-in)
+      # -----------------------------
+      - name: Install Rust toolchain (opt-in for cargo metadata)
+        if: env.CI_USE_CARGO_METADATA == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect Cargo workspaces/crates
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Optional override:
+          #   CI_USE_CARGO_METADATA=auto|true|false (default: auto)
+          #   - auto: try cargo metadata if cargo is available, otherwise fall back
+          #   - true: install Rust toolchain in this job, then try cargo metadata (fall back on failure)
+          #   - false: skip cargo metadata
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          repo = Path(".").resolve()
+          manifests = sorted(repo.rglob("Cargo.toml"))
+
+          if not manifests:
+              out = os.environ["GITHUB_OUTPUT"]
+              with open(out, "a", encoding="utf-8") as f:
+                  f.write("has_rust=false\n")
+                  f.write('matrix={"include":[]}\n')
+              raise SystemExit(0)
+
+          mode = os.environ.get("CI_USE_CARGO_METADATA", "auto").strip().lower()
+          if mode not in {"auto", "true", "false"}:
+              print(
+                  f"Unknown CI_USE_CARGO_METADATA='{mode}' (expected auto|true|false); treating as auto",
+                  file=sys.stderr,
+              )
+              mode = "auto"
+
+          cargo_available = shutil.which("cargo") is not None
+          use_cargo_metadata = mode in {"auto", "true"} and cargo_available
+          if mode == "true" and not cargo_available:
+              print(
+                  "CI_USE_CARGO_METADATA=true but cargo not found; falling back to manifest parsing",
+                  file=sys.stderr,
+              )
+
+          try:
+              import tomllib  # Python 3.11+
+          except ModuleNotFoundError:  # pragma: no cover - best-effort fallback
+              try:
+                  import tomli as tomllib  # type: ignore
+              except ModuleNotFoundError:
+                  tomllib = None  # type: ignore
+
+          ws_re = re.compile(r"^\s*\[workspace\]\s*$", re.MULTILINE)
+          workspace_manifests = []
+          for m in manifests:
+              txt = m.read_text(encoding="utf-8", errors="replace")
+              if ws_re.search(txt):
+                  workspace_manifests.append(m)
+
+          workspace_roots = sorted({m.parent for m in workspace_manifests})
+
+          def _dir_str(path):
+              try:
+                  rel = path.relative_to(repo)
+              except ValueError:
+                  return str(path)
+              rel_str = str(rel)
+              return "." if rel_str in {"", "."} else rel_str
+
+          def _normalize_patterns(raw):
+              if raw is None:
+                  return []
+              if isinstance(raw, str):
+                  raw = [raw]
+              out = []
+              if isinstance(raw, list):
+                  for item in raw:
+                      if isinstance(item, str) and item.strip():
+                          out.append(item.strip().replace("\\\\", "/"))
+              return out
+
+          def _is_under(path, root):
+              try:
+                  path.relative_to(root)
+                  return True
+              except ValueError:
+                  return False
+
+          def _matches_any(rel, patterns):
+              rel_path = Path(rel)
+              return any(rel_path.match(pat) for pat in patterns)
+
+          def _cargo_metadata(manifest_path):
+              if not use_cargo_metadata:
+                  return None
+              try:
+                  proc = subprocess.run(
+                      [
+                          "cargo",
+                          "metadata",
+                          "--format-version",
+                          "1",
+                          "--no-deps",
+                          "--manifest-path",
+                          str(manifest_path),
+                      ],
+                      text=True,
+                      capture_output=True,
+                  )
+              except Exception as exc:
+                  print(f"cargo metadata failed for {manifest_path}: {exc}", file=sys.stderr)
+                  return None
+              if proc.returncode != 0:
+                  err = proc.stderr.strip()
+                  msg = f"cargo metadata failed for {manifest_path}"
+                  if err:
+                      msg = f"{msg}: {err}"
+                  print(msg, file=sys.stderr)
+                  return None
+              try:
+                  data = json.loads(proc.stdout)
+              except json.JSONDecodeError:
+                  print(f"cargo metadata output was not valid JSON for {manifest_path}", file=sys.stderr)
+                  return None
+              if not isinstance(data, dict):
+                  return None
+              packages = data.get("packages")
+              workspace_members = data.get("workspace_members")
+              workspace_root = data.get("workspace_root")
+              if not isinstance(packages, list) or not isinstance(workspace_members, list):
+                  return None
+              if not isinstance(workspace_root, str):
+                  return None
+              member_ids = {m for m in workspace_members if isinstance(m, str)}
+              member_manifests = set()
+              for pkg in packages:
+                  if not isinstance(pkg, dict):
+                      continue
+                  if pkg.get("id") not in member_ids:
+                      continue
+                  manifest_path = pkg.get("manifest_path")
+                  if isinstance(manifest_path, str):
+                      member_manifests.add(Path(manifest_path).resolve())
+              return {"root": Path(workspace_root).resolve(), "members": member_manifests}
+
+          include = []
+          included_dirs = set()
+
+          if not workspace_roots:
+              # No workspaces: treat each manifest dir as its own root.
+              roots = sorted({m.parent for m in manifests})
+              for root in roots:
+                  dir_str = _dir_str(root)
+                  include.append({"dir": dir_str, "is_workspace": False})
+                  included_dirs.add(dir_str)
+          else:
+              # Prefer explicit workspace roots; also include standalone crates not covered by any workspace.
+              workspaces = []
+              for root in workspace_roots:
+                  members = []
+                  exclude = []
+                  member_manifests = None
+
+                  metadata = _cargo_metadata(root / "Cargo.toml")
+                  if metadata is not None:
+                      member_manifests = metadata["members"]
+
+                  if member_manifests is None and tomllib is not None:
+                      try:
+                          with open(root / "Cargo.toml", "rb") as f:
+                              data = tomllib.load(f)
+                          ws = data.get("workspace", {}) if isinstance(data, dict) else {}
+                          members = _normalize_patterns(ws.get("members"))
+                          exclude = _normalize_patterns(ws.get("exclude"))
+                      except Exception:
+                          pass
+                  workspaces.append(
+                      {
+                          "root": root,
+                          "members": members,
+                          "exclude": exclude,
+                          "member_manifests": member_manifests,
+                      }
+                  )
+
+                  dir_str = _dir_str(root)
+                  include.append({"dir": dir_str, "is_workspace": True})
+                  included_dirs.add(dir_str)
+
+              workspace_manifest_set = {m.resolve() for m in workspace_manifests}
+              for m in manifests:
+                  m_resolved = m.resolve()
+                  if m_resolved in workspace_manifest_set:
+                      continue  # already included as workspace root
+
+                  is_member = False
+                  for ws in workspaces:
+                      member_set = ws["member_manifests"]
+                      if member_set is not None:
+                          if m_resolved in member_set:
+                              is_member = True
+                              break
+                          continue
+                      if not _is_under(m.parent, ws["root"]):
+                          continue
+                      rel = m.parent.relative_to(ws["root"]).as_posix()
+                      if rel == ".":
+                          rel = ""
+                      if ws["members"] and _matches_any(rel, ws["members"]):
+                          if not _matches_any(rel, ws["exclude"]):
+                              is_member = True
+                              break
+
+                  if not is_member:
+                      dir_str = _dir_str(m.parent)
+                      if dir_str not in included_dirs:
+                          include.append({"dir": dir_str, "is_workspace": False})
+                          included_dirs.add(dir_str)
+
+          matrix = {"include": include}
+
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a", encoding="utf-8") as f:
+              f.write(f"has_rust={'true' if include else 'false'}\n")
+              f.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
+          PY
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    needs: detect-rust
+    if: needs.detect-rust.outputs.has_rust == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-rust.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Config step: ALL toggles are opt-in via optional env vars, with defaults.
+      # No workflow-level CI_* env required.
+      # -----------------------------------------------------------------------
+      - name: Configure CI knobs (defaults + auto-detection)
+        id: cfg
+        shell: bash
+        working-directory: ${{ matrix.dir }}
+        run: |
+          set -euo pipefail
+
+          # Optional overrides (set them only if you want):
+          #   CI_RUN_FMT=true|false         (default: true)
+          #   CI_RUN_CLIPPY=true|false      (default: true)
+          #   CI_RUN_TESTS=true|false       (default: true)
+          #
+          #   CI_ALL_FEATURES=true|false    (default: false)
+          #   CI_LOCKED=auto|true|false     (default: auto)
+          #   CI_CARGO_DENY=auto|true|false (default: auto)
+          #
+          #   CI_USE_MOLD=true|false        (default: false)
+          #   CI_USE_SCCACHE=true|false     (default: false)
+
+          run_fmt="${CI_RUN_FMT:-true}"
+          run_clippy="${CI_RUN_CLIPPY:-true}"
+          run_tests="${CI_RUN_TESTS:-true}"
+
+          all_features="${CI_ALL_FEATURES:-false}"
+          locked_mode="${CI_LOCKED:-auto}"
+          deny_mode="${CI_CARGO_DENY:-auto}"
+
+          use_mold="${CI_USE_MOLD:-false}"
+          use_sccache="${CI_USE_SCCACHE:-false}"
+
+          # Decide --locked dynamically if in auto mode.
+          locked_flag=""
+          case "$locked_mode" in
+            true)  locked_flag="--locked" ;;
+            false) locked_flag="" ;;
+            auto|"")
+              if [ -f Cargo.lock ]; then locked_flag="--locked"; fi
+              ;;
+            *)
+              echo "Unknown CI_LOCKED='$locked_mode' (expected auto|true|false); treating as auto" >&2
+              if [ -f Cargo.lock ]; then locked_flag="--locked"; fi
+              ;;
+          esac
+
+          # Decide --workspace only when the root Cargo.toml is a workspace root.
+          workspace_flag=""
+          if [ "${{ matrix.is_workspace }}" = "true" ]; then
+            workspace_flag="--workspace"
+          fi
+
+          # Decide --all-features only if explicitly enabled.
+          features_flag=""
+          if [ "$all_features" = "true" ]; then
+            features_flag="--all-features"
+          fi
+
+          # Decide cargo-deny:
+          # - true  => always run
+          # - false => never run
+          # - auto  => run only if deny.toml exists in this workspace root
+          has_deny_toml="false"
+          if [ -f deny.toml ]; then has_deny_toml="true"; fi
+
+          run_deny="false"
+          case "$deny_mode" in
+            true)  run_deny="true" ;;
+            false) run_deny="false" ;;
+            auto|"")
+              if [ "$has_deny_toml" = "true" ]; then run_deny="true"; fi
+              ;;
+            *)
+              echo "Unknown CI_CARGO_DENY='$deny_mode' (expected auto|true|false); treating as auto" >&2
+              if [ "$has_deny_toml" = "true" ]; then run_deny="true"; fi
+              ;;
+          esac
+
+          # Emit step outputs used by subsequent `if:` clauses.
+          {
+            echo "run_fmt=$run_fmt"
+            echo "run_clippy=$run_clippy"
+            echo "run_tests=$run_tests"
+            echo "use_mold=$use_mold"
+            echo "use_sccache=$use_sccache"
+            echo "run_deny=$run_deny"
+            echo "workspace_flag=$workspace_flag"
+            echo "features_flag=$features_flag"
+            echo "locked_flag=$locked_flag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # -----------------------------
+      # Optional: mold (opt-in)
+      # -----------------------------
+      - name: Install mold (opt-in)
+        if: steps.cfg.outputs.use_mold == 'true'
+        uses: rui314/setup-mold@v1
+
+      - name: Enable mold linker (opt-in, best-effort)
+        if: steps.cfg.outputs.use_mold == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v mold >/dev/null 2>&1; then
+            echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+          else
+            echo "mold not found; continuing without it"
+          fi
+
+      # -----------------------------
+      # Optional: sccache (opt-in)
+      # -----------------------------
+      - name: Install sccache (opt-in)
+        if: steps.cfg.outputs.use_sccache == 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Start sccache (opt-in, best-effort)
+        if: steps.cfg.outputs.use_sccache == 'true'
+        shell: bash
+        run: |
+          set +e
+
+          export SCCACHE_GHA_ENABLED="true"
+          export SCCACHE_CACHE_SIZE="2G"
+
+          sccache --stop-server >/dev/null 2>&1 || true
+          sccache --start-server
+          status=$?
+
+          if [ $status -ne 0 ]; then
+            echo "sccache GH cache unavailable; retrying local-only"
+            sccache --stop-server >/dev/null 2>&1 || true
+            SCCACHE_GHA_ENABLED=false sccache --start-server
+            status=$?
+          fi
+
+          if [ $status -ne 0 ]; then
+            echo "sccache unavailable; continuing without it"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            echo "SCCACHE_DISABLE=1" >> "$GITHUB_ENV"
+          else
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            if [ "${SCCACHE_GHA_ENABLED}" != "true" ]; then
+              echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            fi
+          fi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.dir }}
+
+      - name: Rust fmt
+        if: steps.cfg.outputs.run_fmt == 'true'
+        working-directory: ${{ matrix.dir }}
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy
+        if: steps.cfg.outputs.run_clippy == 'true'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          cargo clippy \
+            ${{ steps.cfg.outputs.workspace_flag }} \
+            --all-targets \
+            ${{ steps.cfg.outputs.features_flag }} \
+            ${{ steps.cfg.outputs.locked_flag }} \
+            -- \
+            -D warnings
+
+      - name: Rust tests
+        if: steps.cfg.outputs.run_tests == 'true'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          cargo test \
+            ${{ steps.cfg.outputs.workspace_flag }} \
+            --all-targets \
+            ${{ steps.cfg.outputs.features_flag }} \
+            ${{ steps.cfg.outputs.locked_flag }}
+
+      - name: Cargo deny (optional; auto if deny.toml exists)
+        if: steps.cfg.outputs.run_deny == 'true'
+        working-directory: ${{ matrix.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-deny --locked
+          cargo deny check
