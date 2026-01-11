@@ -19,4 +19,39 @@ time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 [dev-dependencies]
 tempfile = "3.10"
 
+[lints]
+workspace = true
+
 [workspace]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Unused/dead code hygiene (be explicit so it applies even if defaults change)
+unused_imports = "warn"
+unused_variables = "warn"
+unused_mut = "warn"
+unused_must_use = "warn"
+dead_code = "warn"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Broad non-idiomatic coverage (warn-by-default groups). With `-D warnings`, these become errors.
+all = "warn"
+pedantic = "warn"   # strict + opinionated; expect to allow some lints
+nursery = "warn"    # experimental; cherry-pick or allow as needed
+cargo = "warn"
+
+# Explicit non-idiomatic bans (restriction-style lints)
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+indexing_slicing = "deny"
+panic_in_result_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"

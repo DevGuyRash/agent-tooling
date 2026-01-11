@@ -467,12 +467,14 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         });
     }
 
-    let initiator_status = session
+    let initiator_status = match session
         .reviews
         .iter()
         .find(|r| r.target_ref == params.target_ref && r.session_id == session_id.as_str())
-        .map(|r| r.initiator_status)
-        .unwrap_or(InitiatorStatus::Requesting);
+    {
+        Some(existing) => existing.initiator_status,
+        None => InitiatorStatus::Requesting,
+    };
 
     if !session.reviewers.iter().any(|r| r == &reviewer_id) {
         session.reviewers.push(reviewer_id.clone());
