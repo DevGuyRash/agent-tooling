@@ -1,5 +1,9 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 
+//! CLI entrypoint for `mpcr` (UACRP code review coordination utilities).
+//!
+//! The actual coordination logic lives in the `mpcr` library crate (`src/session.rs`, `src/lock.rs`, etc).
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use mpcr::id;
@@ -20,10 +24,36 @@ use time::{Date, Month, OffsetDateTime};
 #[command(
     name = "mpcr",
     version,
-    about = "UACRP code review coordination utilities"
+    about = "UACRP code review coordination utilities",
+    long_about = "UACRP code review coordination utilities.\n\n\
+`mpcr` manages a shared *session directory* containing `_session.json`, a lock file, and reviewer report markdown files.\n\
+All writers acquire `_session.json.lock` and update `_session.json` via an atomic temp-file replace to avoid races.\n\n\
+Use `--json` for machine-readable output.\n\
+Without `--json`, structured results are printed as one-line JSON and successful mutations print `ok`.",
+    after_long_help = r#"Session directory layout (relative to repo root):
+  .local/reports/code_reviews/YYYY-MM-DD/
+    _session.json
+    _session.json.lock
+    {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md
+
+Common flows:
+  # Reviewer
+  mpcr reviewer register --target-ref main
+  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --status IN_PROGRESS --phase INGESTION
+  mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict APPROVE --report-file review.md
+
+  # Applicator
+  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD
+  mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
+"#
 )]
 struct Cli {
-    #[arg(long, global = true, default_value_t = false)]
+    #[arg(
+        long,
+        global = true,
+        default_value_t = false,
+        help = "Emit pretty JSON (suitable for scripting)."
+    )]
     json: bool,
     #[command(subcommand)]
     command: Commands,
@@ -31,22 +61,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Generate deterministic IDs (reviewer_id, session_id, lock owners).
     Id {
         #[command(subcommand)]
         command: IdCommands,
     },
+    /// Acquire/release the session lock file (`_session.json.lock`).
     Lock {
         #[command(subcommand)]
         command: LockCommands,
     },
+    /// Read session state (`_session.json`) without modifying it.
     Session {
         #[command(subcommand)]
         command: SessionCommands,
     },
+    /// Reviewer operations (register/update/note/finalize).
     Reviewer {
         #[command(subcommand)]
         command: ReviewerCommands,
     },
+    /// Applicator operations (wait, set initiator_status, append notes).
     Applicator {
         #[command(subcommand)]
         command: ApplicatorCommands,
@@ -59,148 +94,438 @@ enum IdCommands {
     Id8,
     /// Generate a lowercase hex id of length 2*bytes.
     Hex {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Number of random bytes; output length is 2*N hex characters."
+        )]
         bytes: usize,
     },
 }
 
 #[derive(Subcommand)]
 enum LockCommands {
+    /// Acquire the session lock file (`_session.json.lock`).
+    #[command(after_long_help = r#"Example:
+  mpcr lock acquire --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
+"#)]
     Acquire {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "OWNER",
+            help = "Lock owner identifier (recommend: an id8 from `mpcr id id8`)."
+        )]
         owner: String,
-        #[arg(long, default_value_t = 8)]
+        #[arg(
+            long,
+            default_value_t = 8,
+            value_name = "N",
+            help = "Maximum retries with exponential backoff before failing with LOCK_TIMEOUT."
+        )]
         max_retries: usize,
     },
+    /// Release the session lock file if you are the current owner.
+    #[command(after_long_help = r#"Example:
+  mpcr lock release --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
+"#)]
     Release {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "OWNER",
+            help = "Lock owner identifier (must match the contents of `_session.json.lock`)."
+        )]
         owner: String,
     },
 }
 
 #[derive(Subcommand)]
 enum SessionCommands {
+    /// Print the parsed `_session.json`.
+    #[command(after_long_help = r#"Example:
+  mpcr session show --session-dir .local/reports/code_reviews/YYYY-MM-DD
+"#)]
     Show {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
     },
 }
 
 #[derive(Subcommand)]
 enum ReviewerCommands {
+    /// Register yourself as a reviewer (creates/updates `_session.json`).
+    #[command(after_long_help = r#"Examples:
+  # Create or join today's session directory under the current repo root:
+  mpcr reviewer register --target-ref main
+
+  # Explicit date and repo root:
+  mpcr reviewer register --target-ref pr/123 --repo-root /path/to/repo --date 2026-01-11
+
+  # Override the session directory location:
+  mpcr reviewer register --target-ref main --session-dir .local/reports/code_reviews/YYYY-MM-DD
+"#)]
     Register {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Target reference being reviewed (branch name, PR ref, commit, etc)."
+        )]
         target_ref: String,
 
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Override the session directory (otherwise computed from repo_root + date)."
+        )]
         session_dir: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Repository root used to compute the default session directory (defaults to cwd)."
+        )]
         repo_root: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "YYYY-MM-DD",
+            help = "Session date used to compute the default session directory (defaults to today, UTC)."
+        )]
         date: Option<String>,
 
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "8-character ASCII alphanumeric reviewer identifier (default: random)."
+        )]
         reviewer_id: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "8-character ASCII alphanumeric session identifier (default: join active session for target_ref, else random)."
+        )]
         session_id: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Optional parent reviewer id for handoff/chaining (8-character ASCII alphanumeric)."
+        )]
         parent_id: Option<String>,
     },
 
+    /// Update your reviewer-owned status and/or current phase.
+    #[command(after_long_help = r#"Reviewer statuses:
+  INITIALIZING  Registered; review not yet started
+  IN_PROGRESS   Actively reviewing
+  FINISHED      Completed (typically set by `reviewer finalize`)
+  CANCELLED     Stopped early
+  ERROR         Fatal error; see notes for details
+  BLOCKED       Waiting on an external dependency or intervention
+
+Review phases:
+  INGESTION, DOMAIN_COVERAGE, THEOREM_GENERATION, ADVERSARIAL_PROOFS, SYNTHESIS, REPORT_WRITING
+
+Examples:
+  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --status IN_PROGRESS --phase INGESTION
+  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --clear-phase
+"#)]
     Update {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+        )]
         reviewer_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id (8-character ASCII alphanumeric)."
+        )]
         session_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "STATUS",
+            help = "Set reviewer-owned status (see `--help` for allowed values)."
+        )]
         status: Option<ReviewerStatus>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "PHASE",
+            help = "Set current review phase (see `--help` for allowed values)."
+        )]
         phase: Option<ReviewPhase>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Clear current review phase (sets `current_phase` to null)."
+        )]
         clear_phase: bool,
     },
 
+    /// Finalize a review: write the report markdown and mark the review entry FINISHED.
+    #[command(after_long_help = r#"Verdicts:
+  APPROVE, REQUEST_CHANGES, BLOCK
+
+Report input:
+  - Use `--report-file <path>` to read markdown from a file
+  - Or omit it and pipe markdown via stdin
+
+Examples:
+  mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict APPROVE --report-file review.md
+  cat review.md | mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict REQUEST_CHANGES --major 2
+"#)]
     Finalize {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json` and where the report file will be written."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+        )]
         reviewer_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id (8-character ASCII alphanumeric)."
+        )]
         session_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "VERDICT",
+            help = "Final verdict to record in the session entry."
+        )]
         verdict: ReviewVerdict,
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of BLOCKER findings in the report."
+        )]
         blocker: u64,
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of MAJOR findings in the report."
+        )]
         major: u64,
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of MINOR findings in the report."
+        )]
         minor: u64,
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of NIT findings in the report."
+        )]
         nit: u64,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Read report markdown from this file (if omitted, reads from stdin)."
+        )]
         report_file: Option<PathBuf>,
     },
 
+    /// Append a reviewer note to the session entry.
+    #[command(after_long_help = r#"Note content:
+  - By default, `--content` is stored as a JSON string.
+  - With `--content-json`, `--content` must be valid JSON (object/array/string/number/etc).
+
+Examples:
+  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type question --content \"Can you clarify X?\"
+  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type domain_observation --content-json --content '{\"domain\":\"security\",\"note\":\"...\"}'
+"#)]
     Note {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+        )]
         reviewer_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id (8-character ASCII alphanumeric)."
+        )]
         session_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "NOTE_TYPE",
+            help = "Structured note type (see `--help` for allowed values)."
+        )]
         note_type: NoteType,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "TEXT",
+            help = "Note content (string by default, or JSON when --content-json is set)."
+        )]
         content: String,
-        #[arg(long)]
+        #[arg(long, help = "Interpret --content as JSON instead of a plain string.")]
         content_json: bool,
     },
 }
 
 #[derive(Subcommand)]
 enum ApplicatorCommands {
+    /// Set `initiator_status` on an existing review entry (applicator-owned field).
+    #[command(after_long_help = r#"Initiator statuses:
+  REQUESTING, OBSERVING, RECEIVED, REVIEWED, APPLYING, APPLIED, CANCELLED
+
+Example:
+  mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
+"#)]
     SetStatus {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Reviewer id for the entry you are updating (8-character ASCII alphanumeric)."
+        )]
         reviewer_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id for the entry you are updating (8-character ASCII alphanumeric)."
+        )]
         session_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "INITIATOR_STATUS",
+            help = "New initiator_status value (see `--help` for allowed values)."
+        )]
         initiator_status: InitiatorStatus,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Lock owner id8 used while updating `_session.json` (default: random)."
+        )]
         lock_owner: Option<String>,
     },
 
+    /// Append an applicator note to a review entry.
+    #[command(after_long_help = r#"Note content:
+  - By default, `--content` is stored as a JSON string.
+  - With `--content-json`, `--content` must be valid JSON.
+
+Example:
+  mpcr applicator note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type applied --content \"Fixed in commit abc123\"
+"#)]
     Note {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Reviewer id for the entry you are updating (8-character ASCII alphanumeric)."
+        )]
         reviewer_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id for the entry you are updating (8-character ASCII alphanumeric)."
+        )]
         session_id: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "NOTE_TYPE",
+            help = "Structured note type (see `--help` for allowed values)."
+        )]
         note_type: NoteType,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "TEXT",
+            help = "Note content (string by default, or JSON when --content-json is set)."
+        )]
         content: String,
-        #[arg(long)]
+        #[arg(long, help = "Interpret --content as JSON instead of a plain string.")]
         content_json: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Lock owner id8 used while updating `_session.json` (default: random)."
+        )]
         lock_owner: Option<String>,
     },
 
+    /// Block until matching reviews reach a terminal status.
+    #[command(after_long_help = r#"Terminal reviewer statuses:
+  FINISHED, CANCELLED, ERROR
+
+Examples:
+  # Wait for *all* reviews in the session dir:
+  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD
+
+  # Wait for a specific target/session id:
+  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD --target-ref main --session-id <id8>
+"#)]
     Wait {
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Session directory containing `_session.json`."
+        )]
         session_dir: PathBuf,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "If set, only wait for reviews matching this target_ref."
+        )]
         target_ref: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "If set, only wait for reviews matching this session_id."
+        )]
         session_id: Option<String>,
     },
 }
