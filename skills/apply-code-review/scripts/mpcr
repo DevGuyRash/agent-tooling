@@ -36,7 +36,21 @@ if [ ! -f "${src_dir}/Cargo.lock" ]; then
   exit 2
 fi
 
+needs_build=0
 if [ ! -x "${bin}" ]; then
+  needs_build=1
+elif [ "${src_dir}/Cargo.toml" -nt "${bin}" ] || [ "${src_dir}/Cargo.lock" -nt "${bin}" ]; then
+  needs_build=1
+elif find "${src_dir}/src" "${src_dir}/tests" -type f -newer "${bin}" -print -quit 2>/dev/null | grep -q .; then
+  needs_build=1
+fi
+
+if [ "${needs_build}" -eq 1 ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "error: mpcr is not built and 'cargo' was not found in PATH" >&2
+    echo "hint: install a Rust toolchain (rustc + cargo) to build ${src_dir}" >&2
+    exit 127
+  fi
   cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release
 fi
 
