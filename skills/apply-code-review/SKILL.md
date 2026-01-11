@@ -6,17 +6,16 @@ compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requir
 
 # Apply Code Review
 
-Use the protocol in `references/code-review-application-protocol.md`.
+Follow the protocol in `references/code-review-application-protocol.md`.
 
-Use `scripts/mpcr` (bundled; builds `scripts/mpcr-src` on first run) for deterministic coordination file updates.
+## Available commands
 
-## Deterministic primitives (`mpcr`)
+Use `scripts/mpcr` for session coordination. Run any command with `--help` for usage.
 
-- Wait until reviewers reach terminal status:
-  - `scripts/mpcr applicator wait --session-dir "<dir>"`
-- Inspect session and locate reports:
-  - `scripts/mpcr session show --session-dir "<dir>"`
-- Update `initiator_status` for a given review entry:
-  - `scripts/mpcr applicator set-status --session-dir "<dir>" --reviewer-id "<id8>" --session-id "<id8>" --initiator-status RECEIVED`
-- Append applicator notes back to reviewers:
-  - `scripts/mpcr applicator note --session-dir "<dir>" --reviewer-id "<id8>" --session-id "<id8>" --note-type applied --content "..." `
+- `mpcr id` — generate identifiers
+- `mpcr applicator wait` — block until reviewers finish
+- `mpcr applicator set-status` — update initiator_status
+- `mpcr applicator note` — append a note
+- `mpcr session show` — inspect session state
+- `mpcr session reports` — list open/closed/in-progress reviews (filters incl. status/phase/verdict + optional notes/report files)
+- `mpcr lock` — manual lock operations

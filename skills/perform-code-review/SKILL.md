@@ -6,22 +6,17 @@ compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requir
 
 # Perform Code Review
 
-## Canonical protocol
+Follow the UACRP protocol in `references/uacrp.md`.
 
-Follow the UACRP protocol and report template in `references/uacrp.md`.
+## Available commands
 
-## Deterministic primitives (`mpcr`)
+Use `scripts/mpcr` for session coordination. Run any command with `--help` for usage.
 
-- Register yourself as a reviewer (creates/updates `_session.json`):
-  - `scripts/mpcr reviewer register --target-ref "<branch|pr|commit>"` (optional: `--repo-root`, `--date`, `--reviewer-id`, `--session-id`, `--parent-id`)
-- Update your status/phase during the review:
-  - `scripts/mpcr reviewer update --session-dir "<dir>" --reviewer-id "<id8>" --session-id "<id8>" --status IN_PROGRESS --phase INGESTION`
-- Append reviewer notes/questions (written into `_session.json`):
-  - `scripts/mpcr reviewer note --session-dir "<dir>" --reviewer-id "<id8>" --session-id "<id8>" --note-type question --content "..." `
-- Finalize (writes `{HH-MM-SS-mmm}_{ref}_{reviewer_id}.md` and updates `_session.json`):
-  - `scripts/mpcr reviewer finalize --session-dir "<dir>" --reviewer-id "<id8>" --session-id "<id8>" --verdict APPROVE --major 1 --minor 0 --nit 0 --blocker 0 --report-file "<path>"`
-
-## Session inspection
-
-- View the full session state:
-  - `scripts/mpcr session show --session-dir "<dir>"`
+- `mpcr id` — generate identifiers
+- `mpcr reviewer register` — register as a reviewer
+- `mpcr reviewer update` — update status/phase
+- `mpcr reviewer note` — append a note
+- `mpcr reviewer finalize` — write report and mark finished
+- `mpcr session show` — inspect session state
+- `mpcr session reports` — list open/closed/in-progress reviews (filters incl. status/phase/verdict + optional notes/report files)
+- `mpcr lock` — manual lock operations
