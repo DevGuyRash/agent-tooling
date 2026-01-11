@@ -1,3 +1,8 @@
+//! File-based lock implementation for coordinating `_session.json` updates.
+//!
+//! The lock is represented by a file named `_session.json.lock` inside the session directory.
+//! Lock acquisition uses `create_new(true)` for exclusivity and retries with exponential backoff.
+
 use anyhow::Context;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -10,7 +15,9 @@ const INITIAL_BACKOFF_MS: u64 = 100;
 const MAX_BACKOFF_MS: u64 = 6_400;
 
 #[derive(Debug, Clone, Copy)]
+/// Configuration for [`acquire_lock`].
 pub struct LockConfig {
+    /// Maximum number of retry attempts when the lock file already exists.
     pub max_retries: usize,
 }
 
@@ -23,12 +30,17 @@ impl Default for LockConfig {
 }
 
 #[derive(Debug)]
+/// RAII-style guard for a held session lock.
+///
+/// When dropped, this will best-effort release the lock *only if* the lock file still contains
+/// the same owner identifier.
 pub struct LockGuard {
     lock_file: Option<PathBuf>,
     owner: String,
 }
 
 impl LockGuard {
+    /// Release the lock early, consuming the guard.
     pub fn release(mut self) -> anyhow::Result<()> {
         self.release_inner()
     }
@@ -62,10 +74,14 @@ impl Drop for LockGuard {
     }
 }
 
+/// Compute the path to the lock file (`_session.json.lock`) for `session_dir`.
 pub fn lock_file_path(session_dir: &Path) -> PathBuf {
     session_dir.join("_session.json.lock")
 }
 
+/// Release the session lock if `owner` matches the contents of the lock file.
+///
+/// This is best-effort: if the lock file does not exist, the operation succeeds.
 pub fn release_lock(session_dir: &Path, owner: impl Into<String>) -> anyhow::Result<()> {
     let mut guard = LockGuard {
         lock_file: Some(lock_file_path(session_dir)),
@@ -74,6 +90,10 @@ pub fn release_lock(session_dir: &Path, owner: impl Into<String>) -> anyhow::Res
     guard.release_inner()
 }
 
+/// Acquire the session lock and return a guard that releases it on drop.
+///
+/// If the lock file already exists, this will retry up to `cfg.max_retries` times with exponential
+/// backoff (100ms → 200ms → ... → 6400ms) and then return an error with the message `LOCK_TIMEOUT`.
 pub fn acquire_lock(
     session_dir: &Path,
     owner: impl Into<String>,

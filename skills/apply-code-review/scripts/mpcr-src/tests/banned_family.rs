@@ -1,3 +1,5 @@
+//! Integration test that enforces "banned family" API constraints for this repository.
+
 // TEMP FILE: copy into any Rust repo as `tests/banned_family.rs` (or any crate's tests/).
 //
 // What it does:
@@ -480,4 +482,3 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
         out.push(b' ');
     }
 }
-

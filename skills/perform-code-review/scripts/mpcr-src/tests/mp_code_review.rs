@@ -1,3 +1,5 @@
+//! Integration tests for `mpcr` session coordination primitives.
+
 use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
     finalize_review, register_reviewer, FinalizeReviewParams, RegisterReviewerParams,
