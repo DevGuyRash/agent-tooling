@@ -5,14 +5,15 @@
 //! The actual coordination logic lives in the `mpcr` library crate (`src/session.rs`, `src/lock.rs`, etc).
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
-    append_note, finalize_review, load_session, register_reviewer, set_initiator_status,
-    update_review, AppendNoteParams, FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType,
-    RegisterReviewerParams, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
-    SetInitiatorStatusParams, SeverityCounts, UpdateReviewParams,
+    append_note, collect_reports, finalize_review, load_session, register_reviewer,
+    set_initiator_status, update_review, AppendNoteParams, FinalizeReviewParams, InitiatorStatus,
+    NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions, ReportsView,
+    ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator, SetInitiatorStatusParams,
+    SeverityCounts, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -61,7 +62,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate deterministic IDs (reviewer_id, session_id, lock owners).
+    /// Generate deterministic IDs (`reviewer_id`, `session_id`, lock owners).
     Id {
         #[command(subcommand)]
         command: IdCommands,
@@ -81,7 +82,7 @@ enum Commands {
         #[command(subcommand)]
         command: ReviewerCommands,
     },
-    /// Applicator operations (wait, set initiator_status, append notes).
+    /// Applicator operations (wait, set `initiator_status`, append notes).
     Applicator {
         #[command(subcommand)]
         command: ApplicatorCommands,
@@ -164,6 +165,109 @@ enum SessionCommands {
         )]
         session_dir: PathBuf,
     },
+    /// Report-oriented session views (open/closed/in-progress).
+    #[command(after_long_help = r#"Examples:
+  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD
+  mpcr session reports in-progress --session-dir .local/reports/code_reviews/YYYY-MM-DD
+  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-notes --only-with-notes
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --only-with-report
+  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-status IN_PROGRESS,BLOCKED
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --initiator-status RECEIVED --verdict APPROVE
+"#)]
+    Reports {
+        #[command(subcommand)]
+        command: ReportsCommands,
+    },
+}
+
+#[derive(Args)]
+struct ReportsArgs {
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Session directory containing `_session.json`."
+    )]
+    session_dir: PathBuf,
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "If set, only include reviews matching this target_ref."
+    )]
+    target_ref: Option<String>,
+    #[arg(
+        long,
+        value_name = "ID8",
+        help = "If set, only include reviews matching this session_id."
+    )]
+    session_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "ID8",
+        help = "If set, only include reviews matching this reviewer_id."
+    )]
+    reviewer_id: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "STATUS",
+        help = "Filter by reviewer status (comma-separated or repeatable)."
+    )]
+    reviewer_status: Vec<ReviewerStatus>,
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "STATUS",
+        help = "Filter by initiator status (comma-separated or repeatable)."
+    )]
+    initiator_status: Vec<InitiatorStatus>,
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "VERDICT",
+        help = "Filter by verdict (comma-separated or repeatable)."
+    )]
+    verdict: Vec<ReviewVerdict>,
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..,
+        value_name = "PHASE",
+        help = "Filter by review phase (comma-separated or repeatable)."
+    )]
+    phase: Vec<ReviewPhase>,
+    #[arg(
+        long,
+        help = "Only include reviews that already have a report file."
+    )]
+    only_with_report: bool,
+    #[arg(
+        long,
+        help = "Only include reviews that contain at least one note (implies --include-notes)."
+    )]
+    only_with_notes: bool,
+    #[arg(
+        long,
+        help = "Include full notes for each review entry."
+    )]
+    include_notes: bool,
+}
+
+#[derive(Subcommand)]
+enum ReportsCommands {
+    /// Reviews not in a terminal status (`INITIALIZING`, `IN_PROGRESS`, `BLOCKED`).
+    Open(ReportsArgs),
+    /// Reviews in a terminal status (`FINISHED`, `CANCELLED`, `ERROR`).
+    Closed(ReportsArgs),
+    /// Reviews actively in progress (`IN_PROGRESS` only).
+    InProgress(ReportsArgs),
 }
 
 #[derive(Subcommand)]
@@ -542,6 +646,7 @@ fn main() {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let now = OffsetDateTime::now_utc();
@@ -588,6 +693,15 @@ fn run() -> anyhow::Result<()> {
                 let session = load_session(&SessionLocator::new(session_dir))?;
                 write_result(cli.json, &session)?;
             }
+            SessionCommands::Reports { command } => match command {
+                ReportsCommands::Open(args) => handle_reports(cli.json, ReportsView::Open, args)?,
+                ReportsCommands::Closed(args) => {
+                    handle_reports(cli.json, ReportsView::Closed, args)?;
+                }
+                ReportsCommands::InProgress(args) => {
+                    handle_reports(cli.json, ReportsView::InProgress, args)?;
+                }
+            },
         },
 
         Commands::Reviewer { command } => match command {
@@ -609,7 +723,7 @@ fn run() -> anyhow::Result<()> {
                     None => now.date(),
                 };
 
-                let session = resolve_session_locator(&repo_root, session_date, session_dir)?;
+                let session = resolve_session_locator(&repo_root, session_date, session_dir);
 
                 let res = register_reviewer(RegisterReviewerParams {
                     repo_root,
@@ -637,14 +751,15 @@ fn run() -> anyhow::Result<()> {
                 } else {
                     phase.map(Some)
                 };
-                update_review(UpdateReviewParams {
+                let params = UpdateReviewParams {
                     session: SessionLocator::new(session_dir),
                     reviewer_id,
                     session_id,
                     status,
                     phase,
                     now,
-                })?;
+                };
+                update_review(&params)?;
                 write_ok(cli.json)?;
             }
 
@@ -717,14 +832,15 @@ fn run() -> anyhow::Result<()> {
                     Some(lock_owner) => lock_owner,
                     None => id::random_id8()?,
                 };
-                set_initiator_status(SetInitiatorStatusParams {
+                let params = SetInitiatorStatusParams {
                     session: SessionLocator::new(session_dir),
                     reviewer_id,
                     session_id,
                     initiator_status,
                     now,
                     lock_owner,
-                })?;
+                };
+                set_initiator_status(&params)?;
                 write_ok(cli.json)?;
             }
 
@@ -760,7 +876,7 @@ fn run() -> anyhow::Result<()> {
                 target_ref,
                 session_id,
             } => {
-                wait_for_reviews(session_dir, target_ref, session_id)?;
+                wait_for_reviews(&session_dir, target_ref.as_deref(), session_id.as_deref())?;
                 write_ok(cli.json)?;
             }
         },
@@ -773,11 +889,11 @@ fn resolve_session_locator(
     repo_root: &Path,
     session_date: Date,
     override_dir: Option<PathBuf>,
-) -> anyhow::Result<SessionLocator> {
-    Ok(match override_dir {
-        Some(dir) => SessionLocator::new(dir),
-        None => SessionLocator::from_repo_root(repo_root, session_date),
-    })
+) -> SessionLocator {
+    override_dir.map_or_else(
+        || SessionLocator::from_repo_root(repo_root, session_date),
+        SessionLocator::new,
+    )
 }
 
 fn parse_date_ymd(s: &str) -> anyhow::Result<Date> {
@@ -847,27 +963,49 @@ fn write_result<T: Serialize>(json: bool, value: &T) -> anyhow::Result<()> {
     }
 }
 
+fn handle_reports(json: bool, view: ReportsView, args: ReportsArgs) -> anyhow::Result<()> {
+    let session = SessionLocator::new(args.session_dir);
+    let session_data = load_session(&session)?;
+    let filters = ReportsFilters {
+        target_ref: args.target_ref,
+        session_id: args.session_id,
+        reviewer_id: args.reviewer_id,
+        reviewer_statuses: args.reviewer_status,
+        initiator_statuses: args.initiator_status,
+        verdicts: args.verdict,
+        phases: args.phase,
+        only_with_report: args.only_with_report,
+        only_with_notes: args.only_with_notes,
+    };
+    let options = ReportsOptions {
+        include_notes: args.include_notes || args.only_with_notes,
+    };
+    let result = collect_reports(&session_data, &session, view, filters, options);
+    write_result(json, &result)
+}
+
 fn wait_for_reviews(
-    session_dir: PathBuf,
-    target_ref: Option<String>,
-    session_id: Option<String>,
+    session_dir: &Path,
+    target_ref: Option<&str>,
+    session_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut delay = std::time::Duration::from_secs(1);
     let max_delay = std::time::Duration::from_secs(60);
+    let session = SessionLocator::new(session_dir.to_path_buf());
 
     loop {
-        let session = load_session(&SessionLocator::new(session_dir.clone()))
+        let session_data = load_session(&session)
             .with_context(|| format!("read session file under {}", session_dir.display()))?;
 
         let mut has_pending = false;
-        for r in session.reviews {
-            if let Some(ref tr) = target_ref {
-                if &r.target_ref != tr {
+        for r in session_data.reviews {
+            if let Some(tr) = target_ref {
+                if r.target_ref != tr {
                     continue;
                 }
             }
-            if let Some(ref sid) = session_id {
-                if &r.session_id != sid {
+            if let Some(sid) = session_id {
+                if r.session_id != sid {
                     continue;
                 }
             }
@@ -883,5 +1021,65 @@ fn wait_for_reviews(
 
         std::thread::sleep(delay);
         delay = std::cmp::min(delay.saturating_mul(2), max_delay);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mpcr::session::{InitiatorStatus, ReviewEntry, ReviewVerdict, ReviewerStatus, SessionFile, SeverityCounts};
+    use std::fs;
+
+    #[test]
+    fn parse_date_ymd_valid_and_invalid() -> anyhow::Result<()> {
+        let date = parse_date_ymd("2026-01-11")?;
+        assert_eq!(date.to_string(), "2026-01-11");
+        assert!(parse_date_ymd("2026-13-01").is_err());
+        assert!(parse_date_ymd("not-a-date").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn parse_content_json_and_string() -> anyhow::Result<()> {
+        let value = parse_content(true, r#"{"key":1}"#)?;
+        assert_eq!(value["key"], 1);
+        let raw = parse_content(false, "hello")?;
+        assert_eq!(raw, serde_json::Value::String("hello".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn wait_for_reviews_returns_when_terminal() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Received,
+            status: ReviewerStatus::Finished,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+            current_phase: None,
+            verdict: Some(ReviewVerdict::Approve),
+            counts: SeverityCounts::zero(),
+            report_file: Some("report.md".to_string()),
+            notes: Vec::new(),
+        };
+        let session = SessionFile {
+            schema_version: "1.0.0".to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+        };
+        let body = serde_json::to_string_pretty(&session)? + "\n";
+        fs::write(session_dir.join("_session.json"), body)?;
+
+        wait_for_reviews(&session_dir, None, None)?;
+        Ok(())
     }
 }

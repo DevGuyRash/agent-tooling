@@ -42,11 +42,9 @@ pub enum ReviewerStatus {
 
 impl ReviewerStatus {
     /// Whether this status is terminal (no further progress is expected).
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            ReviewerStatus::Finished | ReviewerStatus::Cancelled | ReviewerStatus::Error
-        )
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Finished | Self::Cancelled | Self::Error)
     }
 }
 
@@ -418,7 +416,8 @@ pub struct SeverityCounts {
 
 impl SeverityCounts {
     /// Convenience constructor for a zeroed severity tally.
-    pub fn zero() -> Self {
+    #[must_use]
+    pub const fn zero() -> Self {
         Self {
             blocker: 0,
             major: 0,
@@ -493,6 +492,236 @@ pub struct SessionFile {
     pub reviews: Vec<ReviewEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Report view selector for filtering review entries.
+pub enum ReportsView {
+    /// Reviews not in a terminal status (`INITIALIZING`, `IN_PROGRESS`, `BLOCKED`).
+    Open,
+    /// Reviews in a terminal status (`FINISHED`, `CANCELLED`, `ERROR`).
+    Closed,
+    /// Reviews actively in progress (`IN_PROGRESS` only).
+    InProgress,
+}
+
+impl ReportsView {
+    fn matches_status(self, status: ReviewerStatus) -> bool {
+        match self {
+            Self::Open => !status.is_terminal(),
+            Self::Closed => status.is_terminal(),
+            Self::InProgress => status == ReviewerStatus::InProgress,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Optional filters applied on top of a [`ReportsView`].
+pub struct ReportsFilters {
+    /// Only include reviews for this target ref.
+    pub target_ref: Option<String>,
+    /// Only include reviews for this session id.
+    pub session_id: Option<String>,
+    /// Only include reviews for this reviewer id.
+    pub reviewer_id: Option<String>,
+    /// Only include reviews with these reviewer-owned statuses.
+    pub reviewer_statuses: Vec<ReviewerStatus>,
+    /// Only include reviews with these initiator-owned statuses.
+    pub initiator_statuses: Vec<InitiatorStatus>,
+    /// Only include reviews with these verdicts.
+    pub verdicts: Vec<ReviewVerdict>,
+    /// Only include reviews with these phase markers.
+    pub phases: Vec<ReviewPhase>,
+    /// Only include reviews that already have a report file.
+    pub only_with_report: bool,
+    /// Only include reviews that contain at least one note.
+    pub only_with_notes: bool,
+}
+
+impl ReportsFilters {
+    fn matches(&self, entry: &ReviewEntry) -> bool {
+        if let Some(ref target_ref) = self.target_ref {
+            if entry.target_ref != target_ref.as_str() {
+                return false;
+            }
+        }
+        if let Some(ref session_id) = self.session_id {
+            if entry.session_id != session_id.as_str() {
+                return false;
+            }
+        }
+        if let Some(ref reviewer_id) = self.reviewer_id {
+            if entry.reviewer_id != reviewer_id.as_str() {
+                return false;
+            }
+        }
+        if !self.reviewer_statuses.is_empty() && !self.reviewer_statuses.contains(&entry.status) {
+            return false;
+        }
+        if !self.initiator_statuses.is_empty()
+            && !self.initiator_statuses.contains(&entry.initiator_status)
+        {
+            return false;
+        }
+        if !self.verdicts.is_empty() {
+            match entry.verdict {
+                Some(verdict) if self.verdicts.contains(&verdict) => {}
+                _ => return false,
+            }
+        }
+        if !self.phases.is_empty() {
+            match entry.current_phase {
+                Some(phase) if self.phases.contains(&phase) => {}
+                _ => return false,
+            }
+        }
+        if self.only_with_report && entry.report_file.is_none() {
+            return false;
+        }
+        if self.only_with_notes && entry.notes.is_empty() {
+            return false;
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Options that control the shape of report listings.
+pub struct ReportsOptions {
+    /// Include full notes for each review entry.
+    pub include_notes: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Summary view of a review entry for reports.
+pub struct ReviewSummary {
+    /// Reviewer id.
+    pub reviewer_id: String,
+    /// Session id.
+    pub session_id: String,
+    /// Target reference under review.
+    pub target_ref: String,
+    /// Applicator-owned progress state.
+    pub initiator_status: InitiatorStatus,
+    /// Reviewer-owned progress state.
+    pub status: ReviewerStatus,
+    /// Optional parent reviewer id.
+    pub parent_id: Option<String>,
+    /// When the reviewer registered the entry.
+    pub started_at: String,
+    /// Last update timestamp.
+    pub updated_at: String,
+    /// Finished timestamp (if finalized).
+    pub finished_at: Option<String>,
+    /// Optional review phase marker.
+    pub current_phase: Option<ReviewPhase>,
+    /// Optional final verdict.
+    pub verdict: Option<ReviewVerdict>,
+    /// Severity counts from the report.
+    pub counts: SeverityCounts,
+    /// Report filename (if finalized).
+    pub report_file: Option<String>,
+    /// Report path (if finalized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    /// Number of notes attached to the review entry.
+    pub notes_count: usize,
+    /// Optional full notes (included when requested).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<SessionNote>>,
+}
+
+impl ReviewEntry {
+    /// Produce a summarized view suitable for report listings.
+    #[must_use]
+    pub fn summary(&self, session_dir: &Path, include_notes: bool) -> ReviewSummary {
+        let report_path = self
+            .report_file
+            .as_ref()
+            .map(|file| session_dir.join(file).to_string_lossy().to_string());
+        let notes = if include_notes {
+            Some(self.notes.clone())
+        } else {
+            None
+        };
+        ReviewSummary {
+            reviewer_id: self.reviewer_id.clone(),
+            session_id: self.session_id.clone(),
+            target_ref: self.target_ref.clone(),
+            initiator_status: self.initiator_status,
+            status: self.status,
+            parent_id: self.parent_id.clone(),
+            started_at: self.started_at.clone(),
+            updated_at: self.updated_at.clone(),
+            finished_at: self.finished_at.clone(),
+            current_phase: self.current_phase,
+            verdict: self.verdict,
+            counts: self.counts.clone(),
+            report_file: self.report_file.clone(),
+            report_path,
+            notes_count: self.notes.len(),
+            notes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Result payload for report listings.
+pub struct ReportsResult {
+    /// Session directory containing `_session.json`.
+    pub session_dir: String,
+    /// Full path to `_session.json`.
+    pub session_file: String,
+    /// View selector used for this listing.
+    pub view: ReportsView,
+    /// Optional filters applied to the listing.
+    pub filters: ReportsFilters,
+    /// Listing options used for this output.
+    pub options: ReportsOptions,
+    /// Total number of reviews in the session.
+    pub total_reviews: usize,
+    /// Number of reviews matching the view + filters.
+    pub matching_reviews: usize,
+    /// Matching review summaries.
+    pub reviews: Vec<ReviewSummary>,
+}
+
+/// Build a report listing for the given session data.
+#[must_use]
+pub fn collect_reports(
+    session: &SessionFile,
+    locator: &SessionLocator,
+    view: ReportsView,
+    filters: ReportsFilters,
+    options: ReportsOptions,
+) -> ReportsResult {
+    let total_reviews = session.reviews.len();
+    let mut reviews = Vec::new();
+    for entry in &session.reviews {
+        if !filters.matches(entry) {
+            continue;
+        }
+        if !view.matches_status(entry.status) {
+            continue;
+        }
+        reviews.push(entry.summary(locator.session_dir(), options.include_notes));
+    }
+
+    ReportsResult {
+        session_dir: locator.session_dir().to_string_lossy().to_string(),
+        session_file: locator.session_file().to_string_lossy().to_string(),
+        view,
+        filters,
+        options,
+        total_reviews,
+        matching_reviews: reviews.len(),
+        reviews,
+    }
+}
+
 fn format_ts(now: OffsetDateTime) -> anyhow::Result<String> {
     now.format(&Rfc3339).context("format RFC3339 timestamp")
 }
@@ -515,6 +744,9 @@ fn read_session_file(session_dir: &Path) -> anyhow::Result<SessionFile> {
 }
 
 /// Load and parse `_session.json` for the given session locator.
+///
+/// # Errors
+/// Returns an error if the session file cannot be read or parsed.
 pub fn load_session(session: &SessionLocator) -> anyhow::Result<SessionFile> {
     read_session_file(session.session_dir())
 }
@@ -575,11 +807,13 @@ pub struct SessionLocator {
 
 impl SessionLocator {
     /// Create a new locator from an explicit session directory path.
-    pub fn new(session_dir: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(session_dir: PathBuf) -> Self {
         Self { session_dir }
     }
 
     /// Compute the session directory from `repo_root` and `session_date`.
+    #[must_use]
     pub fn from_repo_root(repo_root: &Path, session_date: Date) -> Self {
         let p = paths::session_paths(repo_root, session_date);
         Self {
@@ -588,13 +822,235 @@ impl SessionLocator {
     }
 
     /// Borrow the session directory path.
+    #[must_use]
     pub fn session_dir(&self) -> &Path {
         &self.session_dir
     }
 
     /// Compute the full path to `_session.json` inside this session directory.
+    #[must_use]
     pub fn session_file(&self) -> PathBuf {
         session_file_path(&self.session_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use tempfile::tempdir;
+    use time::Month;
+    use std::fs;
+
+    fn write_session(session_dir: &Path, session: &SessionFile) -> anyhow::Result<()> {
+        fs::create_dir_all(session_dir)?;
+        let path = session_dir.join("_session.json");
+        let body = serde_json::to_string_pretty(session)? + "\n";
+        fs::write(path, body)?;
+        Ok(())
+    }
+
+    fn make_entry() -> ReviewEntry {
+        ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Received,
+            status: ReviewerStatus::Finished,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: Some(ReviewVerdict::Approve),
+            counts: SeverityCounts::zero(),
+            report_file: Some("12-00-00-000_refs_heads_main_deadbeef.md".to_string()),
+            notes: vec![SessionNote {
+                role: NoteRole::Reviewer,
+                timestamp: "2026-01-11T01:30:00Z".to_string(),
+                note_type: NoteType::Question,
+                content: Value::String("context".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn reports_filters_match_status_phase_verdict() -> anyhow::Result<()> {
+        let entry = make_entry();
+        let filters = ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: vec![ReviewerStatus::Finished],
+            initiator_statuses: vec![InitiatorStatus::Received],
+            verdicts: vec![ReviewVerdict::Approve],
+            phases: vec![ReviewPhase::ReportWriting],
+            only_with_report: true,
+            only_with_notes: true,
+        };
+        assert!(filters.matches(&entry));
+
+        let mismatched = ReportsFilters {
+            target_ref: None,
+            session_id: None,
+            reviewer_id: None,
+            reviewer_statuses: vec![ReviewerStatus::Blocked],
+            initiator_statuses: Vec::new(),
+            verdicts: Vec::new(),
+            phases: Vec::new(),
+            only_with_report: false,
+            only_with_notes: false,
+        };
+        assert!(!mismatched.matches(&entry));
+
+        Ok(())
+    }
+
+    #[test]
+    fn register_reviewer_errors_on_target_mismatch() -> anyhow::Result<()> {
+        let repo_root = tempdir()?;
+        let session_dir = tempdir()?;
+        let session_date = Date::from_calendar_date(2026, Month::January, 11)?;
+        let session = SessionLocator::new(session_dir.path().to_path_buf());
+        let now = OffsetDateTime::now_utc();
+
+        register_reviewer(RegisterReviewerParams {
+            repo_root: repo_root.path().to_path_buf(),
+            session_date,
+            session: session.clone(),
+            target_ref: "refs/heads/main".to_string(),
+            reviewer_id: Some("deadbeef".to_string()),
+            session_id: Some("sess0001".to_string()),
+            parent_id: None,
+            now,
+        })?;
+
+        let err = register_reviewer(RegisterReviewerParams {
+            repo_root: repo_root.path().to_path_buf(),
+            session_date,
+            session,
+            target_ref: "refs/heads/other".to_string(),
+            reviewer_id: Some("deadbeef".to_string()),
+            session_id: Some("sess0001".to_string()),
+            parent_id: None,
+            now,
+        })
+        .expect_err("mismatched target_ref should fail");
+        assert!(err.to_string().contains("target_ref"));
+        Ok(())
+    }
+
+    #[test]
+    fn update_review_missing_entry() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let session = SessionFile {
+            schema_version: "1.0.0".to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: Vec::new(),
+            reviews: Vec::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let params = UpdateReviewParams {
+            session: SessionLocator::new(session_dir),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            status: Some(ReviewerStatus::InProgress),
+            phase: None,
+            now: OffsetDateTime::now_utc(),
+        };
+        let err = update_review(&params).expect_err("missing entry should error");
+        assert!(err.to_string().contains("review entry not found"));
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_review_refuses_overwrite() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::Finished,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: Some(ReviewVerdict::Approve),
+            counts: SeverityCounts::zero(),
+            report_file: Some("existing.md".to_string()),
+            notes: Vec::new(),
+        };
+        let session = SessionFile {
+            schema_version: "1.0.0".to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+        };
+        write_session(&session_dir, &session)?;
+
+        let params = FinalizeReviewParams {
+            session: SessionLocator::new(session_dir),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_markdown: "report\n".to_string(),
+            now: OffsetDateTime::now_utc(),
+        };
+        let err = finalize_review(params).expect_err("should refuse overwrite");
+        assert!(err.to_string().contains("report_file already set"));
+        Ok(())
+    }
+
+    #[test]
+    fn append_note_rejects_bad_lock_owner() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::Initializing,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: None,
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+        };
+        let session = SessionFile {
+            schema_version: "1.0.0".to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+        };
+        write_session(&session_dir, &session)?;
+
+        let params = AppendNoteParams {
+            session: SessionLocator::new(session_dir),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            role: NoteRole::Reviewer,
+            note_type: NoteType::Question,
+            content: Value::String("why?".to_string()),
+            now: OffsetDateTime::now_utc(),
+            lock_owner: "bad".to_string(),
+        };
+        let err = append_note(params).expect_err("bad lock_owner should error");
+        assert!(err.to_string().contains("lock_owner"));
+        Ok(())
     }
 }
 
@@ -637,6 +1093,11 @@ pub struct RegisterReviewerResult {
 /// This creates the session directory and `_session.json` if needed, adds the reviewer to the
 /// `reviewers` list (if missing), and appends a new entry in `reviews` unless one already exists
 /// for the same `(reviewer_id, session_id)`.
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, the session cannot be read or written,
+/// or the lock cannot be acquired.
+#[allow(clippy::too_many_lines)]
 pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<RegisterReviewerResult> {
     let reviewer_id = match params.reviewer_id {
         Some(reviewer_id) => reviewer_id,
@@ -662,19 +1123,18 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         LockConfig::default(),
     )?;
 
-    let mut session = match params.session.session_file().exists() {
-        true => read_session_file(params.session.session_dir())?,
-        false => {
-            let repo_root = params.repo_root.canonicalize().with_context(|| {
-                format!("canonicalize repo_root {}", params.repo_root.display())
-            })?;
-            SessionFile {
-                schema_version: "1.0.0".to_string(),
-                session_date: params.session_date.to_string(),
-                repo_root: repo_root.to_string_lossy().to_string(),
-                reviewers: vec![],
-                reviews: vec![],
-            }
+    let mut session = if params.session.session_file().exists() {
+        read_session_file(params.session.session_dir())?
+    } else {
+        let repo_root = params.repo_root.canonicalize().with_context(|| {
+            format!("canonicalize repo_root {}", params.repo_root.display())
+        })?;
+        SessionFile {
+            schema_version: "1.0.0".to_string(),
+            session_date: params.session_date.to_string(),
+            repo_root: repo_root.to_string_lossy().to_string(),
+            reviewers: vec![],
+            reviews: vec![],
         }
     };
 
@@ -722,14 +1182,13 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         });
     }
 
-    let initiator_status = match session
+    let initiator_status = session
         .reviews
         .iter()
         .find(|r| r.target_ref == params.target_ref && r.session_id == session_id.as_str())
-    {
-        Some(existing) => existing.initiator_status,
-        None => InitiatorStatus::Requesting,
-    };
+        .map_or(InitiatorStatus::Requesting, |existing| {
+            existing.initiator_status
+        });
 
     if !session.reviewers.iter().any(|r| r == &reviewer_id) {
         session.reviewers.push(reviewer_id.clone());
@@ -782,7 +1241,11 @@ pub struct UpdateReviewParams {
 }
 
 /// Update a review entry's reviewer-owned `status` and/or `current_phase`.
-pub fn update_review(params: UpdateReviewParams) -> anyhow::Result<()> {
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, the session cannot be read or written,
+/// or the lock cannot be acquired.
+pub fn update_review(params: &UpdateReviewParams) -> anyhow::Result<()> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
 
@@ -861,6 +1324,10 @@ pub struct FinalizeReviewResult {
 /// 1) lock + read session entry to compute the report filename (refuses to overwrite)
 /// 2) write report markdown file (outside the session lock)
 /// 3) lock + update the session entry to `FINISHED` and point at the report file
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, report files cannot be written,
+/// or the session cannot be read or written.
 pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeReviewResult> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
@@ -962,6 +1429,10 @@ pub struct AppendNoteParams {
 }
 
 /// Append a note to the `notes` array for a review entry.
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, the session cannot be read or written,
+/// or the lock cannot be acquired.
 pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
@@ -1010,7 +1481,11 @@ pub struct SetInitiatorStatusParams {
 }
 
 /// Set the applicator-owned `initiator_status` field for a review entry.
-pub fn set_initiator_status(params: SetInitiatorStatusParams) -> anyhow::Result<()> {
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, the session cannot be read or written,
+/// or the lock cannot be acquired.
+pub fn set_initiator_status(params: &SetInitiatorStatusParams) -> anyhow::Result<()> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_id8(&params.lock_owner, "lock_owner")?;

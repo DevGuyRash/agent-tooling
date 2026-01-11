@@ -38,10 +38,10 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 # Broad non-idiomatic coverage (warn-by-default groups). With `-D warnings`, these become errors.
-all = "warn"
-pedantic = "warn"   # strict + opinionated; expect to allow some lints
-nursery = "warn"    # experimental; cherry-pick or allow as needed
-cargo = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }   # strict + opinionated; expect to allow some lints
+nursery = { level = "warn", priority = -1 }    # experimental; cherry-pick or allow as needed
+cargo = { level = "warn", priority = -1 }
 
 # Explicit non-idiomatic bans (restriction-style lints)
 unwrap_used = "deny"

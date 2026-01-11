@@ -7,7 +7,7 @@
 use anyhow::Context;
 use rand::RngCore;
 
-fn hex_digit(nibble: u8) -> u8 {
+const fn hex_digit(nibble: u8) -> u8 {
     match nibble {
         0..=9 => b'0' + nibble,
         10..=15 => b'a' + (nibble - 10),
@@ -20,6 +20,9 @@ fn hex_digit(nibble: u8) -> u8 {
 ///
 /// This uses OS-backed randomness (`rand::rngs::OsRng`) and performs a manual hex encoding
 /// to avoid pulling in an additional dependency.
+///
+/// # Errors
+/// Returns an error if OS randomness cannot be read.
 pub fn random_hex_id(bytes: usize) -> anyhow::Result<String> {
     let mut raw = vec![0_u8; bytes];
     rand::rngs::OsRng
@@ -38,6 +41,36 @@ pub fn random_hex_id(bytes: usize) -> anyhow::Result<String> {
 /// Generate an 8-character lowercase hex identifier.
 ///
 /// This is a convenience wrapper around `random_hex_id(4)`.
+///
+/// # Errors
+/// Returns an error if OS randomness cannot be read.
 pub fn random_id8() -> anyhow::Result<String> {
     random_hex_id(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_digit_and_random_id_shape() -> anyhow::Result<()> {
+        assert_eq!(hex_digit(0), b'0');
+        assert_eq!(hex_digit(9), b'9');
+        assert_eq!(hex_digit(10), b'a');
+        assert_eq!(hex_digit(15), b'f');
+        assert_eq!(hex_digit(16), b'0');
+
+        let empty = random_hex_id(0)?;
+        assert_eq!(empty, "");
+
+        let one = random_hex_id(1)?;
+        assert_eq!(one.len(), 2);
+        assert!(one.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+
+        let id8 = random_id8()?;
+        assert_eq!(id8.len(), 8);
+        assert!(id8.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+
+        Ok(())
+    }
 }

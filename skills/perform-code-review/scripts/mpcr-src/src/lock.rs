@@ -41,6 +41,9 @@ pub struct LockGuard {
 
 impl LockGuard {
     /// Release the lock early, consuming the guard.
+    ///
+    /// # Errors
+    /// Returns an error if the lock file exists but cannot be read or removed.
     pub fn release(mut self) -> anyhow::Result<()> {
         self.release_inner()
     }
@@ -75,6 +78,7 @@ impl Drop for LockGuard {
 }
 
 /// Compute the path to the lock file (`_session.json.lock`) for `session_dir`.
+#[must_use]
 pub fn lock_file_path(session_dir: &Path) -> PathBuf {
     session_dir.join("_session.json.lock")
 }
@@ -82,6 +86,9 @@ pub fn lock_file_path(session_dir: &Path) -> PathBuf {
 /// Release the session lock if `owner` matches the contents of the lock file.
 ///
 /// This is best-effort: if the lock file does not exist, the operation succeeds.
+///
+/// # Errors
+/// Returns an error if the lock file exists but cannot be read or removed.
 pub fn release_lock(session_dir: &Path, owner: impl Into<String>) -> anyhow::Result<()> {
     let mut guard = LockGuard {
         lock_file: Some(lock_file_path(session_dir)),
@@ -94,6 +101,9 @@ pub fn release_lock(session_dir: &Path, owner: impl Into<String>) -> anyhow::Res
 ///
 /// If the lock file already exists, this will retry up to `cfg.max_retries` times with exponential
 /// backoff (100ms → 200ms → ... → 6400ms) and then return an error with the message `LOCK_TIMEOUT`.
+///
+/// # Errors
+/// Returns an error if the lock file cannot be created or written after retries.
 pub fn acquire_lock(
     session_dir: &Path,
     owner: impl Into<String>,
@@ -132,5 +142,31 @@ pub fn acquire_lock(
                     .with_context(|| format!("create lock file {}", lock_file.display()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_lock_handles_missing_and_mismatch() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let session_dir = dir.path();
+
+        // Missing lock file should be ok.
+        release_lock(session_dir, "deadbeef")?;
+
+        // Mismatched owner should leave file intact.
+        let lock_file = lock_file_path(session_dir);
+        fs::write(&lock_file, "owner-a\n")?;
+        release_lock(session_dir, "owner-b")?;
+        assert!(lock_file.exists());
+
+        // Matching owner should remove the lock file.
+        release_lock(session_dir, "owner-a")?;
+        assert!(!lock_file.exists());
+
+        Ok(())
     }
 }
