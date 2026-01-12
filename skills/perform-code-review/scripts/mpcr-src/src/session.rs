@@ -591,6 +591,8 @@ impl ReportsFilters {
 pub struct ReportsOptions {
     /// Include full notes for each review entry.
     pub include_notes: bool,
+    /// Include report markdown contents when available.
+    pub include_report_contents: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -626,6 +628,12 @@ pub struct ReviewSummary {
     /// Report path (if finalized).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_path: Option<String>,
+    /// Report markdown contents (when requested and available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_contents: Option<String>,
+    /// Report read error (when requested and the file could not be read).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_error: Option<String>,
     /// Number of notes attached to the review entry.
     pub notes_count: usize,
     /// Optional full notes (included when requested).
@@ -636,16 +644,32 @@ pub struct ReviewSummary {
 impl ReviewEntry {
     /// Produce a summarized view suitable for report listings.
     #[must_use]
-    pub fn summary(&self, session_dir: &Path, include_notes: bool) -> ReviewSummary {
+    pub fn summary(&self, session_dir: &Path, options: ReportsOptions) -> ReviewSummary {
         let report_path = self
             .report_file
             .as_ref()
             .map(|file| session_dir.join(file).to_string_lossy().to_string());
-        let notes = if include_notes {
+        let notes = if options.include_notes {
             Some(self.notes.clone())
         } else {
             None
         };
+        let mut report_contents = None;
+        let mut report_error = None;
+        if options.include_report_contents {
+            if let Some(ref file) = self.report_file {
+                let path = session_dir.join(file);
+                match fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        report_contents = Some(contents);
+                    }
+                    Err(err) => {
+                        report_error =
+                            Some(format!("read report file {}: {err}", path.display()));
+                    }
+                }
+            }
+        }
         ReviewSummary {
             reviewer_id: self.reviewer_id.clone(),
             session_id: self.session_id.clone(),
@@ -661,6 +685,8 @@ impl ReviewEntry {
             counts: self.counts.clone(),
             report_file: self.report_file.clone(),
             report_path,
+            report_contents,
+            report_error,
             notes_count: self.notes.len(),
             notes,
         }
@@ -707,7 +733,7 @@ pub fn collect_reports(
         if !view.matches_status(entry.status) {
             continue;
         }
-        reviews.push(entry.summary(locator.session_dir(), options.include_notes));
+        reviews.push(entry.summary(locator.session_dir(), options));
     }
 
     ReportsResult {

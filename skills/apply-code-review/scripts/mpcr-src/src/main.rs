@@ -171,7 +171,7 @@ enum SessionCommands {
   mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD
   mpcr session reports in-progress --session-dir .local/reports/code_reviews/YYYY-MM-DD
   mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-notes --only-with-notes
-  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --only-with-report
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --only-with-report --include-report-contents
   mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-status IN_PROGRESS,BLOCKED
   mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --initiator-status RECEIVED --verdict APPROVE
 "#)]
@@ -182,6 +182,7 @@ enum SessionCommands {
 }
 
 #[derive(Args)]
+#[allow(clippy::struct_excessive_bools)]
 struct ReportsArgs {
     #[arg(
         long,
@@ -258,6 +259,12 @@ struct ReportsArgs {
         help = "Include full notes for each review entry."
     )]
     include_notes: bool,
+    #[arg(
+        long,
+        alias = "include-report",
+        help = "Include report markdown contents for each review entry (if available)."
+    )]
+    include_report_contents: bool,
 }
 
 #[derive(Subcommand)]
@@ -979,6 +986,7 @@ fn handle_reports(json: bool, view: ReportsView, args: ReportsArgs) -> anyhow::R
     };
     let options = ReportsOptions {
         include_notes: args.include_notes || args.only_with_notes,
+        include_report_contents: args.include_report_contents,
     };
     let result = collect_reports(&session_data, &session, view, filters, options);
     write_result(json, &result)
