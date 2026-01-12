@@ -1,6 +1,6 @@
 ---
 name: perform-code-review
-description: Perform adversarial code reviews using the UACRP protocol and report template, writing coordination artifacts under `.local/reports/code_reviews/{YYYY-MM-DD}/` and using the bundled `scripts/mpcr` tool for deterministic reviewer/session operations (ID generation, locking, session JSON updates, report file writing).
+description: Perform adversarial code reviews using the UACRP protocol. Use when reviewing code changes, PRs, or diffs. Produces structured review reports with verdicts (APPROVE/REQUEST CHANGES/BLOCK), findings by severity, and evidence-backed proofs.
 compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `scripts/mpcr-src`.
 ---
 
@@ -8,15 +8,16 @@ compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requir
 
 Follow the UACRP protocol in `references/uacrp.md`.
 
-## Available commands
+## Session coordination
 
-Use `scripts/mpcr` for session coordination. Run any command with `--help` for usage.
+Use `scripts/mpcr` for all session operations. Run any command with `--help` for full usage and available options.
 
-- `mpcr id` — generate identifiers
-- `mpcr reviewer register` — register as a reviewer
-- `mpcr reviewer update` — update status/phase
-- `mpcr reviewer note` — append a note
-- `mpcr reviewer finalize` — write report and mark finished
-- `mpcr session show` — inspect session state
-- `mpcr session reports` — list open/closed/in-progress reviews (filters incl. status/phase/verdict + optional notes/report files)
-- `mpcr lock` — manual lock operations
+The `mpcr` wrapper auto-compiles on first run if needed (requires `cargo`). IF compilation fails THEN you SHALL run `cargo build --release --manifest-path scripts/mpcr-src/Cargo.toml` to diagnose.
+
+**Key commands:**
+- `mpcr reviewer register` — register and get your reviewer_id
+- `mpcr reviewer update` — update status/phase as you work
+- `mpcr reviewer note` — append observations
+- `mpcr reviewer finalize` — complete with verdict and report
+- `mpcr session show` — view session state
+- `mpcr session reports` — list/fetch reviews
