@@ -254,73 +254,49 @@ You MAY use any internal workflow you like. The report SHALL include the artifac
 
 ## VI) Report storage & multi-reviewer coordination
 
+You SHALL use `mpcr` for all coordination operations. It handles session management, locking, atomic writes, and report file creation deterministically.
+
 ### Storage structure
 
-IF filesystem write access is available THEN you SHALL write review artifacts under:
+Review artifacts are stored under:
 
-```bash
+```
 {repo_root}/.local/reports/code_reviews/{YYYY-MM-DD}/
-├── _session.json          # Shared coordination state (all reviewers)
-├── _session.json.lock     # Ephemeral lock file during atomic updates
-└── {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md   # Individual review reports
+├── _session.json                              # Shared coordination state
+└── {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md      # Individual review reports
 ```
 
-- `{repo_root}`: repository root
-- `{YYYY-MM-DD}`: review session date (directory groups same-day reviews)
-- `{HH-MM-SS-mmm}`: review start time with milliseconds
-- `{ref}`: sanitized branch/PR ref (filesystem-safe)
-- `{reviewer_id}`: 8-character alphanumeric identifier unique to this reviewer instance
-
-IF filesystem write access is not available THEN you SHALL output the full report in chat AND you SHALL output the session JSON state that would have been written.
-
-In all cases, you SHALL include a pointer line in the report indicating storage location.
+IF filesystem write access is not available THEN you SHALL output the full report in chat.
 
 ---
 
-### Session file (`_session.json`)
+### Session state reference
 
-You SHALL maintain a session file that provides machine-readable coordination state for concurrent and sequential reviewers.
+The session file tracks coordination state. `mpcr` manages this; you observe it.
 
-#### Schema
+**Your status values (`status`):**
 
-```json
-{
-  "schema_version": "1.0.0",
-  "session_date": "{YYYY-MM-DD}",
-  "repo_root": "{absolute_path}",
-  "reviewers": ["{reviewer_id}", ...],
-  "reviews": [
-    {
-      "reviewer_id": "{8_char_id}",
-      "session_id": "{8_char_id}",
-      "target_ref": "{branch_or_pr_ref}",
-      "initiator_status": "{INITIATOR_STATUS}",
-      "status": "{STATUS}",
-      "parent_id": "{parent_reviewer_id_or_null}",
-      "started_at": "{ISO8601_timestamp}",
-      "updated_at": "{ISO8601_timestamp}",
-      "finished_at": "{ISO8601_timestamp_or_null}",
-      "current_phase": "{PHASE_or_null}",
-      "verdict": "{APPROVE|REQUEST_CHANGES|BLOCK|null}",
-      "counts": {
-        "blocker": 0,
-        "major": 0,
-        "minor": 0,
-        "nit": 0
-      },
-      "report_file": "{filename_or_null}",
-      "notes": []
-    }
-  ]
-}
-```
+| Status         | Meaning                                      |
+| -------------- | -------------------------------------------- |
+| `INITIALIZING` | Registered; review not yet started           |
+| `IN_PROGRESS`  | Actively reviewing                           |
+| `FINISHED`     | Completed with verdict and counts            |
+| `CANCELLED`    | Intentionally stopped before completion      |
+| `ERROR`        | Encountered fatal error; see notes           |
+| `BLOCKED`      | Awaiting external dependency or intervention |
 
-- `session_id`: Groups related reviews for the same logical review session
-- `target_ref`: The branch, PR, or commit being reviewed
-- `initiator_status`: Status of the review requester (you SHALL observe but SHALL NOT modify)
-- Multiple sessions for the same `target_ref` MAY exist (distinguished by `session_id`)
+**Review phases (for progress updates):**
 
-#### Initiator status values
+| Phase                | Meaning                              |
+| -------------------- | ------------------------------------ |
+| `INGESTION`          | Parsing diff and context             |
+| `DOMAIN_COVERAGE`    | Evaluating universal domains         |
+| `THEOREM_GENERATION` | Generating must-prove assertions     |
+| `ADVERSARIAL_PROOFS` | Attempting to disprove theorems      |
+| `SYNTHESIS`          | Compiling findings and residual risk |
+| `REPORT_WRITING`     | Producing final report artifact      |
+
+**Initiator status values (you SHALL observe only, you SHALL NOT modify):**
 
 | Status       | Meaning                                          |
 | ------------ | ------------------------------------------------ |
@@ -332,46 +308,15 @@ You SHALL maintain a session file that provides machine-readable coordination st
 | `APPLIED`    | Finished processing feedback (applied/declined)  |
 | `CANCELLED`  | Initiator cancelled the request                  |
 
-You SHALL observe `initiator_status` to understand context (e.g., stop early if `CANCELLED`). You SHALL NOT modify `initiator_status`.
+IF `initiator_status` is `CANCELLED` THEN you MAY stop early.
 
-#### Status values
+---
 
-| Status         | Meaning                                      |
-| -------------- | -------------------------------------------- |
-| `INITIALIZING` | Registered; review not yet started           |
-| `IN_PROGRESS`  | Actively reviewing                           |
-| `FINISHED`     | Completed with verdict and counts            |
-| `CANCELLED`    | Intentionally stopped before completion      |
-| `ERROR`        | Encountered fatal error; see notes           |
-| `BLOCKED`      | Awaiting external dependency or intervention |
+### Notes
 
-#### Phase values (optional granularity)
+Notes enable bidirectional communication with applicators. You SHALL use `mpcr reviewer note` to append yours.
 
-| Phase                | Meaning                              |
-| -------------------- | ------------------------------------ |
-| `INGESTION`          | Parsing diff and context             |
-| `DOMAIN_COVERAGE`    | Evaluating universal domains         |
-| `THEOREM_GENERATION` | Generating must-prove assertions     |
-| `ADVERSARIAL_PROOFS` | Attempting to disprove theorems      |
-| `SYNTHESIS`          | Compiling findings and residual risk |
-| `REPORT_WRITING`     | Producing final report artifact      |
-
-#### Notes array
-
-The `notes` array enables bidirectional communication between reviewers and applicators.
-
-```json
-{
-  "role": "{reviewer|applicator}",
-  "timestamp": "{ISO8601}",
-  "type": "{note_type}",
-  "content": "{free_form_or_structured}"
-}
-```
-
-##### Reviewer note types
-
-You MAY append notes with `role: "reviewer"`:
+**Your note types (`role: "reviewer"`):**
 
 | Type                 | Purpose                                  |
 | -------------------- | ---------------------------------------- |
@@ -382,9 +327,7 @@ You MAY append notes with `role: "reviewer"`:
 | `handoff`            | Context for another reviewer             |
 | `error_detail`       | Details about an error encountered       |
 
-##### Applicator note types (for your awareness)
-
-Applicators MAY append notes with `role: "applicator"`:
+**Applicator note types (for your awareness):**
 
 | Type                   | Purpose                               |
 | ---------------------- | ------------------------------------- |
@@ -395,123 +338,17 @@ Applicators MAY append notes with `role: "applicator"`:
 | `already_addressed`    | Issue was already handled elsewhere   |
 | `acknowledged`         | Read and understood, no action needed |
 
-WHEN you observe applicator notes with `type: "clarification_needed"` THEN you MAY append a follow-up note to respond.
+WHEN you observe `clarification_needed` notes THEN you MAY respond via `mpcr reviewer note`.
 
 ---
 
-### Coordination protocol
+### Coordination behavior
 
-#### Reviewer identity
-
-WHEN you begin a review THEN you SHALL generate an 8-character alphanumeric `reviewer_id` and you SHALL use this identifier consistently in both `_session.json` and the report filename.
-
-You SHALL treat yourself as one of potentially many concurrent reviewers. You SHALL NOT assume you are the only reviewer or the first reviewer.
-
-#### Random value generation
-
-WHEN you need to generate random identifiers (reviewer_id, session_id, lock_owner, or any other random values) THEN you SHALL use `mpcr`:
-
-- `mpcr id hex --bytes 4` (8 chars) for `reviewer_id`, `session_id`, and lock owners.
-- For different identifier lengths, adjust `--bytes` (2N hex characters).
-
-You SHALL NOT read directly from `/dev/urandom` or `/dev/random` as this can cause memory exhaustion and system freezes.
-
-#### Parent-child chain
-
-WHEN you are spawned by another reviewer THEN you SHALL record the spawning reviewer's ID in `parent_id`.
-WHEN you spawn yourself (root reviewer) or are invoked directly by a human THEN `parent_id` SHALL be `null`.
-WHEN you spawn a child reviewer THEN you SHALL pass your `reviewer_id` as their `parent_id`.
-
-You do not need to know your children; the chain is recorded upward only.
-
-#### Session initialization
-
-WHEN you begin AND the session directory does not exist THEN you SHALL create the directory.
-
-WHEN you begin AND `_session.json` does not exist THEN you SHALL create the file with initial schema (yourself as the first entry in `reviewers` and `reviews`).
-
-WHEN you begin AND `_session.json` exists THEN you SHALL acquire the lock, read the file, append yourself to `reviewers` and `reviews`, write the file, and release the lock.
-
-#### Session ID determination
-
-You SHALL determine your `session_id` as follows:
-
-1. IF a `session_id` is explicitly provided (e.g., passed by a parent reviewer) THEN you SHALL use that `session_id`.
-
-2. IF no `session_id` is provided THEN you SHALL examine existing reviews in `_session.json` for the same `target_ref`:
-   - IF any review exists with matching `target_ref` AND status is `INITIALIZING`, `IN_PROGRESS`, or `BLOCKED` THEN you SHALL join that session (use its `session_id`).
-   - IF all reviews for that `target_ref` have status `FINISHED`, `CANCELLED`, or `ERROR` (session is implicitly closed) THEN you SHALL generate a new 8-character `session_id`.
-   - IF no reviews exist for that `target_ref` THEN you SHALL generate a new 8-character `session_id`.
-
-#### Session closure
-
-A session is implicitly closed when ALL reviews sharing that `session_id` have terminal status (`FINISHED`, `CANCELLED`, or `ERROR`).
-
-There is no explicit "close" action. WHEN you review the same `target_ref` after closure THEN you SHALL start a new session with a new `session_id`.
-
-#### Lifecycle updates
-
-You SHALL update your entry in `_session.json` at these points:
-
-1. **Registration:** status `INITIALIZING`, `started_at` set
-2. **Review start:** status `IN_PROGRESS`, `current_phase` updated as work proceeds
-3. **Completion:** status `FINISHED`, `finished_at` set, `verdict` and `counts` populated, `report_file` set
-4. **Abnormal termination:** status `CANCELLED` or `ERROR`, relevant note appended
-
-You SHALL follow the lock acquisition protocol for each update.
-
----
-
-### Lock acquisition protocol
-
-You SHALL use your `reviewer_id` as the lock owner (NOT `$$`) because acquire and release may occur in different processes.
-
-You SHALL hold the lock only while updating `_session.json`, not during the entire review. The ideal flow is:
-
-1. Acquire lock
-2. Read `_session.json`
-3. Modify in memory
-4. Write `_session.json` atomically (write to temp file, then `mv`)
-5. Release lock
-6. Continue review work
-
-IF max retries exceeded THEN you SHALL append an `ERROR` note and proceed without update (report still written).
-
-#### Acquire lock (run before updating `_session.json`)
-
-Use `mpcr` (and prefer `mpcr reviewer ...` / `mpcr applicator ...` commands, which handle locking internally):
-
-- `mpcr lock acquire --session-dir "${session_dir}" --owner "${reviewer_id}" --max-retries 8`
-
-#### Atomic write (while lock held)
-
-Use `mpcr` session update commands (they write `_session.json` via temp file + replace):
-
-- Temp file: `{session_dir}/_session.json.tmp.{lock_owner}`
-- Replace: `{session_dir}/_session.json`
-
-#### Release lock (run after updating `_session.json`)
-
-Use:
-
-- `mpcr lock release --session-dir "${session_dir}" --owner "${reviewer_id}"`
-
-Backoff sequence: 100ms → 200ms → 400ms → 800ms → 1600ms → 3200ms → 6400ms → 6400ms (cap).
-Total max wait before timeout: ~19 seconds.
-
----
-
-### Report file creation
-
-You SHALL NOT create your report file until the review is complete.
-Your session file entry (with `INITIALIZING` or `IN_PROGRESS` status) serves as the authoritative record of an active review.
-
-WHEN your review completes successfully THEN you SHALL:
-
-1. Write the report file: `{HH-MM-SS-mmm}_{ref}_{reviewer_id}.md`
-2. Update `_session.json`: status `FINISHED`, `report_file` set to filename
-
-This ordering ensures other reviewers can observe in-flight reviews via session state before any report file exists.
+You are one of potentially many concurrent reviewers. `mpcr` handles:
+- Unique reviewer ID generation and registration
+- Session ID assignment (joining existing sessions or creating new ones)
+- Parent-child chains when spawned by another reviewer
+- Lock acquisition, atomic writes, and report file creation
 
 ---
 
