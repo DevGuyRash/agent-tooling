@@ -21,7 +21,7 @@ mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-re
 
 **Key commands:**
 - `mpcr applicator wait` — block until reviewers finish
-- `mpcr applicator set-status` — update your progress
-- `mpcr applicator note` — record decisions
+- `mpcr applicator set-status --reviewer-id <ID> --session-id <ID> --initiator-status <STATUS>` — update your progress
+- `mpcr applicator note --reviewer-id <ID> --session-id <ID> --note-type <TYPE> --content <TEXT>` — record decisions
 - `mpcr session show` — view session state
 - `mpcr session reports` — list/fetch reviews
