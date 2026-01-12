@@ -10,7 +10,7 @@ Follow the protocol in `references/code-review-application-protocol.md`.
 
 ## Session coordination
 
-Use `scripts/mpcr` for all session operations. Run any command with `--help` for full usage and available filters.
+You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations. Run any command with `--help` for full usage and available filters.
 
 The `mpcr` wrapper auto-compiles on first run if needed (requires `cargo`). IF compilation fails THEN you SHALL run `cargo build --release --manifest-path scripts/mpcr-src/Cargo.toml` to diagnose.
 
