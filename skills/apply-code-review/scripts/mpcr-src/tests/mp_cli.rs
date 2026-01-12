@@ -868,6 +868,49 @@ fn reports_open_only_with_report() -> anyhow::Result<()> {
 }
 
 #[test]
+fn reports_include_report_contents() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let session_dir = dir.path().join("session");
+    let session = sample_session(&session_dir)?;
+    write_session_file(&session_dir, &session)?;
+
+    let report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(&report_path, "final report body")?;
+
+    let closed = run_reports(
+        &session_dir,
+        &["session", "reports", "closed", "--include-report-contents"],
+    )?;
+    assert_eq!(closed["matching_reviews"].as_u64(), Some(1));
+    let contents = closed["reviews"][0]["report_contents"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("report_contents missing"))?;
+    assert!(contents.contains("final report body"));
+    assert!(closed["reviews"][0]["report_error"].is_null());
+    Ok(())
+}
+
+#[test]
+fn reports_missing_report_file_is_graceful() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let session_dir = dir.path().join("session");
+    let session = sample_session(&session_dir)?;
+    write_session_file(&session_dir, &session)?;
+
+    let closed = run_reports(
+        &session_dir,
+        &["session", "reports", "closed", "--include-report-contents"],
+    )?;
+    assert_eq!(closed["matching_reviews"].as_u64(), Some(1));
+    assert!(closed["reviews"][0]["report_contents"].is_null());
+    let error = closed["reviews"][0]["report_error"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("report_error missing"))?;
+    assert!(!error.trim().is_empty());
+    Ok(())
+}
+
+#[test]
 fn reports_include_notes_empty() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let session_dir = dir.path().join("session");

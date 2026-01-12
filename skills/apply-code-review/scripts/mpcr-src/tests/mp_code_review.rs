@@ -461,7 +461,10 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
             only_with_report: false,
             only_with_notes: true,
         },
-        ReportsOptions { include_notes: true },
+        ReportsOptions {
+            include_notes: true,
+            include_report_contents: false,
+        },
     );
     assert_eq!(only_notes.matching_reviews, 1);
     assert!(
@@ -491,6 +494,59 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         only_reports.reviews[0].report_path.is_some(),
         "expected report_path to be populated"
     );
+
+    Ok(())
+}
+
+#[test]
+fn reports_include_report_contents() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let session_locator = SessionLocator::new(dir.path().to_path_buf());
+    let report_file = "12-00-00-000_refs_heads_main_feedface.md";
+    fs::write(dir.path().join(report_file), "final report body")?;
+
+    let finished = ReviewEntry {
+        reviewer_id: "feedface".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Received,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:00:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::Approve),
+        counts: SeverityCounts::zero(),
+        report_file: Some(report_file.to_string()),
+        notes: Vec::new(),
+    };
+
+    let session = SessionFile {
+        schema_version: "1.0.0".to_string(),
+        session_date: "2026-01-11".to_string(),
+        repo_root: dir.path().to_string_lossy().to_string(),
+        reviewers: vec!["feedface".to_string()],
+        reviews: vec![finished],
+    };
+
+    let result = collect_reports(
+        &session,
+        &session_locator,
+        ReportsView::Closed,
+        ReportsFilters::default(),
+        ReportsOptions {
+            include_notes: false,
+            include_report_contents: true,
+        },
+    );
+
+    assert_eq!(result.matching_reviews, 1);
+    assert_eq!(
+        result.reviews[0].report_contents.as_deref(),
+        Some("final report body")
+    );
+    assert!(result.reviews[0].report_error.is_none());
 
     Ok(())
 }
