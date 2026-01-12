@@ -10,18 +10,13 @@ Follow the protocol in `references/code-review-application-protocol.md`.
 
 ## Session coordination
 
-You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations. Run any command with `--help` for full usage and available filters.
+You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations.
 
 The `mpcr` wrapper auto-compiles on first run if needed (requires `cargo`). IF compilation fails THEN you SHALL run `cargo build --release --manifest-path scripts/mpcr-src/Cargo.toml` to diagnose.
+
+BEFORE using any `mpcr` command, you SHALL run `mpcr --help` to see all available commands, required arguments, and example flows.
 
 **Fetch unreviewed reports:**
 ```
 mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-report-contents --json
 ```
-
-**Key commands:**
-- `mpcr applicator wait` — block until reviewers finish
-- `mpcr applicator set-status --reviewer-id <ID> --session-id <ID> --initiator-status <STATUS>` — update your progress
-- `mpcr applicator note --reviewer-id <ID> --session-id <ID> --note-type <TYPE> --content <TEXT>` — record decisions
-- `mpcr session show` — view session state
-- `mpcr session reports` — list/fetch reviews

@@ -10,14 +10,8 @@ Follow the UACRP protocol in `references/uacrp.md`.
 
 ## Session coordination
 
-You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations. Run any command with `--help` for full usage and available options.
+You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations.
 
 The `mpcr` wrapper auto-compiles on first run if needed (requires `cargo`). IF compilation fails THEN you SHALL run `cargo build --release --manifest-path scripts/mpcr-src/Cargo.toml` to diagnose.
 
-**Key commands:**
-- `mpcr reviewer register --target-ref <REF>` — register and get your reviewer_id and session_id
-- `mpcr reviewer update --reviewer-id <ID> --session-id <ID>` — update status/phase as you work
-- `mpcr reviewer note --reviewer-id <ID> --session-id <ID> --note-type <TYPE> --content <TEXT>` — append observations
-- `mpcr reviewer finalize --reviewer-id <ID> --session-id <ID> --verdict <VERDICT>` — complete with verdict and report
-- `mpcr session show` — view session state
-- `mpcr session reports` — list/fetch reviews
+BEFORE using any `mpcr` command, you SHALL run `mpcr --help` to see all available commands, required arguments, and example flows.
