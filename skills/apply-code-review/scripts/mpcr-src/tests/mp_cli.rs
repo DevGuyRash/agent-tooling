@@ -1,5 +1,6 @@
 //! End-to-end CLI tests for `mpcr`.
 
+use mpcr::paths;
 use mpcr::session::{
     InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus,
     SessionFile, SessionNote, SeverityCounts,
@@ -9,6 +10,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use time::{Date, Month};
 
 fn write_session_file(session_dir: &Path, session: &SessionFile) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(session_dir)?;
@@ -304,6 +306,28 @@ fn session_show_reads_session_file() -> anyhow::Result<()> {
 }
 
 #[test]
+fn session_show_resolves_session_dir_from_repo_root() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    let session = sample_session(&session_dir)?;
+    write_session_file(&session_dir, &session)?;
+
+    let value = run_cmd_json(&[
+        "session",
+        "show",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+    ])?;
+    assert_eq!(value["schema_version"], "1.0.0");
+    assert_eq!(value["reviews"].as_array().map(Vec::len), Some(3));
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_creates_session() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
@@ -382,6 +406,51 @@ fn reviewer_update_changes_status_and_phase() -> anyhow::Result<()> {
     let entry = find_review(&session, "deadbeef", "sess0001")?;
     assert_eq!(entry["status"], "IN_PROGRESS");
     assert_eq!(entry["current_phase"], "INGESTION");
+    Ok(())
+}
+
+#[test]
+fn reviewer_update_resolves_session_dir_from_repo_root() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = out["session_dir"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("session_dir missing"))?
+        .to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "update",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--status",
+        "IN_PROGRESS",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let entry = find_review(&session, "deadbeef", "sess0001")?;
+    assert_eq!(entry["status"], "IN_PROGRESS");
     Ok(())
 }
 
