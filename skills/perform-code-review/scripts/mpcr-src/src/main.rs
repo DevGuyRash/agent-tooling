@@ -111,12 +111,8 @@ enum LockCommands {
   mpcr lock acquire --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
 "#)]
     Acquire {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "OWNER",
@@ -136,12 +132,8 @@ enum LockCommands {
   mpcr lock release --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
 "#)]
     Release {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "OWNER",
@@ -158,12 +150,8 @@ enum SessionCommands {
   mpcr session show --session-dir .local/reports/code_reviews/YYYY-MM-DD
 "#)]
     Show {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
     },
     /// Report-oriented session views (open/closed/in-progress).
     #[command(after_long_help = r#"Examples:
@@ -182,14 +170,38 @@ enum SessionCommands {
 }
 
 #[derive(Args)]
-#[allow(clippy::struct_excessive_bools)]
-struct ReportsArgs {
+struct SessionDirArgs {
     #[arg(
         long,
         value_name = "DIR",
-        help = "Session directory containing `_session.json`."
+        help = "Session directory containing `_session.json` (defaults to repo_root/.local/reports/code_reviews/<date>)."
     )]
+    session_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Repo root used to compute the default session dir (defaults to cwd)."
+    )]
+    repo_root: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "YYYY-MM-DD",
+        help = "Session date used to compute the default session dir (defaults to today, UTC)."
+    )]
+    date: Option<String>,
+}
+
+struct ResolvedSessionInput {
     session_dir: PathBuf,
+    repo_root: PathBuf,
+    session_date: Date,
+}
+
+#[derive(Args)]
+#[allow(clippy::struct_excessive_bools)]
+struct ReportsArgs {
+    #[command(flatten)]
+    session: SessionDirArgs,
     #[arg(
         long,
         value_name = "REF",
@@ -298,24 +310,8 @@ enum ReviewerCommands {
         )]
         target_ref: String,
 
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Override the session directory (otherwise computed from repo_root + date)."
-        )]
-        session_dir: Option<PathBuf>,
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Repository root used to compute the default session directory (defaults to cwd)."
-        )]
-        repo_root: Option<PathBuf>,
-        #[arg(
-            long,
-            value_name = "YYYY-MM-DD",
-            help = "Session date used to compute the default session directory (defaults to today, UTC)."
-        )]
-        date: Option<String>,
+        #[command(flatten)]
+        session: SessionDirArgs,
 
         #[arg(
             long,
@@ -354,12 +350,8 @@ Examples:
   mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --clear-phase
 "#)]
     Update {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "ID8",
@@ -408,12 +400,8 @@ Examples:
   cat review.md | mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict REQUEST_CHANGES --major 2
 "#)]
     Finalize {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json` and where the report file will be written."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "ID8",
@@ -476,12 +464,8 @@ Examples:
   mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type domain_observation --content-json --content '{\"domain\":\"security\",\"note\":\"...\"}'
 "#)]
     Note {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "ID8",
@@ -523,12 +507,8 @@ Example:
   mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
 "#)]
     SetStatus {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "ID8",
@@ -566,12 +546,8 @@ Example:
   mpcr applicator note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type applied --content \"Fixed in commit abc123\"
 "#)]
     Note {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "ID8",
@@ -620,12 +596,8 @@ Examples:
   mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD --target-ref main --session-id <id8>
 "#)]
     Wait {
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Session directory containing `_session.json`."
-        )]
-        session_dir: PathBuf,
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(
             long,
             value_name = "REF",
@@ -679,34 +651,35 @@ fn run() -> anyhow::Result<()> {
         },
 
         Commands::Lock { command } => match command {
-            LockCommands::Acquire {
-                session_dir,
-                owner,
-                max_retries,
-            } => {
+            LockCommands::Acquire { session, owner, max_retries } => {
+                let resolved = resolve_session_input(&session, now.date())?;
                 let cfg = LockConfig { max_retries };
-                let guard = lock::acquire_lock(&session_dir, owner, cfg)?;
+                let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
                 std::mem::forget(guard);
                 write_ok(cli.json)?;
             }
-            LockCommands::Release { session_dir, owner } => {
-                lock::release_lock(&session_dir, owner)?;
+            LockCommands::Release { session, owner } => {
+                let resolved = resolve_session_input(&session, now.date())?;
+                lock::release_lock(&resolved.session_dir, owner)?;
                 write_ok(cli.json)?;
             }
         },
 
         Commands::Session { command } => match command {
-            SessionCommands::Show { session_dir } => {
-                let session = load_session(&SessionLocator::new(session_dir))?;
+            SessionCommands::Show { session } => {
+                let resolved = resolve_session_input(&session, now.date())?;
+                let session = load_session(&SessionLocator::new(resolved.session_dir))?;
                 write_result(cli.json, &session)?;
             }
             SessionCommands::Reports { command } => match command {
-                ReportsCommands::Open(args) => handle_reports(cli.json, ReportsView::Open, args)?,
+                ReportsCommands::Open(args) => {
+                    handle_reports(cli.json, now.date(), ReportsView::Open, args)?;
+                }
                 ReportsCommands::Closed(args) => {
-                    handle_reports(cli.json, ReportsView::Closed, args)?;
+                    handle_reports(cli.json, now.date(), ReportsView::Closed, args)?;
                 }
                 ReportsCommands::InProgress(args) => {
-                    handle_reports(cli.json, ReportsView::InProgress, args)?;
+                    handle_reports(cli.json, now.date(), ReportsView::InProgress, args)?;
                 }
             },
         },
@@ -714,27 +687,17 @@ fn run() -> anyhow::Result<()> {
         Commands::Reviewer { command } => match command {
             ReviewerCommands::Register {
                 target_ref,
-                session_dir,
-                repo_root,
-                date,
+                session,
                 reviewer_id,
                 session_id,
                 parent_id,
             } => {
-                let repo_root = match repo_root {
-                    Some(repo_root) => repo_root,
-                    None => std::env::current_dir().context("get cwd")?,
-                };
-                let session_date = match date.as_deref() {
-                    Some(d) => parse_date_ymd(d)?,
-                    None => now.date(),
-                };
-
-                let session = resolve_session_locator(&repo_root, session_date, session_dir);
+                let resolved = resolve_session_input(&session, now.date())?;
+                let session = SessionLocator::new(resolved.session_dir);
 
                 let res = register_reviewer(RegisterReviewerParams {
-                    repo_root,
-                    session_date,
+                    repo_root: resolved.repo_root,
+                    session_date: resolved.session_date,
                     session,
                     target_ref,
                     reviewer_id,
@@ -746,20 +709,21 @@ fn run() -> anyhow::Result<()> {
             }
 
             ReviewerCommands::Update {
-                session_dir,
+                session,
                 reviewer_id,
                 session_id,
                 status,
                 phase,
                 clear_phase,
             } => {
+                let resolved = resolve_session_input(&session, now.date())?;
                 let phase = if clear_phase {
                     Some(None)
                 } else {
                     phase.map(Some)
                 };
                 let params = UpdateReviewParams {
-                    session: SessionLocator::new(session_dir),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     status,
@@ -771,7 +735,7 @@ fn run() -> anyhow::Result<()> {
             }
 
             ReviewerCommands::Finalize {
-                session_dir,
+                session,
                 reviewer_id,
                 session_id,
                 verdict,
@@ -787,8 +751,9 @@ fn run() -> anyhow::Result<()> {
                     None => read_stdin_to_string().context("read report markdown from stdin")?,
                 };
 
+                let resolved = resolve_session_input(&session, now.date())?;
                 let res = finalize_review(FinalizeReviewParams {
-                    session: SessionLocator::new(session_dir),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     verdict,
@@ -805,16 +770,17 @@ fn run() -> anyhow::Result<()> {
             }
 
             ReviewerCommands::Note {
-                session_dir,
+                session,
                 reviewer_id,
                 session_id,
                 note_type,
                 content,
                 content_json,
             } => {
+                let resolved = resolve_session_input(&session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(session_dir),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id: reviewer_id.clone(),
                     session_id,
                     role: NoteRole::Reviewer,
@@ -829,18 +795,19 @@ fn run() -> anyhow::Result<()> {
 
         Commands::Applicator { command } => match command {
             ApplicatorCommands::SetStatus {
-                session_dir,
+                session,
                 reviewer_id,
                 session_id,
                 initiator_status,
                 lock_owner,
             } => {
+                let resolved = resolve_session_input(&session, now.date())?;
                 let lock_owner = match lock_owner {
                     Some(lock_owner) => lock_owner,
                     None => id::random_id8()?,
                 };
                 let params = SetInitiatorStatusParams {
-                    session: SessionLocator::new(session_dir),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     initiator_status,
@@ -852,7 +819,7 @@ fn run() -> anyhow::Result<()> {
             }
 
             ApplicatorCommands::Note {
-                session_dir,
+                session,
                 reviewer_id,
                 session_id,
                 note_type,
@@ -860,13 +827,14 @@ fn run() -> anyhow::Result<()> {
                 content_json,
                 lock_owner,
             } => {
+                let resolved = resolve_session_input(&session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 let lock_owner = match lock_owner {
                     Some(lock_owner) => lock_owner,
                     None => id::random_id8()?,
                 };
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(session_dir),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     role: NoteRole::Applicator,
@@ -879,11 +847,16 @@ fn run() -> anyhow::Result<()> {
             }
 
             ApplicatorCommands::Wait {
-                session_dir,
+                session,
                 target_ref,
                 session_id,
             } => {
-                wait_for_reviews(&session_dir, target_ref.as_deref(), session_id.as_deref())?;
+                let resolved = resolve_session_input(&session, now.date())?;
+                wait_for_reviews(
+                    &resolved.session_dir,
+                    target_ref.as_deref(),
+                    session_id.as_deref(),
+                )?;
                 write_ok(cli.json)?;
             }
         },
@@ -892,15 +865,28 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_session_locator(
-    repo_root: &Path,
-    session_date: Date,
-    override_dir: Option<PathBuf>,
-) -> SessionLocator {
-    override_dir.map_or_else(
-        || SessionLocator::from_repo_root(repo_root, session_date),
-        SessionLocator::new,
-    )
+fn resolve_session_input(
+    args: &SessionDirArgs,
+    default_date: Date,
+) -> anyhow::Result<ResolvedSessionInput> {
+    let repo_root = match args.repo_root.as_ref() {
+        Some(repo_root) => repo_root.clone(),
+        None => std::env::current_dir().context("get cwd")?,
+    };
+    let session_date = match args.date.as_deref() {
+        Some(date) => parse_date_ymd(date)?,
+        None => default_date,
+    };
+    let session_dir = args.session_dir.as_ref().map_or_else(
+        || mpcr::paths::session_paths(&repo_root, session_date).session_dir,
+        std::clone::Clone::clone,
+    );
+
+    Ok(ResolvedSessionInput {
+        session_dir,
+        repo_root,
+        session_date,
+    })
 }
 
 fn parse_date_ymd(s: &str) -> anyhow::Result<Date> {
@@ -970,8 +956,14 @@ fn write_result<T: Serialize>(json: bool, value: &T) -> anyhow::Result<()> {
     }
 }
 
-fn handle_reports(json: bool, view: ReportsView, args: ReportsArgs) -> anyhow::Result<()> {
-    let session = SessionLocator::new(args.session_dir);
+fn handle_reports(
+    json: bool,
+    default_date: Date,
+    view: ReportsView,
+    args: ReportsArgs,
+) -> anyhow::Result<()> {
+    let resolved = resolve_session_input(&args.session, default_date)?;
+    let session = SessionLocator::new(resolved.session_dir);
     let session_data = load_session(&session)?;
     let filters = ReportsFilters {
         target_ref: args.target_ref,
@@ -1035,8 +1027,10 @@ fn wait_for_reviews(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mpcr::paths;
     use mpcr::session::{InitiatorStatus, ReviewEntry, ReviewVerdict, ReviewerStatus, SessionFile, SeverityCounts};
     use std::fs;
+    use time::Month;
 
     #[test]
     fn parse_date_ymd_valid_and_invalid() -> anyhow::Result<()> {
@@ -1088,6 +1082,38 @@ mod tests {
         fs::write(session_dir.join("_session.json"), body)?;
 
         wait_for_reviews(&session_dir, None, None)?;
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_session_input_prefers_override_dir() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let override_dir = dir.path().join("override");
+        let repo_root = dir.path().join("repo");
+        let args = SessionDirArgs {
+            session_dir: Some(override_dir.clone()),
+            repo_root: Some(repo_root.clone()),
+            date: Some("2026-01-11".to_string()),
+        };
+        let fallback = Date::from_calendar_date(2026, Month::January, 12)?;
+        let resolved = resolve_session_input(&args, fallback)?;
+        assert_eq!(resolved.session_dir, override_dir);
+        assert_eq!(resolved.repo_root, repo_root);
+        assert_eq!(resolved.session_date.to_string(), "2026-01-11");
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_session_input_computes_default_dir() -> anyhow::Result<()> {
+        let repo_root = tempfile::tempdir()?;
+        let args = SessionDirArgs {
+            session_dir: None,
+            repo_root: Some(repo_root.path().to_path_buf()),
+            date: Some("2026-01-11".to_string()),
+        };
+        let resolved = resolve_session_input(&args, Date::from_calendar_date(2026, Month::January, 12)?)?;
+        let expected = paths::session_paths(repo_root.path(), Date::from_calendar_date(2026, Month::January, 11)?);
+        assert_eq!(resolved.session_dir, expected.session_dir);
         Ok(())
     }
 }
