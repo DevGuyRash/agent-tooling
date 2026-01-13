@@ -6,23 +6,111 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 # Perform Code Review
 
-**Ingestion Protocol:** Before reviewing any code, you must read `<skills-file-root>/references/uacrp.md` in **chunks of 500 line** batches. Do not attempt to process the whole file at once. The protocol defines domains, evidence standards, severity rubrics, and the report template you MUST use. Process it in 500-line blocks to ensure every rule is retained and no context is lost.
-**Action:** Once—and only once—you have ingested the full protocol using this chunking method, proceed to perform code review following ALL procedures outlined in `<skills-file-root>/references/uacrp.md`.
+Perform an adversarial code review using UACRP and coordinate artifacts via `mpcr`.
+
+## Non-negotiables (do these every time)
+
+- You SHALL produce a UACRP report (Sections 0–11) with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`.
+- You SHALL reuse the same `reviewer_id` for **all** reviews you perform in this repo (even across multiple target refs).
+- You SHALL keep coordination state up to date via `mpcr` (status, phase, notes, counts).
+- You SHALL NOT leave scratch files behind in the repo when you finish (see Scratch policy below).
+
+## UACRP ingestion (once per conversation)
+
+Before reviewing any code, you SHALL read `<skills-file-root>/references/uacrp.md`.
+
+- IF you need to ingest it in parts THEN you SHALL read it in **<= 500-line chunks**.
+- IF you have already ingested UACRP earlier in this conversation THEN you SHALL NOT re-ingest it; proceed with the workflow below.
 
 ## Deliverables
 
 - A UACRP report (Sections 0–11) with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`
 - Findings anchored to specific code locations with evidence
-- Report saved via `mpcr` (or output to chat if unavailable)
+- Report saved via `mpcr reviewer finalize` (or output to chat if `mpcr` is unavailable)
 
 ## Workflow
 
-You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file. The CLI is located at `<skills-file-root>/scripts/mpcr` (it auto-compiles on first run; requires `cargo`). Run `mpcr --help` for full command reference.
 
+### 0) Register and capture deterministic context (recommended)
+
+Register once per target ref and capture the returned context into environment variables:
+
+```sh
+eval "$(mpcr reviewer register --target-ref '<REF>' --emit-env sh)"
 ```
-mpcr reviewer register --target-ref HEAD
-mpcr reviewer complete --review-id ID --verdict REQUEST_CHANGES --report-file report.md
-mpcr reviewer note --review-id ID --note-type question --content "..."
+
+This sets:
+- `MPCR_REVIEWER_ID` (your stable identity for this agent process; reused across target refs)
+- `MPCR_SESSION_ID` (the session for this target ref)
+- `MPCR_SESSION_DIR`, `MPCR_SESSION_FILE`, `MPCR_TARGET_REF`
+
+IF `MPCR_REVIEWER_ID` is already set by the launcher THEN `mpcr` will reuse it. Otherwise `mpcr` generates one and exports it; it remains stable for the rest of the process.
+
+### 1) Target ref selection (use high-quality, specific refs)
+
+**Target ref examples (use high-quality, specific refs):**
+- Commit: `8a99441ef6189b57881fa7f9127bb0eb440af651`
+- Branch: `main` or `refs/heads/main`
+- PR: `pr/123` (or your repo’s convention)
+- Worktree / uncommitted: `worktree:feature/foo (uncommitted)`
+
+### Switching target refs (same reviewer, new session context)
+
+WHEN you switch to reviewing a different target ref THEN you SHALL re-run register and refresh the exported context:
+
+```sh
+eval "$(mpcr reviewer register --target-ref '<NEW_REF>' --emit-env sh)"
+```
+
+This reuses `MPCR_REVIEWER_ID` and updates `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review.
+
+### 2) Keep coordination fields updated while you work
+
+You SHALL set `status` and `phase` at minimum at the boundaries below:
+
+```sh
+mpcr reviewer update --status IN_PROGRESS --phase INGESTION
+mpcr reviewer update --phase DOMAIN_COVERAGE
+mpcr reviewer update --phase THEOREM_GENERATION
+mpcr reviewer update --phase ADVERSARIAL_PROOFS
+mpcr reviewer update --phase SYNTHESIS
+mpcr reviewer update --phase REPORT_WRITING
+```
+
+WHEN you need clarification, are blocked, or discover an early blocker THEN you SHALL add a note (`question`, `blocker_preview`, `escalation_trigger`, `error_detail`, etc) via `mpcr reviewer note`.
+IF you expect a non-`APPROVE` verdict THEN you SHOULD post a `blocker_preview` note as soon as the failure mode is clear (do not wait until the full report is written).
+
+### 3) Finalize without leaving scratch files
+
+You SHALL finalize via `mpcr reviewer finalize` and you SHALL record accurate severity counts (they MUST match the report).
+`mpcr reviewer finalize` defaults all counts to `0`; you SHALL pass the real counts via `--blocker/--major/--minor/--nit` (explicitly include zeros if needed).
+
+Prefer stdin / heredocs so you do not leave a `report.md` behind:
+
+```sh
+mpcr reviewer finalize --verdict REQUEST_CHANGES --major 2 <<'EOF'
+## Adversarial Code Review: <Ref>
+...
+EOF
+```
+
+## Scratch policy (avoid repo litter)
+
+- You SHOULD NOT create scratch markdown files in the repo root.
+- IF you must write scratch files to disk THEN you SHALL write them under `.local/scratch/code_reviews/<reviewer_id>/<session_id>/` to avoid collisions across target refs.
+- WHEN you finish the review THEN you SHALL delete your scratch directory:
+
+```sh
+SCRATCH_DIR=".local/scratch/code_reviews/$MPCR_REVIEWER_ID/$MPCR_SESSION_ID"
+mkdir -p "$SCRATCH_DIR"
+# Example scratch file path (optional):
+#   SCRATCH_REPORT="$SCRATCH_DIR/report.md"
+#   mpcr reviewer finalize \
+#     --verdict APPROVE --report-file "$SCRATCH_REPORT"
+rm -rf "$SCRATCH_DIR"
+# Optional: cleanup all scratch for this reviewer id:
+#   rm -rf ".local/scratch/code_reviews/$MPCR_REVIEWER_ID"
 ```
 
 ## Inputs

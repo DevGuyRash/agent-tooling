@@ -294,6 +294,40 @@ IF filesystem write access is not available THEN you SHALL output the full repor
 
 ---
 
+### Reviewer identity (stable `reviewer_id`)
+
+The `reviewer_id` identifies **you** (the executor) and SHALL be reused across all reviews you perform in this repo, even when:
+- you review multiple target refs (multiple commits/branches/PRs)
+- you review on multiple dates (multiple session directories)
+
+WHEN you start a review THEN you SHALL reuse your existing `reviewer_id`. You SHALL NOT rely on `mpcr`’s default random `reviewer_id`.
+
+IF you do not yet have a stable `reviewer_id` for this repo THEN you SHALL set one once per reviewer process and reuse it for all subsequent reviews.
+
+Preferred: use `mpcr reviewer register --emit-env sh` and `eval` its exports; this sets `MPCR_REVIEWER_ID` and the current session context so later commands can omit repeated flags:
+
+```sh
+eval "$(mpcr reviewer register --target-ref '<REF>' --emit-env sh)"
+```
+
+IF the launcher needs a stable reviewer identity across runs THEN it SHOULD set `MPCR_REVIEWER_ID` (an id8) before invoking `mpcr`.
+
+WHEN you run `mpcr reviewer register` THEN you SHOULD include `--emit-env sh` and `eval` the output to keep the current context deterministic for later commands.
+
+WHEN you switch to a different `target_ref` THEN you SHALL re-run `mpcr reviewer register --target-ref '<NEW_REF>' --emit-env sh` and `eval` its output to update `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review (while keeping the same `MPCR_REVIEWER_ID`).
+
+### Target ref selection (including worktree reviews)
+
+`mpcr` requires a `target_ref` string so reviews can be correlated. Choose a `target_ref` that is specific and auditable.
+
+Examples:
+- Commit SHA: `8a99441ef6189b57881fa7f9127bb0eb440af651`
+- Branch: `main` or `refs/heads/main`
+- PR: `pr/123` (or your repo’s convention)
+- Worktree / uncommitted changes: `worktree:feature/foo (uncommitted)`
+
+WHEN you are reviewing a worktree (no commit) THEN you SHALL still set a `target_ref` that clearly signals “uncommitted” AND you SHALL include `git status` / diff anchors in your report’s Change Inventory / Verification Ledger.
+
 ### Session state reference
 
 The session file tracks coordination state. `mpcr` manages this; you observe it.
@@ -366,8 +400,10 @@ WHEN you observe `clarification_needed` notes THEN you MAY respond via `mpcr rev
 
 **Example:**
 ```bash
-mpcr reviewer note --review-id REVIEW_ID \
-  --note-type question \
+# If you previously ran:
+#   eval "$(mpcr reviewer register --target-ref '<REF>' --emit-env sh)"
+# then reviewer/session context is already set and you can omit `--reviewer-id/--session-id`.
+mpcr reviewer note --note-type question \
   --content "Is the rate limiter expected to persist across process restarts, or is in-memory acceptable?"
 ```
 
@@ -376,7 +412,7 @@ mpcr reviewer note --review-id REVIEW_ID \
 ### Coordination behavior
 
 You are one of potentially many concurrent reviewers. `mpcr` handles:
-- Unique reviewer ID generation and registration
+- Reviewer registration and coordination (you SHOULD supply a stable `reviewer_id`; do not rely on the default random id)
 - Session ID assignment (joining existing sessions or creating new ones)
 - Parent-child chains when spawned by another reviewer
 - Lock acquisition, atomic writes, and report file creation

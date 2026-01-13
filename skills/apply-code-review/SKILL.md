@@ -6,8 +6,12 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 # Apply Code Review
 
-**Ingestion Protocol:** Before reviewing any code, you must read `<skills-file-root>/references/code-review-application-protocol.md` in **chunks of 500 line** batches. It defines status values, note types, and disposition formats you MUST use. Do not attempt to process the whole file at once. Process it in 500-line blocks to ensure every rule is retained and no context is lost.
-**Action:** Once—and only once—you have ingested the full protocol using this chunking method, proceed to apply code review feedback following ALL procedures outlined in `<skills-file-root>/references/code-review-application-protocol.md`.
+## Ingestion protocol (once per conversation)
+
+Before applying any code changes, you SHALL read `<skills-file-root>/references/code-review-application-protocol.md`.
+
+- IF you need to ingest it in parts THEN you SHALL read it in **<= 500-line chunks**.
+- IF you have already ingested the protocol earlier in this conversation THEN you SHALL NOT re-ingest it; proceed with the workflow below.
 
 ## Deliverables
 
@@ -17,13 +21,15 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 ## Workflow
 
-You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and and for gathering, viewing, and interacting with review reports. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and for gathering, viewing, and interacting with review reports. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
 
 ```
 mpcr session reports closed --include-report-contents --json   # Fetch reports
-mpcr applicator note --session-id ID --review-id ID --note-type applied --content "..."
-mpcr applicator set-status --status APPLYING
+mpcr applicator note --reviewer-id ID --session-id ID --note-type applied --content "..."
+mpcr applicator set-status --reviewer-id ID --session-id ID --initiator-status APPLYING
 ```
+
+Tip: IF you are processing one review entry at a time THEN you MAY export `MPCR_SESSION_DIR`, `MPCR_REVIEWER_ID`, and `MPCR_SESSION_ID` for that entry and omit repeated flags in subsequent `mpcr` commands.
 
 Read each report, then read the actual code at the referenced anchors. Verify findings before deciding to fix, decline, or defer.
 

@@ -143,7 +143,7 @@ Optional fields: `changes` (files/lines modified), `tracking` (issue URL for def
 
 **Example:**
 ```bash
-mpcr applicator note --session-id SESSION_ID --review-id REVIEWER_ID \
+mpcr applicator note --session-id SESSION_ID --reviewer-id REVIEWER_ID \
   --note-type applied \
   --content-json '{
     "finding_ref": "BLOCKER: SQL injection in verify_user()",
@@ -154,6 +154,8 @@ mpcr applicator note --session-id SESSION_ID --review-id REVIEWER_ID \
 ```
 
 `SESSION_ID` and `REVIEWER_ID` come from the JSON output of `mpcr session reports`.
+
+IF you have set `MPCR_SESSION_ID` and `MPCR_REVIEWER_ID` in your environment for the current review entry THEN you MAY omit `--session-id/--reviewer-id` flags in `mpcr` commands.
 
 ### Status progression
 
