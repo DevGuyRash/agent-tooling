@@ -30,7 +30,7 @@ use time::{Date, Month, OffsetDateTime};
 `mpcr` manages a shared *session directory* containing `_session.json`, a lock file, and reviewer report markdown files.\n\
 All writers acquire `_session.json.lock` and update `_session.json` via an atomic temp-file replace to avoid races.\n\n\
 Use `--json` for machine-readable output.\n\
-Without `--json`, structured results are printed as one-line JSON and successful mutations print `ok`.",
+Without `--json`, most commands print compact one-line JSON; `id` commands print raw ids and successful mutations print `ok`.",
     after_long_help = r#"Session directory layout (relative to repo root):
   .local/reports/code_reviews/YYYY-MM-DD/
     _session.json
@@ -319,7 +319,7 @@ struct ReportsArgs {
     include_notes: bool,
     #[arg(
         long,
-        alias = "include-report",
+        visible_alias = "include-report",
         help = "Include report markdown contents for each review entry (if available)."
     )]
     include_report_contents: bool,
@@ -539,10 +539,10 @@ Examples:
 
 Examples:
   # If you used `--emit-env sh` earlier, you can omit repeated flags:
-  mpcr reviewer note --note-type question --content \"Can you clarify X?\"
+  mpcr reviewer note --note-type question --content "Can you clarify X?"
 
-  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type question --content \"Can you clarify X?\"
-  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type domain_observation --content-json --content '{\"domain\":\"security\",\"note\":\"...\"}'
+  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type question --content "Can you clarify X?"
+  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type domain_observation --content-json --content '{"domain":"security","note":"..."}'
 "#)]
     Note {
         #[command(flatten)]
@@ -563,7 +563,7 @@ Examples:
         session_id: String,
         #[arg(
             long,
-            alias = "type",
+            visible_alias = "type",
             value_enum,
             ignore_case = true,
             value_name = "NOTE_TYPE",
@@ -633,9 +633,9 @@ Example:
 
 Example:
   # If MPCR_SESSION_DIR / MPCR_SESSION_ID / MPCR_REVIEWER_ID are set:
-  mpcr applicator note --note-type applied --content \"Fixed in commit abc123\"
+  mpcr applicator note --note-type applied --content "Fixed in commit abc123"
 
-  mpcr applicator note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type applied --content \"Fixed in commit abc123\"
+  mpcr applicator note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type applied --content "Fixed in commit abc123"
 "#)]
     Note {
         #[command(flatten)]
@@ -656,7 +656,7 @@ Example:
         session_id: String,
         #[arg(
             long,
-            alias = "type",
+            visible_alias = "type",
             value_enum,
             ignore_case = true,
             value_name = "NOTE_TYPE",
