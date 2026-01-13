@@ -7,6 +7,14 @@
 
 ---
 
+## Deliverables (at a glance)
+
+- You SHALL produce a Markdown report following the template (Sections 0–11), with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`.
+- You SHALL provide evidence anchors and confidence labels for non-trivial claims. Any claim that remains **Assumed** or **Unknown** SHALL appear in Residual Risk with a verification plan.
+- IF filesystem write access is available THEN you SHALL record coordination artifacts under `.local/reports/code_reviews/YYYY-MM-DD/` managed by `mpcr`.
+
+---
+
 ## Overlays & precedence
 
 UACRP is a baseline. Overlays MAY customize, extend, or restrict the baseline for specific contexts (repo, language/framework, policy, scope).
@@ -37,6 +45,16 @@ WHEN an overlay relaxes security, correctness, or compatibility expectations bel
 
 WHEN overlay boundaries are ambiguous THEN you SHALL treat all appended context after the baseline as a single overlay, OR request clarification before proceeding.
 
+### Overlay example (non-normative)
+
+```md
+# Overlay: Repo constraints (example)
+- WHEN you record the Verification ledger THEN you SHALL include the required checks: {commands/CI jobs/artifacts}.
+- WHEN you evaluate scope THEN you SHALL treat these areas as out of scope: {paths/domains explicitly excluded}.
+- WHEN you assess contracts and compatibility THEN you SHALL treat these as contract surfaces: {APIs/configs/schemas treated as public}.
+- WHEN you generate theorems THEN you SHALL include these additional theorems: {domain-specific proof obligations}.
+```
+
 ---
 
 ## 0) Non‑negotiable review rules
@@ -63,8 +81,10 @@ WHEN overlay boundaries are ambiguous THEN you SHALL treat all appended context 
    WHEN additional cycles stop producing new failure modes, evidence, or mitigations THEN you SHALL stop.
    IF you are forced to stop due to missing context or tooling THEN you SHALL state that explicitly in Residual Risk.
 
+   *In practice:* One thorough pass through all in-scope domains is usually sufficient. Stop when re-reading the code yields no new insights.
+
 7. **Always produce a verdict.**
-   WHEN you complete the review THEN you SHALL conclude with exactly one verdict: `APPROVE`, `REQUEST CHANGES`, or `BLOCK`.
+   WHEN you complete the review THEN you SHALL conclude with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`.
 
 ---
 
@@ -196,6 +216,8 @@ WHEN you document a theorem or high-risk conclusion THEN you SHALL label confide
 - **Assumed:** plausible but not evidenced here → SHALL appear in Residual Risk with a verification plan.
 - **Unknown:** cannot be determined from available info → SHALL become a Finding or a Residual Risk item (with an explicit question/plan).
 
+*Calibration:* SQL injection visible in code = Verified (static analysis is objective). Race condition requiring specific timing = Supported (requires inference). External system behavior = Assumed.
+
 WHEN evidence anchors are absent THEN you SHALL NOT use: “safe”, “correct”, “no risk”, “handles all cases”, “race-free”, “secure”, “backwards compatible”.
 
 ---
@@ -255,6 +277,8 @@ You MAY use any internal workflow you like. The report SHALL include the artifac
 ## VI) Report storage & multi-reviewer coordination
 
 You SHALL use `mpcr` for all coordination operations. It handles session management, locking, atomic writes, and report file creation deterministically.
+
+WHEN you run `mpcr` from the target repository's root THEN you MAY omit `--repo-root` (it defaults to the current working directory; session directory derives from repo root and date).
 
 ### Storage structure
 
@@ -340,6 +364,13 @@ Notes enable bidirectional communication with applicators. You SHALL use `mpcr r
 
 WHEN you observe `clarification_needed` notes THEN you MAY respond via `mpcr reviewer note`.
 
+**Example:**
+```bash
+mpcr reviewer note --review-id REVIEW_ID \
+  --note-type question \
+  --content "Is the rate limiter expected to persist across process restarts, or is in-memory acceptable?"
+```
+
 ---
 
 ### Coordination behavior
@@ -359,7 +390,7 @@ You are one of potentially many concurrent reviewers. `mpcr` handles:
 ### 0) Summary
 
 - **Intent:** {what changed; expected behavior}
-- **Verdict:** APPROVE / REQUEST CHANGES / BLOCK
+- **Verdict:** APPROVE / REQUEST_CHANGES / BLOCK
 - **Severity Counts:** {X BLOCKER, Y MAJOR, Z MINOR, W NIT}
 - **Top Risks (most impact first):**
   1. ...
