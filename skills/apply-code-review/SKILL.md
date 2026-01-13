@@ -24,7 +24,7 @@ Before applying any code changes, you SHALL read `<skills-file-root>/references/
 You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and for gathering, viewing, and interacting with review reports. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
 
 ```
-mpcr session reports closed --include-report-contents --json   # Fetch reports
+mpcr session reports closed --include-notes --include-report-contents --json   # Fetch reports
 mpcr applicator note --reviewer-id ID --session-id ID --note-type applied --content "..."
 mpcr applicator set-status --reviewer-id ID --session-id ID --initiator-status APPLYING
 ```

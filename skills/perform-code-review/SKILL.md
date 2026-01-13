@@ -78,8 +78,20 @@ mpcr reviewer update --phase SYNTHESIS
 mpcr reviewer update --phase REPORT_WRITING
 ```
 
-WHEN you need clarification, are blocked, or discover an early blocker THEN you SHALL add a note (`question`, `blocker_preview`, `escalation_trigger`, `error_detail`, etc) via `mpcr reviewer note`.
-IF you expect a non-`APPROVE` verdict THEN you SHOULD post a `blocker_preview` note as soon as the failure mode is clear (do not wait until the full report is written).
+Notes are a shared scratchpad between you and the applicator.
+
+WHEN you notice an observation you may want to cite later (or that could help the applicator start early) THEN you SHOULD write a note via `mpcr reviewer note` instead of holding it in your head.
+
+WHEN you write a note THEN you SHALL include code anchors for each involved location: `path:line` plus the function/symbol.
+IF the note implies a merge condition or verification step THEN you SHOULD state it explicitly.
+
+WHEN you discover a likely non-`APPROVE` outcome THEN you SHALL post a `blocker_preview` note early with merge condition(s) and anchors (do not wait for the full report).
+
+Example:
+
+```sh
+mpcr reviewer note --note-type blocker_preview --content "Merge conditions: run required checks and add evidence to the report. Anchors: crates/foo/src/bar.rs:123 (fn handle_request), crates/foo/src/baz.rs:77 (impl Service::call)."
+```
 
 ### 3) Finalize without leaving scratch files
 

@@ -372,7 +372,7 @@ IF `initiator_status` is `CANCELLED` THEN you MAY stop early.
 
 ### Notes
 
-Notes enable bidirectional communication with applicators. You SHALL use `mpcr reviewer note` to append yours.
+Notes are a shared scratchpad between reviewer and applicator. You SHALL use `mpcr reviewer note` to record early observations and merge conditions with concrete code anchors.
 
 **Your note types (`role: "reviewer"`):**
 

@@ -99,7 +99,7 @@ You SHALL wait for reviewers with non-terminal `status` (`INITIALIZING`, `IN_PRO
 You SHALL fetch completed reviews you haven't processed yet:
 
 ```
-mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-report-contents --json
+mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-notes --include-report-contents --json
 ```
 
 The `report_contents` field contains the full markdown with actionable findings and code anchors. You SHALL run `mpcr session reports closed --help` for all available filters.
