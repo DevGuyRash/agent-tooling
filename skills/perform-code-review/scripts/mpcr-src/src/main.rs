@@ -58,7 +58,12 @@ Common flows:
   mpcr reviewer register --target-ref main --reviewer-id <id8>
   mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --status IN_PROGRESS --phase INGESTION
 
-  # Applicator
+  # Applicator (recommended)
+  mpcr session reports closed --include-report-contents --json
+  mpcr applicator wait
+  mpcr applicator set-status --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
+
+  # Applicator (explicit session dir)
   mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD
   mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
 "#
@@ -679,10 +684,15 @@ Example:
   FINISHED, CANCELLED, ERROR
 
 Examples:
-  # Wait for *all* reviews in the session dir:
-  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD
+  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set), wait for *all* reviews:
+  mpcr applicator wait
 
-  # Wait for a specific target/session id:
+  # Wait for a specific target/session id (env-driven; flags optional):
+  export MPCR_TARGET_REF=main
+  export MPCR_SESSION_ID=<id8>
+  mpcr applicator wait
+
+  # Explicit flags (no env):
   mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD --target-ref main --session-id <id8>
 "#)]
     Wait {
