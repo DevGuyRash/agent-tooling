@@ -145,7 +145,7 @@ Optional fields: `changes` (files/lines modified), `tracking` (issue URL for def
 ```bash
 mpcr applicator note --session-id SESSION_ID --reviewer-id REVIEWER_ID \
   --note-type applied \
-  --content-json '{
+  --content-json --content '{
     "finding_ref": "BLOCKER: SQL injection in verify_user()",
     "anchor": "auth.py:21-22",
     "disposition": "applied",
