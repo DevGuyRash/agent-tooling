@@ -21,9 +21,9 @@
 // - Edit BANNED_PREFIXES if you want to add/remove banned families.
 // - Tweak `should_skip_dir()` if your repo uses a different layout.
 
+use anyhow::{bail, Context};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{bail, Context};
 
 enum MatchKind {
     MacroOrCall,

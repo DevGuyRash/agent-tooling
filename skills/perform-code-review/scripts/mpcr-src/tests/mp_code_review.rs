@@ -1,13 +1,14 @@
 //! Integration tests for `mpcr` session coordination primitives.
 
+use anyhow::{bail, ensure};
 use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
-    collect_reports, finalize_review, register_reviewer, set_initiator_status, FinalizeReviewParams,
-    InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions,
-    ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionFile,
-    SessionLocator, SessionNote, SetInitiatorStatusParams, SeverityCounts,
+    collect_reports, finalize_review, register_reviewer, set_initiator_status,
+    FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams,
+    ReportsFilters, ReportsOptions, ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionFile, SessionLocator, SessionNote, SetInitiatorStatusParams,
+    SeverityCounts,
 };
-use anyhow::{bail, ensure};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -34,7 +35,10 @@ fn lock_acquire_blocks_until_timeout_then_release() -> anyhow::Result<()> {
     let Err(err) = result else {
         bail!("second acquire should fail");
     };
-    ensure!(err.to_string().contains("LOCK_TIMEOUT"), "unexpected error: {err:?}");
+    ensure!(
+        err.to_string().contains("LOCK_TIMEOUT"),
+        "unexpected error: {err:?}"
+    );
 
     guard.release()?;
 
@@ -104,9 +108,7 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
         .reviews
         .first()
         .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
-    ensure!(
-        entry.report_file.as_deref() == Some("12-34-56-789_refs_heads_main_deadbeef.md")
-    );
+    ensure!(entry.report_file.as_deref() == Some("12-34-56-789_refs_heads_main_deadbeef.md"));
     ensure!(entry.finished_at.is_some());
     Ok(())
 }
@@ -201,7 +203,10 @@ fn applicator_lock_owner_must_be_id8() -> anyhow::Result<()> {
     let Err(err) = result else {
         bail!("invalid lock_owner should be rejected");
     };
-    ensure!(err.to_string().contains("lock_owner"), "unexpected error: {err:?}");
+    ensure!(
+        err.to_string().contains("lock_owner"),
+        "unexpected error: {err:?}"
+    );
 
     Ok(())
 }
@@ -492,7 +497,10 @@ fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
         .reviews
         .first()
         .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
-    ensure!(notes_entry.notes.as_ref().is_some(), "expected notes to be included");
+    ensure!(
+        notes_entry.notes.as_ref().is_some(),
+        "expected notes to be included"
+    );
 
     let only_report = collect_reports(
         &session,
@@ -516,7 +524,10 @@ fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
         .reviews
         .first()
         .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
-    ensure!(report_entry.report_path.is_some(), "expected report_path to be populated");
+    ensure!(
+        report_entry.report_path.is_some(),
+        "expected report_path to be populated"
+    );
 
     Ok(())
 }

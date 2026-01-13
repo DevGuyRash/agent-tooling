@@ -62,8 +62,9 @@ impl ValueEnum for ReviewerStatus {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         let pv = match self {
-            Self::Initializing => PossibleValue::new("INITIALIZING")
-                .help("Registered; review not yet started"),
+            Self::Initializing => {
+                PossibleValue::new("INITIALIZING").help("Registered; review not yet started")
+            }
             Self::InProgress => PossibleValue::new("IN_PROGRESS").help("Actively reviewing"),
             Self::Finished => PossibleValue::new("FINISHED").help("Completed with verdict/report"),
             Self::Cancelled => PossibleValue::new("CANCELLED").help("Stopped before completion"),
@@ -187,14 +188,20 @@ impl ValueEnum for ReviewPhase {
     fn to_possible_value(&self) -> Option<PossibleValue> {
         let pv = match self {
             Self::Ingestion => PossibleValue::new("INGESTION").help("Initial codebase ingestion"),
-            Self::DomainCoverage => PossibleValue::new("DOMAIN_COVERAGE")
-                .help("Domain coverage map / scoping"),
-            Self::TheoremGeneration => PossibleValue::new("THEOREM_GENERATION")
-                .help("Generate must-prove theorems"),
+            Self::DomainCoverage => {
+                PossibleValue::new("DOMAIN_COVERAGE").help("Domain coverage map / scoping")
+            }
+            Self::TheoremGeneration => {
+                PossibleValue::new("THEOREM_GENERATION").help("Generate must-prove theorems")
+            }
             Self::AdversarialProofs => PossibleValue::new("ADVERSARIAL_PROOFS")
                 .help("Attempt disproofs / adversarial testing"),
-            Self::Synthesis => PossibleValue::new("SYNTHESIS").help("Synthesize findings/mitigations"),
-            Self::ReportWriting => PossibleValue::new("REPORT_WRITING").help("Write the final report"),
+            Self::Synthesis => {
+                PossibleValue::new("SYNTHESIS").help("Synthesize findings/mitigations")
+            }
+            Self::ReportWriting => {
+                PossibleValue::new("REPORT_WRITING").help("Write the final report")
+            }
         };
         Some(pv)
     }
@@ -236,8 +243,9 @@ impl ValueEnum for ReviewVerdict {
     fn to_possible_value(&self) -> Option<PossibleValue> {
         let pv = match self {
             Self::Approve => PossibleValue::new("APPROVE").help("No changes required"),
-            Self::RequestChanges => PossibleValue::new("REQUEST_CHANGES")
-                .help("Changes required before merge"),
+            Self::RequestChanges => {
+                PossibleValue::new("REQUEST_CHANGES").help("Changes required before merge")
+            }
             Self::Block => PossibleValue::new("BLOCK").help("Cannot merge; must fix"),
         };
         Some(pv)
@@ -321,19 +329,29 @@ impl ValueEnum for NoteType {
                 .help("Flag a high-risk area requiring strict scrutiny"),
             Self::DomainObservation => PossibleValue::new("domain_observation")
                 .help("Observation scoped to a review domain"),
-            Self::BlockerPreview => PossibleValue::new("blocker_preview")
-                .help("Early warning of a likely blocker"),
+            Self::BlockerPreview => {
+                PossibleValue::new("blocker_preview").help("Early warning of a likely blocker")
+            }
             Self::Question => PossibleValue::new("question").help("Request clarification"),
             Self::Handoff => PossibleValue::new("handoff").help("Context for another reviewer"),
-            Self::ErrorDetail => PossibleValue::new("error_detail").help("Error details / debugging info"),
+            Self::ErrorDetail => {
+                PossibleValue::new("error_detail").help("Error details / debugging info")
+            }
             Self::Applied => PossibleValue::new("applied").help("Feedback was applied"),
-            Self::Declined => PossibleValue::new("declined").help("Feedback was declined (include reason)"),
-            Self::Deferred => PossibleValue::new("deferred").help("Feedback deferred (include tracking)"),
-            Self::ClarificationNeeded => PossibleValue::new("clarification_needed")
-                .help("Request more detail before acting"),
+            Self::Declined => {
+                PossibleValue::new("declined").help("Feedback was declined (include reason)")
+            }
+            Self::Deferred => {
+                PossibleValue::new("deferred").help("Feedback deferred (include tracking)")
+            }
+            Self::ClarificationNeeded => {
+                PossibleValue::new("clarification_needed").help("Request more detail before acting")
+            }
             Self::AlreadyAddressed => PossibleValue::new("already_addressed")
                 .help("Already handled elsewhere (reference)"),
-            Self::Acknowledged => PossibleValue::new("acknowledged").help("Read/understood; no action"),
+            Self::Acknowledged => {
+                PossibleValue::new("acknowledged").help("Read/understood; no action")
+            }
         };
         Some(pv)
     }
@@ -664,8 +682,7 @@ impl ReviewEntry {
                         report_contents = Some(contents);
                     }
                     Err(err) => {
-                        report_error =
-                            Some(format!("read report file {}: {err}", path.display()));
+                        report_error = Some(format!("read report file {}: {err}", path.display()));
                     }
                 }
             }
@@ -865,9 +882,9 @@ mod tests {
     use super::*;
     use anyhow::{bail, ensure};
     use serde_json::Value;
+    use std::fs;
     use tempfile::tempdir;
     use time::Month;
-    use std::fs;
 
     fn write_session(session_dir: &Path, session: &SessionFile) -> anyhow::Result<()> {
         fs::create_dir_all(session_dir)?;
@@ -1161,9 +1178,10 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
     let mut session = if params.session.session_file().exists() {
         read_session_file(params.session.session_dir())?
     } else {
-        let repo_root = params.repo_root.canonicalize().with_context(|| {
-            format!("canonicalize repo_root {}", params.repo_root.display())
-        })?;
+        let repo_root = params
+            .repo_root
+            .canonicalize()
+            .with_context(|| format!("canonicalize repo_root {}", params.repo_root.display()))?;
         SessionFile {
             schema_version: "1.0.0".to_string(),
             session_date: params.session_date.to_string(),

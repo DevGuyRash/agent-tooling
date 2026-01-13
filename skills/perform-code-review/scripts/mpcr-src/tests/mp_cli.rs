@@ -1,11 +1,11 @@
 //! End-to-end CLI tests for `mpcr`.
 
+use anyhow::ensure;
 use mpcr::paths;
 use mpcr::session::{
     InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus,
     SessionFile, SessionNote, SeverityCounts,
 };
-use anyhow::ensure;
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -225,12 +225,14 @@ fn find_review<'a>(
     let reviews = json_array(session, "reviews")?;
     reviews
         .iter()
-        .find(|review| match (review.get("reviewer_id"), review.get("session_id")) {
-            (Some(Value::String(rid)), Some(Value::String(sid))) => {
-                rid == reviewer_id && sid == session_id
-            }
-            _ => false,
-        })
+        .find(
+            |review| match (review.get("reviewer_id"), review.get("session_id")) {
+                (Some(Value::String(rid)), Some(Value::String(sid))) => {
+                    rid == reviewer_id && sid == session_id
+                }
+                _ => false,
+            },
+        )
         .ok_or_else(|| anyhow::anyhow!("review entry not found"))
 }
 
@@ -742,9 +744,9 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
         .session_dir
         .to_string_lossy()
         .to_string();
-    ensure!(
-        stdout.contains(&format!("export MPCR_SESSION_DIR='{expected_session_dir}'\n"))
-    );
+    ensure!(stdout.contains(&format!(
+        "export MPCR_SESSION_DIR='{expected_session_dir}'\n"
+    )));
     Ok(())
 }
 

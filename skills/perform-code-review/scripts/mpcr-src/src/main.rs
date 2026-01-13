@@ -302,20 +302,14 @@ struct ReportsArgs {
         help = "Filter by review phase (comma-separated or repeatable)."
     )]
     phase: Vec<ReviewPhase>,
-    #[arg(
-        long,
-        help = "Only include reviews that already have a report file."
-    )]
+    #[arg(long, help = "Only include reviews that already have a report file.")]
     only_with_report: bool,
     #[arg(
         long,
         help = "Only include reviews that contain at least one note (implies --include-notes)."
     )]
     only_with_notes: bool,
-    #[arg(
-        long,
-        help = "Include full notes for each review entry."
-    )]
+    #[arg(long, help = "Include full notes for each review entry.")]
     include_notes: bool,
     #[arg(
         long,
@@ -753,7 +747,11 @@ fn run() -> anyhow::Result<()> {
         },
 
         Commands::Lock { command } => match command {
-            LockCommands::Acquire { session, owner, max_retries } => {
+            LockCommands::Acquire {
+                session,
+                owner,
+                max_retries,
+            } => {
                 let resolved = resolve_session_input(&session, now.date())?;
                 let cfg = LockConfig { max_retries };
                 let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
@@ -1168,7 +1166,9 @@ mod tests {
     use super::*;
     use anyhow::ensure;
     use mpcr::paths;
-    use mpcr::session::{InitiatorStatus, ReviewEntry, ReviewVerdict, ReviewerStatus, SessionFile, SeverityCounts};
+    use mpcr::session::{
+        InitiatorStatus, ReviewEntry, ReviewVerdict, ReviewerStatus, SessionFile, SeverityCounts,
+    };
     use std::fs;
     use time::Month;
 
@@ -1255,8 +1255,12 @@ mod tests {
             repo_root: Some(repo_root.path().to_path_buf()),
             date: Some("2026-01-11".to_string()),
         };
-        let resolved = resolve_session_input(&args, Date::from_calendar_date(2026, Month::January, 12)?)?;
-        let expected = paths::session_paths(repo_root.path(), Date::from_calendar_date(2026, Month::January, 11)?);
+        let resolved =
+            resolve_session_input(&args, Date::from_calendar_date(2026, Month::January, 12)?)?;
+        let expected = paths::session_paths(
+            repo_root.path(),
+            Date::from_calendar_date(2026, Month::January, 11)?,
+        );
         ensure!(resolved.session_dir == expected.session_dir);
         Ok(())
     }
