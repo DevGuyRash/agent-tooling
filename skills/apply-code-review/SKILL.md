@@ -1,7 +1,7 @@
 ---
 name: apply-code-review
 description: Apply code review feedback by consuming completed review reports and tracking progress. Use when processing reviewer feedback after a code review, to read findings, apply fixes, and communicate decisions back to reviewers.
-compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `scripts/mpcr-src`.
+compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `<skills-file-root>/scripts/mpcr-src`.
 ---
 
 # Apply Code Review
@@ -16,7 +16,7 @@ Before reviewing any code, you SHALL read `references/code-review-application-pr
 
 ## Workflow
 
-You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and and for gathering, viewing, and interacting with review reports. The CLI is at `scripts/mpcr` relative to this SKILL.md file. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and and for gathering, viewing, and interacting with review reports. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
 
 ```
 mpcr session reports closed --include-report-contents --json   # Fetch reports

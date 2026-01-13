@@ -1,12 +1,12 @@
 ---
 name: perform-code-review
 description: Perform adversarial code reviews using the UACRP protocol. Use when reviewing code changes, PRs, or diffs. Produces structured review reports with verdicts (APPROVE/REQUEST_CHANGES/BLOCK), findings by severity, and evidence-backed proofs.
-compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `scripts/mpcr-src`.
+compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `<skills-file-root>/scripts/mpcr-src`.
 ---
 
 # Perform Code Review
 
-Before reviewing any code, you SHALL read `references/uacrp.md` in **300-line chunks**. After each chunk, you SHALL summarize your understanding before continuing. The protocol defines domains, evidence standards, severity rubrics, and the report template you MUST use.
+Before reviewing any code, you SHALL read `references/uacrp.md` in **300-line chunks**. After each chunk, you SHALL summarize your understanding before continuing. The protocol defines domains, evidence standards, severity rubrics, and the report template you MUST use. AFTER reading the protocol, you SHALL begin the review process STRICTLY adhering to the UACRP protocol and any other instructions provided to you.
 
 ## Deliverables
 
@@ -16,7 +16,7 @@ Before reviewing any code, you SHALL read `references/uacrp.md` in **300-line ch
 
 ## Workflow
 
-You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file. The CLI is at `scripts/mpcr` relative to this SKILL.md file. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file. The CLI is located in the same directory as this `SKILL.md` file at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
 
 ```
 mpcr reviewer register --target-ref HEAD
