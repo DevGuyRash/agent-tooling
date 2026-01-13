@@ -6,7 +6,8 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 # Perform Code Review
 
-Before reviewing any code, you SHALL read `references/uacrp.md` in **300-line chunks**. After each chunk, you SHALL summarize your understanding before continuing. The protocol defines domains, evidence standards, severity rubrics, and the report template you MUST use. AFTER reading the protocol, you SHALL begin the review process STRICTLY adhering to the UACRP protocol and any other instructions provided to you.
+**Ingestion Protocol:** Before reviewing any code, you must read `<skills-file-root>/references/uacrp.md` in **chunks of 500 line** batches. Do not attempt to process the whole file at once. The protocol defines domains, evidence standards, severity rubrics, and the report template you MUST use. Process it in 500-line blocks to ensure every rule is retained and no context is lost.
+**Action:** Once—and only once—you have ingested the full protocol using this chunking method, proceed to perform code review following ALL procedures outlined in `<skills-file-root>/references/uacrp.md`.
 
 ## Deliverables
 

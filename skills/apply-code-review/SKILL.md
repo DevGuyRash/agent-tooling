@@ -6,7 +6,8 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 # Apply Code Review
 
-Before reviewing any code, you SHALL read `references/code-review-application-protocol.md` in **300-line chunks**. After each chunk, you SHALL summarize your understanding before continuing. It defines status values, note types, and disposition formats you MUST use.
+**Ingestion Protocol:** Before reviewing any code, you must read `<skills-file-root>/references/code-review-application-protocol.md` in **chunks of 500 line** batches. It defines status values, note types, and disposition formats you MUST use. Do not attempt to process the whole file at once. Process it in 500-line blocks to ensure every rule is retained and no context is lost.
+**Action:** Once—and only once—you have ingested the full protocol using this chunking method, proceed to apply code review feedback following ALL procedures outlined in `<skills-file-root>/references/code-review-application-protocol.md`.
 
 ## Deliverables
 
