@@ -37,6 +37,14 @@ Without `--json`, structured results are printed as one-line JSON and successful
     _session.json.lock
     {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md
 
+Environment variables (optional):
+  MPCR_REPO_ROOT    Repo root used for default session dir (no auto-detection; default: cwd)
+  MPCR_DATE         Session date (YYYY-MM-DD) used for default session dir (default: today in UTC)
+  MPCR_SESSION_DIR  Explicit session directory containing `_session.json`
+  MPCR_REVIEWER_ID  Stable reviewer identity (id8) for this executor
+  MPCR_SESSION_ID   Current session id (id8) for reviewer/applicator commands
+  MPCR_TARGET_REF   Current target_ref (used by `applicator wait`)
+
 Common flows:
   # Reviewer (recommended; POSIX shell)
   eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
@@ -69,7 +77,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate deterministic IDs (`reviewer_id`, `session_id`, lock owners).
+    /// Generate IDs (`reviewer_id`, `session_id`, lock owners).
     Id {
         #[command(subcommand)]
         command: IdCommands,
@@ -120,8 +128,15 @@ enum IdCommands {
 #[derive(Subcommand)]
 enum LockCommands {
     /// Acquire the session lock file (`_session.json.lock`).
-    #[command(after_long_help = r#"Example:
-  mpcr lock acquire --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
+    #[command(after_long_help = r#"Examples:
+  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  mpcr lock acquire --owner <owner_id8>
+
+  # Explicit session directory:
+  mpcr lock acquire --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <owner_id8>
+
+Notes:
+  - `lock acquire` leaves the lock held; release it with `lock release` using the same --owner.
 "#)]
     Acquire {
         #[command(flatten)]
@@ -141,8 +156,9 @@ enum LockCommands {
         max_retries: usize,
     },
     /// Release the session lock file if you are the current owner.
-    #[command(after_long_help = r#"Example:
-  mpcr lock release --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <id8>
+    #[command(after_long_help = r#"Examples:
+  mpcr lock release --owner <owner_id8>
+  mpcr lock release --session-dir .local/reports/code_reviews/YYYY-MM-DD --owner <owner_id8>
 "#)]
     Release {
         #[command(flatten)]
@@ -159,7 +175,11 @@ enum LockCommands {
 #[derive(Subcommand)]
 enum SessionCommands {
     /// Print the parsed `_session.json`.
-    #[command(after_long_help = r#"Example:
+    #[command(after_long_help = r#"Examples:
+  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  mpcr session show
+
+  # Explicit session directory:
   mpcr session show --session-dir .local/reports/code_reviews/YYYY-MM-DD
 "#)]
     Show {
@@ -168,13 +188,18 @@ enum SessionCommands {
     },
     /// Report-oriented session views (open/closed/in-progress).
     #[command(after_long_help = r#"Examples:
-  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD
-  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD
-  mpcr session reports in-progress --session-dir .local/reports/code_reviews/YYYY-MM-DD
-  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-notes --only-with-notes
-  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --only-with-report --include-report-contents
-  mpcr session reports open --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-status IN_PROGRESS,BLOCKED
-  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --initiator-status RECEIVED --verdict APPROVE
+  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  mpcr session reports open
+  mpcr session reports closed --include-report-contents --json
+
+  # Filter examples:
+  mpcr session reports open --include-notes --only-with-notes
+  mpcr session reports closed --only-with-report --include-report-contents
+  mpcr session reports open --reviewer-status IN_PROGRESS,BLOCKED
+  mpcr session reports closed --initiator-status RECEIVED --verdict APPROVE
+
+  # Explicit session directory:
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-report-contents --json
 "#)]
     Reports {
         #[command(subcommand)]
@@ -188,21 +213,21 @@ struct SessionDirArgs {
         long,
         env = "MPCR_SESSION_DIR",
         value_name = "DIR",
-        help = "Session directory containing `_session.json` (defaults to repo_root/.local/reports/code_reviews/<date>)."
+        help = "Session directory containing `_session.json` (default: <repo_root>/.local/reports/code_reviews/<date>)."
     )]
     session_dir: Option<PathBuf>,
     #[arg(
         long,
         env = "MPCR_REPO_ROOT",
         value_name = "DIR",
-        help = "Repo root used to compute the default session dir (defaults to cwd)."
+        help = "Repo root used to compute the default session dir (default: cwd; not auto-detected—set when running from a subdir)."
     )]
     repo_root: Option<PathBuf>,
     #[arg(
         long,
         env = "MPCR_DATE",
         value_name = "YYYY-MM-DD",
-        help = "Session date used to compute the default session dir (defaults to today, UTC)."
+        help = "Session date used to compute the default session dir (default: today in UTC; set for determinism)."
     )]
     date: Option<String>,
 }
@@ -315,6 +340,13 @@ enum ReviewerCommands {
   # Recommended: capture deterministic context into env vars (POSIX shell):
   eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
 
+  # Use a stable reviewer_id (recommended when reviewing multiple target refs):
+  export MPCR_REVIEWER_ID="<id8>"
+  eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
+
+  # Worktree / uncommitted review (no commit yet):
+  eval "$(mpcr reviewer register --target-ref 'worktree:feature/foo (uncommitted)' --emit-env sh)"
+
   # Explicit date and repo root:
   mpcr reviewer register --target-ref pr/123 --repo-root /path/to/repo --date 2026-01-11
 
@@ -336,7 +368,7 @@ enum ReviewerCommands {
             long,
             env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "8-character ASCII alphanumeric reviewer identifier (default: random)."
+            help = "8-character ASCII alphanumeric reviewer identifier (default: random; set MPCR_REVIEWER_ID to reuse identity across reviews)."
         )]
         reviewer_id: Option<String>,
         #[arg(
