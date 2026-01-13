@@ -6,17 +6,30 @@ compatibility: Requires a POSIX shell. If `scripts/mpcr` is not prebuilt, requir
 
 # Apply Code Review
 
-Follow the protocol in `references/code-review-application-protocol.md`.
+Before reviewing any code, you SHALL read `references/code-review-application-protocol.md` in **300-line chunks**. After each chunk, you SHALL summarize your understanding before continuing. It defines status values, note types, and disposition formats you MUST use.
 
-## Session coordination
+## Deliverables
 
-You SHALL use `scripts/mpcr` (located in the same directory as this SKILL.md) for all session operations.
+- A disposition (applied/declined/deferred/etc) for every finding, recorded via `mpcr applicator note`
+- Code changes for findings you apply
+- Updated `initiator_status` reflecting your progress
 
-The `mpcr` wrapper auto-compiles on first run if needed (requires `cargo`). IF compilation fails THEN you SHALL run `cargo build --release --manifest-path scripts/mpcr-src/Cargo.toml` to diagnose.
+## Workflow
 
-BEFORE using any `mpcr` command, you SHALL run `mpcr --help` to see all available commands, required arguments, and example flows.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and and for gathering, viewing, and interacting with review reports. The CLI is at `scripts/mpcr` relative to this SKILL.md file. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
 
-**Fetch unreviewed reports:**
 ```
-mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-report-contents --json
+mpcr session reports closed --include-report-contents --json   # Fetch reports
+mpcr applicator note --session-id ID --review-id ID --note-type applied --content "..."
+mpcr applicator set-status --status APPLYING
 ```
+
+Read each report, then read the actual code at the referenced anchors. Verify findings before deciding to fix, decline, or defer.
+
+## Inputs
+
+- A session directory under `.local/reports/code_reviews/YYYY-MM-DD/` containing `_session.json` and reviewer report(s).
+
+## Without session infrastructure
+
+IF `mpcr` is unavailable or session files don't exist THEN work directly from the review content provided to you. Your code changes and stated dispositions are the deliverables.
