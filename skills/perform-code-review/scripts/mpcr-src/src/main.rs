@@ -480,6 +480,7 @@ Examples:
         session_id: String,
         #[arg(
             long,
+            alias = "type",
             value_enum,
             ignore_case = true,
             value_name = "NOTE_TYPE",
@@ -562,6 +563,7 @@ Example:
         session_id: String,
         #[arg(
             long,
+            alias = "type",
             value_enum,
             ignore_case = true,
             value_name = "NOTE_TYPE",
