@@ -51,25 +51,26 @@ pub fn random_id8() -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::ensure;
 
     #[test]
     fn hex_digit_and_random_id_shape() -> anyhow::Result<()> {
-        assert_eq!(hex_digit(0), b'0');
-        assert_eq!(hex_digit(9), b'9');
-        assert_eq!(hex_digit(10), b'a');
-        assert_eq!(hex_digit(15), b'f');
-        assert_eq!(hex_digit(16), b'0');
+        ensure!(hex_digit(0) == b'0');
+        ensure!(hex_digit(9) == b'9');
+        ensure!(hex_digit(10) == b'a');
+        ensure!(hex_digit(15) == b'f');
+        ensure!(hex_digit(16) == b'0');
 
         let empty = random_hex_id(0)?;
-        assert_eq!(empty, "");
+        ensure!(empty == "");
 
         let one = random_hex_id(1)?;
-        assert_eq!(one.len(), 2);
-        assert!(one.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+        ensure!(one.len() == 2);
+        ensure!(one.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
 
         let id8 = random_id8()?;
-        assert_eq!(id8.len(), 8);
-        assert!(id8.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+        ensure!(id8.len() == 8);
+        ensure!(id8.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
 
         Ok(())
     }

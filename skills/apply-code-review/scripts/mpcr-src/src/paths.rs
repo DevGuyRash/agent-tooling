@@ -62,6 +62,7 @@ pub fn sanitize_ref(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::ensure;
     use time::Month;
 
     #[test]
@@ -69,21 +70,18 @@ mod tests {
         let root = Path::new("/repo/root");
         let date = Date::from_calendar_date(2026, Month::January, 11)?;
         let paths = session_paths(root, date);
-        assert!(paths
+        ensure!(paths
             .session_dir
             .ends_with(Path::new(".local/reports/code_reviews/2026-01-11")));
-        assert_eq!(
-            paths.session_file,
-            paths.session_dir.join("_session.json")
-        );
+        ensure!(paths.session_file == paths.session_dir.join("_session.json"));
 
-        assert_eq!(sanitize_ref("refs/heads/main"), "refs_heads_main");
-        assert_eq!(sanitize_ref("___"), "ref");
-        assert_eq!(sanitize_ref("a.b-c_d"), "a.b-c_d");
+        ensure!(sanitize_ref("refs/heads/main") == "refs_heads_main");
+        ensure!(sanitize_ref("___") == "ref");
+        ensure!(sanitize_ref("a.b-c_d") == "a.b-c_d");
 
         let long = "x".repeat(MAX_REF_LEN + 10);
         let sanitized = sanitize_ref(&long);
-        assert_eq!(sanitized.len(), MAX_REF_LEN);
+        ensure!(sanitized.len() == MAX_REF_LEN);
 
         Ok(())
     }

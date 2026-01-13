@@ -23,6 +23,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use anyhow::{bail, Context};
 
 enum MatchKind {
     MacroOrCall,
@@ -40,14 +41,15 @@ const BANNED_PREFIXES: &[(&str, MatchKind)] = &[
 ];
 
 #[test]
-fn banned_family_is_absent_in_production_code() {
-    let root = workspace_root().expect("workspace root");
+fn banned_family_is_absent_in_production_code() -> anyhow::Result<()> {
+    let root = workspace_root().context("workspace root")?;
     let scan_roots = resolve_scan_roots(&root);
     let mut violations = Vec::new();
 
     for root in scan_roots {
         for path in collect_rust_files(&root) {
-            let source = fs::read_to_string(&path).expect("read source");
+            let source = fs::read_to_string(&path)
+                .with_context(|| format!("read source {}", path.display()))?;
             let sanitized = strip_comments_and_strings(&source);
             let raw_lines: Vec<&str> = source.lines().collect();
             let sanitized_lines: Vec<&str> = sanitized.lines().collect();
@@ -80,8 +82,10 @@ fn banned_family_is_absent_in_production_code() {
             message.push_str(&violation);
             message.push('\n');
         }
-        panic!("{message}");
+        bail!("{message}");
     }
+
+    Ok(())
 }
 
 fn workspace_root() -> Option<PathBuf> {
@@ -128,9 +132,8 @@ fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(value) => value,
-            Err(_) => continue,
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -202,26 +205,29 @@ fn brace_delta(line: &str) -> i32 {
 }
 
 fn compute_test_line_mask(lines: &[&str]) -> Vec<bool> {
-    let mut mask = vec![false; lines.len()];
+    let mut mask = Vec::with_capacity(lines.len());
     let mut pending_cfg_test = false;
     let mut in_cfg_test_block = false;
     let mut cfg_test_depth: i32 = 0;
 
-    for (idx, line) in lines.iter().enumerate() {
+    for line in lines {
+        let mut skip = false;
         if in_cfg_test_block {
-            mask[idx] = true;
+            skip = true;
             cfg_test_depth += brace_delta(line);
             if cfg_test_depth <= 0 {
                 in_cfg_test_block = false;
                 cfg_test_depth = 0;
             }
+            mask.push(skip);
             continue;
         }
 
         if pending_cfg_test {
-            mask[idx] = true;
+            skip = true;
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with("#[") {
+                mask.push(skip);
                 continue;
             }
             let delta = brace_delta(line);
@@ -229,16 +235,18 @@ fn compute_test_line_mask(lines: &[&str]) -> Vec<bool> {
                 in_cfg_test_block = true;
                 cfg_test_depth = delta;
                 pending_cfg_test = false;
+                mask.push(skip);
                 continue;
             }
             if trimmed.ends_with(';') {
                 pending_cfg_test = false;
             }
+            mask.push(skip);
             continue;
         }
 
         if is_cfg_test_attr(line) {
-            mask[idx] = true;
+            skip = true;
             pending_cfg_test = true;
             let delta = brace_delta(line);
             if delta != 0 {
@@ -246,233 +254,287 @@ fn compute_test_line_mask(lines: &[&str]) -> Vec<bool> {
                 cfg_test_depth = delta;
                 pending_cfg_test = false;
             }
+            mask.push(skip);
             continue;
         }
 
         if is_tests_module_decl(line) {
             let delta = brace_delta(line);
             if delta != 0 {
-                mask[idx] = true;
+                skip = true;
                 in_cfg_test_block = true;
                 cfg_test_depth = delta;
             }
         }
+
+        mask.push(skip);
     }
 
     mask
 }
 
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+const fn is_ident_char(b: u8) -> bool {
+    matches!(b, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
 }
 
 fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usize> {
     let bytes = line.as_bytes();
     let prefix_bytes = prefix.as_bytes();
-    let mut i = 0;
-    while i + prefix_bytes.len() <= bytes.len() {
-        if &bytes[i..i + prefix_bytes.len()] == prefix_bytes {
-            if i > 0 && is_ident_char(bytes[i - 1]) {
-                i += 1;
-                continue;
-            }
-            let mut j = i + prefix_bytes.len();
-            while j < bytes.len() && is_ident_char(bytes[j]) {
-                j += 1;
-            }
-            match kind {
-                MatchKind::MacroOnly => {
-                    let mut k = j;
-                    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-                        k += 1;
-                    }
-                    if k < bytes.len() && bytes[k] == b'!' {
-                        return Some(i);
-                    }
-                }
-                MatchKind::MacroOrCall => {
-                    if j < bytes.len() && bytes[j] == b'!' {
-                        return Some(i);
-                    }
-                    let mut k = j;
-                    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-                        k += 1;
-                    }
-                    if k < bytes.len() && bytes[k] == b'(' {
-                        return Some(i);
-                    }
+    for (i, window) in bytes.windows(prefix_bytes.len()).enumerate() {
+        if window != prefix_bytes {
+            continue;
+        }
+        if i > 0 {
+            if let Some(prev) = bytes.get(i.saturating_sub(1)) {
+                if is_ident_char(*prev) {
+                    continue;
                 }
             }
         }
-        i += 1;
+
+        let mut j = i.saturating_add(prefix_bytes.len());
+        while bytes.get(j).is_some_and(|b| is_ident_char(*b)) {
+            j = j.saturating_add(1);
+        }
+
+        match kind {
+            MatchKind::MacroOnly => {
+                let mut k = j;
+                while bytes.get(k).is_some_and(u8::is_ascii_whitespace) {
+                    k = k.saturating_add(1);
+                }
+                if bytes.get(k) == Some(&b'!') {
+                    return Some(i);
+                }
+            }
+            MatchKind::MacroOrCall => {
+                if bytes.get(j) == Some(&b'!') {
+                    return Some(i);
+                }
+                let mut k = j;
+                while bytes.get(k).is_some_and(u8::is_ascii_whitespace) {
+                    k = k.saturating_add(1);
+                }
+                if bytes.get(k) == Some(&b'(') {
+                    return Some(i);
+                }
+            }
+        }
     }
     None
 }
 
-fn strip_comments_and_strings(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
-    let mut in_string = false;
-    let mut in_char = false;
-    let mut raw_hashes: Option<usize> = None;
+#[derive(Copy, Clone)]
+enum StripMode {
+    Normal,
+    LineComment,
+    BlockComment { depth: usize },
+    String { escape: bool },
+    Char { escape: bool },
+    RawString { hashes: usize },
+}
 
-    while i < bytes.len() {
-        let b = bytes[i];
-        let next = bytes.get(i + 1).copied().unwrap_or(b'\0');
+type StripIter<'a> = std::iter::Peekable<std::iter::Copied<std::slice::Iter<'a, u8>>>;
 
-        if in_line_comment {
-            if b == b'\n' {
-                in_line_comment = false;
-                out.push(b);
-            } else {
-                push_placeholder(&mut out, b);
-            }
-            i += 1;
-            continue;
+struct Stripper<'a> {
+    out: Vec<u8>,
+    mode: StripMode,
+    it: StripIter<'a>,
+}
+
+impl<'a> Stripper<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            out: Vec::with_capacity(source.len()),
+            mode: StripMode::Normal,
+            it: source.as_bytes().iter().copied().peekable(),
         }
-
-        if in_block_comment {
-            if b == b'*' && next == b'/' {
-                push_placeholder(&mut out, b);
-                push_placeholder(&mut out, next);
-                in_block_comment = false;
-                i += 2;
-            } else {
-                push_placeholder(&mut out, b);
-                i += 1;
-            }
-            continue;
-        }
-
-        if let Some(hashes) = raw_hashes {
-            if b == b'"' {
-                if hashes == 0 {
-                    push_placeholder(&mut out, b);
-                    raw_hashes = None;
-                    i += 1;
-                    continue;
-                }
-                let mut matches = 0;
-                let mut j = i + 1;
-                while matches < hashes && j < bytes.len() && bytes[j] == b'#' {
-                    matches += 1;
-                    j += 1;
-                }
-                if matches == hashes {
-                    push_placeholder(&mut out, b);
-                    for _ in 0..hashes {
-                        push_placeholder(&mut out, b'#');
-                    }
-                    raw_hashes = None;
-                    i = j;
-                    continue;
-                }
-            }
-            push_placeholder(&mut out, b);
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            if b == b'\\' {
-                push_placeholder(&mut out, b);
-                if i + 1 < bytes.len() {
-                    push_placeholder(&mut out, bytes[i + 1]);
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            push_placeholder(&mut out, b);
-            if b == b'"' {
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_char {
-            if b == b'\\' {
-                push_placeholder(&mut out, b);
-                if i + 1 < bytes.len() {
-                    push_placeholder(&mut out, bytes[i + 1]);
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            push_placeholder(&mut out, b);
-            if b == b'\'' {
-                in_char = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if b == b'/' && next == b'/' {
-            push_placeholder(&mut out, b);
-            push_placeholder(&mut out, next);
-            in_line_comment = true;
-            i += 2;
-            continue;
-        }
-        if b == b'/' && next == b'*' {
-            push_placeholder(&mut out, b);
-            push_placeholder(&mut out, next);
-            in_block_comment = true;
-            i += 2;
-            continue;
-        }
-
-        if b == b'\'' {
-            push_placeholder(&mut out, b);
-            in_char = true;
-            i += 1;
-            continue;
-        }
-
-        if b == b'"' {
-            push_placeholder(&mut out, b);
-            in_string = true;
-            i += 1;
-            continue;
-        }
-
-        if b == b'r' || (b == b'b' && next == b'r') {
-            let mut j = i + 1;
-            if b == b'b' {
-                j += 1;
-            }
-            let mut hashes = 0usize;
-            while j < bytes.len() && bytes[j] == b'#' {
-                hashes += 1;
-                j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b'"' {
-                push_placeholder(&mut out, b);
-                if b == b'b' {
-                    push_placeholder(&mut out, next);
-                }
-                for _ in 0..hashes {
-                    push_placeholder(&mut out, b'#');
-                }
-                push_placeholder(&mut out, b'"');
-                raw_hashes = Some(hashes);
-                i = j + 1;
-                continue;
-            }
-        }
-
-        out.push(b);
-        i += 1;
     }
 
-    String::from_utf8_lossy(&out).to_string()
+    fn run(mut self) -> String {
+        while let Some(b) = self.it.next() {
+            self.step(b);
+        }
+        String::from_utf8_lossy(&self.out).into_owned()
+    }
+
+    fn step(&mut self, b: u8) {
+        match self.mode {
+            StripMode::LineComment => self.handle_line_comment(b),
+            StripMode::BlockComment { depth } => self.handle_block_comment(b, depth),
+            StripMode::String { escape } => self.handle_string(b, escape),
+            StripMode::Char { escape } => self.handle_char(b, escape),
+            StripMode::RawString { hashes } => self.handle_raw_string(b, hashes),
+            StripMode::Normal => self.handle_normal(b),
+        }
+    }
+
+    fn handle_line_comment(&mut self, b: u8) {
+        if b == b'\n' {
+            self.out.push(b'\n');
+            self.mode = StripMode::Normal;
+        } else {
+            push_placeholder(&mut self.out, b);
+        }
+    }
+
+    fn handle_block_comment(&mut self, b: u8, depth: usize) {
+        if b == b'/' && self.it.peek() == Some(&b'*') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'*');
+            self.mode = StripMode::BlockComment {
+                depth: depth.saturating_add(1),
+            };
+            return;
+        }
+
+        if b == b'*' && self.it.peek() == Some(&b'/') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'/');
+            let depth = depth.saturating_sub(1);
+            self.mode = if depth == 0 {
+                StripMode::Normal
+            } else {
+                StripMode::BlockComment { depth }
+            };
+            return;
+        }
+
+        push_placeholder(&mut self.out, b);
+        self.mode = StripMode::BlockComment { depth };
+    }
+
+    fn handle_string(&mut self, b: u8, escape: bool) {
+        push_placeholder(&mut self.out, b);
+        if escape {
+            self.mode = StripMode::String { escape: false };
+            return;
+        }
+        if b == b'\\' {
+            self.mode = StripMode::String { escape: true };
+            return;
+        }
+        if b == b'"' {
+            self.mode = StripMode::Normal;
+        } else {
+            self.mode = StripMode::String { escape: false };
+        }
+    }
+
+    fn handle_char(&mut self, b: u8, escape: bool) {
+        push_placeholder(&mut self.out, b);
+        if escape {
+            self.mode = StripMode::Char { escape: false };
+            return;
+        }
+        if b == b'\\' {
+            self.mode = StripMode::Char { escape: true };
+            return;
+        }
+        if b == b'\'' {
+            self.mode = StripMode::Normal;
+        } else {
+            self.mode = StripMode::Char { escape: false };
+        }
+    }
+
+    fn handle_raw_string(&mut self, b: u8, hashes: usize) {
+        push_placeholder(&mut self.out, b);
+        if b != b'"' {
+            self.mode = StripMode::RawString { hashes };
+            return;
+        }
+        if hashes == 0 {
+            self.mode = StripMode::Normal;
+            return;
+        }
+
+        let mut consumed = 0usize;
+        while consumed < hashes && self.it.peek() == Some(&b'#') {
+            self.it.next();
+            push_placeholder(&mut self.out, b'#');
+            consumed = consumed.saturating_add(1);
+        }
+        self.mode = if consumed == hashes {
+            StripMode::Normal
+        } else {
+            StripMode::RawString { hashes }
+        };
+    }
+
+    fn handle_normal(&mut self, b: u8) {
+        if b == b'/' && self.it.peek() == Some(&b'/') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'/');
+            self.mode = StripMode::LineComment;
+            return;
+        }
+        if b == b'/' && self.it.peek() == Some(&b'*') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'*');
+            self.mode = StripMode::BlockComment { depth: 1 };
+            return;
+        }
+        if b == b'"' {
+            push_placeholder(&mut self.out, b);
+            self.mode = StripMode::String { escape: false };
+            return;
+        }
+        if b == b'\'' {
+            push_placeholder(&mut self.out, b);
+            self.mode = StripMode::Char { escape: false };
+            return;
+        }
+        if b == b'b' && self.it.peek() == Some(&b'"') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'"');
+            self.mode = StripMode::String { escape: false };
+            return;
+        }
+        if b == b'b' && self.it.peek() == Some(&b'\'') {
+            push_placeholder(&mut self.out, b);
+            self.it.next();
+            push_placeholder(&mut self.out, b'\'');
+            self.mode = StripMode::Char { escape: false };
+            return;
+        }
+        if b == b'r' || (b == b'b' && self.it.peek() == Some(&b'r')) {
+            let mut buf = vec![b];
+            if b == b'b' {
+                self.it.next();
+                buf.push(b'r');
+            }
+
+            let mut hashes = 0usize;
+            while self.it.peek() == Some(&b'#') {
+                self.it.next();
+                buf.push(b'#');
+                hashes = hashes.saturating_add(1);
+            }
+            if self.it.peek() == Some(&b'"') {
+                self.it.next();
+                buf.push(b'"');
+                for byte in buf {
+                    push_placeholder(&mut self.out, byte);
+                }
+                self.mode = StripMode::RawString { hashes };
+                return;
+            }
+            self.out.extend(buf);
+            return;
+        }
+
+        self.out.push(b);
+    }
+}
+
+fn strip_comments_and_strings(source: &str) -> String {
+    Stripper::new(source).run()
 }
 
 fn push_placeholder(out: &mut Vec<u8>, b: u8) {

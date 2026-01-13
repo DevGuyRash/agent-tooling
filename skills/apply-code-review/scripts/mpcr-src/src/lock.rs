@@ -148,6 +148,7 @@ pub fn acquire_lock(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::ensure;
 
     #[test]
     fn release_lock_handles_missing_and_mismatch() -> anyhow::Result<()> {
@@ -161,11 +162,11 @@ mod tests {
         let lock_file = lock_file_path(session_dir);
         fs::write(&lock_file, "owner-a\n")?;
         release_lock(session_dir, "owner-b")?;
-        assert!(lock_file.exists());
+        ensure!(lock_file.exists());
 
         // Matching owner should remove the lock file.
         release_lock(session_dir, "owner-a")?;
-        assert!(!lock_file.exists());
+        ensure!(!lock_file.exists());
 
         Ok(())
     }

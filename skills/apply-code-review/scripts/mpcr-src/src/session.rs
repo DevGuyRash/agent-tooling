@@ -863,6 +863,7 @@ impl SessionLocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::{bail, ensure};
     use serde_json::Value;
     use tempfile::tempdir;
     use time::Month;
@@ -914,7 +915,7 @@ mod tests {
             only_with_report: true,
             only_with_notes: true,
         };
-        assert!(filters.matches(&entry));
+        ensure!(filters.matches(&entry));
 
         let mismatched = ReportsFilters {
             target_ref: None,
@@ -927,7 +928,7 @@ mod tests {
             only_with_report: false,
             only_with_notes: false,
         };
-        assert!(!mismatched.matches(&entry));
+        ensure!(!mismatched.matches(&entry));
 
         Ok(())
     }
@@ -951,7 +952,7 @@ mod tests {
             now,
         })?;
 
-        let err = register_reviewer(RegisterReviewerParams {
+        let result = register_reviewer(RegisterReviewerParams {
             repo_root: repo_root.path().to_path_buf(),
             session_date,
             session,
@@ -960,9 +961,11 @@ mod tests {
             session_id: Some("sess0001".to_string()),
             parent_id: None,
             now,
-        })
-        .expect_err("mismatched target_ref should fail");
-        assert!(err.to_string().contains("target_ref"));
+        });
+        let Err(err) = result else {
+            bail!("mismatched target_ref should fail");
+        };
+        ensure!(err.to_string().contains("target_ref"));
         Ok(())
     }
 
@@ -987,8 +990,10 @@ mod tests {
             phase: None,
             now: OffsetDateTime::now_utc(),
         };
-        let err = update_review(&params).expect_err("missing entry should error");
-        assert!(err.to_string().contains("review entry not found"));
+        let Err(err) = update_review(&params) else {
+            bail!("missing entry should error");
+        };
+        ensure!(err.to_string().contains("review entry not found"));
         Ok(())
     }
 
@@ -1030,8 +1035,10 @@ mod tests {
             report_markdown: "report\n".to_string(),
             now: OffsetDateTime::now_utc(),
         };
-        let err = finalize_review(params).expect_err("should refuse overwrite");
-        assert!(err.to_string().contains("report_file already set"));
+        let Err(err) = finalize_review(params) else {
+            bail!("should refuse overwrite");
+        };
+        ensure!(err.to_string().contains("report_file already set"));
         Ok(())
     }
 
@@ -1074,8 +1081,10 @@ mod tests {
             now: OffsetDateTime::now_utc(),
             lock_owner: "bad".to_string(),
         };
-        let err = append_note(params).expect_err("bad lock_owner should error");
-        assert!(err.to_string().contains("lock_owner"));
+        let Err(err) = append_note(params) else {
+            bail!("bad lock_owner should error");
+        };
+        ensure!(err.to_string().contains("lock_owner"));
         Ok(())
     }
 }

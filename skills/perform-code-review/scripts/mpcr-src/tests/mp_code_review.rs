@@ -7,6 +7,7 @@ use mpcr::session::{
     ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionFile,
     SessionLocator, SessionNote, SetInitiatorStatusParams, SeverityCounts,
 };
+use anyhow::{bail, ensure};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -16,8 +17,8 @@ use time::OffsetDateTime;
 #[test]
 fn id8_is_8_lower_hex_chars() -> anyhow::Result<()> {
     let id = mpcr::id::random_id8()?;
-    assert_eq!(id.len(), 8);
-    assert!(id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+    ensure!(id.len() == 8);
+    ensure!(id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
     Ok(())
 }
 
@@ -29,12 +30,11 @@ fn lock_acquire_blocks_until_timeout_then_release() -> anyhow::Result<()> {
 
     let guard = lock::acquire_lock(dir.path(), owner1, LockConfig { max_retries: 0 })?;
 
-    let err = lock::acquire_lock(dir.path(), owner2, LockConfig { max_retries: 0 })
-        .expect_err("second acquire should fail");
-    assert!(
-        err.to_string().contains("LOCK_TIMEOUT"),
-        "unexpected error: {err:?}"
-    );
+    let result = lock::acquire_lock(dir.path(), owner2, LockConfig { max_retries: 0 });
+    let Err(err) = result else {
+        bail!("second acquire should fail");
+    };
+    ensure!(err.to_string().contains("LOCK_TIMEOUT"), "unexpected error: {err:?}");
 
     guard.release()?;
 
@@ -66,15 +66,19 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
         now,
     })?;
 
-    assert!(Path::new(&res.session_file).exists());
+    ensure!(Path::new(&res.session_file).exists());
 
     let raw = fs::read_to_string(session.session_file())?;
     let session_json: SessionFile = serde_json::from_str(&raw)?;
-    assert_eq!(session_json.reviewers, vec![reviewer_id.clone()]);
-    assert_eq!(session_json.reviews.len(), 1);
-    assert_eq!(session_json.reviews[0].reviewer_id, reviewer_id);
-    assert_eq!(session_json.reviews[0].session_id, session_id);
-    assert_eq!(session_json.reviews[0].target_ref, target_ref);
+    ensure!(session_json.reviewers == vec![reviewer_id.clone()]);
+    ensure!(session_json.reviews.len() == 1);
+    let entry = session_json
+        .reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
+    ensure!(entry.reviewer_id == reviewer_id);
+    ensure!(entry.session_id == session_id);
+    ensure!(entry.target_ref == target_ref);
 
     let fin = finalize_review(FinalizeReviewParams {
         session: session.clone(),
@@ -91,20 +95,19 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
         now,
     })?;
 
-    assert!(Path::new(&fin.report_path).exists());
-    assert_eq!(
-        fin.report_file,
-        "12-34-56-789_refs_heads_main_deadbeef.md".to_string()
-    );
+    ensure!(Path::new(&fin.report_path).exists());
+    ensure!(fin.report_file == "12-34-56-789_refs_heads_main_deadbeef.md".to_string());
 
     let raw2 = fs::read_to_string(session.session_file())?;
     let session_json2: SessionFile = serde_json::from_str(&raw2)?;
-    let entry = &session_json2.reviews[0];
-    assert_eq!(
-        entry.report_file.as_deref(),
-        Some("12-34-56-789_refs_heads_main_deadbeef.md")
+    let entry = session_json2
+        .reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
+    ensure!(
+        entry.report_file.as_deref() == Some("12-34-56-789_refs_heads_main_deadbeef.md")
     );
-    assert!(entry.finished_at.is_some());
+    ensure!(entry.finished_at.is_some());
     Ok(())
 }
 
@@ -114,13 +117,11 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
     let now = OffsetDateTime::parse("2026-01-11T12:34:56.789Z", &Rfc3339)?;
     let session_date = now.date();
     let session = SessionLocator::from_repo_root(repo_root.path(), session_date);
-    let target_ref = "refs/heads/main".to_string();
-
     register_reviewer(RegisterReviewerParams {
         repo_root: repo_root.path().to_path_buf(),
         session_date,
         session: session.clone(),
-        target_ref: target_ref.clone(),
+        target_ref: "refs/heads/main".to_string(),
         reviewer_id: Some("deadbeef".to_string()),
         session_id: Some("sess0001".to_string()),
         parent_id: None,
@@ -151,7 +152,7 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         repo_root: repo_root.path().to_path_buf(),
         session_date,
         session: session.clone(),
-        target_ref: target_ref.clone(),
+        target_ref: "refs/heads/main".to_string(),
         reviewer_id: Some("cafebabe".to_string()),
         session_id: Some("sess0002".to_string()),
         parent_id: None,
@@ -164,8 +165,8 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         .reviews
         .iter()
         .find(|r| r.reviewer_id == "cafebabe")
-        .expect("cafebabe entry should exist");
-    assert_eq!(entry.initiator_status, InitiatorStatus::Requesting);
+        .ok_or_else(|| anyhow::anyhow!("cafebabe entry should exist"))?;
+    ensure!(entry.initiator_status == InitiatorStatus::Requesting);
 
     Ok(())
 }
@@ -189,18 +190,18 @@ fn applicator_lock_owner_must_be_id8() -> anyhow::Result<()> {
     })?;
 
     let params = SetInitiatorStatusParams {
-        session: session.clone(),
+        session,
         reviewer_id: "deadbeef".to_string(),
         session_id: "sess0001".to_string(),
         initiator_status: InitiatorStatus::Reviewed,
         now,
         lock_owner: "not/ok".to_string(),
     };
-    let err = set_initiator_status(&params).expect_err("invalid lock_owner should be rejected");
-    assert!(
-        err.to_string().contains("lock_owner"),
-        "unexpected error: {err:?}"
-    );
+    let result = set_initiator_status(&params);
+    let Err(err) = result else {
+        bail!("invalid lock_owner should be rejected");
+    };
+    ensure!(err.to_string().contains("lock_owner"), "unexpected error: {err:?}");
 
     Ok(())
 }
@@ -212,13 +213,11 @@ fn register_reviewer_is_idempotent_for_same_reviewer_and_session() -> anyhow::Re
     let session_date = now.date();
     let session = SessionLocator::from_repo_root(repo_root.path(), session_date);
 
-    let target_ref = "refs/heads/main".to_string();
-
     register_reviewer(RegisterReviewerParams {
         repo_root: repo_root.path().to_path_buf(),
         session_date,
         session: session.clone(),
-        target_ref: target_ref.clone(),
+        target_ref: "refs/heads/main".to_string(),
         reviewer_id: Some("deadbeef".to_string()),
         session_id: Some("sess0001".to_string()),
         parent_id: None,
@@ -229,7 +228,7 @@ fn register_reviewer_is_idempotent_for_same_reviewer_and_session() -> anyhow::Re
         repo_root: repo_root.path().to_path_buf(),
         session_date,
         session: session.clone(),
-        target_ref: target_ref.clone(),
+        target_ref: "refs/heads/main".to_string(),
         reviewer_id: Some("deadbeef".to_string()),
         session_id: Some("sess0001".to_string()),
         parent_id: None,
@@ -238,16 +237,14 @@ fn register_reviewer_is_idempotent_for_same_reviewer_and_session() -> anyhow::Re
 
     let raw = fs::read_to_string(session.session_file())?;
     let session_json: SessionFile = serde_json::from_str(&raw)?;
-    assert_eq!(session_json.reviews.len(), 1);
+    ensure!(session_json.reviews.len() == 1);
     Ok(())
 }
 
-#[test]
-fn reports_views_and_filters() -> anyhow::Result<()> {
-    let dir = tempfile::tempdir()?;
+fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
     let session_locator = SessionLocator::new(dir.path().to_path_buf());
-    let started_at = "2026-01-11T00:00:00Z".to_string();
-    let updated_at = "2026-01-11T01:00:00Z".to_string();
+    let started_at = "2026-01-11T00:00:00Z";
+    let updated_at = "2026-01-11T01:00:00Z";
     let note = SessionNote {
         role: NoteRole::Reviewer,
         timestamp: "2026-01-11T01:30:00Z".to_string(),
@@ -262,8 +259,8 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         initiator_status: InitiatorStatus::Requesting,
         status: ReviewerStatus::InProgress,
         parent_id: None,
-        started_at: started_at.clone(),
-        updated_at: updated_at.clone(),
+        started_at: started_at.to_string(),
+        updated_at: updated_at.to_string(),
         finished_at: None,
         current_phase: Some(ReviewPhase::Ingestion),
         verdict: None,
@@ -279,8 +276,8 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         initiator_status: InitiatorStatus::Observing,
         status: ReviewerStatus::Blocked,
         parent_id: None,
-        started_at: started_at.clone(),
-        updated_at: updated_at.clone(),
+        started_at: started_at.to_string(),
+        updated_at: updated_at.to_string(),
         finished_at: None,
         current_phase: None,
         verdict: None,
@@ -296,8 +293,8 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         initiator_status: InitiatorStatus::Received,
         status: ReviewerStatus::Finished,
         parent_id: None,
-        started_at: started_at.clone(),
-        updated_at: updated_at.clone(),
+        started_at: started_at.to_string(),
+        updated_at: updated_at.to_string(),
         finished_at: Some("2026-01-11T02:00:00Z".to_string()),
         current_phase: Some(ReviewPhase::ReportWriting),
         verdict: Some(ReviewVerdict::Approve),
@@ -323,6 +320,14 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         reviews: vec![in_progress, blocked, finished],
     };
 
+    (session_locator, session)
+}
+
+#[test]
+fn reports_view_counts() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (session_locator, session) = reports_fixture(&dir);
+
     let open = collect_reports(
         &session,
         &session_locator,
@@ -330,8 +335,8 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         ReportsFilters::default(),
         ReportsOptions::default(),
     );
-    assert_eq!(open.total_reviews, 3);
-    assert_eq!(open.matching_reviews, 2);
+    ensure!(open.total_reviews == 3);
+    ensure!(open.matching_reviews == 2);
 
     let closed = collect_reports(
         &session,
@@ -340,18 +345,26 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         ReportsFilters::default(),
         ReportsOptions::default(),
     );
-    assert_eq!(closed.matching_reviews, 1);
+    ensure!(closed.matching_reviews == 1);
 
-    let in_progress_view = collect_reports(
+    let in_progress = collect_reports(
         &session,
         &session_locator,
         ReportsView::InProgress,
         ReportsFilters::default(),
         ReportsOptions::default(),
     );
-    assert_eq!(in_progress_view.matching_reviews, 1);
+    ensure!(in_progress.matching_reviews == 1);
 
-    let filtered = collect_reports(
+    Ok(())
+}
+
+#[test]
+fn reports_filters_basic_fields() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (session_locator, session) = reports_fixture(&dir);
+
+    let target_filtered = collect_reports(
         &session,
         &session_locator,
         ReportsView::Open,
@@ -368,7 +381,7 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(filtered.matching_reviews, 1);
+    ensure!(target_filtered.matching_reviews == 1);
 
     let status_filtered = collect_reports(
         &session,
@@ -387,7 +400,7 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(status_filtered.matching_reviews, 1);
+    ensure!(status_filtered.matching_reviews == 1);
 
     let initiator_filtered = collect_reports(
         &session,
@@ -406,7 +419,7 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(initiator_filtered.matching_reviews, 1);
+    ensure!(initiator_filtered.matching_reviews == 1);
 
     let verdict_filtered = collect_reports(
         &session,
@@ -425,7 +438,7 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(verdict_filtered.matching_reviews, 1);
+    ensure!(verdict_filtered.matching_reviews == 1);
 
     let phase_filtered = collect_reports(
         &session,
@@ -444,7 +457,15 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(phase_filtered.matching_reviews, 1);
+    ensure!(phase_filtered.matching_reviews == 1);
+
+    Ok(())
+}
+
+#[test]
+fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (session_locator, session) = reports_fixture(&dir);
 
     let only_notes = collect_reports(
         &session,
@@ -466,13 +487,14 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
             include_report_contents: false,
         },
     );
-    assert_eq!(only_notes.matching_reviews, 1);
-    assert!(
-        only_notes.reviews[0].notes.as_ref().is_some(),
-        "expected notes to be included"
-    );
+    ensure!(only_notes.matching_reviews == 1);
+    let notes_entry = only_notes
+        .reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
+    ensure!(notes_entry.notes.as_ref().is_some(), "expected notes to be included");
 
-    let only_reports = collect_reports(
+    let only_report = collect_reports(
         &session,
         &session_locator,
         ReportsView::Closed,
@@ -489,11 +511,12 @@ fn reports_views_and_filters() -> anyhow::Result<()> {
         },
         ReportsOptions::default(),
     );
-    assert_eq!(only_reports.matching_reviews, 1);
-    assert!(
-        only_reports.reviews[0].report_path.is_some(),
-        "expected report_path to be populated"
-    );
+    ensure!(only_report.matching_reviews == 1);
+    let report_entry = only_report
+        .reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
+    ensure!(report_entry.report_path.is_some(), "expected report_path to be populated");
 
     Ok(())
 }
@@ -541,12 +564,13 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         },
     );
 
-    assert_eq!(result.matching_reviews, 1);
-    assert_eq!(
-        result.reviews[0].report_contents.as_deref(),
-        Some("final report body")
-    );
-    assert!(result.reviews[0].report_error.is_none());
+    ensure!(result.matching_reviews == 1);
+    let entry = result
+        .reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("expected report entry"))?;
+    ensure!(entry.report_contents.as_deref() == Some("final report body"));
+    ensure!(entry.report_error.is_none());
 
     Ok(())
 }
