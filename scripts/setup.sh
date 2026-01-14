@@ -82,7 +82,6 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 log "prebuilding mpcr binaries (locked, release)"
-cargo build --manifest-path skills/perform-code-review/scripts/mpcr-src/Cargo.toml --locked --release
-cargo build --manifest-path skills/apply-code-review/scripts/mpcr-src/Cargo.toml --locked --release
+cargo build --manifest-path skills/code-review/scripts/mpcr-src/Cargo.toml --locked --release
 
 log "done"

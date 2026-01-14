@@ -4,17 +4,18 @@ This repository contains portable Agent Skills (AgentSkills open standard).
 
 ## Skills
 
-### `perform-code-review`
+### `code-review`
 
-Perform adversarial code reviews using the UACRP protocol and report template, writing coordination artifacts under `.local/reports/code_reviews/{YYYY-MM-DD}/` and using a bundled `mpcr` tool for deterministic reviewer/session operations (ID generation, locking, session JSON updates, report writing).
+Unified code review skill with two workflows:
 
-Path: `skills/perform-code-review/`
+- Reviewer: perform adversarial code reviews using UACRP and produce a structured review report
+- Applicator: apply review feedback from completed reports and track dispositions/progress
 
-### `apply-code-review`
+Both workflows coordinate artifacts under `.local/reports/code_reviews/{YYYY-MM-DD}/` and use a bundled `mpcr` tool for deterministic reviewer/session operations (ID generation, locking, session JSON updates, report writing).
 
-Apply code review feedback by consuming completed review reports and updating coordination state (`initiator_status`, applicator notes) in `.local/reports/code_reviews/{YYYY-MM-DD}/_session.json`, using a bundled `mpcr` tool for deterministic waiting, session inspection, status updates, and notes.
+Path: `skills/code-review/`
 
-Path: `skills/apply-code-review/`
+**Migration note:** `perform-code-review` and `apply-code-review` were consolidated into `code-review`. Update any tooling or docs that reference `skills/perform-code-review/` or `skills/apply-code-review/` to use `skills/code-review/`.
 
 ## Container bootstrap scripts
 
@@ -30,7 +31,7 @@ They are optional: each skill ships an `mpcr` shim that auto-builds on first run
 Both scripts:
 - Ensure `.local/reports/code_reviews/` exists (gitignored)
 - Best-effort add the repo root to git `safe.directory`
-- Prebuild `mpcr` in both `skills/*/scripts/mpcr-src` workspaces (`cargo build --locked --release`)
+- Prebuild `mpcr` in `skills/code-review/scripts/mpcr-src` (`cargo build --locked --release`)
 
 Environment flags:
 - `AGENT_SKILLS_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`

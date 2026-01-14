@@ -89,7 +89,8 @@ fn banned_family_is_absent_in_production_code() -> anyhow::Result<()> {
 }
 
 fn workspace_root() -> Option<PathBuf> {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = package_root.clone();
     loop {
         let manifest = dir.join("Cargo.toml");
         if manifest.exists() {
@@ -100,7 +101,9 @@ fn workspace_root() -> Option<PathBuf> {
             }
         }
         if !dir.pop() {
-            return None;
+            // Single-crate repos don't have a `[workspace]` root; still run the scan against the
+            // package root rather than failing the test setup.
+            return Some(package_root);
         }
     }
 }
