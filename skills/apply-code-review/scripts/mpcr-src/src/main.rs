@@ -11,9 +11,9 @@ use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
     append_note, collect_reports, finalize_review, load_session, register_reviewer,
     set_initiator_status, update_review, AppendNoteParams, FinalizeReviewParams, InitiatorStatus,
-    NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions, ReportsView,
-    ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator, SetInitiatorStatusParams,
-    SeverityCounts, UpdateReviewParams,
+    NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions, ReportsResult,
+    ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
+    SetInitiatorStatusParams, SeverityCounts, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -37,8 +37,12 @@ Without `--json`, most commands print compact one-line JSON; `id` commands print
     _session.json.lock
     {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md
 
+Output path notes:
+  report_file  Repo-root-relative report path (stored in `_session.json`)
+  report_path  Full filesystem report path (best effort)
+
 Environment variables (optional):
-  MPCR_REPO_ROOT    Repo root used for default session dir (no auto-detection; default: cwd)
+  MPCR_REPO_ROOT    Repo root used for default session dir (default: auto-detect git root; fallback: cwd)
   MPCR_DATE         Session date (YYYY-MM-DD) used for default session dir (default: today in UTC)
   MPCR_SESSION_DIR  Explicit session directory containing `_session.json`
   MPCR_REVIEWER_ID  Stable reviewer identity (id8) for this executor
@@ -225,7 +229,7 @@ struct SessionDirArgs {
         long,
         env = "MPCR_REPO_ROOT",
         value_name = "DIR",
-        help = "Repo root used to compute the default session dir (default: cwd; not auto-detected—set when running from a subdir)."
+        help = "Repo root used to compute the default session dir (default: auto-detect git root; fallback: cwd)."
     )]
     repo_root: Option<PathBuf>,
     #[arg(
@@ -795,6 +799,8 @@ fn run() -> anyhow::Result<()> {
             } => {
                 let target_ref_for_env = target_ref.clone();
                 let resolved = resolve_session_input(&session, now.date())?;
+                let repo_root_for_env = resolved.repo_root.to_string_lossy().to_string();
+                let date_for_env = resolved.session_date.to_string();
                 let session = SessionLocator::new(resolved.session_dir);
 
                 let res = register_reviewer(RegisterReviewerParams {
@@ -809,6 +815,8 @@ fn run() -> anyhow::Result<()> {
                 })?;
                 match emit_env {
                     Some(EmitEnvFormat::Sh) => write_env_sh(&[
+                        ("MPCR_REPO_ROOT", repo_root_for_env.as_str()),
+                        ("MPCR_DATE", date_for_env.as_str()),
                         ("MPCR_REVIEWER_ID", res.reviewer_id.as_str()),
                         ("MPCR_SESSION_ID", res.session_id.as_str()),
                         ("MPCR_SESSION_DIR", res.session_dir.as_str()),
@@ -980,10 +988,31 @@ fn resolve_session_input(
     args: &SessionDirArgs,
     default_date: Date,
 ) -> anyhow::Result<ResolvedSessionInput> {
-    let repo_root = match args.repo_root.as_ref() {
-        Some(repo_root) => repo_root.clone(),
-        None => std::env::current_dir().context("get cwd")?,
-    };
+    let cwd = std::env::current_dir().context("get cwd")?;
+    resolve_session_input_from_cwd(args, default_date, &cwd)
+}
+
+fn discover_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(current) = dir {
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+fn resolve_session_input_from_cwd(
+    args: &SessionDirArgs,
+    default_date: Date,
+    cwd: &Path,
+) -> anyhow::Result<ResolvedSessionInput> {
+    let repo_root = args
+        .repo_root
+        .clone()
+        .or_else(|| discover_repo_root(cwd))
+        .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
     let session_date = match args.date.as_deref() {
         Some(date) => parse_date_ymd(date)?,
         None => default_date,
@@ -1101,7 +1130,14 @@ fn handle_reports(
 ) -> anyhow::Result<()> {
     let resolved = resolve_session_input(&args.session, default_date)?;
     let session = SessionLocator::new(resolved.session_dir);
-    let session_data = load_session(&session)?;
+
+    if session.session_dir().exists() && !session.session_dir().is_dir() {
+        return Err(anyhow::anyhow!(
+            "session_dir is not a directory: {}",
+            session.session_dir().display()
+        ));
+    }
+
     let filters = ReportsFilters {
         target_ref: args.target_ref,
         session_id: args.session_id,
@@ -1117,6 +1153,22 @@ fn handle_reports(
         include_notes: args.include_notes || args.only_with_notes,
         include_report_contents: args.include_report_contents,
     };
+
+    if !session.session_file().exists() {
+        let result = ReportsResult {
+            session_dir: session.session_dir().to_string_lossy().to_string(),
+            session_file: session.session_file().to_string_lossy().to_string(),
+            view,
+            filters,
+            options,
+            total_reviews: 0,
+            matching_reviews: 0,
+            reviews: Vec::new(),
+        };
+        return write_result(json, &result);
+    }
+
+    let session_data = load_session(&session)?;
     let result = collect_reports(&session_data, &session, view, filters, options);
     write_result(json, &result)
 }
@@ -1129,8 +1181,25 @@ fn wait_for_reviews(
     let mut delay = std::time::Duration::from_secs(1);
     let max_delay = std::time::Duration::from_secs(60);
     let session = SessionLocator::new(session_dir.to_path_buf());
+    let should_wait_for_session = target_ref.is_some() || session_id.is_some();
+
+    if session_dir.exists() && !session_dir.is_dir() {
+        return Err(anyhow::anyhow!(
+            "session_dir is not a directory: {}",
+            session_dir.display()
+        ));
+    }
 
     loop {
+        if !session.session_file().exists() {
+            if !should_wait_for_session {
+                return Ok(());
+            }
+            std::thread::sleep(delay);
+            delay = std::cmp::min(delay.saturating_mul(2), max_delay);
+            continue;
+        }
+
         let session_data = load_session(&session)
             .with_context(|| format!("read session file under {}", session_dir.display()))?;
 
@@ -1255,12 +1324,41 @@ mod tests {
             repo_root: Some(repo_root.path().to_path_buf()),
             date: Some("2026-01-11".to_string()),
         };
-        let resolved =
-            resolve_session_input(&args, Date::from_calendar_date(2026, Month::January, 12)?)?;
+        let resolved = resolve_session_input_from_cwd(
+            &args,
+            Date::from_calendar_date(2026, Month::January, 12)?,
+            repo_root.path(),
+        )?;
         let expected = paths::session_paths(
             repo_root.path(),
             Date::from_calendar_date(2026, Month::January, 11)?,
         );
+        ensure!(resolved.session_dir == expected.session_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_session_input_auto_detects_repo_root() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo_root = dir.path().join("repo");
+        let cwd = repo_root.join("a").join("b");
+        fs::create_dir_all(&cwd)?;
+        fs::create_dir_all(repo_root.join(".git"))?;
+
+        let args = SessionDirArgs {
+            session_dir: None,
+            repo_root: None,
+            date: Some("2026-01-11".to_string()),
+        };
+        let resolved = resolve_session_input_from_cwd(
+            &args,
+            Date::from_calendar_date(2026, Month::January, 12)?,
+            &cwd,
+        )?;
+        ensure!(resolved.repo_root == repo_root);
+        ensure!(resolved.session_date.to_string() == "2026-01-11");
+
+        let expected = paths::session_paths(&repo_root, resolved.session_date);
         ensure!(resolved.session_dir == expected.session_dir);
         Ok(())
     }

@@ -735,6 +735,8 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
     }
 
     let stdout = String::from_utf8(output.stdout)?;
+    ensure!(stdout.contains(&format!("export MPCR_REPO_ROOT='{repo_root_str}'\n")));
+    ensure!(stdout.contains("export MPCR_DATE='2026-01-11'\n"));
     ensure!(stdout.contains("export MPCR_REVIEWER_ID='deadbeef'\n"));
     ensure!(stdout.contains("export MPCR_SESSION_ID='sess0001'\n"));
     ensure!(stdout.contains("export MPCR_TARGET_REF='refs/heads/main'\n"));
@@ -746,6 +748,13 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
         .to_string();
     ensure!(stdout.contains(&format!(
         "export MPCR_SESSION_DIR='{expected_session_dir}'\n"
+    )));
+    let expected_session_file = Path::new(&expected_session_dir)
+        .join("_session.json")
+        .to_string_lossy()
+        .to_string();
+    ensure!(stdout.contains(&format!(
+        "export MPCR_SESSION_FILE='{expected_session_file}'\n"
     )));
     Ok(())
 }
@@ -1034,8 +1043,8 @@ fn reports_empty_session() -> anyhow::Result<()> {
 fn reports_missing_session_file() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let session_dir = dir.path().join("session");
-    let stderr = run_reports_failure(&session_dir, &["session", "reports", "open"])?;
-    ensure!(!stderr.trim().is_empty());
+    let open = run_reports(&session_dir, &["session", "reports", "open"])?;
+    ensure!(json_u64(&open, "matching_reviews")? == 0);
     Ok(())
 }
 

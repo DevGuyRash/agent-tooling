@@ -278,7 +278,7 @@ You MAY use any internal workflow you like. The report SHALL include the artifac
 
 You SHALL use `mpcr` for all coordination operations. It handles session management, locking, atomic writes, and report file creation deterministically.
 
-WHEN you run `mpcr` from the target repository's root THEN you MAY omit `--repo-root` (it defaults to the current working directory; session directory derives from repo root and date).
+WHEN you run `mpcr` from anywhere inside the target repository THEN you MAY omit `--repo-root` (`mpcr` auto-detects the repo root by walking up to `.git`; fallback: current working directory).
 
 ### Storage structure
 
@@ -287,6 +287,7 @@ Review artifacts are stored under:
 ```
 {repo_root}/.local/reports/code_reviews/{YYYY-MM-DD}/
 ├── _session.json                              # Shared coordination state
+├── _session.json.lock                         # Lock file for writers (managed by mpcr)
 └── {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md      # Individual review reports
 ```
 
@@ -635,7 +636,7 @@ WHEN you identify additional documentation items or follow-ups THEN you SHALL ad
 
 ---
 
-**Report storage:** {path if written to file, otherwise “stored in chat”}
+**Report storage:** {repo-root-relative path to report file (e.g. `.local/reports/code_reviews/YYYY-MM-DD/<report>.md`) if written to file, otherwise “stored in chat”}
 
 ---
 

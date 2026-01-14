@@ -488,7 +488,7 @@ pub struct ReviewEntry {
     pub verdict: Option<ReviewVerdict>,
     /// Severity counts extracted from the report.
     pub counts: SeverityCounts,
-    /// Report filename within the session directory (set when finished).
+    /// Report path relative to the repo root (set when finished).
     pub report_file: Option<String>,
     /// Bidirectional notes between reviewer and applicator.
     pub notes: Vec<SessionNote>,
@@ -641,7 +641,7 @@ pub struct ReviewSummary {
     pub verdict: Option<ReviewVerdict>,
     /// Severity counts from the report.
     pub counts: SeverityCounts,
-    /// Report filename (if finalized).
+    /// Report path relative to the repo root (if finalized).
     pub report_file: Option<String>,
     /// Report path (if finalized).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -659,14 +659,61 @@ pub struct ReviewSummary {
     pub notes: Option<Vec<SessionNote>>,
 }
 
+fn strip_repo_root_best_effort(repo_root: &Path, path: &Path) -> Option<PathBuf> {
+    if let Ok(stripped) = path.strip_prefix(repo_root) {
+        return Some(stripped.to_path_buf());
+    }
+
+    // Handle common cases where `repo_root` is canonicalized but `path` is not (symlinks, etc).
+    let canonical_repo_root = repo_root.canonicalize().ok();
+    let canonical_path = path.canonicalize().ok();
+
+    if let Some(ref canonical_path) = canonical_path {
+        if let Ok(stripped) = canonical_path.strip_prefix(repo_root) {
+            return Some(stripped.to_path_buf());
+        }
+    }
+    if let (Some(ref canonical_path), Some(ref canonical_repo_root)) =
+        (canonical_path, canonical_repo_root)
+    {
+        if let Ok(stripped) = canonical_path.strip_prefix(canonical_repo_root) {
+            return Some(stripped.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn resolve_report_file_path(repo_root: &Path, session_dir: &Path, report_file: &str) -> PathBuf {
+    let report_file_path = Path::new(report_file);
+    if report_file_path.is_absolute() {
+        return report_file_path.to_path_buf();
+    }
+
+    // New format: `report_file` is a repo-root-relative path like
+    // `.local/reports/code_reviews/YYYY-MM-DD/{...}.md` (preferred for portability across working dirs).
+    if report_file_path.components().count() > 1 {
+        return repo_root.join(report_file_path);
+    }
+
+    // Legacy format: `report_file` is just the filename within the session directory.
+    session_dir.join(report_file_path)
+}
+
 impl ReviewEntry {
     /// Produce a summarized view suitable for report listings.
     #[must_use]
-    pub fn summary(&self, session_dir: &Path, options: ReportsOptions) -> ReviewSummary {
-        let report_path = self
-            .report_file
-            .as_ref()
-            .map(|file| session_dir.join(file).to_string_lossy().to_string());
+    pub fn summary(
+        &self,
+        repo_root: &Path,
+        session_dir: &Path,
+        options: ReportsOptions,
+    ) -> ReviewSummary {
+        let report_path = self.report_file.as_ref().map(|file| {
+            resolve_report_file_path(repo_root, session_dir, file)
+                .to_string_lossy()
+                .to_string()
+        });
         let notes = if options.include_notes {
             Some(self.notes.clone())
         } else {
@@ -676,7 +723,7 @@ impl ReviewEntry {
         let mut report_error = None;
         if options.include_report_contents {
             if let Some(ref file) = self.report_file {
-                let path = session_dir.join(file);
+                let path = resolve_report_file_path(repo_root, session_dir, file);
                 match fs::read_to_string(&path) {
                     Ok(contents) => {
                         report_contents = Some(contents);
@@ -742,6 +789,7 @@ pub fn collect_reports(
     options: ReportsOptions,
 ) -> ReportsResult {
     let total_reviews = session.reviews.len();
+    let repo_root = Path::new(&session.repo_root);
     let mut reviews = Vec::new();
     for entry in &session.reviews {
         if !filters.matches(entry) {
@@ -750,7 +798,7 @@ pub fn collect_reports(
         if !view.matches_status(entry.status) {
             continue;
         }
-        reviews.push(entry.summary(locator.session_dir(), options));
+        reviews.push(entry.summary(repo_root, locator.session_dir(), options));
     }
 
     ReportsResult {
@@ -908,7 +956,10 @@ mod tests {
             current_phase: Some(ReviewPhase::ReportWriting),
             verdict: Some(ReviewVerdict::Approve),
             counts: SeverityCounts::zero(),
-            report_file: Some("12-00-00-000_refs_heads_main_deadbeef.md".to_string()),
+            report_file: Some(
+                ".local/reports/code_reviews/2026-01-11/12-00-00-000_refs_heads_main_deadbeef.md"
+                    .to_string(),
+            ),
             notes: vec![SessionNote {
                 role: NoteRole::Reviewer,
                 timestamp: "2026-01-11T01:30:00Z".to_string(),
@@ -1102,6 +1153,100 @@ mod tests {
             bail!("bad lock_owner should error");
         };
         ensure!(err.to_string().contains("lock_owner"));
+        Ok(())
+    }
+
+    #[test]
+    fn strip_repo_root_best_effort_strips_exact_prefix() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo_root = dir.path().join("repo");
+        let expected = PathBuf::from(".local")
+            .join("reports")
+            .join("code_reviews")
+            .join("2026-01-11")
+            .join("report.md");
+        let report_path = repo_root.join(&expected);
+
+        let Some(parent) = report_path.parent() else {
+            bail!("report_path should have a parent");
+        };
+        fs::create_dir_all(parent)?;
+        fs::write(&report_path, "report")?;
+
+        let Some(actual) = strip_repo_root_best_effort(&repo_root, &report_path) else {
+            bail!("expected Some(..) for exact prefix match");
+        };
+        ensure!(actual == expected);
+        Ok(())
+    }
+
+    #[test]
+    fn strip_repo_root_best_effort_strips_canonicalized_prefix() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo_root = dir.path().join("repo");
+        fs::create_dir_all(repo_root.join("subdir"))?;
+
+        let expected = PathBuf::from(".local")
+            .join("reports")
+            .join("code_reviews")
+            .join("2026-01-11")
+            .join("report.md");
+        let report_path = repo_root.join(&expected);
+
+        let Some(parent) = report_path.parent() else {
+            bail!("report_path should have a parent");
+        };
+        fs::create_dir_all(parent)?;
+        fs::write(&report_path, "report")?;
+
+        // Introduce non-canonical `..` components so the initial `strip_prefix` fails,
+        // but canonicalization succeeds.
+        let repo_root_with_dotdot = repo_root.join("subdir").join("..");
+        let Some(actual) = strip_repo_root_best_effort(&repo_root_with_dotdot, &report_path) else {
+            bail!("expected Some(..) via canonicalization fallback");
+        };
+        ensure!(actual == expected);
+        Ok(())
+    }
+
+    #[test]
+    fn strip_repo_root_best_effort_returns_none_for_unrelated_local_root() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let real_repo_root = dir.path().join("repo");
+        let other_root = dir.path().join("other");
+        fs::create_dir_all(&other_root)?;
+
+        let expected = PathBuf::from(".local")
+            .join("reports")
+            .join("code_reviews")
+            .join("2026-01-11")
+            .join("report.md");
+        let report_path = real_repo_root.join(&expected);
+
+        let Some(parent) = report_path.parent() else {
+            bail!("report_path should have a parent");
+        };
+        fs::create_dir_all(parent)?;
+        fs::write(&report_path, "report")?;
+
+        ensure!(strip_repo_root_best_effort(&other_root, &report_path).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn strip_repo_root_best_effort_returns_none_without_match_or_local() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo_root = dir.path().join("repo");
+        fs::create_dir_all(&repo_root)?;
+
+        let report_path = dir.path().join("somewhere").join("report.md");
+        let Some(parent) = report_path.parent() else {
+            bail!("report_path should have a parent");
+        };
+        fs::create_dir_all(parent)?;
+        fs::write(&report_path, "report")?;
+
+        ensure!(strip_repo_root_best_effort(&repo_root, &report_path).is_none());
         Ok(())
     }
 }
@@ -1365,7 +1510,7 @@ pub struct FinalizeReviewParams {
 #[derive(Debug, Clone, Serialize)]
 /// Result returned by [`finalize_review`].
 pub struct FinalizeReviewResult {
-    /// Report filename within the session directory.
+    /// Report path relative to the repo root.
     pub report_file: String,
     /// Full report path as a string.
     pub report_path: String,
@@ -1388,6 +1533,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     // Step 1: read the session file (locked) and compute the report filename.
     let started_at;
     let target_ref;
+    let repo_root;
     {
         let lock_owner = params.reviewer_id.clone();
         let _guard = lock::acquire_lock(
@@ -1396,6 +1542,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
             LockConfig::default(),
         )?;
         let session = read_session_file(params.session.session_dir())?;
+        repo_root = PathBuf::from(&session.repo_root);
         let entry = session
             .reviews
             .iter()
@@ -1428,6 +1575,9 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     f.flush()
         .with_context(|| format!("flush report file {}", report_path.display()))?;
 
+    let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
+        .map_or(filename, |rel| rel.to_string_lossy().to_string());
+
     // Step 3: update session JSON (locked) to point at the report.
     {
         let lock_owner = params.reviewer_id.clone();
@@ -1447,7 +1597,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         entry.current_phase = Some(ReviewPhase::ReportWriting);
         entry.verdict = Some(params.verdict);
         entry.counts = params.counts;
-        entry.report_file = Some(filename.clone());
+        entry.report_file = Some(report_file.clone());
         entry.finished_at = Some(format_ts(params.now)?);
         entry.updated_at = format_ts(params.now)?;
 
@@ -1455,7 +1605,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     }
 
     Ok(FinalizeReviewResult {
-        report_file: filename,
+        report_file,
         report_path: report_path.to_string_lossy().to_string(),
     })
 }

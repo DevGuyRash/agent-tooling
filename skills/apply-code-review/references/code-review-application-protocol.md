@@ -92,7 +92,7 @@ WHEN a reviewer posts a `question` note THEN you SHALL respond via `mpcr applica
 
 ## IV) Reading reviews
 
-`mpcr` defaults `--repo-root` to the current working directory; session directory derives from repo root and date. Omit these flags only when running from the target repository's root.
+`mpcr` auto-detects `--repo-root` by walking up from the current working directory until it finds a `.git` directory/file (fallback: current working directory). Session directory derives from repo root and date.
 
 You SHALL wait for reviewers with non-terminal `status` (`INITIALIZING`, `IN_PROGRESS`, or `BLOCKED`) to complete before processing. Use `mpcr applicator wait` to block until all reviewers reach terminal status.
 
@@ -101,6 +101,8 @@ You SHALL fetch completed reviews you haven't processed yet:
 ```
 mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-notes --include-report-contents --json
 ```
+
+IF no session exists yet for the selected date THEN this returns an empty list (no error). For determinism, prefer pinning `MPCR_DATE` or `MPCR_SESSION_DIR` when querying historical sessions.
 
 The `report_contents` field contains the full markdown with actionable findings and code anchors. You SHALL run `mpcr session reports closed --help` for all available filters.
 

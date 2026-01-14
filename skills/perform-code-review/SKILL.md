@@ -44,6 +44,8 @@ This sets:
 - `MPCR_REVIEWER_ID` (your stable identity for this agent process; reused across target refs)
 - `MPCR_SESSION_ID` (the session for this target ref)
 - `MPCR_SESSION_DIR`, `MPCR_SESSION_FILE`, `MPCR_TARGET_REF`
+- `MPCR_REPO_ROOT` (resolved repo root used for default session paths)
+- `MPCR_DATE` (resolved session date used for default session paths)
 
 IF `MPCR_REVIEWER_ID` is already set by the launcher THEN `mpcr` will reuse it. Otherwise `mpcr` generates one and exports it; it remains stable for the rest of the process.
 

@@ -100,7 +100,10 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
     })?;
 
     ensure!(Path::new(&fin.report_path).exists());
-    ensure!(fin.report_file == "12-34-56-789_refs_heads_main_deadbeef.md".to_string());
+    ensure!(
+        fin.report_file
+            == ".local/reports/code_reviews/2026-01-11/12-34-56-789_refs_heads_main_deadbeef.md"
+    );
 
     let raw2 = fs::read_to_string(session.session_file())?;
     let session_json2: SessionFile = serde_json::from_str(&raw2)?;
@@ -108,7 +111,12 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
         .reviews
         .first()
         .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
-    ensure!(entry.report_file.as_deref() == Some("12-34-56-789_refs_heads_main_deadbeef.md"));
+    ensure!(
+        entry.report_file.as_deref()
+            == Some(
+                ".local/reports/code_reviews/2026-01-11/12-34-56-789_refs_heads_main_deadbeef.md"
+            )
+    );
     ensure!(entry.finished_at.is_some());
     Ok(())
 }
