@@ -102,11 +102,11 @@ You SHALL fetch completed reviews you haven't processed yet:
 mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-notes --include-report-contents --json
 ```
 
-IF no session exists yet for the selected date THEN this returns an empty list (no error). For determinism, prefer pinning `MPCR_DATE` or `MPCR_SESSION_DIR` when querying historical sessions.
+IF no session exists yet for the selected date THEN this returns an empty list (no error). For determinism, prefer passing `--date` or `--session-dir` explicitly when querying historical sessions.
 
 The `report_contents` field contains the full markdown with actionable findings and code anchors. You SHALL run `mpcr session reports closed --help` for all available filters.
 
-Every actionable issue in `report_contents` is a finding requiring an explicit disposition. Use UACRP finding headings and anchors for systematic tracking.
+You SHALL treat every actionable issue in `report_contents` as a finding requiring an explicit disposition. Use UACRP finding headings and anchors for systematic tracking.
 
 FOR EACH review, you SHALL analyze the `verdict`, `counts`, and report contents to understand the feedback, then you SHALL update `initiator_status` to `RECEIVED`.
 
@@ -157,7 +157,7 @@ mpcr applicator note --session-id SESSION_ID --reviewer-id REVIEWER_ID \
 
 `SESSION_ID` and `REVIEWER_ID` come from the JSON output of `mpcr session reports`.
 
-IF you have set `MPCR_SESSION_ID` and `MPCR_REVIEWER_ID` in your environment for the current review entry THEN you MAY omit `--session-id/--reviewer-id` flags in `mpcr` commands.
+You SHALL pass `--session-id` and `--reviewer-id` explicitly (values come from the JSON output of `mpcr session reports`).
 
 ### Status progression
 

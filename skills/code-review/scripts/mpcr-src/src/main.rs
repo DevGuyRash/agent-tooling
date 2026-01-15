@@ -41,7 +41,7 @@ Output path notes:
   report_file  Repo-root-relative report path (stored in `_session.json`)
   report_path  Full filesystem report path (best effort)
 
-Environment variables (optional):
+Environment variables (optional; only read when `--use-env` is passed):
   MPCR_REPO_ROOT    Repo root used for default session dir (default: auto-detect git root; fallback: cwd)
   MPCR_DATE         Session date (YYYY-MM-DD) used for default session dir (default: today in UTC)
   MPCR_SESSION_DIR  Explicit session directory containing `_session.json`
@@ -50,26 +50,16 @@ Environment variables (optional):
   MPCR_TARGET_REF   Current target_ref (used by `applicator wait`)
 
 Common flows:
-  # Reviewer (recommended; POSIX shell)
-  eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
-  mpcr reviewer update --status IN_PROGRESS --phase INGESTION
-  mpcr reviewer finalize --verdict APPROVE --blocker 0 --major 0 --minor 0 --nit 0 <<'EOF'
-  ## Adversarial Code Review: main
-  ...
-  EOF
+  # Reviewer (explicit flags; recommended for isolated shells)
+  mpcr reviewer register --target-ref main --print-env
+  # Store MPCR_* values from output, then pass explicitly:
+  mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION
 
-  # Reviewer (explicit flags; no env)
-  mpcr reviewer register --target-ref main --reviewer-id <id8>
-  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --status IN_PROGRESS --phase INGESTION
-
-  # Applicator (recommended)
+  # Applicator (explicit flags; recommended for isolated shells)
   mpcr session reports closed --include-report-contents --json
-  mpcr applicator wait
-  mpcr applicator set-status --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
+  mpcr applicator wait --session-dir <DIR>
+  mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status RECEIVED
 
-  # Applicator (explicit session dir)
-  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD
-  mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
 "#
 )]
 struct Cli {
@@ -80,6 +70,13 @@ struct Cli {
         help = "Emit pretty JSON (suitable for scripting)."
     )]
     json: bool,
+    #[arg(
+        long,
+        global = true,
+        default_value_t = false,
+        help = "Read MPCR_* environment variables for default values (opt-in)."
+    )]
+    use_env: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -138,7 +135,7 @@ enum IdCommands {
 enum LockCommands {
     /// Acquire the session lock file (`_session.json.lock`).
     #[command(after_long_help = r#"Examples:
-  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  # From repo root (or with --repo-root/--date):
   mpcr lock acquire --owner <owner_id8>
 
   # Explicit session directory:
@@ -185,7 +182,7 @@ Notes:
 enum SessionCommands {
     /// Print the parsed `_session.json`.
     #[command(after_long_help = r#"Examples:
-  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  # From repo root (or with --repo-root/--date):
   mpcr session show
 
   # Explicit session directory:
@@ -197,7 +194,7 @@ enum SessionCommands {
     },
     /// Report-oriented session views (open/closed/in-progress).
     #[command(after_long_help = r#"Examples:
-  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set):
+  # From repo root (or with --repo-root/--date):
   mpcr session reports open
   mpcr session reports closed --include-report-contents --json
 
@@ -220,21 +217,18 @@ enum SessionCommands {
 struct SessionDirArgs {
     #[arg(
         long,
-        env = "MPCR_SESSION_DIR",
         value_name = "DIR",
         help = "Session directory containing `_session.json` (default: <repo_root>/.local/reports/code_reviews/<date>)."
     )]
     session_dir: Option<PathBuf>,
     #[arg(
         long,
-        env = "MPCR_REPO_ROOT",
         value_name = "DIR",
         help = "Repo root used to compute the default session dir (default: auto-detect git root; fallback: cwd)."
     )]
     repo_root: Option<PathBuf>,
     #[arg(
         long,
-        env = "MPCR_DATE",
         value_name = "YYYY-MM-DD",
         help = "Session date used to compute the default session dir (default: today in UTC; set for determinism)."
     )]
@@ -340,15 +334,14 @@ enum ReviewerCommands {
   # Create or join today's session directory under the current repo root:
   mpcr reviewer register --target-ref main
 
-  # Recommended: capture deterministic context into env vars (POSIX shell):
-  eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
+  # Recommended for isolated shells: print the MPCR_* context for copy/paste reuse:
+  mpcr reviewer register --target-ref main --print-env
 
-  # Use a stable reviewer_id (recommended when reviewing multiple target refs):
-  export MPCR_REVIEWER_ID="<id8>"
-  eval "$(mpcr reviewer register --target-ref main --emit-env sh)"
+  # Reuse the same reviewer_id across reviews:
+  mpcr reviewer register --target-ref main --reviewer-id <id8> --print-env
 
   # Worktree / uncommitted review (no commit yet):
-  eval "$(mpcr reviewer register --target-ref 'worktree:feature/foo (uncommitted)' --emit-env sh)"
+  mpcr reviewer register --target-ref 'worktree:feature/foo (uncommitted)' --print-env
 
   # Explicit date and repo root:
   mpcr reviewer register --target-ref pr/123 --repo-root /path/to/repo --date 2026-01-11
@@ -369,9 +362,8 @@ enum ReviewerCommands {
 
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "8-character ASCII alphanumeric reviewer identifier (default: random; set MPCR_REVIEWER_ID to reuse identity across reviews)."
+            help = "8-character ASCII alphanumeric reviewer identifier (default: random; pass --reviewer-id to reuse identity across reviews)."
         )]
         reviewer_id: Option<String>,
         #[arg(
@@ -391,9 +383,16 @@ enum ReviewerCommands {
             long,
             value_enum,
             value_name = "FORMAT",
-            help = "Emit environment exports for reuse in later commands (e.g., `eval \"$(mpcr reviewer register ... --emit-env sh)\"`)."
+            help = "Emit `export KEY='value'` lines for POSIX shells."
         )]
         emit_env: Option<EmitEnvFormat>,
+
+        #[arg(
+            long,
+            conflicts_with = "emit_env",
+            help = "Print MPCR_* key/value lines for manual reuse (does not emit `export`)."
+        )]
+        print_env: bool,
     },
 
     /// Update your reviewer-owned status and/or current phase.
@@ -409,29 +408,25 @@ Review phases:
   INGESTION, DOMAIN_COVERAGE, THEOREM_GENERATION, ADVERSARIAL_PROOFS, SYNTHESIS, REPORT_WRITING
 
 Examples:
-  # If you used `--emit-env sh` earlier, you can omit repeated flags:
-  mpcr reviewer update --status IN_PROGRESS --phase INGESTION
-
-  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --status IN_PROGRESS --phase INGESTION
-  mpcr reviewer update --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --clear-phase
+  # Recommended (explicit flags):
+  mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION
+  mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --clear-phase
 "#)]
     Update {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+            help = "Your reviewer_id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        reviewer_id: String,
+        reviewer_id: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
-            help = "Session id (8-character ASCII alphanumeric)."
+            help = "Session id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        session_id: String,
+        session_id: Option<String>,
         #[arg(
             long,
             value_enum,
@@ -464,32 +459,29 @@ Report input:
   - Or omit it and pipe markdown via stdin
 
 Examples:
-  # If you used `--emit-env sh` earlier, you can omit repeated flags:
-  mpcr reviewer finalize --verdict APPROVE --blocker 0 --major 0 --minor 0 --nit 0 <<'EOF'
+  mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --blocker 0 --major 0 --minor 0 --nit 0 <<'EOF'
   ## Adversarial Code Review: <ref>
   ...
   EOF
 
-  mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict APPROVE --report-file review.md
-  cat review.md | mpcr reviewer finalize --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --verdict REQUEST_CHANGES --major 2
+  mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --report-file review.md
+  cat review.md | mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict REQUEST_CHANGES --major 2
 "#)]
     Finalize {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+            help = "Your reviewer_id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        reviewer_id: String,
+        reviewer_id: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
-            help = "Session id (8-character ASCII alphanumeric)."
+            help = "Session id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        session_id: String,
+        session_id: Option<String>,
         #[arg(
             long,
             value_enum,
@@ -536,29 +528,24 @@ Examples:
   - With `--content-json`, `--content` must be valid JSON (object/array/string/number/etc).
 
 Examples:
-  # If you used `--emit-env sh` earlier, you can omit repeated flags:
-  mpcr reviewer note --note-type question --content "Can you clarify X?"
-
-  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type question --content "Can you clarify X?"
-  mpcr reviewer note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type domain_observation --content-json --content '{"domain":"security","note":"..."}'
+  mpcr reviewer note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type question --content "Can you clarify X?"
+  mpcr reviewer note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type domain_observation --content-json --content '{"domain":"security","note":"..."}'
 "#)]
     Note {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "Your reviewer_id (8-character ASCII alphanumeric)."
+            help = "Your reviewer_id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        reviewer_id: String,
+        reviewer_id: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
-            help = "Session id (8-character ASCII alphanumeric)."
+            help = "Session id (id8). Capture from `mpcr reviewer register --print-env`."
         )]
-        session_id: String,
+        session_id: Option<String>,
         #[arg(
             long,
             visible_alias = "type",
@@ -586,28 +573,24 @@ enum ApplicatorCommands {
   REQUESTING, OBSERVING, RECEIVED, REVIEWED, APPLYING, APPLIED, CANCELLED
 
 Example:
-  # If MPCR_SESSION_DIR / MPCR_SESSION_ID / MPCR_REVIEWER_ID are set:
-  mpcr applicator set-status --initiator-status RECEIVED
-
-  mpcr applicator set-status --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --initiator-status RECEIVED
+  # Recommended (explicit flags):
+  mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status RECEIVED
 "#)]
     SetStatus {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "Reviewer id for the entry you are updating (8-character ASCII alphanumeric)."
+            help = "Reviewer id for the entry you are updating (id8)."
         )]
-        reviewer_id: String,
+        reviewer_id: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
-            help = "Session id for the entry you are updating (8-character ASCII alphanumeric)."
+            help = "Session id for the entry you are updating (id8)."
         )]
-        session_id: String,
+        session_id: Option<String>,
         #[arg(
             long,
             value_enum,
@@ -630,28 +613,24 @@ Example:
   - With `--content-json`, `--content` must be valid JSON.
 
 Example:
-  # If MPCR_SESSION_DIR / MPCR_SESSION_ID / MPCR_REVIEWER_ID are set:
-  mpcr applicator note --note-type applied --content "Fixed in commit abc123"
-
-  mpcr applicator note --session-dir .local/reports/code_reviews/YYYY-MM-DD --reviewer-id <id8> --session-id <id8> --note-type applied --content "Fixed in commit abc123"
+  # Recommended (explicit flags):
+  mpcr applicator note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type applied --content "Fixed in commit abc123"
 "#)]
     Note {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_REVIEWER_ID",
             value_name = "ID8",
-            help = "Reviewer id for the entry you are updating (8-character ASCII alphanumeric)."
+            help = "Reviewer id for the entry you are updating (id8)."
         )]
-        reviewer_id: String,
+        reviewer_id: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
-            help = "Session id for the entry you are updating (8-character ASCII alphanumeric)."
+            help = "Session id for the entry you are updating (id8)."
         )]
-        session_id: String,
+        session_id: Option<String>,
         #[arg(
             long,
             visible_alias = "type",
@@ -682,30 +661,23 @@ Example:
   FINISHED, CANCELLED, ERROR
 
 Examples:
-  # From repo root (or with MPCR_REPO_ROOT / MPCR_DATE set), wait for *all* reviews:
+  # From repo root (or with --repo-root/--date), wait for *all* reviews:
   mpcr applicator wait
 
-  # Wait for a specific target/session id (env-driven; flags optional):
-  export MPCR_TARGET_REF=main
-  export MPCR_SESSION_ID=<id8>
-  mpcr applicator wait
-
-  # Explicit flags (no env):
-  mpcr applicator wait --session-dir .local/reports/code_reviews/YYYY-MM-DD --target-ref main --session-id <id8>
+  # Explicit flags (recommended):
+  mpcr applicator wait --session-dir <DIR> --target-ref main --session-id <ID8>
 "#)]
     Wait {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(
             long,
-            env = "MPCR_TARGET_REF",
             value_name = "REF",
             help = "If set, only wait for reviews matching this target_ref."
         )]
         target_ref: Option<String>,
         #[arg(
             long,
-            env = "MPCR_SESSION_ID",
             value_name = "ID8",
             help = "If set, only wait for reviews matching this session_id."
         )]
@@ -728,13 +700,15 @@ fn main() {
 #[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let json = cli.json;
+    let use_env = cli.use_env;
     let now = OffsetDateTime::now_utc();
 
     match cli.command {
         Commands::Id { command } => match command {
             IdCommands::Id8 => {
                 let out = id::random_id8()?;
-                if cli.json {
+                if json {
                     write_json(&out)?;
                 } else {
                     println!("{out}");
@@ -742,7 +716,7 @@ fn run() -> anyhow::Result<()> {
             }
             IdCommands::Hex { bytes } => {
                 let out = id::random_hex_id(bytes)?;
-                if cli.json {
+                if json {
                     write_json(&out)?;
                 } else {
                     println!("{out}");
@@ -756,34 +730,34 @@ fn run() -> anyhow::Result<()> {
                 owner,
                 max_retries,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let cfg = LockConfig { max_retries };
                 let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
                 std::mem::forget(guard);
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
             LockCommands::Release { session, owner } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 lock::release_lock(&resolved.session_dir, owner)?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
         },
 
         Commands::Session { command } => match command {
             SessionCommands::Show { session } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let session = load_session(&SessionLocator::new(resolved.session_dir))?;
-                write_result(cli.json, &session)?;
+                write_result(json, &session)?;
             }
             SessionCommands::Reports { command } => match command {
                 ReportsCommands::Open(args) => {
-                    handle_reports(cli.json, now.date(), ReportsView::Open, args)?;
+                    handle_reports(use_env, json, now.date(), ReportsView::Open, args)?;
                 }
                 ReportsCommands::Closed(args) => {
-                    handle_reports(cli.json, now.date(), ReportsView::Closed, args)?;
+                    handle_reports(use_env, json, now.date(), ReportsView::Closed, args)?;
                 }
                 ReportsCommands::InProgress(args) => {
-                    handle_reports(cli.json, now.date(), ReportsView::InProgress, args)?;
+                    handle_reports(use_env, json, now.date(), ReportsView::InProgress, args)?;
                 }
             },
         },
@@ -796,12 +770,16 @@ fn run() -> anyhow::Result<()> {
                 session_id,
                 parent_id,
                 emit_env,
+                print_env,
             } => {
                 let target_ref_for_env = target_ref.clone();
-                let resolved = resolve_session_input(&session, now.date())?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let repo_root_for_env = resolved.repo_root.to_string_lossy().to_string();
                 let date_for_env = resolved.session_date.to_string();
                 let session = SessionLocator::new(resolved.session_dir);
+
+                let reviewer_id =
+                    reviewer_id.or_else(|| opt_env_string(use_env, "MPCR_REVIEWER_ID"));
 
                 let res = register_reviewer(RegisterReviewerParams {
                     repo_root: resolved.repo_root,
@@ -823,7 +801,24 @@ fn run() -> anyhow::Result<()> {
                         ("MPCR_SESSION_FILE", res.session_file.as_str()),
                         ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
                     ])?,
-                    None => write_result(cli.json, &res)?,
+                    None => {
+                        if print_env {
+                            write_env_kv(
+                                json,
+                                &[
+                                    ("MPCR_REPO_ROOT", repo_root_for_env.as_str()),
+                                    ("MPCR_DATE", date_for_env.as_str()),
+                                    ("MPCR_REVIEWER_ID", res.reviewer_id.as_str()),
+                                    ("MPCR_SESSION_ID", res.session_id.as_str()),
+                                    ("MPCR_SESSION_DIR", res.session_dir.as_str()),
+                                    ("MPCR_SESSION_FILE", res.session_file.as_str()),
+                                    ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
+                                ],
+                            )?;
+                        } else {
+                            write_result(json, &res)?;
+                        }
+                    }
                 }
             }
 
@@ -835,7 +830,11 @@ fn run() -> anyhow::Result<()> {
                 phase,
                 clear_phase,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let phase = if clear_phase {
                     Some(None)
                 } else {
@@ -850,7 +849,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                 };
                 update_review(&params)?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
 
             ReviewerCommands::Finalize {
@@ -870,7 +869,11 @@ fn run() -> anyhow::Result<()> {
                     None => read_stdin_to_string().context("read report markdown from stdin")?,
                 };
 
-                let resolved = resolve_session_input(&session, now.date())?;
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let res = finalize_review(FinalizeReviewParams {
                     session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
@@ -885,7 +888,7 @@ fn run() -> anyhow::Result<()> {
                     report_markdown,
                     now,
                 })?;
-                write_result(cli.json, &res)?;
+                write_result(json, &res)?;
             }
 
             ReviewerCommands::Note {
@@ -896,7 +899,11 @@ fn run() -> anyhow::Result<()> {
                 content,
                 content_json,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 append_note(AppendNoteParams {
                     session: SessionLocator::new(resolved.session_dir),
@@ -908,7 +915,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                     lock_owner: reviewer_id,
                 })?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
         },
 
@@ -920,7 +927,11 @@ fn run() -> anyhow::Result<()> {
                 initiator_status,
                 lock_owner,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let lock_owner = match lock_owner {
                     Some(lock_owner) => lock_owner,
                     None => id::random_id8()?,
@@ -934,7 +945,7 @@ fn run() -> anyhow::Result<()> {
                     lock_owner,
                 };
                 set_initiator_status(&params)?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
 
             ApplicatorCommands::Note {
@@ -946,7 +957,11 @@ fn run() -> anyhow::Result<()> {
                 content_json,
                 lock_owner,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 let lock_owner = match lock_owner {
                     Some(lock_owner) => lock_owner,
@@ -962,7 +977,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                     lock_owner,
                 })?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
 
             ApplicatorCommands::Wait {
@@ -970,13 +985,15 @@ fn run() -> anyhow::Result<()> {
                 target_ref,
                 session_id,
             } => {
-                let resolved = resolve_session_input(&session, now.date())?;
+                let target_ref = target_ref.or_else(|| opt_env_string(use_env, "MPCR_TARGET_REF"));
+                let session_id = session_id.or_else(|| opt_env_string(use_env, "MPCR_SESSION_ID"));
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
                 wait_for_reviews(
                     &resolved.session_dir,
                     target_ref.as_deref(),
                     session_id.as_deref(),
                 )?;
-                write_ok(cli.json)?;
+                write_ok(json)?;
             }
         },
     }
@@ -985,11 +1002,12 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn resolve_session_input(
+    use_env: bool,
     args: &SessionDirArgs,
     default_date: Date,
 ) -> anyhow::Result<ResolvedSessionInput> {
     let cwd = std::env::current_dir().context("get cwd")?;
-    resolve_session_input_from_cwd(args, default_date, &cwd)
+    resolve_session_input_from_cwd(use_env, args, default_date, &cwd)
 }
 
 fn discover_repo_root(start: &Path) -> Option<PathBuf> {
@@ -1004,6 +1022,7 @@ fn discover_repo_root(start: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_session_input_from_cwd(
+    use_env: bool,
     args: &SessionDirArgs,
     default_date: Date,
     cwd: &Path,
@@ -1011,16 +1030,26 @@ fn resolve_session_input_from_cwd(
     let repo_root = args
         .repo_root
         .clone()
+        .or_else(|| opt_env_pathbuf(use_env, "MPCR_REPO_ROOT"))
         .or_else(|| discover_repo_root(cwd))
-        .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
-    let session_date = match args.date.as_deref() {
+        .map_or_else(|| cwd.to_path_buf(), std::convert::identity);
+    let date_raw = args
+        .date
+        .as_deref()
+        .map(std::string::ToString::to_string)
+        .or_else(|| opt_env_string(use_env, "MPCR_DATE"));
+    let session_date = match date_raw.as_deref() {
         Some(date) => parse_date_ymd(date)?,
         None => default_date,
     };
-    let session_dir = args.session_dir.as_ref().map_or_else(
-        || mpcr::paths::session_paths(&repo_root, session_date).session_dir,
-        std::clone::Clone::clone,
-    );
+    let session_dir = args
+        .session_dir
+        .clone()
+        .or_else(|| opt_env_pathbuf(use_env, "MPCR_SESSION_DIR"))
+        .map_or_else(
+            || mpcr::paths::session_paths(&repo_root, session_date).session_dir,
+            std::convert::identity,
+        );
 
     Ok(ResolvedSessionInput {
         session_dir,
@@ -1095,6 +1124,22 @@ fn write_env_sh(pairs: &[(&str, &str)]) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn write_env_kv(json: bool, pairs: &[(&str, &str)]) -> anyhow::Result<()> {
+    if json {
+        let mut map = serde_json::Map::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            map.insert((*key).to_string(), Value::String((*value).to_string()));
+        }
+        return write_json(&Value::Object(map));
+    }
+
+    let mut stdout = std::io::stdout();
+    for (key, value) in pairs {
+        writeln!(stdout, "{key}={value}").context("write stdout")?;
+    }
+    Ok(())
+}
+
 fn sh_single_quote(raw: &str) -> String {
     if raw.is_empty() {
         return "''".to_string();
@@ -1123,12 +1168,13 @@ fn write_result<T: Serialize>(json: bool, value: &T) -> anyhow::Result<()> {
 }
 
 fn handle_reports(
+    use_env: bool,
     json: bool,
     default_date: Date,
     view: ReportsView,
     args: ReportsArgs,
 ) -> anyhow::Result<()> {
-    let resolved = resolve_session_input(&args.session, default_date)?;
+    let resolved = resolve_session_input(use_env, &args.session, default_date)?;
     let session = SessionLocator::new(resolved.session_dir);
 
     if session.session_dir().exists() && !session.session_dir().is_dir() {
@@ -1171,6 +1217,39 @@ fn handle_reports(
     let session_data = load_session(&session)?;
     let result = collect_reports(&session_data, &session, view, filters, options);
     write_result(json, &result)
+}
+
+fn opt_env_string(use_env: bool, key: &str) -> Option<String> {
+    if !use_env {
+        return None;
+    }
+    std::env::var(key).ok()
+}
+
+fn opt_env_pathbuf(use_env: bool, key: &str) -> Option<PathBuf> {
+    if !use_env {
+        return None;
+    }
+    std::env::var_os(key).map(PathBuf::from)
+}
+
+fn require_arg_or_env(
+    value: Option<String>,
+    use_env: bool,
+    env_key: &str,
+    arg_flag: &str,
+) -> anyhow::Result<String> {
+    value
+        .or_else(|| opt_env_string(use_env, env_key))
+        .ok_or_else(|| {
+            if use_env {
+                anyhow::anyhow!(
+                    "missing {arg_flag}; pass {arg_flag} (or set {env_key} and pass --use-env)"
+                )
+            } else {
+                anyhow::anyhow!("missing {arg_flag}; pass {arg_flag}")
+            }
+        })
 }
 
 fn wait_for_reviews(
@@ -1309,7 +1388,7 @@ mod tests {
             date: Some("2026-01-11".to_string()),
         };
         let fallback = Date::from_calendar_date(2026, Month::January, 12)?;
-        let resolved = resolve_session_input(&args, fallback)?;
+        let resolved = resolve_session_input(false, &args, fallback)?;
         ensure!(resolved.session_dir == override_dir);
         ensure!(resolved.repo_root == repo_root);
         ensure!(resolved.session_date.to_string() == "2026-01-11");
@@ -1325,6 +1404,7 @@ mod tests {
             date: Some("2026-01-11".to_string()),
         };
         let resolved = resolve_session_input_from_cwd(
+            false,
             &args,
             Date::from_calendar_date(2026, Month::January, 12)?,
             repo_root.path(),
@@ -1351,6 +1431,7 @@ mod tests {
             date: Some("2026-01-11".to_string()),
         };
         let resolved = resolve_session_input_from_cwd(
+            false,
             &args,
             Date::from_calendar_date(2026, Month::January, 12)?,
             &cwd,

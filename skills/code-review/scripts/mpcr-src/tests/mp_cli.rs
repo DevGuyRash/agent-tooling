@@ -817,6 +817,7 @@ fn reviewer_update_uses_env_defaults_for_ids_and_session_dir() -> anyhow::Result
 
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
         .args([
+            "--use-env",
             "reviewer",
             "update",
             "--status",
@@ -855,7 +856,7 @@ fn applicator_wait_uses_env_defaults_for_session_dir_and_filters() -> anyhow::Re
     let session_dir_str = session_dir.to_string_lossy().to_string();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
-        .args(["applicator", "wait", "--json"])
+        .args(["--use-env", "applicator", "wait", "--json"])
         .env("MPCR_SESSION_DIR", &session_dir_str)
         .env("MPCR_TARGET_REF", "refs/heads/other")
         .output()?;
@@ -868,6 +869,66 @@ fn applicator_wait_uses_env_defaults_for_session_dir_and_filters() -> anyhow::Re
     }
     let result: Value = serde_json::from_slice(&output.stdout)?;
     ensure!(json_bool(&result, "ok")?);
+    Ok(())
+}
+
+#[test]
+fn reviewer_update_does_not_read_env_without_use_env() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--status",
+            "IN_PROGRESS",
+            "--phase",
+            "DOMAIN_COVERAGE",
+            "--json",
+        ])
+        .env("MPCR_REVIEWER_ID", "deadbeef")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .env("MPCR_SESSION_DIR", "/tmp/does-not-matter")
+        .output()?;
+
+    ensure!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("--reviewer-id"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_print_env_json_outputs_expected_vars() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--print-env",
+    ])?;
+
+    ensure!(json_str(&out, "MPCR_REPO_ROOT")? == repo_root_str);
+    ensure!(json_str(&out, "MPCR_DATE")? == "2026-01-11");
+    ensure!(json_str(&out, "MPCR_REVIEWER_ID")? == "deadbeef");
+    ensure!(json_str(&out, "MPCR_SESSION_ID")? == "sess0001");
+    ensure!(json_str(&out, "MPCR_TARGET_REF")? == "refs/heads/main");
+    let session_dir = json_str(&out, "MPCR_SESSION_DIR")?.to_string();
+    let session_file = json_str(&out, "MPCR_SESSION_FILE")?.to_string();
+    ensure!(
+        Path::new(&session_dir)
+            .join("_session.json")
+            .to_string_lossy()
+            == session_file
+    );
     Ok(())
 }
 

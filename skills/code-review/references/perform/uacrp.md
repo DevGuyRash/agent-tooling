@@ -11,7 +11,7 @@
 
 - You SHALL produce a Markdown report following the template (Sections 0–11), with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`.
 - You SHALL provide evidence anchors and confidence labels for non-trivial claims. Any claim that remains **Assumed** or **Unknown** SHALL appear in Residual Risk with a verification plan.
-- IF filesystem write access is available THEN you SHALL record coordination artifacts under `.local/reports/code_reviews/YYYY-MM-DD/` managed by `mpcr`.
+- IF you have filesystem write access THEN you SHALL record coordination artifacts under `.local/reports/code_reviews/YYYY-MM-DD/` managed by `mpcr`.
 
 ---
 
@@ -268,7 +268,7 @@ You MAY use any internal workflow you like. The report SHALL include the artifac
 6. **Findings (failed proofs):** group by severity; for each non‑NIT finding, include fix guidance and how to verify the fix.
 7. **Passing Proofs (defended theorems):** list high-risk claims successfully defended with evidence.
 8. **Residual Risk:** list everything not proven, why it matters, and a concrete verification plan.
-9. **Verification ledger:** record what was run vs not run and where evidence came from (local/CI/code-reading).
+9. **Verification ledger:** you SHOULD run available verification commands (tests, linting, type checking, build) when you have execution access; record what was run vs not run and where evidence came from (local/CI/code-reading).
 10. **Compatibility & rollout notes:** cover mixed-version behavior, migrations, feature flags/config, and rollback.
 11. **Docs/follow-ups:** identify what SHOULD be documented or tracked if deferred.
 
@@ -291,7 +291,7 @@ Review artifacts are stored under:
 └── {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md      # Individual review reports
 ```
 
-IF filesystem write access is not available THEN you SHALL output the full report in chat.
+IF you lack filesystem write access THEN you SHALL output the full report in chat.
 
 ---
 
@@ -301,21 +301,31 @@ The `reviewer_id` identifies **you** (the executor) and SHALL be reused across a
 - you review multiple target refs (multiple commits/branches/PRs)
 - you review on multiple dates (multiple session directories)
 
-WHEN you start a review THEN you SHALL reuse your existing `reviewer_id`. You SHALL NOT rely on `mpcr`’s default random `reviewer_id`.
+WHEN you start a review THEN you SHALL reuse your existing `reviewer_id`. You SHALL NOT rely on `mpcr` generating a new random `reviewer_id` for each review; instead, capture it once (e.g., from `mpcr reviewer register --print-env`) and reuse it.
 
-IF you do not yet have a stable `reviewer_id` for this repo THEN you SHALL set one once per reviewer process and reuse it for all subsequent reviews.
+IF you do not yet have a stable `reviewer_id` for this repo THEN you SHALL capture one once and reuse it for all subsequent reviews.
 
-Preferred: use `mpcr reviewer register --emit-env sh` and `eval` its exports; this sets `MPCR_REVIEWER_ID` and the current session context so later commands can omit repeated flags:
+You SHALL capture the session context via `--print-env` and store the printed values in your context (especially `MPCR_REVIEWER_ID`):
 
 ```sh
-eval "$(mpcr reviewer register --target-ref '<REF>' --emit-env sh)"
+mpcr reviewer register --target-ref '<REF>' --print-env
 ```
 
-IF the launcher needs a stable reviewer identity across runs THEN it SHOULD set `MPCR_REVIEWER_ID` (an id8) before invoking `mpcr`.
+`--print-env` outputs the `MPCR_*` context (as `KEY=value` lines, or JSON when combined with `--json`). Store these values in your context and pass them explicitly to later commands via `--session-dir`, `--reviewer-id`, and `--session-id`.
 
-WHEN you run `mpcr reviewer register` THEN you SHOULD include `--emit-env sh` and `eval` the output to keep the current context deterministic for later commands.
+Optional (POSIX shells only): `mpcr reviewer register --emit-env sh` prints `export ...` lines for convenience in a persistent shell.
 
-WHEN you switch to a different `target_ref` THEN you SHALL re-run `mpcr reviewer register --target-ref '<NEW_REF>' --emit-env sh` and `eval` its output to update `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review (while keeping the same `MPCR_REVIEWER_ID`).
+IF you are starting a new target ref review and already have a stable reviewer identity for this repo THEN you SHALL pass it explicitly:
+
+```sh
+mpcr reviewer register --target-ref '<REF>' --reviewer-id <ID8> --print-env
+```
+
+IF the launcher needs a stable reviewer identity across runs THEN it SHALL pass `--reviewer-id` (an id8) explicitly before invoking `mpcr`.
+
+WHEN you run `mpcr reviewer register` THEN you SHALL capture the session context via `--print-env`.
+
+WHEN you switch to a different `target_ref` THEN you SHALL re-run `mpcr reviewer register --target-ref '<NEW_REF>' --reviewer-id <ID8> --print-env` to update `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review (while keeping the same `reviewer_id`).
 
 ### Target ref selection (including worktree reviews)
 
@@ -401,10 +411,8 @@ WHEN you observe `clarification_needed` notes THEN you MAY respond via `mpcr rev
 
 **Example:**
 ```bash
-# If you previously ran:
-#   eval "$(mpcr reviewer register --target-ref '<REF>' --emit-env sh)"
-# then reviewer/session context is already set and you can omit `--reviewer-id/--session-id`.
-mpcr reviewer note --note-type question \
+# After `mpcr reviewer register ... --print-env`, copy the printed values here:
+mpcr reviewer note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type question \
   --content "Is the rate limiter expected to persist across process restarts, or is in-memory acceptable?"
 ```
 
@@ -413,7 +421,7 @@ mpcr reviewer note --note-type question \
 ### Coordination behavior
 
 You are one of potentially many concurrent reviewers. `mpcr` handles:
-- Reviewer registration and coordination (you SHOULD supply a stable `reviewer_id`; do not rely on the default random id)
+- Reviewer registration and coordination (you SHALL keep a stable `reviewer_id` and reuse it; capture once and store it in your context)
 - Session ID assignment (joining existing sessions or creating new ones)
 - Parent-child chains when spawned by another reviewer
 - Lock acquisition, atomic writes, and report file creation
@@ -589,6 +597,8 @@ IF the Residual Risk section is genuinely empty THEN you SHALL state explicitly:
 ---
 
 ### 8) Verification ledger
+
+WHEN you have execution access THEN you SHOULD run the repo's verification commands (tests, linting, type checking, build) and record results. Execution evidence elevates confidence from **Supported** to **Verified**.
 
 | Check                            | Status (Verified / Not run / N/A) | Evidence (command / CI job / artifact) |
 | -------------------------------- | --------------------------------- | -------------------------------------- |
