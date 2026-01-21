@@ -96,13 +96,21 @@ WHEN a reviewer posts a `question` note THEN you SHALL respond via `mpcr applica
 
 You SHALL wait for reviewers with non-terminal `status` (`INITIALIZING`, `IN_PROGRESS`, or `BLOCKED`) to complete before processing. Use `mpcr applicator wait` to block until all reviewers reach terminal status.
 
+For deterministic waiting (and to avoid waiting on unrelated sessions/targets), you SHALL pass filters when you know them:
+
+```bash
+mpcr applicator wait --session-dir <DIR> --target-ref <REF> --session-id <SESSION_ID8>
+```
+
+`mpcr applicator wait` uses an exponential backoff poll loop; you SHALL use it instead of implementing your own sleep loop.
+
 You SHALL fetch completed reviews you haven't processed yet:
 
 ```
 mpcr session reports closed --initiator-status REQUESTING,OBSERVING --include-notes --include-report-contents --json
 ```
 
-IF no session exists yet for the selected date THEN this returns an empty list (no error). For determinism, prefer passing `--date` or `--session-dir` explicitly when querying historical sessions.
+IF no session exists yet for the selected date THEN this returns an empty list (no error). For determinism, you SHALL pass `--date` or `--session-dir` explicitly when querying historical sessions.
 
 The `report_contents` field contains the full markdown with actionable findings and code anchors. You SHALL run `mpcr session reports closed --help` for all available filters.
 
@@ -145,7 +153,7 @@ Optional fields: `changes` (files/lines modified), `tracking` (issue URL for def
 
 **Example:**
 ```bash
-mpcr applicator note --session-id SESSION_ID --reviewer-id REVIEWER_ID \
+mpcr applicator note --session-dir <DIR> --session-id <SESSION_ID8> --reviewer-id <REVIEWER_ID8> \
   --note-type applied \
   --content-json --content '{
     "finding_ref": "BLOCKER: SQL injection in verify_user()",
@@ -155,9 +163,9 @@ mpcr applicator note --session-id SESSION_ID --reviewer-id REVIEWER_ID \
   }'
 ```
 
-`SESSION_ID` and `REVIEWER_ID` come from the JSON output of `mpcr session reports`.
+`<DIR>`, `<SESSION_ID8>`, and `<REVIEWER_ID8>` come from the JSON output of `mpcr session reports`.
 
-You SHALL pass `--session-id` and `--reviewer-id` explicitly (values come from the JSON output of `mpcr session reports`).
+You SHALL pass `--session-dir`, `--session-id`, and `--reviewer-id` explicitly (values come from the JSON output of `mpcr session reports`).
 
 ### Status progression
 

@@ -2,9 +2,19 @@
 
 You apply code review feedback by consuming completed review reports and recording dispositions and progress via `mpcr`.
 
+## Timing and concurrency (mandatory)
+
+IF subagents / parallel workers are available THEN you SHALL start delegation as soon as you have the minimal deterministic context:
+
+- the `session_dir` you are operating in, and
+- the set of review entries (reviewer_id/session_id/target_ref) you intend to process.
+
+You SHALL NOT wait until you have fully read every report and inspected every code anchor before spawning parallel help.
+Rationale: the “application” workload is naturally partitionable by report entry and by failure mode, and early parallel ingestion reduces latency without weakening determinism (all state mutations still go through `mpcr`).
+
 ## Workflow
 
-You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and for gathering, viewing, and interacting with review reports. The CLI is located at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). Run `mpcr --help` for full command reference.
+You SHALL use `mpcr` for all operations and interactions regarding the `_session.json` file and for gathering, viewing, and interacting with review reports. The CLI is located at `<skills-file-root>/scripts/mpcr`. It auto-compiles on first run (requires `cargo`). In the examples below, `mpcr` refers to that path. Run `mpcr --help` for full command reference.
 
 > **CRITICAL: Avoid environment-variable workflows in isolated shells**
 >
@@ -15,7 +25,12 @@ You SHALL use `mpcr` for all operations and interactions regarding the `_session
 > - Use `mpcr session reports ... --json` to fetch `session_dir`, `reviewer_id`, and `session_id`.
 > - Pass those values explicitly on `mpcr applicator ...` commands via `--session-dir`, `--reviewer-id`, and `--session-id`.
 >
-> You MAY use `--emit-env sh` in POSIX shells to print `export ...` lines for convenience, but explicit flags remain the default/recommended coordination mechanism.
+> In a persistent shell, you MAY export `MPCR_SESSION_DIR`, `MPCR_REVIEWER_ID`, and `MPCR_SESSION_ID` manually and pass `--use-env`, but explicit flags remain the default/recommended coordination mechanism.
+
+> **Session directory determinism**
+>
+> `mpcr session reports ...` defaults to `today in UTC` when computing the default session directory.
+> IF you are applying feedback from a different date (or from a non-default session dir) THEN you SHALL pass `--date <YYYY-MM-DD>` or `--session-dir <DIR>` explicitly on `mpcr session reports ...`.
 
 **Complete single-block example:**
 
@@ -24,17 +39,34 @@ You SHALL use `mpcr` for all operations and interactions regarding the `_session
 mpcr session reports closed --include-notes --include-report-contents --json
 
 # Then, when processing a specific review entry, pass explicit flags:
-mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLYING
+mpcr applicator set-status --session-dir <DIR> --reviewer-id <REVIEWER_ID8> --session-id <SESSION_ID8> --initiator-status APPLYING
 # ... apply fixes ...
-mpcr applicator note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type applied --content "Fixed in commit abc123"
-mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED
+mpcr applicator note --session-dir <DIR> --reviewer-id <REVIEWER_ID8> --session-id <SESSION_ID8> --note-type applied --content "Fixed in commit abc123"
+mpcr applicator set-status --session-dir <DIR> --reviewer-id <REVIEWER_ID8> --session-id <SESSION_ID8> --initiator-status APPLIED
 ```
+
+Where `<DIR>` is the `session_dir` from `mpcr session reports ... --json`, `<REVIEWER_ID8>` is the report entry’s `reviewer_id`, and `<SESSION_ID8>` is the report entry’s `session_id`.
 
 Tip: IF you are processing one review entry at a time THEN you SHALL store `session_dir`, `reviewer_id`, and `session_id` in your context and reuse them explicitly in subsequent `mpcr` commands.
 
 IF you must split your workflow across multiple shell invocations THEN you SHALL pass `--session-dir`, `--reviewer-id`, and `--session-id` explicitly to each command.
 
 Read each report, then read the actual code at the referenced anchors. Verify findings before deciding to fix, decline, or defer.
+
+## Waiting for reviews to finish (mandatory)
+
+Before applying feedback, the review SHALL be complete for the entries you are processing (reviewer statuses terminal).
+Use `mpcr applicator wait` to await completion; it uses an exponential backoff poll loop and stops when all matching reviews are terminal.
+
+```sh
+mpcr applicator wait --session-dir <DIR>
+```
+
+To avoid waiting on unrelated targets/sessions, you SHALL pass filters when you know them:
+
+```sh
+mpcr applicator wait --session-dir <DIR> --target-ref <REF> --session-id <SESSION_ID8>
+```
 
 ## Inputs
 
