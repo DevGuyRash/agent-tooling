@@ -16,6 +16,7 @@ use clap::builder::PossibleValue;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1277,6 +1278,8 @@ pub struct RegisterReviewerParams {
 pub struct RegisterReviewerResult {
     /// The reviewer id used for the entry (id8).
     pub reviewer_id: String,
+    /// Optional parent reviewer id (id8) for handoff/chaining.
+    pub parent_id: Option<String>,
     /// The session id used for the entry (id8).
     pub session_id: String,
     /// Session directory as a string.
@@ -1356,24 +1359,54 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         }
     };
 
-    if let Some(existing) = session
+    if let Some(existing_index) = session
         .reviews
         .iter()
-        .find(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
+        .position(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
     {
-        if existing.target_ref != params.target_ref {
-            return Err(anyhow::anyhow!(
-                "review entry already exists for reviewer_id/session_id but target_ref differs"
-            ));
+        let mut changed = false;
+        let parent_id_for_result;
+
+        {
+            let existing = &mut session.reviews[existing_index];
+
+            if existing.target_ref != params.target_ref {
+                return Err(anyhow::anyhow!(
+                    "review entry already exists for reviewer_id/session_id but target_ref differs"
+                ));
+            }
+
+            if let Some(ref requested_parent_id) = params.parent_id {
+                match existing.parent_id.as_deref() {
+                    None => {
+                        existing.parent_id = Some(requested_parent_id.clone());
+                        existing.updated_at = format_ts(params.now)?;
+                        changed = true;
+                    }
+                    Some(existing_parent_id)
+                        if existing_parent_id == requested_parent_id.as_str() => {}
+                    Some(_) => {
+                        return Err(anyhow::anyhow!(
+                            "review entry already exists for reviewer_id/session_id but parent_id differs"
+                        ));
+                    }
+                }
+            }
+
+            parent_id_for_result = existing.parent_id.clone();
         }
 
         if !session.reviewers.iter().any(|r| r == &reviewer_id) {
             session.reviewers.push(reviewer_id.clone());
+            changed = true;
+        }
+        if changed {
             write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
         }
 
         return Ok(RegisterReviewerResult {
             reviewer_id,
+            parent_id: parent_id_for_result,
             session_id,
             session_dir: params.session.session_dir().to_string_lossy().to_string(),
             session_file: params.session.session_file().to_string_lossy().to_string(),
@@ -1393,6 +1426,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
     }
 
     let started_at = format_ts(params.now)?;
+    let parent_id_for_result = params.parent_id.clone();
 
     session.reviews.push(ReviewEntry {
         reviewer_id: reviewer_id.clone(),
@@ -1415,9 +1449,166 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
 
     Ok(RegisterReviewerResult {
         reviewer_id,
+        parent_id: parent_id_for_result,
         session_id,
         session_dir: params.session.session_dir().to_string_lossy().to_string(),
         session_file: params.session.session_file().to_string_lossy().to_string(),
+    })
+}
+
+#[derive(Debug, Clone)]
+/// Parameters for [`spawn_child_reviewers`].
+pub struct SpawnChildReviewersParams {
+    /// Session directory locator.
+    pub session: SessionLocator,
+    /// Target ref under review (branch/PR/commit/etc).
+    pub target_ref: String,
+    /// Session id (id8) that children join.
+    pub session_id: String,
+    /// Parent reviewer id (id8) recorded into each child entry.
+    pub parent_reviewer_id: String,
+    /// Number of child reviewer entries to create.
+    pub count: usize,
+    /// Timestamp used for `started_at` / `updated_at`.
+    pub now: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// A child reviewer entry spawned by [`spawn_child_reviewers`].
+pub struct SpawnedChildReviewer {
+    /// The child's reviewer id (id8).
+    pub reviewer_id: String,
+    /// The parent reviewer id (id8) recorded on this entry.
+    pub parent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Result returned by [`spawn_child_reviewers`].
+pub struct SpawnChildReviewersResult {
+    /// The parent reviewer id used for all spawned children (id8).
+    pub parent_id: String,
+    /// The session id used for all spawned children (id8).
+    pub session_id: String,
+    /// The target ref used for all spawned children.
+    pub target_ref: String,
+    /// Session directory as a string.
+    pub session_dir: String,
+    /// Session file path as a string.
+    pub session_file: String,
+    /// Spawned child reviewer identifiers.
+    pub children: Vec<SpawnedChildReviewer>,
+}
+
+/// Spawn child reviewer entries under a single parent reviewer id.
+///
+/// This is intended for deterministic multi-agent orchestration:
+/// an orchestrator registers first, then spawns child reviewer entries that:
+/// - join the same `session_id` and `target_ref`
+/// - record `parent_id` for lineage
+/// - start in `INITIALIZING` so each child can transition independently
+///
+/// # Errors
+/// Returns an error if the parent entry cannot be found, identifiers are invalid,
+/// the session cannot be read or written, or the lock cannot be acquired.
+pub fn spawn_child_reviewers(
+    params: SpawnChildReviewersParams,
+) -> anyhow::Result<SpawnChildReviewersResult> {
+    validate_id8(&params.session_id, "session_id")?;
+    validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
+    if params.count == 0 {
+        return Err(anyhow::anyhow!("count must be >= 1"));
+    }
+
+    let session_file = params.session.session_file();
+    if !session_file.exists() {
+        return Err(anyhow::anyhow!(
+            "session file not found: {} (run `mpcr reviewer register` first)",
+            session_file.display()
+        ));
+    }
+
+    let lock_owner = params.parent_reviewer_id.clone();
+    let _guard = lock::acquire_lock(
+        params.session.session_dir(),
+        lock_owner.clone(),
+        LockConfig::default(),
+    )?;
+
+    let mut session = read_session_file(params.session.session_dir())?;
+
+    let parent_entry = session.reviews.iter().find(|r| {
+        r.reviewer_id == params.parent_reviewer_id
+            && r.session_id == params.session_id
+            && r.target_ref == params.target_ref
+    });
+    let Some(_parent_entry) = parent_entry else {
+        return Err(anyhow::anyhow!(
+            "parent review entry not found for reviewer_id/session_id/target_ref (run `mpcr reviewer register` for the parent first)"
+        ));
+    };
+    // Children always start with REQUESTING regardless of parent's initiator_status.
+    // This ensures children are discoverable/actionable by applicators.
+    let initiator_status = InitiatorStatus::Requesting;
+
+    if !session
+        .reviewers
+        .iter()
+        .any(|r| r == params.parent_reviewer_id.as_str())
+    {
+        session.reviewers.push(params.parent_reviewer_id.clone());
+    }
+
+    let mut used_ids: HashSet<String> = session.reviewers.iter().cloned().collect();
+    for entry in &session.reviews {
+        used_ids.insert(entry.reviewer_id.clone());
+    }
+
+    let started_at = format_ts(params.now)?;
+
+    let mut children_ids = Vec::with_capacity(params.count);
+    while children_ids.len() < params.count {
+        let candidate = id::random_id8()?;
+        if used_ids.insert(candidate.clone()) {
+            children_ids.push(candidate);
+        }
+    }
+
+    let mut children = Vec::with_capacity(params.count);
+    for reviewer_id in children_ids {
+        session.reviewers.push(reviewer_id.clone());
+        session.reviews.push(ReviewEntry {
+            reviewer_id: reviewer_id.clone(),
+            session_id: params.session_id.clone(),
+            target_ref: params.target_ref.clone(),
+            initiator_status,
+            status: ReviewerStatus::Initializing,
+            parent_id: Some(params.parent_reviewer_id.clone()),
+            started_at: started_at.clone(),
+            updated_at: started_at.clone(),
+            finished_at: None,
+            current_phase: None,
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: vec![],
+        });
+        children.push(SpawnedChildReviewer {
+            reviewer_id,
+            parent_id: params.parent_reviewer_id.clone(),
+        });
+    }
+
+    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+
+    Ok(SpawnChildReviewersResult {
+        parent_id: params.parent_reviewer_id,
+        session_id: params.session_id,
+        target_ref: params.target_ref,
+        session_dir: params.session.session_dir().to_string_lossy().to_string(),
+        session_file: params.session.session_file().to_string_lossy().to_string(),
+        children,
     })
 }
 
