@@ -20,6 +20,11 @@ Both workflows can use the bundled `mpcr` CLI at `<skills-file-root>/scripts/mpc
 - IF the request includes *both* reviewing and applying THEN ask whether you should run them as two phases; default order: **Reviewer → Applicator**.
 - IF unclear THEN ask a targeted clarification question and wait.
 
+## Multi-agent orchestration (default when available)
+
+- WHEN subagents / parallel workers are available THEN you SHALL use them by default to increase depth and throughput.
+- You SHALL read `<skills-file-root>/references/multi-agent.md` for the orchestration contract and subagent output format.
+
 ## Progressive disclosure and chunking (mandatory)
 
 Before doing any work in either workflow:
