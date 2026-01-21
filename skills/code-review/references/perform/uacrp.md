@@ -35,7 +35,7 @@ WHEN an overlay is provided THEN you SHALL:
 
 WHEN an overlay conflicts with baseline THEN the overlay wins, **EXCEPT**:
 
-- **Section 0 non-negotiable rules (0.1–0.7) SHALL NOT be relaxed or removed.**
+- **Section 0 non-negotiable rules (0.1–0.8) SHALL NOT be relaxed or removed.**
 - Overlays MAY add constraints to non-negotiables; they SHALL NOT weaken them.
 
 WHEN an overlay relaxes security, correctness, or compatibility expectations below the baseline THEN you SHALL:
@@ -85,6 +85,13 @@ WHEN overlay boundaries are ambiguous THEN you SHALL treat all appended context 
 
 7. **Always produce a verdict.**
    WHEN you complete the review THEN you SHALL conclude with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`.
+
+8. **Concrete disproof + minimum theorem density.**
+    WHEN you mark a Universal Domain as **In-scope** THEN you SHALL:
+    - record at least one anchored must‑prove theorem for that domain, AND
+    - include at least one **concrete** disproof attempt (specific inputs / event ordering / adversary path), AND
+    - either defend the theorem with evidence (Passing Proof) OR elevate it to a Finding/Residual Risk.
+    IF you cannot produce a concrete disproof attempt THEN you SHALL mark the claim **Assumed** or **Unknown** and record a verification plan in Residual Risk.
 
 ---
 
@@ -193,6 +200,17 @@ WHEN you find a credible exploit path OR you cannot provide sufficient proof THE
   - Known vulnerability posture (if evidence available); license compatibility (if policy exists).
   - Tooling/CI changes: do they weaken gates, leak secrets, or reduce test fidelity?
 
+### 11) Technical Debt & Evolution (The Code Health Auditor)
+
+**Goal:** You SHALL defend that the change does not introduce avoidable long-term fragility, unclear ownership, or “future-bug debt”.
+
+- Challenge examples (expand with as many as relevant, uncapped):
+  - Are new invariants documented in code (types/docs/tests), or only implied?
+  - Does the change introduce duplication or leaky abstractions that will diverge?
+  - Are “temporary” workarounds tracked (issue link) and bounded?
+  - Does the change make future refactors harder (tight coupling, hidden side effects)?
+  - Are deprecations/migrations/rollbacks considered where the change affects long-lived surfaces?
+
 ---
 
 ## II) Evidence & confidence standard (anti-false-certainty)
@@ -282,6 +300,8 @@ WHEN you run `mpcr` from anywhere inside the target repository THEN you MAY omit
 
 ### Storage structure
 
+Within this skill, `mpcr` refers to `<skills-file-root>/scripts/mpcr`.
+
 Review artifacts are stored under:
 
 ```
@@ -297,7 +317,7 @@ IF you lack filesystem write access THEN you SHALL output the full report in cha
 
 ### Reviewer identity (stable `reviewer_id`)
 
-The `reviewer_id` identifies **you** (the executor) and SHALL be reused across all reviews you perform in this repo, even when:
+The `reviewer_id` identifies **you** and SHALL be reused across all reviews you perform in this repo, even when:
 - you review multiple target refs (multiple commits/branches/PRs)
 - you review on multiple dates (multiple session directories)
 
@@ -318,14 +338,14 @@ Optional (POSIX shells only): `mpcr reviewer register --emit-env sh` prints `exp
 IF you are starting a new target ref review and already have a stable reviewer identity for this repo THEN you SHALL pass it explicitly:
 
 ```sh
-mpcr reviewer register --target-ref '<REF>' --reviewer-id <ID8> --print-env
+mpcr reviewer register --target-ref '<REF>' --reviewer-id <REVIEWER_ID8> --print-env
 ```
 
 IF the launcher needs a stable reviewer identity across runs THEN it SHALL pass `--reviewer-id` (an id8) explicitly before invoking `mpcr`.
 
 WHEN you run `mpcr reviewer register` THEN you SHALL capture the session context via `--print-env`.
 
-WHEN you switch to a different `target_ref` THEN you SHALL re-run `mpcr reviewer register --target-ref '<NEW_REF>' --reviewer-id <ID8> --print-env` to update `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review (while keeping the same `reviewer_id`).
+WHEN you switch to a different `target_ref` THEN you SHALL re-run `mpcr reviewer register --target-ref '<NEW_REF>' --reviewer-id <REVIEWER_ID8> --print-env` to update `MPCR_SESSION_ID` / `MPCR_TARGET_REF` for the new review (while keeping the same `reviewer_id`).
 
 ### Target ref selection (including worktree reviews)
 
@@ -412,7 +432,7 @@ WHEN you observe `clarification_needed` notes THEN you MAY respond via `mpcr rev
 **Example:**
 ```bash
 # After `mpcr reviewer register ... --print-env`, copy the printed values here:
-mpcr reviewer note --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --note-type question \
+mpcr reviewer note --session-dir <DIR> --reviewer-id <REVIEWER_ID8> --session-id <SESSION_ID8> --note-type question \
   --content "Is the rate limiter expected to persist across process restarts, or is in-memory acceptable?"
 ```
 
@@ -458,6 +478,7 @@ You are one of potentially many concurrent reviewers. `mpcr` handles:
 ### 2) Context & repo constraints
 
 - **Stack:** {language/framework/runtime/key libs}
+- **Issue/PR context (if provided):** {links/ids + extracted acceptance criteria, or “not provided”}
 - **Repo conventions/idioms observed:** {patterns seen}
 - **Repo rules discovered:** {docs read or “not found / not provided” with evidence}
 - **High-risk triggers:** {none or list triggers hit, with anchors}
@@ -478,6 +499,7 @@ You are one of potentially many concurrent reviewers. `mpcr` handles:
 | Observability & Operability      |                                   |                          |
 | Verifiability & Reproducibility  |                                   |                          |
 | Dependencies & Supply Chain      |                                   |                          |
+| Technical Debt & Evolution       |                                   |                          |
 
 ---
 
