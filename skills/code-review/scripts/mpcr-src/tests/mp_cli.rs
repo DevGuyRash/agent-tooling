@@ -760,6 +760,43 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
 }
 
 #[test]
+fn reviewer_register_emit_env_sh_exports_parent_id_when_set() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--parent-id",
+            "cafebabe",
+            "--emit-env",
+            "sh",
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    ensure!(stdout.contains("export MPCR_PARENT_ID='cafebabe'\n"));
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_emit_env_sh_quotes_single_quotes_in_values() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
@@ -929,6 +966,201 @@ fn reviewer_register_print_env_json_outputs_expected_vars() -> anyhow::Result<()
             .to_string_lossy()
             == session_file
     );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_print_env_json_outputs_parent_id_when_set() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--print-env",
+    ])?;
+
+    ensure!(json_str(&out, "MPCR_PARENT_ID")? == "cafebabe");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_updates_parent_id_for_existing_entry_when_missing() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let initial = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&initial, "session_dir")?.to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--print-env",
+    ])?;
+    ensure!(json_str(&out, "MPCR_PARENT_ID")? == "cafebabe");
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let entry = find_review(&session, "deadbeef", "sess0001")?;
+    ensure!(json_str(entry, "parent_id")? == "cafebabe");
+    Ok(())
+}
+
+#[test]
+fn reviewer_spawn_children_creates_entries_with_parent_id() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let initial = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&initial, "session_dir")?.to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "3",
+    ])?;
+
+    ensure!(json_str(&out, "parent_id")? == "deadbeef");
+    ensure!(json_str(&out, "session_id")? == "sess0001");
+    ensure!(json_str(&out, "target_ref")? == "refs/heads/main");
+    ensure!(json_str(&out, "session_dir")? == session_dir);
+
+    let children = json_array(&out, "children")?;
+    ensure!(children.len() == 3);
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    for child in children {
+        let child_id = json_str(child, "reviewer_id")?;
+        ensure!(json_str(child, "parent_id")? == "deadbeef");
+
+        let entry = find_review(&session, child_id, "sess0001")?;
+        ensure!(json_str(entry, "parent_id")? == "deadbeef");
+    }
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_ignores_env_reviewer_id() -> anyhow::Result<()> {
+    // When --parent-id is set (child registration), MPCR_REVIEWER_ID from env
+    // should be ignored to prevent accidentally reusing the parent's identity.
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    // First, register the parent
+    let parent_out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent_out, "session_dir")?.to_string();
+
+    // Now, register a child with --parent-id but MPCR_REVIEWER_ID set in env
+    // (simulating inheriting parent env) with --use-env. The child should get
+    // a NEW reviewer_id, not reuse "deadbeef" from env.
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "--json",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--session-dir",
+            &session_dir,
+            "--session-id",
+            "sess0001",
+            "--parent-id",
+            "deadbeef",
+        ])
+        .env("MPCR_REVIEWER_ID", "deadbeef") // Parent's ID in env
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let result: Value = serde_json::from_slice(&output.stdout)?;
+    let child_reviewer_id = json_str(&result, "reviewer_id")?;
+
+    // Child should have a DIFFERENT reviewer_id than parent
+    ensure!(
+        child_reviewer_id != "deadbeef",
+        "child reviewer_id should be distinct from parent when --parent-id is set"
+    );
+
+    // Verify parent_id is set correctly
+    ensure!(json_str(&result, "parent_id")? == "deadbeef");
+
     Ok(())
 }
 
