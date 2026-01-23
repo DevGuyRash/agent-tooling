@@ -32,6 +32,16 @@ This is mandatory because it increases depth and throughput without sacrificing 
 
 You SHALL ask the user how much parallelism they want (no fixed cap). If the user gives a concurrency budget, you SHALL respect it (use waves if needed); otherwise you SHALL continue delegating until additional independent analysis stops producing new failure modes / evidence / mitigations (saturation stop condition).
 
+### Default delegation plan (recommended; low-bloat)
+
+IF the user has not specified a decomposition THEN you SHOULD start with subagents partitioned by report entry and/or finding clusters:
+
+1) **Report Extractor:** parse report(s) into a normalized finding list (severity/title/anchor/claim).  
+2) **Anchor Verifier:** validate each finding against current code at the cited anchors.  
+3) **Patch Designer:** draft patch sketches + verification steps for “applied” recommendations.
+
+Each subagent SHALL read `<skills-file-root>/references/apply/subagent-contract.md` and return exactly one Disposition Packet.
+
 ## Await review completion (mandatory)
 
 IF the review is still in progress for the target entries you intend to apply THEN you SHALL wait for completion before applying changes.

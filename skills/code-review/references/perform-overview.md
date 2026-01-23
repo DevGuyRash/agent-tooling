@@ -32,6 +32,20 @@ This is mandatory because it increases depth and throughput without sacrificing 
 
 You SHALL ask the user how much parallelism they want (no fixed cap). If the user gives a concurrency budget, you SHALL respect it (use waves if needed); otherwise you SHALL continue delegating until the saturation stop condition defined in `<skills-file-root>/references/multi-agent.md` is met.
 
+### Default delegation plan (recommended; low-bloat)
+
+IF the user has not specified a decomposition THEN you SHOULD start with 3 subagents:
+
+1) **Scope Mapper:** change inventory + contract surfaces + trust boundaries + draft depth targets.  
+2) **Red Team:** concrete disproof attempts for the riskiest theorems / boundaries.  
+3) **Systems Auditor:** concurrency/perf/operability scan + verification plan.
+
+Each subagent SHALL read `<skills-file-root>/references/perform/subagent-contract.md` and return exactly one Proof Packet.
+
+IF UACRP escalation triggers apply THEN you SHOULD add redundancy:
+
+- a second independent Depth Diver on the single highest-risk depth target.
+
 ## Deliverables
 
 - A UACRP report (Sections 0–11) with exactly one verdict: `APPROVE`, `REQUEST_CHANGES`, or `BLOCK`

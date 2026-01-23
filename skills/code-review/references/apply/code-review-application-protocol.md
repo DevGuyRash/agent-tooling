@@ -74,6 +74,10 @@ You SHALL treat notes as append-only; duplicates MAY exist. WHEN you create a no
 | `already_addressed`    | Already handled elsewhere (reference) |
 | `acknowledged`         | Read and understood, no action needed |
 | `clarification_needed` | Requesting more detail from reviewer  |
+| `handoff`              | Delegation / multi-agent coordination |
+
+WHEN multi-agent delegation occurs THEN you SHALL record a `handoff` note capturing roster + assignments + scopes.
+This does not replace the requirement: you SHALL record one disposition note per finding.
 
 ### Reviewer note types (for your awareness)
 
