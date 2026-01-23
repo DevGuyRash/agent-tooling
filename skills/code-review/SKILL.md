@@ -25,6 +25,12 @@ Both workflows can use the bundled `mpcr` CLI at `<skills-file-root>/scripts/mpc
 - WHEN subagents / parallel workers are available THEN you SHALL use them by default to increase depth and throughput.
 - You SHALL read `<skills-file-root>/references/multi-agent.md` for the orchestration contract and subagent output format.
 
+### Workflow-specific subagent contracts (progressive disclosure)
+
+- Reviewer subagents SHALL follow: `<skills-file-root>/references/perform/subagent-contract.md`
+- Applicator subagents SHALL follow: `<skills-file-root>/references/apply/subagent-contract.md`
+- OPTIONAL child reviewers (mpcr-integrated) SHALL follow: `<skills-file-root>/references/perform/child-reviewer-contract.md`
+
 ## Progressive disclosure and chunking (mandatory)
 
 Before doing any work in either workflow:
