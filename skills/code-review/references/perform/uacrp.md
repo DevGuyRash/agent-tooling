@@ -93,6 +93,12 @@ WHEN overlay boundaries are ambiguous THEN you SHALL treat all appended context 
     - either defend the theorem with evidence (Passing Proof) OR elevate it to a Finding/Residual Risk.
     IF you cannot produce a concrete disproof attempt THEN you SHALL mark the claim **Assumed** or **Unknown** and record a verification plan in Residual Risk.
 
+9. **Depth targets & adversarial traces (anti-shallow requirement).**
+   WHEN you begin a review THEN you SHALL select 1–3 **depth targets** (the highest-risk files/symbols/data-flows).
+   For at least one depth target, you SHALL produce an end-to-end **adversarial trace** (entrypoint → sink) with anchored steps and at least one concrete break attempt.
+   IF UACRP escalation triggers apply THEN you SHOULD require redundant independent analysis of the single highest-risk depth target (multi-agent or single-agent re-check), and you SHALL surface any disagreement as a Finding or Residual Risk.
+   IF you cannot produce an anchored adversarial trace THEN you SHOULD read `<skills-file-root>/references/perform/depth-playbook.md` and retry.
+
 ---
 
 ## I) Universal Domains (The Lenses)
@@ -273,9 +279,9 @@ IF a critical claim in an escalated area cannot be defended beyond **Assumed** o
 You MAY use any internal workflow you like. The report SHALL include the artifacts below with evidence anchors and confidence labels.
 
 1. **Intent & scope:** identify what changed, for whom, and what “correct” means.
-2. **Change inventory:** provide diffstat + files touched (or state “not available”).
+2. **Change inventory:** provide diffstat + files touched + depth targets (or state “not available”).
 3. **Domain Coverage Map:** for each Universal Domain, record In-scope / Out-of-scope / Unknown with brief rationale.
-4. **Topology & trust boundaries:** identify connected components, impact radius, and where untrusted data crosses trust levels.
+4. **Topology & trust boundaries:** identify connected components, impact radius, and where untrusted data crosses trust levels (include at least one adversarial trace for a depth target).
 5. **Theorems per component:** generate must‑prove assertions for each in-scope domain.
    WHEN you state a theorem THEN the report SHALL include:
    - **Anchor:** why the theorem applies (file/symbol/diff/contract).
@@ -456,6 +462,7 @@ You are one of potentially many concurrent reviewers. `mpcr` handles:
 
 - **Intent:** {what changed; expected behavior}
 - **Verdict:** APPROVE / REQUEST_CHANGES / BLOCK
+- **Depth targets:** {1–3 highest-risk code areas traced end-to-end}
 - **Severity Counts:** {X BLOCKER, Y MAJOR, Z MINOR, W NIT}
 - **Top Risks (most impact first):**
   1. ...
@@ -508,6 +515,7 @@ You are one of potentially many concurrent reviewers. `mpcr` handles:
 - **Connected components:** {A ↔ B ↔ C…}
 - **Impact radius:** {what downstream breaks if wrong}
 - **Trust boundaries crossed:** {where untrusted → trusted; tenant boundaries; external → internal}
+- **Adversarial traces (at least one):** {entrypoint→sink trace with anchors + a concrete break attempt}
 
 ---
 
