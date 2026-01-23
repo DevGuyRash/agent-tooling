@@ -16,6 +16,9 @@ This protocol applies WHEN the user provides (or requests you to use) any GitHub
 
 IF the user does not provide any GitHub context THEN you SHALL NOT guess. Instead, you SHALL ask whether there is an associated PR and/or issue and request a deterministic reference (see Section III).
 You SHALL WAIT for that reference before using `gh` or treating any PR/issue text as authoritative; IF the user explicitly instructs you to proceed without it THEN you SHALL record the missing context as Assumed/Unknown (and proceed with reduced confidence).
+IF the user cannot provide acceptance criteria (or explicitly instructs you to proceed without authoritative context) THEN you SHOULD still attempt to derive **provisional intent + acceptance criteria** from repo-local artifacts (diff, surrounding code, tests, docs) using subagents when available.
+You SHALL treat any inferred criteria as non-authoritative (**Assumed/Unknown**) and include a verification plan; replace it if authoritative PR/issue criteria becomes available later.
+Keep this bounded: stop when an additional context-mining wave produces no new distinct obligations (saturation for context mining).
 
 ---
 

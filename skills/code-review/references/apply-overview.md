@@ -21,7 +21,10 @@ Before applying any code changes, you SHALL read:
 
 There SHALL exist an authoritative problem statement and acceptance criteria for the change.
 IF the user has not provided it (via PR/issue or equivalent) THEN you SHALL ask whether there is an associated PR and/or issue and request a deterministic reference (URL, `PR <owner>/<repo>#<num>` / `Issue <owner>/<repo>#<num>`, or `PR <num>` / `Issue <num>` when operating in the current worktree repo).
-IF no authoritative source exists (PR/issue or equivalent acceptance criteria) THEN you SHALL ask the user to provide explicit acceptance criteria in chat and WAIT before proceeding; if the user explicitly instructs you to proceed anyway, you SHALL record the missing context as Assumed/Unknown in Residual Risk.
+IF no authoritative source exists (PR/issue or equivalent acceptance criteria) THEN you SHALL ask the user to provide explicit acceptance criteria in chat and WAIT before proceeding.
+IF the user cannot provide acceptance criteria (or explicitly instructs you to proceed without them) THEN you SHOULD delegate subagents to mine available repo context (diff, surrounding code, tests, docs) and propose **provisional acceptance criteria**.
+You SHALL treat any inferred acceptance criteria as non-authoritative (**Assumed/Unknown**) and record it with a verification plan (e.g., in an applicator note and/or Disposition Packet residual risk).
+Keep this bounded: stop when an additional context-mining wave produces no new distinct obligations (saturation for context mining).
 
 ## Concurrency default (mandatory when available)
 
