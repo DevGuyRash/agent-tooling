@@ -1,0 +1,133 @@
+# Reviewer protocol: phase-appropriate guidance for adversarial code review.
+# Each phase outputs compact, actionable guidance (target: 20-40 lines per phase).
+# Content is served by `mpcr protocol reviewer --phase <PHASE>`.
+# Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
+
+[phases.INGESTION]
+title = "Ingestion"
+content = """
+You SHALL read the diff and surrounding context, then produce a change inventory:
+
+1. You SHALL list files touched, approximate churn, and change intent (why).
+2. You SHALL identify contract surfaces affected: APIs, schemas, CLI args, config, DB migrations.
+3. You SHALL flag 1-3 depth targets: highest-risk code areas deserving adversarial proofs.
+4. You SHALL note repo conventions, lints, CI constraints, and test patterns.
+
+You SHALL resolve context autonomously:
+- WHEN a git hosting CLI is available (e.g., `gh`, `glab`), you SHALL check for associated PRs/MRs.
+- You SHALL read commit messages for intent. IF no PR/MR exists, you SHALL derive acceptance criteria from the diff and mark them [Assumed].
+- You SHALL NOT ask the user for context you can discover programmatically.
+- IF you are genuinely blocked (e.g., cannot determine what code to review), you SHALL ask ONE clarifying question.
+
+You SHALL run: `mpcr reviewer update --status IN_PROGRESS --phase INGESTION`
+"""
+
+[phases.DOMAIN_COVERAGE]
+title = "Domain Coverage"
+content = """
+You SHALL classify each Universal Domain for the change under review.
+Run `mpcr protocol domains` for the full domain table.
+
+For each domain, you SHALL record one of:
+- In-scope: change touches this concern; you SHALL generate theorems for it.
+- Out-of-scope: change cannot affect this concern; you SHALL state why.
+- Unknown: insufficient context; you SHALL note what is missing.
+
+Coverage rules:
+- You SHALL mark at least 3 domains as In-scope for any non-trivial change.
+- WHEN any API or system boundary is touched, Security and Contracts SHALL be In-scope.
+- WHEN structural changes are made, Architecture SHALL be In-scope.
+
+You SHALL run: `mpcr reviewer update --phase DOMAIN_COVERAGE`
+"""
+
+[phases.THEOREM_GENERATION]
+title = "Theorem Generation"
+content = """
+For each In-scope domain, you SHALL generate must-prove theorems.
+
+A theorem is a concrete, falsifiable claim about the code. Examples:
+- "The new endpoint validates auth tokens before accessing user data."
+- "The migration is backward-compatible: existing rows remain valid."
+- "The retry loop has bounded iterations and cannot infinite-loop."
+
+Rules:
+- Each theorem SHALL reference a specific code location (file:line or function).
+- You SHALL prioritize theorems for depth targets identified during Ingestion.
+- You SHALL generate at least 1 theorem per In-scope domain.
+- You SHALL generate 2-3 theorems for depth target areas.
+- Theorems SHALL be disprovable — you SHALL NOT write truisms like "the code compiles."
+
+You SHALL run: `mpcr reviewer update --phase THEOREM_GENERATION`
+"""
+
+[phases.ADVERSARIAL_PROOFS]
+title = "Adversarial Proofs"
+content = """
+For each theorem, you SHALL attempt a concrete disproof:
+
+1. You SHALL construct a specific scenario, input, or sequence that would violate the theorem.
+2. You SHALL trace the code path to determine if the scenario succeeds or fails.
+3. You SHALL record the outcome:
+   - DEFENDED: disproof attempt failed; the code handles it correctly. You SHALL note evidence.
+   - FINDING: disproof succeeded; the code has a deficiency. You SHALL classify severity.
+
+Severity classification:
+- BLOCKER: correctness/security flaw that SHALL be fixed before merge.
+- MAJOR: significant issue that SHOULD be fixed; workaround may exist.
+- MINOR: improvement opportunity; not blocking.
+- NIT: style, naming, or trivial issue.
+
+Saturation rule: you SHALL stop when 3 consecutive disproof attempts fail to find new issues.
+IF you keep finding issues, you SHALL keep going.
+
+WHEN tests exist that are relevant to your findings, you SHALL run them to validate your proofs.
+IF a test suite is available and your findings touch testable code, you SHALL run it.
+
+You SHALL run: `mpcr reviewer update --phase ADVERSARIAL_PROOFS`
+"""
+
+[phases.SYNTHESIS]
+title = "Synthesis"
+content = """
+You SHALL compile results from adversarial proofs into structured findings.
+
+For each FINDING, you SHALL record:
+- Severity (BLOCKER/MAJOR/MINOR/NIT)
+- Title (concise, actionable)
+- Anchor (file:line or function reference)
+- Claim (what the code should do)
+- Disproof (the concrete scenario that breaks it)
+- Evidence (code trace or reasoning)
+- Recommendation (specific fix — you SHALL NOT give vague advice)
+- Verification (how to confirm the fix works)
+
+For each DEFENDED theorem, you SHALL record:
+- Anchor, disproof attempt, evidence of defense, confidence level (HIGH/MEDIUM/LOW).
+
+You SHALL identify residual risk: areas where coverage was insufficient or Unknown.
+
+You SHALL run: `mpcr reviewer update --phase SYNTHESIS`
+"""
+
+[phases.REPORT_WRITING]
+title = "Report Writing"
+content = """
+You SHALL produce the final review report. Choose template scale based on change size:
+- Run `mpcr protocol report-template --scale compact` for small changes (<100 lines, single concern).
+- Run `mpcr protocol report-template --scale standard` for medium changes.
+- Run `mpcr protocol report-template --scale full` for large/high-risk changes.
+
+You SHALL fill in the template with findings from Synthesis.
+You SHALL NOT invent findings that were not produced during Adversarial Proofs.
+
+You SHALL finalize via mpcr:
+```
+mpcr reviewer finalize \
+  --verdict APPROVE|REQUEST_CHANGES|BLOCK \
+  --blocker N --major N --minor N --nit N \
+  --report-file /path/to/report.md
+```
+
+You SHALL NOT skip finalization. The review is incomplete until `mpcr reviewer finalize` succeeds.
+"""

@@ -1,0 +1,69 @@
+# Applicator protocol: phase-appropriate guidance for applying review feedback.
+# Content is served by `mpcr protocol applicator --phase <PHASE>`.
+# Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
+
+[phases.INGESTION]
+title = "Ingestion"
+content = """
+You SHALL locate and read review reports:
+
+1. You SHALL run `mpcr session reports closed --include-report-contents` to get finished reviews.
+2. IF no session exists, you SHALL look for review report files provided by the user.
+3. You SHALL read each report and build a finding inventory listing all findings by severity.
+4. You SHALL note each reviewer's verdict and acceptance criteria.
+
+You SHALL run: `mpcr applicator set-status --initiator-status RECEIVED`
+"""
+
+[phases.DISPOSITION]
+title = "Disposition"
+content = """
+You SHALL decide a disposition for EVERY finding. You SHALL NOT skip any.
+
+Dispositions:
+- APPLIED: you will implement the recommendation. Record via:
+  `mpcr applicator note --note-type applied --content "finding: <title>, action: <what you will do>"`
+- DECLINED: you disagree with the finding. Record reasoning via:
+  `mpcr applicator note --note-type declined --content "finding: <title>, reason: <why>"`
+- DEFERRED: valid but out of scope for this change. Record via:
+  `mpcr applicator note --note-type deferred --content "finding: <title>, tracking: <issue/ticket>"`
+- ALREADY_ADDRESSED: already fixed or handled elsewhere. Record via:
+  `mpcr applicator note --note-type already_addressed --content "finding: <title>, ref: <where>"`
+
+Rules:
+- BLOCKER findings SHALL be APPLIED unless you provide a compelling DECLINED reason.
+- You SHALL record a disposition note via `mpcr applicator note` for every finding.
+
+You SHALL run: `mpcr applicator set-status --initiator-status REVIEWED`
+"""
+
+[phases.APPLICATION]
+title = "Application"
+content = """
+You SHALL apply accepted feedback:
+
+1. For each APPLIED finding, you SHALL make the code change.
+2. You SHALL verify each change addresses the specific scenario from the disproof.
+3. WHEN tests exist, you SHALL run relevant tests after each change to catch regressions.
+4. IF a change introduces new issues, you SHALL note them.
+
+You SHALL run: `mpcr applicator set-status --initiator-status APPLYING`
+"""
+
+[phases.FINALIZATION]
+title = "Finalization"
+content = """
+You SHALL record final state:
+
+1. You SHALL verify all findings have dispositions.
+2. You SHALL confirm all APPLIED changes are committed or staged.
+3. WHEN a test suite is available, you SHALL run it.
+
+You SHALL run: `mpcr applicator set-status --initiator-status APPLIED`
+
+You SHALL present the user a summary:
+- Applied: N findings
+- Declined: N findings (with reasons)
+- Deferred: N findings (with tracking refs)
+- Already addressed: N findings
+"""

@@ -8,6 +8,7 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
+use mpcr::protocol;
 use mpcr::session::{
     append_note, collect_reports, finalize_review, load_session, register_reviewer,
     set_initiator_status, spawn_child_reviewers, update_review, AppendNoteParams,
@@ -108,6 +109,11 @@ enum Commands {
     Applicator {
         #[command(subcommand)]
         command: ApplicatorCommands,
+    },
+    /// Serve phase-appropriate protocol guidance from embedded data.
+    Protocol {
+        #[command(subcommand)]
+        command: ProtocolCommands,
     },
 }
 
@@ -376,7 +382,7 @@ enum ReviewerCommands {
         #[arg(
             long,
             value_name = "ID8",
-            help = "Optional parent reviewer id for handoff/chaining (8-character ASCII alphanumeric)."
+            help = "Optional parent reviewer id for handoff/chaining (id8). When set, mpcr binds to the parent's existing review entry for this target_ref (pass --session-id if the parent has multiple sessions); prefer `spawn-children` for deterministic lineage."
         )]
         parent_id: Option<String>,
 
@@ -720,6 +726,52 @@ Examples:
     },
 }
 
+#[derive(Subcommand)]
+enum ProtocolCommands {
+    /// Phase-appropriate guidance for code review.
+    Reviewer {
+        #[arg(
+            long,
+            value_name = "PHASE",
+            help = "Review phase (INGESTION, DOMAIN_COVERAGE, THEOREM_GENERATION, ADVERSARIAL_PROOFS, SYNTHESIS, REPORT_WRITING)."
+        )]
+        phase: String,
+    },
+    /// Phase-appropriate guidance for applying review feedback.
+    Applicator {
+        #[arg(
+            long,
+            value_name = "PHASE",
+            help = "Applicator phase (INGESTION, DISPOSITION, APPLICATION, FINALIZATION)."
+        )]
+        phase: String,
+    },
+    /// Multi-agent orchestration guidance.
+    Orchestrator,
+    /// Universal Domains reference table.
+    Domains,
+    /// Report template skeleton at the specified scale.
+    ReportTemplate {
+        #[arg(
+            long,
+            value_name = "SCALE",
+            help = "Template scale (compact, standard, full)."
+        )]
+        scale: String,
+    },
+    /// Subagent dispatch prompt template for a given role.
+    Dispatch {
+        #[arg(
+            long,
+            value_name = "ROLE",
+            help = "Subagent role (scope-mapper, red-team, systems-auditor)."
+        )]
+        role: String,
+    },
+    /// List all available protocol entries.
+    List,
+}
+
 #[derive(Debug, Serialize)]
 struct OkResult {
     ok: bool,
@@ -1056,6 +1108,67 @@ fn run() -> anyhow::Result<()> {
                     session_id.as_deref(),
                 )?;
                 write_ok(json)?;
+            }
+        },
+
+        Commands::Protocol { command } => match command {
+            ProtocolCommands::Reviewer { phase } => {
+                let out = protocol::reviewer_phase(&phase)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Applicator { phase } => {
+                let out = protocol::applicator_phase(&phase)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Orchestrator => {
+                let out = protocol::orchestrator()?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Domains => {
+                let out = protocol::domains()?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::ReportTemplate { scale } => {
+                let out = protocol::report_template(&scale)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Dispatch { role } => {
+                let out = protocol::dispatch(&role)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::List => {
+                let entries = protocol::list_entries()?;
+                if json {
+                    write_json(&entries)?;
+                } else {
+                    for entry in &entries {
+                        println!("{:<16} {:<24} {}", entry.category, entry.key, entry.command);
+                    }
+                }
             }
         },
     }
