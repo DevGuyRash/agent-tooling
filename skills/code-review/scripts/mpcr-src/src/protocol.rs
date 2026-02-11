@@ -89,8 +89,8 @@ pub struct ProtocolListEntry {
 /// # Errors
 /// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
 pub fn reviewer_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: PhasesFile = toml::from_str(REVIEWER_TOML)
-        .map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
+    let file: PhasesFile =
+        toml::from_str(REVIEWER_TOML).map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
     let key = phase.to_ascii_uppercase();
     let entry = file
         .phases
@@ -151,8 +151,8 @@ pub fn domains() -> anyhow::Result<ProtocolOutput> {
 /// # Errors
 /// Returns an error if the embedded TOML cannot be parsed or the scale is not found.
 pub fn report_template(scale: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: TemplatesFile = toml::from_str(TEMPLATES_TOML)
-        .map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
+    let file: TemplatesFile =
+        toml::from_str(TEMPLATES_TOML).map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
     let key = scale.to_ascii_lowercase();
     let entry = file
         .scales
@@ -169,8 +169,8 @@ pub fn report_template(scale: &str) -> anyhow::Result<ProtocolOutput> {
 /// # Errors
 /// Returns an error if the embedded TOML cannot be parsed or the role is not found.
 pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: DispatchFile = toml::from_str(DISPATCH_TOML)
-        .map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
+    let file: DispatchFile =
+        toml::from_str(DISPATCH_TOML).map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
     let key = role.to_ascii_lowercase().replace('-', "_");
     let entry = file
         .roles
@@ -189,8 +189,8 @@ pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
 pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
     let mut entries = Vec::new();
 
-    let reviewer: PhasesFile = toml::from_str(REVIEWER_TOML)
-        .map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
+    let reviewer: PhasesFile =
+        toml::from_str(REVIEWER_TOML).map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
     let mut reviewer_keys: Vec<_> = reviewer.phases.keys().cloned().collect();
     reviewer_keys.sort();
     for key in reviewer_keys {
@@ -233,8 +233,8 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         command: "mpcr protocol domains".to_string(),
     });
 
-    let templates: TemplatesFile = toml::from_str(TEMPLATES_TOML)
-        .map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
+    let templates: TemplatesFile =
+        toml::from_str(TEMPLATES_TOML).map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
     let mut template_keys: Vec<_> = templates.scales.keys().cloned().collect();
     template_keys.sort();
     for key in template_keys {
@@ -248,8 +248,8 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         }
     }
 
-    let dispatch_file: DispatchFile = toml::from_str(DISPATCH_TOML)
-        .map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
+    let dispatch_file: DispatchFile =
+        toml::from_str(DISPATCH_TOML).map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
     let mut dispatch_keys: Vec<_> = dispatch_file.roles.keys().cloned().collect();
     dispatch_keys.sort();
     for key in dispatch_keys {
@@ -338,7 +338,11 @@ mod tests {
     fn list_entries_returns_all() -> anyhow::Result<()> {
         let entries = list_entries()?;
         // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 3 dispatch = 18
-        ensure!(entries.len() >= 18, "expected >= 18 entries, got {}", entries.len());
+        ensure!(
+            entries.len() >= 18,
+            "expected >= 18 entries, got {}",
+            entries.len()
+        );
         Ok(())
     }
 

@@ -1058,7 +1058,8 @@ fn reviewer_register_with_parent_id_errors_when_parent_missing() -> anyhow::Resu
 }
 
 #[test]
-fn reviewer_register_with_parent_id_uses_parent_session_when_session_id_omitted() -> anyhow::Result<()> {
+fn reviewer_register_with_parent_id_uses_parent_session_when_session_id_omitted(
+) -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
 
@@ -1113,7 +1114,8 @@ fn reviewer_register_with_parent_id_uses_parent_session_when_session_id_omitted(
 }
 
 #[test]
-fn reviewer_register_with_parent_id_errors_when_parent_session_is_ambiguous() -> anyhow::Result<()> {
+fn reviewer_register_with_parent_id_errors_when_parent_session_is_ambiguous() -> anyhow::Result<()>
+{
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
 
@@ -1171,8 +1173,8 @@ fn reviewer_register_with_parent_id_errors_when_parent_session_is_ambiguous() ->
 }
 
 #[test]
-fn reviewer_register_with_parent_id_reuses_existing_child_entry_without_session_id()
--> anyhow::Result<()> {
+fn reviewer_register_with_parent_id_reuses_existing_child_entry_without_session_id(
+) -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
 
@@ -1245,7 +1247,8 @@ fn reviewer_register_with_parent_id_reuses_existing_child_entry_without_session_
 }
 
 #[test]
-fn reviewer_register_errors_when_session_id_reused_for_different_target_ref() -> anyhow::Result<()> {
+fn reviewer_register_errors_when_session_id_reused_for_different_target_ref() -> anyhow::Result<()>
+{
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
 
@@ -2013,8 +2016,7 @@ fn protocol_report_template_all_scales() -> anyhow::Result<()> {
 
 #[test]
 fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
-    let stderr =
-        run_protocol_failure(&["protocol", "report-template", "--scale", "NONEXISTENT"])?;
+    let stderr = run_protocol_failure(&["protocol", "report-template", "--scale", "NONEXISTENT"])?;
     ensure!(stderr.contains("unknown template scale"));
     Ok(())
 }

@@ -50,7 +50,7 @@ You SHALL use multi-agent mode WHEN the diff exceeds 500 lines or the user reque
 WHEN using multi-agent:
 1. Get orchestration guidance: `mpcr protocol orchestrator`
 2. Get dispatch templates: `mpcr protocol dispatch --role scope-mapper|red-team|systems-auditor`
-3. Spawn children: `mpcr reviewer spawn-children --parent-id <ID> --count N`
+3. Spawn children: `mpcr reviewer spawn-children --parent-id <ID> --session-id <SID> --target-ref <REF> --count N`
 
 ## Autonomous operation
 

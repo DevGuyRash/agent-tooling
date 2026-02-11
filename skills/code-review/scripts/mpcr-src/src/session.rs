@@ -1373,15 +1373,12 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
                     };
                     session_id.to_string()
                 } else {
-                    match existing_child_session_ids.len() {
-                        0 => {}
-                        _ => {
-                            let available = existing_child_session_ids.join(", ");
-                            return Err(anyhow::anyhow!(
-                                "review entry is ambiguous for reviewer_id/parent_id/target_ref; pass --session-id (available session_ids: {available})"
-                            ));
-                        }
-                    };
+                    if !existing_child_session_ids.is_empty() {
+                        let available = existing_child_session_ids.join(", ");
+                        return Err(anyhow::anyhow!(
+                            "review entry is ambiguous for reviewer_id/parent_id/target_ref; pass --session-id (available session_ids: {available})"
+                        ));
+                    }
 
                     let mut parent_session_ids: Vec<&str> = Vec::new();
                     for entry in &session.reviews {
@@ -1497,14 +1494,10 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
     }
 
     if session_id_was_explicit {
-        if let Some(existing_target_ref) = session
-            .reviews
-            .iter()
-            .find_map(|r| {
-                (r.session_id == session_id && r.target_ref != params.target_ref)
-                    .then_some(r.target_ref.as_str())
-            })
-        {
+        if let Some(existing_target_ref) = session.reviews.iter().find_map(|r| {
+            (r.session_id == session_id && r.target_ref != params.target_ref)
+                .then_some(r.target_ref.as_str())
+        }) {
             return Err(anyhow::anyhow!(
                 "session_id already exists for a different target_ref (existing={existing_target_ref}, requested={})",
                 params.target_ref
