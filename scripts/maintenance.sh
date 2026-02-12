@@ -36,17 +36,35 @@ fi
 # Ensure the default session root exists (gitignored).
 mkdir -p .local/reports/code_reviews
 
-if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ]; then
-  log "skipping mpcr prebuild (AGENT_SKILLS_SKIP_MPCR_BUILD=1)"
-  exit 0
-fi
-
 if ! command -v cargo >/dev/null 2>&1; then
   log "warning: cargo not available; run scripts/setup.sh to install Rust"
   exit 0
 fi
 
-log "updating/prebuilding mpcr binaries (locked, release)"
-cargo build --manifest-path skills/code-review/scripts/mpcr-src/Cargo.toml --locked --release
+if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ]; then
+  log "skipping mpcr prebuild (AGENT_SKILLS_SKIP_MPCR_BUILD=1)"
+else
+  log "updating/prebuilding mpcr binaries (locked, release)"
+  cargo build --manifest-path skills/code-review/scripts/mpcr-src/Cargo.toml --locked --release
+fi
+
+if [ "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" = "1" ] && [ "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" = "1" ]; then
+  log "skipping architecture skill prebuilds (AGENT_SKILLS_SKIP_PCA_BUILD=1 and AGENT_SKILLS_SKIP_PIASCS_BUILD=1)"
+  exit 0
+fi
+
+if [ "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" = "1" ]; then
+  log "skipping pca prebuild (AGENT_SKILLS_SKIP_PCA_BUILD=1)"
+else
+  log "updating/prebuilding pca binaries (locked, release)"
+  cargo build --manifest-path skills/principal-containerization-architect/scripts/pca-src/Cargo.toml --locked --release
+fi
+
+if [ "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" = "1" ]; then
+  log "skipping piascs prebuild (AGENT_SKILLS_SKIP_PIASCS_BUILD=1)"
+else
+  log "updating/prebuilding piascs binaries (locked, release)"
+  cargo build --manifest-path skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs-src/Cargo.toml --locked --release
+fi
 
 log "done"
