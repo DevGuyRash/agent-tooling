@@ -6,25 +6,65 @@ compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is n
 
 # Code Review
 
-This skill bundles two distinct workflows:
+Two workflows: **Reviewer** (perform adversarial code review) and **Applicator** (apply review feedback).
 
-- **Reviewer**: perform an adversarial code review using UACRP and produce a review report
-- **Applicator**: apply feedback from completed review reports and track dispositions/progress
+Both use the `mpcr` CLI at `<skills-file-root>/scripts/mpcr` for session coordination.
 
-Both workflows can use the bundled `mpcr` CLI at `<skills-file-root>/scripts/mpcr` to coordinate session artifacts under `.local/reports/code_reviews/YYYY-MM-DD/`.
+## Workflow selection
 
-## Choose the correct workflow (mandatory)
+You SHALL infer the workflow from context. You SHALL NOT ask the user which workflow to use.
 
-- IF you are asked to **review a change** (diff/PR/patch) THEN you are the **Reviewer** → read `<skills-file-root>/references/perform-overview.md`.
-- IF you are asked to **apply findings** from an existing review report THEN you are the **Applicator** → read `<skills-file-root>/references/apply-overview.md`.
-- IF the request includes *both* reviewing and applying THEN ask whether you should run them as two phases; default order: **Reviewer → Applicator**.
-- IF unclear THEN ask a targeted clarification question and wait.
+- WHEN a diff, PR/MR, patch, or uncommitted changes are present → you SHALL use **Reviewer**.
+- WHEN a review report exists or the user references review findings → you SHALL use **Applicator**.
+- WHEN both reviewing AND applying → you SHALL run **Reviewer** first, then **Applicator**.
+- IF genuinely ambiguous (e.g., both a report and uncommitted changes exist) → you SHALL ask ONE clarifying question.
 
-## Progressive disclosure and chunking (mandatory)
+## Getting started
 
-Before doing any work in either workflow:
+`mpcr protocol` serves phase-appropriate guidance so you never need to hold the full protocol in context. You SHALL run it at each phase transition.
 
-- You SHALL read the relevant overview file (chosen above).
-- IF you need to ingest it in parts THEN you SHALL read it in **<= 500-line chunks**.
-- The overview will direct you to additional reference files; apply the same chunking rule.
-- IF you have already ingested the relevant overview/protocol earlier in this conversation THEN you SHALL NOT re-ingest them; proceed with the workflow.
+### Reviewer
+
+1. Register: `mpcr reviewer register --target-ref <REF>`
+2. For each phase, get guidance: `mpcr protocol reviewer --phase <PHASE>`
+   - Phases: `INGESTION` → `DOMAIN_COVERAGE` → `THEOREM_GENERATION` → `ADVERSARIAL_PROOFS` → `SYNTHESIS` → `REPORT_WRITING`
+3. You SHALL update progress at each phase: `mpcr reviewer update --status IN_PROGRESS --phase <PHASE>`
+4. Get report template: `mpcr protocol report-template --scale compact|standard|full`
+   - compact: <100 line diffs, single concern
+   - standard: medium changes
+   - full: large or high-risk changes
+5. You SHALL finalize: `mpcr reviewer finalize --verdict APPROVE|REQUEST_CHANGES|BLOCK --report-file report.md`
+
+### Applicator
+
+1. Ingest reports: `mpcr session reports closed --include-report-contents`
+2. For each phase, get guidance: `mpcr protocol applicator --phase <PHASE>`
+   - Phases: `INGESTION` → `DISPOSITION` → `APPLICATION` → `FINALIZATION`
+3. You SHALL record dispositions: `mpcr applicator note --note-type applied|declined|deferred --content "..."`
+4. You SHALL set status: `mpcr applicator set-status --initiator-status RECEIVED|REVIEWED|APPLYING|APPLIED`
+
+## Multi-agent orchestration
+
+You SHALL use multi-agent mode WHEN the diff exceeds 500 lines or the user requests it. For most reviews, single-agent is sufficient.
+
+WHEN using multi-agent:
+1. Get orchestration guidance: `mpcr protocol orchestrator`
+2. Get dispatch templates: `mpcr protocol dispatch --role scope-mapper|red-team|systems-auditor`
+3. Spawn children: `mpcr reviewer spawn-children --parent-id <ID> --session-id <SID> --target-ref <REF> --count N`
+
+## Autonomous operation
+
+You SHALL resolve context WITHOUT asking the user:
+- Target ref: infer from current branch. WHEN a git hosting CLI is available (e.g., `gh`, `glab`), you SHALL check for associated PRs/MRs.
+- Acceptance criteria: derive from PR/MR description, commit messages, or diff content. Mark [Assumed] if inferred.
+- PR/MR/issue context: check silently. IF found, use it. IF not, proceed with the diff.
+- Parallelism: default to single-agent unless the diff is large or user requests otherwise.
+
+You SHALL only ask the user IF you are genuinely blocked (e.g., cannot determine what code to review).
+
+## Reference documents (fallback)
+
+IF `mpcr protocol` is unavailable, you SHALL read these files directly:
+- Reviewer: `<skills-file-root>/references/reviewer-protocol.md`
+- Applicator: `<skills-file-root>/references/applicator-protocol.md`
+- Domains: `mpcr protocol domains` (or see the domains table in the reviewer protocol)

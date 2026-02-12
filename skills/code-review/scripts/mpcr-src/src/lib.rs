@@ -12,5 +12,7 @@ pub mod id;
 pub mod lock;
 /// Path helpers for session directories and report filenames.
 pub mod paths;
+/// Embedded protocol data for just-in-time phase guidance.
+pub mod protocol;
 /// Session file (`_session.json`) schema and update operations.
 pub mod session;

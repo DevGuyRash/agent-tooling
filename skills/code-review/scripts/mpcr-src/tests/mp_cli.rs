@@ -760,6 +760,58 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
 }
 
 #[test]
+fn reviewer_register_emit_env_sh_exports_parent_id_when_set() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "cafebabe",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--parent-id",
+            "cafebabe",
+            "--emit-env",
+            "sh",
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    ensure!(stdout.contains("export MPCR_PARENT_ID='cafebabe'\n"));
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_emit_env_sh_quotes_single_quotes_in_values() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
@@ -929,6 +981,496 @@ fn reviewer_register_print_env_json_outputs_expected_vars() -> anyhow::Result<()
             .to_string_lossy()
             == session_file
     );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_print_env_json_outputs_parent_id_when_set() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "cafebabe",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--print-env",
+    ])?;
+
+    ensure!(json_str(&out, "MPCR_PARENT_ID")? == "cafebabe");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_errors_when_parent_missing() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--json",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--parent-id",
+            "cafebabe",
+        ])
+        .output()?;
+
+    ensure!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("parent review entry not found"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_uses_parent_session_when_session_id_omitted(
+) -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    // Create another active session for the same target_ref to ensure parent-based
+    // session selection is deterministic (not order-dependent on "first active session").
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "cafebabe",
+        "--session-id",
+        "sess0002",
+    ])?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--parent-id",
+        "deadbeef",
+    ])?;
+
+    ensure!(json_str(&out, "session_id")? == "sess0001");
+    ensure!(json_str(&out, "parent_id")? == "deadbeef");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_errors_when_parent_session_is_ambiguous() -> anyhow::Result<()>
+{
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0002",
+    ])?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--json",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--parent-id",
+            "deadbeef",
+        ])
+        .output()?;
+
+    ensure!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("ambiguous"));
+    ensure!(stderr.contains("--session-id"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_reuses_existing_child_entry_without_session_id(
+) -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0002",
+    ])?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "c001d00d",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+    ])?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "c001d00d",
+        "--parent-id",
+        "deadbeef",
+    ])?;
+
+    ensure!(json_str(&out, "session_id")? == "sess0001");
+    ensure!(json_str(&out, "reviewer_id")? == "c001d00d");
+    ensure!(json_str(&out, "parent_id")? == "deadbeef");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_errors_when_session_id_reused_for_different_target_ref() -> anyhow::Result<()>
+{
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--json",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/other",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "cafebabe",
+            "--session-id",
+            "sess0001",
+        ])
+        .output()?;
+
+    ensure!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("session_id already exists for a different target_ref"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_updates_parent_id_for_existing_entry_when_missing() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let initial = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&initial, "session_dir")?.to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "cafebabe",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--print-env",
+    ])?;
+    ensure!(json_str(&out, "MPCR_PARENT_ID")? == "cafebabe");
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let entry = find_review(&session, "deadbeef", "sess0001")?;
+    ensure!(json_str(entry, "parent_id")? == "cafebabe");
+    Ok(())
+}
+
+#[test]
+fn reviewer_spawn_children_creates_entries_with_parent_id() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let initial = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&initial, "session_dir")?.to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "3",
+    ])?;
+
+    ensure!(json_str(&out, "parent_id")? == "deadbeef");
+    ensure!(json_str(&out, "session_id")? == "sess0001");
+    ensure!(json_str(&out, "target_ref")? == "refs/heads/main");
+    ensure!(json_str(&out, "session_dir")? == session_dir);
+
+    let children = json_array(&out, "children")?;
+    ensure!(children.len() == 3);
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    for child in children {
+        let child_id = json_str(child, "reviewer_id")?;
+        ensure!(json_str(child, "parent_id")? == "deadbeef");
+
+        let entry = find_review(&session, child_id, "sess0001")?;
+        ensure!(json_str(entry, "parent_id")? == "deadbeef");
+    }
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_with_parent_id_ignores_env_reviewer_id() -> anyhow::Result<()> {
+    // When --parent-id is set (child registration), MPCR_REVIEWER_ID from env
+    // should be ignored to prevent accidentally reusing the parent's identity.
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    // First, register the parent
+    let parent_out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent_out, "session_dir")?.to_string();
+
+    // Now, register a child with --parent-id but MPCR_REVIEWER_ID set in env
+    // (simulating inheriting parent env) with --use-env. The child should get
+    // a NEW reviewer_id, not reuse "deadbeef" from env.
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "--json",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--session-dir",
+            &session_dir,
+            "--session-id",
+            "sess0001",
+            "--parent-id",
+            "deadbeef",
+        ])
+        .env("MPCR_REVIEWER_ID", "deadbeef") // Parent's ID in env
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let result: Value = serde_json::from_slice(&output.stdout)?;
+    let child_reviewer_id = json_str(&result, "reviewer_id")?;
+
+    // Child should have a DIFFERENT reviewer_id than parent
+    ensure!(
+        child_reviewer_id != "deadbeef",
+        "child reviewer_id should be distinct from parent when --parent-id is set"
+    );
+
+    // Verify parent_id is set correctly
+    ensure!(json_str(&result, "parent_id")? == "deadbeef");
+
     Ok(())
 }
 
@@ -1343,5 +1885,193 @@ fn reports_session_dir_is_file() -> anyhow::Result<()> {
     fs::write(&file_path, "placeholder")?;
     let stderr = run_reports_failure(&file_path, &["session", "reports", "open"])?;
     ensure!(!stderr.trim().is_empty());
+    Ok(())
+}
+
+// ── Protocol subcommand tests ────────────────────────────────────────────────
+
+fn run_protocol(args: &[&str]) -> anyhow::Result<Value> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(args)
+        .arg("--json")
+        .output()?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_protocol_text(args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(args)
+        .output()?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mpcr failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+fn run_protocol_failure(args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(args)
+        .output()?;
+    if output.status.success() {
+        return Err(anyhow::anyhow!("mpcr unexpectedly succeeded"));
+    }
+    Ok(String::from_utf8_lossy(&output.stderr).to_string())
+}
+
+#[test]
+fn protocol_reviewer_ingestion_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "reviewer", "--phase", "INGESTION"])?;
+    ensure!(json_str(&out, "title")? == "Ingestion");
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("change inventory"));
+    ensure!(content.contains("mpcr reviewer update"));
+    Ok(())
+}
+
+#[test]
+fn protocol_reviewer_all_phases() -> anyhow::Result<()> {
+    let phases = [
+        "INGESTION",
+        "DOMAIN_COVERAGE",
+        "THEOREM_GENERATION",
+        "ADVERSARIAL_PROOFS",
+        "SYNTHESIS",
+        "REPORT_WRITING",
+    ];
+    for phase in phases {
+        let out = run_protocol(&["protocol", "reviewer", "--phase", phase])?;
+        let title = json_str(&out, "title")?;
+        ensure!(!title.is_empty(), "empty title for {phase}");
+        let content = json_str(&out, "content")?;
+        ensure!(!content.is_empty(), "empty content for {phase}");
+    }
+    Ok(())
+}
+
+#[test]
+fn protocol_reviewer_case_insensitive() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "reviewer", "--phase", "ingestion"])?;
+    ensure!(json_str(&out, "title")? == "Ingestion");
+    Ok(())
+}
+
+#[test]
+fn protocol_reviewer_unknown_phase_fails() -> anyhow::Result<()> {
+    let stderr = run_protocol_failure(&["protocol", "reviewer", "--phase", "NONEXISTENT"])?;
+    ensure!(stderr.contains("unknown reviewer phase"));
+    Ok(())
+}
+
+#[test]
+fn protocol_applicator_all_phases() -> anyhow::Result<()> {
+    let phases = ["INGESTION", "DISPOSITION", "APPLICATION", "FINALIZATION"];
+    for phase in phases {
+        let out = run_protocol(&["protocol", "applicator", "--phase", phase])?;
+        let title = json_str(&out, "title")?;
+        ensure!(!title.is_empty(), "empty title for {phase}");
+    }
+    Ok(())
+}
+
+#[test]
+fn protocol_orchestrator_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "orchestrator"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Decomposition"));
+    ensure!(content.contains("Dispatch"));
+    ensure!(content.contains("Synthesis"));
+    Ok(())
+}
+
+#[test]
+fn protocol_domains_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "domains"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Architecture"));
+    ensure!(content.contains("Security"));
+    ensure!(content.contains("Concurrency"));
+    ensure!(content.contains("Performance"));
+    Ok(())
+}
+
+#[test]
+fn protocol_report_template_all_scales() -> anyhow::Result<()> {
+    for scale in ["compact", "standard", "full"] {
+        let out = run_protocol(&["protocol", "report-template", "--scale", scale])?;
+        let content = json_str(&out, "content")?;
+        ensure!(content.contains("Verdict"), "missing Verdict for {scale}");
+        ensure!(content.contains("Findings"), "missing Findings for {scale}");
+    }
+    Ok(())
+}
+
+#[test]
+fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
+    let stderr = run_protocol_failure(&["protocol", "report-template", "--scale", "NONEXISTENT"])?;
+    ensure!(stderr.contains("unknown template scale"));
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
+    for role in ["scope-mapper", "red-team", "systems-auditor"] {
+        let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
+        let content = json_str(&out, "content")?;
+        ensure!(
+            content.contains("Proof Packet"),
+            "missing Proof Packet for {role}"
+        );
+        ensure!(
+            content.contains("read-only"),
+            "missing read-only constraint for {role}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_unknown_role_fails() -> anyhow::Result<()> {
+    let stderr = run_protocol_failure(&["protocol", "dispatch", "--role", "NONEXISTENT"])?;
+    ensure!(stderr.contains("unknown dispatch role"));
+    Ok(())
+}
+
+#[test]
+fn protocol_list_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "list"])?;
+    let entries = out
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("list output was not an array"))?;
+    // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 3 dispatch = 18
+    ensure!(entries.len() >= 18, "expected >= 18, got {}", entries.len());
+    Ok(())
+}
+
+#[test]
+fn protocol_list_text_output() -> anyhow::Result<()> {
+    let out = run_protocol_text(&["protocol", "list"])?;
+    ensure!(out.contains("reviewer"));
+    ensure!(out.contains("applicator"));
+    ensure!(out.contains("orchestrator"));
+    ensure!(out.contains("report-template"));
+    ensure!(out.contains("dispatch"));
+    Ok(())
+}
+
+#[test]
+fn protocol_reviewer_text_output() -> anyhow::Result<()> {
+    let out = run_protocol_text(&["protocol", "reviewer", "--phase", "INGESTION"])?;
+    // Text mode should output content directly (no JSON envelope)
+    ensure!(out.contains("change inventory"));
+    ensure!(!out.contains("\"title\""));
     Ok(())
 }

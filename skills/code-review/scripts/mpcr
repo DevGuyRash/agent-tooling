@@ -41,7 +41,7 @@ if [ ! -x "${bin}" ]; then
   needs_build=1
 elif [ "${src_dir}/Cargo.toml" -nt "${bin}" ] || [ "${src_dir}/Cargo.lock" -nt "${bin}" ]; then
   needs_build=1
-elif find "${src_dir}/src" "${src_dir}/tests" -type f -newer "${bin}" -print -quit 2>/dev/null | grep -q .; then
+elif find "${src_dir}/src" "${src_dir}/tests" "${src_dir}/protocols" -type f -newer "${bin}" -print -quit 2>/dev/null | grep -q .; then
   needs_build=1
 fi
 
