@@ -5,6 +5,21 @@ log() {
   printf '%s\n' "maintenance: $*" >&2
 }
 
+build_rust_skill() {
+  name="$1"
+  skip_var_name="$2"
+  manifest_path="$3"
+  action_prefix="$4"
+
+  eval "skip_value=\${${skip_var_name}:-}"
+  if [ "${skip_value}" = "1" ]; then
+    log "skipping ${name} prebuild (${skip_var_name}=1)"
+  else
+    log "${action_prefix} ${name} binaries (locked, release)"
+    cargo build --manifest-path "${manifest_path}" --locked --release
+  fi
+}
+
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
 
@@ -41,30 +56,27 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 0
 fi
 
-if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ]; then
-  log "skipping mpcr prebuild (AGENT_SKILLS_SKIP_MPCR_BUILD=1)"
-else
-  log "updating/prebuilding mpcr binaries (locked, release)"
-  cargo build --manifest-path skills/code-review/scripts/mpcr-src/Cargo.toml --locked --release
-fi
+build_rust_skill \
+  "mpcr" \
+  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
+  "skills/code-review/scripts/mpcr-src/Cargo.toml" \
+  "updating/prebuilding"
 
 if [ "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" = "1" ] && [ "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" = "1" ]; then
   log "skipping architecture skill prebuilds (AGENT_SKILLS_SKIP_PCA_BUILD=1 and AGENT_SKILLS_SKIP_PIASCS_BUILD=1)"
   exit 0
 fi
 
-if [ "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" = "1" ]; then
-  log "skipping pca prebuild (AGENT_SKILLS_SKIP_PCA_BUILD=1)"
-else
-  log "updating/prebuilding pca binaries (locked, release)"
-  cargo build --manifest-path skills/principal-containerization-architect/scripts/pca-src/Cargo.toml --locked --release
-fi
+build_rust_skill \
+  "pca" \
+  "AGENT_SKILLS_SKIP_PCA_BUILD" \
+  "skills/principal-containerization-architect/scripts/pca-src/Cargo.toml" \
+  "updating/prebuilding"
 
-if [ "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" = "1" ]; then
-  log "skipping piascs prebuild (AGENT_SKILLS_SKIP_PIASCS_BUILD=1)"
-else
-  log "updating/prebuilding piascs binaries (locked, release)"
-  cargo build --manifest-path skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs-src/Cargo.toml --locked --release
-fi
+build_rust_skill \
+  "piascs" \
+  "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
+  "skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs-src/Cargo.toml" \
+  "updating/prebuilding"
 
 log "done"

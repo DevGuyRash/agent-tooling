@@ -1,4 +1,4 @@
-//! Structured error types for PCA flows.
+//! Structured error types for PIASCS flows.
 
 use std::path::Path;
 

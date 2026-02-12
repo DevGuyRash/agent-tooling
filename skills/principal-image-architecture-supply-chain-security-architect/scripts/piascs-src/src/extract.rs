@@ -25,6 +25,7 @@ use crate::error::AppError;
 /// ```
 pub fn extract_images(input: &str) -> Result<Vec<String>, AppError> {
     let mut candidates = Vec::new();
+    let mut stage_aliases = BTreeSet::new();
 
     let image_re =
         Regex::new(r#"(?m)^\s*image\s*:\s*["']?([^\s"'#]+)["']?\s*$"#).map_err(|error| {
@@ -44,14 +45,36 @@ pub fn extract_images(input: &str) -> Result<Vec<String>, AppError> {
         if line.starts_with("FROM ") || line.starts_with("from ") {
             let mut parts = line.split_whitespace();
             let _ = parts.next();
-            if let Some(first_token) = parts.next() {
-                let reference = if first_token.starts_with("--") {
-                    parts.next().unwrap_or_default()
-                } else {
-                    first_token
-                };
-                if !reference.is_empty() {
+            let mut tokens: Vec<&str> = parts.collect();
+
+            while let Some(first) = tokens.first().copied() {
+                if !first.starts_with("--") {
+                    break;
+                }
+
+                let _ = tokens.remove(0);
+                if !first.contains('=')
+                    && tokens
+                        .first()
+                        .copied()
+                        .is_some_and(|next| !next.starts_with("--"))
+                {
+                    let _ = tokens.remove(0);
+                }
+            }
+
+            if let Some(reference) = tokens.first().copied() {
+                let normalized_reference = reference.to_lowercase();
+                let is_stage_alias = !normalized_reference.contains('/')
+                    && !normalized_reference.contains(':')
+                    && !normalized_reference.contains('@')
+                    && stage_aliases.contains(&normalized_reference);
+                if !reference.is_empty() && !is_stage_alias {
                     candidates.push(reference.to_string());
+                }
+
+                if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("as") {
+                    stage_aliases.insert(tokens[2].to_lowercase());
                 }
             }
         }
@@ -132,6 +155,19 @@ FROM alpine:3.20
 
         let actual = extract_images(input).expect("extract should succeed");
         assert_eq!(actual, vec!["alpine:3.20", "nginx:1.27", "redis:7"]);
+    }
+
+    #[test]
+    fn extract_images_ignores_from_stage_aliases() {
+        let input = r#"
+FROM rust:1.84 AS builder
+RUN cargo build --release
+FROM builder AS runtime
+COPY --from=builder /app /app
+"#;
+
+        let actual = extract_images(input).expect("extract should succeed");
+        assert_eq!(actual, vec!["rust:1.84"]);
     }
 
     #[test]

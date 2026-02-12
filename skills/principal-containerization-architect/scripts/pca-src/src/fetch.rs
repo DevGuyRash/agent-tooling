@@ -1,5 +1,6 @@
 //! Metadata fetchers for API-first and fallback research.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use regex::Regex;
@@ -124,7 +125,10 @@ pub fn fetch_image_profile(
         }
     }
 
-    if allow_scrape_fallback && (digest.is_none() || dockerfile_url.is_none()) {
+    if allow_scrape_fallback
+        && parsed.registry == "docker.io"
+        && (digest.is_none() || dockerfile_url.is_none())
+    {
         if let Ok((scraped_digest, scraped_repo_url)) = scrape_hub_page(&client, &parsed.repository)
         {
             if digest.is_none() {
@@ -290,7 +294,7 @@ fn fetch_registry_manifest(
             reason: "failed to parse auth challenge".to_string(),
         })?;
 
-        let token = fetch_bearer_token(client, &auth, &parsed.repository)?;
+        let token = fetch_bearer_token(client, &auth, &parsed.repository, &parsed.registry)?;
         let authorized = request_registry(client, &manifest_url, Some(&token))?;
         return parse_manifest_response(&manifest_url, authorized);
     }
@@ -366,11 +370,9 @@ fn fetch_bearer_token(
     client: &Client,
     challenge: &AuthChallenge,
     repository: &str,
+    registry: &str,
 ) -> Result<String, AppError> {
-    let mut token_url = Url::parse(&challenge.realm).map_err(|error| AppError::Http {
-        url: challenge.realm.clone(),
-        reason: format!("invalid token realm url: {error}"),
-    })?;
+    let mut token_url = validate_realm_url(&challenge.realm, registry)?;
 
     {
         let mut query = token_url.query_pairs_mut();
@@ -416,6 +418,95 @@ fn fetch_bearer_token(
             url: challenge.realm.clone(),
             reason: "token response did not include token field".to_string(),
         })
+}
+
+fn validate_realm_url(realm: &str, registry: &str) -> Result<Url, AppError> {
+    let url = Url::parse(realm).map_err(|error| AppError::Http {
+        url: realm.to_string(),
+        reason: format!("invalid token realm url: {error}"),
+    })?;
+
+    if url.scheme() != "https" {
+        return Err(AppError::Http {
+            url: realm.to_string(),
+            reason: "token realm url must use https".to_string(),
+        });
+    }
+
+    let realm_host = url.host_str().ok_or_else(|| AppError::Http {
+        url: realm.to_string(),
+        reason: "token realm url did not include a host".to_string(),
+    })?;
+
+    let registry_host = Url::parse(&format!("https://{registry}"))
+        .map_err(|error| AppError::Http {
+            url: registry.to_string(),
+            reason: format!("invalid registry host: {error}"),
+        })?
+        .host_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::Http {
+            url: registry.to_string(),
+            reason: "registry host resolution failed".to_string(),
+        })?;
+
+    if !is_same_or_subdomain(realm_host, &registry_host) {
+        return Err(AppError::Http {
+            url: realm.to_string(),
+            reason: format!(
+                "token realm host {realm_host} is not in registry domain {registry_host}"
+            ),
+        });
+    }
+
+    if is_disallowed_host(realm_host) {
+        return Err(AppError::Http {
+            url: realm.to_string(),
+            reason: format!("token realm host {realm_host} is not allowed"),
+        });
+    }
+
+    Ok(url)
+}
+
+fn is_same_or_subdomain(candidate: &str, registry_host: &str) -> bool {
+    let candidate_lower = candidate.to_ascii_lowercase();
+    let registry_lower = registry_host.to_ascii_lowercase();
+    candidate_lower == registry_lower || candidate_lower.ends_with(&format!(".{registry_lower}"))
+}
+
+fn is_disallowed_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(value) => is_disallowed_ipv4(value),
+            IpAddr::V6(value) => is_disallowed_ipv6(value),
+        };
+    }
+
+    false
+}
+
+fn is_disallowed_ipv4(value: Ipv4Addr) -> bool {
+    value.is_private()
+        || value.is_loopback()
+        || value.is_link_local()
+        || value.is_broadcast()
+        || value.is_documentation()
+        || value.is_multicast()
+        || value.is_unspecified()
+}
+
+fn is_disallowed_ipv6(value: Ipv6Addr) -> bool {
+    value.is_loopback()
+        || value.is_unspecified()
+        || value.is_multicast()
+        || value.is_unique_local()
+        || value.is_unicast_link_local()
+        || value.segments()[0] == 0x2001 && value.segments()[1] == 0x0db8
 }
 
 fn parse_auth_challenge(value: &str) -> Option<AuthChallenge> {
@@ -570,4 +661,27 @@ fn split_tag(repository: &str) -> (&str, &str) {
     }
 
     (repository, "latest")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_realm_url;
+
+    #[test]
+    fn validate_realm_url_rejects_non_https() {
+        let result = validate_realm_url("http://auth.docker.io/token", "docker.io");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_realm_url_rejects_outside_domain() {
+        let result = validate_realm_url("https://evil.example/token", "docker.io");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_realm_url_accepts_subdomain() {
+        let result = validate_realm_url("https://auth.docker.io/token", "docker.io");
+        assert!(result.is_ok());
+    }
 }
