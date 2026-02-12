@@ -8,12 +8,14 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
+use mpcr::protocol;
 use mpcr::session::{
     append_note, collect_reports, finalize_review, load_session, register_reviewer,
-    set_initiator_status, update_review, AppendNoteParams, FinalizeReviewParams, InitiatorStatus,
-    NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions, ReportsResult,
-    ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
-    SetInitiatorStatusParams, SeverityCounts, UpdateReviewParams,
+    set_initiator_status, spawn_child_reviewers, update_review, AppendNoteParams,
+    FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams,
+    ReportsFilters, ReportsOptions, ReportsResult, ReportsView, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
+    SpawnChildReviewersParams, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -107,6 +109,11 @@ enum Commands {
     Applicator {
         #[command(subcommand)]
         command: ApplicatorCommands,
+    },
+    /// Serve phase-appropriate protocol guidance from embedded data.
+    Protocol {
+        #[command(subcommand)]
+        command: ProtocolCommands,
     },
 }
 
@@ -375,7 +382,7 @@ enum ReviewerCommands {
         #[arg(
             long,
             value_name = "ID8",
-            help = "Optional parent reviewer id for handoff/chaining (8-character ASCII alphanumeric)."
+            help = "Optional parent reviewer id for handoff/chaining (id8). When set, mpcr binds to the parent's existing review entry for this target_ref (pass --session-id if the parent has multiple sessions); prefer `spawn-children` for deterministic lineage."
         )]
         parent_id: Option<String>,
 
@@ -393,6 +400,40 @@ enum ReviewerCommands {
             help = "Print MPCR_* key/value lines for manual reuse (does not emit `export`)."
         )]
         print_env: bool,
+    },
+
+    /// Spawn child reviewer entries under a single parent reviewer id.
+    #[command(after_long_help = r#"Examples:
+  # After registering as the parent and capturing session context:
+  mpcr reviewer spawn-children --target-ref main --session-dir <DIR> --session-id <ID8> --parent-id <PARENT_ID8> --count 3 --json
+"#)]
+    SpawnChildren {
+        #[command(flatten)]
+        session: SessionDirArgs,
+
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Target reference being reviewed (must match the parent review entry)."
+        )]
+        target_ref: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id (id8). Capture from the parent's `mpcr reviewer register --print-env`."
+        )]
+        session_id: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Parent reviewer id (id8). Capture from the parent's `mpcr reviewer register --print-env`."
+        )]
+        parent_id: Option<String>,
+
+        #[arg(long, value_name = "N", help = "Number of child reviewers to spawn.")]
+        count: usize,
     },
 
     /// Update your reviewer-owned status and/or current phase.
@@ -685,6 +726,52 @@ Examples:
     },
 }
 
+#[derive(Subcommand)]
+enum ProtocolCommands {
+    /// Phase-appropriate guidance for code review.
+    Reviewer {
+        #[arg(
+            long,
+            value_name = "PHASE",
+            help = "Review phase (INGESTION, DOMAIN_COVERAGE, THEOREM_GENERATION, ADVERSARIAL_PROOFS, SYNTHESIS, REPORT_WRITING)."
+        )]
+        phase: String,
+    },
+    /// Phase-appropriate guidance for applying review feedback.
+    Applicator {
+        #[arg(
+            long,
+            value_name = "PHASE",
+            help = "Applicator phase (INGESTION, DISPOSITION, APPLICATION, FINALIZATION)."
+        )]
+        phase: String,
+    },
+    /// Multi-agent orchestration guidance.
+    Orchestrator,
+    /// Universal Domains reference table.
+    Domains,
+    /// Report template skeleton at the specified scale.
+    ReportTemplate {
+        #[arg(
+            long,
+            value_name = "SCALE",
+            help = "Template scale (compact, standard, full)."
+        )]
+        scale: String,
+    },
+    /// Subagent dispatch prompt template for a given role.
+    Dispatch {
+        #[arg(
+            long,
+            value_name = "ROLE",
+            help = "Subagent role (scope-mapper, red-team, systems-auditor)."
+        )]
+        role: String,
+    },
+    /// List all available protocol entries.
+    List,
+}
+
 #[derive(Debug, Serialize)]
 struct OkResult {
     ok: bool,
@@ -778,8 +865,14 @@ fn run() -> anyhow::Result<()> {
                 let date_for_env = resolved.session_date.to_string();
                 let session = SessionLocator::new(resolved.session_dir);
 
-                let reviewer_id =
-                    reviewer_id.or_else(|| opt_env_string(use_env, "MPCR_REVIEWER_ID"));
+                // When --parent-id is set (child registration), ignore MPCR_REVIEWER_ID from env
+                // to prevent accidentally reusing the parent's identity. A child should either
+                // provide an explicit --reviewer-id or let mpcr generate a new one.
+                let reviewer_id = if parent_id.is_some() {
+                    reviewer_id // Ignore env fallback for children
+                } else {
+                    reviewer_id.or_else(|| opt_env_string(use_env, "MPCR_REVIEWER_ID"))
+                };
 
                 let res = register_reviewer(RegisterReviewerParams {
                     repo_root: resolved.repo_root,
@@ -791,35 +884,56 @@ fn run() -> anyhow::Result<()> {
                     parent_id,
                     now,
                 })?;
+
+                let mut env_pairs = vec![
+                    ("MPCR_REPO_ROOT", repo_root_for_env.as_str()),
+                    ("MPCR_DATE", date_for_env.as_str()),
+                    ("MPCR_REVIEWER_ID", res.reviewer_id.as_str()),
+                    ("MPCR_SESSION_ID", res.session_id.as_str()),
+                    ("MPCR_SESSION_DIR", res.session_dir.as_str()),
+                    ("MPCR_SESSION_FILE", res.session_file.as_str()),
+                    ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
+                ];
+                if let Some(parent_id) = res.parent_id.as_deref() {
+                    env_pairs.insert(3, ("MPCR_PARENT_ID", parent_id));
+                }
+
                 match emit_env {
-                    Some(EmitEnvFormat::Sh) => write_env_sh(&[
-                        ("MPCR_REPO_ROOT", repo_root_for_env.as_str()),
-                        ("MPCR_DATE", date_for_env.as_str()),
-                        ("MPCR_REVIEWER_ID", res.reviewer_id.as_str()),
-                        ("MPCR_SESSION_ID", res.session_id.as_str()),
-                        ("MPCR_SESSION_DIR", res.session_dir.as_str()),
-                        ("MPCR_SESSION_FILE", res.session_file.as_str()),
-                        ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
-                    ])?,
+                    Some(EmitEnvFormat::Sh) => write_env_sh(&env_pairs)?,
                     None => {
                         if print_env {
-                            write_env_kv(
-                                json,
-                                &[
-                                    ("MPCR_REPO_ROOT", repo_root_for_env.as_str()),
-                                    ("MPCR_DATE", date_for_env.as_str()),
-                                    ("MPCR_REVIEWER_ID", res.reviewer_id.as_str()),
-                                    ("MPCR_SESSION_ID", res.session_id.as_str()),
-                                    ("MPCR_SESSION_DIR", res.session_dir.as_str()),
-                                    ("MPCR_SESSION_FILE", res.session_file.as_str()),
-                                    ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
-                                ],
-                            )?;
+                            write_env_kv(json, &env_pairs)?;
                         } else {
                             write_result(json, &res)?;
                         }
                     }
                 }
+            }
+
+            ReviewerCommands::SpawnChildren {
+                session,
+                target_ref,
+                session_id,
+                parent_id,
+                count,
+            } => {
+                let target_ref =
+                    require_arg_or_env(target_ref, use_env, "MPCR_TARGET_REF", "--target-ref")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let parent_reviewer_id =
+                    require_arg_or_env(parent_id, use_env, "MPCR_REVIEWER_ID", "--parent-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+
+                let res = spawn_child_reviewers(SpawnChildReviewersParams {
+                    session: SessionLocator::new(resolved.session_dir),
+                    target_ref,
+                    session_id,
+                    parent_reviewer_id,
+                    count,
+                    now,
+                })?;
+                write_result(json, &res)?;
             }
 
             ReviewerCommands::Update {
@@ -994,6 +1108,67 @@ fn run() -> anyhow::Result<()> {
                     session_id.as_deref(),
                 )?;
                 write_ok(json)?;
+            }
+        },
+
+        Commands::Protocol { command } => match command {
+            ProtocolCommands::Reviewer { phase } => {
+                let out = protocol::reviewer_phase(&phase)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Applicator { phase } => {
+                let out = protocol::applicator_phase(&phase)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Orchestrator => {
+                let out = protocol::orchestrator()?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Domains => {
+                let out = protocol::domains()?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::ReportTemplate { scale } => {
+                let out = protocol::report_template(&scale)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Dispatch { role } => {
+                let out = protocol::dispatch(&role)?;
+                if json {
+                    write_json(&out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::List => {
+                let entries = protocol::list_entries()?;
+                if json {
+                    write_json(&entries)?;
+                } else {
+                    for entry in &entries {
+                        println!("{:<16} {:<24} {}", entry.category, entry.key, entry.command);
+                    }
+                }
             }
         },
     }

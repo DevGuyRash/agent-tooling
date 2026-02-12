@@ -1,0 +1,166 @@
+# Report templates at different scales.
+# Content is served by `mpcr protocol report-template --scale <SCALE>`.
+
+[scales.compact]
+title = "Compact Report Template"
+content = """
+# Code Review Report
+
+**Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
+**Target:** <branch/PR/commit ref>
+**Reviewer:** <reviewer_id>
+
+## Summary
+<2-3 sentences: what changed, overall assessment, key risk areas>
+
+## Findings
+
+### BLOCKER (if any)
+#### B1: <Title>
+- **Anchor:** `file:line`
+- **Issue:** <concrete description>
+- **Scenario:** <specific input/sequence that triggers it>
+- **Recommendation:** <specific fix>
+- **Verification:** <how to confirm the fix>
+
+### MAJOR (if any)
+<same format as BLOCKER>
+
+### MINOR / NIT (if any)
+<abbreviated: title, anchor, recommendation>
+
+## Defended Proofs
+<1-2 sentences per defended theorem, or "No adversarial proofs attempted" for trivial changes>
+
+## Residual Risk
+<Anything not fully verified, with suggested follow-up>
+"""
+
+[scales.standard]
+title = "Standard Report Template"
+content = """
+# Code Review Report
+
+**Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
+**Target:** <branch/PR/commit ref>
+**Reviewer:** <reviewer_id>
+**Counts:** blocker=N major=N minor=N nit=N
+
+## Summary
+<3-5 sentences: what changed, why, overall risk assessment>
+
+## Domain Coverage Map
+
+| Domain | Scope | Rationale |
+|--------|-------|-----------|
+| Architecture | In-scope / Out-of-scope / Unknown | <brief why> |
+| Contracts | ... | ... |
+| ... | ... | ... |
+
+## Findings
+
+### BLOCKER
+#### B1: <Title>
+- **Anchor:** `file:line` or function name
+- **Claim:** <what should be true>
+- **Disproof:** <concrete scenario that breaks it>
+- **Evidence:** <code trace or reasoning>
+- **Recommendation:** <specific fix>
+- **Verification:** <how to confirm>
+
+### MAJOR
+<same format>
+
+### MINOR
+<abbreviated: anchor, issue, recommendation>
+
+### NIT
+<one-liners: anchor, suggestion>
+
+## Defended Proofs
+For each In-scope domain where no issues found:
+- **Domain:** <name>
+- **Theorem:** <what was tested>
+- **Disproof attempt:** <what was tried>
+- **Outcome:** defended, confidence HIGH/MEDIUM
+
+## Residual Risk
+- <Area>: <what wasn't fully verified and why>
+- Suggested follow-up: <action>
+"""
+
+[scales.full]
+title = "Full UACRP Report Template"
+content = """
+# Universal Adversarial Code Review Report
+
+**Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
+**Target:** <branch/PR/commit ref>
+**Reviewer:** <reviewer_id>
+**Session:** <session_id>
+**Counts:** blocker=N major=N minor=N nit=N
+
+## 1. Change Inventory
+- Files: <list with churn>
+- Intent: <why this change exists>
+- Contract surfaces touched: <APIs, schemas, CLI, config, migrations>
+- Depth targets: <1-3 highest-risk areas>
+
+## 2. Acceptance Criteria
+<From PR description, issue, or derived from diff. Mark [Assumed] if inferred.>
+
+## 3. Domain Coverage Map
+
+| Domain | Scope | Rationale |
+|--------|-------|-----------|
+| Architecture | In-scope | <why> |
+| Contracts | In-scope | <why> |
+| Data integrity | Out-of-scope | <why> |
+| Error handling | In-scope | <why> |
+| Security | In-scope | <why> |
+| Concurrency | Out-of-scope | <why> |
+| Performance | Unknown | <what's missing> |
+| Observability | Out-of-scope | <why> |
+| Testing | In-scope | <why> |
+| Documentation | Out-of-scope | <why> |
+| Dependencies | Out-of-scope | <why> |
+
+## 4. Theorems
+For each In-scope domain, list must-prove theorems:
+1. <domain>: "<concrete falsifiable claim>" (file:line)
+2. ...
+
+## 5. Findings
+
+### BLOCKER
+#### B1: <Title>
+- **Anchor:** `file:line`
+- **Claim:** <what should be true>
+- **Disproof:** <concrete scenario>
+- **Evidence:** <code trace>
+- **Recommendation:** <specific fix>
+- **Verification:** <how to confirm>
+
+### MAJOR
+<same structure>
+
+### MINOR
+- **M1:** `file:line` - <issue> -> <recommendation>
+
+### NIT
+- **N1:** `file:line` - <suggestion>
+
+## 6. Defended Proofs
+| Theorem | Disproof Attempt | Outcome | Confidence |
+|---------|-----------------|---------|------------|
+| <claim> | <scenario tried> | Defended | HIGH |
+| ... | ... | ... | ... |
+
+## 7. Residual Risk
+- <Area>: <what wasn't verified>, suggested follow-up: <action>
+
+## 8. Verification Plan
+For each BLOCKER/MAJOR finding:
+1. <What to verify after fix>
+2. <Test to add or run>
+"""
