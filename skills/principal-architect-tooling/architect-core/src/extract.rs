@@ -17,7 +17,7 @@ use crate::error::AppError;
 ///
 /// # Examples
 /// ```
-/// use piascs::extract::extract_images;
+/// use architect_core::extract::extract_images;
 ///
 /// let text = "image: nginx:1.27\nFROM redis:7";
 /// let images = extract_images(text).expect("extract should succeed");
@@ -94,7 +94,7 @@ pub fn extract_images(input: &str) -> Result<Vec<String>, AppError> {
 ///
 /// # Examples
 /// ```
-/// use piascs::extract::normalize_images;
+/// use architect_core::extract::normalize_images;
 ///
 /// let set = normalize_images(&[" Nginx:1.27 ".to_string(), "nginx:1.27".to_string()])
 ///     .expect("normalize should succeed");

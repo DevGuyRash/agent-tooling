@@ -18,8 +18,8 @@ use crate::model::CachedProfiles;
 ///
 /// # Examples
 /// ```no_run
-/// use piascs::cache::write_cache;
-/// use piascs::model::CachedProfiles;
+/// use architect_core::cache::write_cache;
+/// use architect_core::model::CachedProfiles;
 /// use std::path::Path;
 ///
 /// let payload = CachedProfiles { schema_version: 1, profiles: Vec::new() };
@@ -42,7 +42,7 @@ pub fn write_cache(cache_path: &Path, profiles: &CachedProfiles) -> Result<(), A
 ///
 /// # Examples
 /// ```no_run
-/// use piascs::cache::read_cache;
+/// use architect_core::cache::read_cache;
 /// use std::path::Path;
 ///
 /// let _ = read_cache(Path::new("cache.json"));

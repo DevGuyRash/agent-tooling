@@ -1,4 +1,4 @@
-//! Structured error types for PIASCS flows.
+//! Structured error types for architecture skill flows.
 
 use std::path::Path;
 
@@ -34,7 +34,7 @@ impl AppError {
     /// # Examples
     /// ```
     /// use std::path::Path;
-    /// use piascs::error::AppError;
+    /// use architect_core::error::AppError;
     ///
     /// let err = AppError::io(Path::new("cache.json"), "permission denied".to_string());
     /// assert!(matches!(err, AppError::Io { .. }));

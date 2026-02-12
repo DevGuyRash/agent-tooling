@@ -1,19 +1,7 @@
 //! CLI argument definitions.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
 use std::path::PathBuf;
-
-/// Top-level CLI parser.
-#[derive(Debug, Parser)]
-#[command(
-    name = "pca",
-    about = "Deterministic helper for container architecture skill"
-)]
-pub struct Cli {
-    /// Command to execute.
-    #[command(subcommand)]
-    pub command: Command,
-}
 
 /// Supported deterministic command set.
 #[derive(Debug, Subcommand)]

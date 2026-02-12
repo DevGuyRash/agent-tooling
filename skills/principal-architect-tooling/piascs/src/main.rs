@@ -1,11 +1,23 @@
 //! Binary entrypoint for the deterministic PIASCS CLI.
 
+use architect_core::cli::Command;
+use architect_core::{run, SkillVariant};
 use clap::Parser;
-use piascs::cli::Cli;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "piascs",
+    about = "Deterministic helper for image architecture skill"
+)]
+struct Cli {
+    /// Command to execute.
+    #[command(subcommand)]
+    command: Command,
+}
 
 fn main() {
     let cli = Cli::parse();
-    match piascs::run(cli.command) {
+    match run(cli.command, SkillVariant::Piascs) {
         Ok(output) => {
             if !output.is_empty() {
                 println!("{output}");

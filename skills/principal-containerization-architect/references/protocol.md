@@ -6,4 +6,4 @@
 4. Emit configuration files only after all prior gates and critical unknown handling.
 5. Include a single-line traceability marker in each major section.
 
-Use this with `scripts/pca` outputs to keep sections deterministic.
+Use this with `../principal-architect-tooling/target/release/pca` outputs to keep sections deterministic.

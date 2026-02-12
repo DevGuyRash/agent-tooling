@@ -21,7 +21,7 @@ Path: `skills/code-review/`
 
 Deterministic Compose/Swarm architecture skill for security-first deployment planning with strict output ordering and traceability IDs (`AC-*`, `IMG-*`, `RSK-*`, `O-*`).
 
-- Script-first workflow via `skills/principal-containerization-architect/scripts/pca`
+- Binary workflow via `skills/principal-architect-tooling/target/release/pca`
 - API-first image metadata refresh with optional scraping fallback
 - Cached, deterministic render/check workflow for repeatable section generation
 
@@ -31,7 +31,7 @@ Path: `skills/principal-containerization-architect/`
 
 Deterministic Docker image architecture skill for Dockerfile + Buildx/Bake planning with supply-chain controls (SBOM/provenance/signing) and strict traceability.
 
-- Script-first workflow via `skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs`
+- Binary workflow via `skills/principal-architect-tooling/target/release/piascs`
 - API-first image inventory and digest/platform research with deterministic cache
 - Strictness-gated output rendering for reproducible artifact planning
 
@@ -43,7 +43,7 @@ These scripts are repo-wide (not skill-specific) and are intended for:
 - AI agent runners that create a new container and then clone this repo
 - CI/CD systems that reuse cached containers/workspaces
 
-They are optional: each Rust-backed skill ships a shim that auto-builds on first run, but the scripts below make environments more deterministic by ensuring Rust is available and by prebuilding binaries up front.
+They are optional, but recommended for deterministic environments because they ensure Rust is available and prebuild binaries up front.
 
 - Fresh container (after clone): `scripts/setup.sh`
 - Cached container (after checkout): `scripts/maintenance.sh`
@@ -52,8 +52,8 @@ Both scripts:
 - Ensure `.local/reports/code_reviews/` exists (gitignored)
 - Best-effort add the repo root to git `safe.directory`
 - Prebuild `mpcr` in `skills/code-review/scripts/mpcr-src` (`cargo build --locked --release`)
-- Prebuild `pca` in `skills/principal-containerization-architect/scripts/pca-src`
-- Prebuild `piascs` in `skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs-src`
+- Prebuild `pca` in `skills/principal-architect-tooling/pca`
+- Prebuild `piascs` in `skills/principal-architect-tooling/piascs`
 
 Environment flags:
 - `AGENT_SKILLS_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`

@@ -12,8 +12,8 @@ use crate::model::CachedProfiles;
 ///
 /// # Examples
 /// ```
-/// use pca::model::CachedProfiles;
-/// use pca::render::render_markdown;
+/// use architect_core::model::CachedProfiles;
+/// use architect_core::render::render_markdown;
 ///
 /// let markdown = render_markdown(&CachedProfiles { schema_version: 1, profiles: Vec::new() });
 /// assert!(markdown.contains("Traceability"));

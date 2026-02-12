@@ -6,4 +6,4 @@
 4. Enforce emission gate if strictness requires unresolved unknowns to block output.
 5. Keep traceability IDs (`AC`, `IMG`, `RSK`, `O`) in every major section.
 
-Use with `scripts/piascs` to keep outputs deterministic across runs.
+Use with `../principal-architect-tooling/target/release/piascs` to keep outputs deterministic across runs.

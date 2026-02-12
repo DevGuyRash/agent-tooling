@@ -1,8 +1,8 @@
-//! Deterministic research toolkit for container architecture skill outputs.
+//! Shared deterministic research toolkit for architecture skill outputs.
 //!
 //! # Overview
 //! This crate provides deterministic extraction, metadata collection, cache management,
-//! rendering, and validation primitives that are consumed by the `pca` CLI.
+//! rendering, and validation primitives that are consumed by both `pca` and `piascs`.
 
 use std::fs;
 
@@ -19,10 +19,29 @@ use crate::cli::Command;
 use crate::error::AppError;
 use crate::model::CachedProfiles;
 
+/// Runtime selector for CLI-specific behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillVariant {
+    /// Principal containerization architecture assistant.
+    Pca,
+    /// Principal image architecture and supply-chain security assistant.
+    Piascs,
+}
+
+impl SkillVariant {
+    fn user_agent(self) -> &'static str {
+        match self {
+            SkillVariant::Pca => "agent-skills-pca/0.1",
+            SkillVariant::Piascs => "agent-skills-piascs/0.1",
+        }
+    }
+}
+
 /// Execute one CLI command.
 ///
 /// # Arguments
 /// * `command` - Parsed command enum describing which deterministic workflow to execute.
+/// * `variant` - Runtime selector for CLI-specific behavior such as user-agent text.
 ///
 /// # Returns
 /// * `Ok(String)` when the command completed successfully, containing stdout text.
@@ -30,16 +49,16 @@ use crate::model::CachedProfiles;
 ///
 /// # Examples
 /// ```no_run
-/// use pca::cli::{Command, ExtractArgs};
-/// use pca::run;
+/// use architect_core::cli::{Command, ExtractArgs};
+/// use architect_core::{run, SkillVariant};
 ///
 /// let command = Command::Extract(ExtractArgs {
 ///     input: "compose.yaml".into(),
 ///     format: "text".into(),
 /// });
-/// let _ = run(command);
+/// let _ = run(command, SkillVariant::Pca);
 /// ```
-pub fn run(command: Command) -> Result<String, AppError> {
+pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> {
     match command {
         Command::Extract(args) => {
             let content = fs::read_to_string(&args.input)
@@ -75,7 +94,8 @@ pub fn run(command: Command) -> Result<String, AppError> {
 
             let normalized = extract::normalize_images(&all_images)?;
             let ordered: Vec<String> = normalized.into_iter().collect();
-            let mut profiles = fetch::fetch_profiles(&ordered, args.allow_scrape_fallback)?;
+            let mut profiles =
+                fetch::fetch_profiles(&ordered, args.allow_scrape_fallback, variant.user_agent())?;
             for (index, profile) in profiles.iter_mut().enumerate() {
                 profile.id = format!("IMG-{}", index + 1);
             }

@@ -15,8 +15,8 @@ use crate::model::CachedProfiles;
 ///
 /// # Examples
 /// ```
-/// use pca::check::validate_cache;
-/// use pca::model::CachedProfiles;
+/// use architect_core::check::validate_cache;
+/// use architect_core::model::CachedProfiles;
 ///
 /// let warnings = validate_cache(&CachedProfiles { schema_version: 1, profiles: Vec::new() }, "advisory")
 ///     .expect("validation should succeed");

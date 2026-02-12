@@ -105,13 +105,13 @@ fi
 build_rust_skill \
   "pca" \
   "AGENT_SKILLS_SKIP_PCA_BUILD" \
-  "skills/principal-containerization-architect/scripts/pca-src/Cargo.toml" \
+  "skills/principal-architect-tooling/pca/Cargo.toml" \
   "prebuilding"
 
 build_rust_skill \
   "piascs" \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
-  "skills/principal-image-architecture-supply-chain-security-architect/scripts/piascs-src/Cargo.toml" \
+  "skills/principal-architect-tooling/piascs/Cargo.toml" \
   "prebuilding"
 
 log "done"

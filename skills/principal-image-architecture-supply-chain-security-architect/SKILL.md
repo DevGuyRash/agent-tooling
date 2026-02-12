@@ -5,7 +5,7 @@ description: Transform Docker image build requirements into deterministic Docker
 
 # Principal Image Architecture Supply Chain Security Architect
 
-Produce deterministic image-architecture output via script-first research and rendering.
+Produce deterministic image-architecture output via binary-first research and rendering.
 
 ## Required workflow
 
@@ -19,17 +19,19 @@ Produce deterministic image-architecture output via script-first research and re
 Run commands from `<skills-file-root>`:
 
 ```bash
+# Precondition: binaries are prebuilt via scripts/setup.sh or scripts/maintenance.sh.
+
 # 1) Extract refs from Dockerfiles/spec text
-./scripts/piascs extract <input-file> --format text
+../principal-architect-tooling/target/release/piascs extract <input-file> --format text
 
 # 2) Refresh deterministic cache
-./scripts/piascs refresh --cache-dir ./references/cache --image debian:12-slim --allow-scrape-fallback
+../principal-architect-tooling/target/release/piascs refresh --cache-dir ./references/cache --image debian:12-slim --allow-scrape-fallback
 
 # 3) Render Section 2 image research
-./scripts/piascs render --cache-dir ./references/cache --format markdown
+../principal-architect-tooling/target/release/piascs render --cache-dir ./references/cache --format markdown
 
 # 4) Enforce strictness gate
-./scripts/piascs check --cache-dir ./references/cache --strictness balanced
+../principal-architect-tooling/target/release/piascs check --cache-dir ./references/cache --strictness balanced
 ```
 
 ## Determinism policy

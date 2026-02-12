@@ -5,7 +5,7 @@ description: Transform conceptual or existing Docker Compose/Swarm deployment re
 
 # Principal Containerization Architect
 
-Produce deterministic Compose/Swarm architecture output by executing a script-first workflow.
+Produce deterministic Compose/Swarm architecture output by executing a binary-first workflow.
 
 ## Required workflow
 
@@ -19,17 +19,19 @@ Produce deterministic Compose/Swarm architecture output by executing a script-fi
 Run commands from `<skills-file-root>`:
 
 ```bash
+# Precondition: binaries are prebuilt via scripts/setup.sh or scripts/maintenance.sh.
+
 # 1) Extract image refs from user-provided text/config
-./scripts/pca extract <input-file> --format text
+../principal-architect-tooling/target/release/pca extract <input-file> --format text
 
 # 2) Refresh deterministic cache (official APIs first)
-./scripts/pca refresh --cache-dir ./references/cache --image nginx:1.27 --allow-scrape-fallback
+../principal-architect-tooling/target/release/pca refresh --cache-dir ./references/cache --image nginx:1.27 --allow-scrape-fallback
 
 # 3) Render Section 2 content from cache
-./scripts/pca render --cache-dir ./references/cache --format markdown
+../principal-architect-tooling/target/release/pca render --cache-dir ./references/cache --format markdown
 
 # 4) Enforce strictness gate
-./scripts/pca check --cache-dir ./references/cache --strictness balanced
+../principal-architect-tooling/target/release/pca check --cache-dir ./references/cache --strictness balanced
 ```
 
 ## Determinism policy

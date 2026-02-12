@@ -13,8 +13,6 @@ use url::Url;
 use crate::error::AppError;
 use crate::model::{ImageProfile, Platform};
 
-const DEFAULT_USER_AGENT: &str = "agent-skills-piascs/0.1";
-
 #[derive(Debug, Clone)]
 struct ParsedImageRef {
     registry: String,
@@ -68,15 +66,16 @@ struct DockerHubMetadata {
 ///
 /// # Examples
 /// ```no_run
-/// use piascs::fetch::fetch_image_profile;
+/// use architect_core::fetch::fetch_image_profile;
 ///
-/// let profile = fetch_image_profile("nginx:1.27", true)?;
+/// let profile = fetch_image_profile("nginx:1.27", true, "agent-skills-pca/0.1")?;
 /// assert!(profile.image.contains("nginx"));
-/// # Ok::<(), piascs::error::AppError>(())
+/// # Ok::<(), architect_core::error::AppError>(())
 /// ```
 pub fn fetch_image_profile(
     image: &str,
     allow_scrape_fallback: bool,
+    user_agent: &str,
 ) -> Result<ImageProfile, AppError> {
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
@@ -94,7 +93,7 @@ pub fn fetch_image_profile(
     let mut dockerfile_url: Option<String> = None;
 
     if parsed.registry == "docker.io" {
-        match fetch_docker_hub_metadata(&client, &parsed) {
+        match fetch_docker_hub_metadata(&client, &parsed, user_agent) {
             Ok(hub) => {
                 digest = hub.digest;
                 platforms = hub.platforms;
@@ -109,7 +108,7 @@ pub fn fetch_image_profile(
     }
 
     if digest.is_none() || platforms.is_empty() {
-        match fetch_registry_manifest(&client, &parsed) {
+        match fetch_registry_manifest(&client, &parsed, user_agent) {
             Ok((manifest_digest, manifest_platforms)) => {
                 if digest.is_none() {
                     digest = manifest_digest;
@@ -129,7 +128,8 @@ pub fn fetch_image_profile(
         && parsed.registry == "docker.io"
         && (digest.is_none() || dockerfile_url.is_none())
     {
-        if let Ok((scraped_digest, scraped_repo_url)) = scrape_hub_page(&client, &parsed.repository)
+        if let Ok((scraped_digest, scraped_repo_url)) =
+            scrape_hub_page(&client, &parsed.repository, user_agent)
         {
             if digest.is_none() {
                 digest = scraped_digest;
@@ -167,19 +167,24 @@ pub fn fetch_image_profile(
 ///
 /// # Examples
 /// ```no_run
-/// use piascs::fetch::fetch_profiles;
+/// use architect_core::fetch::fetch_profiles;
 ///
-/// let profiles = fetch_profiles(&["nginx:1.27".to_string()], true)?;
+/// let profiles = fetch_profiles(&["nginx:1.27".to_string()], true, "agent-skills-pca/0.1")?;
 /// assert_eq!(profiles.len(), 1);
-/// # Ok::<(), piascs::error::AppError>(())
+/// # Ok::<(), architect_core::error::AppError>(())
 /// ```
 pub fn fetch_profiles(
     images: &[String],
     allow_scrape_fallback: bool,
+    user_agent: &str,
 ) -> Result<Vec<ImageProfile>, AppError> {
     let mut output = Vec::with_capacity(images.len());
     for image in images {
-        output.push(fetch_image_profile(image, allow_scrape_fallback)?);
+        output.push(fetch_image_profile(
+            image,
+            allow_scrape_fallback,
+            user_agent,
+        )?);
     }
     Ok(output)
 }
@@ -187,6 +192,7 @@ pub fn fetch_profiles(
 fn fetch_docker_hub_metadata(
     client: &Client,
     parsed: &ParsedImageRef,
+    user_agent: &str,
 ) -> Result<DockerHubMetadata, AppError> {
     let tag_url = format!(
         "https://hub.docker.com/v2/repositories/{}/tags/{}",
@@ -194,7 +200,7 @@ fn fetch_docker_hub_metadata(
     );
     let tag_response = client
         .get(&tag_url)
-        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .header(USER_AGENT, user_agent)
         .send()
         .map_err(|error| AppError::Http {
             url: tag_url.clone(),
@@ -234,7 +240,7 @@ fn fetch_docker_hub_metadata(
     );
     let repo_response = client
         .get(&repo_url)
-        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .header(USER_AGENT, user_agent)
         .send()
         .map_err(|error| AppError::Http {
             url: repo_url.clone(),
@@ -272,13 +278,14 @@ fn fetch_docker_hub_metadata(
 fn fetch_registry_manifest(
     client: &Client,
     parsed: &ParsedImageRef,
+    user_agent: &str,
 ) -> Result<(Option<String>, Vec<Platform>), AppError> {
     let manifest_url = format!(
         "https://{}/v2/{}/manifests/{}",
         parsed.registry, parsed.repository, parsed.reference
     );
 
-    let response = request_registry(client, &manifest_url, None)?;
+    let response = request_registry(client, &manifest_url, None, user_agent)?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let challenge = response
             .headers()
@@ -294,8 +301,14 @@ fn fetch_registry_manifest(
             reason: "failed to parse auth challenge".to_string(),
         })?;
 
-        let token = fetch_bearer_token(client, &auth, &parsed.repository, &parsed.registry)?;
-        let authorized = request_registry(client, &manifest_url, Some(&token))?;
+        let token = fetch_bearer_token(
+            client,
+            &auth,
+            &parsed.repository,
+            &parsed.registry,
+            user_agent,
+        )?;
+        let authorized = request_registry(client, &manifest_url, Some(&token), user_agent)?;
         return parse_manifest_response(&manifest_url, authorized);
     }
 
@@ -347,10 +360,15 @@ fn parse_manifest_response(
     Ok((digest, platforms))
 }
 
-fn request_registry(client: &Client, url: &str, token: Option<&str>) -> Result<Response, AppError> {
+fn request_registry(
+    client: &Client,
+    url: &str,
+    token: Option<&str>,
+    user_agent: &str,
+) -> Result<Response, AppError> {
     let mut request = client
         .get(url)
-        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .header(USER_AGENT, user_agent)
         .header(
             ACCEPT,
             "application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json",
@@ -371,6 +389,7 @@ fn fetch_bearer_token(
     challenge: &AuthChallenge,
     repository: &str,
     registry: &str,
+    user_agent: &str,
 ) -> Result<String, AppError> {
     let mut token_url = validate_realm_url(&challenge.realm, registry)?;
 
@@ -391,7 +410,7 @@ fn fetch_bearer_token(
     let url_string = token_url.to_string();
     let response = client
         .get(token_url)
-        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .header(USER_AGENT, user_agent)
         .send()
         .map_err(|error| AppError::Http {
             url: url_string.clone(),
@@ -541,11 +560,12 @@ fn parse_auth_challenge(value: &str) -> Option<AuthChallenge> {
 fn scrape_hub_page(
     client: &Client,
     repository: &str,
+    user_agent: &str,
 ) -> Result<(Option<String>, Option<String>), AppError> {
     let url = format!("https://hub.docker.com/r/{repository}");
     let body = client
         .get(&url)
-        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .header(USER_AGENT, user_agent)
         .send()
         .and_then(|response| response.error_for_status())
         .map_err(|error| AppError::Http {
@@ -683,5 +703,17 @@ mod tests {
     fn validate_realm_url_accepts_subdomain() {
         let result = validate_realm_url("https://auth.docker.io/token", "docker.io");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_realm_url_rejects_localhost_host() {
+        let result = validate_realm_url("https://localhost/token", "localhost");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_realm_url_rejects_private_ipv4_host() {
+        let result = validate_realm_url("https://10.0.0.7/token", "10.0.0.7");
+        assert!(result.is_err());
     }
 }
