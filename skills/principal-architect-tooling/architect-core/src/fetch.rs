@@ -667,9 +667,12 @@ fn scrape_hub_page(
             reason: error.to_string(),
         })?;
 
-    let digest = Regex::new(r"sha256:[a-f0-9]{64}")
-        .ok()
-        .and_then(|regex| regex.find(&body))
+    let digest_regex =
+        Regex::new(r"sha256:[a-f0-9]{64}").map_err(|error| AppError::InvalidInput {
+            reason: format!("failed to compile digest regex: {error}"),
+        })?;
+    let digest = digest_regex
+        .find(&body)
         .map(|match_| match_.as_str().to_string());
 
     let github_url = extract_github_url(&body);
@@ -678,7 +681,10 @@ fn scrape_hub_page(
 }
 
 fn extract_github_url(text: &str) -> Option<String> {
-    let regex = Regex::new(r"https://github.com/[A-Za-z0-9._/-]+").ok()?;
+    let regex = match Regex::new(r"https://github.com/[A-Za-z0-9._/-]+") {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
     regex.find(text).map(|match_| match_.as_str().to_string())
 }
 

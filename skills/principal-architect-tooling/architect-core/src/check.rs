@@ -30,12 +30,19 @@ pub fn validate_cache(cache: &CachedProfiles, strictness: &str) -> Result<Vec<St
     }
 
     let mut warnings = Vec::new();
+    let mut critical = Vec::new();
     for profile in &cache.profiles {
         if profile.digest.is_none() {
-            warnings.push(format!("{} missing digest", profile.id));
+            let issue = format!("{} missing digest", profile.id);
+            warnings.push(issue.clone());
+            critical.push(issue);
         }
         if profile.docs_url.is_none() {
-            warnings.push(format!("{} missing docs url", profile.id));
+            let issue = format!("{} missing docs url", profile.id);
+            if is_docker_hub_image(&profile.image) {
+                critical.push(issue.clone());
+            }
+            warnings.push(issue);
         }
         if profile.dockerfile_url.is_none() {
             warnings.push(format!("{} missing dockerfile url", profile.id));
@@ -51,27 +58,10 @@ pub fn validate_cache(cache: &CachedProfiles, strictness: &str) -> Result<Vec<St
         });
     }
 
-    if strictness == "balanced" {
-        let critical: Vec<String> = cache
-            .profiles
-            .iter()
-            .flat_map(|profile| {
-                let mut issues = Vec::new();
-                if profile.digest.is_none() {
-                    issues.push(format!("{} missing digest", profile.id));
-                }
-                if is_docker_hub_image(&profile.image) && profile.docs_url.is_none() {
-                    issues.push(format!("{} missing docs url", profile.id));
-                }
-                issues
-            })
-            .collect();
-
-        if !critical.is_empty() {
-            return Err(AppError::InvalidInput {
-                reason: format!("balanced validation failed: {}", critical.join("; ")),
-            });
-        }
+    if strictness == "balanced" && !critical.is_empty() {
+        return Err(AppError::InvalidInput {
+            reason: format!("balanced validation failed: {}", critical.join("; ")),
+        });
     }
 
     Ok(warnings)

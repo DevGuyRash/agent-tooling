@@ -1,27 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-log() {
-  printf '%s\n' "maintenance: $*" >&2
-}
-
-build_rust_skill() {
-  name="$1"
-  skip_flag_value="$2"
-  skip_flag_name="$3"
-  manifest_path="$4"
-  action_prefix="$5"
-
-  if [ "${skip_flag_value}" = "1" ]; then
-    log "skipping ${name} prebuild (${skip_flag_name}=1)"
-  else
-    log "${action_prefix} ${name} binaries (locked, release)"
-    cargo build --manifest-path "${manifest_path}" --locked --release
-  fi
-}
-
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
+
+# shellcheck source=scripts/common.sh
+. "${script_dir}/common.sh"
 
 # Prefer git's idea of the repo root when available (handles symlinks / odd invocations).
 if command -v git >/dev/null 2>&1; then
@@ -52,11 +36,12 @@ fi
 mkdir -p .local/reports/code_reviews
 
 if ! command -v cargo >/dev/null 2>&1; then
-  log "warning: cargo not available; run scripts/setup.sh to install Rust"
+  log "maintenance" "warning: cargo not available; run scripts/setup.sh to install Rust"
   exit 0
 fi
 
 build_rust_skill \
+  "maintenance" \
   "mpcr" \
   "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" \
   "AGENT_SKILLS_SKIP_MPCR_BUILD" \
@@ -64,6 +49,7 @@ build_rust_skill \
   "updating/prebuilding"
 
 build_rust_skill \
+  "maintenance" \
   "pca" \
   "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" \
   "AGENT_SKILLS_SKIP_PCA_BUILD" \
@@ -71,10 +57,11 @@ build_rust_skill \
   "updating/prebuilding"
 
 build_rust_skill \
+  "maintenance" \
   "piascs" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "skills/principal-architect-tooling/piascs/Cargo.toml" \
   "updating/prebuilding"
 
-log "done"
+log "maintenance" "done"
