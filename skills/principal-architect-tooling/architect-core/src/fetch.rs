@@ -405,15 +405,7 @@ fn fetch_config_blob_platform(
         reason: format!("config blob parse failed: {error}"),
     })?;
 
-    let os = value.get("os").and_then(Value::as_str);
-    let arch = value.get("architecture").and_then(Value::as_str);
-    if let (Some(os), Some(arch)) = (os, arch) {
-        return Ok(Some(Platform {
-            os: os.to_string(),
-            arch: arch.to_string(),
-        }));
-    }
-    Ok(None)
+    Ok(extract_platform_from_config_payload(&value))
 }
 
 fn request_registry(
@@ -767,9 +759,24 @@ fn split_tag(repository: &str) -> (&str, &str) {
     (repository, "latest")
 }
 
+fn extract_platform_from_config_payload(value: &Value) -> Option<Platform> {
+    let os = value.get("os").and_then(Value::as_str)?;
+    let arch = value.get("architecture").and_then(Value::as_str)?;
+    Some(Platform {
+        os: os.to_string(),
+        arch: arch.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{infer_docs_url, parse_image_reference, validate_realm_url};
+    use crate::model::Platform;
+    use serde_json::json;
+
+    use super::{
+        extract_platform_from_config_payload, infer_docs_url, parse_image_reference,
+        validate_realm_url,
+    };
 
     #[test]
     fn validate_realm_url_rejects_non_https() {
@@ -818,5 +825,21 @@ mod tests {
             parse_image_reference("ghcr.io/openfaas/gateway:latest").expect("parse should succeed");
         let docs = infer_docs_url(&parsed);
         assert_eq!(docs.as_deref(), Some("https://github.com/openfaas/gateway"));
+    }
+
+    #[test]
+    fn extract_platform_from_config_payload_reads_os_and_architecture() {
+        let payload = json!({
+            "architecture": "amd64",
+            "os": "linux"
+        });
+        let platform = extract_platform_from_config_payload(&payload);
+        assert_eq!(
+            platform,
+            Some(Platform {
+                os: "linux".to_string(),
+                arch: "amd64".to_string(),
+            })
+        );
     }
 }
