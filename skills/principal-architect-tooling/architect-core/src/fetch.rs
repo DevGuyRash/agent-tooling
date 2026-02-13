@@ -87,7 +87,11 @@ pub fn fetch_image_profile(
     let parsed = parse_image_reference(image)?;
     let mut notes = Vec::new();
 
-    let mut digest: Option<String> = None;
+    let mut digest: Option<String> = if is_digest_reference(&parsed.reference) {
+        Some(parsed.reference.clone())
+    } else {
+        None
+    };
     let mut platforms: Vec<Platform> = Vec::new();
     let mut docs_url: Option<String> = None;
     let mut dockerfile_url: Option<String> = None;
@@ -95,7 +99,9 @@ pub fn fetch_image_profile(
     if parsed.registry == "docker.io" {
         match fetch_docker_hub_metadata(&client, &parsed, user_agent) {
             Ok(hub) => {
-                digest = hub.digest;
+                if digest.is_none() {
+                    digest = hub.digest;
+                }
                 platforms = hub.platforms;
                 docs_url = hub.docs_url;
                 dockerfile_url = hub.dockerfile_url;
@@ -197,7 +203,7 @@ fn fetch_docker_hub_metadata(
     parsed: &ParsedImageRef,
     user_agent: &str,
 ) -> Result<DockerHubMetadata, AppError> {
-    let (digest, platforms) = if parsed.reference.starts_with("sha256:") {
+    let (digest, platforms) = if is_digest_reference(&parsed.reference) {
         (None, Vec::new())
     } else {
         fetch_docker_hub_tag_metadata(client, parsed, user_agent)?
@@ -682,7 +688,7 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
         .trim_matches('"')
         .trim_matches('\'')
         .trim_matches('`')
-        .to_lowercase();
+        .to_string();
 
     if cleaned.is_empty() {
         return Err(AppError::InvalidInput {
@@ -706,8 +712,8 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
     let mut repository = name_part.to_string();
 
     if let Some((first, rest)) = name_part.split_once('/') {
-        if first.contains('.') || first.contains(':') || first == "localhost" {
-            registry = first.to_string();
+        if first.contains('.') || first.contains(':') || first.eq_ignore_ascii_case("localhost") {
+            registry = first.to_ascii_lowercase();
             repository = rest.to_string();
         }
     }
@@ -727,7 +733,7 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
     let tag = tag_part.to_string();
 
     let reference = digest.unwrap_or_else(|| tag.clone());
-    let normalized = if reference.starts_with("sha256:") {
+    let normalized = if is_digest_reference(&reference) {
         format!("{registry}/{repository}@{reference}")
     } else {
         format!("{registry}/{repository}:{reference}")
@@ -740,6 +746,12 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
         normalized,
         tag,
     })
+}
+
+fn is_digest_reference(reference: &str) -> bool {
+    reference
+        .get(0..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("sha256:"))
 }
 
 fn split_tag(repository: &str) -> (&str, &str) {
@@ -774,8 +786,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        extract_platform_from_config_payload, infer_docs_url, parse_image_reference,
-        validate_realm_url,
+        extract_platform_from_config_payload, infer_docs_url, is_digest_reference,
+        parse_image_reference, validate_realm_url,
     };
 
     #[test]
@@ -841,5 +853,20 @@ mod tests {
                 arch: "amd64".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn parse_image_reference_preserves_case_for_repository_and_tag() {
+        let parsed =
+            parse_image_reference("ghcr.io/OpenFaaS/Gateway:RC1").expect("parse should succeed");
+        assert_eq!(parsed.registry, "ghcr.io");
+        assert_eq!(parsed.repository, "OpenFaaS/Gateway");
+        assert_eq!(parsed.reference, "RC1");
+        assert_eq!(parsed.normalized, "ghcr.io/OpenFaaS/Gateway:RC1");
+    }
+
+    #[test]
+    fn is_digest_reference_accepts_uppercase_prefix() {
+        assert!(is_digest_reference("SHA256:abc"));
     }
 }

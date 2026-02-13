@@ -109,7 +109,7 @@ pub fn normalize_images(images: &[String]) -> Result<BTreeSet<String>, AppError>
             .trim_matches('`')
             .trim_matches('\'')
             .trim_end_matches(',')
-            .to_lowercase();
+            .to_string();
 
         if cleaned.is_empty() {
             continue;
@@ -173,6 +173,13 @@ COPY --from=builder /app /app
     fn normalize_images_rejects_invalid_reference() {
         let result = normalize_images(&["invalid ref".to_string()]);
         assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn normalize_images_preserves_case_for_tags_and_paths() {
+        let set = normalize_images(&["ghcr.io/OpenFaaS/Gateway:RC1".to_string()])
+            .expect("normalize should succeed");
+        assert!(set.contains("ghcr.io/OpenFaaS/Gateway:RC1"));
     }
 
     #[test]
