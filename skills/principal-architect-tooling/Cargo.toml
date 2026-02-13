@@ -1,0 +1,3 @@
+[workspace]
+members = ["architect-core", "pca", "piascs"]
+resolver = "2"
