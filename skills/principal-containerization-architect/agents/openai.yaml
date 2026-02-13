@@ -1,0 +1,4 @@
+interface:
+  display_name: "Principal Containerization Architect"
+  short_description: "Deterministic Compose/Swarm architecture hardening"
+  default_prompt: "Analyze deployment requirements and produce deterministic, security-first Compose and Swarm architecture outputs with strict phase ordering and traceability."
