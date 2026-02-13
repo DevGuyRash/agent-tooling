@@ -7,13 +7,13 @@ log() {
 
 build_rust_skill() {
   name="$1"
-  skip_var_name="$2"
-  manifest_path="$3"
-  action_prefix="$4"
+  skip_flag_value="$2"
+  skip_flag_name="$3"
+  manifest_path="$4"
+  action_prefix="$5"
 
-  eval "skip_value=\${${skip_var_name}:-}"
-  if [ "${skip_value}" = "1" ]; then
-    log "skipping ${name} prebuild (${skip_var_name}=1)"
+  if [ "${skip_flag_value}" = "1" ]; then
+    log "skipping ${name} prebuild (${skip_flag_name}=1)"
   else
     log "${action_prefix} ${name} binaries (locked, release)"
     cargo build --manifest-path "${manifest_path}" --locked --release
@@ -58,23 +58,21 @@ fi
 
 build_rust_skill \
   "mpcr" \
+  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" \
   "AGENT_SKILLS_SKIP_MPCR_BUILD" \
   "skills/code-review/scripts/mpcr-src/Cargo.toml" \
   "updating/prebuilding"
 
-if [ "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" = "1" ] && [ "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" = "1" ]; then
-  log "skipping architecture skill prebuilds (AGENT_SKILLS_SKIP_PCA_BUILD=1 and AGENT_SKILLS_SKIP_PIASCS_BUILD=1)"
-  exit 0
-fi
-
 build_rust_skill \
   "pca" \
+  "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" \
   "AGENT_SKILLS_SKIP_PCA_BUILD" \
   "skills/principal-architect-tooling/pca/Cargo.toml" \
   "updating/prebuilding"
 
 build_rust_skill \
   "piascs" \
+  "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "skills/principal-architect-tooling/piascs/Cargo.toml" \
   "updating/prebuilding"

@@ -119,7 +119,8 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
             let payload = cache::read_cache(&cache_path)?;
             match args.format.as_str() {
                 "markdown" => Ok(render::render_markdown(&payload)),
-                "json" => Ok(render::render_json(&payload)),
+                "json" => render::render_json(&payload)
+                    .map_err(|error| AppError::serialization(&cache_path, error.to_string())),
                 _ => Err(AppError::InvalidInput {
                     reason: format!("unsupported render format: {}", args.format),
                 }),

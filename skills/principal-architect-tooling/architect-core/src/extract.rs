@@ -27,12 +27,11 @@ pub fn extract_images(input: &str) -> Result<Vec<String>, AppError> {
     let mut candidates = Vec::new();
     let mut stage_aliases = BTreeSet::new();
 
-    let image_re =
-        Regex::new(r#"(?m)^\s*image\s*:\s*["']?([^\s"'#]+)["']?\s*$"#).map_err(|error| {
-            AppError::InvalidInput {
-                reason: format!("failed to compile image regex: {error}"),
-            }
-        })?;
+    let image_re = Regex::new(r#"(?m)^\s*image\s*:\s*["']?([^\s"'#]+)["']?\s*(?:#.*)?$"#).map_err(
+        |error| AppError::InvalidInput {
+            reason: format!("failed to compile image regex: {error}"),
+        },
+    )?;
 
     for capture in image_re.captures_iter(input) {
         if let Some(value) = capture.get(1) {
@@ -174,5 +173,17 @@ COPY --from=builder /app /app
     fn normalize_images_rejects_invalid_reference() {
         let result = normalize_images(&["invalid ref".to_string()]);
         assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn extract_images_supports_compose_inline_comment() {
+        let input = r#"
+services:
+  web:
+    image: nginx:1.27 # pinned
+"#;
+
+        let actual = extract_images(input).expect("extract should succeed");
+        assert_eq!(actual, vec!["nginx:1.27"]);
     }
 }

@@ -74,10 +74,8 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
 /// * `cache` - Parsed cache structure.
 ///
 /// # Returns
-/// * Pretty-printed JSON text.
-pub fn render_json(cache: &CachedProfiles) -> String {
-    match serde_json::to_string_pretty(cache) {
-        Ok(value) => value,
-        Err(_) => "{}".to_string(),
-    }
+/// * `Ok(String)` pretty-printed JSON text when serialization succeeds.
+/// * `Err(serde_json::Error)` when serialization fails.
+pub fn render_json(cache: &CachedProfiles) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(cache)
 }

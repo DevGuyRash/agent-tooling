@@ -232,14 +232,14 @@ fn fetch_docker_hub_tag_metadata(
 
     if !tag_response.status().is_success() {
         return Err(AppError::Http {
-            url: tag_url,
+            url: tag_url.clone(),
             reason: format!("unexpected status {}", tag_response.status()),
         });
     }
 
     let tag_payload: DockerHubTagResponse =
         tag_response.json().map_err(|error| AppError::Http {
-            url: "https://hub.docker.com/v2/repositories/<repo>/tags/<tag>".to_string(),
+            url: tag_url.clone(),
             reason: format!("invalid docker hub tag payload: {error}"),
         })?;
 
@@ -323,37 +323,14 @@ fn fetch_registry_manifest(
         parsed.registry, parsed.repository, parsed.reference
     );
 
-    let response = request_registry(client, &manifest_url, None, user_agent)?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        let challenge = response
-            .headers()
-            .get(WWW_AUTHENTICATE)
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| AppError::Http {
-                url: manifest_url.clone(),
-                reason: "registry returned 401 without WWW-Authenticate".to_string(),
-            })?;
-
-        let auth = parse_auth_challenge(challenge).ok_or_else(|| AppError::Http {
-            url: manifest_url.clone(),
-            reason: "failed to parse auth challenge".to_string(),
-        })?;
-
-        let token = fetch_bearer_token(
-            client,
-            &auth,
-            &parsed.repository,
-            &parsed.registry,
-            user_agent,
-        )?;
-        let authorized = request_registry(client, &manifest_url, Some(&token), user_agent)?;
-        return parse_manifest_response(&manifest_url, authorized);
-    }
-
-    parse_manifest_response(&manifest_url, response)
+    let response = request_registry_with_auth(client, parsed, &manifest_url, user_agent)?;
+    parse_manifest_response(client, parsed, user_agent, &manifest_url, response)
 }
 
 fn parse_manifest_response(
+    client: &Client,
+    parsed: &ParsedImageRef,
+    user_agent: &str,
     url: &str,
     response: Response,
 ) -> Result<(Option<String>, Vec<Platform>), AppError> {
@@ -393,9 +370,50 @@ fn parse_manifest_response(
                 });
             }
         }
+    } else if let Some(config_digest) = value
+        .get("config")
+        .and_then(|config| config.get("digest"))
+        .and_then(Value::as_str)
+    {
+        if let Some(platform) =
+            fetch_config_blob_platform(client, parsed, config_digest, user_agent)?
+        {
+            platforms.push(platform);
+        }
     }
 
     Ok((digest, platforms))
+}
+
+fn fetch_config_blob_platform(
+    client: &Client,
+    parsed: &ParsedImageRef,
+    config_digest: &str,
+    user_agent: &str,
+) -> Result<Option<Platform>, AppError> {
+    let blob_url = format!(
+        "https://{}/v2/{}/blobs/{}",
+        parsed.registry, parsed.repository, config_digest
+    );
+    let response = request_registry_with_auth(client, parsed, &blob_url, user_agent)?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let value: Value = response.json().map_err(|error| AppError::Http {
+        url: blob_url.clone(),
+        reason: format!("config blob parse failed: {error}"),
+    })?;
+
+    let os = value.get("os").and_then(Value::as_str);
+    let arch = value.get("architecture").and_then(Value::as_str);
+    if let (Some(os), Some(arch)) = (os, arch) {
+        return Ok(Some(Platform {
+            os: os.to_string(),
+            arch: arch.to_string(),
+        }));
+    }
+    Ok(None)
 }
 
 fn request_registry(
@@ -420,6 +438,41 @@ fn request_registry(
         url: url.to_string(),
         reason: error.to_string(),
     })
+}
+
+fn request_registry_with_auth(
+    client: &Client,
+    parsed: &ParsedImageRef,
+    url: &str,
+    user_agent: &str,
+) -> Result<Response, AppError> {
+    let response = request_registry(client, url, None, user_agent)?;
+    if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(response);
+    }
+
+    let challenge = response
+        .headers()
+        .get(WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| AppError::Http {
+            url: url.to_string(),
+            reason: "registry returned 401 without WWW-Authenticate".to_string(),
+        })?;
+
+    let auth = parse_auth_challenge(challenge).ok_or_else(|| AppError::Http {
+        url: url.to_string(),
+        reason: "failed to parse auth challenge".to_string(),
+    })?;
+
+    let token = fetch_bearer_token(
+        client,
+        &auth,
+        &parsed.repository,
+        &parsed.registry,
+        user_agent,
+    )?;
+    request_registry(client, url, Some(&token), user_agent)
 }
 
 fn fetch_bearer_token(
@@ -463,7 +516,7 @@ fn fetch_bearer_token(
     }
 
     let payload: Value = response.json().map_err(|error| AppError::Http {
-        url: "token-endpoint".to_string(),
+        url: url_string.clone(),
         reason: format!("token payload parse failed: {error}"),
     })?;
 
@@ -677,16 +730,9 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
         });
     }
 
-    let (repository, tag) = match digest {
-        Some(_) => {
-            let (repo_only, inferred_tag) = split_tag(&repository);
-            (repo_only.to_string(), inferred_tag.to_string())
-        }
-        None => {
-            let (repo_only, explicit_tag) = split_tag(&repository);
-            (repo_only.to_string(), explicit_tag.to_string())
-        }
-    };
+    let (repo_only, tag_part) = split_tag(&repository);
+    let repository = repo_only.to_string();
+    let tag = tag_part.to_string();
 
     let reference = digest.unwrap_or_else(|| tag.clone());
     let normalized = if reference.starts_with("sha256:") {
