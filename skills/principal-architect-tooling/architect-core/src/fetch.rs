@@ -141,8 +141,11 @@ pub fn fetch_image_profile(
         }
     }
 
-    if docs_url.is_none() && parsed.registry == "docker.io" {
-        docs_url = Some(format!("https://hub.docker.com/r/{}", parsed.repository));
+    if docs_url.is_none() {
+        docs_url = infer_docs_url(&parsed);
+        if docs_url.is_some() {
+            notes.push("source:docs-heuristic".to_string());
+        }
     }
 
     Ok(ImageProfile {
@@ -194,6 +197,26 @@ fn fetch_docker_hub_metadata(
     parsed: &ParsedImageRef,
     user_agent: &str,
 ) -> Result<DockerHubMetadata, AppError> {
+    let (digest, platforms) = if parsed.reference.starts_with("sha256:") {
+        (None, Vec::new())
+    } else {
+        fetch_docker_hub_tag_metadata(client, parsed, user_agent)?
+    };
+    let dockerfile_url = fetch_docker_hub_repo_dockerfile_url(client, parsed, user_agent)?;
+
+    Ok(DockerHubMetadata {
+        digest,
+        platforms,
+        docs_url: Some(format!("https://hub.docker.com/r/{}", parsed.repository)),
+        dockerfile_url,
+    })
+}
+
+fn fetch_docker_hub_tag_metadata(
+    client: &Client,
+    parsed: &ParsedImageRef,
+    user_agent: &str,
+) -> Result<(Option<String>, Vec<Platform>), AppError> {
     let tag_url = format!(
         "https://hub.docker.com/v2/repositories/{}/tags/{}",
         parsed.repository, parsed.tag
@@ -234,6 +257,14 @@ fn fetch_docker_hub_metadata(
         }
     }
 
+    Ok((digest, platforms))
+}
+
+fn fetch_docker_hub_repo_dockerfile_url(
+    client: &Client,
+    parsed: &ParsedImageRef,
+    user_agent: &str,
+) -> Result<Option<String>, AppError> {
     let repo_url = format!(
         "https://hub.docker.com/v2/repositories/{}",
         parsed.repository
@@ -248,12 +279,7 @@ fn fetch_docker_hub_metadata(
         })?;
 
     if !repo_response.status().is_success() {
-        return Ok(DockerHubMetadata {
-            digest,
-            platforms,
-            docs_url: Some(format!("https://hub.docker.com/r/{}", parsed.repository)),
-            dockerfile_url: None,
-        });
+        return Ok(None);
     }
 
     let repo_payload: DockerHubRepoResponse =
@@ -262,17 +288,29 @@ fn fetch_docker_hub_metadata(
             reason: format!("invalid docker hub repository payload: {error}"),
         })?;
 
-    let dockerfile_url = repo_payload
+    Ok(repo_payload
         .full_description
         .as_deref()
-        .and_then(extract_github_url);
+        .and_then(extract_github_url))
+}
 
-    Ok(DockerHubMetadata {
-        digest,
-        platforms,
-        docs_url: Some(format!("https://hub.docker.com/r/{}", parsed.repository)),
-        dockerfile_url,
-    })
+fn infer_docs_url(parsed: &ParsedImageRef) -> Option<String> {
+    if parsed.registry == "docker.io" {
+        return Some(format!("https://hub.docker.com/r/{}", parsed.repository));
+    }
+
+    if parsed.registry == "quay.io" {
+        return Some(format!("https://quay.io/repository/{}", parsed.repository));
+    }
+
+    if parsed.registry == "ghcr.io" {
+        let mut parts = parsed.repository.split('/');
+        if let (Some(owner), Some(repo)) = (parts.next(), parts.next()) {
+            return Some(format!("https://github.com/{owner}/{repo}"));
+        }
+    }
+
+    None
 }
 
 fn fetch_registry_manifest(
@@ -685,7 +723,7 @@ fn split_tag(repository: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_realm_url;
+    use super::{infer_docs_url, parse_image_reference, validate_realm_url};
 
     #[test]
     fn validate_realm_url_rejects_non_https() {
@@ -715,5 +753,24 @@ mod tests {
     fn validate_realm_url_rejects_private_ipv4_host() {
         let result = validate_realm_url("https://10.0.0.7/token", "10.0.0.7");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn infer_docs_url_returns_quay_repository_link() {
+        let parsed =
+            parse_image_reference("quay.io/org/service:1.0").expect("parse should succeed");
+        let docs = infer_docs_url(&parsed);
+        assert_eq!(
+            docs.as_deref(),
+            Some("https://quay.io/repository/org/service")
+        );
+    }
+
+    #[test]
+    fn infer_docs_url_returns_ghcr_github_link() {
+        let parsed =
+            parse_image_reference("ghcr.io/openfaas/gateway:latest").expect("parse should succeed");
+        let docs = infer_docs_url(&parsed);
+        assert_eq!(docs.as_deref(), Some("https://github.com/openfaas/gateway"));
     }
 }
