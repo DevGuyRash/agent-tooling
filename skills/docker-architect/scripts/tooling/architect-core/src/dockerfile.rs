@@ -101,8 +101,7 @@ impl ParsedDockerfile {
         let expected = keyword.to_ascii_uppercase();
         self.instructions[range]
             .iter()
-            .filter(|instruction| instruction.keyword == expected)
-            .next_back()
+            .rfind(|instruction| instruction.keyword == expected)
     }
 
     /// Return final-stage instructions matching a specific keyword.

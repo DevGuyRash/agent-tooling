@@ -1945,7 +1945,10 @@ fn protocol_json_flag_emits_compact_output() -> anyhow::Result<()> {
     ensure!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout)?;
-    ensure!(stdout.lines().count() == 1, "expected compact single-line JSON");
+    ensure!(
+        stdout.lines().count() == 1,
+        "expected compact single-line JSON"
+    );
     ensure!(stdout.starts_with("{\"title\":"));
     Ok(())
 }

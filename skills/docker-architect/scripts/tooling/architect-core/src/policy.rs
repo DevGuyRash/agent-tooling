@@ -373,7 +373,7 @@ pub fn evaluate_compose_policy(
         }
         for service_name in &service_names {
             let service_value = services
-                .get(&YamlValue::String(service_name.clone()))
+                .get(YamlValue::String(service_name.clone()))
                 .ok_or_else(|| AppError::InvalidInput {
                     reason: format!("missing service mapping for {service_name}"),
                 })?;
@@ -418,6 +418,12 @@ pub fn evaluate_dockerfile_policy(
     let parsed = ParsedDockerfile::parse(dockerfile_text)?;
     let mut violations = Vec::new();
     let mut patches = Vec::new();
+    let package_manager_re = Regex::new(
+        r"(?i)\b(apt-get|apt|apk|yum|dnf|microdnf|zypper|pacman)\b",
+    )
+    .map_err(|error| AppError::InvalidInput {
+        reason: format!("failed to compile package manager regex: {error}"),
+    })?;
 
     for rule in &policy.rules {
         match &rule.action {
@@ -524,12 +530,6 @@ pub fn evaluate_dockerfile_policy(
                     continue;
                 };
 
-                let package_manager_re =
-                    Regex::new(r"(?i)\b(apt-get|apt|apk|yum|dnf|microdnf|zypper|pacman)\b")
-                        .map_err(|error| AppError::InvalidInput {
-                            reason: format!("failed to compile package manager regex: {error}"),
-                        })?;
-
                 for instruction in parsed.final_stage_instructions_by_keyword("RUN") {
                     if let Some(match_) = package_manager_re.find(&instruction.arguments) {
                         violations.push(PolicyViolation {
@@ -575,7 +575,7 @@ pub fn apply_compose_patch_plan(
         })?;
 
     let services = root
-        .get_mut(&YamlValue::String("services".to_string()))
+        .get_mut(YamlValue::String("services".to_string()))
         .and_then(YamlValue::as_mapping_mut)
         .ok_or_else(|| AppError::InvalidInput {
             reason: "compose input must include a services mapping".to_string(),
@@ -588,7 +588,7 @@ pub fn apply_compose_patch_plan(
             })?;
 
         let service = services
-            .get_mut(&YamlValue::String(service_name.to_string()))
+            .get_mut(YamlValue::String(service_name.to_string()))
             .and_then(YamlValue::as_mapping_mut)
             .ok_or_else(|| AppError::InvalidInput {
                 reason: format!("compose service `{service_name}` not found"),
@@ -702,7 +702,7 @@ fn finalize_policy_output(
 fn get_services_mapping(document: &YamlValue) -> Result<&Mapping, AppError> {
     document
         .as_mapping()
-        .and_then(|mapping| mapping.get(&YamlValue::String("services".to_string())))
+        .and_then(|mapping| mapping.get(YamlValue::String("services".to_string())))
         .and_then(YamlValue::as_mapping)
         .ok_or_else(|| AppError::InvalidInput {
             reason: "compose input must include a services mapping".to_string(),
@@ -873,7 +873,7 @@ fn add_compose_violation(
 }
 
 fn get_service_key<'a>(service: &'a Mapping, key: &str) -> Option<&'a YamlValue> {
-    service.get(&YamlValue::String(key.to_string()))
+    service.get(YamlValue::String(key.to_string()))
 }
 
 fn yaml_to_json(value: &YamlValue) -> Result<JsonValue, AppError> {
