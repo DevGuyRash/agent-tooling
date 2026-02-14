@@ -56,10 +56,14 @@ OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
 
 QUERY='
-query($owner:String!, $repo:String!, $number:Int!) {
+query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           isResolved
           comments(first:10) {
@@ -82,14 +86,42 @@ echo "Repo: $REPO"
 echo "PR:   #$PR_NUMBER"
 echo ""
 
-# Pull unresolved threads and flatten comment nodes.
+# Pull unresolved threads and flatten comment nodes with pagination.
 # Do not suppress API errors; fail-fast is safer than false green output.
-RESULT="$(gh api graphql -F owner="$OWNER" -F repo="$NAME" -F number="$PR_NUMBER" -f query="$QUERY" --jq '
-  .data.repository.pullRequest.reviewThreads.nodes[]
-  | select(.isResolved == false)
-  | .comments.nodes[]
-  | {author: .author.login, path: .path, line: .line, url: .url, body: .body}
-')"
+RESULT=""
+AFTER=""
+while :; do
+  GH_ARGS=(
+    api graphql
+    -F owner="$OWNER"
+    -F repo="$NAME"
+    -F number="$PR_NUMBER"
+    -f query="$QUERY"
+  )
+  if [[ -n "$AFTER" ]]; then
+    GH_ARGS+=(-F after="$AFTER")
+  fi
+
+  PAGE_RESULT="$(gh "${GH_ARGS[@]}" --jq '
+    .data.repository.pullRequest.reviewThreads.nodes[]
+    | select(.isResolved == false)
+    | .comments.nodes[]
+    | {author: .author.login, path: .path, line: .line, url: .url, body: .body}
+  ')"
+  if [[ -n "$PAGE_RESULT" ]]; then
+    if [[ -n "$RESULT" ]]; then
+      RESULT+=$'\n'
+    fi
+    RESULT+="$PAGE_RESULT"
+  fi
+
+  HAS_NEXT="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')"
+  if [[ "$HAS_NEXT" != "true" ]]; then
+    break
+  fi
+  AFTER="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')"
+  [[ -n "$AFTER" && "$AFTER" != "null" ]] || die "pagination cursor missing while hasNextPage=true"
+done
 
 if [[ -z "$RESULT" ]]; then
   echo "✅ No unresolved inline review threads found."

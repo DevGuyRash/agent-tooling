@@ -40,5 +40,22 @@ fi
 OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
 
-gh api "repos/$OWNER/$NAME/labels?per_page=100" \
-  --jq '[ .[] | {name, color: (.color|ascii_downcase), description: (.description // "")} ] | sort_by(.name)'
+TMP_FILE="$(mktemp)"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+PAGE=1
+while :; do
+  PAGE_JSON="$(gh api "repos/$OWNER/$NAME/labels?per_page=100&page=$PAGE")"
+  COUNT="$(printf '%s' "$PAGE_JSON" | jq 'length')"
+  if [[ "$COUNT" -eq 0 ]]; then
+    break
+  fi
+  printf '%s\n' "$PAGE_JSON" >> "$TMP_FILE"
+  PAGE=$((PAGE + 1))
+done
+
+jq -s '
+  add
+  | [ .[] | {name, color: (.color|ascii_downcase), description: (.description // "")} ]
+  | sort_by(.name)
+' "$TMP_FILE"

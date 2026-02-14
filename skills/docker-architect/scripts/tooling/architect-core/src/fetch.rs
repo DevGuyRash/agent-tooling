@@ -241,6 +241,9 @@ pub fn fetch_image_profile(
         let scrape_url = format!("https://hub.docker.com/r/{}", parsed.repository);
         match scrape_hub_page(&client, &parsed.repository, user_agent) {
             Ok((scraped_digest, scraped_repo_url)) => {
+                if digest.is_none() {
+                    digest = scraped_digest.clone();
+                }
                 if dockerfile_url.is_none() {
                     dockerfile_url = scraped_repo_url;
                 }
