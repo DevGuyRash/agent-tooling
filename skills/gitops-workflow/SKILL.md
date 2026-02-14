@@ -1,0 +1,248 @@
+---
+name: gitops-workflow
+description: End-to-end GitOps workflow governance and automation: branching from the default branch, Conventional Commits, PR creation/update/merge hygiene, CI gating, squash-merge message + release notes structure, and helper scripts (git + GitHub CLI). Use when creating branches/commits/PRs/releases or enforcing team Git workflow standards.
+license: MIT
+compatibility: Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable.
+metadata:
+  author: DevGuyRash
+  version: "1.0.0"
+  category: development
+allowed-tools: Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write
+---
+
+# GitOps Workflow Toolkit
+
+This skill packages a **repeatable, auditable GitOps workflow** with **policy-as-code** options (templates + CI checks) and **automation helpers** (scripts). It is designed to be:
+
+- **Reusable**: works across repos with minimal assumptions.
+- **Scalable**: encourages automation and guardrails for larger teams.
+- **Modular**: short main instructions + deeper references + optional scripts/assets.
+- **Idiomatic**: follows the Open Agent Skills structure (SKILL.md + scripts/ + references/ + assets/). See: [references/REFERENCE.md](references/REFERENCE.md).
+
+---
+
+## When to use this skill
+
+Use this skill when the user asks you to:
+
+- start a new piece of work (create a branch)
+- write commits or enforce **Conventional Commits**
+- open, update, review, or merge a pull request
+- generate a squash-merge commit message or release notes
+- check unresolved PR review threads and CI status
+- set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
+
+---
+
+## Prerequisites
+
+- `git` available and the current working directory is a git repo.
+- For GitHub PR automation: `gh` authenticated (recommended).
+
+Optional helpers:
+
+- `python3` (for generator scripts)
+- `jq` (some `gh` JSON queries are easier with it, but not required)
+
+---
+
+## Non‑negotiable invariants
+
+Unless the repo explicitly defines otherwise, follow these rules:
+
+1. **Never commit directly to the default branch** (`main`/`master`/etc.).
+2. **Always branch from the default branch** (or explicitly designated base).
+3. **Use descriptive branch names**:  
+   `feat/<short-desc>`, `fix/<short-desc>`, `docs/<short-desc>`, `refactor/<short-desc>`, `test/<short-desc>`  
+   (Additional allowed types are supported; see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md).)
+4. **All commits use Conventional Commits** format.
+5. **PRs must link issues** using closing keywords when applicable (`Fixes #123`, `Closes #123`, …).
+6. **Before pushing updates to an existing PR** you MUST:
+   - read top-level PR comments
+   - read unresolved inline review threads
+   - check failing CI and plan fixes
+   - address or respond to every unresolved item (reply in the original thread)
+7. **Merging requires**:
+   - all review conversations resolved
+   - CI checks green
+   - at least one approving review (unless explicitly waived)
+   - PR author confirms ready
+   - branch is up to date / rebased
+8. **Default merge strategy is Squash & Merge**, using the structured squash body in
+   [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md).
+9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
+
+---
+
+## Quick start flow (agent checklist)
+
+When you are asked to “do Git work” in a repo, do this first:
+
+1. **Detect repo context**
+   - default branch name (prefer `origin/HEAD`)
+   - current branch, dirty working tree, remote URL
+   - existing workflow enforcement (PR template, CI, branch protections)
+2. **Choose the correct playbook**
+   - start work → Branching playbook
+   - open PR → PR creation playbook
+   - update PR → PR update playbook
+   - merge PR → Merge playbook
+   - release notes → Release notes playbook
+
+Detailed checklists live in:
+
+- [references/CHECKLISTS.md](references/CHECKLISTS.md)
+
+---
+
+## Playbook A: Start work (branching)
+
+### Goal
+
+Create a correctly named branch from the default branch, without accidentally working on `main`.
+
+### Steps
+
+1. Ensure working tree is clean:
+   - `git status --porcelain` should be empty (stash/commit/discard as needed).
+2. Sync the default branch:
+   - `git checkout <default-branch> && git pull`
+3. Create a branch:
+   - `git checkout -b <type>/<short-desc>`
+
+**Recommended helper** (handles default-branch detection + naming validation):
+
+- `scripts/start-branch.sh`
+
+Example:
+
+```bash
+bash scripts/start-branch.sh feat add-json-output
+```
+
+---
+
+## Playbook B: Commit work (Conventional Commits)
+
+### Rules
+
+Use:
+
+```md
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+- imperative mood, lowercase, no trailing period
+- scope is optional but preferred when it adds clarity
+- keep commits atomic and logically grouped
+
+See:
+
+- [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md)
+
+---
+
+## Playbook C: Create a PR
+
+### Steps (GitHub)
+
+1. Find/link relevant issues:
+   - `gh issue list --search "keyword"`
+   - Use `Fixes #123` / `Closes #123` in the PR body when appropriate
+2. Use the PR template structure:
+   - [assets/templates/pull-request-body.md](assets/templates/pull-request-body.md)
+3. Create PR using a **body file** (avoid literal `\n` rendering):
+   - `gh pr create --title "<title>" --body-file <file>`
+
+Optional helper:
+
+- `scripts/pr-create.sh` (generates a filled PR body skeleton and opens a PR)
+
+---
+
+## Playbook D: Update an existing PR (strict)
+
+Before pushing any new commits to a PR branch:
+
+1. Read top-level PR comments:
+   - `gh pr view <number> --comments`
+2. Read unresolved inline review threads:
+   - `bash scripts/pr-unresolved-threads.sh <number>`
+3. Review CI checks/logs:
+   - `gh pr checks <number> --watch`
+4. Address/respond to every unresolved item.
+   - Reply in the original thread (do NOT create a new top-level comment).
+5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
+
+Guidance for handling automated reviewer feedback:
+
+- [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
+
+---
+
+## Playbook E: Merge a PR (squash & merge)
+
+1. Confirm merge preconditions:
+   - conversations resolved
+   - CI green
+   - approvals present
+   - up to date with base branch
+2. Squash merge using the structured body template:
+   - [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md)
+3. If the PR has multiple commits, include the `## Commits` section.
+4. After merge, emit a commit receipt:
+   - `python3 scripts/receipt.py --branch <branch> --base <default-branch> --pr-url <url>`
+
+---
+
+## Playbook F: Draft release notes
+
+Use:
+
+- [assets/templates/release-notes.md](assets/templates/release-notes.md)
+
+Optional helper (builds a skeleton from git history):
+
+- `python3 scripts/generate-release-notes.py --since <tag-or-sha> --version vX.Y.Z`
+
+---
+
+## Optional enforcement (recommended)
+
+This skill includes ready-to-copy templates:
+
+- **PR title lint** (Conventional Commits for squash merge title)
+  - `assets/github/workflows/pr-title-lint.yml`
+- **Commit message lint** (commitlint)
+  - `assets/github/workflows/commitlint.yml`
+- **Release automation** (optional; Conventional Commits based)
+  - `assets/github/workflows/release-please.yml`
+
+See:
+
+- [references/ENFORCEMENT.md](references/ENFORCEMENT.md)
+- [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
+
+---
+
+## Output requirement: Commit receipts
+
+After any push/merge operation, include a receipt like:
+
+```markdown
+- **branch `<branch-name>`**
+  - `<SHA>` `<type>[(<scope>)]:` _<description>_
+  - `<SHA>` `<type>[(<scope>)]:` _<description>_
+```
+
+Helper:
+
+- `python3 scripts/receipt.py`
+
+Details:
+
+- [references/RECEIPTS.md](references/RECEIPTS.md)
