@@ -48,4 +48,7 @@ so they reliably trigger (per repo conventions).
 Examples:
 @your-bot
 @your-team
+Defaults:
+@codex
+@gemini-code-assist
 -->

@@ -1,13 +1,13 @@
 ---
 name: gitops-workflow
-description: End-to-end GitOps workflow governance and automation: branching from the default branch, Conventional Commits, PR creation/update/merge hygiene, CI gating, squash-merge message + release notes structure, and helper scripts (git + GitHub CLI). Use when creating branches/commits/PRs/releases or enforcing team Git workflow standards.
+description: "End-to-end GitOps workflow governance and automation: branching from the default branch, Conventional Commits, PR creation/update/merge hygiene, CI gating, squash-merge message + release notes structure, and helper scripts (git + GitHub CLI). Use when creating branches/commits/PRs/releases or enforcing team Git workflow standards."
 license: MIT
-compatibility: Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable.
+compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
   version: "1.0.0"
   category: development
-allowed-tools: Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write
+allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
 
 # GitOps Workflow Toolkit
