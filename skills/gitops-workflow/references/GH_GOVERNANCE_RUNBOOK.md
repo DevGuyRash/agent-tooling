@@ -35,6 +35,11 @@ python3 skills/gitops-workflow/scripts/repo-governance.py apply --policy <policy
 python3 skills/gitops-workflow/scripts/repo-governance.py audit --policy <policy> --repo <owner/repo> --format json
 ```
 
+Wrapper equivalent:
+```bash
+bash skills/gitops-workflow/scripts/governance-enforce.sh --policy <policy> --repo <owner/repo>
+```
+
 ## Exit codes
 
 - `0`: success / no drift

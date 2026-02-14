@@ -17,6 +17,7 @@ Governance-specific references:
 - [ENFORCEMENT.md](ENFORCEMENT.md)
 - [GOVERNANCE_POLICY.md](GOVERNANCE_POLICY.md)
 - [GH_GOVERNANCE_RUNBOOK.md](GH_GOVERNANCE_RUNBOOK.md)
+- [SCRIPT_ROUTING.md](SCRIPT_ROUTING.md)
 
 ## How to install
 

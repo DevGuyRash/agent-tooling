@@ -4,13 +4,14 @@ set -euo pipefail
 # pr-unresolved-threads.sh - List unresolved GitHub PR review threads (inline comments).
 #
 # Usage:
-#   bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo]
+#   bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]
 #
 # Requirements:
 #   - gh (GitHub CLI) authenticated
 #
 # Output:
-#   Prints unresolved threads in a readable format. Exits 0 even if threads exist.
+#   Prints unresolved threads in a readable format.
+#   Default exit is 0 even if threads exist; use --fail-on-unresolved to return 3.
 
 die() {
   echo "Error: $*" >&2
@@ -28,11 +29,16 @@ shift || true
 [[ -n "$PR_NUMBER" ]] || die "missing <pr_number>"
 
 REPO=""
+FAIL_ON_UNRESOLVED="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
       REPO="${2:-}"
       shift 2
+      ;;
+    --fail-on-unresolved)
+      FAIL_ON_UNRESOLVED="true"
+      shift
       ;;
     *)
       die "unknown argument: $1"
@@ -98,3 +104,7 @@ done
 
 echo ""
 echo "Tip: Copy a thread URL and reply in the original thread in GitHub UI when possible."
+
+if [[ "$FAIL_ON_UNRESOLVED" == "true" ]]; then
+  exit 3
+fi

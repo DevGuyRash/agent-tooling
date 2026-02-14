@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.1.0"
+  version: "1.2.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -73,6 +73,30 @@ Unless the repo explicitly defines otherwise, follow these rules:
    [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md).
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
+
+---
+
+## Script-first dispatch (mandatory)
+
+When a bundled script exists for the requested operation, use the script first.
+Direct ad hoc `gh`/`git` command sequences are fallback-only.
+
+| Task | Required script |
+| --- | --- |
+| Start branch from default branch | `bash scripts/start-branch.sh <type> <slug> [--issue <id>] [--base <branch>]` |
+| Create PR body + PR | `bash scripts/pr-create.sh --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
+| PR hygiene audit | `bash scripts/pr-audit.sh <pr_number>` |
+| Strict PR workflow (comments + unresolved threads + checks) | `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]` |
+| List unresolved inline threads | `bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
+| Reply to inline review comment | `bash scripts/pr-reply.sh <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Receipt generation | `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]` |
+| Governance enforcement sequence | `bash scripts/governance-enforce.sh [--policy <path>] [--repo owner/repo] [--no-write-codeowners]` |
+
+Exception protocol:
+- If you bypass a required script, include one line in your output: `Script bypass reason: <specific blocker>`.
+- Valid blockers are limited to missing script capability, incompatible inputs, or script runtime failure.
+
+Detailed routing notes: [references/SCRIPT_ROUTING.md](references/SCRIPT_ROUTING.md)
 
 ---
 
@@ -183,6 +207,7 @@ Before pushing any new commits to a PR branch:
 Guidance for handling automated reviewer feedback:
 
 - [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
+- `scripts/pr-workflow.sh` (strict deterministic wrapper)
 
 ---
 
@@ -234,6 +259,9 @@ Enforce repository governance as desired-state policy for branch/ruleset protect
    - `python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners`
 4. Audit final state:
    - `python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json`
+
+Wrapper helper:
+- `bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
 
 ### Bootstrap helpers
 

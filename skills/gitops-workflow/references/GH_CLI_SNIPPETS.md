@@ -40,7 +40,12 @@ Get raw diff / patch (plain text):
 
 Use the helper script:
 ```bash
-bash scripts/pr-unresolved-threads.sh <pr_number>
+bash scripts/pr-unresolved-threads.sh <pr_number> --fail-on-unresolved
+```
+
+Strict PR workflow wrapper:
+```bash
+bash scripts/pr-workflow.sh <pr_number> --watch-checks
 ```
 
 ## Reply to an inline comment thread
@@ -70,4 +75,9 @@ python3 scripts/repo-governance.py apply --policy assets/config/github-governanc
 Audit drift:
 ```bash
 python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json
+```
+
+Enforce full governance sequence:
+```bash
+bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
 ```

@@ -3,6 +3,7 @@
 This skill supports advisory templates, but governance controls should be applied as deterministic desired state using:
 
 - `scripts/repo-governance.py`
+- `scripts/governance-enforce.sh`
 - `assets/config/github-governance-policy.v1.json`
 
 Reference docs:
@@ -18,6 +19,12 @@ python3 scripts/repo-governance.py validate --policy assets/config/github-govern
 python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
 python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners
 python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json
+```
+
+Single-command wrapper:
+
+```bash
+bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
 ```
 
 Behavior:

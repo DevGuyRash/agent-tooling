@@ -2,6 +2,11 @@
 
 Use these checklists to keep work consistent and auditable. If a repo already has a stricter version, follow the stricter rules.
 
+Script-first policy:
+- If a checklist step has a mapped script, use the script first.
+- If you bypass the script, record: `Script bypass reason: <specific blocker>`.
+- Routing reference: [SCRIPT_ROUTING.md](SCRIPT_ROUTING.md).
+
 ---
 
 ## A) Start work checklist (branching)
@@ -49,10 +54,12 @@ Recommended:
 
 Before pushing *any* updates to a PR:
 
+- [ ] Run strict PR wrapper first:
+  - `bash scripts/pr-workflow.sh <number> --watch-checks`
 - [ ] Read top-level comments:
   - `gh pr view <number> --comments`
 - [ ] Read unresolved inline review threads:
-  - `bash scripts/pr-unresolved-threads.sh <number>`
+  - `bash scripts/pr-unresolved-threads.sh <number> --fail-on-unresolved`
 - [ ] Check CI and logs:
   - `gh pr checks <number> --watch`
 - [ ] Identify every unresolved request and either:
@@ -86,3 +93,13 @@ Before pushing *any* updates to a PR:
 
 Template:
 - [assets/templates/release-notes.md](../assets/templates/release-notes.md)
+
+---
+
+## G) Governance enforcement checklist (strict)
+
+- [ ] Run deterministic wrapper sequence:
+  - `bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
+- [ ] Confirm `validate` succeeded before apply.
+- [ ] Confirm `plan` output reviewed before apply.
+- [ ] Confirm `audit` has no drift after apply.
