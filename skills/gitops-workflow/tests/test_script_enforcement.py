@@ -29,6 +29,7 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "governance-enforce.sh",
             SCRIPTS_DIR / "pr-unresolved-threads.sh",
+            SCRIPTS_DIR / "pr-resolve-threads.sh",
         ]
         for target in targets:
             proc = run(["bash", "-n", str(target)], cwd=ROOT)
@@ -200,6 +201,79 @@ class LabelsExportPaginationTests(unittest.TestCase):
             self.assertIn('"name": "z-last"', proc.stdout)
             self.assertLess(proc.stdout.find('"name": "a-first"'), proc.stdout.find('"name": "m-mid"'))
             self.assertLess(proc.stdout.find('"name": "m-mid"'), proc.stdout.find('"name": "z-last"'))
+
+
+class ResolveThreadsScriptTests(unittest.TestCase):
+    def test_resolve_threads_dry_run_all(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" && \"$2\" == \"graphql\" ]]; then\n"
+                "  has_after=\"false\"\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      if [[ \"${!next}\" == after=* ]]; then\n"
+                "        has_after=\"true\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  jq_expr=\"\"\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      jq_expr=\"${!next}\"\n"
+                "      break\n"
+                "    fi\n"
+                "  done\n"
+                "  if [[ \"$jq_expr\" == *\"pageInfo.hasNextPage\"* ]]; then\n"
+                "    if [[ \"$has_after\" == \"false\" ]]; then printf 'true\\n'; else printf 'false\\n'; fi\n"
+                "  elif [[ \"$jq_expr\" == *\"pageInfo.endCursor\"* ]]; then\n"
+                "    printf 'CURSOR_1\\n'\n"
+                "  elif [[ \"$jq_expr\" == *\"reviewThreads.nodes\"* ]]; then\n"
+                "    if [[ \"$has_after\" == \"false\" ]]; then\n"
+                "      printf 'PRRT_1\\tauthor-a\\tfileA\\thttp://example/1\\n'\n"
+                "    else\n"
+                "      printf 'PRRT_2\\tauthor-b\\tfileB\\thttp://example/2\\n'\n"
+                "    fi\n"
+                "  else\n"
+                "    printf '\\n'\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "printf '\\n'\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-resolve-threads.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                    "--all",
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Selected unresolved threads: 2", proc.stdout)
+            self.assertIn("DRY-RUN resolve thread: PRRT_1", proc.stdout)
+            self.assertIn("DRY-RUN resolve thread: PRRT_2", proc.stdout)
 
 
 if __name__ == "__main__":

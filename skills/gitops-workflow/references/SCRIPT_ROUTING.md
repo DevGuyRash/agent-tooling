@@ -25,6 +25,9 @@ When bypassing, record:
   - `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]`
 - Unresolved inline thread check:
   - `bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
+- Resolve unresolved inline threads:
+  - `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]`
+  - `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
   - `bash scripts/pr-reply.sh <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
 - Receipt generation:

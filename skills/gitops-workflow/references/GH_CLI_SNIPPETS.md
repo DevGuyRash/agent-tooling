@@ -48,6 +48,11 @@ Strict PR workflow wrapper:
 bash scripts/pr-workflow.sh <pr_number> --watch-checks
 ```
 
+Resolve unresolved inline threads:
+```bash
+bash scripts/pr-resolve-threads.sh <pr_number> --all
+```
+
 ## Reply to an inline comment thread
 
 If you only have a comment id and need to reply via API:

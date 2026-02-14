@@ -88,6 +88,8 @@ Direct ad hoc `gh`/`git` command sequences are fallback-only.
 | PR hygiene audit | `bash scripts/pr-audit.sh <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]` |
 | List unresolved inline threads | `bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
+| Resolve unresolved inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
+| Resolve specific inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
 | Reply to inline review comment | `bash scripts/pr-reply.sh <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
 | Receipt generation | `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance enforcement sequence | `bash scripts/governance-enforce.sh [--policy <path>] [--repo owner/repo] [--no-write-codeowners]` |
