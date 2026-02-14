@@ -1,0 +1,37 @@
+version: 1
+domain: compose
+strictness: enforcing
+rules:
+  - id: AC-CMP-READONLY
+    severity: block
+    action: ensure_key
+    target: service.*
+    key: read_only
+    value: true
+    rationale: Immutable root filesystem is mandatory.
+  - id: AC-CMP-CAPDROP
+    severity: block
+    action: ensure_list_contains
+    target: service.*
+    key: cap_drop
+    value: ALL
+    rationale: Capabilities must be explicitly whitelisted.
+  - id: AC-CMP-NNP
+    severity: block
+    action: ensure_list_contains
+    target: service.*
+    key: security_opt
+    value: no-new-privileges:true
+    rationale: Privilege escalation controls are mandatory.
+  - id: AC-CMP-DIGEST
+    severity: block
+    action: require_image_digest
+    target: service.*
+    key: image
+    rationale: Deterministic deployment requires digest pinning.
+  - id: AC-CMP-USER
+    severity: block
+    action: require_non_root_user
+    target: service.*
+    key: user
+    rationale: Enforcing mode requires non-root runtime identity.

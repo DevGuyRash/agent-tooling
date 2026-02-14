@@ -1,0 +1,31 @@
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-READONLY
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: read_only
+    value: true
+    rationale: Immutable root filesystem by default.
+  - id: AC-CMP-CAPDROP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: cap_drop
+    value: ALL
+    rationale: Drop capabilities unless explicitly required.
+  - id: AC-CMP-NNP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: security_opt
+    value: no-new-privileges:true
+    rationale: Prevent privilege escalation in runtime.
+  - id: AC-CMP-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+    rationale: Non-root runtime posture for services.

@@ -1,0 +1,29 @@
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-MULTISTAGE
+    severity: block
+    action: require_multi_stage
+    target: dockerfile
+    rationale: Runtime artifacts must come from dedicated stage outputs.
+  - id: AC-DF-USER
+    severity: block
+    action: require_non_root_user
+    target: final_stage
+    key: USER
+    rationale: Runtime image must run as non-root by default.
+  - id: AC-DF-PACKAGE-MGR
+    severity: block
+    action: forbid_runtime_package_manager
+    target: final_stage
+    rationale: Final stage should avoid mutable package-manager installs.
+  - id: AC-DF-OCI-LABELS
+    severity: block
+    action: require_labels
+    target: final_stage
+    labels:
+      - org.opencontainers.image.source
+      - org.opencontainers.image.revision
+      - org.opencontainers.image.licenses
+    rationale: OCI traceability labels are mandatory for release images.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Docker Architect"
+  short_description: "Deterministic Docker Compose and image architecture"
+  default_prompt: "Analyze Docker deployment and image requirements, then produce deterministic architecture outputs for Compose/Swarm and Docker image supply-chain workflows with strict traceability."

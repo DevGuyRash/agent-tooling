@@ -1,0 +1,24 @@
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-MULTISTAGE
+    severity: warn
+    action: require_multi_stage
+    target: dockerfile
+    rationale: Build dependencies should be isolated from runtime layers.
+  - id: AC-DF-USER
+    severity: warn
+    action: require_non_root_user
+    target: final_stage
+    key: USER
+    rationale: Runtime image should not default to root.
+  - id: AC-DF-OCI-LABELS
+    severity: warn
+    action: require_labels
+    target: final_stage
+    labels:
+      - org.opencontainers.image.source
+      - org.opencontainers.image.revision
+      - org.opencontainers.image.licenses
+    rationale: Supply-chain traceability metadata should be present.
