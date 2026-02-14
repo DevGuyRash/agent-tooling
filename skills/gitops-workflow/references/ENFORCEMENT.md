@@ -1,53 +1,59 @@
-# Enforcement & Automation (policy-as-code)
+# Enforcement & Automation (Deterministic by Default)
 
-This skill is usable without automation, but scales best with enforcement layered in CI + repo settings.
+This skill supports advisory templates, but governance controls should be applied as deterministic desired state using:
 
-## 1) Repo settings (GitHub)
+- `scripts/repo-governance.py`
+- `assets/config/github-governance-policy.v1.json`
 
-Recommended branch protection for the default branch:
+Reference docs:
+- [GOVERNANCE_POLICY.md](GOVERNANCE_POLICY.md)
+- [GH_GOVERNANCE_RUNBOOK.md](GH_GOVERNANCE_RUNBOOK.md)
 
-- Require PRs before merging
-- Require status checks to pass
-- Require conversation resolution
-- Require at least 1 approving review
-- Dismiss stale approvals when new commits are pushed (team preference)
-- Require linear history (optional; recommended if you want strict rebases)
-- Restrict who can push to the protected branch
+## 1) Required flow: validate -> plan -> apply -> audit
 
-Tip: If you use GitHub merge queues, ensure required workflows also run on `merge_group` events where applicable.
+Run in this order for every governance change:
 
-## 2) PR title lint (squash merge safety)
+```bash
+python3 scripts/repo-governance.py validate --policy assets/config/github-governance-policy.v1.json
+python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
+python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners
+python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json
+```
 
-If you squash merge and GitHub uses PR title as the squash commit message, PR titles must be Conventional Commits.
+Behavior:
+- `plan`/`audit` exit `3` when drift exists.
+- `apply` is fail-closed and exits non-zero on partial failure.
+- `apply` requires `--write-codeowners` when CODEOWNERS drift exists.
 
-Template workflow:
+## 2) Deterministic controls covered
+
+Policy reconciliation manages:
+- rulesets (or legacy branch protection fallback when enabled)
+- required checks
+- CODEOWNERS content (local file)
+- exact label set membership (create/update/delete)
+
+## 3) Required checks discovery
+
+To seed policy with real check context names:
+
+```bash
+bash scripts/required-checks-discover.sh --repo <owner/repo>
+```
+
+## 4) Label baseline export
+
+To export current labels into policy format:
+
+```bash
+bash scripts/labels-export.sh --repo <owner/repo>
+```
+
+## 5) CI templates remain useful
+
+These workflow templates still provide enforcement signal consumed by branch/ruleset protections:
 - `assets/github/workflows/pr-title-lint.yml`
-
-This uses `amannn/action-semantic-pull-request@v6` (or a compatible replacement).
-
-## 3) Commit message lint (CI)
-
-Local hooks can be bypassed. CI enforcement is the reliable backstop.
-
-Template workflow:
 - `assets/github/workflows/commitlint.yml`
+- `assets/github/workflows/release-please.yml` (optional release automation)
 
-This uses `wagoid/commitlint-github-action@v6`.
-
-## 4) Release automation (optional)
-
-If your release process is based on Conventional Commits, you may use `release-please` to automate changelog + release PRs.
-
-Template workflow:
-- `assets/github/workflows/release-please.yml`
-
-Note: `release-please` generates release notes in its own format. If you require the custom release body structure from this skill, you can:
-- generate your custom notes using `scripts/generate-release-notes.py`, or
-- post-process release-please output.
-
-## 5) Local developer hooks (optional)
-
-Option A (Node repos): Husky + commitlint  
-Option B (polyglot repos): pre-commit + a conventional commit checker
-
-This skill ships only templates; actual adoption depends on repo language/tooling.
+Tip: if using merge queue, ensure required workflows also run on `merge_group`.

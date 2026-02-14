@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.0.0"
+  version: "1.1.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -31,6 +31,7 @@ Use this skill when the user asks you to:
 - generate a squash-merge commit message or release notes
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
+- reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
 
 ---
 
@@ -71,6 +72,7 @@ Unless the repo explicitly defines otherwise, follow these rules:
 8. **Default merge strategy is Squash & Merge**, using the structured squash body in
    [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md).
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
+10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
 
 ---
 
@@ -208,6 +210,43 @@ Use:
 Optional helper (builds a skeleton from git history):
 
 - `python3 scripts/generate-release-notes.py --since <tag-or-sha> --version vX.Y.Z`
+
+---
+
+## Playbook G: Deterministic governance reconciliation
+
+### Goal
+
+Enforce repository governance as desired-state policy for branch/ruleset protections, required checks, CODEOWNERS, and labels.
+
+### Canonical policy file
+
+- `assets/config/github-governance-policy.v1.json`
+- Contract details: [references/GOVERNANCE_POLICY.md](references/GOVERNANCE_POLICY.md)
+
+### Strict command sequence
+
+1. Validate policy:
+   - `python3 scripts/repo-governance.py validate --policy assets/config/github-governance-policy.v1.json`
+2. Plan drift (non-mutating):
+   - `python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
+3. Apply reconciliation (mutating):
+   - `python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners`
+4. Audit final state:
+   - `python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json`
+
+### Bootstrap helpers
+
+- Discover candidate required checks:
+  - `bash scripts/required-checks-discover.sh --repo <owner/repo>`
+- Export existing labels:
+  - `bash scripts/labels-export.sh --repo <owner/repo>`
+- Lint CODEOWNERS ordering/tokens:
+  - `python3 scripts/codeowners-lint.py --path .github/CODEOWNERS`
+
+Operational details:
+- [references/ENFORCEMENT.md](references/ENFORCEMENT.md)
+- [references/GH_GOVERNANCE_RUNBOOK.md](references/GH_GOVERNANCE_RUNBOOK.md)
 
 ---
 

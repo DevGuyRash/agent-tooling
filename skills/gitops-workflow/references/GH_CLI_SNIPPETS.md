@@ -49,3 +49,25 @@ If you only have a comment id and need to reply via API:
 ```bash
 bash scripts/pr-reply.sh <comment_id> "Reply text"
 ```
+
+## Deterministic governance
+
+Validate policy:
+```bash
+python3 scripts/repo-governance.py validate --policy assets/config/github-governance-policy.v1.json
+```
+
+Plan drift:
+```bash
+python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
+```
+
+Apply policy:
+```bash
+python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners
+```
+
+Audit drift:
+```bash
+python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json
+```

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "github-governance/v1",
+  "repository": {
+    "owner": "acme",
+    "name": "widget",
+    "defaultBranch": "main"
+  },
+  "rulesets": [],
+  "requiredChecks": [
+    "z-check",
+    "a-check"
+  ],
+  "codeowners": {
+    "path": ".github/CODEOWNERS",
+    "entries": [
+      {
+        "pattern": "*",
+        "owners": [
+          "@acme/maintainers"
+        ]
+      }
+    ]
+  },
+  "labels": [
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Bug"
+    },
+    {
+      "name": "enhancement",
+      "color": "a2eeef",
+      "description": "Feature"
+    }
+  ],
+  "options": {
+    "allowLegacyBranchProtection": false,
+    "rulesetsExact": true,
+    "managedRulesetName": "default-branch-protection",
+    "requiredApprovingReviewCount": 1,
+    "dismissStaleReviews": true,
+    "requireCodeOwnerReview": true,
+    "requireLastPushApproval": false,
+    "requireLinearHistory": true,
+    "requireSignedCommits": false,
+    "blockForcePushes": true
+  },
+  "bypass": []
+}

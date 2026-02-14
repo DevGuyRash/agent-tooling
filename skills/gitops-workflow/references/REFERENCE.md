@@ -13,6 +13,11 @@ This skill’s structure:
 - `scripts/` – optional automation helpers (git + GitHub CLI + Python).
 - `assets/` – copy/paste templates (PR body, squash message, release notes, CI workflows).
 
+Governance-specific references:
+- [ENFORCEMENT.md](ENFORCEMENT.md)
+- [GOVERNANCE_POLICY.md](GOVERNANCE_POLICY.md)
+- [GH_GOVERNANCE_RUNBOOK.md](GH_GOVERNANCE_RUNBOOK.md)
+
 ## How to install
 
 Copy this directory into a skills-discovery location supported by your agent product, for example:
