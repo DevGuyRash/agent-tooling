@@ -10,11 +10,50 @@ Two workflows: **Reviewer** (perform adversarial code review) and **Applicator**
 
 Both use the `mpcr` CLI at `<skills-file-root>/scripts/mpcr` for session coordination.
 
+## Role modes (HIGHEST PRIORITY)
+
+You SHALL determine your role mode BEFORE choosing Reviewer vs Applicator workflow.
+
+### WORKER (subagent) mode
+
+IF the incoming prompt includes any of:
+- `## Proof Packet:`
+- `MPCR_DISPATCH_ROLE=`
+- explicit instruction that you are a subagent or worker
+
+THEN you are in WORKER mode.
+
+In WORKER mode:
+- You SHALL NOT run any `mpcr` commands (`register`, `update`, `note`, `finalize`, or session mutations).
+- You SHALL NOT run repo-wide `git diff` or `git show` patch commands.
+- You SHALL review ONLY the assigned files and minimal surrounding context needed for proof.
+- You SHALL return EXACTLY one Proof Packet and NOTHING else.
+
+### ORCHESTRATOR (multi-agent coordinator) mode
+
+WHEN multi-agent mode is enabled (diff > 500 lines OR the user requests multi-agent)
+AND you are not in WORKER mode,
+THEN you are the ORCHESTRATOR.
+
+In ORCHESTRATOR mode:
+- You SHALL follow `mpcr protocol orchestrator`.
+- You SHALL NOT fetch or print full patch diffs. You MAY only use diff summary commands.
+- You SHALL NOT perform proofs yourself; workers do.
+- You SHALL dispatch workers with assigned file lists and focus areas, not full diffs or full files.
+- You SHALL send workers a fresh, minimal prompt; you SHALL NOT forward full conversation history.
+
+## Token / context discipline (all modes)
+
+- You SHALL NOT paste raw diffs into chat unless explicitly requested by the user.
+- You SHALL treat large tool outputs as toxic and prefer narrow commands (`--stat`, `--name-only`, `--numstat`, `head`, `sed -n`).
+- When quoting code, you SHALL keep excerpts to <= 12 lines and <= 3 excerpts total.
+- In multi-agent mode, worker prompts SHALL include scope and acceptance criteria only, not repository-wide context.
+
 ## Workflow selection
 
 You SHALL infer the workflow from context. You SHALL NOT ask the user which workflow to use.
 
-- WHEN a diff, PR/MR, patch, or uncommitted changes are present → you SHALL use **Reviewer**.
+- WHEN a diff, PR/MR, patch, or uncommitted changes are present → you SHALL use **Reviewer** (unless WORKER or ORCHESTRATOR mode applies).
 - WHEN a review report exists or the user references review findings → you SHALL use **Applicator**.
 - WHEN both reviewing AND applying → you SHALL run **Reviewer** first, then **Applicator**.
 - IF genuinely ambiguous (e.g., both a report and uncommitted changes exist) → you SHALL ask ONE clarifying question.

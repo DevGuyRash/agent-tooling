@@ -31,8 +31,9 @@ use time::{Date, Month, OffsetDateTime};
     long_about = "UACRP code review coordination utilities.\n\n\
 `mpcr` manages a shared *session directory* containing `_session.json`, a lock file, and reviewer report markdown files.\n\
 All writers acquire `_session.json.lock` and update `_session.json` via an atomic temp-file replace to avoid races.\n\n\
-Use `--json` for machine-readable output.\n\
-Without `--json`, most commands print compact one-line JSON; `id` commands print raw ids and successful mutations print `ok`.",
+Use `--json` for machine-readable output (compact).\n\
+Use `--json-pretty` for human-readable JSON.\n\
+Without `--json` or `--json-pretty`, most commands print compact one-line JSON; `id` commands print raw ids and successful mutations print `ok`.",
     after_long_help = r#"Session directory layout (relative to repo root):
   .local/reports/code_reviews/YYYY-MM-DD/
     _session.json
@@ -69,9 +70,16 @@ struct Cli {
         long,
         global = true,
         default_value_t = false,
-        help = "Emit pretty JSON (suitable for scripting)."
+        help = "Emit compact JSON output."
     )]
     json: bool,
+    #[arg(
+        long,
+        global = true,
+        default_value_t = false,
+        help = "Emit pretty JSON output (implies --json)."
+    )]
+    json_pretty: bool,
     #[arg(
         long,
         global = true,
@@ -787,7 +795,8 @@ fn main() {
 #[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let json = cli.json;
+    let json = cli.json || cli.json_pretty;
+    let json_pretty = cli.json_pretty;
     let use_env = cli.use_env;
     let now = OffsetDateTime::now_utc();
 
@@ -796,7 +805,7 @@ fn run() -> anyhow::Result<()> {
             IdCommands::Id8 => {
                 let out = id::random_id8()?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{out}");
                 }
@@ -804,7 +813,7 @@ fn run() -> anyhow::Result<()> {
             IdCommands::Hex { bytes } => {
                 let out = id::random_hex_id(bytes)?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{out}");
                 }
@@ -821,12 +830,12 @@ fn run() -> anyhow::Result<()> {
                 let cfg = LockConfig { max_retries };
                 let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
                 std::mem::forget(guard);
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
             LockCommands::Release { session, owner } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 lock::release_lock(&resolved.session_dir, owner)?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
         },
 
@@ -834,17 +843,38 @@ fn run() -> anyhow::Result<()> {
             SessionCommands::Show { session } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let session = load_session(&SessionLocator::new(resolved.session_dir))?;
-                write_result(json, &session)?;
+                write_result(json, json_pretty, &session)?;
             }
             SessionCommands::Reports { command } => match command {
                 ReportsCommands::Open(args) => {
-                    handle_reports(use_env, json, now.date(), ReportsView::Open, args)?;
+                    handle_reports(
+                        use_env,
+                        json,
+                        json_pretty,
+                        now.date(),
+                        ReportsView::Open,
+                        args,
+                    )?;
                 }
                 ReportsCommands::Closed(args) => {
-                    handle_reports(use_env, json, now.date(), ReportsView::Closed, args)?;
+                    handle_reports(
+                        use_env,
+                        json,
+                        json_pretty,
+                        now.date(),
+                        ReportsView::Closed,
+                        args,
+                    )?;
                 }
                 ReportsCommands::InProgress(args) => {
-                    handle_reports(use_env, json, now.date(), ReportsView::InProgress, args)?;
+                    handle_reports(
+                        use_env,
+                        json,
+                        json_pretty,
+                        now.date(),
+                        ReportsView::InProgress,
+                        args,
+                    )?;
                 }
             },
         },
@@ -902,9 +932,9 @@ fn run() -> anyhow::Result<()> {
                     Some(EmitEnvFormat::Sh) => write_env_sh(&env_pairs)?,
                     None => {
                         if print_env {
-                            write_env_kv(json, &env_pairs)?;
+                            write_env_kv(json, json_pretty, &env_pairs)?;
                         } else {
-                            write_result(json, &res)?;
+                            write_result(json, json_pretty, &res)?;
                         }
                     }
                 }
@@ -933,7 +963,7 @@ fn run() -> anyhow::Result<()> {
                     count,
                     now,
                 })?;
-                write_result(json, &res)?;
+                write_result(json, json_pretty, &res)?;
             }
 
             ReviewerCommands::Update {
@@ -963,7 +993,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                 };
                 update_review(&params)?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
 
             ReviewerCommands::Finalize {
@@ -1002,7 +1032,7 @@ fn run() -> anyhow::Result<()> {
                     report_markdown,
                     now,
                 })?;
-                write_result(json, &res)?;
+                write_result(json, json_pretty, &res)?;
             }
 
             ReviewerCommands::Note {
@@ -1029,7 +1059,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                     lock_owner: reviewer_id,
                 })?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
         },
 
@@ -1059,7 +1089,7 @@ fn run() -> anyhow::Result<()> {
                     lock_owner,
                 };
                 set_initiator_status(&params)?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
 
             ApplicatorCommands::Note {
@@ -1091,7 +1121,7 @@ fn run() -> anyhow::Result<()> {
                     now,
                     lock_owner,
                 })?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
 
             ApplicatorCommands::Wait {
@@ -1107,7 +1137,7 @@ fn run() -> anyhow::Result<()> {
                     target_ref.as_deref(),
                     session_id.as_deref(),
                 )?;
-                write_ok(json)?;
+                write_ok(json, json_pretty)?;
             }
         },
 
@@ -1115,7 +1145,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::Reviewer { phase } => {
                 let out = protocol::reviewer_phase(&phase)?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1123,7 +1153,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::Applicator { phase } => {
                 let out = protocol::applicator_phase(&phase)?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1131,7 +1161,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::Orchestrator => {
                 let out = protocol::orchestrator()?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1139,7 +1169,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::Domains => {
                 let out = protocol::domains()?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1147,7 +1177,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::ReportTemplate { scale } => {
                 let out = protocol::report_template(&scale)?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1155,7 +1185,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::Dispatch { role } => {
                 let out = protocol::dispatch(&role)?;
                 if json {
-                    write_json(&out)?;
+                    write_json(json_pretty, &out)?;
                 } else {
                     println!("{}", out.content.trim());
                 }
@@ -1163,7 +1193,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::List => {
                 let entries = protocol::list_entries()?;
                 if json {
-                    write_json(&entries)?;
+                    write_json(json_pretty, &entries)?;
                 } else {
                     for entry in &entries {
                         println!("{:<16} {:<24} {}", entry.category, entry.key, entry.command);
@@ -1273,18 +1303,23 @@ fn read_stdin_to_string() -> anyhow::Result<String> {
     Ok(buf)
 }
 
-fn write_ok(json: bool) -> anyhow::Result<()> {
+fn write_ok(json: bool, pretty: bool) -> anyhow::Result<()> {
     if json {
-        write_result(true, &OkResult { ok: true })
+        write_result(true, pretty, &OkResult { ok: true })
     } else {
         println!("ok");
         Ok(())
     }
 }
 
-fn write_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
+fn write_json<T: Serialize>(pretty: bool, value: &T) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
-    let raw = serde_json::to_string_pretty(value).context("serialize JSON")?;
+    let raw = if pretty {
+        serde_json::to_string_pretty(value)
+    } else {
+        serde_json::to_string(value)
+    }
+    .context("serialize JSON")?;
     stdout.write_all(raw.as_bytes()).context("write stdout")?;
     stdout.write_all(b"\n").context("write stdout newline")?;
     Ok(())
@@ -1299,13 +1334,13 @@ fn write_env_sh(pairs: &[(&str, &str)]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn write_env_kv(json: bool, pairs: &[(&str, &str)]) -> anyhow::Result<()> {
+fn write_env_kv(json: bool, pretty: bool, pairs: &[(&str, &str)]) -> anyhow::Result<()> {
     if json {
         let mut map = serde_json::Map::with_capacity(pairs.len());
         for (key, value) in pairs {
             map.insert((*key).to_string(), Value::String((*value).to_string()));
         }
-        return write_json(&Value::Object(map));
+        return write_json(pretty, &Value::Object(map));
     }
 
     let mut stdout = std::io::stdout();
@@ -1332,9 +1367,9 @@ fn sh_single_quote(raw: &str) -> String {
     out
 }
 
-fn write_result<T: Serialize>(json: bool, value: &T) -> anyhow::Result<()> {
+fn write_result<T: Serialize>(json: bool, pretty: bool, value: &T) -> anyhow::Result<()> {
     if json {
-        write_json(value)
+        write_json(pretty, value)
     } else {
         // human output: best-effort JSON on one line.
         println!("{}", serde_json::to_string(value).context("serialize")?);
@@ -1345,6 +1380,7 @@ fn write_result<T: Serialize>(json: bool, value: &T) -> anyhow::Result<()> {
 fn handle_reports(
     use_env: bool,
     json: bool,
+    json_pretty: bool,
     default_date: Date,
     view: ReportsView,
     args: ReportsArgs,
@@ -1386,12 +1422,12 @@ fn handle_reports(
             matching_reviews: 0,
             reviews: Vec::new(),
         };
-        return write_result(json, &result);
+        return write_result(json, json_pretty, &result);
     }
 
     let session_data = load_session(&session)?;
     let result = collect_reports(&session_data, &session, view, filters, options);
-    write_result(json, &result)
+    write_result(json, json_pretty, &result)
 }
 
 fn opt_env_string(use_env: bool, key: &str) -> Option<String> {

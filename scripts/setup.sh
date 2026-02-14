@@ -75,6 +75,18 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 0
 fi
 
+compose_skip_flag="${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}"
+if [ -z "${compose_skip_flag}" ] && [ -n "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" ]; then
+  compose_skip_flag="${AGENT_SKILLS_SKIP_PCA_BUILD}"
+  log "setup" "warning: AGENT_SKILLS_SKIP_PCA_BUILD is deprecated; use AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD"
+fi
+
+image_skip_flag="${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}"
+if [ -z "${image_skip_flag}" ] && [ -n "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" ]; then
+  image_skip_flag="${AGENT_SKILLS_SKIP_PIASCS_BUILD}"
+  log "setup" "warning: AGENT_SKILLS_SKIP_PIASCS_BUILD is deprecated; use AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD"
+fi
+
 build_rust_skill \
   "setup" \
   "mpcr" \
@@ -85,18 +97,18 @@ build_rust_skill \
 
 build_rust_skill \
   "setup" \
-  "pca" \
-  "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" \
-  "AGENT_SKILLS_SKIP_PCA_BUILD" \
-  "skills/principal-architect-tooling/pca/Cargo.toml" \
+  "docker-architect-compose" \
+  "${compose_skip_flag}" \
+  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "skills/docker-architect/scripts/tooling/docker-architect-compose/Cargo.toml" \
   "prebuilding"
 
 build_rust_skill \
   "setup" \
-  "piascs" \
-  "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" \
-  "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
-  "skills/principal-architect-tooling/piascs/Cargo.toml" \
+  "docker-architect-image" \
+  "${image_skip_flag}" \
+  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "skills/docker-architect/scripts/tooling/docker-architect-image/Cargo.toml" \
   "prebuilding"
 
 log "setup" "done"
