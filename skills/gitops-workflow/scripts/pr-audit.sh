@@ -29,4 +29,4 @@ gh pr checks "$PR" || true
 echo ""
 
 echo "== Unresolved inline threads =="
-bash "$(dirname "$0")/pr-unresolved-threads.sh" "$PR" || true
+bash "$(dirname "$0")/pr-unresolved-threads.sh" "$PR"

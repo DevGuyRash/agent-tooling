@@ -76,13 +76,14 @@ echo "Repo: $REPO"
 echo "PR:   #$PR_NUMBER"
 echo ""
 
-# Pull unresolved threads and flatten comment nodes
+# Pull unresolved threads and flatten comment nodes.
+# Do not suppress API errors; fail-fast is safer than false green output.
 RESULT="$(gh api graphql -F owner="$OWNER" -F repo="$NAME" -F number="$PR_NUMBER" -f query="$QUERY" --jq '
   .data.repository.pullRequest.reviewThreads.nodes[]
   | select(.isResolved == false)
   | .comments.nodes[]
   | {author: .author.login, path: .path, line: .line, url: .url, body: .body}
-' 2>/dev/null || true)"
+')"
 
 if [[ -z "$RESULT" ]]; then
   echo "✅ No unresolved inline review threads found."

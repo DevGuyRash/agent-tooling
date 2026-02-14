@@ -83,14 +83,23 @@ def get_current_branch() -> str:
     return branch
 
 
-def get_merge_base(base_ref: str) -> str:
-    return run(["git", "merge-base", "HEAD", base_ref])
+def get_merge_base(branch_ref: str, base_ref: str) -> str:
+    return run(["git", "merge-base", branch_ref, base_ref])
 
 
-def get_commits_since(base_commit: str, max_count: int) -> List[Commit]:
+def get_commits_since(base_commit: str, branch_ref: str, max_count: int) -> List[Commit]:
     # --reverse shows oldest-first which reads nicer in receipts
     fmt = "%h\t%s"
-    raw = run(["git", "log", "--reverse", f"--max-count={max_count}", f"--pretty=format:{fmt}", f"{base_commit}..HEAD"])
+    raw = run(
+        [
+            "git",
+            "log",
+            "--reverse",
+            f"--max-count={max_count}",
+            f"--pretty=format:{fmt}",
+            f"{base_commit}..{branch_ref}",
+        ]
+    )
     if not raw:
         return []
     commits: List[Commit] = []
@@ -132,12 +141,14 @@ def main() -> int:
     branch = args.branch or get_current_branch()
     base_ref = args.base or detect_default_base_ref()
 
-    # Ensure branch exists locally; if not, we still print header but warn.
-    # (We don't checkout or modify state.)
-    _ = try_run(["git", "rev-parse", "--verify", branch])
+    # Ensure branch ref resolves to a commit (local or remote ref).
+    branch_commit = try_run(["git", "rev-parse", "--verify", f"{branch}^{{commit}}"])
+    if not branch_commit:
+        sys.stderr.write(f"Error: branch ref does not resolve to a commit: {branch}\n")
+        return 2
 
-    base_commit = get_merge_base(base_ref)
-    commits = get_commits_since(base_commit, args.max)
+    base_commit = get_merge_base(branch, base_ref)
+    commits = get_commits_since(base_commit, branch, args.max)
 
     print(f"- **branch `{branch}`**")
     if not commits:
