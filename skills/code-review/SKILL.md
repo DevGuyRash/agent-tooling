@@ -24,7 +24,9 @@ IF the incoming prompt includes any of:
 THEN you are in WORKER mode.
 
 In WORKER mode:
-- You SHALL NOT run any `mpcr` commands (`register`, `update`, `note`, `finalize`, or session mutations).
+- You SHALL run only child-scoped `mpcr` progress commands when dispatch context provides child ids:
+  - allowed: `mpcr reviewer update`, `mpcr reviewer note` for your assigned child `reviewer_id/session_id`
+  - forbidden: `mpcr reviewer register`, `spawn-children`, `complete-child`, parent `finalize`, or session-wide mutations
 - You SHALL NOT run repo-wide `git diff` or `git show` patch commands.
 - You SHALL review ONLY the assigned files and minimal surrounding context needed for proof.
 - You SHALL return EXACTLY one Proof Packet and NOTHING else.
@@ -73,10 +75,12 @@ You SHALL infer the workflow from context. You SHALL NOT ask the user which work
    - standard: medium changes
    - full: large or high-risk changes
 5. You SHALL finalize: `mpcr reviewer finalize --verdict APPROVE|REQUEST_CHANGES|BLOCK --report-file report.md`
+   - `--report-file` is moved to canonical session report path by default.
+   - pass `--copy-report-input` only when you need to preserve the source file.
 
 ### Applicator
 
-1. Ingest reports: `mpcr session reports closed --include-report-contents`
+1. Ingest reports: `mpcr session reports closed --include-report-contents --include-leaf-children`
 2. For each phase, get guidance: `mpcr protocol applicator --phase <PHASE>`
    - Phases: `INGESTION` → `DISPOSITION` → `APPLICATION` → `FINALIZATION`
 3. You SHALL record dispositions: `mpcr applicator note --note-type applied|declined|deferred --content "..."`
@@ -90,6 +94,9 @@ WHEN using multi-agent:
 1. Get orchestration guidance: `mpcr protocol orchestrator`
 2. Get dispatch templates: `mpcr protocol dispatch --role scope-mapper|red-team|systems-auditor`
 3. Spawn children: `mpcr reviewer spawn-children --parent-id <ID> --session-id <SID> --target-ref <REF> --count N`
+4. Workers update child progress (`update` + `note`) using child IDs.
+5. Orchestrator finalizes each completed child: `mpcr reviewer complete-child --reviewer-id <CHILD_ID> --session-id <SID> --verdict ... --report-file ...`
+6. Close abandoned children so sessions do not remain unfinished: `mpcr reviewer close-children --parent-id <ID> --session-id <SID>`
 
 ## Autonomous operation
 

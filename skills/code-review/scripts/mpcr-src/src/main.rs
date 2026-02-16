@@ -10,12 +10,12 @@ use mpcr::id;
 use mpcr::lock::{self, LockConfig};
 use mpcr::protocol;
 use mpcr::session::{
-    append_note, collect_reports, finalize_review, load_session, register_reviewer,
-    set_initiator_status, spawn_child_reviewers, update_review, AppendNoteParams,
-    FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams,
-    ReportsFilters, ReportsOptions, ReportsResult, ReportsView, ReviewPhase, ReviewVerdict,
-    ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
-    SpawnChildReviewersParams, UpdateReviewParams,
+    append_note, close_child_reviews, collect_reports, finalize_review, load_session,
+    register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
+    AppendNoteParams, CloseChildReviewsParams, FinalizeReportInput, FinalizeReviewParams,
+    InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions,
+    ReportsResult, ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
+    SetInitiatorStatusParams, SeverityCounts, SpawnChildReviewersParams, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -59,7 +59,7 @@ Common flows:
   mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION
 
   # Applicator (explicit flags; recommended for isolated shells)
-  mpcr session reports closed --include-report-contents --json
+  mpcr session reports closed --include-report-contents --include-leaf-children --json
   mpcr applicator wait --session-dir <DIR>
   mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status RECEIVED
 
@@ -211,16 +211,17 @@ enum SessionCommands {
     #[command(after_long_help = r#"Examples:
   # From repo root (or with --repo-root/--date):
   mpcr session reports open
-  mpcr session reports closed --include-report-contents --json
+  mpcr session reports closed --include-report-contents --include-leaf-children --json
 
   # Filter examples:
   mpcr session reports open --include-notes --only-with-notes
   mpcr session reports closed --only-with-report --include-report-contents
+  mpcr session reports closed --include-leaf-children --reviewer-status FINISHED
   mpcr session reports open --reviewer-status IN_PROGRESS,BLOCKED
   mpcr session reports closed --initiator-status RECEIVED --verdict APPROVE
 
   # Explicit session directory:
-  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-report-contents --json
+  mpcr session reports closed --session-dir .local/reports/code_reviews/YYYY-MM-DD --include-report-contents --include-leaf-children --json
 "#)]
     Reports {
         #[command(subcommand)]
@@ -330,6 +331,11 @@ struct ReportsArgs {
         help = "Include report markdown contents for each review entry (if available)."
     )]
     include_report_contents: bool,
+    #[arg(
+        long,
+        help = "Include leaf child reviews in top-level report rows (default hides leaf children)."
+    )]
+    include_leaf_children: bool,
 }
 
 #[derive(Subcommand)]
@@ -444,6 +450,66 @@ enum ReviewerCommands {
         count: usize,
     },
 
+    /// Bulk-close child reviewer entries under a parent.
+    #[command(after_long_help = r#"Examples:
+  # Cancel all parent-owned children still in INITIALIZING/IN_PROGRESS/BLOCKED:
+  mpcr reviewer close-children --session-dir <DIR> --parent-id <PARENT_ID8> --session-id <ID8>
+
+  # Mark blocked children as ERROR for a specific target:
+  mpcr reviewer close-children --session-dir <DIR> --parent-id <PARENT_ID8> --session-id <ID8> --target-ref main --only-status BLOCKED --set-status ERROR
+"#)]
+    CloseChildren {
+        #[command(flatten)]
+        session: SessionDirArgs,
+
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Parent reviewer id (id8). Capture from parent registration context."
+        )]
+        parent_id: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Session id (id8) shared by the parent and children."
+        )]
+        session_id: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "If set, only close children for this target_ref."
+        )]
+        target_ref: Option<String>,
+
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "STATUS",
+            help = "Child reviewer statuses eligible for closing (default: INITIALIZING,IN_PROGRESS,BLOCKED)."
+        )]
+        only_status: Vec<ReviewerStatus>,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value = "CANCELLED",
+            value_name = "STATUS",
+            help = "Reviewer status to apply to matching child entries."
+        )]
+        set_status: ReviewerStatus,
+
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Clear child current_phase while closing entries."
+        )]
+        clear_phase: bool,
+    },
+
     /// Update your reviewer-owned status and/or current phase.
     #[command(after_long_help = r#"Reviewer statuses:
   INITIALIZING  Registered; review not yet started
@@ -504,8 +570,14 @@ Examples:
   APPROVE, REQUEST_CHANGES, BLOCK
 
 Report input:
-  - Use `--report-file <path>` to read markdown from a file
+  - Use `--report-file <path>` to move the file into mpcr's canonical report path (single artifact)
+  - Add `--copy-report-input` to preserve the original input file and keep copy behavior
   - Or omit it and pipe markdown via stdin
+
+Child lifecycle:
+  - By default, unresolved child reviews under this reviewer are auto-closed before finalize.
+  - Use `--no-auto-close-children` to fail instead when open children exist.
+  - Use `--auto-close-children-status CANCELLED|ERROR` to control auto-close status.
 
 Examples:
   mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --blocker 0 --major 0 --minor 0 --nit 0 <<'EOF'
@@ -514,6 +586,7 @@ Examples:
   EOF
 
   mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --report-file review.md
+  mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --report-file review.md --copy-report-input
   cat review.md | mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict REQUEST_CHANGES --major 2
 "#)]
     Finalize {
@@ -566,9 +639,105 @@ Examples:
         #[arg(
             long,
             value_name = "PATH",
-            help = "Read report markdown from this file (if omitted, reads from stdin)."
+            help = "Use this report markdown file as finalize input (moved to canonical path unless --copy-report-input is set)."
         )]
         report_file: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Copy --report-file input instead of moving it (preserves the source file)."
+        )]
+        copy_report_input: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Do not auto-close unresolved child reviews before finalize."
+        )]
+        no_auto_close_children: bool,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "CANCELLED",
+            value_name = "STATUS",
+            help = "Status used when auto-closing unresolved child reviews (CANCELLED or ERROR)."
+        )]
+        auto_close_children_status: ReviewerStatus,
+    },
+
+    /// Complete a child review entry with required artifact fields.
+    #[command(after_long_help = r#"Examples:
+  # Finalize a child from a report file and attach worker proof summary:
+  mpcr reviewer complete-child --session-dir <DIR> --reviewer-id <CHILD_ID8> --session-id <ID8> \
+    --verdict APPROVE --report-file child.md --proof-note "Proof Packet: ..."
+
+  # Pipe child report via stdin:
+  cat child.md | mpcr reviewer complete-child --session-dir <DIR> --reviewer-id <CHILD_ID8> --session-id <ID8> --verdict REQUEST_CHANGES --major 1
+"#)]
+    CompleteChild {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(long, value_name = "ID8", help = "Child reviewer id (id8).")]
+        reviewer_id: Option<String>,
+        #[arg(long, value_name = "ID8", help = "Session id (id8).")]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            value_name = "VERDICT",
+            help = "Final verdict for the child review."
+        )]
+        verdict: ReviewVerdict,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of BLOCKER findings in the child report."
+        )]
+        blocker: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of MAJOR findings in the child report."
+        )]
+        major: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of MINOR findings in the child report."
+        )]
+        minor: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Number of NIT findings in the child report."
+        )]
+        nit: u64,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Use this child report markdown file as finalize input (moved unless --copy-report-input)."
+        )]
+        report_file: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Copy --report-file input instead of moving it (preserves the source file)."
+        )]
+        copy_report_input: bool,
+        #[arg(
+            long,
+            value_name = "TEXT",
+            conflicts_with = "proof_note_file",
+            help = "Optional proof packet summary to append to child notes."
+        )]
+        proof_note: Option<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with = "proof_note",
+            help = "Optional file containing proof packet summary to append to child notes."
+        )]
+        proof_note_file: Option<PathBuf>,
     },
 
     /// Append a reviewer note to the session entry.
@@ -966,6 +1135,44 @@ fn run() -> anyhow::Result<()> {
                 write_result(json, json_pretty, &res)?;
             }
 
+            ReviewerCommands::CloseChildren {
+                session,
+                parent_id,
+                session_id,
+                target_ref,
+                only_status,
+                set_status,
+                clear_phase,
+            } => {
+                let parent_reviewer_id =
+                    require_arg_or_env(parent_id, use_env, "MPCR_REVIEWER_ID", "--parent-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+
+                let only_statuses = if only_status.is_empty() {
+                    vec![
+                        ReviewerStatus::Initializing,
+                        ReviewerStatus::InProgress,
+                        ReviewerStatus::Blocked,
+                    ]
+                } else {
+                    only_status
+                };
+
+                let result = close_child_reviews(CloseChildReviewsParams {
+                    session: SessionLocator::new(resolved.session_dir),
+                    parent_reviewer_id,
+                    session_id,
+                    target_ref,
+                    only_statuses,
+                    set_status,
+                    clear_phase,
+                    now,
+                })?;
+                write_result(json, json_pretty, &result)?;
+            }
+
             ReviewerCommands::Update {
                 session,
                 reviewer_id,
@@ -1006,11 +1213,15 @@ fn run() -> anyhow::Result<()> {
                 minor,
                 nit,
                 report_file,
+                copy_report_input,
+                no_auto_close_children,
+                auto_close_children_status,
             } => {
-                let report_markdown = match report_file {
-                    Some(p) => std::fs::read_to_string(&p)
-                        .with_context(|| format!("read report file {}", p.display()))?,
-                    None => read_stdin_to_string().context("read report markdown from stdin")?,
+                let report_input = match report_file {
+                    Some(p) => FinalizeReportInput::File(p),
+                    None => FinalizeReportInput::Markdown(
+                        read_stdin_to_string().context("read report markdown from stdin")?,
+                    ),
                 };
 
                 let reviewer_id =
@@ -1029,9 +1240,90 @@ fn run() -> anyhow::Result<()> {
                         minor,
                         nit,
                     },
-                    report_markdown,
+                    report_input,
+                    copy_input_report: copy_report_input,
+                    auto_close_open_children: !no_auto_close_children,
+                    auto_close_children_status,
                     now,
                 })?;
+                write_result(json, json_pretty, &res)?;
+            }
+
+            ReviewerCommands::CompleteChild {
+                session,
+                reviewer_id,
+                session_id,
+                verdict,
+                blocker,
+                major,
+                minor,
+                nit,
+                report_file,
+                copy_report_input,
+                proof_note,
+                proof_note_file,
+            } => {
+                let report_input = match report_file {
+                    Some(p) => FinalizeReportInput::File(p),
+                    None => FinalizeReportInput::Markdown(
+                        read_stdin_to_string().context("read child report markdown from stdin")?,
+                    ),
+                };
+
+                let reviewer_id =
+                    require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
+                let session_id =
+                    require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let session_locator = SessionLocator::new(resolved.session_dir);
+
+                ensure_complete_child_has_parent(&session_locator, &reviewer_id, &session_id)?;
+
+                let res = finalize_review(FinalizeReviewParams {
+                    session: session_locator.clone(),
+                    reviewer_id: reviewer_id.clone(),
+                    session_id: session_id.clone(),
+                    verdict,
+                    counts: SeverityCounts {
+                        blocker,
+                        major,
+                        minor,
+                        nit,
+                    },
+                    report_input,
+                    copy_input_report: copy_report_input,
+                    auto_close_open_children: false,
+                    auto_close_children_status: ReviewerStatus::Cancelled,
+                    now,
+                })?;
+
+                let proof_note = match (proof_note, proof_note_file) {
+                    (Some(note), None) => Some(note),
+                    (None, Some(path)) => Some(
+                        std::fs::read_to_string(&path)
+                            .with_context(|| format!("read proof note file {}", path.display()))?,
+                    ),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow::anyhow!(
+                            "pass only one of --proof-note or --proof-note-file"
+                        ));
+                    }
+                };
+
+                if let Some(note) = proof_note {
+                    append_note(AppendNoteParams {
+                        session: session_locator,
+                        reviewer_id,
+                        session_id,
+                        role: NoteRole::Reviewer,
+                        note_type: NoteType::ProofPacket,
+                        content: Value::String(note),
+                        now,
+                        lock_owner: id::random_id8()?,
+                    })?;
+                }
+
                 write_result(json, json_pretty, &res)?;
             }
 
@@ -1409,6 +1701,7 @@ fn handle_reports(
     let options = ReportsOptions {
         include_notes: args.include_notes || args.only_with_notes,
         include_report_contents: args.include_report_contents,
+        include_leaf_children: args.include_leaf_children,
     };
 
     if !session.session_file().exists() {
@@ -1461,6 +1754,38 @@ fn require_arg_or_env(
                 anyhow::anyhow!("missing {arg_flag}; pass {arg_flag}")
             }
         })
+}
+
+fn ensure_complete_child_has_parent(
+    session: &SessionLocator,
+    reviewer_id: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let session_data = load_session(session)?;
+    let child_entry = session_data
+        .reviews
+        .iter()
+        .find(|entry| entry.reviewer_id == reviewer_id && entry.session_id == session_id)
+        .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
+
+    let parent_id = child_entry.parent_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "complete-child requires a child review entry with parent_id (reviewer_id/session_id points at a parent or standalone review)"
+        )
+    })?;
+
+    let parent_exists = session_data.reviews.iter().any(|entry| {
+        entry.reviewer_id == parent_id
+            && entry.session_id == child_entry.session_id
+            && entry.target_ref == child_entry.target_ref
+    });
+    if !parent_exists {
+        return Err(anyhow::anyhow!(
+            "complete-child parent review entry not found for parent_id/session_id/target_ref"
+        ));
+    }
+
+    Ok(())
 }
 
 fn wait_for_reviews(
@@ -1573,9 +1898,10 @@ mod tests {
             counts: SeverityCounts::zero(),
             report_file: Some("report.md".to_string()),
             notes: Vec::new(),
+            child_reviews: Vec::new(),
         };
         let session = SessionFile {
-            schema_version: "1.0.0".to_string(),
+            schema_version: "1.1.0".to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],

@@ -7,7 +7,7 @@ title = "Ingestion"
 content = """
 You SHALL locate and read review reports:
 
-1. You SHALL run `mpcr session reports closed --include-report-contents` to get finished reviews.
+1. You SHALL run `mpcr session reports closed --include-report-contents --include-leaf-children` to get finished reviews.
 2. IF no session exists, you SHALL look for review report files provided by the user.
 3. You SHALL read each report and build a finding inventory listing all findings by severity.
 4. You SHALL note each reviewer's verdict and acceptance criteria.

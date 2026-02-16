@@ -37,24 +37,33 @@ For each worker, you SHALL:
 3. Include only assigned files, focus domains, and acceptance criteria in the prompt.
 4. You SHALL NOT include full diffs, full file contents, or full conversation history in worker prompts.
 5. Launch the worker as a subagent (e.g., via the Task tool or equivalent).
+6. Provide child mpcr context (`session_dir`, `session_id`, child `reviewer_id`) so workers can run `mpcr reviewer update`/`note`.
 
 You SHALL launch ALL workers as actual subagents. IF a subagent mechanism is not available,
 you SHALL fall back to single-agent mode and perform the review yourself using `mpcr protocol reviewer`.
 
 ## Child lifecycle
 WHEN you spawn children via mpcr but do NOT dispatch subagents for them, you SHALL
-update each unused child: `mpcr reviewer update --reviewer-id <CHILD_ID> --status CANCELLED`.
+close unused children via:
+`mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <ID8> --set-status CANCELLED`.
 You SHALL NOT leave children in INITIALIZING state.
 
 ## Synthesis
 1. You SHALL wait for all worker subagents to return their Proof Packets.
-2. You SHALL merge findings, deduplicate, and resolve conflicts (keep the higher severity).
-3. You SHALL run `mpcr protocol report-template --scale standard` for the report skeleton.
-4. You SHALL write the merged report and finalize:
+2. For each completed worker packet, you SHALL run:
+   `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+   (or stdin) and attach proof summary via `--proof-note`/`--proof-note-file`.
+3. For abandoned or failed workers, you SHALL close unresolved children:
+   `mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <ID8> --set-status CANCELLED`.
+4. You SHALL merge findings, deduplicate, and resolve conflicts (keep the higher severity).
+5. You SHALL run `mpcr protocol report-template --scale standard` for the report skeleton.
+6. You SHALL write the merged report and finalize:
    `mpcr reviewer finalize --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+   (default behavior moves `<PATH>` into the canonical session report path and auto-closes unresolved children).
 
 ## Constraints
-- You own the mpcr session. Workers SHALL NOT run mpcr commands.
+- You own session registration/spawn/final completion/parent finalize.
+- Workers SHALL only run child-scoped `mpcr reviewer update` and `mpcr reviewer note`.
 - Workers are read-only: they SHALL NOT edit files.
 - IF a worker finds nothing, that is valid. You SHALL NOT pad findings.
 - You SHALL update phase status via `mpcr reviewer update --phase <PHASE>` at each transition.

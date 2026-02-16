@@ -80,6 +80,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         counts: SeverityCounts::zero(),
         report_file: None,
         notes: vec![note],
+        child_reviews: Vec::new(),
     };
 
     let blocked = ReviewEntry {
@@ -97,6 +98,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         counts: SeverityCounts::zero(),
         report_file: None,
         notes: Vec::new(),
+        child_reviews: Vec::new(),
     };
 
     let finished = ReviewEntry {
@@ -119,10 +121,11 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         },
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
+        child_reviews: Vec::new(),
     };
 
     SessionFile {
-        schema_version: "1.0.0".to_string(),
+        schema_version: "1.1.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: vec![
@@ -136,7 +139,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
 
 fn empty_session(session_dir: &Path) -> SessionFile {
     SessionFile {
-        schema_version: "1.0.0".to_string(),
+        schema_version: "1.1.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: Vec::new(),
@@ -146,7 +149,7 @@ fn empty_session(session_dir: &Path) -> SessionFile {
 
 fn session_without_notes(session_dir: &Path) -> SessionFile {
     SessionFile {
-        schema_version: "1.0.0".to_string(),
+        schema_version: "1.1.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: vec!["deadbeef".to_string()],
@@ -165,6 +168,7 @@ fn session_without_notes(session_dir: &Path) -> SessionFile {
             counts: SeverityCounts::zero(),
             report_file: None,
             notes: Vec::new(),
+            child_reviews: Vec::new(),
         }],
     }
 }
@@ -212,6 +216,16 @@ fn run_cmd_json(args: &[&str]) -> anyhow::Result<Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+fn run_cmd_failure(args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(args)
+        .output()?;
+    if output.status.success() {
+        return Err(anyhow::anyhow!("mpcr unexpectedly succeeded"));
+    }
+    Ok(String::from_utf8_lossy(&output.stderr).to_string())
+}
+
 fn read_session_json(session_dir: &Path) -> anyhow::Result<Value> {
     let raw = fs::read_to_string(session_dir.join("_session.json"))?;
     Ok(serde_json::from_str(&raw)?)
@@ -222,8 +236,42 @@ fn find_review<'a>(
     reviewer_id: &str,
     session_id: &str,
 ) -> anyhow::Result<&'a Value> {
+    fn find_review_recursive<'a>(
+        reviews: &'a [Value],
+        reviewer_id: &str,
+        session_id: &str,
+    ) -> Option<&'a Value> {
+        for review in reviews {
+            let is_match = match (review.get("reviewer_id"), review.get("session_id")) {
+                (Some(Value::String(rid)), Some(Value::String(sid))) => {
+                    rid == reviewer_id && sid == session_id
+                }
+                _ => false,
+            };
+            if is_match {
+                return Some(review);
+            }
+            if let Some(children) = review.get("child_reviews").and_then(Value::as_array) {
+                if let Some(found) = find_review_recursive(children, reviewer_id, session_id) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
     let reviews = json_array(session, "reviews")?;
-    reviews
+    find_review_recursive(reviews, reviewer_id, session_id)
+        .ok_or_else(|| anyhow::anyhow!("review entry not found"))
+}
+
+fn find_child_review<'a>(
+    parent_review: &'a Value,
+    reviewer_id: &str,
+    session_id: &str,
+) -> anyhow::Result<&'a Value> {
+    let children = json_array(parent_review, "child_reviews")?;
+    children
         .iter()
         .find(
             |review| match (review.get("reviewer_id"), review.get("session_id")) {
@@ -233,7 +281,7 @@ fn find_review<'a>(
                 _ => false,
             },
         )
-        .ok_or_else(|| anyhow::anyhow!("review entry not found"))
+        .ok_or_else(|| anyhow::anyhow!("child review entry not found"))
 }
 
 #[test]
@@ -274,6 +322,193 @@ fn reports_closed_and_in_progress_views() -> anyhow::Result<()> {
 
     let in_progress = run_reports(&session_dir, &["session", "reports", "in-progress"])?;
     ensure!(json_u64(&in_progress, "matching_reviews")? == 1);
+    Ok(())
+}
+
+#[test]
+fn reports_hide_leaf_children_but_include_non_leaf_children() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned_child = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    let child = json_array(&spawned_child, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?
+        .clone();
+    let child_id = json_str(&child, "reviewer_id")?.to_string();
+
+    let spawned_grandchild = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        &child_id,
+        "--count",
+        "1",
+    ])?;
+    let grandchild = json_array(&spawned_grandchild, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("grandchild missing"))?
+        .clone();
+    let grandchild_id = json_str(&grandchild, "reviewer_id")?;
+
+    let reports = run_reports(Path::new(&session_dir), &["session", "reports", "open"])?;
+    ensure!(json_u64(&reports, "matching_reviews")? == 2);
+
+    let reviews = json_array(&reports, "reviews")?;
+    ensure!(reviews.len() == 2);
+
+    let parent_review = reviews
+        .iter()
+        .find(|review| json_str(review, "reviewer_id").ok() == Some("deadbeef"))
+        .ok_or_else(|| anyhow::anyhow!("parent review missing"))?;
+    ensure!(json_array(parent_review, "child_reviews")?.len() == 1);
+
+    let child_review = reviews
+        .iter()
+        .find(|review| json_str(review, "reviewer_id").ok() == Some(child_id.as_str()))
+        .ok_or_else(|| anyhow::anyhow!("non-leaf child review missing"))?;
+    ensure!(json_array(child_review, "child_reviews")?.len() == 1);
+
+    let has_grandchild_top_level = reviews
+        .iter()
+        .any(|review| json_str(review, "reviewer_id").ok() == Some(grandchild_id));
+    ensure!(!has_grandchild_top_level);
+
+    let reports_with_leaf = run_reports(
+        Path::new(&session_dir),
+        &["session", "reports", "open", "--include-leaf-children"],
+    )?;
+    ensure!(json_u64(&reports_with_leaf, "matching_reviews")? == 3);
+    let reviews_with_leaf = json_array(&reports_with_leaf, "reviews")?;
+    ensure!(reviews_with_leaf.len() == 3);
+    let has_grandchild_with_leaf = reviews_with_leaf
+        .iter()
+        .any(|review| json_str(review, "reviewer_id").ok() == Some(grandchild_id));
+    ensure!(has_grandchild_with_leaf);
+
+    Ok(())
+}
+
+#[test]
+fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let session_dir = dir.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+
+    let parent_report = "parent.md";
+    let child_report = "child.md";
+    let grandchild_report = "grandchild.md";
+    fs::write(session_dir.join(parent_report), "parent report body")?;
+    fs::write(session_dir.join(child_report), "child report body")?;
+    fs::write(
+        session_dir.join(grandchild_report),
+        "grandchild report body",
+    )?;
+
+    let parent = ReviewEntry {
+        reviewer_id: "deadbeef".to_string(),
+        session_id: "sess0001".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Received,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:00:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: Some("2026-01-11T02:00:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::Approve),
+        counts: SeverityCounts::zero(),
+        report_file: Some(parent_report.to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+    };
+    let mut child = parent.clone();
+    child.reviewer_id = "cafe1234".to_string();
+    child.parent_id = Some(parent.reviewer_id.clone());
+    child.report_file = Some(child_report.to_string());
+    let mut grandchild = parent.clone();
+    grandchild.reviewer_id = "babe5678".to_string();
+    grandchild.parent_id = Some(child.reviewer_id.clone());
+    grandchild.report_file = Some(grandchild_report.to_string());
+
+    write_session_file(
+        &session_dir,
+        &SessionFile {
+            schema_version: "1.1.0".to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: session_dir.to_string_lossy().to_string(),
+            reviewers: vec![
+                parent.reviewer_id.clone(),
+                child.reviewer_id.clone(),
+                grandchild.reviewer_id.clone(),
+            ],
+            reviews: vec![parent, child, grandchild],
+        },
+    )?;
+
+    let closed_default = run_reports(
+        &session_dir,
+        &["session", "reports", "closed", "--include-report-contents"],
+    )?;
+    ensure!(json_u64(&closed_default, "matching_reviews")? == 2);
+    let default_reviews = json_array(&closed_default, "reviews")?;
+    ensure!(!default_reviews
+        .iter()
+        .any(|review| json_str(review, "reviewer_id").ok() == Some("babe5678")));
+
+    let closed_with_leaf = run_reports(
+        &session_dir,
+        &[
+            "session",
+            "reports",
+            "closed",
+            "--include-report-contents",
+            "--include-leaf-children",
+        ],
+    )?;
+    ensure!(json_u64(&closed_with_leaf, "matching_reviews")? == 3);
+    let with_leaf_reviews = json_array(&closed_with_leaf, "reviews")?;
+    let grandchild_review = with_leaf_reviews
+        .iter()
+        .find(|review| json_str(review, "reviewer_id").ok() == Some("babe5678"))
+        .ok_or_else(|| anyhow::anyhow!("grandchild review missing with leaf inclusion"))?;
+    ensure!(json_str(grandchild_review, "report_contents")?.contains("grandchild report body"));
+
     Ok(())
 }
 
@@ -339,7 +574,7 @@ fn session_show_reads_session_file() -> anyhow::Result<()> {
 
     let value = run_cmd_json(&["session", "show", "--session-dir", &session_dir_str])?;
     ensure!(json_array(&value, "reviews")?.len() == 3);
-    ensure!(json_str(&value, "schema_version")? == "1.0.0");
+    ensure!(json_str(&value, "schema_version")? == "1.1.0");
     Ok(())
 }
 
@@ -360,7 +595,7 @@ fn session_show_resolves_session_dir_from_repo_root() -> anyhow::Result<()> {
         "--date",
         "2026-01-11",
     ])?;
-    ensure!(json_str(&value, "schema_version")? == "1.0.0");
+    ensure!(json_str(&value, "schema_version")? == "1.1.0");
     ensure!(json_array(&value, "reviews")?.len() == 3);
     Ok(())
 }
@@ -632,6 +867,10 @@ fn reviewer_finalize_writes_report_and_updates_entry() -> anyhow::Result<()> {
     ensure!(report_path.ends_with(report_name));
     let contents = fs::read_to_string(report_path)?;
     ensure!(contents.contains("looks good"));
+    ensure!(
+        !report_file.exists(),
+        "source report should be moved by default"
+    );
 
     let session = read_session_json(Path::new(&session_dir))?;
     let entry = find_review(&session, "deadbeef", "sess0001")?;
@@ -641,6 +880,55 @@ fn reviewer_finalize_writes_report_and_updates_entry() -> anyhow::Result<()> {
     let counts = json_field(entry, "counts")?;
     ensure!(json_u64(counts, "major")? == 2);
     ensure!(json_str(entry, "report_file")? == report_name);
+    Ok(())
+}
+
+#[test]
+fn reviewer_finalize_copy_report_input_preserves_source() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&out, "session_dir")?.to_string();
+
+    let source_report = repo_root.path().join("review.md");
+    fs::write(&source_report, "copy mode body")?;
+
+    let result = run_cmd_json(&[
+        "reviewer",
+        "finalize",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        source_report.to_string_lossy().as_ref(),
+        "--copy-report-input",
+    ])?;
+
+    let report_path = json_str(&result, "report_path")?;
+    ensure!(Path::new(report_path).exists());
+    ensure!(
+        source_report.exists(),
+        "source report should remain in copy mode"
+    );
     Ok(())
 }
 
@@ -1397,6 +1685,9 @@ fn reviewer_spawn_children_creates_entries_with_parent_id() -> anyhow::Result<()
     ensure!(children.len() == 3);
 
     let session = read_session_json(Path::new(&session_dir))?;
+    let parent = find_review(&session, "deadbeef", "sess0001")?;
+    let parent_children = json_array(parent, "child_reviews")?;
+    ensure!(parent_children.len() == 3);
     for child in children {
         let child_id = json_str(child, "reviewer_id")?;
         ensure!(json_str(child, "parent_id")? == "deadbeef");
@@ -1404,6 +1695,561 @@ fn reviewer_spawn_children_creates_entries_with_parent_id() -> anyhow::Result<()
         let entry = find_review(&session, child_id, "sess0001")?;
         ensure!(json_str(entry, "parent_id")? == "deadbeef");
     }
+    Ok(())
+}
+
+#[test]
+fn session_file_stores_children_nested_under_parent_only() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let initial = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&initial, "session_dir")?.to_string();
+
+    let spawned = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "3",
+    ])?;
+    let children = json_array(&spawned, "children")?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let reviews = json_array(&session, "reviews")?;
+    ensure!(reviews.len() == 1);
+
+    let parent = reviews
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("parent review missing"))?;
+    ensure!(json_str(parent, "reviewer_id")? == "deadbeef");
+    let nested_children = json_array(parent, "child_reviews")?;
+    ensure!(nested_children.len() == 3);
+
+    for child in children {
+        let child_id = json_str(child, "reviewer_id")?;
+        let exists_top_level = reviews
+            .iter()
+            .any(|review| json_str(review, "reviewer_id").ok() == Some(child_id));
+        ensure!(!exists_top_level);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn child_review_updates_are_embedded_under_parent() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    let children = json_array(&spawned, "children")?;
+    let child = children
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+    let child_id = json_str(child, "reviewer_id")?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "update",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        child_id,
+        "--session-id",
+        "sess0001",
+        "--status",
+        "IN_PROGRESS",
+        "--phase",
+        "INGESTION",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let parent_review = find_review(&session, "deadbeef", "sess0001")?;
+    let child_summary = find_child_review(parent_review, child_id, "sess0001")?;
+    ensure!(json_str(child_summary, "status")? == "IN_PROGRESS");
+    ensure!(json_str(child_summary, "current_phase")? == "INGESTION");
+
+    let source_report = repo_root.path().join("child.md");
+    fs::write(&source_report, "child report")?;
+    run_cmd_json(&[
+        "reviewer",
+        "finalize",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        child_id,
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        source_report.to_string_lossy().as_ref(),
+    ])?;
+
+    run_cmd_json(&[
+        "applicator",
+        "set-status",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        child_id,
+        "--session-id",
+        "sess0001",
+        "--initiator-status",
+        "RECEIVED",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let parent_review = find_review(&session, "deadbeef", "sess0001")?;
+    let child_summary = find_child_review(parent_review, child_id, "sess0001")?;
+    ensure!(json_str(child_summary, "status")? == "FINISHED");
+    ensure!(json_str(child_summary, "verdict")? == "APPROVE");
+    ensure!(json_str(child_summary, "initiator_status")? == "RECEIVED");
+    ensure!(
+        child_summary.get("report_file").is_some(),
+        "expected embedded report_file"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_close_children_cancels_open_children() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "2",
+    ])?;
+
+    let result = run_cmd_json(&[
+        "reviewer",
+        "close-children",
+        "--session-dir",
+        &session_dir,
+        "--parent-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-phase",
+    ])?;
+    ensure!(json_u64(&result, "matching_children")? == 2);
+    ensure!(json_u64(&result, "updated_children")? == 2);
+
+    let children = json_array(&spawned, "children")?;
+    let session = read_session_json(Path::new(&session_dir))?;
+    for child in children {
+        let child_id = json_str(child, "reviewer_id")?;
+        let child_entry = find_review(&session, child_id, "sess0001")?;
+        ensure!(json_str(child_entry, "status")? == "CANCELLED");
+        ensure!(json_is_null_or_missing(child_entry, "current_phase"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn reviewer_finalize_auto_closes_open_children() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "2",
+    ])?;
+    let children = json_array(&spawned, "children")?;
+    let first_child = children
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+    let first_child_id = json_str(first_child, "reviewer_id")?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "update",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        first_child_id,
+        "--session-id",
+        "sess0001",
+        "--status",
+        "IN_PROGRESS",
+        "--phase",
+        "INGESTION",
+    ])?;
+
+    let report_file = repo_root.path().join("parent.md");
+    fs::write(&report_file, "parent body")?;
+    run_cmd_json(&[
+        "reviewer",
+        "finalize",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "REQUEST_CHANGES",
+        "--major",
+        "1",
+        "--report-file",
+        report_file.to_string_lossy().as_ref(),
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    for child in children {
+        let child_id = json_str(child, "reviewer_id")?;
+        let entry = find_review(&session, child_id, "sess0001")?;
+        ensure!(json_str(entry, "status")? == "CANCELLED");
+        let notes = json_array(entry, "notes")?;
+        let has_auto_close_note = notes.iter().any(|note| {
+            matches!(
+                note.get("type"),
+                Some(Value::String(note_type)) if note_type == "auto_closed_by_parent_finalize"
+            )
+        });
+        ensure!(
+            has_auto_close_note,
+            "missing auto-close note on child {child_id}"
+        );
+    }
+
+    let parent_entry = find_review(&session, "deadbeef", "sess0001")?;
+    let parent_child = find_child_review(parent_entry, first_child_id, "sess0001")?;
+    ensure!(json_str(parent_child, "status")? == "CANCELLED");
+    Ok(())
+}
+
+#[test]
+fn reviewer_finalize_fails_with_no_auto_close_children() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+
+    let report_file = repo_root.path().join("parent.md");
+    fs::write(&report_file, "parent body")?;
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "finalize",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        report_file.to_string_lossy().as_ref(),
+        "--no-auto-close-children",
+    ])?;
+    ensure!(stderr.contains("cannot finalize while child reviews are open"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_complete_child_finalizes_and_attaches_proof_note() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    let children = json_array(&spawned, "children")?;
+    let child = children
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+    let child_id = json_str(child, "reviewer_id")?;
+
+    let child_report = repo_root.path().join("child.md");
+    fs::write(&child_report, "child report body")?;
+    run_cmd_json(&[
+        "reviewer",
+        "complete-child",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        child_id,
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        child_report.to_string_lossy().as_ref(),
+        "--proof-note",
+        "## Proof Packet: child",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let child_entry = find_review(&session, child_id, "sess0001")?;
+    ensure!(json_str(child_entry, "status")? == "FINISHED");
+    ensure!(json_str(child_entry, "current_phase")? == "REPORT_WRITING");
+    ensure!(json_str(child_entry, "verdict")? == "APPROVE");
+    ensure!(child_entry.get("report_file").is_some());
+    let child_notes = json_array(child_entry, "notes")?;
+    let has_proof_note = child_notes.iter().any(|note| {
+        matches!(
+            note.get("type"),
+            Some(Value::String(note_type)) if note_type == "proof_packet"
+        )
+    });
+    ensure!(has_proof_note);
+
+    let parent_entry = find_review(&session, "deadbeef", "sess0001")?;
+    let child_summary = find_child_review(parent_entry, child_id, "sess0001")?;
+    ensure!(json_str(child_summary, "status")? == "FINISHED");
+    ensure!(child_summary.get("report_file").is_some());
+    Ok(())
+}
+
+#[test]
+fn reviewer_complete_child_fails_for_non_child_entry() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let report_file = repo_root.path().join("parent.md");
+    fs::write(&report_file, "not a child")?;
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "complete-child",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        report_file.to_string_lossy().as_ref(),
+    ])?;
+    ensure!(stderr.contains("complete-child requires a child review entry with parent_id"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let session_dir = repo_root.path().join("session");
+    let session = SessionFile {
+        schema_version: "1.1.0".to_string(),
+        session_date: "2026-01-11".to_string(),
+        repo_root: repo_root.path().to_string_lossy().to_string(),
+        reviewers: vec!["cafebabe".to_string()],
+        reviews: vec![ReviewEntry {
+            reviewer_id: "cafebabe".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::Initializing,
+            parent_id: Some("deadbeef".to_string()),
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T00:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: None,
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+        }],
+    };
+    write_session_file(&session_dir, &session)?;
+
+    let report_file = repo_root.path().join("child.md");
+    fs::write(&report_file, "orphan child report")?;
+    let session_dir_str = session_dir.to_string_lossy().to_string();
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "complete-child",
+        "--session-dir",
+        &session_dir_str,
+        "--reviewer-id",
+        "cafebabe",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        report_file.to_string_lossy().as_ref(),
+    ])?;
+    ensure!(stderr.contains("complete-child parent review entry not found"));
     Ok(())
 }
 
@@ -1562,6 +2408,196 @@ fn applicator_note_appends_note() -> anyhow::Result<()> {
     ensure!(json_str(note, "type")? == "applied");
     let content = json_field(note, "content")?;
     ensure!(json_str(content, "result")? == "done");
+    Ok(())
+}
+
+#[test]
+fn applicator_set_status_updates_grandchild_without_top_level_duplicates() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned_child = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    let child = json_array(&spawned_child, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+    let child_id = json_str(child, "reviewer_id")?.to_string();
+
+    let spawned_grandchild = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        &child_id,
+        "--count",
+        "1",
+    ])?;
+    let grandchild = json_array(&spawned_grandchild, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("grandchild missing"))?;
+    let grandchild_id = json_str(grandchild, "reviewer_id")?;
+
+    run_cmd_json(&[
+        "applicator",
+        "set-status",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        grandchild_id,
+        "--session-id",
+        "sess0001",
+        "--initiator-status",
+        "RECEIVED",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let top_reviews = json_array(&session, "reviews")?;
+    ensure!(top_reviews.len() == 1);
+    ensure!(!top_reviews
+        .iter()
+        .any(|entry| json_str(entry, "reviewer_id").ok() == Some(child_id.as_str())));
+    ensure!(!top_reviews
+        .iter()
+        .any(|entry| json_str(entry, "reviewer_id").ok() == Some(grandchild_id)));
+
+    let grandchild_entry = find_review(&session, grandchild_id, "sess0001")?;
+    ensure!(json_str(grandchild_entry, "initiator_status")? == "RECEIVED");
+    let child_entry = find_review(&session, &child_id, "sess0001")?;
+    let nested_grandchild = find_child_review(child_entry, grandchild_id, "sess0001")?;
+    ensure!(json_str(nested_grandchild, "initiator_status")? == "RECEIVED");
+    Ok(())
+}
+
+#[test]
+fn applicator_note_updates_grandchild_without_top_level_duplicates() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let spawned_child = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    let child = json_array(&spawned_child, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+    let child_id = json_str(child, "reviewer_id")?.to_string();
+
+    let spawned_grandchild = run_cmd_json(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        &child_id,
+        "--count",
+        "1",
+    ])?;
+    let grandchild = json_array(&spawned_grandchild, "children")?
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("grandchild missing"))?;
+    let grandchild_id = json_str(grandchild, "reviewer_id")?;
+
+    run_cmd_json(&[
+        "applicator",
+        "note",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        grandchild_id,
+        "--session-id",
+        "sess0001",
+        "--note-type",
+        "applied",
+        "--content",
+        "child fix applied",
+    ])?;
+
+    let session = read_session_json(Path::new(&session_dir))?;
+    let top_reviews = json_array(&session, "reviews")?;
+    ensure!(top_reviews.len() == 1);
+    ensure!(!top_reviews
+        .iter()
+        .any(|entry| json_str(entry, "reviewer_id").ok() == Some(child_id.as_str())));
+    ensure!(!top_reviews
+        .iter()
+        .any(|entry| json_str(entry, "reviewer_id").ok() == Some(grandchild_id)));
+
+    let grandchild_entry = find_review(&session, grandchild_id, "sess0001")?;
+    let notes = json_array(grandchild_entry, "notes")?;
+    ensure!(notes.len() == 1);
+    let note = notes
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("note missing"))?;
+    ensure!(json_str(note, "role")? == "applicator");
+    ensure!(json_str(note, "type")? == "applied");
+    ensure!(json_str(note, "content")? == "child fix applied");
+
+    let child_entry = find_review(&session, &child_id, "sess0001")?;
+    let nested_grandchild = find_child_review(child_entry, grandchild_id, "sess0001")?;
+    ensure!(json_array(nested_grandchild, "notes")?.len() == 1);
     Ok(())
 }
 

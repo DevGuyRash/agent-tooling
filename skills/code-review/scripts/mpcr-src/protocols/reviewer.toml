@@ -129,5 +129,12 @@ mpcr reviewer finalize \
   --report-file /path/to/report.md
 ```
 
+Finalize artifact rules:
+- WHEN `--report-file` is provided, mpcr moves that file into the canonical session report path by default.
+- IF you must keep the source file, you SHALL pass `--copy-report-input`.
+- IF `--report-file` is omitted, you SHALL pipe markdown via stdin.
+- Parent finalize auto-closes unresolved child reviews by default (status `CANCELLED`).
+- IF you want finalize to fail when open children exist, you SHALL pass `--no-auto-close-children`.
+
 You SHALL NOT skip finalization. The review is incomplete until `mpcr reviewer finalize` succeeds.
 """
