@@ -1,0 +1,89 @@
+#!/usr/bin/env sh
+set -eu
+
+script_path="$0"
+case "$script_path" in
+  */*) : ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    case "$resolved" in
+      */*) script_path="$resolved" ;;
+    esac
+    ;;
+esac
+
+if command -v readlink >/dev/null 2>&1; then
+  while [ -L "$script_path" ]; do
+    link="$(readlink "$script_path" 2>/dev/null || true)"
+    [ -n "$link" ] || break
+    case "$link" in
+      /*) script_path="$link" ;;
+      *) script_path="$(dirname -- "$script_path")/$link" ;;
+    esac
+  done
+fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
+skill_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
+tooling_dir="${script_dir}/tooling"
+tooling_manifest="${tooling_dir}/Cargo.toml"
+compose_launcher="${script_dir}/docker-architect-compose"
+
+if [ ! -f "${tooling_manifest}" ]; then
+  echo "error: missing ${tooling_manifest} (docker-architect tooling workspace not found)" >&2
+  exit 2
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "error: cargo is required to run deterministic golden tests" >&2
+  exit 127
+fi
+
+echo "[docker-architect-ci-gate] running deterministic golden pipeline tests"
+cargo test --manifest-path "${tooling_manifest}" --locked -p architect-core --test golden_pipeline
+
+verify_enabled_value="$(printf '%s' "${DOCKER_ARCHITECT_ENABLE_VERIFY:-0}" | tr '[:upper:]' '[:lower:]')"
+verify_enabled=0
+case "${verify_enabled_value}" in
+  1|true|yes|on) verify_enabled=1 ;;
+esac
+
+if [ "${verify_enabled}" -ne 1 ]; then
+  echo "[docker-architect-ci-gate] skipping live docker verify (set DOCKER_ARCHITECT_ENABLE_VERIFY=1 to enable)"
+  exit 0
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "error: DOCKER_ARCHITECT_ENABLE_VERIFY=1 requires docker in PATH" >&2
+  exit 127
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "error: docker daemon is unreachable but DOCKER_ARCHITECT_ENABLE_VERIFY=1 was requested" >&2
+  exit 2
+fi
+
+verify_compose_file="${DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE:-${skill_root}/references/ci/verify.compose.yaml}"
+if [ ! -f "${verify_compose_file}" ]; then
+  echo "error: verify compose file not found: ${verify_compose_file}" >&2
+  exit 2
+fi
+
+if [ ! -x "${compose_launcher}" ] || [ ! -f "${compose_launcher}" ]; then
+  echo "error: missing executable compose launcher: ${compose_launcher}" >&2
+  exit 2
+fi
+
+report_file="$(mktemp "${TMPDIR:-/tmp}/docker-architect-verify-report.XXXXXX.json")"
+trap 'rm -f "${report_file}"' EXIT HUP INT TERM
+
+echo "[docker-architect-ci-gate] running live docker verify with ${verify_compose_file}"
+"${compose_launcher}" verify "${verify_compose_file}" --mode compose --output "${report_file}"
+
+if ! grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "${report_file}"; then
+  echo "error: live docker verify failed (success=false)" >&2
+  cat "${report_file}" >&2
+  exit 1
+fi
+
+echo "[docker-architect-ci-gate] live docker verify passed"

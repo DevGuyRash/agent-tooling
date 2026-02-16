@@ -1,0 +1,112 @@
+version: 1
+images:
+  - id: KB-POSTGRES
+    match:
+      registries: [docker.io]
+      repositories: [library/postgres]
+    runtime_uid: 999
+    runtime_gid: 999
+    required_mounts:
+      - /var/lib/postgresql/data
+    recommended_env:
+      - key: POSTGRES_DB
+        default_value: app
+        required: false
+        rationale: Sets the default database created at first startup.
+      - key: POSTGRES_USER
+        default_value: app
+        required: false
+        rationale: Sets the default database user created at first startup.
+      - key: POSTGRES_PASSWORD
+        required: true
+        rationale: Required unless trust auth is explicitly configured.
+      - key: PGDATA
+        default_value: /var/lib/postgresql/data/pgdata
+        required: false
+        rationale: Moves data files under a dedicated writable subdirectory.
+    preferred_healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER:-postgres}" -d "$${POSTGRES_DB:-postgres}" || exit 1
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
+    security_notes:
+      - Keep /var/lib/postgresql/data writable even when root filesystem is read-only.
+
+  - id: KB-REDIS
+    match:
+      registries: [docker.io]
+      repositories: [library/redis]
+    runtime_uid: 999
+    runtime_gid: 999
+    required_mounts:
+      - /data
+    recommended_env:
+      - key: REDIS_PASSWORD
+        required: false
+        rationale: Set when authentication is required for shared environments.
+    preferred_healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 10
+    security_notes:
+      - Configure appendonly persistence or external backups for production stateful use.
+
+  - id: KB-NGINX
+    match:
+      registries: [docker.io]
+      repositories: [library/nginx]
+    runtime_uid: 101
+    runtime_gid: 101
+    recommended_env:
+      - key: NGINX_ENTRYPOINT_QUIET_LOGS
+        default_value: "1"
+        required: false
+        rationale: Reduces startup noise while preserving error output.
+    preferred_healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q --spider http://127.0.0.1:80/ || exit 1
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  - id: KB-DISTROLESS
+    match:
+      image_prefixes:
+        - gcr.io/distroless/
+        - cgr.dev/chainguard/
+        - ghcr.io/distroless/
+    security_notes:
+      - Distroless images often omit shell utilities and should avoid CMD-SHELL healthchecks.
+      - Prefer application-native readiness endpoints or exec-form Dockerfile HEALTHCHECK probes.
+
+  - id: KB-SCRATCH
+    match:
+      registries: [docker.io]
+      repositories: [library/scratch]
+    security_notes:
+      - Scratch-based images do not include a shell; use exec-form healthchecks only.
+
+  - id: KB-OPENCL
+    match:
+      image_prefixes:
+        - docker.io/nvidia/
+        - nvcr.io/nvidia/
+        - docker.io/rocm/
+        - ghcr.io/rocm/
+        - rocm/
+    preferred_gpu_driver: nvidia
+    preferred_gpu_capabilities:
+      - gpu
+      - compute
+    security_notes:
+      - OpenCL/GPU workloads may require device reservations and host runtime integration.

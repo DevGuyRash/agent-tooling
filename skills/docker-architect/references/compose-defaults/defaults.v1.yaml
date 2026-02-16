@@ -1,0 +1,49 @@
+version: 1
+anchors:
+  - name: hardening_core
+    yaml_key: x-hardening-core
+    mode: any
+    min_usage: 2
+    body:
+      read_only: true
+      cap_drop:
+        - ALL
+      security_opt:
+        - no-new-privileges:true
+
+  - name: resource_defaults_compose
+    yaml_key: x-resource-defaults-compose
+    mode: compose
+    min_usage: 2
+    body:
+      cpus: "1.0"
+      mem_limit: 512m
+      pids_limit: 256
+
+  - name: resource_defaults_swarm
+    yaml_key: x-resource-defaults-swarm
+    mode: swarm
+    min_usage: 2
+    body:
+      deploy:
+        resources:
+          limits:
+            cpus: "1.0"
+            memory: 512m
+
+  - name: init_permissions_core
+    yaml_key: x-init-permissions-core
+    mode: any
+    min_usage: 1
+    body:
+      user: "0:0"
+      read_only: true
+      cap_drop:
+        - ALL
+      cap_add:
+        - CHOWN
+        - FOWNER
+      security_opt:
+        - no-new-privileges:true
+      network_mode: none
+      restart: "no"
