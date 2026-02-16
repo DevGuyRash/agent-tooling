@@ -16,6 +16,9 @@ struct GoldenCase {
     cache_dir: &'static str,
     policy: &'static str,
     mode: DeployMode,
+    expected_violation_substrings: &'static [&'static str],
+    required_patch_ops: &'static [&'static str],
+    forbidden_patch_ops: &'static [&'static str],
     expected_patch_plan: &'static str,
     expected_hardened: &'static str,
     expected_anchored: &'static str,
@@ -64,6 +67,35 @@ fn run_case(case: &GoldenCase) {
         case.mode,
     )
     .expect("initial policy evaluation should succeed");
+
+    for expected in case.expected_violation_substrings {
+        assert!(
+            initial
+                .violations
+                .iter()
+                .any(|violation| violation.reason.contains(expected)),
+            "fixture {} expected violation containing `{}`",
+            case.name,
+            expected
+        );
+    }
+    for op in case.required_patch_ops {
+        assert!(
+            initial.patch_plan.iter().any(|patch| patch.op == *op),
+            "fixture {} expected patch op `{}`",
+            case.name,
+            op
+        );
+    }
+    for op in case.forbidden_patch_ops {
+        assert!(
+            !initial.patch_plan.iter().any(|patch| patch.op == *op),
+            "fixture {} should not include patch op `{}`",
+            case.name,
+            op
+        );
+    }
+
     let rendered_patch_plan =
         serde_json::to_string_pretty(&initial.patch_plan).expect("patch plan should serialize");
     let expected_patch_plan =
@@ -129,6 +161,9 @@ fn golden_cases() -> Vec<GoldenCase> {
             cache_dir: "tests/golden/compose_dual/cache",
             policy: "policy-compose-enforcing.yaml",
             mode: DeployMode::Compose,
+            expected_violation_substrings: &[],
+            required_patch_ops: &[],
+            forbidden_patch_ops: &[],
             expected_patch_plan: "tests/golden/compose_dual/expected.patch-plan.json",
             expected_hardened: "tests/golden/compose_dual/expected.hardened.yaml",
             expected_anchored: "tests/golden/compose_dual/expected.anchored.yaml",
@@ -139,9 +174,45 @@ fn golden_cases() -> Vec<GoldenCase> {
             cache_dir: "tests/golden/swarm_dual/cache",
             policy: "policy-swarm-enforcing.yaml",
             mode: DeployMode::Swarm,
+            expected_violation_substrings: &[],
+            required_patch_ops: &[],
+            forbidden_patch_ops: &[],
             expected_patch_plan: "tests/golden/swarm_dual/expected.patch-plan.json",
             expected_hardened: "tests/golden/swarm_dual/expected.hardened.yaml",
             expected_anchored: "tests/golden/swarm_dual/expected.anchored.yaml",
+        },
+        GoldenCase {
+            name: "compose_init_perms_named_volume",
+            input: "tests/golden/compose_init_perms_named_volume/input.compose.yaml",
+            cache_dir: "tests/golden/compose_init_perms_named_volume/cache",
+            policy: "policy-compose-enforcing.yaml",
+            mode: DeployMode::Compose,
+            expected_violation_substrings: &[
+                "service runs as non-root with writable volumes; init sidecar enforces deterministic ownership",
+            ],
+            required_patch_ops: &["inject_service", "depends_on_add"],
+            forbidden_patch_ops: &[],
+            expected_patch_plan:
+                "tests/golden/compose_init_perms_named_volume/expected.patch-plan.json",
+            expected_hardened:
+                "tests/golden/compose_init_perms_named_volume/expected.hardened.yaml",
+            expected_anchored:
+                "tests/golden/compose_init_perms_named_volume/expected.anchored.yaml",
+        },
+        GoldenCase {
+            name: "compose_bind_mount_skip",
+            input: "tests/golden/compose_bind_mount_skip/input.compose.yaml",
+            cache_dir: "tests/golden/compose_bind_mount_skip/cache",
+            policy: "policy-compose-balanced.yaml",
+            mode: DeployMode::Compose,
+            expected_violation_substrings: &[
+                "bind mount target `/var/cache/app` detected; permission init sidecar chown is disabled by default to avoid host ownership mutation",
+            ],
+            required_patch_ops: &[],
+            forbidden_patch_ops: &["inject_service", "depends_on_add"],
+            expected_patch_plan: "tests/golden/compose_bind_mount_skip/expected.patch-plan.json",
+            expected_hardened: "tests/golden/compose_bind_mount_skip/expected.hardened.yaml",
+            expected_anchored: "tests/golden/compose_bind_mount_skip/expected.anchored.yaml",
         },
     ]
 }

@@ -1,0 +1,58 @@
+services:
+  api:
+    cap_drop:
+    - ALL
+    cpus: '1.0'
+    depends_on:
+      api-init-perms:
+        condition: service_completed_successfully
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      test:
+      - CMD
+      - nginx
+      - -t
+      timeout: 5s
+    image: nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    mem_limit: 512m
+    pids_limit: 256
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /run:rw,noexec,nosuid,nodev,size=16m
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+    - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 101:101
+    volumes:
+    - app_data:/var/cache/app
+  api-init-perms:
+    cap_add:
+    - CHOWN
+    - FOWNER
+    cap_drop:
+    - ALL
+    command:
+    - /bin/sh
+    - -euxc
+    - set -eu; for path in /mnt/perm-0; do mkdir -p "$path"; owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"; if [ "$owner" != "101:101" ]; then chown -R 101:101 "$path"; fi; done
+    cpus: '1.0'
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    mem_limit: 512m
+    network_mode: none
+    pids_limit: 256
+    read_only: true
+    restart: no
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=16m
+    - /run:rw,noexec,nosuid,nodev,size=16m
+    - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 0:0
+    volumes:
+    - app_data:/mnt/perm-0
+volumes:
+  app_data: {}

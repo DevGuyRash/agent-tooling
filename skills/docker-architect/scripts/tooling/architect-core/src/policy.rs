@@ -483,10 +483,13 @@ pub fn evaluate_compose_policy_with_mode(
                 })?;
             evaluate_rule_for_service(
                 rule,
-                service_name,
-                service,
-                cache,
-                mode,
+                ServiceRuleContext {
+                    service_name,
+                    service,
+                    services,
+                    cache,
+                    active_mode: mode,
+                },
                 &mut violations,
                 &mut patches,
             )?;
@@ -1032,15 +1035,27 @@ fn get_services_mapping(document: &YamlValue) -> Result<&Mapping, AppError> {
         })
 }
 
+struct ServiceRuleContext<'a> {
+    service_name: &'a str,
+    service: &'a Mapping,
+    services: &'a Mapping,
+    cache: &'a CachedProfiles,
+    active_mode: DeployMode,
+}
+
 fn evaluate_rule_for_service(
     rule: &PolicyRule,
-    service_name: &str,
-    service: &Mapping,
-    cache: &CachedProfiles,
-    active_mode: DeployMode,
+    context: ServiceRuleContext<'_>,
     violations: &mut Vec<PolicyViolation>,
     patches: &mut Vec<PatchOperation>,
 ) -> Result<(), AppError> {
+    let ServiceRuleContext {
+        service_name,
+        service,
+        services,
+        cache,
+        active_mode,
+    } = context;
     let service_profile = lookup_profile_for_service(cache, service);
     match &rule.action {
         PolicyAction::EnsureKey { key, value } => {
@@ -1136,6 +1151,9 @@ fn evaluate_rule_for_service(
             }
         }
         PolicyAction::RequireNonRootUser { key } => {
+            if is_init_permissions_service_name(service_name) {
+                return Ok(());
+            }
             let current_user = get_service_path(service, key)?.and_then(yaml_scalar_to_string);
             if current_user
                 .as_deref()
@@ -1215,6 +1233,9 @@ fn evaluate_rule_for_service(
                         "permission init sidecars are skipped in swarm mode; run a pre-deploy ownership job when required".to_string(),
                     );
                 }
+                return Ok(());
+            }
+            if service_has_permission_init_sidecar(service_name, service, services) {
                 return Ok(());
             }
             for target in heuristics::bind_mount_targets(service) {
@@ -1385,6 +1406,38 @@ fn add_compose_violation(
         target: format!("services.{service_name}.{key}"),
         reason,
     });
+}
+
+fn is_init_permissions_service_name(service_name: &str) -> bool {
+    service_name.ends_with("-init-perms") || service_name.starts_with("init-")
+}
+
+fn service_has_permission_init_sidecar(
+    service_name: &str,
+    service: &Mapping,
+    services: &Mapping,
+) -> bool {
+    let init_name = format!("{service_name}-init-perms");
+    let init_service_exists = services
+        .get(YamlValue::String(init_name.clone()))
+        .and_then(YamlValue::as_mapping)
+        .is_some();
+    if !init_service_exists {
+        return false;
+    }
+
+    let Some(depends_on) = service.get(YamlValue::String("depends_on".to_string())) else {
+        return false;
+    };
+
+    match depends_on {
+        YamlValue::Mapping(map) => map.get(YamlValue::String(init_name.clone())).is_some(),
+        YamlValue::Sequence(items) => items
+            .iter()
+            .filter_map(YamlValue::as_str)
+            .any(|item| item == init_name.as_str()),
+        _ => false,
+    }
 }
 
 fn get_service_key<'a>(service: &'a Mapping, key: &str) -> Option<&'a YamlValue> {
@@ -2815,6 +2868,84 @@ rules:
             .patch_plan
             .iter()
             .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_skips_non_root_requirement_for_init_perms_services() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    user: "0:0"
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: enforcing
+rules:
+  - id: AC-CMP-USER
+    severity: block
+    action: require_non_root_user
+    target: service.*
+    key: user
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_skips_reinjecting_existing_init_perms_sidecar() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      api-init-perms:
+        condition: service_completed_successfully
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "depends_on_add"));
     }
 
     #[test]

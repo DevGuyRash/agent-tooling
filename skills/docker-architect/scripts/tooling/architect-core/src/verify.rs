@@ -206,9 +206,17 @@ fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<boo
 
 fn logs_contain_error_keywords(logs: &str) -> bool {
     let lower = logs.to_ascii_lowercase();
-    ["panic", "fatal", "error", "exception"]
-        .iter()
-        .any(|keyword| lower.contains(keyword))
+    [
+        "panic",
+        "fatal",
+        "error",
+        "exception",
+        "read-only file system",
+        "permission denied",
+        "operation not permitted",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
 }
 
 fn is_root_user(user: &str) -> bool {
@@ -296,6 +304,15 @@ mod tests {
     fn logs_contain_error_keywords_matches_expected_terms() {
         assert!(logs_contain_error_keywords("panic: unable to bind"));
         assert!(logs_contain_error_keywords("Fatal startup error"));
+        assert!(logs_contain_error_keywords(
+            "write /tmp/x: read-only file system"
+        ));
+        assert!(logs_contain_error_keywords(
+            "open /etc/app: permission denied"
+        ));
+        assert!(logs_contain_error_keywords(
+            "mount failed: operation not permitted"
+        ));
         assert!(!logs_contain_error_keywords("ready and healthy"));
     }
 }

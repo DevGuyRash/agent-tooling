@@ -116,12 +116,19 @@ pub fn ensure_volume_permissions(
               "command": ["/bin/sh", "-euxc", init_script],
               "user": "0:0",
               "read_only": true,
-              "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=16m"],
+              "tmpfs": [
+                "/tmp:rw,noexec,nosuid,nodev,size=16m",
+                "/run:rw,noexec,nosuid,nodev,size=16m",
+                "/var/run:rw,noexec,nosuid,nodev,size=16m"
+              ],
               "cap_drop": ["ALL"],
               "cap_add": ["CHOWN", "FOWNER"],
               "security_opt": ["no-new-privileges:true"],
               "network_mode": "none",
               "restart": "no",
+              "cpus": "1.0",
+              "mem_limit": "512m",
+              "pids_limit": 256,
               "volumes": init_mounts
             }),
             reason: "service runs as non-root with writable volumes; init sidecar enforces deterministic ownership".to_string(),
@@ -900,6 +907,37 @@ volumes:
             .expect("init command should exist");
         assert!(command.contains("stat -c '%u:%g'"));
         assert!(command.contains("if [ \"$owner\" != \"1000:1000\" ]"));
+
+        let injected = patches.first().expect("init patch should exist");
+        assert_eq!(
+            injected.value.get("cpus").and_then(|value| value.as_str()),
+            Some("1.0")
+        );
+        assert_eq!(
+            injected
+                .value
+                .get("mem_limit")
+                .and_then(|value| value.as_str()),
+            Some("512m")
+        );
+        assert_eq!(
+            injected
+                .value
+                .get("pids_limit")
+                .and_then(|value| value.as_u64()),
+            Some(256)
+        );
+        let tmpfs = injected
+            .value
+            .get("tmpfs")
+            .and_then(|value| value.as_array())
+            .expect("tmpfs entries should exist");
+        let tmpfs_entries: Vec<&str> = tmpfs.iter().filter_map(|value| value.as_str()).collect();
+        assert!(tmpfs_entries.iter().any(|entry| entry.starts_with("/tmp:")));
+        assert!(tmpfs_entries.iter().any(|entry| entry.starts_with("/run:")));
+        assert!(tmpfs_entries
+            .iter()
+            .any(|entry| entry.starts_with("/var/run:")));
     }
 
     #[test]
