@@ -60,7 +60,11 @@ pub fn validate_cache(cache: &CachedProfiles, strictness: &str) -> Result<Vec<St
             warnings.push(issue);
         }
         if profile.dockerfile_url.is_none() {
-            warnings.push(format!("{} missing dockerfile url", profile.id));
+            let issue = format!("{} missing dockerfile url", profile.id);
+            if is_docker_hub_image(&profile.image) {
+                critical.push(issue.clone());
+            }
+            warnings.push(issue);
         }
         if profile.platforms.is_empty() {
             warnings.push(format!("{} missing platforms", profile.id));
@@ -98,6 +102,7 @@ mod tests {
             docs_url: Some("https://example.com/docs".to_string()),
             dockerfile_url: Some("https://example.com/repo".to_string()),
             digest: Some("sha256:abc".to_string()),
+            config_digest: Some("sha256:def".to_string()),
             platforms: vec![Platform {
                 os: "linux".to_string(),
                 arch: "amd64".to_string(),
@@ -105,6 +110,7 @@ mod tests {
             runtime: RuntimeProfile::default(),
             sources: Vec::new(),
             notes: Vec::new(),
+            researched_config: Default::default(),
         }
     }
 
@@ -112,6 +118,23 @@ mod tests {
     fn balanced_rejects_missing_docs_for_docker_hub_image() {
         let mut profile = base_profile("docker.io/library/nginx:1.27");
         profile.docs_url = None;
+        let cache = CachedProfiles {
+            schema_version: 1,
+            profiles: vec![profile],
+            unresolved_references: Vec::new(),
+        };
+
+        let result = validate_cache(&cache, "balanced");
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::InvalidInput { .. })
+        ));
+    }
+
+    #[test]
+    fn balanced_rejects_missing_dockerfile_for_docker_hub_image() {
+        let mut profile = base_profile("docker.io/library/nginx:1.27");
+        profile.dockerfile_url = None;
         let cache = CachedProfiles {
             schema_version: 1,
             profiles: vec![profile],

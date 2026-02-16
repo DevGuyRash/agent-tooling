@@ -52,6 +52,10 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
             "digest: {}\n",
             profile.digest.as_deref().unwrap_or("unknown")
         ));
+        out.push_str(&format!(
+            "config_digest: {}\n",
+            profile.config_digest.as_deref().unwrap_or("unknown")
+        ));
         out.push_str("runtime:\n");
         out.push_str(&format!(
             "  user: {}\n",
@@ -85,6 +89,119 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
                 out.push_str(&format!("    - {}\n", key));
             }
         }
+        out.push_str("  env:\n");
+        if profile.runtime.env.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for item in &profile.runtime.env {
+                match item.value.as_deref() {
+                    Some(value) => out.push_str(&format!("    - {}={}\n", item.key, value)),
+                    None => out.push_str(&format!("    - {}\n", item.key)),
+                }
+            }
+        }
+        out.push_str("  exposed_ports:\n");
+        if profile.runtime.exposed_ports.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for port in &profile.runtime.exposed_ports {
+                out.push_str(&format!("    - {}\n", port));
+            }
+        }
+        out.push_str("  volumes:\n");
+        if profile.runtime.volumes.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for volume in &profile.runtime.volumes {
+                out.push_str(&format!("    - {}\n", volume));
+            }
+        }
+        out.push_str(&format!(
+            "  stop_signal: {}\n",
+            profile.runtime.stop_signal.as_deref().unwrap_or("unknown")
+        ));
+        out.push_str("  healthcheck:\n");
+        if let Some(healthcheck) = &profile.runtime.healthcheck {
+            out.push_str("    test:\n");
+            if healthcheck.test.is_empty() {
+                out.push_str("      - none\n");
+            } else {
+                for token in &healthcheck.test {
+                    out.push_str(&format!("      - {}\n", token));
+                }
+            }
+            out.push_str(&format!(
+                "    interval_ns: {}\n",
+                healthcheck
+                    .interval_ns
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+            ));
+            out.push_str(&format!(
+                "    timeout_ns: {}\n",
+                healthcheck
+                    .timeout_ns
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+            ));
+            out.push_str(&format!(
+                "    start_period_ns: {}\n",
+                healthcheck
+                    .start_period_ns
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+            ));
+            out.push_str(&format!(
+                "    retries: {}\n",
+                healthcheck
+                    .retries
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+            ));
+        } else {
+            out.push_str("    test:\n");
+            out.push_str("      - none\n");
+            out.push_str("    interval_ns: unknown\n");
+            out.push_str("    timeout_ns: unknown\n");
+            out.push_str("    start_period_ns: unknown\n");
+            out.push_str("    retries: unknown\n");
+        }
+        out.push_str("  tools:\n");
+        if profile.runtime.tools.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for (tool, available) in &profile.runtime.tools {
+                out.push_str(&format!("    - {}: {}\n", tool, available));
+            }
+        }
+        out.push_str("  tool_details:\n");
+        if profile.runtime.tool_details.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for (tool, detail) in &profile.runtime.tool_details {
+                out.push_str(&format!(
+                    "    - {}: available={}, path={}, strategy={}\n",
+                    tool,
+                    detail.available,
+                    detail.path.as_deref().unwrap_or("unknown"),
+                    detail.strategy.as_deref().unwrap_or("unknown")
+                ));
+            }
+        }
+        out.push_str("  signatures:\n");
+        out.push_str(&format!(
+            "    opencl: {}\n",
+            profile.runtime.signatures.opencl
+        ));
+        out.push_str(&format!(
+            "    nvidia: {}\n",
+            profile.runtime.signatures.nvidia
+        ));
+        out.push_str(&format!("    rocm: {}\n", profile.runtime.signatures.rocm));
+        out.push_str(&format!(
+            "    gpu_compute: {}\n",
+            profile.runtime.signatures.gpu_compute
+        ));
+        out.push_str(&format!(
+            "    distroless: {}\n",
+            profile.runtime.signatures.distroless
+        ));
         out.push_str("  oci:\n");
         out.push_str(&format!(
             "    source: {}\n",
@@ -130,6 +247,54 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
         } else {
             for note in &profile.notes {
                 out.push_str(&format!("  - {}\n", note));
+            }
+        }
+        out.push_str("researched_config:\n");
+        out.push_str("  recommended_env:\n");
+        if profile.researched_config.recommended_env.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for item in &profile.researched_config.recommended_env {
+                out.push_str(&format!("    - key: {}\n", item.key));
+                out.push_str(&format!(
+                    "      default_value: {}\n",
+                    item.default_value.as_deref().unwrap_or("none")
+                ));
+                out.push_str(&format!("      required: {}\n", item.required));
+                out.push_str(&format!(
+                    "      rationale: {}\n",
+                    item.rationale.as_deref().unwrap_or("none")
+                ));
+            }
+        }
+        out.push_str("  required_mounts:\n");
+        if profile.researched_config.required_mounts.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for path in &profile.researched_config.required_mounts {
+                out.push_str(&format!("    - {}\n", path));
+            }
+        }
+        out.push_str(&format!(
+            "  runtime_uid: {}\n",
+            profile
+                .researched_config
+                .runtime_uid
+                .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+        ));
+        out.push_str(&format!(
+            "  runtime_gid: {}\n",
+            profile
+                .researched_config
+                .runtime_gid
+                .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+        ));
+        out.push_str("  security_notes:\n");
+        if profile.researched_config.security_notes.is_empty() {
+            out.push_str("    - none\n");
+        } else {
+            for note in &profile.researched_config.security_notes {
+                out.push_str(&format!("    - {}\n", note));
             }
         }
         out.push_str("```\n\n");

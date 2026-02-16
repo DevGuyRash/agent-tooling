@@ -1,5 +1,6 @@
 //! Image reference extraction utilities.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use regex::Regex;
@@ -57,6 +58,7 @@ pub fn extract_images(input: &str) -> Result<Vec<String>, AppError> {
 pub fn extract_image_sets(input: &str) -> Result<ExtractedImages, AppError> {
     let mut candidates = Vec::new();
     let mut stage_aliases = BTreeSet::new();
+    let mut arg_defaults: BTreeMap<String, String> = BTreeMap::new();
 
     let image_re = Regex::new(r#"(?m)^\s*image\s*:\s*["']?([^\s"'#]+)["']?\s*(?:#.*)?$"#).map_err(
         |error| AppError::InvalidInput {
@@ -72,6 +74,12 @@ pub fn extract_image_sets(input: &str) -> Result<ExtractedImages, AppError> {
 
     for raw_line in input.lines() {
         let line = raw_line.trim();
+        if line.starts_with("ARG ") || line.starts_with("arg ") {
+            if let Some((name, default)) = parse_arg_default(line) {
+                arg_defaults.insert(name, default);
+            }
+            continue;
+        }
         if line.starts_with("FROM ") || line.starts_with("from ") {
             let mut parts = line.split_whitespace();
             let _ = parts.next();
@@ -94,13 +102,14 @@ pub fn extract_image_sets(input: &str) -> Result<ExtractedImages, AppError> {
             }
 
             if let Some(reference) = tokens.first().copied() {
-                let normalized_reference = reference.to_lowercase();
+                let resolved_reference = resolve_from_reference(reference, &arg_defaults);
+                let normalized_reference = resolved_reference.to_lowercase();
                 let is_stage_alias = !normalized_reference.contains('/')
                     && !normalized_reference.contains(':')
                     && !normalized_reference.contains('@')
                     && stage_aliases.contains(&normalized_reference);
-                if !reference.is_empty() && !is_stage_alias {
-                    candidates.push(reference.to_string());
+                if !resolved_reference.is_empty() && !is_stage_alias {
+                    candidates.push(resolved_reference);
                 }
 
                 if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("as") {
@@ -111,6 +120,109 @@ pub fn extract_image_sets(input: &str) -> Result<ExtractedImages, AppError> {
     }
 
     classify_images(&candidates)
+}
+
+fn parse_arg_default(line: &str) -> Option<(String, String)> {
+    let mut parts = line.splitn(2, char::is_whitespace);
+    let keyword = parts.next()?;
+    if !keyword.eq_ignore_ascii_case("ARG") {
+        return None;
+    }
+    let remainder = parts.next()?.trim();
+    let (name, value) = remainder.split_once('=')?;
+    let key = name.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let default = value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
+    Some((key.to_string(), default))
+}
+
+fn resolve_from_reference(reference: &str, arg_defaults: &BTreeMap<String, String>) -> String {
+    let bytes = reference.as_bytes();
+    let mut output = String::with_capacity(reference.len());
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            output.push(bytes[index] as char);
+            index += 1;
+            continue;
+        }
+
+        if index + 1 >= bytes.len() {
+            output.push('$');
+            index += 1;
+            continue;
+        }
+
+        if bytes[index + 1] == b'{' {
+            let mut end = index + 2;
+            while end < bytes.len() && bytes[end] != b'}' {
+                end += 1;
+            }
+            if end < bytes.len() {
+                let token = &reference[index + 2..end];
+                if is_valid_arg_name(token) {
+                    if let Some(value) = arg_defaults.get(token) {
+                        output.push_str(value);
+                    } else {
+                        output.push_str(&reference[index..=end]);
+                    }
+                    index = end + 1;
+                    continue;
+                }
+            }
+            output.push('$');
+            index += 1;
+            continue;
+        }
+
+        let start = index + 1;
+        if !is_valid_arg_start(bytes[start]) {
+            output.push('$');
+            index += 1;
+            continue;
+        }
+
+        let mut end = start;
+        while end < bytes.len() && is_valid_arg_continue(bytes[end]) {
+            end += 1;
+        }
+
+        let token = &reference[start..end];
+        if let Some(value) = arg_defaults.get(token) {
+            output.push_str(value);
+        } else {
+            output.push_str(&reference[index..end]);
+        }
+        index = end;
+    }
+
+    output
+}
+
+fn is_valid_arg_name(value: &str) -> bool {
+    let mut chars = value.bytes();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !is_valid_arg_start(first) {
+        return false;
+    }
+    chars.all(is_valid_arg_continue)
+}
+
+fn is_valid_arg_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_valid_arg_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 /// Normalize and deduplicate image references.
@@ -232,6 +344,17 @@ COPY --from=builder /app /app
     }
 
     #[test]
+    fn extract_images_resolves_arg_default_in_from_reference() {
+        let input = r#"
+ARG RUNTIME_IMAGE=ghcr.io/example/app:1.2.3
+FROM ${RUNTIME_IMAGE}
+"#;
+
+        let actual = extract_images(input).expect("extract should succeed");
+        assert_eq!(actual, vec!["ghcr.io/example/app:1.2.3"]);
+    }
+
+    #[test]
     fn normalize_images_rejects_invalid_reference() {
         let result = normalize_images(&["invalid ref".to_string()]);
         assert!(matches!(result, Err(AppError::InvalidInput { .. })));
@@ -273,5 +396,26 @@ FROM $BASE_IMAGE
                 "nginx:${NGINX_VERSION}".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn extract_images_resolves_arg_tokens_without_prefix_collisions() {
+        let input = r#"
+ARG A=docker.io/library/alpine
+ARG AB=docker.io/library/debian:12
+FROM $AB
+"#;
+        let actual = extract_images(input).expect("extract should succeed");
+        assert_eq!(actual, vec!["docker.io/library/debian:12"]);
+    }
+
+    #[test]
+    fn extract_images_keeps_unresolved_arg_tokens_when_no_default_is_set() {
+        let input = r#"
+FROM ${RUNTIME_BASE}
+"#;
+        let sets = extract_image_sets(input).expect("extract should succeed");
+        assert!(sets.valid.is_empty());
+        assert_eq!(sets.unresolved, vec!["${RUNTIME_BASE}".to_string()]);
     }
 }

@@ -12,7 +12,11 @@ use serde_json::Value;
 use url::Url;
 
 use crate::error::AppError;
-use crate::model::{ImageProfile, OciLabelProfile, Platform, RuntimeProfile, SourceRecord};
+use crate::knowledge;
+use crate::model::{
+    EnvVar, HealthcheckProfile, ImageProfile, OciLabelProfile, Platform, RecommendedEnvVar,
+    ResearchedConfig, RuntimeProfile, RuntimeSignatures, SourceRecord,
+};
 
 #[derive(Debug, Clone)]
 struct ParsedImageRef {
@@ -115,6 +119,7 @@ pub fn fetch_image_profile(
     let mut docs_url: Option<String> = None;
     let mut dockerfile_url: Option<String> = None;
     let mut runtime = RuntimeProfile::default();
+    let mut config_digest_for_profile: Option<String> = None;
 
     if parsed.registry == "docker.io" {
         match fetch_docker_hub_metadata(&client, &parsed, user_agent) {
@@ -143,13 +148,14 @@ pub fn fetch_image_profile(
                     "https://hub.docker.com/v2/repositories/{}/tags/{}",
                     parsed.repository, parsed.tag
                 );
+                let status = stable_failure_status(&error);
                 sources.push(SourceRecord {
                     kind: "docker-hub-api".to_string(),
                     url: tag_url,
-                    status: format!("failed:{error}"),
+                    status: status.clone(),
                     digest: None,
                 });
-                notes.push(format!("docker-hub-api-failed:{error}"));
+                notes.push(format!("docker-hub-api-failed:{status}"));
             }
         }
     }
@@ -172,6 +178,7 @@ pub fn fetch_image_profile(
                     platforms = manifest.platforms;
                 }
                 registry_config_digest = manifest.config_digest;
+                config_digest_for_profile = registry_config_digest.clone();
                 sources.push(SourceRecord {
                     kind: "registry-v2".to_string(),
                     url: manifest.manifest_url,
@@ -187,13 +194,14 @@ pub fn fetch_image_profile(
                     parsed.repository,
                     parsed.reference
                 );
+                let status = stable_failure_status(&error);
                 sources.push(SourceRecord {
                     kind: "registry-v2".to_string(),
                     url: manifest_url,
-                    status: format!("failed:{error}"),
+                    status: status.clone(),
                     digest: None,
                 });
-                notes.push(format!("registry-v2-failed:{error}"));
+                notes.push(format!("registry-v2-failed:{status}"));
             }
         }
     }
@@ -223,13 +231,14 @@ pub fn fetch_image_profile(
                     parsed.repository,
                     config_digest
                 );
+                let status = stable_failure_status(&error);
                 sources.push(SourceRecord {
                     kind: "registry-v2-config".to_string(),
                     url: blob_url,
-                    status: format!("failed:{error}"),
+                    status: status.clone(),
                     digest: Some(config_digest),
                 });
-                notes.push(format!("registry-v2-config-failed:{error}"));
+                notes.push(format!("registry-v2-config-failed:{status}"));
             }
         }
     }
@@ -256,13 +265,14 @@ pub fn fetch_image_profile(
                 notes.push("source:html-fallback".to_string());
             }
             Err(error) => {
+                let status = stable_failure_status(&error);
                 sources.push(SourceRecord {
                     kind: "html-fallback".to_string(),
                     url: scrape_url,
-                    status: format!("failed:{error}"),
+                    status: status.clone(),
                     digest: None,
                 });
-                notes.push(format!("html-fallback-failed:{error}"));
+                notes.push(format!("html-fallback-failed:{status}"));
             }
         }
     }
@@ -274,16 +284,34 @@ pub fn fetch_image_profile(
         }
     }
 
+    runtime.signatures = detect_runtime_signatures(&runtime);
+    let mut researched_config =
+        knowledge::researched_config_for_image(&parsed.normalized, &runtime.signatures)?
+            .unwrap_or_default();
+    if allow_scrape_fallback {
+        enrich_researched_env_from_docs(
+            &client,
+            user_agent,
+            docs_url.as_deref(),
+            dockerfile_url.as_deref(),
+            &mut researched_config,
+            &mut sources,
+            &mut notes,
+        );
+    }
+
     Ok(ImageProfile {
         id: String::new(),
         image: parsed.normalized,
         docs_url,
         dockerfile_url,
         digest,
+        config_digest: config_digest_for_profile,
         platforms,
         runtime,
         sources,
         notes,
+        researched_config,
     })
 }
 
@@ -861,7 +889,7 @@ fn parse_auth_challenge(value: &str) -> Option<AuthChallenge> {
     for part in params.1.split(',') {
         let (key, raw) = part.trim().split_once('=')?;
         let parsed = raw.trim().trim_matches('"').to_string();
-        match key {
+        match key.to_ascii_lowercase().as_str() {
             "realm" => realm = Some(parsed),
             "service" => service = Some(parsed),
             "scope" => scope = Some(parsed),
@@ -918,6 +946,191 @@ fn extract_github_url(text: &str) -> Option<String> {
     regex.find(text).map(|match_| match_.as_str().to_string())
 }
 
+fn enrich_researched_env_from_docs(
+    client: &Client,
+    user_agent: &str,
+    docs_url: Option<&str>,
+    dockerfile_url: Option<&str>,
+    researched_config: &mut ResearchedConfig,
+    sources: &mut Vec<SourceRecord>,
+    notes: &mut Vec<String>,
+) {
+    let candidates = docs_scan_candidates(docs_url, dockerfile_url);
+    if candidates.is_empty() {
+        return;
+    }
+
+    let mut reported_failure = false;
+    for url in candidates {
+        match fetch_docs_text(client, &url, user_agent) {
+            Ok(body) => {
+                sources.push(SourceRecord {
+                    kind: "docs-env-scan".to_string(),
+                    url: url.clone(),
+                    status: "ok".to_string(),
+                    digest: None,
+                });
+                let discovered = extract_recommended_env_from_docs(&body);
+                if discovered.is_empty() {
+                    continue;
+                }
+
+                let mut existing_keys: BTreeSet<String> = researched_config
+                    .recommended_env
+                    .iter()
+                    .map(|item| item.key.to_ascii_uppercase())
+                    .collect();
+                let mut added = 0usize;
+                for key in discovered {
+                    if !existing_keys.insert(key.to_ascii_uppercase()) {
+                        continue;
+                    }
+                    researched_config.recommended_env.push(RecommendedEnvVar {
+                        key,
+                        default_value: None,
+                        required: false,
+                        rationale: Some(
+                            "discovered from upstream documentation environment section"
+                                .to_string(),
+                        ),
+                    });
+                    added += 1;
+                }
+                researched_config
+                    .recommended_env
+                    .sort_by(|left, right| left.key.cmp(&right.key));
+                if added > 0 {
+                    notes.push(format!("source:docs-env-scan:{added}-added"));
+                }
+                return;
+            }
+            Err(error) => {
+                let status = stable_failure_status(&error);
+                sources.push(SourceRecord {
+                    kind: "docs-env-scan".to_string(),
+                    url: url.clone(),
+                    status: status.clone(),
+                    digest: None,
+                });
+                if !reported_failure {
+                    notes.push(format!("docs-env-scan-failed:{status}"));
+                    reported_failure = true;
+                }
+            }
+        }
+    }
+}
+
+fn docs_scan_candidates(docs_url: Option<&str>, dockerfile_url: Option<&str>) -> Vec<String> {
+    let mut urls = BTreeSet::new();
+
+    for candidate in [docs_url, dockerfile_url].into_iter().flatten() {
+        if let Some((owner, repo)) = parse_github_owner_repo(candidate) {
+            urls.insert(format!(
+                "https://api.github.com/repos/{owner}/{repo}/readme"
+            ));
+            continue;
+        }
+        if candidate.ends_with(".md")
+            || candidate.ends_with(".txt")
+            || candidate.contains("raw.githubusercontent.com")
+        {
+            urls.insert(candidate.to_string());
+        }
+    }
+
+    urls.into_iter().collect()
+}
+
+fn parse_github_owner_repo(url: &str) -> Option<(String, String)> {
+    let parsed = Url::parse(url).ok()?;
+    if parsed.host_str()? != "github.com" {
+        return None;
+    }
+    let mut segments = parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty());
+    let owner = segments.next()?.to_string();
+    let repository = segments.next()?.trim_end_matches(".git").to_string();
+    if owner.is_empty() || repository.is_empty() {
+        return None;
+    }
+    Some((owner, repository))
+}
+
+fn fetch_docs_text(client: &Client, url: &str, user_agent: &str) -> Result<String, AppError> {
+    let response = build_docs_request(client, url, user_agent)
+        .send()
+        .map_err(|error| AppError::Http {
+            url: url.to_string(),
+            reason: error.to_string(),
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::Http {
+            url: url.to_string(),
+            reason: format!("unexpected status {}", response.status()),
+        });
+    }
+    response.text().map_err(|error| AppError::Http {
+        url: url.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+fn build_docs_request(
+    client: &Client,
+    url: &str,
+    user_agent: &str,
+) -> reqwest::blocking::RequestBuilder {
+    let mut request = client.get(url).header(USER_AGENT, user_agent);
+    if url.starts_with("https://api.github.com/repos/") {
+        request = request
+            .header(ACCEPT, "application/vnd.github.v3.raw")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+    }
+    request
+}
+
+fn extract_recommended_env_from_docs(content: &str) -> Vec<String> {
+    let env_key_re = match Regex::new(r"\b[A-Z][A-Z0-9_]{2,}\b") {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut discovered = BTreeSet::new();
+    for line in content.lines() {
+        let lower = line.to_ascii_lowercase();
+        let context_match = lower.contains("environment")
+            || lower.contains("env var")
+            || lower.contains("variable")
+            || line.contains('|');
+        if !context_match {
+            continue;
+        }
+        for match_ in env_key_re.find_iter(line) {
+            let candidate = match_.as_str();
+            if is_probable_env_key(candidate) {
+                discovered.insert(candidate.to_string());
+            }
+        }
+    }
+    discovered.into_iter().collect()
+}
+
+fn is_probable_env_key(value: &str) -> bool {
+    if value.ends_with("_FILE") {
+        return false;
+    }
+    if value.contains('_') {
+        return true;
+    }
+    value.ends_with("TOKEN")
+        || value.ends_with("PASSWORD")
+        || value.ends_with("SECRET")
+        || value.ends_with("KEY")
+        || value.ends_with("PORT")
+}
+
 fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
     let cleaned = image
         .trim()
@@ -937,6 +1150,7 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
             reason: format!("image reference contains whitespace: {cleaned}"),
         });
     }
+    validate_image_reference_chars(&cleaned)?;
 
     let (name_part, digest) = if let Some((base, digest_value)) = cleaned.split_once('@') {
         (base, Some(digest_value.to_string()))
@@ -953,6 +1167,7 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
             repository = rest.to_string();
         }
     }
+    validate_registry_host(&registry)?;
 
     if registry == "docker.io" && !repository.contains('/') {
         repository = format!("library/{repository}");
@@ -965,7 +1180,11 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
     }
 
     let (repo_only, tag_part) = split_tag(&repository);
-    let repository = repo_only.to_string();
+    let repository = if registry == "docker.io" {
+        repo_only.to_ascii_lowercase()
+    } else {
+        repo_only.to_string()
+    };
     let tag = tag_part.to_string();
 
     let reference = digest.unwrap_or_else(|| tag.clone());
@@ -982,6 +1201,38 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
         normalized,
         tag,
     })
+}
+
+fn validate_image_reference_chars(cleaned: &str) -> Result<(), AppError> {
+    let valid_chars = cleaned.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@')
+    });
+    if !valid_chars {
+        return Err(AppError::InvalidInput {
+            reason: format!("image reference contains unsupported characters: {cleaned}"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_registry_host(registry: &str) -> Result<(), AppError> {
+    let host = Url::parse(&format!("https://{registry}"))
+        .map_err(|error| AppError::InvalidInput {
+            reason: format!("invalid registry host `{registry}`: {error}"),
+        })?
+        .host_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::InvalidInput {
+            reason: format!("invalid registry host `{registry}`"),
+        })?;
+
+    if is_disallowed_host(&host) {
+        return Err(AppError::InvalidInput {
+            reason: format!("registry host `{host}` is not allowed"),
+        });
+    }
+
+    Ok(())
 }
 
 fn registry_api_host(registry: &str) -> String {
@@ -1040,6 +1291,15 @@ fn extract_runtime_profile_from_config_payload(value: &Value) -> RuntimeProfile 
         .map(ToOwned::to_owned)
         .filter(|dir| !dir.is_empty());
     profile.env_keys = parse_env_keys(config.get("Env"));
+    profile.env = parse_env_vars(config.get("Env"));
+    profile.exposed_ports = parse_string_key_map(config.get("ExposedPorts"));
+    profile.volumes = parse_string_key_map(config.get("Volumes"));
+    profile.stop_signal = config
+        .get("StopSignal")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .filter(|signal| !signal.is_empty());
+    profile.healthcheck = parse_healthcheck(config.get("Healthcheck"));
     profile.oci = parse_oci_labels(config.get("Labels"));
 
     profile
@@ -1073,6 +1333,78 @@ fn parse_env_keys(value: Option<&Value>) -> Vec<String> {
     keys.into_iter().collect()
 }
 
+fn parse_env_vars(value: Option<&Value>) -> Vec<EnvVar> {
+    let mut vars = Vec::new();
+    if let Some(Value::Array(items)) = value {
+        for entry in items {
+            let Some(raw) = entry.as_str() else {
+                continue;
+            };
+            if raw.is_empty() {
+                continue;
+            }
+            let (key, value) = match raw.split_once('=') {
+                Some((key, value)) => (key.trim(), Some(value.to_string())),
+                None => (raw.trim(), None),
+            };
+            if key.is_empty() {
+                continue;
+            }
+            vars.push(EnvVar {
+                key: key.to_string(),
+                value,
+            });
+        }
+    }
+    vars.sort_by(|left, right| left.key.cmp(&right.key).then(left.value.cmp(&right.value)));
+    vars.dedup();
+    vars
+}
+
+fn parse_string_key_map(value: Option<&Value>) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    if let Some(Value::Object(map)) = value {
+        for key in map.keys() {
+            if !key.is_empty() {
+                values.insert(key.to_string());
+            }
+        }
+    }
+    values.into_iter().collect()
+}
+
+fn parse_healthcheck(value: Option<&Value>) -> Option<HealthcheckProfile> {
+    let Some(Value::Object(map)) = value else {
+        return None;
+    };
+
+    let test = parse_command_list(map.get("Test"));
+    let interval_ns = map.get("Interval").and_then(Value::as_u64);
+    let timeout_ns = map.get("Timeout").and_then(Value::as_u64);
+    let start_period_ns = map.get("StartPeriod").and_then(Value::as_u64);
+    let retries = map
+        .get("Retries")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+
+    if test.is_empty()
+        && interval_ns.is_none()
+        && timeout_ns.is_none()
+        && start_period_ns.is_none()
+        && retries.is_none()
+    {
+        return None;
+    }
+
+    Some(HealthcheckProfile {
+        test,
+        interval_ns,
+        timeout_ns,
+        start_period_ns,
+        retries,
+    })
+}
+
 fn parse_oci_labels(value: Option<&Value>) -> OciLabelProfile {
     let mut labels = OciLabelProfile::default();
     if let Some(Value::Object(map)) = value {
@@ -1092,12 +1424,107 @@ fn parse_oci_labels(value: Option<&Value>) -> OciLabelProfile {
     labels
 }
 
+fn detect_runtime_signatures(profile: &RuntimeProfile) -> RuntimeSignatures {
+    let mut signatures = RuntimeSignatures::default();
+
+    for key in &profile.env_keys {
+        let normalized = key.to_ascii_uppercase();
+        if normalized.starts_with("NVIDIA_") {
+            signatures.nvidia = true;
+            signatures.gpu_compute = true;
+        }
+        if normalized.starts_with("ROCM_") || normalized.starts_with("HIP_") {
+            signatures.rocm = true;
+            signatures.gpu_compute = true;
+        }
+        if normalized.contains("OPENCL") || normalized.contains("OCL_ICD") {
+            signatures.opencl = true;
+            signatures.gpu_compute = true;
+        }
+    }
+
+    for entry in &profile.env {
+        let normalized = entry.key.to_ascii_uppercase();
+        if normalized.starts_with("NVIDIA_") {
+            signatures.nvidia = true;
+            signatures.gpu_compute = true;
+        }
+        if normalized.starts_with("ROCM_") || normalized.starts_with("HIP_") {
+            signatures.rocm = true;
+            signatures.gpu_compute = true;
+        }
+        if normalized.contains("OPENCL") || normalized.contains("OCL_ICD") {
+            signatures.opencl = true;
+            signatures.gpu_compute = true;
+        }
+    }
+
+    if profile
+        .oci
+        .source
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("nvidia"))
+        .unwrap_or(false)
+    {
+        signatures.nvidia = true;
+        signatures.gpu_compute = true;
+    }
+
+    signatures
+}
+
+fn stable_failure_status(error: &AppError) -> String {
+    match error {
+        AppError::Http { reason, .. } => {
+            if let Some(code) = parse_http_status(reason) {
+                return format!("failed:http_status:{code}");
+            }
+            let reason_lower = reason.to_ascii_lowercase();
+            if reason_lower.contains("timed out") || reason_lower.contains("timeout") {
+                return "failed:timeout".to_string();
+            }
+            if reason_lower.contains("dns") || reason_lower.contains("name or service not known") {
+                return "failed:dns".to_string();
+            }
+            if reason_lower.contains("tls") || reason_lower.contains("certificate") {
+                return "failed:tls".to_string();
+            }
+            if reason_lower.contains("parse") {
+                return "failed:parse".to_string();
+            }
+            "failed:http".to_string()
+        }
+        AppError::Serialization { .. } => "failed:parse".to_string(),
+        AppError::InvalidInput { .. } => "failed:invalid-input".to_string(),
+        AppError::Io { .. } => "failed:io".to_string(),
+    }
+}
+
+fn parse_http_status(reason: &str) -> Option<u16> {
+    let marker = "unexpected status ";
+    let index = reason.find(marker)?;
+    let status_text = reason[index + marker.len()..].split_whitespace().next()?;
+    status_text.parse::<u16>().ok()
+}
+
 fn runtime_profile_has_data(profile: &RuntimeProfile) -> bool {
     profile.user.is_some()
         || !profile.entrypoint.is_empty()
         || !profile.cmd.is_empty()
         || profile.working_dir.is_some()
         || !profile.env_keys.is_empty()
+        || !profile.env.is_empty()
+        || !profile.exposed_ports.is_empty()
+        || !profile.volumes.is_empty()
+        || profile.stop_signal.is_some()
+        || profile.healthcheck.is_some()
+        || !profile.tools.is_empty()
+        || !profile.tool_details.is_empty()
+        || profile.signatures.gpu_compute
+        || profile.signatures.opencl
+        || profile.signatures.nvidia
+        || profile.signatures.rocm
+        || profile.signatures.distroless
         || profile.oci.source.is_some()
         || profile.oci.revision.is_some()
         || profile.oci.licenses.is_some()
@@ -1115,13 +1542,17 @@ fn dedup_platforms(platforms: Vec<Platform>) -> Vec<Platform> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{OciLabelProfile, Platform, RuntimeProfile};
+    use crate::model::{
+        EnvVar, HealthcheckProfile, OciLabelProfile, Platform, RuntimeProfile, RuntimeSignatures,
+    };
+    use reqwest::blocking::Client;
     use serde_json::json;
 
     use super::{
-        extract_platform_from_config_payload, extract_runtime_profile_from_config_payload,
-        infer_docs_url, is_digest_reference, normalize_image_reference, parse_image_reference,
-        registry_api_host, validate_realm_url,
+        build_docs_request, docs_scan_candidates, extract_platform_from_config_payload,
+        extract_recommended_env_from_docs, extract_runtime_profile_from_config_payload,
+        infer_docs_url, is_digest_reference, normalize_image_reference, parse_auth_challenge,
+        parse_github_owner_repo, parse_image_reference, registry_api_host, validate_realm_url,
     };
 
     #[test]
@@ -1152,6 +1583,17 @@ mod tests {
     fn validate_realm_url_rejects_private_ipv4_host() {
         let result = validate_realm_url("https://10.0.0.7/token", "10.0.0.7");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_auth_challenge_accepts_case_insensitive_parameter_keys() {
+        let parsed = parse_auth_challenge(
+            r#"Bearer Realm="https://auth.docker.io/token",Service="registry.docker.io",Scope="repo:library/nginx:pull""#,
+        )
+        .expect("challenge should parse");
+        assert_eq!(parsed.realm, "https://auth.docker.io/token");
+        assert_eq!(parsed.service.as_deref(), Some("registry.docker.io"));
+        assert_eq!(parsed.scope.as_deref(), Some("repo:library/nginx:pull"));
     }
 
     #[test]
@@ -1198,6 +1640,16 @@ mod tests {
                 "Cmd": ["serve", "--port", "8080"],
                 "WorkingDir": "/work",
                 "Env": ["A=1", "B=2"],
+                "ExposedPorts": {"8080/tcp": {}},
+                "Volumes": {"/data": {}},
+                "StopSignal": "SIGTERM",
+                "Healthcheck": {
+                    "Test": ["CMD", "/entrypoint.sh", "healthcheck"],
+                    "Interval": 10000000000u64,
+                    "Timeout": 3000000000u64,
+                    "StartPeriod": 5000000000u64,
+                    "Retries": 5
+                },
                 "Labels": {
                     "org.opencontainers.image.source": "https://github.com/example/repo",
                     "org.opencontainers.image.revision": "abc123",
@@ -1219,6 +1671,33 @@ mod tests {
                 ],
                 working_dir: Some("/work".to_string()),
                 env_keys: vec!["A".to_string(), "B".to_string()],
+                env: vec![
+                    EnvVar {
+                        key: "A".to_string(),
+                        value: Some("1".to_string()),
+                    },
+                    EnvVar {
+                        key: "B".to_string(),
+                        value: Some("2".to_string()),
+                    }
+                ],
+                exposed_ports: vec!["8080/tcp".to_string()],
+                volumes: vec!["/data".to_string()],
+                stop_signal: Some("SIGTERM".to_string()),
+                healthcheck: Some(HealthcheckProfile {
+                    test: vec![
+                        "CMD".to_string(),
+                        "/entrypoint.sh".to_string(),
+                        "healthcheck".to_string()
+                    ],
+                    interval_ns: Some(10000000000),
+                    timeout_ns: Some(3000000000),
+                    start_period_ns: Some(5000000000),
+                    retries: Some(5),
+                }),
+                tools: std::collections::BTreeMap::new(),
+                tool_details: std::collections::BTreeMap::new(),
+                signatures: RuntimeSignatures::default(),
                 oci: OciLabelProfile {
                     source: Some("https://github.com/example/repo".to_string()),
                     revision: Some("abc123".to_string()),
@@ -1239,6 +1718,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_image_reference_rejects_disallowed_registry_host() {
+        let result = parse_image_reference("localhost/team/image:1.0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_image_reference_normalizes_docker_hub_repository_to_lowercase() {
+        let parsed =
+            parse_image_reference("docker.io/Library/NgInX:RC1").expect("parse should succeed");
+        assert_eq!(parsed.repository, "library/nginx");
+        assert_eq!(parsed.tag, "RC1");
+        assert_eq!(parsed.normalized, "docker.io/library/nginx:RC1");
+    }
+
+    #[test]
+    fn parse_image_reference_rejects_unsupported_characters() {
+        let result = parse_image_reference("docker.io/library/nginx?latest");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn is_digest_reference_accepts_uppercase_prefix() {
         assert!(is_digest_reference("SHA256:abc"));
     }
@@ -1247,6 +1747,68 @@ mod tests {
     fn registry_api_host_maps_docker_hub_registry() {
         assert_eq!(registry_api_host("docker.io"), "registry-1.docker.io");
         assert_eq!(registry_api_host("ghcr.io"), "ghcr.io");
+    }
+
+    #[test]
+    fn parse_github_owner_repo_extracts_owner_and_repo() {
+        let parsed = parse_github_owner_repo("https://github.com/example/project")
+            .expect("github repo url should parse");
+        assert_eq!(parsed.0, "example");
+        assert_eq!(parsed.1, "project");
+    }
+
+    #[test]
+    fn docs_scan_candidates_prefers_github_readme_api() {
+        let candidates = docs_scan_candidates(
+            Some("https://hub.docker.com/r/library/postgres"),
+            Some("https://github.com/docker-library/postgres"),
+        );
+        assert_eq!(
+            candidates,
+            vec!["https://api.github.com/repos/docker-library/postgres/readme".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_docs_request_sets_github_raw_headers() {
+        let client = Client::builder().build().expect("client should build");
+        let request = build_docs_request(
+            &client,
+            "https://api.github.com/repos/example/project/readme",
+            "agent-skills/1.0",
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("accept")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/vnd.github.v3.raw")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-github-api-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2022-11-28")
+        );
+    }
+
+    #[test]
+    fn extract_recommended_env_from_docs_reads_environment_table_rows() {
+        let markdown = r#"
+## Environment Variables
+
+| Variable | Description |
+| --- | --- |
+| POSTGRES_PASSWORD | Required secret. |
+| POSTGRES_DB | Optional database name. |
+"#;
+        let discovered = extract_recommended_env_from_docs(markdown);
+        assert!(discovered.contains(&"POSTGRES_PASSWORD".to_string()));
+        assert!(discovered.contains(&"POSTGRES_DB".to_string()));
     }
 
     #[test]

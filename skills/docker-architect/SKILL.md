@@ -1,7 +1,7 @@
 ---
 name: docker-architect
 description: Design deterministic Docker architecture outputs for both Compose/Swarm deployments and image supply-chain pipelines using strict phase ordering, traceability IDs, and hardened defaults.
-compatibility: Requires a POSIX shell. Local launchers are `<skills-file-root>/scripts/docker-architect-compose` and `<skills-file-root>/scripts/docker-architect-image`.
+compatibility: Requires a POSIX shell. Local launchers are `<skills-file-root>/scripts/docker-architect-compose`, `<skills-file-root>/scripts/docker-architect-image`, and `<skills-file-root>/scripts/docker-architect-ci-gate`.
 ---
 
 # Docker Architect
@@ -36,9 +36,13 @@ Run commands from `<skills-file-root>`:
 ./scripts/docker-architect-compose refresh --cache-dir ./references/cache --image nginx:1.27 --allow-scrape-fallback
 ./scripts/docker-architect-compose render --cache-dir ./references/cache --format markdown
 ./scripts/docker-architect-compose check --cache-dir ./references/cache --strictness balanced
-./scripts/docker-architect-compose policy-check compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache
-./scripts/docker-architect-compose policy-plan compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache
+./scripts/docker-architect-compose policy-check compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose
+./scripts/docker-architect-compose policy-plan compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose
 ./scripts/docker-architect-compose policy-apply compose.yaml --plan patch-plan.json --output compose.hardened.yaml --mode compose
+./scripts/docker-architect-compose policy-check stack.yaml --policy ./references/policy-swarm-balanced.yaml --cache-dir ./references/cache --mode swarm
+./scripts/docker-architect-compose policy-plan stack.yaml --policy ./references/policy-swarm-balanced.yaml --cache-dir ./references/cache --mode swarm
+./scripts/docker-architect-compose compose-generate compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --output compose.anchored.yaml --mode compose --anchors auto
+./scripts/docker-architect-compose anchor-suggest compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose --format json
 ./scripts/docker-architect-compose output-check architecture.md --mode compose
 
 # Image/build workflow
@@ -50,6 +54,11 @@ Run commands from `<skills-file-root>`:
 ./scripts/docker-architect-image policy-check Dockerfile --policy ./references/policy-dockerfile-balanced.yaml
 ./scripts/docker-architect-image policy-plan Dockerfile --policy ./references/policy-dockerfile-balanced.yaml
 ./scripts/docker-architect-image output-check architecture.md --mode image
+
+# Generalized deterministic CI gate (fixtures + optional live verify)
+./scripts/docker-architect-ci-gate
+DOCKER_ARCHITECT_ENABLE_VERIFY=1 ./scripts/docker-architect-ci-gate
+DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=./references/ci/verify.compose.yaml ./scripts/docker-architect-ci-gate
 ```
 
 ## Portability contract
@@ -65,6 +74,16 @@ Run commands from `<skills-file-root>`:
 - Prefer official APIs; use scrape fallback only when missing fields block output quality.
 - For Docker Hub images, always prefer registry v2 `Docker-Content-Digest` over Hub tag digest data.
 - Apply hardened image and supply-chain controls by default.
+- Curated deterministic image defaults are versioned in `references/image-knowledge/knowledge.v1.yaml`.
+- Curated deterministic compose anchor defaults are versioned in `references/compose-defaults/defaults.v1.yaml`.
+- Anchor suggestions are report-only and do not mutate defaults unless manually reviewed and applied.
+
+## CI gate
+
+- `./scripts/docker-architect-ci-gate` always runs deterministic fixture-based golden tests (`architect-core` `golden_pipeline` integration test).
+- Live runtime verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`. If requested, Docker availability and daemon reachability are required.
+- Live verify defaults to `references/ci/verify.compose.yaml`; override with `DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<path>`.
+- The verify stage runs `docker-architect-compose verify ...` and fails the gate unless report `success` is `true`.
 
 ## References
 
@@ -74,4 +93,7 @@ Run commands from `<skills-file-root>`:
 - Image output contract: `references/output-contract-image.md`
 - Cache payload file: `references/cache/image-profiles.json`
 - Compose policy packs: `references/policy-compose-balanced.yaml`, `references/policy-compose-enforcing.yaml`
+- Swarm policy packs: `references/policy-swarm-balanced.yaml`, `references/policy-swarm-enforcing.yaml`
+- Compose defaults: `references/compose-defaults/defaults.v1.yaml`
 - Dockerfile policy packs: `references/policy-dockerfile-balanced.yaml`, `references/policy-dockerfile-enforcing.yaml`
+- CI verify fixture: `references/ci/verify.compose.yaml`

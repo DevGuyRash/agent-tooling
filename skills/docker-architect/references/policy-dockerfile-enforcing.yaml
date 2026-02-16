@@ -27,3 +27,24 @@ rules:
       - org.opencontainers.image.revision
       - org.opencontainers.image.licenses
     rationale: OCI traceability labels are mandatory for release images.
+  - id: AC-DF-FROM-DIGEST
+    severity: block
+    action: require_from_digest
+    target: dockerfile
+    rationale: Deterministic Dockerfiles require digest-pinned base images.
+  - id: AC-DF-REPRODUCIBLE
+    severity: warn
+    action: require_build_arg
+    target: dockerfile
+    key: SOURCE_DATE_EPOCH
+    rationale: SOURCE_DATE_EPOCH improves deterministic, reproducible build metadata.
+  - id: AC-DF-CACHE-MOUNTS
+    severity: block
+    action: require_build_cache_mounts
+    target: dockerfile
+    rationale: BuildKit cache mounts are mandatory for deterministic, reproducible layers.
+  - id: AC-DF-SUID-SGID
+    severity: block
+    action: require_suid_sgid_strip
+    target: final_stage
+    rationale: Final stage must strip SUID/SGID bits to reduce privilege-escalation risk.

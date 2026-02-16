@@ -22,6 +22,14 @@ pub enum Command {
     PolicyPlan(PolicyEvalArgs),
     /// Apply a deterministic patch plan.
     PolicyApply(PolicyApplyArgs),
+    /// Generate deterministic anchorized compose output from hardened policy results.
+    ComposeGenerate(ComposeGenerateArgs),
+    /// Suggest reusable YAML anchors from hardened compose output.
+    AnchorSuggest(AnchorSuggestArgs),
+    /// Probe runtime tool availability for images and persist results in cache.
+    Probe(ProbeArgs),
+    /// Execute runtime verification and emit a machine-readable report.
+    Verify(VerifyArgs),
 }
 
 /// Arguments for extraction.
@@ -49,6 +57,12 @@ pub struct RefreshArgs {
     /// Allow HTML scraping fallback after API failure.
     #[arg(long, default_value_t = false)]
     pub allow_scrape_fallback: bool,
+    /// Probe image tool availability locally with `docker run`.
+    #[arg(long, default_value_t = false)]
+    pub probe_runtime_tools: bool,
+    /// Tool names to probe when `--probe-runtime-tools` is enabled.
+    #[arg(long = "probe-tool")]
+    pub probe_tools: Vec<String>,
 }
 
 /// Arguments for rendering.
@@ -91,9 +105,13 @@ pub struct PolicyEvalArgs {
     /// Policy pack yaml path.
     #[arg(long)]
     pub policy: PathBuf,
-    /// Cache directory containing image-profiles.json (required for compose policy evaluation).
+    /// Cache directory containing image-profiles.json.
+    /// Required for compose policy evaluation and optional for dockerfile digest resolution.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+    /// Deployment mode for compose policy heuristics (`compose` or `swarm`).
+    #[arg(long, default_value = "compose")]
+    pub mode: String,
 }
 
 /// Arguments for patch plan application.
@@ -110,4 +128,87 @@ pub struct PolicyApplyArgs {
     /// Apply mode. Currently only `compose`.
     #[arg(long, default_value = "compose")]
     pub mode: String,
+}
+
+/// Arguments for anchorized compose generation.
+#[derive(Debug, Args)]
+pub struct ComposeGenerateArgs {
+    /// Input compose yaml file path.
+    pub input: PathBuf,
+    /// Policy pack yaml path.
+    #[arg(long)]
+    pub policy: PathBuf,
+    /// Cache directory containing image-profiles.json.
+    #[arg(long)]
+    pub cache_dir: PathBuf,
+    /// Output file path.
+    #[arg(long)]
+    pub output: PathBuf,
+    /// Deploy mode for compose policy heuristics and defaults (`compose` or `swarm`).
+    #[arg(long, default_value = "compose")]
+    pub mode: String,
+    /// Anchor emission mode (`auto`, `minimal`, `full`).
+    #[arg(long, default_value = "auto")]
+    pub anchors: String,
+    /// Optional custom compose defaults file to extend/override built-in anchors.
+    #[arg(long)]
+    pub defaults_file: Option<PathBuf>,
+}
+
+/// Arguments for deterministic anchor suggestion reports.
+#[derive(Debug, Args)]
+pub struct AnchorSuggestArgs {
+    /// Input compose yaml file path.
+    pub input: PathBuf,
+    /// Policy pack yaml path.
+    #[arg(long)]
+    pub policy: PathBuf,
+    /// Cache directory containing image-profiles.json.
+    #[arg(long)]
+    pub cache_dir: PathBuf,
+    /// Deploy mode for compose policy heuristics and defaults (`compose` or `swarm`).
+    #[arg(long, default_value = "compose")]
+    pub mode: String,
+    /// Output format (`json` or `markdown`).
+    #[arg(long, default_value = "json")]
+    pub format: String,
+    /// Optional minimum usage threshold override.
+    #[arg(long)]
+    pub min_usage: Option<usize>,
+    /// Include sensitive/noisy key suggestions.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub include_sensitive: bool,
+    /// Maximum number of suggestions.
+    #[arg(long, default_value_t = 50)]
+    pub max_suggestions: usize,
+    /// Optional output file path. When omitted, output is written to stdout.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+/// Arguments for runtime tool probing.
+#[derive(Debug, Args)]
+pub struct ProbeArgs {
+    /// Cache directory containing image-profiles.json.
+    #[arg(long)]
+    pub cache_dir: PathBuf,
+    /// Tool names to probe in each image.
+    #[arg(long = "tool")]
+    pub tools: Vec<String>,
+}
+
+/// Arguments for runtime verification.
+#[derive(Debug, Args)]
+pub struct VerifyArgs {
+    /// Input compose yaml path.
+    pub input: PathBuf,
+    /// Verification mode. Currently only `compose`.
+    #[arg(long, default_value = "compose")]
+    pub mode: String,
+    /// Optional output file for machine-readable JSON report.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Tear down resources after verification run.
+    #[arg(long, default_value_t = true)]
+    pub teardown: bool,
 }
