@@ -16,7 +16,7 @@ When bypassing, record:
 ## Routing table
 
 - Branch creation:
-  - `bash scripts/start-branch.sh <type> <slug> [--issue <id>] [--base <branch>]`
+  - `bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]`
 - PR creation:
   - `bash scripts/pr-create.sh --title "<title>" [--create] [--draft] [--base <branch>] [--head <branch>]`
 - PR hygiene snapshot:
@@ -30,6 +30,8 @@ When bypassing, record:
   - `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
   - `bash scripts/pr-reply.sh <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
+- Squash merge (deterministic, required):
+  - `bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:
   - `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]`
 - Governance enforcement:

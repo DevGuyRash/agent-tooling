@@ -14,7 +14,7 @@ A commit receipt is a small markdown block you emit after push/merge operations 
 
 - List branches in execution order (e.g., `test → fix → feat → refactor`)
 - Include PR URL/ID if a PR was created or merged
-- Prefer short SHAs and the Conventional Commit subject line
+- Use short SHAs and only the first-line subject (never commit body lines)
 
 ## Helper
 

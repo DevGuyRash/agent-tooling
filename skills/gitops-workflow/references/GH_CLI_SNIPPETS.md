@@ -48,6 +48,16 @@ Strict PR workflow wrapper:
 bash scripts/pr-workflow.sh <pr_number> --watch-checks
 ```
 
+Deterministic squash merge wrapper:
+```bash
+bash scripts/pr-merge-squash.sh <pr_number>
+```
+
+Admin override squash merge:
+```bash
+bash scripts/pr-merge-squash.sh <pr_number> --admin
+```
+
 Resolve unresolved inline threads:
 ```bash
 bash scripts/pr-resolve-threads.sh <pr_number> --all

@@ -22,8 +22,8 @@
 
 ## Commits
 
-- `<SHA>` <original commit message>
-- `<SHA>` <original commit message>
+- `<SHA>` <first-line commit subject>
+- `<SHA>` <first-line commit subject>
 
 ## Refs
 

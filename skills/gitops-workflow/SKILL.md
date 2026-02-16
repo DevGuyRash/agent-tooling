@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.2.0"
+  version: "1.3.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -83,7 +83,7 @@ Direct ad hoc `gh`/`git` command sequences are fallback-only.
 
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch | `bash scripts/start-branch.sh <type> <slug> [--issue <id>] [--base <branch>]` |
+| Start branch from default branch | `bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]` |
 | Create PR body + PR | `bash scripts/pr-create.sh --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
 | PR hygiene audit | `bash scripts/pr-audit.sh <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]` |
@@ -91,6 +91,7 @@ Direct ad hoc `gh`/`git` command sequences are fallback-only.
 | Resolve unresolved inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
 | Reply to inline review comment | `bash scripts/pr-reply.sh <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Squash merge a PR deterministically | `bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
 | Receipt generation | `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance enforcement sequence | `bash scripts/governance-enforce.sh [--policy <path>] [--repo owner/repo] [--no-write-codeowners]` |
 
@@ -121,6 +122,15 @@ Detailed checklists live in:
 
 - [references/CHECKLISTS.md](references/CHECKLISTS.md)
 
+Minimal deterministic command path (progressive-disclosure entrypoint):
+
+```bash
+bash scripts/start-branch.sh feat add-json-output
+bash scripts/pr-create.sh --title "feat(cli): add json output" --create
+bash scripts/pr-merge-squash.sh <pr_number>
+python3 scripts/receipt.py --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
+```
+
 ---
 
 ## Playbook A: Start work (branching)
@@ -131,8 +141,8 @@ Create a correctly named branch from the default branch, without accidentally wo
 
 ### Steps
 
-1. Ensure working tree is clean:
-   - `git status --porcelain` should be empty (stash/commit/discard as needed).
+1. If working tree is dirty, stash tracked + untracked changes with deterministic metadata.
+   - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
 2. Sync the default branch:
    - `git checkout <default-branch> && git pull`
 3. Create a branch:
@@ -146,6 +156,7 @@ Example:
 
 ```bash
 bash scripts/start-branch.sh feat add-json-output
+bash scripts/start-branch.sh chore --issue 4321 --stash-name "carry-local-wip"
 ```
 
 ---
@@ -215,15 +226,19 @@ Guidance for handling automated reviewer feedback:
 
 ## Playbook E: Merge a PR (squash & merge)
 
-1. Confirm merge preconditions:
+1. Run deterministic merge wrapper:
+   - `bash scripts/pr-merge-squash.sh <pr_number>`
+2. Wrapper preconditions (default mode):
    - conversations resolved
-   - CI green
+   - required CI checks green
    - approvals present
-   - up to date with base branch
-2. Squash merge using the structured body template:
-   - [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md)
-3. If the PR has multiple commits, include the `## Commits` section.
-4. After merge, emit a commit receipt:
+   - PR is not draft and mergeable
+3. Squash merge body is generated deterministically with commit bullets:
+   - `- <short-sha> <first-line commit subject>`
+4. Optional escalation path for repository admins:
+   - `bash scripts/pr-merge-squash.sh <pr_number> --admin`
+   - this passes `--admin` to `gh pr merge` and relaxes approval/check gates
+5. After merge, emit a commit receipt:
    - `python3 scripts/receipt.py --branch <branch> --base <default-branch> --pr-url <url>`
 
 ---

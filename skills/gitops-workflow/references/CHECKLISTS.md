@@ -11,7 +11,7 @@ Script-first policy:
 
 ## A) Start work checklist (branching)
 
-- [ ] `git status --porcelain` is clean (no accidental partial changes)
+- [ ] if worktree is dirty, branch helper auto-stashes tracked + untracked and restores safely
 - [ ] you are on the default branch (`main`/`master`)
 - [ ] default branch is up to date (`git pull`)
 - [ ] new branch name matches allowed pattern: `<type>/<short-desc>`
@@ -20,6 +20,7 @@ Script-first policy:
 Recommended:
 ```bash
 bash scripts/start-branch.sh feat add-json-output
+bash scripts/start-branch.sh chore --issue 789 --stash-name "carry-local-wip"
 ```
 
 ---
@@ -76,8 +77,12 @@ Before pushing *any* updates to a PR:
 - [ ] at least one approving review (unless explicitly waived)
 - [ ] PR author says “ready to merge”
 - [ ] branch is up to date with base (rebase if required)
-- [ ] squash commit message uses required structure:
-  - [assets/templates/squash-merge-message.md](../assets/templates/squash-merge-message.md)
+- [ ] run deterministic merge helper:
+  - `bash scripts/pr-merge-squash.sh <number>`
+- [ ] squash commit body includes `## Commits` bullets:
+  - each bullet is `<short-sha> <first-line commit subject>`
+- [ ] if emergency admin merge is required, use:
+  - `bash scripts/pr-merge-squash.sh <number> --admin`
 - [ ] after merge/push, emit commit receipt:
   - `python3 scripts/receipt.py --branch <branch> --base <default-branch> --pr-url <url>`
 
