@@ -32,6 +32,8 @@ bash scripts/start-branch.sh chore --issue 789 --stash-name "carry-local-wip"
 - [ ] commit is atomic (one logical change)
 - [ ] scope is used when it reduces ambiguity (e.g., `cli`, `api`, `docs`)
 - [ ] tests/docs included in same commit when they are part of the same logical change
+- [ ] if asked to "commit worktree"/"commit changes", split into batched Conventional Commits by logical unit
+- [ ] do not use one catch-all commit unless user explicitly asks for a single commit
 
 ---
 

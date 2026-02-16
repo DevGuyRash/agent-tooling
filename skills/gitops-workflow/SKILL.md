@@ -73,6 +73,7 @@ Unless the repo explicitly defines otherwise, follow these rules:
    [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md).
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
+11. **When asked to "commit worktree" or "commit changes"**, create **batched Conventional Commits** grouped by logical change (feat/fix/docs/test/refactor/chore/etc.); do **not** make a single catch-all commit unless explicitly requested.
 
 ---
 
@@ -178,6 +179,7 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
+- when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)
 
 See:
 

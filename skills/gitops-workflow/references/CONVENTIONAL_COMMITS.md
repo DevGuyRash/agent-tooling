@@ -31,6 +31,10 @@ Extended types (allowed for tooling/workflow):
 - no trailing period
 - keep it short and specific (≈72 chars is a good target)
 
+## Batching rule for worktree commit requests
+
+When the request is generic (for example, "commit worktree" or "commit changes"), default to batched commits grouped by logical change. Do not collapse unrelated changes into one commit unless the user explicitly requests a single commit.
+
 Examples:
 - `feat(cli): add --json output`
 - `fix(api): handle empty payload`
