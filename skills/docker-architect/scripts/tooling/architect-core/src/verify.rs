@@ -53,6 +53,7 @@ pub struct ServiceVerifyRecord {
 }
 
 /// Verify a compose file by running containers, collecting inspect facts, and emitting a report.
+/// This is a baseline hardening gate, not a readiness waiter.
 ///
 /// # Arguments
 /// * `compose_file` - Compose yaml file path.
@@ -61,6 +62,10 @@ pub struct ServiceVerifyRecord {
 /// # Returns
 /// * `Ok(ComposeVerifyReport)` when commands execute successfully.
 /// * `Err(AppError)` when docker commands or inspect parsing fail.
+///
+/// # Behavior Notes
+/// * Runs `docker compose up -d` and immediately inspects current state.
+/// * Does not wait/poll for health transitions; services with healthchecks may still be `starting`.
 pub fn verify_compose(
     compose_file: &Path,
     teardown: bool,

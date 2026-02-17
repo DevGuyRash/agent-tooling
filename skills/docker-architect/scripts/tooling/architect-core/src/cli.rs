@@ -28,7 +28,7 @@ pub enum Command {
     AnchorSuggest(AnchorSuggestArgs),
     /// Probe runtime tool availability for images and persist results in cache.
     Probe(ProbeArgs),
-    /// Execute runtime verification and emit a machine-readable report.
+    /// Execute baseline runtime hardening verification and emit a machine-readable report.
     Verify(VerifyArgs),
 }
 
@@ -197,18 +197,21 @@ pub struct ProbeArgs {
     pub tools: Vec<String>,
 }
 
-/// Arguments for runtime verification.
+/// Arguments for baseline runtime hardening verification.
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
     /// Input compose yaml path.
     pub input: PathBuf,
-    /// Verification mode. Currently only `compose`.
+    /// Verification mode. Currently only `compose` and interpreted as a baseline hardening gate.
     #[arg(long, default_value = "compose")]
     pub mode: String,
-    /// Optional output file for machine-readable JSON report.
+    /// Optional output file for machine-readable JSON report of baseline checks.
     #[arg(long)]
     pub output: Option<PathBuf>,
     /// Tear down resources after verification run.
+    ///
+    /// Verification runs `up -d` and immediate inspect/log checks; it does not wait/poll for
+    /// health status transitions.
     #[arg(long, default_value_t = true)]
     pub teardown: bool,
 }

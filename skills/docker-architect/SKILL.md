@@ -83,6 +83,8 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=./referenc
 - `./scripts/docker-architect-ci-gate` always runs deterministic fixture-based golden tests (`architect-core` `golden_pipeline` integration test).
 - Live runtime verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`. If requested, Docker availability and daemon reachability are required.
 - Live verify defaults to `references/ci/verify.compose.yaml`; override with `DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<path>`.
+- Runtime verify is a baseline hardening gate: it runs `docker compose up -d` and inspects current state without waiting/polling for health transitions.
+- On stacks with real healthchecks, services that are still `starting` at inspection time may fail verify even if they would become healthy later.
 - The verify stage runs `docker-architect-compose verify ...` and fails the gate unless report `success` is `true`.
 
 ## References
