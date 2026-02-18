@@ -4,10 +4,16 @@ This policy file is the canonical desired state for deterministic repository gov
 Use it with:
 
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py validate --policy <file>
-python3 skills/gitops-workflow/scripts/repo-governance.py plan --policy <file>
-python3 skills/gitops-workflow/scripts/repo-governance.py apply --policy <file> --write-codeowners
-python3 skills/gitops-workflow/scripts/repo-governance.py audit --policy <file> --format json
+export SKILL_ROOT="/absolute/path/to/gitops-workflow"
+```
+
+Then:
+
+```bash
+python3 "$SKILL_ROOT/scripts/repo-governance.py" validate --policy <file>
+python3 "$SKILL_ROOT/scripts/repo-governance.py" plan --policy <file>
+python3 "$SKILL_ROOT/scripts/repo-governance.py" apply --policy <file> --write-codeowners
+python3 "$SKILL_ROOT/scripts/repo-governance.py" audit --policy <file> --format json
 ```
 
 ## Top-level keys

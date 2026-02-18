@@ -64,7 +64,7 @@ class GovernanceUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             codeowners_path = Path(temp_dir) / "CODEOWNERS"
             codeowners_path.write_text(
-                "# Managed by skills/gitops-workflow/scripts/repo-governance.py\n\n* @acme/maintainers\n",
+                "# Managed by repo-governance.py\n\n* @acme/maintainers\n",
                 encoding="utf-8",
             )
             policy = deepcopy(self.policy_fixture)
@@ -78,7 +78,7 @@ class GovernanceUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             codeowners_path = Path(temp_dir) / "CODEOWNERS"
             codeowners_path.write_text(
-                "# Managed by skills/gitops-workflow/scripts/repo-governance.py\n\n* @acme/maintainers\n",
+                "# Managed by repo-governance.py\n\n* @acme/maintainers\n",
                 encoding="utf-8",
             )
             policy = deepcopy(self.policy_fixture)
@@ -100,6 +100,15 @@ class GovernanceUnitTests(unittest.TestCase):
             )
 
         client = repo_governance.GitHubClient(runner=failing_runner)
+        with self.assertRaises(repo_governance.GovernanceError) as ctx:
+            client.api_json("repos/acme/widget/rulesets")
+        self.assertEqual(ctx.exception.exit_code, repo_governance.EXIT_PERMISSIONS)
+
+    def test_github_client_maps_missing_binary_to_exit_five(self):
+        def missing_runner(_cmd, input_text=None):
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'gh'")
+
+        client = repo_governance.GitHubClient(runner=missing_runner)
         with self.assertRaises(repo_governance.GovernanceError) as ctx:
             client.api_json("repos/acme/widget/rulesets")
         self.assertEqual(ctx.exception.exit_code, repo_governance.EXIT_PERMISSIONS)

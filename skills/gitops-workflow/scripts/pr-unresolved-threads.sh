@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # Requirements:
 #   - gh (GitHub CLI) authenticated
+#   - jq (for response shaping)
 #
 # Output:
 #   Prints unresolved threads in a readable format.
@@ -23,6 +24,7 @@ require_cmd() {
 }
 
 require_cmd gh
+require_cmd jq
 
 PR_NUMBER="${1:-}"
 shift || true
@@ -102,12 +104,10 @@ while :; do
     GH_ARGS+=(-F after="$AFTER")
   fi
 
-  PAGE_RESULT="$(gh "${GH_ARGS[@]}" --jq '
-    .data.repository.pullRequest.reviewThreads.nodes[]
-    | select(.isResolved == false)
-    | .comments.nodes[]
-    | {author: .author.login, path: .path, line: .line, url: .url, body: .body}
-  ')"
+  PAGE_JSON="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads')"
+  [[ -n "$PAGE_JSON" ]] || die "empty response from GitHub API"
+
+  PAGE_RESULT="$(printf '%s' "$PAGE_JSON" | jq -c '.nodes[] | select(.isResolved == false) | .comments.nodes[] | {author: .author.login, path: .path, line: .line, url: .url, body: .body}')"
   if [[ -n "$PAGE_RESULT" ]]; then
     if [[ -n "$RESULT" ]]; then
       RESULT+=$'\n'
@@ -115,11 +115,11 @@ while :; do
     RESULT+="$PAGE_RESULT"
   fi
 
-  HAS_NEXT="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')"
+  HAS_NEXT="$(printf '%s' "$PAGE_JSON" | jq -r '.pageInfo.hasNextPage')"
   if [[ "$HAS_NEXT" != "true" ]]; then
     break
   fi
-  AFTER="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')"
+  AFTER="$(printf '%s' "$PAGE_JSON" | jq -r '.pageInfo.endCursor')"
   [[ -n "$AFTER" && "$AFTER" != "null" ]] || die "pagination cursor missing while hasNextPage=true"
 done
 

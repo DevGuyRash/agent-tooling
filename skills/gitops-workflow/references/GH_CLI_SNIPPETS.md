@@ -2,6 +2,11 @@
 
 These are common `gh` commands used by the playbooks.
 
+Set `SKILL_ROOT` to the installed skill root:
+```bash
+export SKILL_ROOT="/absolute/path/to/gitops-workflow"
+```
+
 ## Issues
 
 Search by keyword:
@@ -40,59 +45,59 @@ Get raw diff / patch (plain text):
 
 Use the helper script:
 ```bash
-bash scripts/pr-unresolved-threads.sh <pr_number> --fail-on-unresolved
+bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> --fail-on-unresolved
 ```
 
 Strict PR workflow wrapper:
 ```bash
-bash scripts/pr-workflow.sh <pr_number> --watch-checks
+bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> --watch-checks
 ```
 
 Deterministic squash merge wrapper:
 ```bash
-bash scripts/pr-merge-squash.sh <pr_number>
+bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 ```
 
 Admin override squash merge:
 ```bash
-bash scripts/pr-merge-squash.sh <pr_number> --admin
+bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin
 ```
 
 Resolve unresolved inline threads:
 ```bash
-bash scripts/pr-resolve-threads.sh <pr_number> --all
+bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> --all
 ```
 
 ## Reply to an inline comment thread
 
 If you only have a comment id and need to reply via API:
 ```bash
-bash scripts/pr-reply.sh <comment_id> "Reply text"
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Reply text"
 ```
 
 ## Deterministic governance
 
 Validate policy:
 ```bash
-python3 scripts/repo-governance.py validate --policy assets/config/github-governance-policy.v1.json
+python3 "$SKILL_ROOT/scripts/repo-governance.py" validate --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json"
 ```
 
 Plan drift:
 ```bash
-python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
+python3 "$SKILL_ROOT/scripts/repo-governance.py" plan --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>
 ```
 
 Apply policy:
 ```bash
-python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners
+python3 "$SKILL_ROOT/scripts/repo-governance.py" apply --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo> --write-codeowners
 ```
 
 Audit drift:
 ```bash
-python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json
+python3 "$SKILL_ROOT/scripts/repo-governance.py" audit --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo> --format json
 ```
 
 Enforce full governance sequence:
 ```bash
-bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>
+bash "$SKILL_ROOT/scripts/governance-enforce.sh" --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>
 ```

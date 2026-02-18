@@ -15,29 +15,34 @@ If scope is insufficient, commands fail with exit code `5`.
 
 ## Standard command sequence
 
+Set `SKILL_ROOT` to the installed `gitops-workflow` skill directory:
+```bash
+export SKILL_ROOT="/absolute/path/to/gitops-workflow"
+```
+
 1. Validate policy:
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py validate --policy skills/gitops-workflow/assets/config/github-governance-policy.v1.json
+python3 "$SKILL_ROOT/scripts/repo-governance.py" validate --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json"
 ```
 
 2. Plan drift (non-mutating):
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py plan --policy <policy> --repo <owner/repo>
+python3 "$SKILL_ROOT/scripts/repo-governance.py" plan --policy <policy> --repo <owner/repo>
 ```
 
 3. Apply (mutating):
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py apply --policy <policy> --repo <owner/repo> --write-codeowners
+python3 "$SKILL_ROOT/scripts/repo-governance.py" apply --policy <policy> --repo <owner/repo> --write-codeowners
 ```
 
 4. Audit post-apply:
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py audit --policy <policy> --repo <owner/repo> --format json
+python3 "$SKILL_ROOT/scripts/repo-governance.py" audit --policy <policy> --repo <owner/repo> --format json
 ```
 
 Wrapper equivalent:
 ```bash
-bash skills/gitops-workflow/scripts/governance-enforce.sh --policy <policy> --repo <owner/repo>
+bash "$SKILL_ROOT/scripts/governance-enforce.sh" --policy <policy> --repo <owner/repo>
 ```
 
 ## Exit codes
@@ -68,15 +73,15 @@ bash skills/gitops-workflow/scripts/governance-enforce.sh --policy <policy> --re
 
 - Discover checks:
 ```bash
-bash skills/gitops-workflow/scripts/required-checks-discover.sh --repo <owner/repo>
+bash "$SKILL_ROOT/scripts/required-checks-discover.sh" --repo <owner/repo>
 ```
 
 - Export labels:
 ```bash
-bash skills/gitops-workflow/scripts/labels-export.sh --repo <owner/repo>
+bash "$SKILL_ROOT/scripts/labels-export.sh" --repo <owner/repo>
 ```
 
 - Export baseline policy:
 ```bash
-python3 skills/gitops-workflow/scripts/repo-governance.py export --repo <owner/repo> --out /tmp/policy.json
+python3 "$SKILL_ROOT/scripts/repo-governance.py" export --repo <owner/repo> --out /tmp/policy.json
 ```

@@ -34,7 +34,9 @@ EXIT_DRIFT = 3
 EXIT_APPLY_FAILED = 4
 EXIT_PERMISSIONS = 5
 
-DEFAULT_POLICY_PATH = "skills/gitops-workflow/assets/config/github-governance-policy.v1.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SCRIPT_DIR.parent
+DEFAULT_POLICY_PATH = str(SKILL_ROOT / "assets" / "config" / "github-governance-policy.v1.json")
 DEFAULT_CODEOWNERS_PATH = ".github/CODEOWNERS"
 
 
@@ -98,6 +100,9 @@ class GitHubClient:
             if "not found" in lowered:
                 raise GovernanceError(output.strip() or f"GitHub API path not found: {path}", EXIT_INVALID_POLICY)
             raise GovernanceError(output.strip() or f"gh api failed for {path}", EXIT_APPLY_FAILED)
+        except FileNotFoundError as exc:
+            # Ensure a missing `gh` binary maps to a deterministic governance exit code.
+            raise GovernanceError(str(exc), EXIT_PERMISSIONS)
 
         if raw.strip() == "":
             return None
@@ -432,14 +437,17 @@ class GovernanceManager:
 
 def run_cmd(cmd: Sequence[str], input_text: Optional[str] = None) -> str:
     """Run a command and return stdout as text."""
+    try:
+        proc = subprocess.run(
+            list(cmd),
+            input=input_text,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise exc
 
-    proc = subprocess.run(
-        list(cmd),
-        input=input_text,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(proc.returncode, list(cmd), output=proc.stdout, stderr=proc.stderr)
     return proc.stdout
@@ -903,7 +911,7 @@ def normalize_legacy_branch_protection(payload: Dict[str, Any]) -> Dict[str, Any
 
 
 def render_codeowners(entries: List[Dict[str, Any]]) -> str:
-    lines = ["# Managed by skills/gitops-workflow/scripts/repo-governance.py", ""]
+    lines = ["# Managed by repo-governance.py", ""]
     for entry in sorted(entries, key=lambda e: e["pattern"]):
         owner_text = " ".join(sorted(set(entry["owners"])))
         lines.append(f"{entry['pattern']} {owner_text}")
