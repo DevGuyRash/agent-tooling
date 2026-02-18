@@ -2061,6 +2061,10 @@ fn reviewer_finalize_fails_with_no_auto_close_children() -> anyhow::Result<()> {
 
     let report_file = repo_root.path().join("parent.md");
     fs::write(&report_file, "parent body")?;
+    let reports_before = fs::read_dir(&session_dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
     let stderr = run_cmd_failure(&[
         "reviewer",
         "finalize",
@@ -2077,6 +2081,181 @@ fn reviewer_finalize_fails_with_no_auto_close_children() -> anyhow::Result<()> {
         "--no-auto-close-children",
     ])?;
     ensure!(stderr.contains("cannot finalize while child reviews are open"));
+    let reports_after = fs::read_dir(&session_dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    ensure!(reports_before == reports_after);
+    ensure!(report_file.exists());
+    Ok(())
+}
+
+#[test]
+fn reviewer_spawn_children_rejects_count_above_limit() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "33",
+    ])?;
+    ensure!(stderr.contains("count must be <= 32"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_note_rejects_applicator_note_types() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "note",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--note-type",
+        "applied",
+        "--content",
+        "should fail",
+    ])?;
+    ensure!(stderr.contains("not allowed for role `reviewer`"));
+    Ok(())
+}
+
+#[test]
+fn applicator_note_rejects_reviewer_note_types() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let stderr = run_cmd_failure(&[
+        "applicator",
+        "note",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--note-type",
+        "question",
+        "--content",
+        "should fail",
+    ])?;
+    ensure!(stderr.contains("not allowed for role `applicator`"));
+    Ok(())
+}
+
+#[test]
+fn worker_dispatch_role_blocks_non_progress_commands() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .arg("id")
+        .arg("id8")
+        .env("MPCR_DISPATCH_ROLE", "red-team")
+        .output()?;
+    ensure!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("MPCR_DISPATCH_ROLE=red-team"));
+    Ok(())
+}
+
+#[test]
+fn worker_dispatch_role_allows_reviewer_update() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--session-dir",
+            &session_dir,
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--status",
+            "IN_PROGRESS",
+        ])
+        .env("MPCR_DISPATCH_ROLE", "red-team")
+        .output()?;
+    ensure!(output.status.success());
     Ok(())
 }
 

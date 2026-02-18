@@ -312,6 +312,34 @@ pub enum NoteType {
     AutoClosedByParentFinalize,
 }
 
+impl NoteType {
+    fn allowed_for_role(&self, role: NoteRole) -> bool {
+        match role {
+            NoteRole::Reviewer => matches!(
+                self,
+                Self::EscalationTrigger
+                    | Self::DomainObservation
+                    | Self::BlockerPreview
+                    | Self::Question
+                    | Self::Handoff
+                    | Self::ErrorDetail
+                    | Self::ProofPacket
+                    | Self::AutoClosedByParentFinalize
+            ),
+            NoteRole::Applicator => matches!(
+                self,
+                Self::ErrorDetail
+                    | Self::Applied
+                    | Self::Declined
+                    | Self::Deferred
+                    | Self::ClarificationNeeded
+                    | Self::AlreadyAddressed
+                    | Self::Acknowledged
+            ),
+        }
+    }
+}
+
 impl ValueEnum for NoteType {
     fn value_variants<'a>() -> &'a [Self] {
         &[
@@ -2391,6 +2419,8 @@ pub struct SpawnChildReviewersParams {
     pub now: OffsetDateTime,
 }
 
+const MAX_SPAWN_CHILDREN: usize = 32;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 /// A child reviewer entry spawned by [`spawn_child_reviewers`].
@@ -2437,6 +2467,11 @@ pub fn spawn_child_reviewers(
     validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
     if params.count == 0 {
         return Err(anyhow::anyhow!("count must be >= 1"));
+    }
+    if params.count > MAX_SPAWN_CHILDREN {
+        return Err(anyhow::anyhow!(
+            "count must be <= {MAX_SPAWN_CHILDREN}"
+        ));
     }
 
     let session_file = params.session.session_file();
@@ -2756,6 +2791,23 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                 "report_file already set; refusing to overwrite"
             ));
         }
+        let open_child_ids: Vec<String> = session
+            .reviews
+            .iter()
+            .filter(|child| {
+                child.parent_id.as_deref() == Some(params.reviewer_id.as_str())
+                    && child.session_id == params.session_id
+                    && child.target_ref == entry.target_ref
+                    && !child.status.is_terminal()
+            })
+            .map(|child| child.reviewer_id.clone())
+            .collect();
+        if !open_child_ids.is_empty() && !params.auto_close_open_children {
+            let list = open_child_ids.join(",");
+            return Err(anyhow::anyhow!(
+                "cannot finalize while child reviews are open (run `mpcr reviewer close-children` first): {list}"
+            ));
+        }
         started_at = parse_ts(&entry.started_at)?;
         target_ref = entry.target_ref.clone();
     }
@@ -2918,6 +2970,20 @@ pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_id8(&params.lock_owner, "lock_owner")?;
+    if !params.note_type.allowed_for_role(params.role) {
+        let note_type_name = match serde_json::to_string(&params.note_type) {
+            Ok(raw) => raw.trim_matches('"').to_string(),
+            Err(_) => "unknown".to_string(),
+        };
+        return Err(anyhow::anyhow!(
+            "note_type `{}` is not allowed for role `{}`",
+            note_type_name,
+            match params.role {
+                NoteRole::Reviewer => "reviewer",
+                NoteRole::Applicator => "applicator",
+            }
+        ));
+    }
 
     let lock_owner = params.lock_owner.clone();
     let _guard = lock::acquire_lock(

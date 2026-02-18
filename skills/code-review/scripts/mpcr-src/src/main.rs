@@ -964,6 +964,7 @@ fn main() {
 #[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    enforce_worker_mode_restrictions(&cli.command)?;
     let json = cli.json || cli.json_pretty;
     let json_pretty = cli.json_pretty;
     let use_env = cli.use_env;
@@ -1496,6 +1497,29 @@ fn run() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
+    let dispatch_role = std::env::var("MPCR_DISPATCH_ROLE")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let Some(dispatch_role) = dispatch_role else {
+        return Ok(());
+    };
+
+    let allowed = matches!(
+        command,
+        Commands::Reviewer {
+            command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
+        }
+    );
+    if allowed {
+        return Ok(());
+    }
+
+    Err(anyhow::anyhow!(
+        "MPCR_DISPATCH_ROLE={dispatch_role} restricts this executor to `mpcr reviewer update` and `mpcr reviewer note` only"
+    ))
 }
 
 fn resolve_session_input(
