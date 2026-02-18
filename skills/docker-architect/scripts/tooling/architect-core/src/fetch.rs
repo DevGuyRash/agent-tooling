@@ -99,13 +99,16 @@ pub fn fetch_image_profile(
     allow_scrape_fallback: bool,
     user_agent: &str,
 ) -> Result<ImageProfile, AppError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| AppError::InvalidInput {
-            reason: format!("failed to build http client: {error}"),
-        })?;
+    let client = build_http_client()?;
+    fetch_image_profile_with_client(&client, image, allow_scrape_fallback, user_agent)
+}
 
+fn fetch_image_profile_with_client(
+    client: &Client,
+    image: &str,
+    allow_scrape_fallback: bool,
+    user_agent: &str,
+) -> Result<ImageProfile, AppError> {
     let parsed = parse_image_reference(image)?;
     let mut notes = Vec::new();
     let mut sources = Vec::new();
@@ -337,15 +340,26 @@ pub fn fetch_profiles(
     allow_scrape_fallback: bool,
     user_agent: &str,
 ) -> Result<Vec<ImageProfile>, AppError> {
+    let client = build_http_client()?;
     let mut output = Vec::with_capacity(images.len());
     for image in images {
-        output.push(fetch_image_profile(
+        output.push(fetch_image_profile_with_client(
+            &client,
             image,
             allow_scrape_fallback,
             user_agent,
         )?);
     }
     Ok(output)
+}
+
+fn build_http_client() -> Result<Client, AppError> {
+    Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| AppError::InvalidInput {
+            reason: format!("failed to build http client: {error}"),
+        })
 }
 
 /// Normalize an image reference into a fully-qualified deterministic form.

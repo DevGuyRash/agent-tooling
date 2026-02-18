@@ -1,12 +1,18 @@
 //! Runtime verification helpers for generated compose outputs.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::AppError;
+
+const DOCKER_VERIFY_TIMEOUT: Duration = Duration::from_secs(45);
+const DOCKER_LOGS_TIMEOUT: Duration = Duration::from_secs(20);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Verification report for compose runtime checks.
 #[derive(Debug, Clone, Serialize)]
@@ -190,15 +196,14 @@ fn inspect_record_from_value(
 }
 
 fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<bool, AppError> {
-    let output = Command::new("docker")
-        .arg("logs")
-        .arg("--tail")
-        .arg(tail.to_string())
-        .arg(container_id)
-        .output()
-        .map_err(|error| AppError::InvalidInput {
-            reason: format!("failed to execute docker logs command for {container_id}: {error}"),
-        })?;
+    let tail_string = tail.to_string();
+    let output = run_docker_output(
+        &["logs", "--tail", &tail_string, container_id],
+        DOCKER_LOGS_TIMEOUT,
+    )
+    .map_err(|error| AppError::InvalidInput {
+        reason: format!("failed to execute docker logs command for {container_id}: {error}"),
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -242,15 +247,14 @@ fn run_compose_command(compose_file: &Path, args: &[&str]) -> Result<String, App
 }
 
 fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
-    let output = Command::new("docker")
-        .args(args)
-        .output()
-        .map_err(|error| AppError::InvalidInput {
+    let output = run_docker_output(args, DOCKER_VERIFY_TIMEOUT).map_err(|error| {
+        AppError::InvalidInput {
             reason: format!(
                 "failed to execute docker command `{}`: {error}",
                 args.join(" ")
             ),
-        })?;
+        }
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(AppError::InvalidInput {
@@ -263,6 +267,36 @@ fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String> {
+    let mut child = Command::new("docker")
+        .args(args)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let start = Instant::now();
+
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return child.wait_with_output().map_err(|error| error.to_string());
+        }
+
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "timed out after {}s: docker {}",
+                timeout.as_secs(),
+                args.join(" ")
+            ));
+        }
+
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 #[cfg(test)]

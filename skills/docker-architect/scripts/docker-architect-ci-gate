@@ -57,6 +57,10 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "error: DOCKER_ARCHITECT_ENABLE_VERIFY=1 requires docker in PATH" >&2
   exit 127
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "error: DOCKER_ARCHITECT_ENABLE_VERIFY=1 requires jq in PATH for report parsing" >&2
+  exit 127
+fi
 
 if ! docker info >/dev/null 2>&1; then
   echo "error: docker daemon is unreachable but DOCKER_ARCHITECT_ENABLE_VERIFY=1 was requested" >&2
@@ -80,7 +84,7 @@ trap 'rm -f "${report_file}"' EXIT HUP INT TERM
 echo "[docker-architect-ci-gate] running live docker verify with ${verify_compose_file}"
 "${compose_launcher}" verify "${verify_compose_file}" --mode compose --output "${report_file}"
 
-if ! grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "${report_file}"; then
+if ! jq -e '.success == true' "${report_file}" >/dev/null 2>&1; then
   echo "error: live docker verify failed (success=false)" >&2
   cat "${report_file}" >&2
   exit 1

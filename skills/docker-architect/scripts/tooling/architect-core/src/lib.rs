@@ -119,8 +119,8 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                         Ok(result) => {
                             apply_runtime_probe_results(profile, result);
                         }
-                        Err(_) => {
-                            profile.notes.push("runtime-probe-failed".to_string());
+                        Err(error) => {
+                            note_runtime_probe_failure(profile, &error);
                         }
                     }
                 }
@@ -412,8 +412,8 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     Ok(result) => {
                         apply_runtime_probe_results(profile, result);
                     }
-                    Err(_) => {
-                        profile.notes.push("runtime-probe-failed".to_string());
+                    Err(error) => {
+                        note_runtime_probe_failure(profile, &error);
                     }
                 }
             }
@@ -466,6 +466,26 @@ fn apply_runtime_probe_results(
             "advisory:distroless-avoid-cmd-shell-healthchecks-use-native-health-endpoint-or-dockerfile-healthcheck",
         );
     }
+}
+
+fn note_runtime_probe_failure(profile: &mut ImageProfile, error: &AppError) {
+    push_note_once(&mut profile.notes, "runtime-probe-failed");
+    let category = match error {
+        AppError::Io { .. } => "io",
+        AppError::InvalidInput { reason } => {
+            if reason.to_ascii_lowercase().contains("timed out") {
+                "timeout"
+            } else {
+                "invalid-input"
+            }
+        }
+        AppError::Http { .. } => "http",
+        AppError::Serialization { .. } => "serialization",
+    };
+    push_note_once(
+        &mut profile.notes,
+        &format!("runtime-probe-failed-reason:{category}"),
+    );
 }
 
 fn probe_detected_distroless_shell_missing(details: &BTreeMap<String, RuntimeToolDetail>) -> bool {

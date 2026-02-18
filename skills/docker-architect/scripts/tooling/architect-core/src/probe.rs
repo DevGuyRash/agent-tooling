@@ -2,11 +2,16 @@
 
 use std::collections::BTreeMap;
 use std::process::{Command, Output};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 
 use crate::error::AppError;
 use crate::model::RuntimeToolDetail;
+
+const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Probe tool availability for one image using `docker run`.
 ///
@@ -115,18 +120,15 @@ struct ShellProbeOutcome {
 fn probe_tool_with_shell(image: &str, tool: &str) -> Result<ShellProbeOutcome, AppError> {
     let mut missing_shell_count = 0usize;
     for shell in ["/bin/sh", "sh"] {
-        let output = Command::new("docker")
-            .arg("run")
-            .arg("--rm")
-            .arg("--entrypoint")
-            .arg(shell)
-            .arg(image)
-            .arg("-c")
-            .arg(format!("command -v {tool}"))
-            .output()
-            .map_err(|error| AppError::InvalidInput {
-                reason: format!("failed to execute docker runtime probe: {error}"),
-            })?;
+        let output = run_docker_probe_command(&[
+            "run".to_string(),
+            "--rm".to_string(),
+            "--entrypoint".to_string(),
+            shell.to_string(),
+            image.to_string(),
+            "-c".to_string(),
+            format!("command -v {tool}"),
+        ])?;
 
         if output.status.success() {
             let discovered = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -161,17 +163,52 @@ fn candidate_entrypoints(tool: &str) -> Vec<String> {
 }
 
 fn run_entrypoint_probe(image: &str, entrypoint: &str) -> Result<Output, AppError> {
-    Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--entrypoint")
-        .arg(entrypoint)
-        .arg(image)
-        .arg("--help")
-        .output()
+    run_docker_probe_command(&[
+        "run".to_string(),
+        "--rm".to_string(),
+        "--entrypoint".to_string(),
+        entrypoint.to_string(),
+        image.to_string(),
+        "--help".to_string(),
+    ])
+}
+
+fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
+    let mut child = Command::new("docker")
+        .args(args)
+        .spawn()
         .map_err(|error| AppError::InvalidInput {
             reason: format!("failed to execute docker runtime probe: {error}"),
-        })
+        })?;
+
+    let start = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| AppError::InvalidInput {
+                reason: format!("failed while waiting for docker runtime probe: {error}"),
+            })?
+            .is_some()
+        {
+            return child.wait_with_output().map_err(|error| AppError::InvalidInput {
+                reason: format!("failed to collect docker runtime probe output: {error}"),
+            });
+        }
+
+        if start.elapsed() >= DOCKER_PROBE_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::InvalidInput {
+                reason: format!(
+                    "docker runtime probe timed out after {}s: docker {}",
+                    DOCKER_PROBE_TIMEOUT.as_secs(),
+                    args.join(" ")
+                ),
+            });
+        }
+
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 fn indicates_missing_binary(output: &Output) -> bool {
