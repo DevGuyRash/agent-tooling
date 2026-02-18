@@ -82,19 +82,26 @@ Unless the repo explicitly defines otherwise, follow these rules:
 When a bundled script exists for the requested operation, use the script first.
 Direct ad hoc `gh`/`git` command sequences are fallback-only.
 
+Path resolution (mandatory):
+- Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to this skill folder (the folder containing this `SKILL.md`), not relative to the target repository where git work is being performed.
+- Before dispatching, resolve and keep a local variable:
+  - `SKILL_ROOT=<absolute-path-to-this-skill-folder>`
+  - Example in this repo: `/home/rashino/repos/agent-skills/skills/gitops-workflow`
+- Execute helpers via `"$SKILL_ROOT/scripts/..."` so they are found even when CWD is another repo.
+
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch | `bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]` |
-| Create PR body + PR | `bash scripts/pr-create.sh --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
-| PR hygiene audit | `bash scripts/pr-audit.sh <pr_number>` |
-| Strict PR workflow (comments + unresolved threads + checks) | `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]` |
-| List unresolved inline threads | `bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
-| Resolve unresolved inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
-| Resolve specific inline threads | `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
-| Reply to inline review comment | `bash scripts/pr-reply.sh <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
-| Squash merge a PR deterministically | `bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
-| Receipt generation | `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]` |
-| Governance enforcement sequence | `bash scripts/governance-enforce.sh [--policy <path>] [--repo owner/repo] [--no-write-codeowners]` |
+| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]` |
+| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
+| PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
+| Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
+| List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
+| Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
+| Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
+| Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Squash merge a PR deterministically | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
+| Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
+| Governance enforcement sequence | `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] [--repo owner/repo] [--no-write-codeowners]` |
 
 Exception protocol:
 - If you bypass a required script, include one line in your output: `Script bypass reason: <specific blocker>`.
@@ -126,10 +133,10 @@ Detailed checklists live in:
 Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
-bash scripts/start-branch.sh feat add-json-output
-bash scripts/pr-create.sh --title "feat(cli): add json output" --create
-bash scripts/pr-merge-squash.sh <pr_number>
-python3 scripts/receipt.py --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create
+bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
+python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
 ```
 
 ---
@@ -152,12 +159,13 @@ Create a correctly named branch from the default branch, without accidentally wo
 **Recommended helper** (handles default-branch detection + naming validation):
 
 - `scripts/start-branch.sh`
+  - Resolve as: `"$SKILL_ROOT/scripts/start-branch.sh"`
 
 Example:
 
 ```bash
-bash scripts/start-branch.sh feat add-json-output
-bash scripts/start-branch.sh chore --issue 4321 --stash-name "carry-local-wip"
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 4321 --stash-name "carry-local-wip"
 ```
 
 ---
@@ -202,6 +210,7 @@ See:
 Optional helper:
 
 - `scripts/pr-create.sh` (generates a filled PR body skeleton and opens a PR)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 
 ---
 
@@ -212,7 +221,7 @@ Before pushing any new commits to a PR branch:
 1. Read top-level PR comments:
    - `gh pr view <number> --comments`
 2. Read unresolved inline review threads:
-   - `bash scripts/pr-unresolved-threads.sh <number>`
+   - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <number>`
 3. Review CI checks/logs:
    - `gh pr checks <number> --watch`
 4. Address/respond to every unresolved item.
@@ -223,13 +232,14 @@ Guidance for handling automated reviewer feedback:
 
 - [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
 - `scripts/pr-workflow.sh` (strict deterministic wrapper)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-workflow.sh"`
 
 ---
 
 ## Playbook E: Merge a PR (squash & merge)
 
 1. Run deterministic merge wrapper:
-   - `bash scripts/pr-merge-squash.sh <pr_number>`
+   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>`
 2. Wrapper preconditions (default mode):
    - conversations resolved
    - required CI checks green
@@ -238,10 +248,10 @@ Guidance for handling automated reviewer feedback:
 3. Squash merge body is generated deterministically with commit bullets:
    - `- <short-sha> <first-line commit subject>`
 4. Optional escalation path for repository admins:
-   - `bash scripts/pr-merge-squash.sh <pr_number> --admin`
+   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin`
    - this passes `--admin` to `gh pr merge` and relaxes approval/check gates
 5. After merge, emit a commit receipt:
-   - `python3 scripts/receipt.py --branch <branch> --base <default-branch> --pr-url <url>`
+   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
 
 ---
 
@@ -253,7 +263,7 @@ Use:
 
 Optional helper (builds a skeleton from git history):
 
-- `python3 scripts/generate-release-notes.py --since <tag-or-sha> --version vX.Y.Z`
+- `python3 "$SKILL_ROOT/scripts/generate-release-notes.py" --since <tag-or-sha> --version vX.Y.Z`
 
 ---
 
@@ -271,25 +281,25 @@ Enforce repository governance as desired-state policy for branch/ruleset protect
 ### Strict command sequence
 
 1. Validate policy:
-   - `python3 scripts/repo-governance.py validate --policy assets/config/github-governance-policy.v1.json`
+   - `python3 "$SKILL_ROOT/scripts/repo-governance.py" validate --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json"`
 2. Plan drift (non-mutating):
-   - `python3 scripts/repo-governance.py plan --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
+   - `python3 "$SKILL_ROOT/scripts/repo-governance.py" plan --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>`
 3. Apply reconciliation (mutating):
-   - `python3 scripts/repo-governance.py apply --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --write-codeowners`
+   - `python3 "$SKILL_ROOT/scripts/repo-governance.py" apply --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo> --write-codeowners`
 4. Audit final state:
-   - `python3 scripts/repo-governance.py audit --policy assets/config/github-governance-policy.v1.json --repo <owner/repo> --format json`
+   - `python3 "$SKILL_ROOT/scripts/repo-governance.py" audit --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo> --format json`
 
 Wrapper helper:
-- `bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
+- `bash "$SKILL_ROOT/scripts/governance-enforce.sh" --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>`
 
 ### Bootstrap helpers
 
 - Discover candidate required checks:
-  - `bash scripts/required-checks-discover.sh --repo <owner/repo>`
+  - `bash "$SKILL_ROOT/scripts/required-checks-discover.sh" --repo <owner/repo>`
 - Export existing labels:
-  - `bash scripts/labels-export.sh --repo <owner/repo>`
+  - `bash "$SKILL_ROOT/scripts/labels-export.sh" --repo <owner/repo>`
 - Lint CODEOWNERS ordering/tokens:
-  - `python3 scripts/codeowners-lint.py --path .github/CODEOWNERS`
+  - `python3 "$SKILL_ROOT/scripts/codeowners-lint.py" --path .github/CODEOWNERS`
 
 Operational details:
 - [references/ENFORCEMENT.md](references/ENFORCEMENT.md)
@@ -327,7 +337,7 @@ After any push/merge operation, include a receipt like:
 
 Helper:
 
-- `python3 scripts/receipt.py`
+- `python3 "$SKILL_ROOT/scripts/receipt.py"`
 
 Details:
 

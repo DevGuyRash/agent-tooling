@@ -5,6 +5,9 @@ This document defines when agents must use bundled scripts instead of ad hoc com
 ## Rule
 
 If a script exists for the operation, use the script first.
+Resolve script paths from the skill directory, not the target repository directory.
+Set `SKILL_ROOT` to the absolute path of the `gitops-workflow` skill folder (the folder containing `SKILL.md`), then call scripts via `"$SKILL_ROOT/scripts/..."`.
+
 Only bypass when:
 - script cannot express required inputs,
 - script fails for reasons outside task scope,
@@ -16,26 +19,26 @@ When bypassing, record:
 ## Routing table
 
 - Branch creation:
-  - `bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]`
+  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]`
 - PR creation:
-  - `bash scripts/pr-create.sh --title "<title>" [--create] [--draft] [--base <branch>] [--head <branch>]`
+  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create] [--draft] [--base <branch>] [--head <branch>]`
 - PR hygiene snapshot:
-  - `bash scripts/pr-audit.sh <pr_number>`
+  - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:
-  - `bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]`
+  - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
 - Unresolved inline thread check:
-  - `bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
+  - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
 - Resolve unresolved inline threads:
-  - `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]`
-  - `bash scripts/pr-resolve-threads.sh <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
+  - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]`
+  - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
-  - `bash scripts/pr-reply.sh <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
 - Squash merge (deterministic, required):
-  - `bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:
-  - `python3 scripts/receipt.py --branch <branch> --base <base> [--pr-url <url>]`
+  - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]`
 - Governance enforcement:
-  - `bash scripts/governance-enforce.sh [--policy <path>] [--repo owner/repo] [--no-write-codeowners]`
+  - `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] [--repo owner/repo] [--no-write-codeowners]`
 
 ## Strict mode hints
 
