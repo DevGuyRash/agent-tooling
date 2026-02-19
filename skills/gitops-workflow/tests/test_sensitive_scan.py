@@ -43,6 +43,11 @@ class SensitiveScanScriptTests(unittest.TestCase):
         for token in unsupported:
             self.assertNotIn(token, cfg, f"gitleaks config uses RE2-unsupported token: {token}")
 
+    def test_gitleaks_config_ignores_build_artifacts(self):
+        cfg = GITLEAKS_CONFIG.read_text(encoding="utf-8")
+        self.assertIn("'''(^|/)target/'''", cfg)
+        self.assertIn("'''(^|/)__pycache__/'''", cfg)
+
     def _write_fake_gitleaks(self, folder: Path) -> Path:
         fake = folder / "gitleaks"
         fake.write_text(

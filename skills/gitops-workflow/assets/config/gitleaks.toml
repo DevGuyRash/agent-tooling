@@ -10,6 +10,8 @@ paths = [
   '''(^|/)tests/fixtures/''',
   '''(^|/)tests/golden/''',
   '''(^|/)docs/examples/''',
+  '''(^|/)target/''',
+  '''(^|/)__pycache__/''',
 ]
 regexes = [
   '''(?i)example(_|-)?(secret|token|key|password)''',
