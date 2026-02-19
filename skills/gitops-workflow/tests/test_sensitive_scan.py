@@ -108,8 +108,7 @@ class SensitiveScanScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
             args = args_file.read_text(encoding="utf-8")
-            self.assertIn("git", args)
-            self.assertIn("--pre-commit", args)
+            self.assertIn("protect", args)
             self.assertIn("--staged", args)
             self.assertIn("--redact", args)
 

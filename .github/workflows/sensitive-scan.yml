@@ -12,18 +12,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # Set to a pinned tag such as v8.30.0 for deterministic installs.
+      # Override in repo/workflow env if you want a different version.
+      GITLEAKS_VERSION: "v8.30.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve latest gitleaks
+      - name: Resolve gitleaks version
         id: gitleaks
         shell: bash
         run: |
           set -euo pipefail
-          tag="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r '.tag_name // empty' | head -n 1)"
+          if [[ -n "${GITLEAKS_VERSION:-}" ]]; then
+            tag="${GITLEAKS_VERSION}"
+          else
+            tag="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r '.tag_name // empty' | head -n 1)"
+          fi
           if [[ -z "$tag" ]]; then
-            echo "Error: unable to resolve latest gitleaks release tag" >&2
+            echo "Error: unable to resolve gitleaks release tag" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

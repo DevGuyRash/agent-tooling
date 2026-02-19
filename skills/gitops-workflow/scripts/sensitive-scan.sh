@@ -399,11 +399,24 @@ resolve_gitleaks_bin() {
 
 GITLEAKS_BIN_PATH="$(resolve_gitleaks_bin)"
 
+supports_subcommand() {
+  local sub="$1"
+  "$GITLEAKS_BIN_PATH" "$sub" --help >/dev/null 2>&1
+}
+
 SCAN_ARGS=()
 if [[ "$MODE" == "staged" ]]; then
-  SCAN_ARGS=(git --pre-commit --staged --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  if supports_subcommand protect; then
+    SCAN_ARGS=(protect --staged --source . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  else
+    SCAN_ARGS=(git --pre-commit --staged --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  fi
 else
-  SCAN_ARGS=(dir . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  if supports_subcommand detect; then
+    SCAN_ARGS=(detect --source . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  else
+    SCAN_ARGS=(dir . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+  fi
 fi
 
 if [[ "$REDACT" == "true" ]]; then
