@@ -62,7 +62,7 @@ jobs:
             echo "Error: expected .github/gitleaks.toml (copy from skill assets/config/gitleaks.toml)." >&2
             exit 1
           fi
-          gitleaks dir . \
+          gitleaks detect --source . --no-git \
             --config .github/gitleaks.toml \
             --redact \
             --exit-code 1 \
