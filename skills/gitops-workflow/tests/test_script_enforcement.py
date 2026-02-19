@@ -29,6 +29,7 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "start-branch.sh",
             SCRIPTS_DIR / "install-hooks.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
+            SCRIPTS_DIR / "pr-create.sh",
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "pr-merge-squash.sh",
             SCRIPTS_DIR / "governance-enforce.sh",

@@ -219,7 +219,7 @@ See:
 
 Optional helper:
 
-- `scripts/pr-create.sh` (generates a filled PR body skeleton and opens a PR)
+- `scripts/pr-create.sh` (generates a prefilled PR body from git history and opens a PR)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 
 ---
