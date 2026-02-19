@@ -2,8 +2,8 @@
 
 This skill supports advisory templates, but governance controls should be applied as deterministic desired state using:
 
-- `scripts/repo-governance.py`
-- `scripts/governance-enforce.sh`
+- `"$SKILL_ROOT/scripts/repo-governance.py"`
+- `"$SKILL_ROOT/scripts/governance-enforce.sh"`
 - `assets/config/github-governance-policy.v1.json`
 
 Command context:

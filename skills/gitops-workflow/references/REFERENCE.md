@@ -46,7 +46,7 @@ You can adopt this skill in layers:
 1. **Instructions only**: agent follows the playbooks + checklists.
 2. **Templates**: copy PR template + squash/release templates into `.github/`.
 3. **CI enforcement**: add GitHub Actions from `assets/github/workflows/`.
-4. **Local hooks** (optional but recommended): install managed pre-commit sensitive scan hook with `scripts/install-hooks.sh`.
+4. **Local hooks** (optional but recommended): install managed pre-commit sensitive scan hook with `bash "$SKILL_ROOT/scripts/install-hooks.sh"`.
 5. **Release automation** (optional): integrate `release-please` or your release process.
 
 See [ENFORCEMENT.md](ENFORCEMENT.md) for details.

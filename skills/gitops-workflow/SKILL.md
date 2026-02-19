@@ -241,6 +241,7 @@ Before pushing any new commits to a PR branch:
 4. Address/respond to every unresolved item.
    - Reply in the original thread (do NOT create a new top-level comment).
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
+   - Optional trigger commands (if enabled in repo): `@codex review` then `@gemini-code-assist review`.
 
 Guidance for handling automated reviewer feedback:
 

@@ -189,8 +189,8 @@ OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
   echo
   echo "# Reviewers / bots"
   echo
-  echo "@codex"
-  echo "@gemini-code-assist"
+  echo "@codex review"
+  echo "@gemini-code-assist review"
 } > "$OUT_FILE"
 
 echo "📝 PR body file created: $OUT_FILE"
