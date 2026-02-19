@@ -62,8 +62,14 @@ jobs:
             echo "Error: expected .github/gitleaks.toml (copy from skill assets/config/gitleaks.toml)." >&2
             exit 1
           fi
-          gitleaks detect --source . --no-git \
+          if ! gitleaks detect --source . --no-git \
             --config .github/gitleaks.toml \
             --redact \
             --exit-code 1 \
-            --no-banner
+            --no-banner \
+            --report-format json \
+            --report-path gitleaks-report.json; then
+            echo "gitleaks findings:"
+            cat gitleaks-report.json
+            exit 1
+          fi
