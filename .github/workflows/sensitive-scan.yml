@@ -1,0 +1,61 @@
+name: sensitive scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  sensitive-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve latest gitleaks
+        id: gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r '.tag_name // empty' | head -n 1)"
+          if [[ -z "$tag" ]]; then
+            echo "Error: unable to resolve latest gitleaks release tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.gitleaks.outputs.tag }}'
+          ver="${tag#v}"
+          asset="gitleaks_${ver}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/${tag}"
+          curl -fsSL -o "$asset" "$base/$asset"
+          curl -fsSL -o checksums.txt "$base/gitleaks_${ver}_checksums.txt"
+          expected="$(awk -v target="$asset" '$2 == target {print $1}' checksums.txt)"
+          actual="$(sha256sum "$asset" | awk '{print $1}')"
+          [[ -n "$expected" ]] || { echo "Error: checksum missing for $asset" >&2; exit 1; }
+          [[ "$actual" == "$expected" ]] || { echo "Error: checksum mismatch for $asset" >&2; exit 1; }
+          tar -xzf "$asset"
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Run sensitive scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f .github/gitleaks.toml ]]; then
+            echo "Error: expected .github/gitleaks.toml (copy from skill assets/config/gitleaks.toml)." >&2
+            exit 1
+          fi
+          gitleaks dir . \
+            --config .github/gitleaks.toml \
+            --redact \
+            --exit-code 1 \
+            --no-banner

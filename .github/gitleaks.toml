@@ -1,0 +1,50 @@
+title = "gitops-workflow gitleaks config"
+minVersion = "v8.25.0"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist for test fixtures and known non-sensitive examples"
+paths = [
+  '''(^|/)tests/fixtures/''',
+  '''(^|/)tests/golden/''',
+  '''(^|/)docs/examples/''',
+  '''(^|/)target/''',
+  '''(^|/)__pycache__/''',
+]
+regexes = [
+  '''(?i)example(_|-)?(secret|token|key|password)''',
+]
+
+[[rules]]
+id = "pii-us-ssn-labeled"
+description = "Potential US SSN in labeled context"
+regex = '''(?i)\b(?:ssn|social[\s_-]?security(?:[\s_-]?number)?)\b[^\n]{0,25}\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'''
+keywords = ["ssn", "social security"]
+tags = ["pii", "ssn"]
+
+[[rules]]
+id = "pii-email-labeled"
+description = "Potential personal email in labeled context"
+regex = '''(?i)\b(?:email|e-mail|contact[\s_-]?email|personal[\s_-]?email)\b[^\n]{0,20}(?:=|:|=>)\s*[\"']?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}[\"']?'''
+keywords = ["email", "contact email"]
+tags = ["pii", "email"]
+
+[[rules]]
+id = "pii-vin-labeled"
+description = "Potential VIN in labeled context"
+regex = '''(?i)\bvin\b[^\n]{0,16}(?:=|:|=>)\s*[\"']?([A-HJ-NPR-Z0-9]{17})[\"']?'''
+keywords = ["vin"]
+tags = ["pii", "vehicle", "vin"]
+
+[[rules]]
+id = "pii-stock-number-labeled"
+description = "Potential stock or inventory identifier in labeled context"
+regex = '''(?i)\b(?:stock(?:[\s_-]?number)?|inventory(?:[\s_-]?number)?|stockno)\b[^\n]{0,16}(?:=|:|=>)\s*[\"']?([A-Z0-9][A-Z0-9-]{5,20})[\"']?'''
+keywords = ["stock", "inventory"]
+tags = ["pii", "inventory"]
+
+# Names are intentionally not enabled by default because generic "first last"
+# patterns produce high false positives in code, docs, and changelogs.
+# If your org has deterministic person-name fields, add a repo-specific rule.
