@@ -28,7 +28,7 @@ tags = ["pii", "ssn"]
 [[rules]]
 id = "pii-email-labeled"
 description = "Potential personal email in labeled context"
-regex = '''(?i)\b(?:email|e-mail|contact[\s_-]?email|personal[\s_-]?email)\b[^\n]{0,20}(?:=|:|=>)\s*[\"']?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}[\"']?'''
+regex = '''(?i)(?:^|[[:space:]])(?:email|e-mail|contact[\s_-]?email|personal[\s_-]?email)\b[^\n]{0,20}(?:=|:|=>)\s*[\"']?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}[\"']?'''
 keywords = ["email", "contact email"]
 tags = ["pii", "email"]
 
