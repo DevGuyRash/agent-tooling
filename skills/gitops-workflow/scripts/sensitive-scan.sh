@@ -436,7 +436,11 @@ SCAN_CODE=$?
 set -e
 
 if [[ "$SCAN_CODE" -eq 0 ]]; then
-  say "Sensitive-data scan passed ($MODE)."
+  if [[ "$FORMAT" == "json" ]]; then
+    echo "Sensitive-data scan passed ($MODE)." >&2
+  else
+    say "Sensitive-data scan passed ($MODE)."
+  fi
   exit 0
 fi
 

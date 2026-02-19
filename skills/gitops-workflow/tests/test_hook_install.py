@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -67,6 +68,24 @@ class HookInstallerTests(unittest.TestCase):
             self.assertIn(MANAGED_MARKER, text)
             self.assertIn("sensitive-scan.sh", text)
             self.assertTrue(os.access(path, os.X_OK))
+
+    def test_install_escapes_skill_root_in_generated_hook(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            proc = run(
+                ["bash", str(INSTALL_SCRIPT), "--repo", str(repo)],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            text = hook_path(repo).read_text(encoding="utf-8")
+            expected_assignment = f"SKILL_ROOT={shlex.quote(str(ROOT))}"
+            self.assertIn(expected_assignment, text)
+            self.assertNotIn(f'SKILL_ROOT="{ROOT}"', text)
 
     def test_install_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp_dir:
