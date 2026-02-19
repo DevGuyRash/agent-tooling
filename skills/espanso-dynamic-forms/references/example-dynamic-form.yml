@@ -1,0 +1,22 @@
+matches:
+  - trigger: ":example-dynamic"
+    replace: "{{output}}"
+    vars:
+      - name: form1
+        type: form
+        params:
+          layout: |
+            Provider:
+            [[provider]]
+          fields:
+            provider:
+              type: text
+      - name: layout_generator
+        type: script
+        params:
+          args:
+            - "%CONFIG%/tools/rust/bin/espanso_env"
+            - ESPANSO_FORM_OPERATION=layout
+            - ESPANSO_FORM_PROVIDER={{form1.provider}}
+            - ESPANSO_FORM_FIELD_input_mode=text
+            - "%CONFIG%/tools/rust/bin/example_layout_generator"
