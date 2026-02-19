@@ -1,7 +1,7 @@
 //! Runtime verification helpers for generated compose outputs.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -271,6 +271,8 @@ fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
 fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String> {
     let mut child = Command::new("docker")
         .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| error.to_string())?;
     let start = Instant::now();

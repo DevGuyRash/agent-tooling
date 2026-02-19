@@ -1,7 +1,7 @@
 //! Optional local runtime probes used to enrich deterministic cache payloads.
 
 use std::collections::BTreeMap;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -181,6 +181,8 @@ fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
     let mut child =
         Command::new("docker")
             .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| AppError::InvalidInput {
                 reason: format!("failed to execute docker runtime probe: {error}"),
