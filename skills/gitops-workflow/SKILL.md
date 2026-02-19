@@ -97,7 +97,7 @@ Path resolution (mandatory):
 | Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]` |
 | Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
-| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
+| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
@@ -140,7 +140,9 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
-bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create
+bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
+# edit generated body file if needed, then explicitly create PR
+# gh pr create --title "feat(cli): add json output" --body-file <generated-file>
 bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
 ```
@@ -219,7 +221,7 @@ See:
 
 Optional helper:
 
-- `scripts/pr-create.sh` (generates a prefilled PR body from git history and opens a PR)
+- `scripts/pr-create.sh` (generates a prefilled PR body from git history; PR creation requires explicit `--create --force-create`)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 
 ---

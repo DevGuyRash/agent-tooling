@@ -4,11 +4,12 @@ set -euo pipefail
 # pr-create.sh - Create a PR using the skill's PR body template.
 #
 # Usage:
-#   bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create] [--draft] [--base main] [--head my-branch]
+#   bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--draft] [--base main] [--head my-branch]
 #
 # Behavior:
 # - Writes a prefilled PR body with deterministic sections derived from git metadata.
-# - If --create is provided, runs `gh pr create --body-file <file>`.
+# - By default, does NOT create a PR; it prints the body path for human/agent review.
+# - `--create` requires `--force-create` to run `gh pr create --body-file <file>`.
 # - If --create is not provided, prints the file path so you can edit it first.
 #
 # Requirements:
@@ -21,6 +22,7 @@ die() {
 
 TITLE=""
 CREATE="false"
+FORCE_CREATE="false"
 DRAFT="false"
 BASE=""
 HEAD=""
@@ -33,6 +35,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --create)
       CREATE="true"
+      shift
+      ;;
+    --force-create)
+      FORCE_CREATE="true"
       shift
       ;;
     --draft)
@@ -193,6 +199,10 @@ echo ""
 
 if [[ "$CREATE" != "true" ]]; then
   exit 0
+fi
+
+if [[ "$FORCE_CREATE" != "true" ]]; then
+  die "--create requires --force-create to avoid accidental PR creation"
 fi
 
 require_cmd gh

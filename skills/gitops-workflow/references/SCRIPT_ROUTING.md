@@ -27,7 +27,8 @@ When bypassing, record:
 - Sensitive-data full repo scan (CI/manual parity):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
 - PR creation:
-  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create] [--draft] [--base <branch>] [--head <branch>]`
+  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]`
+  - Recommended deterministic flow: run without `--create`, review/edit generated body, then run `gh pr create --body-file <file>`.
 - PR hygiene snapshot:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:

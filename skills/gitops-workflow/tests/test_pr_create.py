@@ -104,7 +104,83 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             self.assertIn("no commits between main and main", proc.stderr)
 
+    def test_create_requires_force_create_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--create",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("--create requires --force-create", proc.stderr)
+
+    def test_create_with_force_create_invokes_gh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            gh_args = tmp_path / "gh-args.txt"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            init_repo(repo)
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "echo \"$*\" > \"${GH_ARGS_FILE}\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GH_ARGS_FILE"] = str(gh_args)
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--create",
+                    "--force-create",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = gh_args.read_text(encoding="utf-8")
+            self.assertIn("pr create", args)
+            self.assertIn("--title feat(demo): add sample change", args)
+
 
 if __name__ == "__main__":
     unittest.main()
-
