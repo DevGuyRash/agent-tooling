@@ -1,0 +1,39 @@
+{
+  "baseBranch": "main",
+  "branchTypes": [
+    "feat",
+    "fix",
+    "docs",
+    "refactor",
+    "test",
+    "chore",
+    "perf",
+    "ci",
+    "build",
+    "style",
+    "deps",
+    "security",
+    "revert",
+    "hotfix"
+  ],
+  "branchPattern": "{type}/{slug}",
+  "issueTokenStyle": "{issue}-",
+  "requireConventionalPrTitles": true,
+  "mergeStrategy": "squash",
+  "receipt": {
+    "enabled": true,
+    "maxCommits": 50
+  },
+  "releaseNotes": {
+    "includeCommits": false,
+    "sectionOrder": [
+      "Overview",
+      "New Features",
+      "What's Changed",
+      "Bug Fixes",
+      "Breaking Changes",
+      "Commits",
+      "Refs"
+    ]
+  }
+}

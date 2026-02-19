@@ -16,12 +16,14 @@ use clap::builder::PossibleValue;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
+
+const SESSION_SCHEMA_VERSION: &str = "1.1.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -304,6 +306,38 @@ pub enum NoteType {
     AlreadyAddressed,
     /// Applicator note: acknowledged; no action needed.
     Acknowledged,
+    /// Worker proof packet summary attached to child completion.
+    ProofPacket,
+    /// System note when parent finalization auto-closes unresolved children.
+    AutoClosedByParentFinalize,
+}
+
+impl NoteType {
+    const fn allowed_for_role(&self, role: NoteRole) -> bool {
+        match role {
+            NoteRole::Reviewer => matches!(
+                self,
+                Self::EscalationTrigger
+                    | Self::DomainObservation
+                    | Self::BlockerPreview
+                    | Self::Question
+                    | Self::Handoff
+                    | Self::ErrorDetail
+                    | Self::ProofPacket
+                    | Self::AutoClosedByParentFinalize
+            ),
+            NoteRole::Applicator => matches!(
+                self,
+                Self::ErrorDetail
+                    | Self::Applied
+                    | Self::Declined
+                    | Self::Deferred
+                    | Self::ClarificationNeeded
+                    | Self::AlreadyAddressed
+                    | Self::Acknowledged
+            ),
+        }
+    }
 }
 
 impl ValueEnum for NoteType {
@@ -321,6 +355,8 @@ impl ValueEnum for NoteType {
             Self::ClarificationNeeded,
             Self::AlreadyAddressed,
             Self::Acknowledged,
+            Self::ProofPacket,
+            Self::AutoClosedByParentFinalize,
         ]
     }
 
@@ -352,6 +388,13 @@ impl ValueEnum for NoteType {
                 .help("Already handled elsewhere (reference)"),
             Self::Acknowledged => {
                 PossibleValue::new("acknowledged").help("Read/understood; no action")
+            }
+            Self::ProofPacket => {
+                PossibleValue::new("proof_packet").help("Worker proof packet summary")
+            }
+            Self::AutoClosedByParentFinalize => {
+                PossibleValue::new("auto_closed_by_parent_finalize")
+                    .help("Child auto-closed by parent finalization")
             }
         };
         Some(pv)
@@ -413,6 +456,16 @@ impl std::str::FromStr for NoteType {
                 || s.eq_ignore_ascii_case("ACKNOWLEDGED") =>
             {
                 Ok(Self::Acknowledged)
+            }
+            s if s.eq_ignore_ascii_case("proof_packet")
+                || s.eq_ignore_ascii_case("PROOF_PACKET") =>
+            {
+                Ok(Self::ProofPacket)
+            }
+            s if s.eq_ignore_ascii_case("auto_closed_by_parent_finalize")
+                || s.eq_ignore_ascii_case("AUTO_CLOSED_BY_PARENT_FINALIZE") =>
+            {
+                Ok(Self::AutoClosedByParentFinalize)
             }
             _ => Err(anyhow::anyhow!("invalid NoteType: {s}")),
         }
@@ -493,6 +546,43 @@ pub struct ReviewEntry {
     pub report_file: Option<String>,
     /// Bidirectional notes between reviewer and applicator.
     pub notes: Vec<SessionNote>,
+    /// Embedded child review summaries owned by this parent reviewer entry.
+    #[serde(default)]
+    pub child_reviews: Vec<ChildReviewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Embedded summary for a child review entry nested under its parent.
+pub struct ChildReviewEntry {
+    /// 8-character child reviewer id.
+    pub reviewer_id: String,
+    /// 8-character session id.
+    pub session_id: String,
+    /// Target reference being reviewed (branch, PR ref, commit, etc).
+    pub target_ref: String,
+    /// Applicator-owned progress state for consuming this child review.
+    pub initiator_status: InitiatorStatus,
+    /// Reviewer-owned progress state for the child.
+    pub status: ReviewerStatus,
+    /// Parent reviewer id for lineage.
+    pub parent_id: Option<String>,
+    /// RFC3339 timestamp (UTC) when the child was registered.
+    pub started_at: String,
+    /// RFC3339 timestamp (UTC) of the last child update.
+    pub updated_at: String,
+    /// RFC3339 timestamp (UTC) when the child was finalized (if finished).
+    pub finished_at: Option<String>,
+    /// Optional reviewer phase marker.
+    pub current_phase: Option<ReviewPhase>,
+    /// Optional final verdict.
+    pub verdict: Option<ReviewVerdict>,
+    /// Severity counts extracted from the report.
+    pub counts: SeverityCounts,
+    /// Report path relative to the repo root (if finalized).
+    pub report_file: Option<String>,
+    /// Number of notes attached to the child review entry.
+    pub notes_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +599,78 @@ pub struct SessionFile {
     pub reviewers: Vec<String>,
     /// Review coordination entries.
     pub reviews: Vec<ReviewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionFileDisk {
+    pub schema_version: String,
+    pub session_date: String,
+    pub repo_root: String,
+    pub reviewers: Vec<String>,
+    pub reviews: Vec<ReviewEntryDisk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReviewEntryDisk {
+    pub reviewer_id: String,
+    pub session_id: String,
+    pub target_ref: String,
+    pub initiator_status: InitiatorStatus,
+    pub status: ReviewerStatus,
+    pub parent_id: Option<String>,
+    pub started_at: String,
+    pub updated_at: String,
+    pub finished_at: Option<String>,
+    pub current_phase: Option<ReviewPhase>,
+    pub verdict: Option<ReviewVerdict>,
+    pub counts: SeverityCounts,
+    pub report_file: Option<String>,
+    #[serde(default)]
+    pub notes: Vec<SessionNote>,
+    #[serde(default)]
+    pub child_reviews: Vec<Self>,
+}
+
+impl ReviewEntryDisk {
+    fn from_review_entry(entry: &ReviewEntry) -> Self {
+        Self {
+            reviewer_id: entry.reviewer_id.clone(),
+            session_id: entry.session_id.clone(),
+            target_ref: entry.target_ref.clone(),
+            initiator_status: entry.initiator_status,
+            status: entry.status,
+            parent_id: entry.parent_id.clone(),
+            started_at: entry.started_at.clone(),
+            updated_at: entry.updated_at.clone(),
+            finished_at: entry.finished_at.clone(),
+            current_phase: entry.current_phase,
+            verdict: entry.verdict,
+            counts: entry.counts.clone(),
+            report_file: entry.report_file.clone(),
+            notes: entry.notes.clone(),
+            child_reviews: Vec::new(),
+        }
+    }
+
+    fn to_review_entry(&self) -> ReviewEntry {
+        ReviewEntry {
+            reviewer_id: self.reviewer_id.clone(),
+            session_id: self.session_id.clone(),
+            target_ref: self.target_ref.clone(),
+            initiator_status: self.initiator_status,
+            status: self.status,
+            parent_id: self.parent_id.clone(),
+            started_at: self.started_at.clone(),
+            updated_at: self.updated_at.clone(),
+            finished_at: self.finished_at.clone(),
+            current_phase: self.current_phase,
+            verdict: self.verdict,
+            counts: self.counts.clone(),
+            report_file: self.report_file.clone(),
+            notes: self.notes.clone(),
+            child_reviews: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -612,6 +774,8 @@ pub struct ReportsOptions {
     pub include_notes: bool,
     /// Include report markdown contents when available.
     pub include_report_contents: bool,
+    /// Include leaf child reviews in top-level rows (default keeps parent-centric view).
+    pub include_leaf_children: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -658,6 +822,8 @@ pub struct ReviewSummary {
     /// Optional full notes (included when requested).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<Vec<SessionNote>>,
+    /// Embedded child review summaries for parent entries.
+    pub child_reviews: Vec<ChildReviewEntry>,
 }
 
 fn strip_repo_root_best_effort(repo_root: &Path, path: &Path) -> Option<PathBuf> {
@@ -699,6 +865,277 @@ fn resolve_report_file_path(repo_root: &Path, session_dir: &Path, report_file: &
 
     // Legacy format: `report_file` is just the filename within the session directory.
     session_dir.join(report_file_path)
+}
+
+fn upsert_child_review(parent_entry: &mut ReviewEntry, child_entry: &ReviewEntry) {
+    let next = ChildReviewEntry::from_review_entry(child_entry);
+    if let Some(existing) = parent_entry.child_reviews.iter_mut().find(|child| {
+        child.reviewer_id == child_entry.reviewer_id && child.session_id == child_entry.session_id
+    }) {
+        *existing = next;
+        return;
+    }
+    parent_entry.child_reviews.push(next);
+}
+
+type ParentReviewKey = (String, String, String);
+type ChildReviewKey = (String, String);
+type ReviewKey = (String, String);
+
+fn review_key(entry: &ReviewEntry) -> ReviewKey {
+    (entry.reviewer_id.clone(), entry.session_id.clone())
+}
+
+fn choose_newer_entry(existing: &ReviewEntry, candidate: &ReviewEntry) -> bool {
+    if candidate.updated_at > existing.updated_at {
+        return true;
+    }
+    if candidate.updated_at < existing.updated_at {
+        return false;
+    }
+    candidate.notes.len() > existing.notes.len()
+}
+
+fn flatten_reviews_disk(
+    entries: &[ReviewEntryDisk],
+    flat_reviews: &mut BTreeMap<ReviewKey, ReviewEntry>,
+) {
+    for entry in entries {
+        let candidate = entry.to_review_entry();
+        let key = review_key(&candidate);
+        match flat_reviews.get(&key) {
+            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
+            _ => {
+                flat_reviews.insert(key, candidate);
+            }
+        }
+        flatten_reviews_disk(&entry.child_reviews, flat_reviews);
+    }
+}
+
+fn flatten_session_file_disk(session: SessionFileDisk) -> SessionFile {
+    let mut flat_reviews: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
+    flatten_reviews_disk(&session.reviews, &mut flat_reviews);
+
+    let mut reviewers: BTreeSet<String> = session.reviewers.into_iter().collect();
+    for entry in flat_reviews.values() {
+        reviewers.insert(entry.reviewer_id.clone());
+    }
+
+    let mut flattened = SessionFile {
+        schema_version: session.schema_version,
+        session_date: session.session_date,
+        repo_root: session.repo_root,
+        reviewers: reviewers.into_iter().collect(),
+        reviews: flat_reviews.into_values().collect(),
+    };
+    reconcile_parent_child_reviews(&mut flattened);
+    flattened
+}
+
+fn dedupe_flat_reviews(reviews: &[ReviewEntry]) -> BTreeMap<ReviewKey, ReviewEntry> {
+    let mut by_key: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
+    for entry in reviews {
+        let mut candidate = entry.clone();
+        candidate.child_reviews = Vec::new();
+        let key = review_key(&candidate);
+        match by_key.get(&key) {
+            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
+            _ => {
+                by_key.insert(key, candidate);
+            }
+        }
+    }
+    by_key
+}
+
+fn build_disk_review_node(
+    key: &ReviewKey,
+    reviews_by_key: &BTreeMap<ReviewKey, ReviewEntry>,
+    children_by_parent: &BTreeMap<ParentReviewKey, Vec<ReviewKey>>,
+    visiting: &mut BTreeSet<ReviewKey>,
+) -> anyhow::Result<ReviewEntryDisk> {
+    if !visiting.insert(key.clone()) {
+        return Err(anyhow::anyhow!(
+            "cycle detected while building child review tree"
+        ));
+    }
+
+    let entry = reviews_by_key
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("review entry missing while building child review tree"))?;
+    let parent_key = (
+        entry.reviewer_id.clone(),
+        entry.session_id.clone(),
+        entry.target_ref.clone(),
+    );
+
+    let mut child_keys = children_by_parent
+        .get(&parent_key)
+        .cloned()
+        .map_or_else(Vec::new, std::convert::identity);
+    child_keys.sort();
+    child_keys.dedup();
+
+    let mut child_reviews = Vec::with_capacity(child_keys.len());
+    for child_key in child_keys {
+        child_reviews.push(build_disk_review_node(
+            &child_key,
+            reviews_by_key,
+            children_by_parent,
+            visiting,
+        )?);
+    }
+
+    visiting.remove(key);
+
+    let mut node = ReviewEntryDisk::from_review_entry(entry);
+    node.child_reviews = child_reviews;
+    Ok(node)
+}
+
+fn canonicalize_session_for_write(session: &SessionFile) -> anyhow::Result<SessionFileDisk> {
+    let reviews_by_key = dedupe_flat_reviews(&session.reviews);
+
+    let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
+    for (child_key, entry) in &reviews_by_key {
+        let Some(parent_id) = entry.parent_id.as_deref() else {
+            continue;
+        };
+        let parent_exists = reviews_by_key.values().any(|candidate| {
+            candidate.reviewer_id == parent_id
+                && candidate.session_id == entry.session_id
+                && candidate.target_ref == entry.target_ref
+        });
+        if !parent_exists {
+            continue;
+        }
+        children_by_parent
+            .entry((
+                parent_id.to_string(),
+                entry.session_id.clone(),
+                entry.target_ref.clone(),
+            ))
+            .or_default()
+            .push(child_key.clone());
+    }
+
+    let mut root_keys = Vec::new();
+    for (key, entry) in &reviews_by_key {
+        let is_root = entry.parent_id.as_deref().is_none_or(|parent_id| {
+            !reviews_by_key.values().any(|candidate| {
+                candidate.reviewer_id == parent_id
+                    && candidate.session_id == entry.session_id
+                    && candidate.target_ref == entry.target_ref
+            })
+        });
+        if is_root {
+            root_keys.push(key.clone());
+        }
+    }
+    root_keys.sort();
+    root_keys.dedup();
+
+    let mut reviews = Vec::with_capacity(root_keys.len());
+    let mut visiting = BTreeSet::new();
+    for key in root_keys {
+        reviews.push(build_disk_review_node(
+            &key,
+            &reviews_by_key,
+            &children_by_parent,
+            &mut visiting,
+        )?);
+    }
+
+    let mut reviewers: BTreeSet<String> = session.reviewers.iter().cloned().collect();
+    for entry in reviews_by_key.values() {
+        reviewers.insert(entry.reviewer_id.clone());
+    }
+
+    Ok(SessionFileDisk {
+        schema_version: SESSION_SCHEMA_VERSION.to_string(),
+        session_date: session.session_date.clone(),
+        repo_root: session.repo_root.clone(),
+        reviewers: reviewers.into_iter().collect(),
+        reviews,
+    })
+}
+
+fn sync_child_review_to_parent(
+    session: &mut SessionFile,
+    reviewer_id: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let Some(child_index) = session
+        .reviews
+        .iter()
+        .position(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
+    else {
+        return Err(anyhow::anyhow!(
+            "review entry not found for reviewer_id/session_id"
+        ));
+    };
+
+    let child_entry = session
+        .reviews
+        .get(child_index)
+        .ok_or_else(|| anyhow::anyhow!("review entry index invalid"))?
+        .clone();
+    let Some(parent_id) = child_entry.parent_id.as_deref() else {
+        return Ok(());
+    };
+
+    let parent_index = session.reviews.iter().position(|r| {
+        r.reviewer_id == parent_id
+            && r.session_id == child_entry.session_id
+            && r.target_ref == child_entry.target_ref
+    });
+    let Some(parent_index) = parent_index else {
+        return Err(anyhow::anyhow!(
+            "parent review entry not found for child reviewer_id/session_id"
+        ));
+    };
+
+    let parent_entry = session
+        .reviews
+        .get_mut(parent_index)
+        .ok_or_else(|| anyhow::anyhow!("parent review entry index invalid"))?;
+    upsert_child_review(parent_entry, &child_entry);
+    Ok(())
+}
+
+fn reconcile_parent_child_reviews(session: &mut SessionFile) {
+    let mut children_by_parent: BTreeMap<
+        ParentReviewKey,
+        BTreeMap<ChildReviewKey, ChildReviewEntry>,
+    > = BTreeMap::new();
+
+    for entry in &session.reviews {
+        let Some(parent_id) = entry.parent_id.as_deref() else {
+            continue;
+        };
+        let parent_key = (
+            parent_id.to_string(),
+            entry.session_id.clone(),
+            entry.target_ref.clone(),
+        );
+        let child_key = (entry.reviewer_id.clone(), entry.session_id.clone());
+        children_by_parent
+            .entry(parent_key)
+            .or_default()
+            .insert(child_key, ChildReviewEntry::from_review_entry(entry));
+    }
+
+    for entry in &mut session.reviews {
+        let parent_key = (
+            entry.reviewer_id.clone(),
+            entry.session_id.clone(),
+            entry.target_ref.clone(),
+        );
+        entry.child_reviews = children_by_parent
+            .remove(&parent_key)
+            .map_or_else(Vec::new, |children| children.into_values().collect());
+    }
 }
 
 impl ReviewEntry {
@@ -754,6 +1191,28 @@ impl ReviewEntry {
             report_error,
             notes_count: self.notes.len(),
             notes,
+            child_reviews: self.child_reviews.clone(),
+        }
+    }
+}
+
+impl ChildReviewEntry {
+    fn from_review_entry(entry: &ReviewEntry) -> Self {
+        Self {
+            reviewer_id: entry.reviewer_id.clone(),
+            session_id: entry.session_id.clone(),
+            target_ref: entry.target_ref.clone(),
+            initiator_status: entry.initiator_status,
+            status: entry.status,
+            parent_id: entry.parent_id.clone(),
+            started_at: entry.started_at.clone(),
+            updated_at: entry.updated_at.clone(),
+            finished_at: entry.finished_at.clone(),
+            current_phase: entry.current_phase,
+            verdict: entry.verdict,
+            counts: entry.counts.clone(),
+            report_file: entry.report_file.clone(),
+            notes_count: entry.notes.len(),
         }
     }
 }
@@ -789,10 +1248,19 @@ pub fn collect_reports(
     filters: ReportsFilters,
     options: ReportsOptions,
 ) -> ReportsResult {
-    let total_reviews = session.reviews.len();
+    let mut total_reviews = 0usize;
     let repo_root = Path::new(&session.repo_root);
     let mut reviews = Vec::new();
     for entry in &session.reviews {
+        // Reports are parent-centric: hide leaf child rows. Keep roots and non-leaf
+        // child nodes so descendant trees remain visible in multi-level hierarchies.
+        if !options.include_leaf_children
+            && entry.parent_id.is_some()
+            && entry.child_reviews.is_empty()
+        {
+            continue;
+        }
+        total_reviews = total_reviews.saturating_add(1);
         if !filters.matches(entry) {
             continue;
         }
@@ -830,9 +1298,9 @@ fn read_session_file(session_dir: &Path) -> anyhow::Result<SessionFile> {
     let path = session_file_path(session_dir);
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("read session file {}", path.display()))?;
-    let parsed: SessionFile =
+    let parsed: SessionFileDisk =
         serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))?;
-    Ok(parsed)
+    Ok(flatten_session_file_disk(parsed))
 }
 
 /// Load and parse `_session.json` for the given session locator.
@@ -852,7 +1320,12 @@ fn write_session_file_atomic(
         .with_context(|| format!("create session dir {}", session_dir.display()))?;
     let session_file = session_file_path(session_dir);
     let tmp = session_dir.join(format!("_session.json.tmp.{owner}"));
-    let body = serde_json::to_string_pretty(session).context("serialize session JSON")? + "\n";
+    let mut session_to_write = session.clone();
+    reconcile_parent_child_reviews(&mut session_to_write);
+    validate_session_consistency(&session_to_write)?;
+    let session_disk = canonicalize_session_for_write(&session_to_write)?;
+    let body =
+        serde_json::to_string_pretty(&session_disk).context("serialize session JSON")? + "\n";
     fs::write(&tmp, body).with_context(|| format!("write temp session file {}", tmp.display()))?;
 
     // Best-effort cross-platform replacement:
@@ -874,6 +1347,42 @@ fn write_session_file_atomic(
             tmp.display()
         )
     })?;
+    Ok(())
+}
+
+fn validate_finished_entry(entry: &ReviewEntry) -> anyhow::Result<()> {
+    if entry.status != ReviewerStatus::Finished {
+        return Ok(());
+    }
+
+    if entry.report_file.is_none() {
+        return Err(anyhow::anyhow!(
+            "review {}:{} is FINISHED but report_file is missing",
+            entry.reviewer_id,
+            entry.session_id
+        ));
+    }
+    if entry.verdict.is_none() {
+        return Err(anyhow::anyhow!(
+            "review {}:{} is FINISHED but verdict is missing",
+            entry.reviewer_id,
+            entry.session_id
+        ));
+    }
+    if entry.finished_at.is_none() {
+        return Err(anyhow::anyhow!(
+            "review {}:{} is FINISHED but finished_at is missing",
+            entry.reviewer_id,
+            entry.session_id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_session_consistency(session: &SessionFile) -> anyhow::Result<()> {
+    for entry in &session.reviews {
+        validate_finished_entry(entry)?;
+    }
     Ok(())
 }
 
@@ -967,6 +1476,7 @@ mod tests {
                 note_type: NoteType::Question,
                 content: Value::String("context".to_string()),
             }],
+            child_reviews: vec![],
         }
     }
 
@@ -999,6 +1509,283 @@ mod tests {
         };
         ensure!(!mismatched.matches(&entry));
 
+        Ok(())
+    }
+
+    #[test]
+    fn session_file_deserializes_without_child_reviews() -> anyhow::Result<()> {
+        let raw = r#"{
+  "schema_version": "1.0.0",
+  "session_date": "2026-01-11",
+  "repo_root": "/tmp/repo",
+  "reviewers": ["deadbeef"],
+  "reviews": [
+    {
+      "reviewer_id": "deadbeef",
+      "session_id": "sess0001",
+      "target_ref": "refs/heads/main",
+      "initiator_status": "REQUESTING",
+      "status": "INITIALIZING",
+      "parent_id": null,
+      "started_at": "2026-01-11T00:00:00Z",
+      "updated_at": "2026-01-11T00:00:00Z",
+      "finished_at": null,
+      "current_phase": null,
+      "verdict": null,
+      "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
+      "report_file": null,
+      "notes": []
+    }
+  ]
+}"#;
+        let session: SessionFile = serde_json::from_str(raw)?;
+        ensure!(session.reviews.len() == 1);
+        let review = session
+            .reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("review missing"))?;
+        ensure!(review.child_reviews.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn close_child_reviews_updates_parent_embedded_state() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string(), "cafebabe".to_string()],
+            reviews: vec![
+                ReviewEntry {
+                    reviewer_id: "deadbeef".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::InProgress,
+                    parent_id: None,
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: Some(ReviewPhase::Ingestion),
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: Vec::new(),
+                    child_reviews: Vec::new(),
+                },
+                ReviewEntry {
+                    reviewer_id: "cafebabe".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::InProgress,
+                    parent_id: Some("deadbeef".to_string()),
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: Some(ReviewPhase::DomainCoverage),
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: Vec::new(),
+                    child_reviews: Vec::new(),
+                },
+            ],
+        };
+        write_session(&session_dir, &session)?;
+
+        let result = close_child_reviews(CloseChildReviewsParams {
+            session: SessionLocator::new(session_dir.clone()),
+            parent_reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: None,
+            only_statuses: vec![ReviewerStatus::InProgress],
+            set_status: ReviewerStatus::Cancelled,
+            clear_phase: true,
+            now: OffsetDateTime::now_utc(),
+        })?;
+        ensure!(result.updated_children == 1);
+
+        let parsed = read_session_file(&session_dir)?;
+        let parent = parsed
+            .reviews
+            .iter()
+            .find(|review| review.reviewer_id == "deadbeef")
+            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
+        ensure!(parent.child_reviews.len() == 1);
+        let child = parent
+            .child_reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+        ensure!(child.status == ReviewerStatus::Cancelled);
+        ensure!(child.current_phase.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn write_session_file_atomic_reconciles_parent_child_reviews() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec![
+                "deadbeef".to_string(),
+                "cafebabe".to_string(),
+                "badc0ffe".to_string(),
+            ],
+            reviews: vec![
+                ReviewEntry {
+                    reviewer_id: "deadbeef".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::InProgress,
+                    parent_id: None,
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: Some(ReviewPhase::Ingestion),
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: Vec::new(),
+                    child_reviews: vec![ChildReviewEntry {
+                        reviewer_id: "badc0ffe".to_string(),
+                        session_id: "sess0001".to_string(),
+                        target_ref: "refs/heads/main".to_string(),
+                        initiator_status: InitiatorStatus::Observing,
+                        status: ReviewerStatus::Blocked,
+                        parent_id: Some("deadbeef".to_string()),
+                        started_at: "2026-01-11T00:00:00Z".to_string(),
+                        updated_at: "2026-01-11T01:00:00Z".to_string(),
+                        finished_at: None,
+                        current_phase: Some(ReviewPhase::Synthesis),
+                        verdict: None,
+                        counts: SeverityCounts::zero(),
+                        report_file: None,
+                        notes_count: 0,
+                    }],
+                },
+                ReviewEntry {
+                    reviewer_id: "cafebabe".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::InProgress,
+                    parent_id: Some("deadbeef".to_string()),
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: Some(ReviewPhase::DomainCoverage),
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: vec![SessionNote {
+                        role: NoteRole::Reviewer,
+                        timestamp: "2026-01-11T01:30:00Z".to_string(),
+                        note_type: NoteType::DomainObservation,
+                        content: Value::String("domain coverage".to_string()),
+                    }],
+                    child_reviews: Vec::new(),
+                },
+            ],
+        };
+
+        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
+        let parsed = read_session_file(&session_dir)?;
+        let parent = parsed
+            .reviews
+            .iter()
+            .find(|review| review.reviewer_id == "deadbeef")
+            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
+        ensure!(parent.child_reviews.len() == 1);
+        let child = parent
+            .child_reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+        ensure!(child.reviewer_id == "cafebabe");
+        ensure!(child.status == ReviewerStatus::InProgress);
+        ensure!(child.current_phase == Some(ReviewPhase::DomainCoverage));
+        ensure!(child.notes_count == 1);
+        Ok(())
+    }
+
+    #[test]
+    fn update_parent_rebuilds_embedded_child_reviews() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string(), "cafebabe".to_string()],
+            reviews: vec![
+                ReviewEntry {
+                    reviewer_id: "deadbeef".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::InProgress,
+                    parent_id: None,
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: Some(ReviewPhase::Ingestion),
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: Vec::new(),
+                    child_reviews: Vec::new(),
+                },
+                ReviewEntry {
+                    reviewer_id: "cafebabe".to_string(),
+                    session_id: "sess0001".to_string(),
+                    target_ref: "refs/heads/main".to_string(),
+                    initiator_status: InitiatorStatus::Requesting,
+                    status: ReviewerStatus::Initializing,
+                    parent_id: Some("deadbeef".to_string()),
+                    started_at: "2026-01-11T00:00:00Z".to_string(),
+                    updated_at: "2026-01-11T01:00:00Z".to_string(),
+                    finished_at: None,
+                    current_phase: None,
+                    verdict: None,
+                    counts: SeverityCounts::zero(),
+                    report_file: None,
+                    notes: Vec::new(),
+                    child_reviews: Vec::new(),
+                },
+            ],
+        };
+        write_session(&session_dir, &session)?;
+
+        let params = UpdateReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            status: Some(ReviewerStatus::Blocked),
+            phase: None,
+            now: OffsetDateTime::now_utc(),
+        };
+        update_review(&params)?;
+
+        let parsed = read_session_file(&session_dir)?;
+        let parent = parsed
+            .reviews
+            .iter()
+            .find(|review| review.reviewer_id == "deadbeef")
+            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
+        ensure!(parent.status == ReviewerStatus::Blocked);
+        ensure!(parent.child_reviews.len() == 1);
+        let child = parent
+            .child_reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+        ensure!(child.reviewer_id == "cafebabe");
+        ensure!(child.status == ReviewerStatus::Initializing);
         Ok(())
     }
 
@@ -1043,7 +1830,7 @@ mod tests {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
         let session = SessionFile {
-            schema_version: "1.0.0".to_string(),
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: Vec::new(),
@@ -1067,6 +1854,53 @@ mod tests {
     }
 
     #[test]
+    fn update_review_rejects_finished_without_report_artifacts() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::Synthesis),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+        };
+        write_session(&session_dir, &session)?;
+
+        let params = UpdateReviewParams {
+            session: SessionLocator::new(session_dir),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            status: Some(ReviewerStatus::Finished),
+            phase: None,
+            now: OffsetDateTime::now_utc(),
+        };
+        let Err(err) = update_review(&params) else {
+            bail!("finished without report artifacts should fail");
+        };
+        ensure!(err
+            .to_string()
+            .contains("FINISHED but report_file is missing"));
+        Ok(())
+    }
+
+    #[test]
     fn finalize_review_refuses_overwrite() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
@@ -1085,9 +1919,10 @@ mod tests {
             counts: SeverityCounts::zero(),
             report_file: Some("existing.md".to_string()),
             notes: Vec::new(),
+            child_reviews: Vec::new(),
         };
         let session = SessionFile {
-            schema_version: "1.0.0".to_string(),
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
@@ -1101,7 +1936,10 @@ mod tests {
             session_id: "sess0001".to_string(),
             verdict: ReviewVerdict::Approve,
             counts: SeverityCounts::zero(),
-            report_markdown: "report\n".to_string(),
+            report_input: FinalizeReportInput::Markdown("report\n".to_string()),
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
             now: OffsetDateTime::now_utc(),
         };
         let Err(err) = finalize_review(params) else {
@@ -1130,9 +1968,10 @@ mod tests {
             counts: SeverityCounts::zero(),
             report_file: None,
             notes: Vec::new(),
+            child_reviews: Vec::new(),
         };
         let session = SessionFile {
-            schema_version: "1.0.0".to_string(),
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
@@ -1334,7 +2173,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
             .canonicalize()
             .with_context(|| format!("canonicalize repo_root {}", params.repo_root.display()))?;
         SessionFile {
-            schema_version: "1.0.0".to_string(),
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
             session_date: params.session_date.to_string(),
             repo_root: repo_root.to_string_lossy().to_string(),
             reviewers: vec![],
@@ -1445,11 +2284,16 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         }
     }
 
-    if let Some(existing) = session
+    if let Some(existing_index) = session
         .reviews
-        .iter_mut()
-        .find(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
+        .iter()
+        .position(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
     {
+        let mut should_sync_parent = false;
+        let existing = session
+            .reviews
+            .get_mut(existing_index)
+            .ok_or_else(|| anyhow::anyhow!("review entry index invalid"))?;
         let mut changed = false;
 
         if existing.target_ref != params.target_ref {
@@ -1464,6 +2308,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
                     existing.parent_id = Some(requested_parent_id.clone());
                     existing.updated_at = format_ts(params.now)?;
                     changed = true;
+                    should_sync_parent = true;
                 }
                 Some(existing_parent_id) if existing_parent_id == requested_parent_id.as_str() => {}
                 Some(_) => {
@@ -1478,6 +2323,10 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
 
         if !session.reviewers.iter().any(|r| r == &reviewer_id) {
             session.reviewers.push(reviewer_id.clone());
+            changed = true;
+        }
+        if should_sync_parent {
+            sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
             changed = true;
         }
         if changed {
@@ -1535,7 +2384,12 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         counts: SeverityCounts::zero(),
         report_file: None,
         notes: vec![],
+        child_reviews: vec![],
     });
+
+    if parent_id_for_result.is_some() {
+        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
+    }
 
     write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
 
@@ -1564,6 +2418,8 @@ pub struct SpawnChildReviewersParams {
     /// Timestamp used for `started_at` / `updated_at`.
     pub now: OffsetDateTime,
 }
+
+const MAX_SPAWN_CHILDREN: usize = 32;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1611,6 +2467,9 @@ pub fn spawn_child_reviewers(
     validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
     if params.count == 0 {
         return Err(anyhow::anyhow!("count must be >= 1"));
+    }
+    if params.count > MAX_SPAWN_CHILDREN {
+        return Err(anyhow::anyhow!("count must be <= {MAX_SPAWN_CHILDREN}"));
     }
 
     let session_file = params.session.session_file();
@@ -1669,6 +2528,7 @@ pub fn spawn_child_reviewers(
     }
 
     let mut children = Vec::with_capacity(params.count);
+    let mut child_refs = Vec::with_capacity(params.count);
     for reviewer_id in children_ids {
         session.reviewers.push(reviewer_id.clone());
         session.reviews.push(ReviewEntry {
@@ -1686,11 +2546,17 @@ pub fn spawn_child_reviewers(
             counts: SeverityCounts::zero(),
             report_file: None,
             notes: vec![],
+            child_reviews: vec![],
         });
+        child_refs.push((reviewer_id.clone(), params.session_id.clone()));
         children.push(SpawnedChildReviewer {
             reviewer_id,
             parent_id: params.parent_reviewer_id.clone(),
         });
+    }
+
+    for (reviewer_id, session_id) in child_refs {
+        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
     }
 
     write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
@@ -1754,6 +2620,8 @@ pub fn update_review(params: &UpdateReviewParams) -> anyhow::Result<()> {
     }
     entry.updated_at = format_ts(params.now)?;
 
+    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
+
     write_session_file_atomic(params.session.session_dir(), &params.reviewer_id, &session)?;
     Ok(())
 }
@@ -1773,6 +2641,15 @@ fn report_file_name(
 }
 
 #[derive(Debug, Clone)]
+/// Report source passed to [`finalize_review`].
+pub enum FinalizeReportInput {
+    /// Read report markdown from in-memory content (stdin path in CLI).
+    Markdown(String),
+    /// Move/copy report markdown from an existing file path.
+    File(PathBuf),
+}
+
+#[derive(Debug, Clone)]
 /// Parameters for [`finalize_review`].
 pub struct FinalizeReviewParams {
     /// Session directory locator.
@@ -1785,8 +2662,14 @@ pub struct FinalizeReviewParams {
     pub verdict: ReviewVerdict,
     /// Severity counts to record.
     pub counts: SeverityCounts,
-    /// Report markdown contents to write to disk.
-    pub report_markdown: String,
+    /// Report input source for finalization.
+    pub report_input: FinalizeReportInput,
+    /// Preserve the input report file when `report_input` is [`FinalizeReportInput::File`].
+    pub copy_input_report: bool,
+    /// Auto-close unresolved child reviews under this reviewer before finalizing.
+    pub auto_close_open_children: bool,
+    /// Status used when auto-closing unresolved children.
+    pub auto_close_children_status: ReviewerStatus,
     /// Timestamp written to `finished_at` and `updated_at`.
     pub now: OffsetDateTime,
 }
@@ -1800,6 +2683,73 @@ pub struct FinalizeReviewResult {
     pub report_path: String,
 }
 
+fn write_markdown_report_file(
+    report_path: &Path,
+    mut report_markdown: String,
+) -> anyhow::Result<()> {
+    if !report_markdown.ends_with('\n') {
+        report_markdown.push('\n');
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(report_path)
+        .with_context(|| format!("create report file {}", report_path.display()))?;
+    f.write_all(report_markdown.as_bytes())
+        .with_context(|| format!("write report file {}", report_path.display()))?;
+    f.flush()
+        .with_context(|| format!("flush report file {}", report_path.display()))?;
+    Ok(())
+}
+
+fn same_file_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_can = a.canonicalize().ok();
+    let b_can = b.canonicalize().ok();
+    matches!((a_can, b_can), (Some(a_can), Some(b_can)) if a_can == b_can)
+}
+
+fn copy_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    fs::copy(src, dst).with_context(|| {
+        format!(
+            "copy report input from {} to {}",
+            src.display(),
+            dst.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::CrossesDevices => {
+            copy_file(src, dst)?;
+            fs::remove_file(src)
+                .with_context(|| format!("remove moved report input {}", src.display()))?;
+            Ok(())
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "move report input from {} to {}",
+                src.display(),
+                dst.display()
+            )
+        }),
+    }
+}
+
+fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
+    match status {
+        ReviewerStatus::Cancelled | ReviewerStatus::Error => Ok(()),
+        _ => Err(anyhow::anyhow!(
+            "auto-close child status must be CANCELLED or ERROR"
+        )),
+    }
+}
+
 /// Finalize a review entry: write the report file and update `_session.json`.
 ///
 /// This performs the write in three steps:
@@ -1810,9 +2760,11 @@ pub struct FinalizeReviewResult {
 /// # Errors
 /// Returns an error if identifiers are invalid, report files cannot be written,
 /// or the session cannot be read or written.
+#[allow(clippy::too_many_lines)] // Reason: finalize coordinates lock/read/write and child lifecycle in one transactional flow.
 pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeReviewResult> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
+    validate_auto_close_status(params.auto_close_children_status)?;
 
     // Step 1: read the session file (locked) and compute the report filename.
     let started_at;
@@ -1837,6 +2789,23 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                 "report_file already set; refusing to overwrite"
             ));
         }
+        let open_child_ids: Vec<String> = session
+            .reviews
+            .iter()
+            .filter(|child| {
+                child.parent_id.as_deref() == Some(params.reviewer_id.as_str())
+                    && child.session_id == params.session_id
+                    && child.target_ref == entry.target_ref
+                    && !child.status.is_terminal()
+            })
+            .map(|child| child.reviewer_id.clone())
+            .collect();
+        if !open_child_ids.is_empty() && !params.auto_close_open_children {
+            let list = open_child_ids.join(",");
+            return Err(anyhow::anyhow!(
+                "cannot finalize while child reviews are open (run `mpcr reviewer close-children` first): {list}"
+            ));
+        }
         started_at = parse_ts(&entry.started_at)?;
         target_ref = entry.target_ref.clone();
     }
@@ -1844,20 +2813,41 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
 
-    // Step 2: write report file (outside the session lock).
-    let mut report = params.report_markdown;
-    if !report.ends_with('\n') {
-        report.push('\n');
+    // Step 2: write/move report file (outside the session lock).
+    match params.report_input {
+        FinalizeReportInput::Markdown(report_markdown) => {
+            write_markdown_report_file(&report_path, report_markdown)?;
+        }
+        FinalizeReportInput::File(source_path) => {
+            if !source_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "report input file does not exist: {}",
+                    source_path.display()
+                ));
+            }
+
+            if same_file_path(&source_path, &report_path) {
+                if !report_path.exists() {
+                    return Err(anyhow::anyhow!(
+                        "report input file does not exist: {}",
+                        source_path.display()
+                    ));
+                }
+            } else {
+                if report_path.exists() {
+                    return Err(anyhow::anyhow!(
+                        "report file already exists at destination: {}",
+                        report_path.display()
+                    ));
+                }
+                if params.copy_input_report {
+                    copy_file(&source_path, &report_path)?;
+                } else {
+                    move_file(&source_path, &report_path)?;
+                }
+            }
+        }
     }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&report_path)
-        .with_context(|| format!("create report file {}", report_path.display()))?;
-    f.write_all(report.as_bytes())
-        .with_context(|| format!("write report file {}", report_path.display()))?;
-    f.flush()
-        .with_context(|| format!("flush report file {}", report_path.display()))?;
 
     let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
         .map_or(filename, |rel| rel.to_string_lossy().to_string());
@@ -1871,6 +2861,58 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
             LockConfig::default(),
         )?;
         let mut session = read_session_file(params.session.session_dir())?;
+        let open_child_ids: Vec<String> = session
+            .reviews
+            .iter()
+            .filter(|entry| {
+                entry.parent_id.as_deref() == Some(params.reviewer_id.as_str())
+                    && entry.session_id == params.session_id
+                    && entry.target_ref == target_ref
+                    && !entry.status.is_terminal()
+            })
+            .map(|entry| entry.reviewer_id.clone())
+            .collect();
+
+        if !open_child_ids.is_empty() && !params.auto_close_open_children {
+            let list = open_child_ids.join(",");
+            return Err(anyhow::anyhow!(
+                "cannot finalize while child reviews are open (run `mpcr reviewer close-children` first): {list}"
+            ));
+        }
+
+        if !open_child_ids.is_empty() {
+            let updated_at = format_ts(params.now)?;
+            let note_timestamp = updated_at.clone();
+            let note_content = Value::String(format!(
+                "auto-closed by parent finalize reviewer_id={} session_id={}",
+                params.reviewer_id, params.session_id
+            ));
+            for entry in &mut session.reviews {
+                if entry.parent_id.as_deref() != Some(params.reviewer_id.as_str()) {
+                    continue;
+                }
+                if entry.session_id != params.session_id || entry.target_ref != target_ref {
+                    continue;
+                }
+                if entry.status.is_terminal() {
+                    continue;
+                }
+
+                entry.status = params.auto_close_children_status;
+                entry.current_phase = None;
+                entry.updated_at.clone_from(&updated_at);
+                entry.notes.push(SessionNote {
+                    role: NoteRole::Reviewer,
+                    timestamp: note_timestamp.clone(),
+                    note_type: NoteType::AutoClosedByParentFinalize,
+                    content: note_content.clone(),
+                });
+            }
+            for reviewer_id in &open_child_ids {
+                sync_child_review_to_parent(&mut session, reviewer_id, &params.session_id)?;
+            }
+        }
+
         let entry = session
             .reviews
             .iter_mut()
@@ -1884,6 +2926,8 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         entry.report_file = Some(report_file.clone());
         entry.finished_at = Some(format_ts(params.now)?);
         entry.updated_at = format_ts(params.now)?;
+
+        sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
 
         write_session_file_atomic(params.session.session_dir(), &params.reviewer_id, &session)?;
     }
@@ -1924,6 +2968,20 @@ pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_id8(&params.lock_owner, "lock_owner")?;
+    if !params.note_type.allowed_for_role(params.role) {
+        let note_type_name = serde_json::to_string(&params.note_type).map_or_else(
+            |_| "unknown".to_string(),
+            |raw| raw.trim_matches('"').to_string(),
+        );
+        return Err(anyhow::anyhow!(
+            "note_type `{}` is not allowed for role `{}`",
+            note_type_name,
+            match params.role {
+                NoteRole::Reviewer => "reviewer",
+                NoteRole::Applicator => "applicator",
+            }
+        ));
+    }
 
     let lock_owner = params.lock_owner.clone();
     let _guard = lock::acquire_lock(
@@ -1945,6 +3003,8 @@ pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
         content: params.content,
     });
     entry.updated_at = format_ts(params.now)?;
+
+    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
 
     write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
     Ok(())
@@ -1993,6 +3053,150 @@ pub fn set_initiator_status(params: &SetInitiatorStatusParams) -> anyhow::Result
     entry.initiator_status = params.initiator_status;
     entry.updated_at = format_ts(params.now)?;
 
+    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
+
     write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+/// Parameters for [`close_child_reviews`].
+pub struct CloseChildReviewsParams {
+    /// Session directory locator.
+    pub session: SessionLocator,
+    /// Parent reviewer id (id8) whose child entries should be updated.
+    pub parent_reviewer_id: String,
+    /// Session id (id8) that children must belong to.
+    pub session_id: String,
+    /// Optional target ref filter.
+    pub target_ref: Option<String>,
+    /// Child statuses eligible for update.
+    pub only_statuses: Vec<ReviewerStatus>,
+    /// Reviewer-owned status to set on matching children.
+    pub set_status: ReviewerStatus,
+    /// Clear child `current_phase` when true.
+    pub clear_phase: bool,
+    /// Timestamp written to `updated_at`.
+    pub now: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Child identifier emitted by [`close_child_reviews`].
+pub struct ClosedChildReview {
+    /// Child reviewer id.
+    pub reviewer_id: String,
+    /// Child session id.
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Result returned by [`close_child_reviews`].
+pub struct CloseChildReviewsResult {
+    /// Parent reviewer id used for the operation.
+    pub parent_id: String,
+    /// Session id used for the operation.
+    pub session_id: String,
+    /// Optional target ref filter used for the operation.
+    pub target_ref: Option<String>,
+    /// Number of child entries matching all filters.
+    pub matching_children: usize,
+    /// Number of child entries updated by this operation.
+    pub updated_children: usize,
+    /// Updated child identifiers.
+    pub children: Vec<ClosedChildReview>,
+}
+
+/// Bulk-close child reviews under a parent reviewer.
+///
+/// # Errors
+/// Returns an error if identifiers are invalid, the parent entry is missing,
+/// or the session cannot be read/written.
+pub fn close_child_reviews(
+    params: CloseChildReviewsParams,
+) -> anyhow::Result<CloseChildReviewsResult> {
+    validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
+    validate_id8(&params.session_id, "session_id")?;
+    validate_auto_close_status(params.set_status)?;
+
+    let lock_owner = params.parent_reviewer_id.clone();
+    let _guard = lock::acquire_lock(
+        params.session.session_dir(),
+        lock_owner.clone(),
+        LockConfig::default(),
+    )?;
+    let mut session = read_session_file(params.session.session_dir())?;
+
+    let parent_reviewer_id = params.parent_reviewer_id.as_str();
+    let session_id = params.session_id.as_str();
+    let parent_exists = session.reviews.iter().any(|entry| {
+        entry.reviewer_id == parent_reviewer_id
+            && entry.session_id == session_id
+            && params
+                .target_ref
+                .as_ref()
+                .is_none_or(|target_ref| entry.target_ref == *target_ref)
+    });
+    if !parent_exists {
+        return Err(anyhow::anyhow!(
+            "parent review entry not found for reviewer_id/session_id/target_ref"
+        ));
+    }
+
+    let updated_at = format_ts(params.now)?;
+    let mut matching_children = 0usize;
+    let mut updated_ids = Vec::new();
+
+    for entry in &mut session.reviews {
+        if entry.parent_id.as_deref() != Some(params.parent_reviewer_id.as_str()) {
+            continue;
+        }
+        if entry.session_id != params.session_id {
+            continue;
+        }
+        if let Some(target_ref) = params.target_ref.as_deref() {
+            if entry.target_ref != target_ref {
+                continue;
+            }
+        }
+        if !params.only_statuses.is_empty() && !params.only_statuses.contains(&entry.status) {
+            continue;
+        }
+
+        matching_children += 1;
+
+        let changed = entry.status != params.set_status
+            || (params.clear_phase && entry.current_phase.is_some());
+        if !changed {
+            continue;
+        }
+
+        entry.status = params.set_status;
+        if params.clear_phase {
+            entry.current_phase = None;
+        }
+        entry.updated_at.clone_from(&updated_at);
+        updated_ids.push((entry.reviewer_id.clone(), entry.session_id.clone()));
+    }
+
+    let mut children = Vec::with_capacity(updated_ids.len());
+    for (reviewer_id, session_id) in updated_ids {
+        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
+        children.push(ClosedChildReview {
+            reviewer_id,
+            session_id,
+        });
+    }
+
+    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+
+    Ok(CloseChildReviewsResult {
+        parent_id: params.parent_reviewer_id,
+        session_id: params.session_id,
+        target_ref: params.target_ref,
+        matching_children,
+        updated_children: children.len(),
+        children,
+    })
 }

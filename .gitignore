@@ -24,3 +24,4 @@ tmp/
 # Local coordination artifacts (if you run skills in this repo)
 .local/
 
+__pycache__

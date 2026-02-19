@@ -1,0 +1,8 @@
+[package]
+name = "docker-architect-compose"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+architect-core = { path = "../architect-core" }
+clap = { version = "4.5.28", features = ["derive"] }

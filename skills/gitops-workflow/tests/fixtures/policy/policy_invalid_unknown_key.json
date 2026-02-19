@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "github-governance/v1",
+  "repository": {
+    "owner": "acme",
+    "name": "widget",
+    "defaultBranch": "main"
+  },
+  "labels": [],
+  "rulesets": [],
+  "requiredChecks": [],
+  "codeowners": {
+    "path": ".github/CODEOWNERS",
+    "entries": []
+  },
+  "options": {},
+  "bypass": [],
+  "unknownKey": true
+}

@@ -1,0 +1,45 @@
+x-hardening-core: &hardening_core
+  cap_drop:
+    - ALL
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+x-resource-defaults-compose: &resource_defaults_compose
+  cpus: '1.0'
+  mem_limit: 512m
+  pids_limit: 256
+services:
+  api:
+    <<: [*hardening_core, *resource_defaults_compose]
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      test:
+        - CMD
+        - nginx
+        - -t
+      timeout: 5s
+    image: nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    tmpfs:
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 101:101
+  worker:
+    <<: [*hardening_core, *resource_defaults_compose]
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      timeout: 5s
+    image: redis:7.2@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    tmpfs:
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 999:999
