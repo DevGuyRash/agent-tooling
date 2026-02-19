@@ -157,6 +157,14 @@ if [[ "$MODE" == "staged" ]]; then
     fi
     exit 0
   fi
+  if [[ -z "$(git -C "$REPO_PATH" diff --cached --name-only --diff-filter=d)" ]]; then
+    if [[ "$FORMAT" == "json" ]]; then
+      printf '{"status":"skipped","mode":"staged","reason":"deletions_only"}\n'
+    else
+      say "Only staged deletions detected; skipping sensitive-data scan."
+    fi
+    exit 0
+  fi
 fi
 
 platform_asset_suffix() {

@@ -158,6 +158,26 @@ class SensitiveScanScriptTests(unittest.TestCase):
             self.assertEqual(payload["mode"], "staged")
             self.assertEqual(payload["reason"], "no_staged_changes")
 
+    def test_json_staged_deletions_only_skip_emits_machine_parseable_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+            stage_file(repo, "obsolete.txt", "to be deleted\n")
+            run(["git", "commit", "-m", "chore: add obsolete file"], cwd=repo)
+            run(["git", "rm", "obsolete.txt"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCAN_SCRIPT), "--staged", "--format", "json", "--repo", str(repo)],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "skipped")
+            self.assertEqual(payload["mode"], "staged")
+            self.assertEqual(payload["reason"], "deletions_only")
+
     def test_staged_scan_blocks_on_findings_with_redacted_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"

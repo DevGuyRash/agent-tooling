@@ -45,6 +45,14 @@ class ScriptSyntaxTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, f"bash -n failed for {target}\n{proc.stderr}")
 
 
+class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
+    def test_workflow_extracts_gitleaks_in_temp_dir_without_repo_cleanup(self):
+        workflow = (ROOT / "assets" / "github" / "workflows" / "sensitive-scan.yml").read_text(encoding="utf-8")
+        self.assertIn('workdir="$(mktemp -d)"', workflow)
+        self.assertIn('trap \'rm -rf "$workdir"\' EXIT', workflow)
+        self.assertNotIn("README.md LICENSE", workflow)
+
+
 class GovernanceWrapperBehaviorTests(unittest.TestCase):
     def test_governance_wrapper_runs_validate_plan_apply_audit_in_order(self):
         with tempfile.TemporaryDirectory() as temp_dir:

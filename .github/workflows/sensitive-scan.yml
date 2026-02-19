@@ -44,16 +44,17 @@ jobs:
           ver="${tag#v}"
           asset="gitleaks_${ver}_linux_x64.tar.gz"
           base="https://github.com/gitleaks/gitleaks/releases/download/${tag}"
-          curl -fsSL -o "$asset" "$base/$asset"
-          curl -fsSL -o checksums.txt "$base/gitleaks_${ver}_checksums.txt"
-          expected="$(awk -v target="$asset" '$2 == target {print $1}' checksums.txt)"
-          actual="$(sha256sum "$asset" | awk '{print $1}')"
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          curl -fsSL -o "$workdir/$asset" "$base/$asset"
+          curl -fsSL -o "$workdir/checksums.txt" "$base/gitleaks_${ver}_checksums.txt"
+          expected="$(awk -v target="$asset" '$2 == target {print $1}' "$workdir/checksums.txt")"
+          actual="$(sha256sum "$workdir/$asset" | awk '{print $1}')"
           [[ -n "$expected" ]] || { echo "Error: checksum missing for $asset" >&2; exit 1; }
           [[ "$actual" == "$expected" ]] || { echo "Error: checksum mismatch for $asset" >&2; exit 1; }
-          tar -xzf "$asset"
-          chmod +x gitleaks
-          sudo mv gitleaks /usr/local/bin/gitleaks
-          rm -f "$asset" checksums.txt README.md LICENSE
+          tar -xzf "$workdir/$asset" -C "$workdir"
+          chmod +x "$workdir/gitleaks"
+          sudo mv "$workdir/gitleaks" /usr/local/bin/gitleaks
 
       - name: Run sensitive scan
         shell: bash
