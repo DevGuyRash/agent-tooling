@@ -75,17 +75,19 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 0
 fi
 
-compose_skip_flag="${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}"
-if [ -z "${compose_skip_flag}" ] && [ -n "${AGENT_SKILLS_SKIP_PCA_BUILD:-}" ]; then
-  compose_skip_flag="${AGENT_SKILLS_SKIP_PCA_BUILD}"
-  log "setup" "warning: AGENT_SKILLS_SKIP_PCA_BUILD is deprecated; use AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD"
-fi
+compose_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}" \
+  "AGENT_SKILLS_SKIP_PCA_BUILD" \
+  "${AGENT_SKILLS_SKIP_PCA_BUILD:-}")"
 
-image_skip_flag="${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}"
-if [ -z "${image_skip_flag}" ] && [ -n "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}" ]; then
-  image_skip_flag="${AGENT_SKILLS_SKIP_PIASCS_BUILD}"
-  log "setup" "warning: AGENT_SKILLS_SKIP_PIASCS_BUILD is deprecated; use AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD"
-fi
+image_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}" \
+  "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
+  "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
 build_rust_skill \
   "setup" \

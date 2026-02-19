@@ -21,3 +21,19 @@ build_rust_skill() {
     cargo build --manifest-path "${manifest_path}" --locked --release
   fi
 }
+
+resolve_deprecated_flag() {
+  prefix="$1"
+  preferred_flag_name="$2"
+  preferred_value="$3"
+  deprecated_flag_name="$4"
+  deprecated_value="$5"
+
+  if [ -z "${preferred_value}" ] && [ -n "${deprecated_value}" ]; then
+    log "$prefix" "warning: ${deprecated_flag_name} is deprecated; use ${preferred_flag_name}"
+    printf '%s' "${deprecated_value}"
+    return 0
+  fi
+
+  printf '%s' "${preferred_value}"
+}
