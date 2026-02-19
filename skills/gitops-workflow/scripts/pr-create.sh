@@ -114,7 +114,8 @@ CHANGES_FILE="$(mktemp -t pr-changes.XXXXXX.txt)"
 COMMITS_FILE="$(mktemp -t pr-commits.XXXXXX.txt)"
 trap 'rm -f "$CHANGES_FILE" "$COMMITS_FILE"' EXIT
 
-git log --pretty=format:'%s' "$BASE...$HEAD" > "$COMMITS_FILE"
+# Commit subjects should be head-only (PR-introduced) for deterministic summaries.
+git log --pretty=format:'%s' "$BASE..$HEAD" > "$COMMITS_FILE"
 git diff --name-only "$BASE...$HEAD" > "$CHANGES_FILE"
 
 if [[ ! -s "$COMMITS_FILE" ]]; then

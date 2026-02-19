@@ -181,6 +181,40 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("pr create", args)
             self.assertIn("--title feat(demo): add sample change", args)
 
+    def test_changes_section_excludes_base_only_commits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "feature.txt", "feat\n", "feat(demo): branch-only change")
+            run(["git", "checkout", "main"], cwd=repo)
+            commit_file(repo, "main.txt", "main update\n", "chore(main): base-only change")
+            run(["git", "checkout", "feat/demo"], cwd=repo)
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): branch-only change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
+            self.assertIsNotNone(m, proc.stdout)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("feat(demo): branch-only change", body)
+            self.assertNotIn("chore(main): base-only change", body)
+
 
 if __name__ == "__main__":
     unittest.main()
