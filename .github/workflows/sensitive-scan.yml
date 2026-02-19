@@ -53,6 +53,7 @@ jobs:
           tar -xzf "$asset"
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
+          rm -f "$asset" checksums.txt README.md LICENSE
 
       - name: Run sensitive scan
         shell: bash
