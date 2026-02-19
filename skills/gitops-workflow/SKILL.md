@@ -74,6 +74,9 @@ Unless the repo explicitly defines otherwise, follow these rules:
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
 11. **When asked to "commit worktree" or "commit changes"**, create **batched Conventional Commits** grouped by logical change (feat/fix/docs/test/refactor/chore/etc.); do **not** make a single catch-all commit unless explicitly requested.
+12. **Before creating a commit**, run the deterministic sensitive-data gate and block on findings:
+    - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
+    - scanner attempts latest `gitleaks` update when network is available; pin with `SENSITIVE_SCAN_GITLEAKS_VERSION=vX.Y.Z` if needed
 
 ---
 
@@ -91,7 +94,9 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]` |
+| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]` |
+| Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
+| Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged\|--all] [--repo <path>] [--format text\|json] [--redact] [--no-download]` |
 | Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
@@ -134,6 +139,7 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
 bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create
 bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
@@ -151,6 +157,7 @@ Create a correctly named branch from the default branch, without accidentally wo
 
 1. If working tree is dirty, stash tracked + untracked changes with deterministic metadata.
    - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
+   - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
 2. Sync the default branch:
    - `git checkout <default-branch> && git pull`
 3. Create a branch:
@@ -187,11 +194,14 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
+- run sensitive-data gate before commit:
+  - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)
 
 See:
 
 - [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md)
+- [assets/config/gitleaks.toml](assets/config/gitleaks.toml)
 
 ---
 
@@ -315,6 +325,8 @@ This skill includes ready-to-copy templates:
   - `assets/github/workflows/pr-title-lint.yml`
 - **Commit message lint** (commitlint)
   - `assets/github/workflows/commitlint.yml`
+- **Sensitive-data scan** (gitleaks; recommended)
+  - `assets/github/workflows/sensitive-scan.yml`
 - **Release automation** (optional; Conventional Commits based)
   - `assets/github/workflows/release-please.yml`
 

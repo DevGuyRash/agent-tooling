@@ -27,6 +27,8 @@ class ScriptSyntaxTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         targets = [
             SCRIPTS_DIR / "start-branch.sh",
+            SCRIPTS_DIR / "install-hooks.sh",
+            SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "pr-merge-squash.sh",
             SCRIPTS_DIR / "governance-enforce.sh",
@@ -314,6 +316,11 @@ class StartBranchScriptTests(unittest.TestCase):
             self.assertTrue((repo / "notes.tmp").exists())
             stash_list = run(["git", "stash", "list"], cwd=repo).stdout.strip()
             self.assertEqual(stash_list, "")
+            hook_path = run(["git", "rev-parse", "--git-path", "hooks/pre-commit"], cwd=repo).stdout.strip()
+            hook_file = Path(hook_path) if Path(hook_path).is_absolute() else repo / hook_path
+            self.assertTrue(hook_file.exists())
+            hook_text = hook_file.read_text(encoding="utf-8")
+            self.assertIn("gitops-workflow-managed-pre-commit", hook_text)
 
     def test_start_branch_omitted_slug_uses_issue_slug(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -374,6 +381,27 @@ class StartBranchScriptTests(unittest.TestCase):
             self.assertIn("stash restore failed", proc.stderr)
             stash_list = run(["git", "stash", "list"], cwd=repo).stdout
             self.assertIn("gitops-workflow:start-branch:", stash_list)
+
+    def test_start_branch_missing_option_value_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            proc_issue = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "--issue"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc_issue.returncode, 0)
+            self.assertIn("option '--issue' requires a value", proc_issue.stderr)
+
+            proc_base = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "x", "--base"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc_base.returncode, 0)
+            self.assertIn("option '--base' requires a value", proc_base.stderr)
 
 
 class MergeSquashScriptTests(unittest.TestCase):
