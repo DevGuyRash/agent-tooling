@@ -178,15 +178,14 @@ fn run_entrypoint_probe(image: &str, entrypoint: &str) -> Result<Output, AppErro
 }
 
 fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
-    let mut child =
-        Command::new("docker")
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| AppError::InvalidInput {
-                reason: format!("failed to execute docker runtime probe: {error}"),
-            })?;
+    let mut child = Command::new("docker")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AppError::InvalidInput {
+            reason: format!("failed to execute docker runtime probe: {error}"),
+        })?;
 
     let start = Instant::now();
     loop {
