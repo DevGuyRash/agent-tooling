@@ -1,0 +1,27 @@
+services:
+  api:
+    cap_drop:
+    - ALL
+    cpus: '1.0'
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      test:
+      - CMD
+      - nginx
+      - -t
+      timeout: 5s
+    image: nginx:1.27
+    mem_limit: 512m
+    pids_limit: 256
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /run:rw,noexec,nosuid,nodev,size=16m
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+    - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 101:101
+    volumes:
+    - ./host-data:/var/cache/app

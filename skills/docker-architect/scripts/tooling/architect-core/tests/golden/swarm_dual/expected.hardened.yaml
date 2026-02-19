@@ -1,0 +1,53 @@
+services:
+  api:
+    cap_drop:
+    - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512m
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      test:
+      - CMD
+      - nginx
+      - -t
+      timeout: 5s
+    image: nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /run:rw,noexec,nosuid,nodev,size=16m
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+    - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 101:101
+  worker:
+    cap_drop:
+    - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512m
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      test:
+      - CMD
+      - redis-cli
+      - ping
+      timeout: 5s
+    image: redis:7.2@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /run:rw,noexec,nosuid,nodev,size=16m
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+    - /var/run:rw,noexec,nosuid,nodev,size=16m
+    user: 999:999

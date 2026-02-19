@@ -3,7 +3,7 @@
 use anyhow::{bail, ensure};
 use mpcr::lock::{self, LockConfig};
 use mpcr::session::{
-    collect_reports, finalize_review, register_reviewer, set_initiator_status,
+    collect_reports, finalize_review, register_reviewer, set_initiator_status, FinalizeReportInput,
     FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams,
     ReportsFilters, ReportsOptions, ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict,
     ReviewerStatus, SessionFile, SessionLocator, SessionNote, SetInitiatorStatusParams,
@@ -95,7 +95,10 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
             minor: 2,
             nit: 3,
         },
-        report_markdown: "hello\n".to_string(),
+        report_input: FinalizeReportInput::Markdown("hello\n".to_string()),
+        copy_input_report: false,
+        auto_close_open_children: true,
+        auto_close_children_status: ReviewerStatus::Cancelled,
         now,
     })?;
 
@@ -154,7 +157,10 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         session_id: "sess0001".to_string(),
         verdict: ReviewVerdict::Approve,
         counts: SeverityCounts::zero(),
-        report_markdown: "hello\n".to_string(),
+        report_input: FinalizeReportInput::Markdown("hello\n".to_string()),
+        copy_input_report: false,
+        auto_close_open_children: true,
+        auto_close_children_status: ReviewerStatus::Cancelled,
         now,
     })?;
 
@@ -280,6 +286,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         counts: SeverityCounts::zero(),
         report_file: None,
         notes: vec![note],
+        child_reviews: Vec::new(),
     };
 
     let blocked = ReviewEntry {
@@ -297,6 +304,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         counts: SeverityCounts::zero(),
         report_file: None,
         notes: Vec::new(),
+        child_reviews: Vec::new(),
     };
 
     let finished = ReviewEntry {
@@ -319,10 +327,11 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         },
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
+        child_reviews: Vec::new(),
     };
 
     let session = SessionFile {
-        schema_version: "1.0.0".to_string(),
+        schema_version: "1.1.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: dir.path().to_string_lossy().to_string(),
         reviewers: vec![
@@ -498,6 +507,7 @@ fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
         ReportsOptions {
             include_notes: true,
             include_report_contents: false,
+            include_leaf_children: false,
         },
     );
     ensure!(only_notes.matching_reviews == 1);
@@ -562,10 +572,11 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         counts: SeverityCounts::zero(),
         report_file: Some(report_file.to_string()),
         notes: Vec::new(),
+        child_reviews: Vec::new(),
     };
 
     let session = SessionFile {
-        schema_version: "1.0.0".to_string(),
+        schema_version: "1.1.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: dir.path().to_string_lossy().to_string(),
         reviewers: vec!["feedface".to_string()],
@@ -580,6 +591,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         ReportsOptions {
             include_notes: false,
             include_report_contents: true,
+            include_leaf_children: false,
         },
     );
 

@@ -1,0 +1,41 @@
+name: lint-pr-title
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  semantic-pull-request:
+    name: validate PR title (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - name: check PR title
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed Conventional Commit types (newline-delimited)
+          types: |
+            feat
+            fix
+            docs
+            refactor
+            test
+            chore
+            perf
+            ci
+            build
+            style
+            deps
+            security
+            revert
+            hotfix
+          # Optional: enforce lowercase subject (no uppercase start)
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" in "{title}" must not start with an uppercase letter.
+          # If the PR has exactly one commit, validate it as well.
+          validateSingleCommit: true

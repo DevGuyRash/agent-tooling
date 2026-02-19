@@ -1,0 +1,12 @@
+[
+  {
+    "name": "bug",
+    "color": "ffffff",
+    "description": "Old description"
+  },
+  {
+    "name": "stale",
+    "color": "cccccc",
+    "description": "Old label"
+  }
+]

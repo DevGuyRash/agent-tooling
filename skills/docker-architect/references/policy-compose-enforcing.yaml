@@ -1,0 +1,84 @@
+version: 1
+domain: compose
+strictness: enforcing
+rules:
+  - id: AC-CMP-NOPORTS
+    severity: block
+    action: forbid_key
+    target: service.*
+    key: ports
+    rationale: Deterministic internal stacks must not publish host ports.
+  - id: AC-CMP-PRIVILEGED
+    severity: block
+    action: forbid_key
+    target: service.*
+    key: privileged
+    rationale: Privileged containers are forbidden.
+  - id: AC-CMP-READONLY
+    severity: block
+    action: ensure_key
+    target: service.*
+    key: read_only
+    value: true
+    rationale: Immutable root filesystem is mandatory.
+  - id: AC-CMP-WRITABLE
+    severity: block
+    action: ensure_writable_paths
+    target: service.*
+    rationale: Read-only root filesystem requires deterministic writable tmpfs and volume targets.
+  - id: AC-CMP-CAPDROP
+    severity: block
+    action: ensure_list_contains
+    target: service.*
+    key: cap_drop
+    value: ALL
+    rationale: Capabilities must be explicitly whitelisted.
+  - id: AC-CMP-NNP
+    severity: block
+    action: ensure_list_contains
+    target: service.*
+    key: security_opt
+    value: no-new-privileges:true
+    rationale: Privilege escalation controls are mandatory.
+  - id: AC-CMP-SECRETS
+    severity: block
+    action: require_sensitive_env_secrets
+    target: service.*
+    rationale: Sensitive TOKEN/PASS/KEY variables must be sourced via compose secrets, not inline environment values.
+  - id: AC-CMP-DIGEST
+    severity: block
+    action: require_image_digest
+    target: service.*
+    key: image
+    rationale: Deterministic deployment requires digest pinning.
+  - id: AC-CMP-USER
+    severity: block
+    action: require_non_root_user
+    target: service.*
+    key: user
+    rationale: Enforcing mode requires non-root runtime identity.
+  - id: AC-CMP-PERMS-INIT
+    severity: block
+    action: ensure_volume_permissions
+    target: service.*
+    rationale: Non-root writable services require deterministic permission init sidecars.
+  - id: AC-CMP-HEALTH
+    severity: block
+    action: synthesize_healthcheck
+    target: service.*
+    rationale: Healthchecks must be synthesized from verified runtime facts and curated image knowledge.
+  - id: AC-CMP-CAPS
+    severity: block
+    action: ensure_capability_profile
+    target: service.*
+    rationale: Add back only justified capabilities and device reservations deterministically.
+  - id: AC-CMP-RESOURCES
+    severity: block
+    action: ensure_resource_limits
+    target: service.*
+    mode: compose
+    value:
+      memory: 512m
+      cpus: "1.0"
+      pids_limit: 256
+    rationale: Compose mode requires explicit deterministic resource limits.

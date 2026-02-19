@@ -1,0 +1,14 @@
+services:
+  smoke:
+    image: docker.io/library/alpine:3.20
+    command:
+      - sleep
+      - "120"
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m

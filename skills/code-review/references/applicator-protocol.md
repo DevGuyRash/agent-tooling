@@ -12,7 +12,7 @@ IF `mpcr protocol` works, you SHALL use it instead — it serves phase-appropria
 
 ## Phase 1: Ingestion
 
-1. You SHALL run `mpcr session reports closed --include-report-contents` to get finished reviews.
+1. You SHALL run `mpcr session reports closed --include-report-contents --include-leaf-children` to get finished reviews.
 2. IF no session exists, you SHALL read report files provided by the user.
 3. You SHALL build a finding inventory: list all findings by severity.
 4. You SHALL note each reviewer's verdict and acceptance criteria.
@@ -57,7 +57,7 @@ You SHALL present the user a summary: Applied N, Declined N (reasons), Deferred 
 ## mpcr quick reference
 
 ```
-mpcr session reports closed --include-report-contents [--json]
+mpcr session reports closed --include-report-contents --include-leaf-children [--json]
 mpcr applicator set-status --initiator-status <STATUS> --reviewer-id <ID> --session-id <SID>
 mpcr applicator note --note-type <TYPE> --content "..."
 mpcr applicator wait [--target-ref <REF>]

@@ -99,6 +99,13 @@ mpcr reviewer finalize --verdict APPROVE|REQUEST_CHANGES|BLOCK \
   --blocker N --major N --minor N --nit N --report-file report.md
 ```
 
+Finalize artifact rules:
+- WHEN `--report-file` is provided, mpcr moves that file into the canonical session report path by default.
+- IF you need to preserve the source file, pass `--copy-report-input`.
+- IF `--report-file` is omitted, pipe report markdown via stdin.
+- Parent finalize auto-closes unresolved child reviews by default (`CANCELLED`).
+- If you need strict failure when children remain open, pass `--no-auto-close-children`.
+
 ## Non-negotiable rules
 
 1. No ungrounded claims. Every finding SHALL have an evidence anchor (file:line or function).
@@ -113,6 +120,7 @@ mpcr reviewer finalize --verdict APPROVE|REQUEST_CHANGES|BLOCK \
 mpcr reviewer register --target-ref <REF>
 mpcr reviewer update --status IN_PROGRESS --phase <PHASE>
 mpcr reviewer note --note-type question|blocker_preview|domain_observation --content "..."
-mpcr reviewer finalize --verdict <V> [--blocker N --major N --minor N --nit N] [--report-file path]
+mpcr reviewer finalize --verdict <V> [--blocker N --major N --minor N --nit N] [--report-file path] [--copy-report-input] [--no-auto-close-children]
+mpcr reviewer complete-child --reviewer-id <ID8> --session-id <ID8> --verdict <V> [--blocker N --major N --minor N --nit N] [--report-file path] [--proof-note TEXT]
 mpcr session reports open|closed|in-progress [--include-report-contents]
 ```

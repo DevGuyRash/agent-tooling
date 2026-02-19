@@ -1,4 +1,0 @@
-interface:
-  display_name: "Principal Image Architecture & Supply-Chain Security Architect"
-  short_description: "Deterministic image build and supply-chain hardening"
-  default_prompt: "Analyze image build requirements and produce deterministic Dockerfile and Buildx/Bake outputs with attestations, reproducibility, and strict traceability."

@@ -1,0 +1,79 @@
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-SWM-NOPORTS
+    severity: warn
+    action: forbid_key
+    target: service.*
+    key: ports
+    rationale: Internal swarm services should not publish host ports by default.
+  - id: AC-SWM-PRIVILEGED
+    severity: warn
+    action: forbid_key
+    target: service.*
+    key: privileged
+    rationale: Privileged containers are forbidden by default.
+  - id: AC-SWM-READONLY
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: read_only
+    value: true
+    rationale: Immutable root filesystem by default.
+  - id: AC-SWM-WRITABLE
+    severity: warn
+    action: ensure_writable_paths
+    target: service.*
+    rationale: Read-only root filesystem requires deterministic writable tmpfs and volume targets.
+  - id: AC-SWM-CAPDROP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: cap_drop
+    value: ALL
+    rationale: Drop capabilities unless explicitly required.
+  - id: AC-SWM-NNP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: security_opt
+    value: no-new-privileges:true
+    rationale: Prevent privilege escalation in runtime.
+  - id: AC-SWM-SECRETS
+    severity: warn
+    action: require_sensitive_env_secrets
+    target: service.*
+    rationale: Prefer secrets for TOKEN/PASS/KEY variables instead of inline environment values.
+  - id: AC-SWM-DIGEST
+    severity: warn
+    action: require_image_digest
+    target: service.*
+    key: image
+    rationale: Swarm deployments should use digest-pinned images.
+  - id: AC-SWM-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+    rationale: Non-root runtime posture for services.
+  - id: AC-SWM-HEALTH
+    severity: warn
+    action: synthesize_healthcheck
+    target: service.*
+    rationale: Healthchecks should be synthesized from verified runtime facts and curated image knowledge.
+  - id: AC-SWM-CAPS
+    severity: warn
+    action: ensure_capability_profile
+    target: service.*
+    rationale: Add back only justified capabilities and device reservations deterministically.
+  - id: AC-SWM-RESOURCES
+    severity: warn
+    action: ensure_resource_limits
+    target: service.*
+    mode: swarm
+    value:
+      memory: 512m
+      cpus: "1.0"
+      pids_limit: 256
+    rationale: Swarm mode requires explicit deterministic deploy resource limits.
