@@ -212,7 +212,11 @@ fetch_latest_version_tag() {
     return 1
   fi
   local tag
-  tag="$(curl -fsSL "$LATEST_API_URL" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -n 1)"
+  if command -v jq >/dev/null 2>&1; then
+    tag="$(curl -fsSL "$LATEST_API_URL" | jq -r '.tag_name // empty' | head -n 1)"
+  else
+    tag="$(curl -fsSL "$LATEST_API_URL" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -n 1)"
+  fi
   [[ -n "$tag" ]] || return 1
   echo "$tag"
 }
