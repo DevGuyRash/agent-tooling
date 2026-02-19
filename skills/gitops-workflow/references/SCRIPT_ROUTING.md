@@ -20,6 +20,8 @@ When bypassing, record:
 
 - Branch creation:
   - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]`
+- Security bootstrap (hooks + CI files):
+  - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
 - Hook installation:
   - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]`
 - Sensitive-data pre-commit gate (required before `git commit`):

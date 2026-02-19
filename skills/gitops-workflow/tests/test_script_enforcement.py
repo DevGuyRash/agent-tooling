@@ -28,6 +28,7 @@ class ScriptSyntaxTests(unittest.TestCase):
         targets = [
             SCRIPTS_DIR / "start-branch.sh",
             SCRIPTS_DIR / "install-hooks.sh",
+            SCRIPTS_DIR / "setup-security.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-create.sh",
             SCRIPTS_DIR / "pr-workflow.sh",

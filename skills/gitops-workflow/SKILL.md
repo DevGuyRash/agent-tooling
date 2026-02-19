@@ -95,6 +95,7 @@ Path resolution (mandatory):
 | Task | Required script |
 | --- | --- |
 | Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]` |
+| Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
 | Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
 | Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]` |
@@ -139,6 +140,7 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/setup-security.sh"
 bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
 bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
 # edit generated body file if needed, then explicitly create PR
