@@ -27,38 +27,38 @@ Generate deterministic Docker architecture outputs across two workflows:
 6. Generate final architecture content using required section ordering.
 7. Validate final markdown output contract before returning.
 
-Run commands from `<skills-file-root>`:
+Use absolute skill-rooted paths:
 
 ```bash
 # Compose/Swarm workflow
-./scripts/docker-architect-compose extract <input-file> --format text
-./scripts/docker-architect-compose extract <input-file> --format json
-./scripts/docker-architect-compose refresh --cache-dir ./references/cache --image nginx:1.27 --allow-scrape-fallback
-./scripts/docker-architect-compose render --cache-dir ./references/cache --format markdown
-./scripts/docker-architect-compose check --cache-dir ./references/cache --strictness balanced
-./scripts/docker-architect-compose policy-check compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose
-./scripts/docker-architect-compose policy-plan compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose
-./scripts/docker-architect-compose policy-apply compose.yaml --plan patch-plan.json --output compose.hardened.yaml --mode compose
-./scripts/docker-architect-compose policy-check stack.yaml --policy ./references/policy-swarm-balanced.yaml --cache-dir ./references/cache --mode swarm
-./scripts/docker-architect-compose policy-plan stack.yaml --policy ./references/policy-swarm-balanced.yaml --cache-dir ./references/cache --mode swarm
-./scripts/docker-architect-compose compose-generate compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --output compose.anchored.yaml --mode compose --anchors auto
-./scripts/docker-architect-compose anchor-suggest compose.yaml --policy ./references/policy-compose-balanced.yaml --cache-dir ./references/cache --mode compose --format json
-./scripts/docker-architect-compose output-check architecture.md --mode compose
+<skills-file-root>/scripts/docker-architect-compose extract <input-file> --format text
+<skills-file-root>/scripts/docker-architect-compose extract <input-file> --format json
+<skills-file-root>/scripts/docker-architect-compose refresh --cache-dir <skills-file-root>/references/cache --image nginx:1.27 --allow-scrape-fallback
+<skills-file-root>/scripts/docker-architect-compose render --cache-dir <skills-file-root>/references/cache --format markdown
+<skills-file-root>/scripts/docker-architect-compose check --cache-dir <skills-file-root>/references/cache --strictness balanced
+<skills-file-root>/scripts/docker-architect-compose policy-check compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose
+<skills-file-root>/scripts/docker-architect-compose policy-plan compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose
+<skills-file-root>/scripts/docker-architect-compose policy-apply compose.yaml --plan patch-plan.json --output compose.hardened.yaml --mode compose
+<skills-file-root>/scripts/docker-architect-compose policy-check stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
+<skills-file-root>/scripts/docker-architect-compose policy-plan stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
+<skills-file-root>/scripts/docker-architect-compose compose-generate compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --output compose.anchored.yaml --mode compose --anchors auto
+<skills-file-root>/scripts/docker-architect-compose anchor-suggest compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose --format json
+<skills-file-root>/scripts/docker-architect-compose output-check architecture.md --mode compose
 
 # Image/build workflow
-./scripts/docker-architect-image extract <input-file> --format text
-./scripts/docker-architect-image extract <input-file> --format json
-./scripts/docker-architect-image refresh --cache-dir ./references/cache --image debian:12-slim --allow-scrape-fallback
-./scripts/docker-architect-image render --cache-dir ./references/cache --format markdown
-./scripts/docker-architect-image check --cache-dir ./references/cache --strictness balanced
-./scripts/docker-architect-image policy-check Dockerfile --policy ./references/policy-dockerfile-balanced.yaml
-./scripts/docker-architect-image policy-plan Dockerfile --policy ./references/policy-dockerfile-balanced.yaml
-./scripts/docker-architect-image output-check architecture.md --mode image
+<skills-file-root>/scripts/docker-architect-image extract <input-file> --format text
+<skills-file-root>/scripts/docker-architect-image extract <input-file> --format json
+<skills-file-root>/scripts/docker-architect-image refresh --cache-dir <skills-file-root>/references/cache --image debian:12-slim --allow-scrape-fallback
+<skills-file-root>/scripts/docker-architect-image render --cache-dir <skills-file-root>/references/cache --format markdown
+<skills-file-root>/scripts/docker-architect-image check --cache-dir <skills-file-root>/references/cache --strictness balanced
+<skills-file-root>/scripts/docker-architect-image policy-check Dockerfile --policy <skills-file-root>/references/policy-dockerfile-balanced.yaml
+<skills-file-root>/scripts/docker-architect-image policy-plan Dockerfile --policy <skills-file-root>/references/policy-dockerfile-balanced.yaml
+<skills-file-root>/scripts/docker-architect-image output-check architecture.md --mode image
 
 # Generalized deterministic CI gate (fixtures + optional live verify)
-./scripts/docker-architect-ci-gate
-DOCKER_ARCHITECT_ENABLE_VERIFY=1 ./scripts/docker-architect-ci-gate
-DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=./references/ci/verify.compose.yaml ./scripts/docker-architect-ci-gate
+<skills-file-root>/scripts/docker-architect-ci-gate
+DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-gate
+DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<skills-file-root>/references/ci/verify.compose.yaml <skills-file-root>/scripts/docker-architect-ci-gate
 ```
 
 ## Portability contract
@@ -80,7 +80,7 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=./referenc
 
 ## CI gate
 
-- `./scripts/docker-architect-ci-gate` always runs deterministic fixture-based golden tests (`architect-core` `golden_pipeline` integration test).
+- `<skills-file-root>/scripts/docker-architect-ci-gate` always runs deterministic fixture-based golden tests (`architect-core` `golden_pipeline` integration test).
 - Live runtime verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`. If requested, Docker availability and daemon reachability are required.
 - Live verify defaults to `references/ci/verify.compose.yaml`; override with `DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<path>`.
 - Runtime verify is a baseline hardening gate: it runs `docker compose up -d` and inspects current state without waiting/polling for health transitions.

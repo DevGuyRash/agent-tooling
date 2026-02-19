@@ -24,6 +24,7 @@ Governance-specific references:
 Copy this directory into a skills-discovery location supported by your agent product, for example:
 
 - Project-local: `.skills/gitops-workflow/`
+- Codex: `.codex/skills/gitops-workflow/`
 - Claude Code: `.claude/skills/gitops-workflow/`
 - Cursor: `.cursor/skills/gitops-workflow/`
 - Generic agents: `.agent/skills/gitops-workflow/`
@@ -35,7 +36,7 @@ Copy this directory into a skills-discovery location supported by your agent pro
 Use the `skills-ref` reference tool to validate the frontmatter and structure:
 
 ```bash
-skills-ref validate ./gitops-workflow
+skills-ref validate <skills-file-root>
 ```
 
 ## How to adopt incrementally

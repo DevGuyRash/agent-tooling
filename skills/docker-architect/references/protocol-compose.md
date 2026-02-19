@@ -9,4 +9,4 @@
 7. Run `output-check` against final markdown before final delivery.
 8. Include a single-line traceability marker in each major section.
 
-Use this with `./scripts/docker-architect-compose` outputs to keep sections deterministic.
+Use this with `<skills-file-root>/scripts/docker-architect-compose` outputs to keep sections deterministic.

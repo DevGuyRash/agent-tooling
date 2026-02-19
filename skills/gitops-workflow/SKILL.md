@@ -86,7 +86,7 @@ Path resolution (mandatory):
 - Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to this skill folder (the folder containing this `SKILL.md`), not relative to the target repository where git work is being performed.
 - Before dispatching, resolve and keep a local variable:
   - `SKILL_ROOT=<absolute-path-to-this-skill-folder>`
-  - Example placeholder: `<your-skill-root>/skills/gitops-workflow`
+  - Example placeholder: `<absolute-path>/gitops-workflow`
 - Execute helpers via `"$SKILL_ROOT/scripts/..."` so they are found even when CWD is another repo.
 
 | Task | Required script |

@@ -22,4 +22,4 @@ Required major sections:
 Always emit in order and only open the file-emission section after preconditions are satisfied.
 Major sections must use H1 headings (`# Section Name`); lower heading levels are ignored by contract validation.
 Policy artifacts (`policy-check` and `policy-plan`) must be machine-readable and deterministic.
-Validate with: `./scripts/docker-architect-compose output-check <output.md> --mode compose`.
+Validate with: `<skills-file-root>/scripts/docker-architect-compose output-check <output.md> --mode compose`.

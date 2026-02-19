@@ -10,4 +10,4 @@
 8. Run `output-check` against final markdown before final delivery.
 9. Keep traceability IDs (`AC`, `IMG`, `RSK`, `O`) in every major section.
 
-Use with `./scripts/docker-architect-image` to keep outputs deterministic across runs.
+Use with `<skills-file-root>/scripts/docker-architect-image` to keep outputs deterministic across runs.
