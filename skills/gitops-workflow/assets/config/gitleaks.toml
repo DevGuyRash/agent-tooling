@@ -10,6 +10,7 @@ paths = [
   '''(^|/)tests/fixtures/''',
   '''(^|/)tests/golden/''',
   '''(^|/)docs/examples/''',
+  '''(^|/)\.git/''',
   '''(^|/)target/''',
   '''(^|/)__pycache__/''',
 ]

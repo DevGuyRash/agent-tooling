@@ -45,6 +45,7 @@ class SensitiveScanScriptTests(unittest.TestCase):
 
     def test_gitleaks_config_ignores_build_artifacts(self):
         cfg = GITLEAKS_CONFIG.read_text(encoding="utf-8")
+        self.assertIn("'''(^|/)\\.git/'''", cfg)
         self.assertIn("'''(^|/)target/'''", cfg)
         self.assertIn("'''(^|/)__pycache__/'''", cfg)
 
