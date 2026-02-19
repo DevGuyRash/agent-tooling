@@ -31,6 +31,9 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "setup-security.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-create.sh",
+            SCRIPTS_DIR / "pr-comment.sh",
+            SCRIPTS_DIR / "pr-request-review.sh",
+            SCRIPTS_DIR / "pr-reply.sh",
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "pr-merge-squash.sh",
             SCRIPTS_DIR / "governance-enforce.sh",
@@ -540,6 +543,157 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertIn("Admin override enabled; continuing despite required-check failures.", proc.stdout)
             merge_call = log_file.read_text(encoding="utf-8")
             self.assertIn(" --admin", merge_call)
+
+
+class PrCommentScriptTests(unittest.TestCase):
+    def test_pr_comment_normalizes_literal_newline_sequences(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "body_file=''\n"
+                "for ((i=1; i<=$#; i++)); do\n"
+                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
+                "    next=$((i+1))\n"
+                "    body_file=\"${!next}\"\n"
+                "  fi\n"
+                "done\n"
+                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
+                "echo \"ok\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-comment.sh"),
+                    "7",
+                    "--body",
+                    "@codex review\\n@gemini-code-assist review\\n\\nFinal pass.",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertIn("@codex review\n@gemini-code-assist review\n\nFinal pass.\n", body)
+
+
+class PrRequestReviewScriptTests(unittest.TestCase):
+    def test_pr_request_review_posts_ordered_triggers_with_optional_note(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "body_file=''\n"
+                "for ((i=1; i<=$#; i++)); do\n"
+                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
+                "    next=$((i+1))\n"
+                "    body_file=\"${!next}\"\n"
+                "  fi\n"
+                "done\n"
+                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
+                "echo \"ok\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-request-review.sh"),
+                    "8",
+                    "--note",
+                    "Final verification pass requested.",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertTrue(body.startswith("@codex review\n@gemini-code-assist review\n"))
+            self.assertIn("Final verification pass requested.\n", body)
+
+
+class PrReplyScriptTests(unittest.TestCase):
+    def test_pr_reply_normalizes_literal_newline_sequences(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=* ]]; then\n"
+                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "line one\\nline two",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "line one\nline two")
 
 if __name__ == "__main__":
     unittest.main()

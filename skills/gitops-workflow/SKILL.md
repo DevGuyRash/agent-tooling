@@ -101,6 +101,8 @@ Path resolution (mandatory):
 | Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
+| Add top-level PR comment (newline-safe) | `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]` |
+| Request bot re-review deterministically | `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]` |
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
@@ -240,8 +242,12 @@ Before pushing any new commits to a PR branch:
    - `gh pr checks <number> --watch`
 4. Address/respond to every unresolved item.
    - Reply in the original thread (do NOT create a new top-level comment).
+   - `pr-reply.sh` normalizes literal `\n` in reply text into real newlines.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
    - Optional trigger commands (if enabled in repo): `@codex review` then `@gemini-code-assist review`.
+   - Preferred deterministic command: `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
+   - For manual multi-line top-level PR comments, avoid literal `\n` escapes; use `--body-file`:
+     - `gh pr comment <number> --body-file <file>`
 
 Guidance for handling automated reviewer feedback:
 

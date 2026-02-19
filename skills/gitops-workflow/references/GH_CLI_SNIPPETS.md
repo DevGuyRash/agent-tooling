@@ -31,6 +31,16 @@ View top-level PR comments:
 gh pr view <number> --comments
 ```
 
+Add a multi-line PR comment deterministically (no literal `\n` escapes):
+```bash
+bash "$SKILL_ROOT/scripts/pr-comment.sh" <number> --body "@codex review\n@gemini-code-assist review\n\nFinal verification pass requested."
+```
+
+Request default AI re-review deterministically:
+```bash
+bash "$SKILL_ROOT/scripts/pr-request-review.sh" <number> --note "Final verification pass requested."
+```
+
 Watch checks:
 ```bash
 gh pr checks <number> --watch
@@ -73,6 +83,11 @@ bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> --all
 If you only have a comment id and need to reply via API:
 ```bash
 bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Reply text"
+```
+
+Literal `\n` is normalized automatically in `pr-reply.sh`, so this is safe:
+```bash
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Line 1\nLine 2"
 ```
 
 ## Deterministic governance

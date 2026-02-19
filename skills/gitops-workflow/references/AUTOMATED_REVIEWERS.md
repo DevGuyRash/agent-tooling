@@ -27,6 +27,10 @@ These are convenience triggers, not required workflow steps.
 - Gemini Code Assist:
   - `@gemini-code-assist review`
 
+Deterministic helper (preferred when posting a top-level re-review request):
+
+- `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
+
 ## If you cannot reply inline
 
 If permissions/tooling prevent inline replies, leave a top-level PR comment referencing:

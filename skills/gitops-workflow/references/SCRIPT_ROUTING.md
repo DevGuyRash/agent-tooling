@@ -35,6 +35,10 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:
   - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
+- Top-level PR comment (deterministic; avoids literal `\n` rendering):
+  - `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]`
+- Bot re-review request (deterministic ordering: Codex then Gemini):
+  - `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
 - Unresolved inline thread check:
   - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
 - Resolve unresolved inline threads:
@@ -42,6 +46,7 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
+  - Literal `\n` in `<reply text>` is normalized to real newlines.
 - Squash merge (deterministic, required):
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:
