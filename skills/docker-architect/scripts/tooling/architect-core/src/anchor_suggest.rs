@@ -247,10 +247,11 @@ pub fn suggest_anchors(
     let composite = discover_composite_anchors(services, threshold, opts.max_suggestions)?;
     for candidate in composite {
         let composite_keys = top_level_fragment_keys(&candidate.body).join(",");
-        let sensitive = candidate
-            .body
-            .as_mapping()
-            .is_some_and(|map| map.keys().filter_map(YamlValue::as_str).any(is_sensitive_key));
+        let sensitive = candidate.body.as_mapping().is_some_and(|map| {
+            map.keys()
+                .filter_map(YamlValue::as_str)
+                .any(is_sensitive_key)
+        });
         let hardening_or_resource = candidate.body.as_mapping().is_some_and(|map| {
             map.keys()
                 .filter_map(YamlValue::as_str)
@@ -264,11 +265,10 @@ pub fn suggest_anchors(
             sensitive,
             hardening_or_resource,
         );
-        let normalized_fragment = serde_yaml::to_string(&candidate.body).map_err(|error| {
-            AppError::InvalidInput {
+        let normalized_fragment =
+            serde_yaml::to_string(&candidate.body).map_err(|error| AppError::InvalidInput {
                 reason: format!("failed to serialize composite fragment: {error}"),
-            }
-        })?;
+            })?;
 
         prepared.push(PreparedSuggestion {
             kind: SuggestionKind::Composite,
@@ -321,7 +321,9 @@ pub fn suggest_anchors(
     for (index, item) in prepared.into_iter().enumerate() {
         let (mut proposed_name, key_root) = match item.kind {
             SuggestionKind::Composite => {
-                let name = item.name_hint.unwrap_or_else(|| "composite_fragment".to_string());
+                let name = item
+                    .name_hint
+                    .unwrap_or_else(|| "composite_fragment".to_string());
                 let key = item
                     .yaml_key_hint
                     .unwrap_or_else(|| "x-composite-fragment".to_string());
@@ -476,18 +478,19 @@ fn discover_raw_composites(
             }
 
             let canonical = canonicalize_value(value);
-            let normalized = serde_yaml::to_string(&canonical).map_err(|error| {
-                AppError::InvalidInput {
+            let normalized =
+                serde_yaml::to_string(&canonical).map_err(|error| AppError::InvalidInput {
                     reason: format!("failed to serialize composite atom: {error}"),
-                }
-            })?;
+                })?;
             let atom_id = format!("{key_name}::{normalized}");
-            let entry = atom_by_id.entry(atom_id.clone()).or_insert_with(|| AtomSupport {
-                id: atom_id,
-                key: key_name.to_string(),
-                value: canonical.clone(),
-                services: BTreeSet::new(),
-            });
+            let entry = atom_by_id
+                .entry(atom_id.clone())
+                .or_insert_with(|| AtomSupport {
+                    id: atom_id,
+                    key: key_name.to_string(),
+                    value: canonical.clone(),
+                    services: BTreeSet::new(),
+                });
             entry.services.insert(service_name.clone());
         }
     }
@@ -501,10 +504,7 @@ fn discover_raw_composites(
     }
 
     frequent_atoms.sort_by(|left, right| {
-        (
-            std::cmp::Reverse(left.services.len()),
-            left.id.as_str(),
-        )
+        (std::cmp::Reverse(left.services.len()), left.id.as_str())
             .cmp(&(std::cmp::Reverse(right.services.len()), right.id.as_str()))
     });
     if frequent_atoms.len() > MAX_COMPOSITE_ATOMS {
@@ -565,11 +565,10 @@ fn enumerate_composites(
 
             if keys.len() == current_indexes.len() {
                 let fragment = mapping_from_atoms(atoms, current_indexes);
-                let normalized_fragment = serde_yaml::to_string(&fragment).map_err(|error| {
-                    AppError::InvalidInput {
+                let normalized_fragment =
+                    serde_yaml::to_string(&fragment).map_err(|error| AppError::InvalidInput {
                         reason: format!("failed to serialize composite fragment: {error}"),
-                    }
-                })?;
+                    })?;
 
                 let fingerprint = format!(
                     "{}::{}",
@@ -644,7 +643,9 @@ fn prune_dominated_composites(
     for candidate in candidates {
         let candidate_key_set: BTreeSet<&str> = candidate.keys.iter().map(String::as_str).collect();
         let dominated = retained.iter().any(|existing| {
-            if existing.services != candidate.services || existing.keys.len() <= candidate.keys.len() {
+            if existing.services != candidate.services
+                || existing.keys.len() <= candidate.keys.len()
+            {
                 return false;
             }
             let existing_keys: BTreeSet<&str> = existing.keys.iter().map(String::as_str).collect();
@@ -660,12 +661,21 @@ fn prune_dominated_composites(
         (
             left.keys.join(","),
             left.normalized_fragment.as_str(),
-            left.services.iter().cloned().collect::<Vec<String>>().join(","),
+            left.services
+                .iter()
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(","),
         )
             .cmp(&(
                 right.keys.join(","),
                 right.normalized_fragment.as_str(),
-                right.services.iter().cloned().collect::<Vec<String>>().join(","),
+                right
+                    .services
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join(","),
             ))
     });
 
@@ -687,7 +697,10 @@ pub fn render_markdown_report(report: &AnchorSuggestionReport) -> Result<String,
 
     for suggestion in &report.suggestions {
         out.push_str(&format!("## {}\n", suggestion.id));
-        out.push_str(&format!("- kind: `{}`\n", suggestion_kind_label(suggestion.kind)));
+        out.push_str(&format!(
+            "- kind: `{}`\n",
+            suggestion_kind_label(suggestion.kind)
+        ));
         out.push_str(&format!("- key: `{}`\n", suggestion.proposed_yaml_key));
         out.push_str(&format!("- path: `{}`\n", suggestion.path_signature));
         out.push_str(&format!("- usage: {}\n", suggestion.usage_count));
@@ -989,11 +1002,7 @@ fn last_path_segment(path: &str) -> String {
 }
 
 fn key_count_for_fragment(fragment: &YamlValue) -> usize {
-    fragment
-        .as_mapping()
-        .map(Mapping::len)
-        .unwrap_or(1)
-        .max(1)
+    fragment.as_mapping().map(Mapping::len).unwrap_or(1).max(1)
 }
 
 fn top_level_fragment_keys(fragment: &YamlValue) -> Vec<String> {
@@ -1061,11 +1070,7 @@ fn composite_name_and_key(
     used_yaml_keys: &mut BTreeMap<String, usize>,
 ) -> (String, String) {
     let base = sanitize_name(primary_key);
-    let fingerprint = format!(
-        "{}|{}",
-        normalized_fragment,
-        service_names.join(",")
-    );
+    let fingerprint = format!("{}|{}", normalized_fragment, service_names.join(","));
     let hash = stable_hash_hex8(&fingerprint);
     let mut proposed_name = format!("composite_{base}_{hash}");
     let key_root = format!("x-composite-{base}-{hash}");

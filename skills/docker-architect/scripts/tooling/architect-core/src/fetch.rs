@@ -125,7 +125,7 @@ fn fetch_image_profile_with_client(
     let mut config_digest_for_profile: Option<String> = None;
 
     if parsed.registry == "docker.io" {
-        match fetch_docker_hub_metadata(&client, &parsed, user_agent) {
+        match fetch_docker_hub_metadata(client, &parsed, user_agent) {
             Ok(hub) => {
                 if platforms.is_empty() {
                     platforms = hub.platforms;
@@ -167,7 +167,7 @@ fn fetch_image_profile_with_client(
     let should_fetch_registry =
         parsed.registry == "docker.io" || digest.is_none() || platforms.is_empty();
     if should_fetch_registry {
-        match fetch_registry_manifest(&client, &parsed, user_agent) {
+        match fetch_registry_manifest(client, &parsed, user_agent) {
             Ok(manifest) => {
                 if parsed.registry == "docker.io" {
                     if manifest.digest.is_some() {
@@ -210,7 +210,7 @@ fn fetch_image_profile_with_client(
     }
 
     if let Some(config_digest) = registry_config_digest {
-        match fetch_config_blob_details(&client, &parsed, &config_digest, user_agent) {
+        match fetch_config_blob_details(client, &parsed, &config_digest, user_agent) {
             Ok(config) => {
                 if platforms.is_empty() {
                     if let Some(platform) = config.platform {
@@ -251,7 +251,7 @@ fn fetch_image_profile_with_client(
         && (digest.is_none() || dockerfile_url.is_none())
     {
         let scrape_url = format!("https://hub.docker.com/r/{}", parsed.repository);
-        match scrape_hub_page(&client, &parsed.repository, user_agent) {
+        match scrape_hub_page(client, &parsed.repository, user_agent) {
             Ok((scraped_digest, scraped_repo_url)) => {
                 if digest.is_none() {
                     digest = scraped_digest.clone();
@@ -293,7 +293,7 @@ fn fetch_image_profile_with_client(
             .unwrap_or_default();
     if allow_scrape_fallback {
         enrich_researched_env_from_docs(
-            &client,
+            client,
             user_agent,
             docs_url.as_deref(),
             dockerfile_url.as_deref(),
@@ -1218,9 +1218,9 @@ fn parse_image_reference(image: &str) -> Result<ParsedImageRef, AppError> {
 }
 
 fn validate_image_reference_chars(cleaned: &str) -> Result<(), AppError> {
-    let valid_chars = cleaned.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@')
-    });
+    let valid_chars = cleaned
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@'));
     if !valid_chars {
         return Err(AppError::InvalidInput {
             reason: format!("image reference contains unsupported characters: {cleaned}"),

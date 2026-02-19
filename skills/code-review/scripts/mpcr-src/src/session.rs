@@ -313,7 +313,7 @@ pub enum NoteType {
 }
 
 impl NoteType {
-    fn allowed_for_role(&self, role: NoteRole) -> bool {
+    const fn allowed_for_role(&self, role: NoteRole) -> bool {
         match role {
             NoteRole::Reviewer => matches!(
                 self,
@@ -2469,9 +2469,7 @@ pub fn spawn_child_reviewers(
         return Err(anyhow::anyhow!("count must be >= 1"));
     }
     if params.count > MAX_SPAWN_CHILDREN {
-        return Err(anyhow::anyhow!(
-            "count must be <= {MAX_SPAWN_CHILDREN}"
-        ));
+        return Err(anyhow::anyhow!("count must be <= {MAX_SPAWN_CHILDREN}"));
     }
 
     let session_file = params.session.session_file();
@@ -2971,10 +2969,10 @@ pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
     validate_id8(&params.session_id, "session_id")?;
     validate_id8(&params.lock_owner, "lock_owner")?;
     if !params.note_type.allowed_for_role(params.role) {
-        let note_type_name = match serde_json::to_string(&params.note_type) {
-            Ok(raw) => raw.trim_matches('"').to_string(),
-            Err(_) => "unknown".to_string(),
-        };
+        let note_type_name = serde_json::to_string(&params.note_type).map_or_else(
+            |_| "unknown".to_string(),
+            |raw| raw.trim_matches('"').to_string(),
+        );
         return Err(anyhow::anyhow!(
             "note_type `{}` is not allowed for role `{}`",
             note_type_name,

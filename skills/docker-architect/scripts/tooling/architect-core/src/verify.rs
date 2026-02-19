@@ -247,14 +247,13 @@ fn run_compose_command(compose_file: &Path, args: &[&str]) -> Result<String, App
 }
 
 fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
-    let output = run_docker_output(args, DOCKER_VERIFY_TIMEOUT).map_err(|error| {
-        AppError::InvalidInput {
+    let output =
+        run_docker_output(args, DOCKER_VERIFY_TIMEOUT).map_err(|error| AppError::InvalidInput {
             reason: format!(
                 "failed to execute docker command `{}`: {error}",
                 args.join(" ")
             ),
-        }
-    })?;
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(AppError::InvalidInput {

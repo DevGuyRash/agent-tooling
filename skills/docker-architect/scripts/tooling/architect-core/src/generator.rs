@@ -346,15 +346,18 @@ fn plan_service_anchors(
                     continue;
                 }
 
-                let candidate_keys: BTreeSet<String> = top_level_keys(&candidate.body).into_iter().collect();
+                let candidate_keys: BTreeSet<String> =
+                    top_level_keys(&candidate.body).into_iter().collect();
                 if candidate_keys.len() < 2 {
                     continue;
                 }
 
                 let conflicts = candidate.service_names.iter().any(|service_name| {
-                    service_covered_keys.get(service_name).is_some_and(|covered| {
-                        candidate_keys.iter().any(|key| covered.contains(key))
-                    })
+                    service_covered_keys
+                        .get(service_name)
+                        .is_some_and(|covered| {
+                            candidate_keys.iter().any(|key| covered.contains(key))
+                        })
                 });
                 if conflicts {
                     continue;
@@ -374,10 +377,14 @@ fn plan_service_anchors(
                     let Some(service_render) = services_render.get_mut(service_name) else {
                         continue;
                     };
-                    service_render.selected_anchors.push(definition.name.clone());
+                    service_render
+                        .selected_anchors
+                        .push(definition.name.clone());
                     strip_covered_fields(&mut service_render.rendered_mapping, &definition.body);
 
-                    let covered = service_covered_keys.entry(service_name.clone()).or_default();
+                    let covered = service_covered_keys
+                        .entry(service_name.clone())
+                        .or_default();
                     for key in &candidate_keys {
                         covered.insert(key.clone());
                     }
@@ -401,7 +408,9 @@ fn plan_service_anchors(
     })
 }
 
-fn service_mapping_from_rendered(services_render: &BTreeMap<String, ServiceAnchorRender>) -> Mapping {
+fn service_mapping_from_rendered(
+    services_render: &BTreeMap<String, ServiceAnchorRender>,
+) -> Mapping {
     let mut services = Mapping::new();
     for (name, render) in services_render {
         services.insert(
@@ -514,7 +523,9 @@ fn compare_anchor_names(
         return right_composite_key_count.cmp(&left_composite_key_count);
     }
 
-    let left_yaml = left_def.map(|definition| definition.yaml_key.as_str()).unwrap_or(left);
+    let left_yaml = left_def
+        .map(|definition| definition.yaml_key.as_str())
+        .unwrap_or(left);
     let right_yaml = right_def
         .map(|definition| definition.yaml_key.as_str())
         .unwrap_or(right);

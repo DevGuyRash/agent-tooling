@@ -100,7 +100,11 @@ fn probe_tool_without_shell(image: &str, tool: &str) -> Result<Option<String>, A
     Ok(None)
 }
 
-fn classify_entrypoint_probe(candidate: &str, success: bool, missing_binary: bool) -> Option<String> {
+fn classify_entrypoint_probe(
+    candidate: &str,
+    success: bool,
+    missing_binary: bool,
+) -> Option<String> {
     if success {
         return Some(candidate.to_string());
     }
@@ -174,12 +178,13 @@ fn run_entrypoint_probe(image: &str, entrypoint: &str) -> Result<Output, AppErro
 }
 
 fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
-    let mut child = Command::new("docker")
-        .args(args)
-        .spawn()
-        .map_err(|error| AppError::InvalidInput {
-            reason: format!("failed to execute docker runtime probe: {error}"),
-        })?;
+    let mut child =
+        Command::new("docker")
+            .args(args)
+            .spawn()
+            .map_err(|error| AppError::InvalidInput {
+                reason: format!("failed to execute docker runtime probe: {error}"),
+            })?;
 
     let start = Instant::now();
     loop {
@@ -190,9 +195,11 @@ fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
             })?
             .is_some()
         {
-            return child.wait_with_output().map_err(|error| AppError::InvalidInput {
-                reason: format!("failed to collect docker runtime probe output: {error}"),
-            });
+            return child
+                .wait_with_output()
+                .map_err(|error| AppError::InvalidInput {
+                    reason: format!("failed to collect docker runtime probe output: {error}"),
+                });
         }
 
         if start.elapsed() >= DOCKER_PROBE_TIMEOUT {
@@ -230,7 +237,8 @@ fn missing_tool_strategy(tool: &str, shell_missing: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_entrypoints, classify_entrypoint_probe, missing_tool_strategy, probe_runtime_tools,
+        candidate_entrypoints, classify_entrypoint_probe, missing_tool_strategy,
+        probe_runtime_tools,
     };
 
     #[test]
