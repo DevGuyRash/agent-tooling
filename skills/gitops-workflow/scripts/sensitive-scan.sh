@@ -150,7 +150,11 @@ fi
 
 if [[ "$MODE" == "staged" ]]; then
   if [[ -z "$(git -C "$REPO_PATH" diff --cached --name-only)" ]]; then
-    say "No staged changes detected; skipping sensitive-data scan."
+    if [[ "$FORMAT" == "json" ]]; then
+      printf '{"status":"skipped","mode":"staged","reason":"no_staged_changes"}\n'
+    else
+      say "No staged changes detected; skipping sensitive-data scan."
+    fi
     exit 0
   fi
 fi

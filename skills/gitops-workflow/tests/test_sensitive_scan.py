@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -139,6 +140,23 @@ class SensitiveScanScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertNotIn("Sensitive-data scan passed", proc.stdout)
             self.assertIn("Sensitive-data scan passed", proc.stderr)
+
+    def test_json_staged_mode_skip_emits_machine_parseable_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            proc = run(
+                ["bash", str(SCAN_SCRIPT), "--staged", "--format", "json", "--repo", str(repo)],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "skipped")
+            self.assertEqual(payload["mode"], "staged")
+            self.assertEqual(payload["reason"], "no_staged_changes")
 
     def test_staged_scan_blocks_on_findings_with_redacted_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
