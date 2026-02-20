@@ -167,6 +167,77 @@ class UnresolvedThreadsStrictModeTests(unittest.TestCase):
             self.assertIn("http://example/1", proc.stdout)
             self.assertIn("http://example/2", proc.stdout)
 
+    def test_threads_script_can_show_resolved_threads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" && \"$2\" == \"graphql\" ]]; then\n"
+                "  jq_expr=\"\"\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      jq_expr=\"${!next}\"\n"
+                "      break\n"
+                "    fi\n"
+                "  done\n"
+                "  if [[ \"$jq_expr\" == *\".data.repository.pullRequest.reviewThreads\"* ]]; then\n"
+                "    cat <<'JSON'\n"
+                "{\"nodes\":[{\"isResolved\":true,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"bot\"},\"path\":\"a/b\",\"line\":9,\"url\":\"http://example/resolved\",\"body\":\"done\"}]}},{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"bot\"},\"path\":\"a/b\",\"line\":10,\"url\":\"http://example/unresolved\",\"body\":\"todo\"}]}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}\n"
+                "JSON\n"
+                "  else\n"
+                "    printf '\\n'\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "printf '\\n'\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-unresolved-threads.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                    "--state",
+                    "resolved",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Resolved inline review threads", proc.stdout)
+            self.assertIn("http://example/resolved", proc.stdout)
+            self.assertNotIn("http://example/unresolved", proc.stdout)
+
+    def test_threads_script_rejects_invalid_state_value(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-unresolved-threads.sh"),
+                "7",
+                "--state",
+                "closed",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid --state", proc.stderr)
+
 
 class LabelsExportPaginationTests(unittest.TestCase):
     def test_labels_export_fetches_multiple_pages(self):
