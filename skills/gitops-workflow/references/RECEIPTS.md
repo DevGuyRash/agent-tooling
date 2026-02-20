@@ -21,7 +21,7 @@ A commit receipt is a small markdown block you emit after push/merge operations 
 Generate a receipt from your current branch:
 
 ```bash
-python3 scripts/receipt.py --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
+python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
 ```
 
 If your base branch isn't `main`, pass `--base origin/<default-branch>`.

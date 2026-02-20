@@ -18,6 +18,7 @@ set -euo pipefail
 # - Uses kebab-case for slug; spaces become hyphens.
 # - If working tree is dirty, stashes tracked+untracked changes before switching branches
 #   and restores them after branch creation.
+# - Auto-installs managed pre-commit hook by default to enforce sensitive-data scans.
 
 ALLOWED_TYPES=("feat" "fix" "docs" "refactor" "test" "chore" "perf" "ci" "build" "style" "deps" "security" "revert" "hotfix")
 
@@ -30,10 +31,18 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_opt_value() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
 print_help() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]
+  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]
 
 Arguments:
   <type>             Branch type prefix (feat, fix, docs, refactor, ...).
@@ -43,6 +52,7 @@ Options:
   --issue <id>       Optional issue token inserted before slug.
   --base <branch>    Optional base branch; default auto-detect from origin/HEAD, fallback main.
   --stash-name <n>   Optional stash note when auto-stashing dirty worktree.
+  --no-install-hooks Skip automatic managed pre-commit hook installation.
   -h, --help         Show this help text.
 
 Deterministic defaults when <slug> is omitted:
@@ -74,6 +84,7 @@ ISSUE=""
 BASE=""
 STASH_NOTE=""
 AUTO_SLUG_FROM_ISSUE="false"
+INSTALL_HOOKS="true"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,16 +93,23 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --issue)
+      require_opt_value "--issue" "${2:-}"
       ISSUE="${2:-}"
       shift 2
       ;;
     --base)
+      require_opt_value "--base" "${2:-}"
       BASE="${2:-}"
       shift 2
       ;;
     --stash-name)
+      require_opt_value "--stash-name" "${2:-}"
       STASH_NOTE="${2:-}"
       shift 2
+      ;;
+    --no-install-hooks)
+      INSTALL_HOOKS="false"
+      shift
       ;;
     *)
       die "unknown argument: $1"
@@ -173,7 +191,10 @@ fi
 echo "Base branch: $BASE"
 echo "Creating branch: $BRANCH"
 
-git fetch origin --prune >/dev/null 2>&1 || true
+if ! FETCH_OUTPUT="$(git fetch origin --prune 2>&1)"; then
+  echo "Warning: git fetch origin --prune failed; continuing with local refs." >&2
+  echo "Warning: git fetch details: $FETCH_OUTPUT" >&2
+fi
 
 git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout base branch '$BASE' (does it exist locally?)"
 if git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
@@ -197,6 +218,21 @@ if [[ "$STASHED" == "true" ]]; then
     echo "  2) git stash apply stash@{0}" >&2
     echo "  3) resolve conflicts, then optionally: git stash drop stash@{0}" >&2
     exit 3
+  fi
+fi
+
+if [[ "$INSTALL_HOOKS" == "true" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  HOOK_INSTALLER="$SCRIPT_DIR/install-hooks.sh"
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+  if [[ -x "$HOOK_INSTALLER" ]]; then
+    if bash "$HOOK_INSTALLER" --repo "$REPO_ROOT" >/dev/null 2>&1; then
+      echo "Managed pre-commit hook ensured for: $REPO_ROOT"
+    else
+      echo "Warning: failed to auto-install managed pre-commit hook; run '$HOOK_INSTALLER --repo \"$REPO_ROOT\"' manually." >&2
+    fi
+  else
+    echo "Warning: hook installer script not found/executable at $HOOK_INSTALLER" >&2
   fi
 fi
 

@@ -7,11 +7,18 @@ Script-first policy:
 - If you bypass the script, record: `Script bypass reason: <specific blocker>`.
 - Routing reference: [SCRIPT_ROUTING.md](SCRIPT_ROUTING.md).
 
+Set script root once when running commands from this checklist:
+
+```bash
+SKILL_ROOT=<absolute-path-to-gitops-workflow>
+```
+
 ---
 
 ## A) Start work checklist (branching)
 
 - [ ] if worktree is dirty, branch helper auto-stashes tracked + untracked and restores safely
+- [ ] branch helper auto-installs managed pre-commit hook unless `--no-install-hooks` is used
 - [ ] you are on the default branch (`main`/`master`)
 - [ ] default branch is up to date (`git pull`)
 - [ ] new branch name matches allowed pattern: `<type>/<short-desc>`
@@ -19,14 +26,18 @@ Script-first policy:
 
 Recommended:
 ```bash
-bash scripts/start-branch.sh feat add-json-output
-bash scripts/start-branch.sh chore --issue 789 --stash-name "carry-local-wip"
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry-local-wip"
 ```
 
 ---
 
 ## B) Commit checklist (Conventional Commits)
 
+- [ ] run sensitive-data gate on staged changes before commit:
+  - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
+- [ ] if needed, install managed hook once per repo:
+  - `bash "$SKILL_ROOT/scripts/install-hooks.sh" --repo <path>`
 - [ ] commit subject matches: `type(scope): description`
 - [ ] subject is imperative + lowercase + no trailing period
 - [ ] commit is atomic (one logical change)
@@ -34,6 +45,7 @@ bash scripts/start-branch.sh chore --issue 789 --stash-name "carry-local-wip"
 - [ ] tests/docs included in same commit when they are part of the same logical change
 - [ ] if asked to "commit worktree"/"commit changes", split into batched Conventional Commits by logical unit
 - [ ] do not use one catch-all commit unless user explicitly asks for a single commit
+- [ ] if scanner allowlist/config is changed, include explicit rationale in commit/PR description
 
 ---
 
@@ -58,11 +70,11 @@ Recommended:
 Before pushing *any* updates to a PR:
 
 - [ ] Run strict PR wrapper first:
-  - `bash scripts/pr-workflow.sh <number> --watch-checks`
+  - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <number> --watch-checks`
 - [ ] Read top-level comments:
   - `gh pr view <number> --comments`
 - [ ] Read unresolved inline review threads:
-  - `bash scripts/pr-unresolved-threads.sh <number> --fail-on-unresolved`
+  - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <number> --fail-on-unresolved`
 - [ ] Check CI and logs:
   - `gh pr checks <number> --watch`
 - [ ] Identify every unresolved request and either:
@@ -80,13 +92,13 @@ Before pushing *any* updates to a PR:
 - [ ] PR author says “ready to merge”
 - [ ] branch is up to date with base (rebase if required)
 - [ ] run deterministic merge helper:
-  - `bash scripts/pr-merge-squash.sh <number>`
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number>`
 - [ ] squash commit body includes `## Commits` bullets:
   - each bullet is `<short-sha> <first-line commit subject>`
 - [ ] if emergency admin merge is required, use:
-  - `bash scripts/pr-merge-squash.sh <number> --admin`
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number> --admin`
 - [ ] after merge/push, emit commit receipt:
-  - `python3 scripts/receipt.py --branch <branch> --base <default-branch> --pr-url <url>`
+  - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
 
 ---
 
@@ -106,7 +118,7 @@ Template:
 ## G) Governance enforcement checklist (strict)
 
 - [ ] Run deterministic wrapper sequence:
-  - `bash scripts/governance-enforce.sh --policy assets/config/github-governance-policy.v1.json --repo <owner/repo>`
+  - `bash "$SKILL_ROOT/scripts/governance-enforce.sh" --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>`
 - [ ] Confirm `validate` succeeded before apply.
 - [ ] Confirm `plan` output reviewed before apply.
 - [ ] Confirm `audit` has no drift after apply.

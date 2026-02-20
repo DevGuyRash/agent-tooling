@@ -17,6 +17,20 @@ Automated review bots are helpful but non-authoritative. Treat them like a well-
    - Typos, obvious bugs, missing tests, style drift.
    - Be cautious with architectural changes.
 
+## Optional trigger commands
+
+Use these only if your repository has the corresponding bot enabled.
+These are convenience triggers, not required workflow steps.
+
+- Codex:
+  - `@codex review`
+- Gemini Code Assist:
+  - `@gemini-code-assist review`
+
+Deterministic helper (preferred when posting a top-level re-review request):
+
+- `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
+
 ## If you cannot reply inline
 
 If permissions/tooling prevent inline replies, leave a top-level PR comment referencing:

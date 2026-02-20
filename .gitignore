@@ -23,5 +23,6 @@ tmp/
 
 # Local coordination artifacts (if you run skills in this repo)
 .local/
+skills/gitops-workflow/.bin/
 
 __pycache__

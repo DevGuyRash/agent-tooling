@@ -35,6 +35,9 @@ Extended types (allowed for tooling/workflow):
 
 When the request is generic (for example, "commit worktree" or "commit changes"), default to batched commits grouped by logical change. Do not collapse unrelated changes into one commit unless the user explicitly requests a single commit.
 
+Before creating commits, run the sensitive-data gate:
+- `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
+
 Examples:
 - `feat(cli): add --json output`
 - `fix(api): handle empty payload`
