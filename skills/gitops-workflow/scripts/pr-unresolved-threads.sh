@@ -4,14 +4,14 @@ set -euo pipefail
 # pr-unresolved-threads.sh - List unresolved GitHub PR review threads (inline comments).
 #
 # Usage:
-#   bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--fail-on-unresolved]
+#   bash scripts/pr-unresolved-threads.sh <pr_number> [--repo owner/repo] [--state unresolved|resolved|all] [--include-resolved] [--fail-on-unresolved]
 #
 # Requirements:
 #   - gh (GitHub CLI) authenticated
 #   - jq (for response shaping)
 #
 # Output:
-#   Prints unresolved threads in a readable format.
+#   Prints matching threads in a readable format.
 #   Default exit is 0 even if threads exist; use --fail-on-unresolved to return 3.
 
 die() {
@@ -23,6 +23,14 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_opt_value() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
 require_cmd gh
 require_cmd jq
 
@@ -32,11 +40,22 @@ shift || true
 
 REPO=""
 FAIL_ON_UNRESOLVED="false"
+THREAD_STATE="unresolved"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
+      require_opt_value "--repo" "${2:-}"
       REPO="${2:-}"
       shift 2
+      ;;
+    --state)
+      require_opt_value "--state" "${2:-}"
+      THREAD_STATE="${2:-}"
+      shift 2
+      ;;
+    --include-resolved)
+      THREAD_STATE="all"
+      shift
       ;;
     --fail-on-unresolved)
       FAIL_ON_UNRESOLVED="true"
@@ -47,6 +66,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$THREAD_STATE" in
+  unresolved|resolved|all)
+    ;;
+  *)
+    die "invalid --state '$THREAD_STATE' (expected: unresolved, resolved, or all)"
+    ;;
+esac
 
 if [[ -z "$REPO" ]]; then
   # best-effort: infer from current directory
@@ -88,10 +115,11 @@ echo "Repo: $REPO"
 echo "PR:   #$PR_NUMBER"
 echo ""
 
-# Pull unresolved threads and flatten comment nodes with pagination.
+# Pull matching threads and flatten comment nodes with pagination.
 # Do not suppress API errors; fail-fast is safer than false green output.
 RESULT=""
 AFTER=""
+FOUND_UNRESOLVED="false"
 while :; do
   GH_ARGS=(
     api graphql
@@ -107,7 +135,22 @@ while :; do
   PAGE_JSON="$(gh "${GH_ARGS[@]}" --jq '.data.repository.pullRequest.reviewThreads')"
   [[ -n "$PAGE_JSON" ]] || die "empty response from GitHub API"
 
-  PAGE_RESULT="$(printf '%s' "$PAGE_JSON" | jq -c '.nodes[] | select(.isResolved == false) | .comments.nodes[] | {author: .author.login, path: .path, line: .line, url: .url, body: .body}')"
+  PAGE_HAS_UNRESOLVED="$(printf '%s' "$PAGE_JSON" | jq -r 'if any(.nodes[]?; .isResolved == false) then "true" else "false" end')"
+  if [[ "$PAGE_HAS_UNRESOLVED" == "true" ]]; then
+    FOUND_UNRESOLVED="true"
+  fi
+
+  PAGE_RESULT="$(printf '%s' "$PAGE_JSON" | jq -c --arg state "$THREAD_STATE" '
+    .nodes[]
+    | select(
+        ($state == "unresolved" and .isResolved == false)
+        or ($state == "resolved" and .isResolved == true)
+        or ($state == "all")
+      )
+    | . as $thread
+    | .comments.nodes[]
+    | {resolved: $thread.isResolved, author: .author.login, path: .path, line: .line, url: .url, body: .body}
+  ')"
   if [[ -n "$PAGE_RESULT" ]]; then
     if [[ -n "$RESULT" ]]; then
       RESULT+=$'\n'
@@ -124,11 +167,31 @@ while :; do
 done
 
 if [[ -z "$RESULT" ]]; then
-  echo "✅ No unresolved inline review threads found."
+  case "$THREAD_STATE" in
+    unresolved)
+      echo "✅ No unresolved inline review threads found."
+      ;;
+    resolved)
+      echo "✅ No resolved inline review threads found."
+      ;;
+    all)
+      echo "✅ No inline review threads found."
+      ;;
+  esac
   exit 0
 fi
 
-echo "⚠️ Unresolved inline review threads:"
+case "$THREAD_STATE" in
+  unresolved)
+    echo "⚠️ Unresolved inline review threads:"
+    ;;
+  resolved)
+    echo "ℹ️ Resolved inline review threads:"
+    ;;
+  all)
+    echo "ℹ️ Inline review threads (all states):"
+    ;;
+esac
 echo "$RESULT" | while IFS= read -r line; do
   # Each line is JSON (because --jq outputs objects). Print it as-is for machine readability.
   echo "$line"
@@ -137,6 +200,6 @@ done
 echo ""
 echo "Tip: Copy a thread URL and reply in the original thread in GitHub UI when possible."
 
-if [[ "$FAIL_ON_UNRESOLVED" == "true" ]]; then
+if [[ "$FAIL_ON_UNRESOLVED" == "true" && "$FOUND_UNRESOLVED" == "true" ]]; then
   exit 3
 fi

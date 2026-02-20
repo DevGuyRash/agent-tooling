@@ -27,6 +27,13 @@ class ScriptSyntaxTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         targets = [
             SCRIPTS_DIR / "start-branch.sh",
+            SCRIPTS_DIR / "install-hooks.sh",
+            SCRIPTS_DIR / "setup-security.sh",
+            SCRIPTS_DIR / "sensitive-scan.sh",
+            SCRIPTS_DIR / "pr-create.sh",
+            SCRIPTS_DIR / "pr-comment.sh",
+            SCRIPTS_DIR / "pr-request-review.sh",
+            SCRIPTS_DIR / "pr-reply.sh",
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "pr-merge-squash.sh",
             SCRIPTS_DIR / "governance-enforce.sh",
@@ -36,6 +43,14 @@ class ScriptSyntaxTests(unittest.TestCase):
         for target in targets:
             proc = run(["bash", "-n", str(target)], cwd=ROOT)
             self.assertEqual(proc.returncode, 0, f"bash -n failed for {target}\n{proc.stderr}")
+
+
+class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
+    def test_workflow_extracts_gitleaks_in_temp_dir_without_repo_cleanup(self):
+        workflow = (ROOT / "assets" / "github" / "workflows" / "sensitive-scan.yml").read_text(encoding="utf-8")
+        self.assertIn('workdir="$(mktemp -d)"', workflow)
+        self.assertIn('trap \'rm -rf "$workdir"\' EXIT', workflow)
+        self.assertNotIn("README.md LICENSE", workflow)
 
 
 class GovernanceWrapperBehaviorTests(unittest.TestCase):
@@ -151,6 +166,77 @@ class UnresolvedThreadsStrictModeTests(unittest.TestCase):
             self.assertIn("Unresolved inline review threads", proc.stdout)
             self.assertIn("http://example/1", proc.stdout)
             self.assertIn("http://example/2", proc.stdout)
+
+    def test_threads_script_can_show_resolved_threads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" && \"$2\" == \"graphql\" ]]; then\n"
+                "  jq_expr=\"\"\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      jq_expr=\"${!next}\"\n"
+                "      break\n"
+                "    fi\n"
+                "  done\n"
+                "  if [[ \"$jq_expr\" == *\".data.repository.pullRequest.reviewThreads\"* ]]; then\n"
+                "    cat <<'JSON'\n"
+                "{\"nodes\":[{\"isResolved\":true,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"bot\"},\"path\":\"a/b\",\"line\":9,\"url\":\"http://example/resolved\",\"body\":\"done\"}]}},{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"bot\"},\"path\":\"a/b\",\"line\":10,\"url\":\"http://example/unresolved\",\"body\":\"todo\"}]}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}\n"
+                "JSON\n"
+                "  else\n"
+                "    printf '\\n'\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "printf '\\n'\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-unresolved-threads.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                    "--state",
+                    "resolved",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Resolved inline review threads", proc.stdout)
+            self.assertIn("http://example/resolved", proc.stdout)
+            self.assertNotIn("http://example/unresolved", proc.stdout)
+
+    def test_threads_script_rejects_invalid_state_value(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-unresolved-threads.sh"),
+                "7",
+                "--state",
+                "closed",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid --state", proc.stderr)
 
 
 class LabelsExportPaginationTests(unittest.TestCase):
@@ -314,6 +400,11 @@ class StartBranchScriptTests(unittest.TestCase):
             self.assertTrue((repo / "notes.tmp").exists())
             stash_list = run(["git", "stash", "list"], cwd=repo).stdout.strip()
             self.assertEqual(stash_list, "")
+            hook_path = run(["git", "rev-parse", "--git-path", "hooks/pre-commit"], cwd=repo).stdout.strip()
+            hook_file = Path(hook_path) if Path(hook_path).is_absolute() else repo / hook_path
+            self.assertTrue(hook_file.exists())
+            hook_text = hook_file.read_text(encoding="utf-8")
+            self.assertIn("gitops-workflow-managed-pre-commit", hook_text)
 
     def test_start_branch_omitted_slug_uses_issue_slug(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -374,6 +465,27 @@ class StartBranchScriptTests(unittest.TestCase):
             self.assertIn("stash restore failed", proc.stderr)
             stash_list = run(["git", "stash", "list"], cwd=repo).stdout
             self.assertIn("gitops-workflow:start-branch:", stash_list)
+
+    def test_start_branch_missing_option_value_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            proc_issue = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "--issue"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc_issue.returncode, 0)
+            self.assertIn("option '--issue' requires a value", proc_issue.stderr)
+
+            proc_base = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "x", "--base"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc_base.returncode, 0)
+            self.assertIn("option '--base' requires a value", proc_base.stderr)
 
 
 class MergeSquashScriptTests(unittest.TestCase):
@@ -510,6 +622,237 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertIn("Admin override enabled; continuing despite required-check failures.", proc.stdout)
             merge_call = log_file.read_text(encoding="utf-8")
             self.assertIn(" --admin", merge_call)
+
+
+class PrCommentScriptTests(unittest.TestCase):
+    def test_pr_comment_normalizes_literal_newline_sequences(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "body_file=''\n"
+                "for ((i=1; i<=$#; i++)); do\n"
+                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
+                "    next=$((i+1))\n"
+                "    body_file=\"${!next}\"\n"
+                "  fi\n"
+                "done\n"
+                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
+                "echo \"ok\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-comment.sh"),
+                    "7",
+                    "--body",
+                    "@codex review\\n@gemini-code-assist review\\n\\nFinal pass.",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertIn("@codex review\n@gemini-code-assist review\n\nFinal pass.\n", body)
+
+    def test_pr_comment_missing_body_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-comment.sh"),
+                "7",
+                "--body",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' requires a value", proc.stderr)
+
+    def test_pr_comment_missing_repo_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-comment.sh"),
+                "7",
+                "--body",
+                "hello",
+                "--repo",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--repo' requires a value", proc.stderr)
+
+    def test_pr_comment_reports_argument_error_before_missing_gh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shim_dir = Path(temp_dir) / "bin"
+            shim_dir.mkdir(parents=True, exist_ok=True)
+            os.symlink("/bin/bash", shim_dir / "bash")
+            env = os.environ.copy()
+            env["PATH"] = str(shim_dir)
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-comment.sh"),
+                    "7",
+                    "--body",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("option '--body' requires a value", proc.stderr)
+            self.assertNotIn("missing required command: gh", proc.stderr)
+
+
+class PrRequestReviewScriptTests(unittest.TestCase):
+    def test_pr_request_review_posts_ordered_triggers_with_optional_note(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "body_file=''\n"
+                "for ((i=1; i<=$#; i++)); do\n"
+                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
+                "    next=$((i+1))\n"
+                "    body_file=\"${!next}\"\n"
+                "  fi\n"
+                "done\n"
+                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
+                "echo \"ok\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-request-review.sh"),
+                    "8",
+                    "--note",
+                    "Final verification pass requested.",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertTrue(body.startswith("@codex review\n@gemini-code-assist review\n"))
+            self.assertIn("Final verification pass requested.\n", body)
+
+    def test_pr_request_review_missing_repo_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-request-review.sh"),
+                "8",
+                "--repo",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--repo' requires a value", proc.stderr)
+
+    def test_pr_request_review_missing_note_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-request-review.sh"),
+                "8",
+                "--note",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--note' requires a value", proc.stderr)
+
+
+class PrReplyScriptTests(unittest.TestCase):
+    def test_pr_reply_normalizes_literal_newline_sequences(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=* ]]; then\n"
+                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "line one\\nline two",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "line one\nline two")
 
 if __name__ == "__main__":
     unittest.main()

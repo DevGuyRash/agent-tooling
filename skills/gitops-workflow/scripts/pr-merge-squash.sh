@@ -42,6 +42,9 @@ USAGE
 require_cmd gh
 require_cmd python3
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 PR_NUMBER="${1:-}"
 if [[ "$PR_NUMBER" == "-h" || "$PR_NUMBER" == "--help" || -z "$PR_NUMBER" ]]; then
   print_help
@@ -298,4 +301,4 @@ gh "${MERGE_ARGS[@]}"
 echo ""
 echo "✅ Squash merge complete: $PR_URL"
 echo "Receipt helper:"
-echo "  python3 scripts/receipt.py --branch \"\$(git rev-parse --abbrev-ref HEAD)\" --base origin/main --pr-url \"$PR_URL\""
+echo "  python3 \"$SKILL_ROOT/scripts/receipt.py\" --branch \"\$(git rev-parse --abbrev-ref HEAD)\" --base origin/main --pr-url \"$PR_URL\""

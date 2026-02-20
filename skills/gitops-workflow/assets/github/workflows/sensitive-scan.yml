@@ -1,0 +1,77 @@
+name: sensitive scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  sensitive-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Set to a pinned tag such as v8.30.0 for deterministic installs.
+      # Override in repo/workflow env if you want a different version.
+      GITLEAKS_VERSION: "v8.30.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve gitleaks version
+        id: gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITLEAKS_VERSION:-}" ]]; then
+            tag="${GITLEAKS_VERSION}"
+          else
+            tag="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r '.tag_name // empty' | head -n 1)"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "Error: unable to resolve gitleaks release tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.gitleaks.outputs.tag }}'
+          ver="${tag#v}"
+          asset="gitleaks_${ver}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/${tag}"
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          curl -fsSL -o "$workdir/$asset" "$base/$asset"
+          curl -fsSL -o "$workdir/checksums.txt" "$base/gitleaks_${ver}_checksums.txt"
+          expected="$(awk -v target="$asset" '$2 == target {print $1}' "$workdir/checksums.txt")"
+          actual="$(sha256sum "$workdir/$asset" | awk '{print $1}')"
+          [[ -n "$expected" ]] || { echo "Error: checksum missing for $asset" >&2; exit 1; }
+          [[ "$actual" == "$expected" ]] || { echo "Error: checksum mismatch for $asset" >&2; exit 1; }
+          tar -xzf "$workdir/$asset" -C "$workdir"
+          chmod +x "$workdir/gitleaks"
+          sudo mv "$workdir/gitleaks" /usr/local/bin/gitleaks
+
+      - name: Run sensitive scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f .github/gitleaks.toml ]]; then
+            echo "Error: expected .github/gitleaks.toml (copy from skill assets/config/gitleaks.toml)." >&2
+            exit 1
+          fi
+          if ! gitleaks detect --source . --no-git \
+            --config .github/gitleaks.toml \
+            --redact \
+            --exit-code 1 \
+            --no-banner \
+            --report-format json \
+            --report-path gitleaks-report.json; then
+            echo "gitleaks findings:"
+            cat gitleaks-report.json
+            exit 1
+          fi

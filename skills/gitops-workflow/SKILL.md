@@ -74,6 +74,9 @@ Unless the repo explicitly defines otherwise, follow these rules:
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
 11. **When asked to "commit worktree" or "commit changes"**, create **batched Conventional Commits** grouped by logical change (feat/fix/docs/test/refactor/chore/etc.); do **not** make a single catch-all commit unless explicitly requested.
+12. **Before creating a commit**, run the deterministic sensitive-data gate and block on findings:
+    - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
+    - scanner attempts latest `gitleaks` update when network is available; pin with `SENSITIVE_SCAN_GITLEAKS_VERSION=vX.Y.Z` if needed
 
 ---
 
@@ -91,10 +94,15 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]` |
-| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create] [--draft] [--base <branch>] [--head <branch>]` |
+| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]` |
+| Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
+| Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
+| Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
+| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
 | Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
+| Add top-level PR comment (newline-safe) | `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]` |
+| Request bot re-review deterministically | `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]` |
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
@@ -134,7 +142,11 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
-bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create
+bash "$SKILL_ROOT/scripts/setup-security.sh"
+bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
+bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
+# edit generated body file if needed, then explicitly create PR
+# gh pr create --title "feat(cli): add json output" --body-file <generated-file>
 bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
 ```
@@ -151,6 +163,7 @@ Create a correctly named branch from the default branch, without accidentally wo
 
 1. If working tree is dirty, stash tracked + untracked changes with deterministic metadata.
    - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
+   - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
 2. Sync the default branch:
    - `git checkout <default-branch> && git pull`
 3. Create a branch:
@@ -187,11 +200,14 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
+- run sensitive-data gate before commit:
+  - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)
 
 See:
 
 - [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md)
+- [assets/config/gitleaks.toml](assets/config/gitleaks.toml)
 
 ---
 
@@ -209,7 +225,7 @@ See:
 
 Optional helper:
 
-- `scripts/pr-create.sh` (generates a filled PR body skeleton and opens a PR)
+- `scripts/pr-create.sh` (generates a prefilled PR body from git history; PR creation requires explicit `--create --force-create`)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 
 ---
@@ -226,7 +242,12 @@ Before pushing any new commits to a PR branch:
    - `gh pr checks <number> --watch`
 4. Address/respond to every unresolved item.
    - Reply in the original thread (do NOT create a new top-level comment).
+   - `pr-reply.sh` normalizes literal `\n` in reply text into real newlines.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
+   - Optional trigger commands (if enabled in repo): `@codex review` then `@gemini-code-assist review`.
+   - Preferred deterministic command: `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
+   - For manual multi-line top-level PR comments, avoid literal `\n` escapes; use `--body-file`:
+     - `gh pr comment <number> --body-file <file>`
 
 Guidance for handling automated reviewer feedback:
 
@@ -315,6 +336,8 @@ This skill includes ready-to-copy templates:
   - `assets/github/workflows/pr-title-lint.yml`
 - **Commit message lint** (commitlint)
   - `assets/github/workflows/commitlint.yml`
+- **Sensitive-data scan** (gitleaks; recommended)
+  - `assets/github/workflows/sensitive-scan.yml`
 - **Release automation** (optional; Conventional Commits based)
   - `assets/github/workflows/release-please.yml`
 

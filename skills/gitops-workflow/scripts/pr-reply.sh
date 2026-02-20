@@ -12,6 +12,7 @@ set -euo pipefail
 # Notes:
 # - This replies to a *review comment* (inline diff comment), not a general issue comment.
 # - If you don't know the comment id, reply in the GitHub UI instead.
+# - Literal '\n' sequences in <reply text> are normalized to real newlines.
 
 die() {
   echo "Error: $*" >&2
@@ -56,6 +57,7 @@ NAME="${REPO##*/}"
 
 ENDPOINT="/repos/${OWNER}/${NAME}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies"
 
-gh api -X POST "$ENDPOINT" -f body="$REPLY_TEXT" >/dev/null
+REPLY_TEXT_NORMALIZED="${REPLY_TEXT//\\n/$'\n'}"
+gh api -X POST "$ENDPOINT" -f body="$REPLY_TEXT_NORMALIZED" >/dev/null
 
 echo "✅ Replied to comment $COMMENT_ID on PR #$PR_NUMBER in $REPO"

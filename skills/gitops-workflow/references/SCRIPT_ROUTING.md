@@ -19,13 +19,26 @@ When bypassing, record:
 ## Routing table
 
 - Branch creation:
-  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]`
+  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]`
+- Security bootstrap (hooks + CI files):
+  - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
+- Hook installation:
+  - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]`
+- Sensitive-data pre-commit gate (required before `git commit`):
+  - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact [--repo <path>]`
+- Sensitive-data full repo scan (CI/manual parity):
+  - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
 - PR creation:
-  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create] [--draft] [--base <branch>] [--head <branch>]`
+  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]`
+  - Recommended deterministic flow: run without `--create`, review/edit generated body, then run `gh pr create --body-file <file>`.
 - PR hygiene snapshot:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:
   - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
+- Top-level PR comment (deterministic; avoids literal `\n` rendering):
+  - `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]`
+- Bot re-review request (deterministic ordering: Codex then Gemini):
+  - `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
 - Unresolved inline thread check:
   - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
 - Resolve unresolved inline threads:
@@ -33,6 +46,7 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
+  - Literal `\n` in `<reply text>` is normalized to real newlines.
 - Squash merge (deterministic, required):
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:
@@ -42,6 +56,8 @@ When bypassing, record:
 
 ## Strict mode hints
 
+- Use hook installer once per repository to enforce local blocking pre-commit scans.
+- Use `--no-download` only in pinned/offline environments that preinstall `gitleaks`.
 - Use `--fail-on-unresolved` when unresolved threads should block updates.
 - Use `--watch-checks` when waiting for CI status transitions.
 - Use governance wrapper defaults to enforce `validate -> plan -> apply -> audit` ordering.

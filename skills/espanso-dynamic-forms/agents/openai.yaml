@@ -1,0 +1,4 @@
+interface:
+  display_name: "Espanso Dynamic Forms"
+  short_description: "Comprehensive dynamic form patterns for Espanso"
+  default_prompt: "Use $espanso-dynamic-forms to design, scaffold, and lint a portable dynamic Espanso form provider pattern."

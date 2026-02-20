@@ -49,6 +49,6 @@ Examples:
 @your-bot
 @your-team
 Defaults:
-@codex
-@gemini-code-assist
+@codex review
+@gemini-code-assist review
 -->
