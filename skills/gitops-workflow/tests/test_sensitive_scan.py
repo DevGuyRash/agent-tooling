@@ -114,6 +114,35 @@ class SensitiveScanScriptTests(unittest.TestCase):
             self.assertIn("--staged", args)
             self.assertIn("--redact", args)
 
+    def test_all_scan_uses_worktree_only_detect_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+            stage_file(repo, "notes.txt", "hello world\n")
+
+            fake_dir = Path(temp_dir) / "bin"
+            fake_dir.mkdir(parents=True, exist_ok=True)
+            fake_gitleaks = self._write_fake_gitleaks(fake_dir)
+            args_file = Path(temp_dir) / "args.txt"
+
+            env = os.environ.copy()
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["FAKE_ARGS"] = str(args_file)
+            env["FAKE_MODE"] = "clean"
+
+            proc = run(
+                ["bash", str(SCAN_SCRIPT), "--all", "--repo", str(repo)],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            args = args_file.read_text(encoding="utf-8")
+            self.assertIn("detect", args)
+            self.assertIn("--no-git", args)
+
     def test_json_success_keeps_stdout_machine_parseable(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"

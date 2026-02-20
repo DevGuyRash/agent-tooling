@@ -425,7 +425,7 @@ if [[ "$MODE" == "staged" ]]; then
   fi
 else
   if supports_subcommand detect; then
-    SCAN_ARGS=(detect --source . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
+    SCAN_ARGS=(detect --no-git --source . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
   else
     SCAN_ARGS=(dir . --config "$CONFIG_PATH" --exit-code 1 --no-banner)
   fi

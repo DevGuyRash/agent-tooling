@@ -20,6 +20,14 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_opt_value() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -53,14 +61,17 @@ BODY_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --body)
+      require_opt_value "--body" "${2:-}"
       BODY="${2:-}"
       shift 2
       ;;
     --body-file)
+      require_opt_value "--body-file" "${2:-}"
       BODY_FILE="${2:-}"
       shift 2
       ;;
     --repo)
+      require_opt_value "--repo" "${2:-}"
       REPO="${2:-}"
       shift 2
       ;;

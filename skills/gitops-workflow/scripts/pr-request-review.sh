@@ -15,6 +15,14 @@ die() {
   exit 1
 }
 
+require_opt_value() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -44,10 +52,12 @@ NOTE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
+      require_opt_value "--repo" "${2:-}"
       REPO="${2:-}"
       shift 2
       ;;
     --note)
+      require_opt_value "--note" "${2:-}"
       NOTE="${2:-}"
       shift 2
       ;;

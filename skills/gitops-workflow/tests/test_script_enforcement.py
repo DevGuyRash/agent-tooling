@@ -599,6 +599,36 @@ class PrCommentScriptTests(unittest.TestCase):
             body = body_capture.read_text(encoding="utf-8")
             self.assertIn("@codex review\n@gemini-code-assist review\n\nFinal pass.\n", body)
 
+    def test_pr_comment_missing_body_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-comment.sh"),
+                "7",
+                "--body",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' requires a value", proc.stderr)
+
+    def test_pr_comment_missing_repo_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-comment.sh"),
+                "7",
+                "--body",
+                "hello",
+                "--repo",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--repo' requires a value", proc.stderr)
+
 
 class PrRequestReviewScriptTests(unittest.TestCase):
     def test_pr_request_review_posts_ordered_triggers_with_optional_note(self):
@@ -646,6 +676,34 @@ class PrRequestReviewScriptTests(unittest.TestCase):
             body = body_capture.read_text(encoding="utf-8")
             self.assertTrue(body.startswith("@codex review\n@gemini-code-assist review\n"))
             self.assertIn("Final verification pass requested.\n", body)
+
+    def test_pr_request_review_missing_repo_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-request-review.sh"),
+                "8",
+                "--repo",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--repo' requires a value", proc.stderr)
+
+    def test_pr_request_review_missing_note_value_fails_with_actionable_error(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-request-review.sh"),
+                "8",
+                "--note",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--note' requires a value", proc.stderr)
 
 
 class PrReplyScriptTests(unittest.TestCase):
