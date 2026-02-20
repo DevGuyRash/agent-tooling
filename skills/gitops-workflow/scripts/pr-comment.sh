@@ -45,8 +45,6 @@ Options:
 USAGE
 }
 
-require_cmd gh
-
 PR_NUMBER="${1:-}"
 if [[ "$PR_NUMBER" == "-h" || "$PR_NUMBER" == "--help" || -z "$PR_NUMBER" ]]; then
   print_help
@@ -108,6 +106,8 @@ if [[ -n "$BODY" ]]; then
 fi
 
 [[ -f "$BODY_FILE" ]] || die "body file not found: $BODY_FILE"
+
+require_cmd gh
 
 ARGS=(pr comment "$PR_NUMBER" --body-file "$BODY_FILE")
 if [[ -n "$REPO" ]]; then

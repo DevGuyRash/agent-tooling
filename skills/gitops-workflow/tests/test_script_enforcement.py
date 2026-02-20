@@ -629,6 +629,28 @@ class PrCommentScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("option '--repo' requires a value", proc.stderr)
 
+    def test_pr_comment_reports_argument_error_before_missing_gh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shim_dir = Path(temp_dir) / "bin"
+            shim_dir.mkdir(parents=True, exist_ok=True)
+            os.symlink("/bin/bash", shim_dir / "bash")
+            env = os.environ.copy()
+            env["PATH"] = str(shim_dir)
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-comment.sh"),
+                    "7",
+                    "--body",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("option '--body' requires a value", proc.stderr)
+            self.assertNotIn("missing required command: gh", proc.stderr)
+
 
 class PrRequestReviewScriptTests(unittest.TestCase):
     def test_pr_request_review_posts_ordered_triggers_with_optional_note(self):
