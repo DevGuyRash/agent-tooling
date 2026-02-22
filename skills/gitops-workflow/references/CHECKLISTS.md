@@ -117,6 +117,8 @@ Template:
 
 ## G) Governance enforcement checklist (strict)
 
+- [ ] Verify governance GitHub capabilities deterministically:
+  - `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo>`
 - [ ] Run deterministic wrapper sequence:
   - `bash "$SKILL_ROOT/scripts/governance-enforce.sh" --policy "$SKILL_ROOT/assets/config/github-governance-policy.v1.json" --repo <owner/repo>`
 - [ ] Confirm `validate` succeeded before apply.

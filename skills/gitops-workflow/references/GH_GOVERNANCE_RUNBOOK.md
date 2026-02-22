@@ -13,6 +13,12 @@ This runbook is for deterministic, fail-closed enforcement operations.
 `gh auth status` token should support repository administration APIs.
 If scope is insufficient, commands fail with exit code `5`.
 
+Deterministic preflight:
+```bash
+bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo>
+```
+This checker runs read-only capability probes for repo metadata, rulesets, and labels endpoints in a fixed order.
+
 ## Standard command sequence
 
 Set `SKILL_ROOT` to the installed `gitops-workflow` skill directory:

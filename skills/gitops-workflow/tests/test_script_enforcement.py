@@ -29,6 +29,7 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "start-branch.sh",
             SCRIPTS_DIR / "install-hooks.sh",
             SCRIPTS_DIR / "setup-security.sh",
+            SCRIPTS_DIR / "gh-scope-check.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-create.sh",
             SCRIPTS_DIR / "pr-comment.sh",
@@ -61,6 +62,19 @@ class GovernanceWrapperBehaviorTests(unittest.TestCase):
             fake_bin.mkdir(parents=True, exist_ok=True)
             log_file = temp_path / "calls.log"
 
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" ]]; then\n"
+                "  echo '{}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
             fake_python3 = fake_bin / "python3"
             fake_python3.write_text(
                 "#!/usr/bin/env bash\n"
@@ -80,7 +94,7 @@ class GovernanceWrapperBehaviorTests(unittest.TestCase):
             env["FAKE_LOG"] = str(log_file)
 
             proc = run(
-                ["bash", str(SCRIPTS_DIR / "governance-enforce.sh")],
+                ["bash", str(SCRIPTS_DIR / "governance-enforce.sh"), "--repo", "acme/widget"],
                 cwd=ROOT,
                 env=env,
                 check=False,
@@ -94,6 +108,55 @@ class GovernanceWrapperBehaviorTests(unittest.TestCase):
             self.assertIn(" apply ", f" {calls[2]} ")
             self.assertIn(" --write-codeowners", calls[2])
             self.assertIn(" audit ", f" {calls[3]} ")
+
+    def test_governance_wrapper_requires_repo_for_preflight(self):
+        proc = run(
+            ["bash", str(SCRIPTS_DIR / "governance-enforce.sh")],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("--repo is required", proc.stderr)
+
+    def test_governance_wrapper_stops_when_capability_preflight_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            log_file = temp_path / "calls.log"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "echo 'Resource not accessible by integration' >&2\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            fake_python3 = fake_bin / "python3"
+            fake_python3.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "echo \"$*\" >> \"${FAKE_LOG}\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_python3.chmod(fake_python3.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(log_file)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "governance-enforce.sh"), "--repo", "acme/widget"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 5, proc.stdout + proc.stderr)
+            self.assertFalse(log_file.exists(), "python3 governance sequence should not run after preflight failure")
 
 
 class UnresolvedThreadsStrictModeTests(unittest.TestCase):
