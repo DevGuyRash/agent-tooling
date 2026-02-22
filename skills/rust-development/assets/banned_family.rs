@@ -171,9 +171,20 @@ fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
             Ok(value) => value,
             Err(_) => continue,
         };
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|entry| entry.path());
+        let mut sorted_entries = Vec::new();
         for entry in entries {
+            match entry {
+                Ok(value) => sorted_entries.push(value),
+                Err(err) => {
+                    eprintln!(
+                        "warning: failed to read an entry under {}: {err}",
+                        dir.display()
+                    );
+                }
+            }
+        }
+        sorted_entries.sort_by_key(|entry| entry.path());
+        for entry in sorted_entries {
             let path = entry.path();
             let file_type = match entry.file_type() {
                 Ok(value) => value,
@@ -319,9 +330,20 @@ fn has_non_negated_test_token(expr: &str) -> bool {
 
 fn is_tests_module_decl(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("mod tests")
-        || trimmed.starts_with("pub mod tests")
-        || trimmed.starts_with("pub(crate) mod tests")
+    const TEST_MODULE_PREFIXES: &[&str] =
+        &["mod tests", "pub mod tests", "pub(crate) mod tests"];
+    TEST_MODULE_PREFIXES.iter().any(|prefix| {
+        if !trimmed.starts_with(prefix) {
+            return false;
+        }
+        let remainder = &trimmed[prefix.len()..];
+        match remainder.chars().next() {
+            None => true,
+            Some('{') | Some(';') => true,
+            Some(ch) if ch.is_whitespace() => true,
+            Some(_) => false,
+        }
+    })
 }
 
 fn brace_delta(line: &str) -> i32 {

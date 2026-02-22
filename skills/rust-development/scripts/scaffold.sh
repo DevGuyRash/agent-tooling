@@ -9,7 +9,7 @@
 #
 # Options:
 #   --clippy       Append workspace lint config to Cargo.toml
-#   --banned-test  Copy tests/banned_family.rs into the workspace
+#   --banned-test  Copy banned_family.rs into a runnable crate test dir
 #   --ci           Copy .github/workflows/ci.yml into the workspace
 #   --all          All of the above
 #   --force        Overwrite existing files
@@ -178,6 +178,33 @@ safe_copy() {
   echo "  ✓ $label → $dst"
 }
 
+resolve_banned_test_destination() {
+  root_manifest="${workspace_root}/Cargo.toml"
+  default_dst="${workspace_root}/tests/banned_family.rs"
+
+  if grep -Eq '^[[:space:]]*\[package\][[:space:]]*$' "$root_manifest"; then
+    printf '%s\n' "$default_dst"
+    return
+  fi
+
+  member_manifest="$(
+    find "$workspace_root" -name Cargo.toml -print \
+      | LC_ALL=C sort \
+      | awk -v root="$root_manifest" '
+        $0 == root { next }
+        $0 ~ /\/(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)\// { next }
+        { print; exit }
+      '
+  )"
+
+  if [ -n "$member_manifest" ]; then
+    printf '%s/tests/banned_family.rs\n' "$(dirname -- "$member_manifest")"
+    return
+  fi
+
+  printf '%s\n' "$default_dst"
+}
+
 # ---------------------------------------------------------------------------
 # Clippy lints — append with sentinel marker for idempotency
 # ---------------------------------------------------------------------------
@@ -256,9 +283,13 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$do_banned" -eq 1 ]; then
   echo "═══ Banned-family test harness ═══"
+  banned_dst="$(resolve_banned_test_destination)"
+  if [ "$banned_dst" != "${workspace_root}/tests/banned_family.rs" ]; then
+    echo "  ℹ virtual workspace detected; placing harness under: $(dirname -- "$banned_dst")"
+  fi
   safe_copy \
     "${assets_dir}/banned_family.rs" \
-    "${workspace_root}/tests/banned_family.rs" \
+    "$banned_dst" \
     "banned_family.rs"
   echo ""
 fi
@@ -268,6 +299,10 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$do_ci" -eq 1 ]; then
   echo "═══ GitHub Actions CI workflow ═══"
+  safe_copy \
+    "${assets_dir}/detect_rust_workspaces.py" \
+    "${workspace_root}/.github/scripts/detect_rust_workspaces.py" \
+    "detect_rust_workspaces.py"
   safe_copy \
     "${assets_dir}/ci.yml" \
     "${workspace_root}/.github/workflows/ci.yml" \

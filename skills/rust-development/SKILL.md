@@ -167,8 +167,8 @@ You SHALL use the scaffolding script to set up workspace tooling:
 | Flag | Effect |
 |---|---|
 | `--clippy` | Append workspace lint config to `Cargo.toml` |
-| `--banned-test` | Copy `tests/banned_family.rs` into the workspace |
-| `--ci` | Copy `.github/workflows/ci.yml` into the workspace |
+| `--banned-test` | Copy `banned_family.rs` into a runnable crate `tests/` directory |
+| `--ci` | Copy `.github/workflows/ci.yml` and `.github/scripts/detect_rust_workspaces.py` |
 | `--all` | All of the above |
 | `--force` | Overwrite existing files and replace prior config |
 
