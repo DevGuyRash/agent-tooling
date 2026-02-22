@@ -242,24 +242,32 @@ fn line_has_standalone_error_prefix(line: &str) -> bool {
     let Some(remainder) = line.strip_prefix("error") else {
         return false;
     };
-    if remainder.is_empty() || remainder.starts_with(':') {
+    if remainder.is_empty() {
         return true;
     }
 
     let Some(first_char) = remainder.chars().next() else {
         return false;
     };
-    if !first_char.is_ascii_whitespace() {
+    if !(first_char.is_ascii_whitespace() || first_char == ':' || first_char == ',') {
         return false;
+    }
+    if first_char == ':' {
+        return true;
     }
 
     let first_token = remainder
-        .trim_start()
+        .trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || character == ':' || character == ','
+        })
         .split(|character: char| {
             character.is_ascii_whitespace() || character == ':' || character == ','
         })
         .next()
         .unwrap_or_default();
+    if first_token.is_empty() {
+        return true;
+    }
 
     !matches!(
         first_token,
@@ -385,6 +393,7 @@ mod tests {
         assert!(logs_contain_error_keywords("error: connection refused"));
         assert!(logs_contain_error_keywords("ERROR failed to connect"));
         assert!(logs_contain_error_keywords(" error failed to connect"));
+        assert!(logs_contain_error_keywords("error,details=failed to connect"));
         assert!(logs_contain_error_keywords(
             "write /tmp/x: read-only file system"
         ));
@@ -397,6 +406,7 @@ mod tests {
         assert!(!logs_contain_error_keywords("error tolerance: none"));
         assert!(!logs_contain_error_keywords("error correction disabled"));
         assert!(!logs_contain_error_keywords("error count: 0"));
+        assert!(!logs_contain_error_keywords("error,count: 0"));
         assert!(!logs_contain_error_keywords("errors found: 0"));
         assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));

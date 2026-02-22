@@ -3335,7 +3335,9 @@ USER root
             PatchOperation {
                 op: "insert_after".to_string(),
                 path: "dockerfile.final_stage.last_run_or_from".to_string(),
-                value: json!("RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} \\;"),
+                value: json!(
+                    "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
+                ),
                 rule_id: "AC-DF-SUID-SGID".to_string(),
             },
         ];
@@ -3345,7 +3347,9 @@ USER root
         assert!(patched
             .contains("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
         assert!(patched.contains("USER 65532:65532"));
-        assert!(patched.contains("chmod a-s"));
+        assert!(patched.contains(
+            "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
+        ));
     }
 
     #[test]
