@@ -6,6 +6,9 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
 
 pub mod anchor_suggest;
 pub mod cache;
@@ -28,6 +31,10 @@ pub mod verify;
 use crate::cli::Command;
 use crate::error::AppError;
 use crate::model::{CachedProfiles, ImageProfile, RuntimeToolDetail};
+
+const MAX_POLICY_PLAN_BYTES: u64 = 1_048_576;
+const MAX_IMAGE_LIST_BYTES: u64 = 1_048_576;
+const MAX_GENERAL_TEXT_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Runtime selector for CLI-specific behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +78,11 @@ impl SkillVariant {
 pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> {
     match command {
         Command::Extract(args) => {
-            let content = fs::read_to_string(&args.input)
-                .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+            let content = read_utf8_file_with_size_limit(
+                &args.input,
+                MAX_GENERAL_TEXT_INPUT_BYTES,
+                "extract input file",
+            )?;
             let images = extract::extract_image_sets(&content)?;
             match args.format.as_str() {
                 "text" => Ok(images.valid.join("\n")),
@@ -86,8 +96,8 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
         Command::Refresh(args) => {
             let mut all_images = args.images;
             if let Some(path) = args.image_file {
-                let file_content = fs::read_to_string(&path)
-                    .map_err(|error| AppError::io(&path, error.to_string()))?;
+                let file_content =
+                    read_utf8_file_with_size_limit(&path, MAX_IMAGE_LIST_BYTES, "image list file")?;
                 for line in file_content.lines() {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -133,11 +143,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                 .map_err(|error| AppError::io(&args.cache_dir, error.to_string()))?;
             let cache_path = args.cache_dir.join("image-profiles.json");
             let payload = CachedProfiles {
-                schema_version: 3,
+                schema_version: cache::CURRENT_CACHE_SCHEMA_VERSION,
                 profiles,
                 unresolved_references: extracted.unresolved,
             };
-            cache::write_cache(&cache_path, &payload)?;
+            cache::with_cache_lock(&cache_path, || cache::write_cache(&cache_path, &payload))?;
             Ok(format!(
                 "wrote {} profiles to {} (unresolved: {})",
                 payload.profiles.len(),
@@ -174,8 +184,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
             Ok(output)
         }
         Command::OutputCheck(args) => {
-            let content = fs::read_to_string(&args.input)
-                .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+            let content = read_utf8_file_with_size_limit(
+                &args.input,
+                MAX_GENERAL_TEXT_INPUT_BYTES,
+                "output-check input file",
+            )?;
             let errors = output_check::validate_output_contract(&content, &args.mode)?;
             if errors.is_empty() {
                 return Ok("ok: output contract passed".to_string());
@@ -191,8 +204,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
         }
         Command::PolicyCheck(args) => match variant {
             SkillVariant::Compose => {
-                let input_content = fs::read_to_string(&args.input)
-                    .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+                let input_content = read_utf8_file_with_size_limit(
+                    &args.input,
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-check input file",
+                )?;
                 let cache_dir = args
                     .cache_dir
                     .as_ref()
@@ -202,8 +218,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     })?;
                 let cache_path = cache_dir.join("image-profiles.json");
                 let cache = cache::read_cache(&cache_path)?;
-                let policy_pack =
-                    policy::load_policy_pack(&args.policy, policy::PolicyDomain::Compose)?;
+                let policy_pack = policy::load_policy_pack_with_limit(
+                    &args.policy,
+                    policy::PolicyDomain::Compose,
+                    policy::MAX_POLICY_PACK_BYTES,
+                )?;
                 let mode = heuristics::DeployMode::parse(&args.mode)?;
                 let evaluation = policy::evaluate_compose_policy_with_mode(
                     &input_content,
@@ -215,31 +234,42 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     "domain": evaluation.domain,
                     "mode": args.mode,
                     "strictness": evaluation.strictness,
-                    "violations": evaluation.violations
+                    "violations": evaluation.violations,
+                    "has_blocked_violations": evaluation.has_blocked_violations()
                 });
                 serde_json::to_string_pretty(&output)
                     .map_err(|error| AppError::serialization(&args.input, error.to_string()))
             }
             SkillVariant::Image => {
-                let input_content = fs::read_to_string(&args.input)
-                    .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+                let input_source_path =
+                    canonicalize_existing_path(&args.input, "policy-check input file path")?;
+                let input_content = read_utf8_file_with_size_limit(
+                    input_source_path.as_path(),
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-check input file",
+                )?;
                 let cache_payload = if let Some(cache_dir) = args.cache_dir.as_ref() {
                     let cache_path = cache_dir.join("image-profiles.json");
                     Some(cache::read_cache(&cache_path)?)
                 } else {
                     None
                 };
-                let policy_pack =
-                    policy::load_policy_pack(&args.policy, policy::PolicyDomain::Dockerfile)?;
-                let evaluation = policy::evaluate_dockerfile_policy_with_cache(
+                let policy_pack = policy::load_policy_pack_with_limit(
+                    &args.policy,
+                    policy::PolicyDomain::Dockerfile,
+                    policy::MAX_POLICY_PACK_BYTES,
+                )?;
+                let evaluation = policy::evaluate_dockerfile_policy_with_cache_and_source(
                     &input_content,
                     &policy_pack,
                     cache_payload.as_ref(),
+                    Some(input_source_path.as_path()),
                 )?;
                 let output = serde_json::json!({
                     "domain": evaluation.domain,
                     "strictness": evaluation.strictness,
-                    "violations": evaluation.violations
+                    "violations": evaluation.violations,
+                    "has_blocked_violations": evaluation.has_blocked_violations()
                 });
                 serde_json::to_string_pretty(&output)
                     .map_err(|error| AppError::serialization(&args.input, error.to_string()))
@@ -247,8 +277,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
         },
         Command::PolicyPlan(args) => match variant {
             SkillVariant::Compose => {
-                let input_content = fs::read_to_string(&args.input)
-                    .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+                let input_content = read_utf8_file_with_size_limit(
+                    &args.input,
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-plan input file",
+                )?;
                 let cache_dir = args
                     .cache_dir
                     .as_ref()
@@ -257,8 +290,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     })?;
                 let cache_path = cache_dir.join("image-profiles.json");
                 let cache = cache::read_cache(&cache_path)?;
-                let policy_pack =
-                    policy::load_policy_pack(&args.policy, policy::PolicyDomain::Compose)?;
+                let policy_pack = policy::load_policy_pack_with_limit(
+                    &args.policy,
+                    policy::PolicyDomain::Compose,
+                    policy::MAX_POLICY_PACK_BYTES,
+                )?;
                 let mode = heuristics::DeployMode::parse(&args.mode)?;
                 let evaluation = policy::evaluate_compose_policy_with_mode(
                     &input_content,
@@ -270,61 +306,94 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     .map_err(|error| AppError::serialization(&args.input, error.to_string()))
             }
             SkillVariant::Image => {
-                let input_content = fs::read_to_string(&args.input)
-                    .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+                let input_source_path =
+                    canonicalize_existing_path(&args.input, "policy-plan input file path")?;
+                let input_content = read_utf8_file_with_size_limit(
+                    input_source_path.as_path(),
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-plan input file",
+                )?;
                 let cache_payload = if let Some(cache_dir) = args.cache_dir.as_ref() {
                     let cache_path = cache_dir.join("image-profiles.json");
                     Some(cache::read_cache(&cache_path)?)
                 } else {
                     None
                 };
-                let policy_pack =
-                    policy::load_policy_pack(&args.policy, policy::PolicyDomain::Dockerfile)?;
-                let evaluation = policy::evaluate_dockerfile_policy_with_cache(
+                let policy_pack = policy::load_policy_pack_with_limit(
+                    &args.policy,
+                    policy::PolicyDomain::Dockerfile,
+                    policy::MAX_POLICY_PACK_BYTES,
+                )?;
+                let evaluation = policy::evaluate_dockerfile_policy_with_cache_and_source(
                     &input_content,
                     &policy_pack,
                     cache_payload.as_ref(),
+                    Some(input_source_path.as_path()),
                 )?;
                 serde_json::to_string_pretty(&evaluation.patch_plan)
                     .map_err(|error| AppError::serialization(&args.input, error.to_string()))
             }
         },
-        Command::PolicyApply(args) => {
-            if args.mode != "compose" {
-                return Err(AppError::InvalidInput {
-                    reason: format!("unsupported policy-apply mode: {}", args.mode),
-                });
+        Command::PolicyApply(args) => match args.mode.as_str() {
+            "compose" => {
+                let input_content = read_utf8_file_with_size_limit(
+                    &args.input,
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-apply input file",
+                )?;
+                let patch_plan = read_patch_plan_with_size_limit(&args.plan)?;
+                let mode = heuristics::DeployMode::parse(&args.mode)?;
+                let rendered = policy::apply_compose_patch_plan(&input_content, &patch_plan, mode)?;
+                fs::write(&args.output, rendered)
+                    .map_err(|error| AppError::io(&args.output, error.to_string()))?;
+                Ok(format!(
+                    "wrote patched compose output to {}",
+                    args.output.display()
+                ))
             }
-
-            let input_content = fs::read_to_string(&args.input)
-                .map_err(|error| AppError::io(&args.input, error.to_string()))?;
-            let patch_content = fs::read_to_string(&args.plan)
-                .map_err(|error| AppError::io(&args.plan, error.to_string()))?;
-            let patch_plan: Vec<policy::PatchOperation> = serde_json::from_str(&patch_content)
-                .map_err(|error| {
-                    AppError::serialization(&args.plan, format!("invalid patch plan json: {error}"))
-                })?;
-            let mode = heuristics::DeployMode::parse(&args.mode)?;
-            let rendered = policy::apply_compose_patch_plan(&input_content, &patch_plan, mode)?;
-            fs::write(&args.output, rendered)
-                .map_err(|error| AppError::io(&args.output, error.to_string()))?;
-            Ok(format!(
-                "wrote patched compose output to {}",
-                args.output.display()
-            ))
-        }
+            "dockerfile" => {
+                if variant != SkillVariant::Image {
+                    return Err(AppError::InvalidInput {
+                        reason: "policy-apply mode dockerfile is only supported in image workflow"
+                            .to_string(),
+                    });
+                }
+                let input_content = read_utf8_file_with_size_limit(
+                    &args.input,
+                    MAX_GENERAL_TEXT_INPUT_BYTES,
+                    "policy-apply input file",
+                )?;
+                let patch_plan = read_patch_plan_with_size_limit(&args.plan)?;
+                let rendered = policy::apply_dockerfile_patch_plan(&input_content, &patch_plan)?;
+                fs::write(&args.output, rendered)
+                    .map_err(|error| AppError::io(&args.output, error.to_string()))?;
+                Ok(format!(
+                    "wrote patched dockerfile output to {}",
+                    args.output.display()
+                ))
+            }
+            _ => Err(AppError::InvalidInput {
+                reason: format!("unsupported policy-apply mode: {}", args.mode),
+            }),
+        },
         Command::ComposeGenerate(args) => {
             if variant != SkillVariant::Compose {
                 return Err(AppError::InvalidInput {
                     reason: "compose-generate is only supported in compose workflow".to_string(),
                 });
             }
-            let input_content = fs::read_to_string(&args.input)
-                .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+            let input_content = read_utf8_file_with_size_limit(
+                &args.input,
+                MAX_GENERAL_TEXT_INPUT_BYTES,
+                "compose-generate input file",
+            )?;
             let cache_path = args.cache_dir.join("image-profiles.json");
             let cache = cache::read_cache(&cache_path)?;
-            let policy_pack =
-                policy::load_policy_pack(&args.policy, policy::PolicyDomain::Compose)?;
+            let policy_pack = policy::load_policy_pack_with_limit(
+                &args.policy,
+                policy::PolicyDomain::Compose,
+                policy::MAX_POLICY_PACK_BYTES,
+            )?;
             let mode = heuristics::DeployMode::parse(&args.mode)?;
             let evaluation = policy::evaluate_compose_policy_with_mode(
                 &input_content,
@@ -354,12 +423,18 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                     reason: "anchor-suggest is only supported in compose workflow".to_string(),
                 });
             }
-            let input_content = fs::read_to_string(&args.input)
-                .map_err(|error| AppError::io(&args.input, error.to_string()))?;
+            let input_content = read_utf8_file_with_size_limit(
+                &args.input,
+                MAX_GENERAL_TEXT_INPUT_BYTES,
+                "anchor-suggest input file",
+            )?;
             let cache_path = args.cache_dir.join("image-profiles.json");
             let cache = cache::read_cache(&cache_path)?;
-            let policy_pack =
-                policy::load_policy_pack(&args.policy, policy::PolicyDomain::Compose)?;
+            let policy_pack = policy::load_policy_pack_with_limit(
+                &args.policy,
+                policy::PolicyDomain::Compose,
+                policy::MAX_POLICY_PACK_BYTES,
+            )?;
             let mode = heuristics::DeployMode::parse(&args.mode)?;
             let evaluation = policy::evaluate_compose_policy_with_mode(
                 &input_content,
@@ -401,26 +476,37 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
         }
         Command::Probe(args) => {
             let cache_path = args.cache_dir.join("image-profiles.json");
-            let mut payload = cache::read_cache(&cache_path)?;
             let tools = if args.tools.is_empty() {
                 vec!["sh".to_string(), "curl".to_string(), "wget".to_string()]
             } else {
                 args.tools
             };
-            for profile in &mut payload.profiles {
-                match probe::probe_runtime_tools(&profile.image, &tools) {
-                    Ok(result) => {
-                        apply_runtime_probe_results(profile, result);
-                    }
-                    Err(error) => {
-                        note_runtime_probe_failure(profile, &error);
+            let payload = cache::with_cache_lock(&cache_path, || cache::read_cache(&cache_path))?;
+            let outcomes = collect_probe_outcomes(&payload.profiles, &tools);
+
+            let profiles_updated = cache::with_cache_lock(&cache_path, || {
+                let mut payload = cache::read_cache(&cache_path)?;
+                let mut profiles_updated = 0usize;
+                for profile in &mut payload.profiles {
+                    let Some(outcome) = outcomes.get(&profile.image) else {
+                        continue;
+                    };
+                    profiles_updated += 1;
+                    match outcome {
+                        ProbeOutcome::Success(result) => {
+                            apply_runtime_probe_results(profile, result.clone());
+                        }
+                        ProbeOutcome::Failure { category } => {
+                            note_runtime_probe_failure_category(profile, category);
+                        }
                     }
                 }
-            }
-            cache::write_cache(&cache_path, &payload)?;
+                cache::write_cache(&cache_path, &payload)?;
+                Ok(profiles_updated)
+            })?;
             Ok(format!(
                 "updated runtime probe results for {} profiles in {}",
-                payload.profiles.len(),
+                profiles_updated,
                 cache_path.display()
             ))
         }
@@ -442,6 +528,102 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
             }
         }
     }
+}
+
+/// Parse policy-check output and return whether blocked violations were reported.
+///
+/// # Arguments
+/// * `output` - JSON output emitted by `Command::PolicyCheck`.
+///
+/// # Returns
+/// * `Ok(true)` if `has_blocked_violations` is present and set to `true`.
+/// * `Ok(false)` if `has_blocked_violations` is present and set to `false`.
+/// * `Err(AppError)` if the output is not valid JSON or missing the required boolean field.
+pub fn output_has_blocked_violations(output: &str) -> Result<bool, AppError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(output).map_err(|error| AppError::InvalidInput {
+            reason: format!("policy-check output must be valid json: {error}"),
+        })?;
+    parsed
+        .get("has_blocked_violations")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| AppError::InvalidInput {
+            reason: "policy-check output missing boolean has_blocked_violations".to_string(),
+        })
+}
+
+pub(crate) fn read_utf8_file_with_size_limit(
+    path: &Path,
+    max_bytes: u64,
+    input_label: &str,
+) -> Result<String, AppError> {
+    let file = File::open(path).map_err(|error| AppError::io(path, error.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| AppError::io(path, error.to_string()))?;
+    if metadata.len() > max_bytes {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "{input_label} exceeds max size of {max_bytes} bytes: {} bytes",
+                metadata.len()
+            ),
+        });
+    }
+
+    let mut reader = BufReader::new(file).take(max_bytes.saturating_add(1));
+    let mut content = String::new();
+    reader
+        .read_to_string(&mut content)
+        .map_err(|error| AppError::io(path, error.to_string()))?;
+    if content.len() as u64 > max_bytes {
+        return Err(AppError::InvalidInput {
+            reason: format!("{input_label} exceeds max size of {max_bytes} bytes"),
+        });
+    }
+
+    Ok(content)
+}
+
+fn canonicalize_existing_path(path: &Path, input_label: &str) -> Result<PathBuf, AppError> {
+    fs::canonicalize(path).map_err(|error| AppError::InvalidInput {
+        reason: format!(
+            "{input_label} must resolve to an existing canonical path: {} ({error})",
+            path.display()
+        ),
+    })
+}
+
+fn read_patch_plan_with_size_limit(
+    plan_path: &Path,
+) -> Result<Vec<policy::PatchOperation>, AppError> {
+    let patch_content =
+        read_utf8_file_with_size_limit(plan_path, MAX_POLICY_PLAN_BYTES, "policy plan file")?;
+    serde_json::from_str(&patch_content).map_err(|error| {
+        AppError::serialization(plan_path, format!("invalid patch plan json: {error}"))
+    })
+}
+
+#[derive(Debug, Clone)]
+enum ProbeOutcome {
+    Success(BTreeMap<String, RuntimeToolDetail>),
+    Failure { category: String },
+}
+
+fn collect_probe_outcomes(
+    profiles: &[ImageProfile],
+    tools: &[String],
+) -> BTreeMap<String, ProbeOutcome> {
+    let mut outcomes = BTreeMap::new();
+    for profile in profiles {
+        let outcome = match probe::probe_runtime_tools(&profile.image, tools) {
+            Ok(result) => ProbeOutcome::Success(result),
+            Err(error) => ProbeOutcome::Failure {
+                category: runtime_probe_failure_category(&error).to_string(),
+            },
+        };
+        outcomes.insert(profile.image.clone(), outcome);
+    }
+    outcomes
 }
 
 fn apply_runtime_probe_results(
@@ -469,8 +651,19 @@ fn apply_runtime_probe_results(
 }
 
 fn note_runtime_probe_failure(profile: &mut ImageProfile, error: &AppError) {
+    note_runtime_probe_failure_category(profile, runtime_probe_failure_category(error));
+}
+
+fn note_runtime_probe_failure_category(profile: &mut ImageProfile, category: &str) {
     push_note_once(&mut profile.notes, "runtime-probe-failed");
-    let category = match error {
+    push_note_once(
+        &mut profile.notes,
+        &format!("runtime-probe-failed-reason:{category}"),
+    );
+}
+
+fn runtime_probe_failure_category(error: &AppError) -> &'static str {
+    match error {
         AppError::Io { .. } => "io",
         AppError::InvalidInput { reason } => {
             if reason.to_ascii_lowercase().contains("timed out") {
@@ -481,11 +674,7 @@ fn note_runtime_probe_failure(profile: &mut ImageProfile, error: &AppError) {
         }
         AppError::Http { .. } => "http",
         AppError::Serialization { .. } => "serialization",
-    };
-    push_note_once(
-        &mut profile.notes,
-        &format!("runtime-probe-failed-reason:{category}"),
-    );
+    }
 }
 
 fn probe_detected_distroless_shell_missing(details: &BTreeMap<String, RuntimeToolDetail>) -> bool {
@@ -497,5 +686,92 @@ fn probe_detected_distroless_shell_missing(details: &BTreeMap<String, RuntimeToo
 fn push_note_once(notes: &mut Vec<String>, note: &str) {
     if !notes.iter().any(|item| item == note) {
         notes.push(note.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use tempfile::tempdir;
+
+    use super::{
+        output_has_blocked_violations, read_patch_plan_with_size_limit,
+        read_utf8_file_with_size_limit,
+    };
+    use crate::error::AppError;
+
+    #[test]
+    fn read_utf8_file_with_size_limit_accepts_small_file() {
+        let temp = tempdir().expect("tempdir should be created");
+        let input_path = temp.path().join("input.txt");
+        std::fs::write(&input_path, "services:\n  web:\n    image: nginx:1.27\n")
+            .expect("input should be written");
+
+        let content = read_utf8_file_with_size_limit(&input_path, 1024, "test input")
+            .expect("small file should be accepted");
+        assert!(content.contains("services:"));
+    }
+
+    #[test]
+    fn read_utf8_file_with_size_limit_rejects_oversized_file() {
+        let temp = tempdir().expect("tempdir should be created");
+        let input_path = temp.path().join("input.txt");
+        let file = File::create(&input_path).expect("file should be created");
+        file.set_len(17).expect("file should be sized");
+
+        let result = read_utf8_file_with_size_limit(&input_path, 16, "test input");
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn read_patch_plan_with_size_limit_accepts_small_valid_json() {
+        let temp = tempdir().expect("tempdir should be created");
+        let plan_path = temp.path().join("patch-plan.json");
+        std::fs::write(
+            &plan_path,
+            r#"[{"op":"set","path":"services.web.read_only","value":true,"rule_id":"AC-CMP-READONLY"}]"#,
+        )
+        .expect("patch plan should be written");
+
+        let patch_plan = read_patch_plan_with_size_limit(&plan_path).expect("plan should parse");
+        assert_eq!(patch_plan.len(), 1);
+    }
+
+    #[test]
+    fn read_patch_plan_with_size_limit_rejects_oversized_file() {
+        let temp = tempdir().expect("tempdir should be created");
+        let plan_path = temp.path().join("patch-plan.json");
+        let file = File::create(&plan_path).expect("file should be created");
+        file.set_len(1_048_577).expect("file should be sized");
+
+        let result = read_patch_plan_with_size_limit(&plan_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn output_has_blocked_violations_reads_true_flag() {
+        let output = r#"{"has_blocked_violations":true}"#;
+        let has_blocked = output_has_blocked_violations(output).expect("valid output should parse");
+        assert!(has_blocked);
+    }
+
+    #[test]
+    fn output_has_blocked_violations_reads_false_flag() {
+        let output = r#"{"has_blocked_violations":false}"#;
+        let has_blocked = output_has_blocked_violations(output).expect("valid output should parse");
+        assert!(!has_blocked);
+    }
+
+    #[test]
+    fn output_has_blocked_violations_errors_when_json_is_invalid() {
+        let result = output_has_blocked_violations("not-json");
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn output_has_blocked_violations_errors_when_key_is_missing() {
+        let result = output_has_blocked_violations(r#"{"violations":[]}"#);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 }

@@ -33,7 +33,7 @@ rules:
     target: dockerfile
     rationale: Deterministic Dockerfiles require digest-pinned base images.
   - id: AC-DF-REPRODUCIBLE
-    severity: warn
+    severity: block
     action: require_build_arg
     target: dockerfile
     key: SOURCE_DATE_EPOCH
@@ -48,3 +48,14 @@ rules:
     action: require_suid_sgid_strip
     target: final_stage
     rationale: Final stage must strip SUID/SGID bits to reduce privilege-escalation risk.
+  - id: AC-DF-HEALTHCHECK
+    severity: block
+    action: require_healthcheck
+    target: final_stage
+    rationale: Final stage must include a HEALTHCHECK instruction for runtime observability.
+  - id: AC-DF-DOCKERIGNORE
+    severity: block
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+    rationale: A .dockerignore must accompany every Dockerfile to prevent context bloat and secret leakage.

@@ -216,10 +216,9 @@ fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<boo
 
 fn logs_contain_error_keywords(logs: &str) -> bool {
     let lower = logs.to_ascii_lowercase();
-    [
+    if [
         "panic",
         "fatal",
-        "error",
         "exception",
         "read-only file system",
         "permission denied",
@@ -227,6 +226,16 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
     ]
     .iter()
     .any(|keyword| lower.contains(keyword))
+    {
+        return true;
+    }
+
+    lower.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("error:")
+            || trimmed.contains(" level=error")
+            || trimmed.contains("] error")
+    })
 }
 
 fn is_root_user(user: &str) -> bool {
@@ -344,6 +353,7 @@ mod tests {
     fn logs_contain_error_keywords_matches_expected_terms() {
         assert!(logs_contain_error_keywords("panic: unable to bind"));
         assert!(logs_contain_error_keywords("Fatal startup error"));
+        assert!(logs_contain_error_keywords("error: connection refused"));
         assert!(logs_contain_error_keywords(
             "write /tmp/x: read-only file system"
         ));
@@ -353,6 +363,9 @@ mod tests {
         assert!(logs_contain_error_keywords(
             "mount failed: operation not permitted"
         ));
+        assert!(!logs_contain_error_keywords("error tolerance: none"));
+        assert!(!logs_contain_error_keywords("error correction disabled"));
+        assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
     }
 }

@@ -356,6 +356,7 @@ pub fn fetch_profiles(
 fn build_http_client() -> Result<Client, AppError> {
     Client::builder()
         .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| AppError::InvalidInput {
             reason: format!("failed to build http client: {error}"),
