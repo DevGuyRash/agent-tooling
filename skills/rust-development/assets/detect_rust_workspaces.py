@@ -55,7 +55,18 @@ def _is_excluded_manifest(manifest_path: Path) -> bool:
         rel_dir = manifest_path.parent.relative_to(repo)
     except ValueError:
         return True
-    return any(part in excluded_dirs for part in rel_dir.parts)
+    rel_dir_posix = rel_dir.as_posix()
+    for pattern in excluded_dirs:
+        normalized = pattern.strip("/").replace("\\", "/")
+        if not normalized:
+            continue
+        if "/" in normalized:
+            if rel_dir_posix == normalized or rel_dir_posix.startswith(f"{normalized}/"):
+                return True
+            continue
+        if normalized in rel_dir.parts:
+            return True
+    return False
 
 
 manifests = [
@@ -116,6 +127,36 @@ def _dir_str(path: Path) -> str:
         return str(path)
     rel_str = str(rel)
     return "." if rel_str in {"", "."} else rel_str
+
+
+def _validate_matrix_dir(dir_str: str) -> None:
+    if dir_str == ".":
+        return
+    normalized = dir_str.replace("\\", "/")
+    if normalized.startswith("/") or normalized.startswith("../"):
+        raise SystemExit(
+            f"Unsafe matrix directory '{dir_str}': expected a relative repository path"
+        )
+    if "/../" in normalized or normalized.endswith("/.."):
+        raise SystemExit(f"Unsafe matrix directory '{dir_str}': parent traversal is forbidden")
+    segments = normalized.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise SystemExit(f"Unsafe matrix directory '{dir_str}': invalid path segment")
+    for ch in dir_str:
+        code = ord(ch)
+        if code < 32 or code == 127:
+            raise SystemExit(
+                f"Unsafe matrix directory '{dir_str}': control characters are forbidden"
+            )
+
+
+def _add_include(path: Path, is_workspace: bool, include: list, included_dirs: set) -> None:
+    dir_str = _dir_str(path)
+    _validate_matrix_dir(dir_str)
+    if dir_str in included_dirs:
+        return
+    include.append({"dir": dir_str, "is_workspace": is_workspace})
+    included_dirs.add(dir_str)
 
 
 def _normalize_patterns(raw):
@@ -204,9 +245,7 @@ included_dirs = set()
 if not workspace_roots:
     roots = sorted({manifest.parent for manifest in manifests})
     for root in roots:
-        dir_str = _dir_str(root)
-        include.append({"dir": dir_str, "is_workspace": False})
-        included_dirs.add(dir_str)
+        _add_include(root, False, include, included_dirs)
 else:
     workspaces = []
     for root in workspace_roots:
@@ -239,9 +278,7 @@ else:
             }
         )
 
-        dir_str = _dir_str(root)
-        include.append({"dir": dir_str, "is_workspace": True})
-        included_dirs.add(dir_str)
+        _add_include(root, True, include, included_dirs)
 
     workspace_manifest_set = {manifest.resolve() for manifest in workspace_manifests}
     for manifest in manifests:
@@ -273,10 +310,7 @@ else:
                     break
 
         if not is_member:
-            dir_str = _dir_str(manifest.parent)
-            if dir_str not in included_dirs:
-                include.append({"dir": dir_str, "is_workspace": False})
-                included_dirs.add(dir_str)
+            _add_include(manifest.parent, False, include, included_dirs)
 
 matrix = {"include": include}
 

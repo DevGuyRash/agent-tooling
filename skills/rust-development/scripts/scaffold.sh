@@ -190,9 +190,16 @@ resolve_banned_test_destination() {
   member_manifest="$(
     find "$workspace_root" -name Cargo.toml -print \
       | LC_ALL=C sort \
-      | awk -v root="$root_manifest" '
-        $0 == root { next }
-        $0 ~ /\/(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)\// { next }
+      | awk -v workspace_root="$workspace_root" -v root_manifest="$root_manifest" '
+        $0 == root_manifest { next }
+        {
+          rel = $0
+          prefix = workspace_root "/"
+          if (index(rel, prefix) == 1) {
+            rel = substr(rel, length(prefix) + 1)
+          }
+        }
+        rel ~ /(^|\/)(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)(\/|$)/ { next }
         { print; exit }
       '
   )"

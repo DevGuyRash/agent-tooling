@@ -147,12 +147,18 @@ fn resolve_scan_roots(root: &Path) -> Vec<PathBuf> {
         }
     }
 
-    let crates_dir = root.join("crates");
-    if crates_dir.exists() {
-        vec![crates_dir]
-    } else {
-        vec![root.to_path_buf()]
+    let mut roots = Vec::new();
+    if root.join("src").is_dir() {
+        roots.push(root.to_path_buf());
     }
+    let crates_dir = root.join("crates");
+    if crates_dir.is_dir() {
+        roots.push(crates_dir);
+    }
+    if roots.is_empty() {
+        roots.push(root.to_path_buf());
+    }
+    roots
 }
 
 fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
@@ -262,11 +268,43 @@ fn is_cfg_test_attr(line: &str) -> bool {
     let Some(inner) = trimmed.strip_prefix("#[cfg(") else {
         return false;
     };
-    let Some(inner) = inner.strip_suffix(")]") else {
+    let Some(end_idx) = inner.find(")]") else {
         return false;
     };
+    has_non_negated_test_token(&inner[..end_idx])
+}
 
-    has_non_negated_test_token(inner)
+fn parse_cfg_test_attribute_at(lines: &[&str], start_idx: usize) -> Option<(String, usize)> {
+    let trimmed = lines[start_idx].trim();
+    let mut remainder = trimmed.strip_prefix("#[cfg(")?;
+    let mut expr = String::new();
+    let mut idx = start_idx;
+    loop {
+        if let Some(end_idx) = remainder.find(")]") {
+            let before_end = remainder[..end_idx].trim();
+            if !before_end.is_empty() {
+                if !expr.is_empty() {
+                    expr.push(' ');
+                }
+                expr.push_str(before_end);
+            }
+            return Some((expr, idx));
+        }
+
+        let chunk = remainder.trim();
+        if !chunk.is_empty() {
+            if !expr.is_empty() {
+                expr.push(' ');
+            }
+            expr.push_str(chunk);
+        }
+
+        idx += 1;
+        if idx >= lines.len() {
+            return None;
+        }
+        remainder = lines[idx].trim();
+    }
 }
 
 fn has_non_negated_test_token(expr: &str) -> bool {
@@ -330,8 +368,7 @@ fn has_non_negated_test_token(expr: &str) -> bool {
 
 fn is_tests_module_decl(line: &str) -> bool {
     let trimmed = line.trim_start();
-    const TEST_MODULE_PREFIXES: &[&str] =
-        &["mod tests", "pub mod tests", "pub(crate) mod tests"];
+    const TEST_MODULE_PREFIXES: &[&str] = &["mod tests", "pub mod tests", "pub(crate) mod tests"];
     TEST_MODULE_PREFIXES.iter().any(|prefix| {
         if !trimmed.starts_with(prefix) {
             return false;
@@ -364,7 +401,9 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
     let mut in_cfg_test_block = false;
     let mut cfg_test_depth: i32 = 0;
 
-    for (idx, line) in lines.iter().enumerate() {
+    let mut idx = 0usize;
+    while idx < lines.len() {
+        let line = lines[idx];
         if in_cfg_test_block {
             mask[idx] = true;
             cfg_test_depth += brace_delta(sanitized_lines[idx]);
@@ -372,6 +411,7 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
                 in_cfg_test_block = false;
                 cfg_test_depth = 0;
             }
+            idx += 1;
             continue;
         }
 
@@ -381,6 +421,7 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
             // Keep pending state across blank lines and stacked attributes until
             // the cfg(test)-annotated item (module/use/type/etc.) is observed.
             if trimmed.is_empty() || trimmed.starts_with("#[") {
+                idx += 1;
                 continue;
             }
             let delta = brace_delta(sanitized_lines[idx]);
@@ -393,19 +434,30 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
                 // are complete on this line and should clear pending state.
                 pending_cfg_test = false;
             }
+            idx += 1;
             continue;
         }
 
-        if is_cfg_test_attr(line) {
-            mask[idx] = true;
-            pending_cfg_test = true;
-            let delta = brace_delta(sanitized_lines[idx]);
-            if delta != 0 {
-                in_cfg_test_block = true;
-                cfg_test_depth = delta;
-                pending_cfg_test = false;
+        if let Some((expr, attr_end_idx)) = parse_cfg_test_attribute_at(lines, idx) {
+            if has_non_negated_test_token(&expr) {
+                for mark in idx..=attr_end_idx {
+                    mask[mark] = true;
+                }
+                let delta = brace_delta(sanitized_lines[attr_end_idx]);
+                let has_trailing_item = sanitized_lines[attr_end_idx]
+                    .split_once(")]")
+                    .map(|(_, trailing)| !trailing.trim().is_empty())
+                    .unwrap_or(false);
+                if delta != 0 {
+                    in_cfg_test_block = true;
+                    cfg_test_depth = delta;
+                    pending_cfg_test = false;
+                } else {
+                    pending_cfg_test = !has_trailing_item;
+                }
+                idx = attr_end_idx + 1;
+                continue;
             }
-            continue;
         }
 
         if is_tests_module_decl(line) {
@@ -416,6 +468,7 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
                 cfg_test_depth = delta;
             }
         }
+        idx += 1;
     }
 
     mask
@@ -716,9 +769,23 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 mod tests {
     use super::{
         compute_test_line_mask, contains_unsafe_impl_send_or_sync, is_cfg_test_attr,
-        should_skip_file, strip_comments_and_strings,
+        resolve_scan_roots, should_skip_file, strip_comments_and_strings,
     };
-    use std::path::Path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "banned-family-{label}-{}-{}",
+            std::process::id(),
+            nanos
+        ))
+    }
 
     #[test]
     fn cfg_test_single_line_item_does_not_mask_following_production_code() {
@@ -755,6 +822,36 @@ mod tests {
     }
 
     #[test]
+    fn multiline_cfg_test_attribute_masks_only_test_item() {
+        let lines = vec![
+            "#[cfg(",
+            "    test,",
+            ")]",
+            "fn helper() { panic!(\"only in tests\"); }",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, false]);
+    }
+
+    #[test]
+    fn multiline_cfg_test_with_trailing_comment_masks_following_item() {
+        let raw = [
+            "#[cfg(",
+            "    test",
+            ")] // keep",
+            "fn helper() { panic!(\"only in tests\"); }",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let source = raw.join("\n");
+        let sanitized_source = strip_comments_and_strings(&source);
+        let raw_lines: Vec<&str> = source.lines().collect();
+        let sanitized_lines: Vec<&str> = sanitized_source.lines().collect();
+        let mask = compute_test_line_mask(&raw_lines, &sanitized_lines);
+        assert_eq!(mask, vec![true, true, true, true, false]);
+    }
+
+    #[test]
     fn lifetime_annotations_do_not_mask_following_code() {
         let source = "fn conn() -> &'static str { value.unwrap() }";
         let sanitized = strip_comments_and_strings(source);
@@ -773,6 +870,23 @@ mod tests {
         let lines = vec!["mod tests;", "fn prod() { panic!(\"bug\"); }"];
         let mask = compute_test_line_mask(&lines, &lines);
         assert_eq!(mask, vec![true, false]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_includes_root_and_crates_for_mixed_layout() {
+        let root = unique_temp_dir("roots");
+        let src_dir = root.join("src");
+        let crates_dir = root.join("crates");
+        fs::create_dir_all(&src_dir).expect("create root src");
+        fs::create_dir_all(&crates_dir).expect("create crates dir");
+        fs::write(src_dir.join("lib.rs"), "pub fn root_pkg() {}").expect("write root src");
+
+        let roots = resolve_scan_roots(&root);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], root);
+        assert_eq!(roots[1], crates_dir);
+
+        fs::remove_dir_all(&root).expect("cleanup temp workspace");
     }
 
     #[test]

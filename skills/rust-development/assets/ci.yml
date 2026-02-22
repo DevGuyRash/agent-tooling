@@ -66,8 +66,22 @@ jobs:
           #   CI_MAX_MATRIX_ENTRIES=<int> (default: 128; fail if exceeded)
           script_path=".github/scripts/detect_rust_workspaces.py"
           if [ ! -f "$script_path" ]; then
-            echo "missing detector script: $script_path (copy from skills/rust-development/assets)" >&2
-            exit 1
+            echo "warning: missing detector script: $script_path" >&2
+            fallback_manifest="$(
+              find . \
+                \( -path './.git' -o -path './.github' -o -path './.local' -o -path './target' -o -path './node_modules' -o -path './vendor' -o -path './tests' -o -path './test' -o -path './testdata' -o -path './fixtures' -o -path './fixture' -o -path './examples' -o -path './benches' \) -prune \
+                -o -type f -name Cargo.toml -print -quit
+            )"
+            if [ -n "$fallback_manifest" ]; then
+              echo "detector script is missing and Rust manifests are present; refusing to skip Rust CI" >&2
+              exit 1
+            fi
+            echo "no Cargo.toml files detected in fallback scan; skipping Rust jobs" >&2
+            {
+              echo "has_rust=false"
+              echo 'matrix={"include":[]}'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           python3 "$script_path"
 
@@ -213,7 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           if command -v mold >/dev/null 2>&1; then
-            echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+            echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
           else
             echo "mold not found; continuing without it"
           fi
@@ -263,9 +277,11 @@ jobs:
 
       - name: Prepare diagnostics directory
         shell: bash
+        env:
+          MATRIX_DIR: ${{ matrix.dir }}
         run: |
           set -euo pipefail
-          diag_dir="$RUNNER_TEMP/rust-ci/${{ matrix.dir }}"
+          diag_dir="$RUNNER_TEMP/rust-ci/$MATRIX_DIR"
           mkdir -p "$diag_dir"
           echo "RUST_CI_DIAG_DIR=$diag_dir" >> "$GITHUB_ENV"
 
