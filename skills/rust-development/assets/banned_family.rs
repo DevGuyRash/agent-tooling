@@ -1,0 +1,770 @@
+// Banned-family test harness for Rust workspaces.
+//
+// Copy into any Rust repo as `tests/banned_family.rs` (or any crate's tests/).
+//
+// What it does:
+// - Fails the test if *non-test* Rust code contains banned-family calls.
+// - Skips test-only code: `#[cfg(test)]` blocks, `mod tests { ... }`, and
+//   test-only directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
+// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable`.
+// - Use this together with clippy lints (see clippy-lints.toml) to cover
+//   broader non-idiomatic patterns.
+//
+// Defaults:
+// - Scans `crates/` if it exists; otherwise scans the workspace root.
+// - You can override scan roots via env var: BANNED_FAMILY_ROOTS="src,crates,apps"
+//   (comma-separated, relative to workspace root).
+//
+// Usage:
+// - Run: `cargo test -p <crate> --test banned_family --locked`
+// - Works best when your CI runs `cargo test --workspace`.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+enum MatchKind {
+    MacroOrCall,
+    MacroOnly,
+}
+
+const BANNED_PREFIXES: &[(&str, MatchKind)] = &[
+    ("unwrap", MatchKind::MacroOrCall),
+    ("expect", MatchKind::MacroOrCall),
+    ("panic", MatchKind::MacroOrCall),
+    ("todo", MatchKind::MacroOrCall),
+    ("unimplemented", MatchKind::MacroOrCall),
+    ("unreachable", MatchKind::MacroOrCall),
+    ("dbg", MatchKind::MacroOnly),
+];
+
+#[test]
+fn banned_family_is_absent_in_production_code() {
+    let root = workspace_root().expect("workspace root");
+    let scan_roots = resolve_scan_roots(&root);
+    let mut violations = Vec::new();
+
+    for root in scan_roots {
+        for path in collect_rust_files(&root) {
+            let source = fs::read_to_string(&path).expect("read source");
+            let sanitized = strip_comments_and_strings(&source);
+            let raw_lines: Vec<&str> = source.lines().collect();
+            let sanitized_lines: Vec<&str> = sanitized.lines().collect();
+            let skip_lines = compute_test_line_mask(&raw_lines, &sanitized_lines);
+
+            for (line_idx, line) in sanitized_lines.iter().enumerate() {
+                if skip_lines.get(line_idx).copied().unwrap_or(false) {
+                    continue;
+                }
+                let raw_line = raw_lines.get(line_idx).copied().unwrap_or("");
+                let has_invariant = raw_line.contains("// INVARIANT:");
+                let line_no = line_idx + 1;
+                for (prefix, kind) in BANNED_PREFIXES {
+                    if let Some(col) = find_banned_prefix(line, prefix, kind) {
+                        if has_invariant && is_invariant_escapable_prefix(prefix) {
+                            continue;
+                        }
+                        violations.push(format!(
+                            "{}:{}:{}: banned `{}` family call",
+                            path.display(),
+                            line_no,
+                            col + 1,
+                            prefix
+                        ));
+                    }
+                }
+                if contains_unsafe_impl_send_or_sync(line) {
+                    violations.push(format!(
+                        "{}:{}:1: banned `unsafe impl Send/Sync`",
+                        path.display(),
+                        line_no,
+                    ));
+                }
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        let mut message = String::from("banned-family usage found:\n");
+        for violation in violations {
+            message.push_str("  ");
+            message.push_str(&violation);
+            message.push('\n');
+        }
+        panic!("{message}");
+    }
+}
+
+fn workspace_root() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // clone: dir is mutated by pop(); manifest_dir remains as fallback.
+    let mut dir = manifest_dir.clone();
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        let has_workspace_manifest = manifest.exists()
+            && fs::read_to_string(&manifest)
+                .map(|contents| contents.contains("[workspace]"))
+                .unwrap_or(false);
+        if has_workspace_manifest {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    // Fall back to the crate's own manifest directory. This also covers runs
+    // from workspace members where no ancestor Cargo.toml declares [workspace].
+    Some(manifest_dir)
+}
+
+fn resolve_scan_roots(root: &Path) -> Vec<PathBuf> {
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if let Ok(value) = std::env::var("BANNED_FAMILY_ROOTS") {
+        let mut roots = Vec::new();
+        for part in value.split(',') {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let requested = Path::new(trimmed);
+            if requested.is_absolute() {
+                continue;
+            }
+            let candidate = root.join(requested);
+            let canonical_candidate = match fs::canonicalize(&candidate) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            if !canonical_candidate.starts_with(&canonical_root) {
+                continue;
+            }
+            if canonical_candidate.is_dir() {
+                roots.push(canonical_candidate);
+            }
+        }
+        if !roots.is_empty() {
+            return roots;
+        }
+    }
+
+    let crates_dir = root.join("crates");
+    if crates_dir.exists() {
+        vec![crates_dir]
+    } else {
+        vec![root.to_path_buf()]
+    }
+}
+
+fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited_dirs = HashSet::new();
+    while let Some(dir) = stack.pop() {
+        let canonical_dir = match fs::canonicalize(&dir) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        if !visited_dirs.insert(canonical_dir) {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if should_skip_dir(&path) {
+                    continue;
+                }
+                stack.push(path);
+            } else if file_type.is_file()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+            {
+                if should_skip_file(&path) {
+                    continue;
+                }
+                files.push(path);
+            }
+        }
+    }
+    files.sort_unstable();
+    files
+}
+
+fn should_skip_dir(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        matches!(
+            name.as_ref(),
+            "target" | ".git" | ".local" | "vendor" | "node_modules"
+        ) || is_test_only_component(name.as_ref())
+    })
+}
+
+fn should_skip_file(path: &Path) -> bool {
+    if path
+        .parent()
+        .map(|parent| {
+            parent.components().any(|component| {
+                let segment = component.as_os_str().to_string_lossy();
+                is_test_only_component(segment.as_ref())
+            })
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == "tests.rs" || name.ends_with("_test.rs")
+}
+
+fn is_test_only_component(name: &str) -> bool {
+    matches!(
+        name,
+        "test"
+            | "tests"
+            | "testdata"
+            | "bench"
+            | "benches"
+            | "example"
+            | "examples"
+            | "fixture"
+            | "fixtures"
+    )
+}
+
+fn is_cfg_test_attr(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(inner) = trimmed.strip_prefix("#[cfg(") else {
+        return false;
+    };
+    let Some(inner) = inner.strip_suffix(")]") else {
+        return false;
+    };
+
+    has_non_negated_test_token(inner)
+}
+
+fn has_non_negated_test_token(expr: &str) -> bool {
+    let compact: String = expr
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    let bytes = compact.as_bytes();
+    let mut idx = 0usize;
+    let mut in_string = false;
+    let mut stack: Vec<bool> = Vec::new();
+
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if in_string {
+            if b == b'\\' && idx + 1 < bytes.len() {
+                idx += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+            idx += 1;
+            continue;
+        }
+
+        if b == b'"' {
+            in_string = true;
+            idx += 1;
+            continue;
+        }
+
+        if is_ident_char(b) {
+            let start = idx;
+            idx += 1;
+            while idx < bytes.len() && is_ident_char(bytes[idx]) {
+                idx += 1;
+            }
+            let ident = &compact[start..idx];
+            if idx < bytes.len() && bytes[idx] == b'(' {
+                stack.push(ident == "not");
+                idx += 1;
+                continue;
+            }
+            if ident == "test" && !stack.iter().any(|frame_is_not| *frame_is_not) {
+                return true;
+            }
+            continue;
+        }
+
+        if b == b'(' {
+            stack.push(false);
+        } else if b == b')' {
+            stack.pop();
+        }
+        idx += 1;
+    }
+
+    false
+}
+
+fn is_tests_module_decl(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("mod tests")
+        || trimmed.starts_with("pub mod tests")
+        || trimmed.starts_with("pub(crate) mod tests")
+}
+
+fn brace_delta(line: &str) -> i32 {
+    let mut delta = 0;
+    for ch in line.chars() {
+        match ch {
+            '{' => delta += 1,
+            '}' => delta -= 1,
+            _ => {}
+        }
+    }
+    delta
+}
+
+fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut pending_cfg_test = false;
+    let mut in_cfg_test_block = false;
+    let mut cfg_test_depth: i32 = 0;
+
+    for (idx, line) in lines.iter().enumerate() {
+        if in_cfg_test_block {
+            mask[idx] = true;
+            cfg_test_depth += brace_delta(sanitized_lines[idx]);
+            if cfg_test_depth <= 0 {
+                in_cfg_test_block = false;
+                cfg_test_depth = 0;
+            }
+            continue;
+        }
+
+        if pending_cfg_test {
+            mask[idx] = true;
+            let trimmed = line.trim();
+            // Keep pending state across blank lines and stacked attributes until
+            // the cfg(test)-annotated item (module/use/type/etc.) is observed.
+            if trimmed.is_empty() || trimmed.starts_with("#[") {
+                continue;
+            }
+            let delta = brace_delta(sanitized_lines[idx]);
+            if delta != 0 {
+                in_cfg_test_block = true;
+                cfg_test_depth = delta;
+                pending_cfg_test = false;
+            } else {
+                // Single-line annotated items (`fn helper() {}`, `use`, `type`, etc.)
+                // are complete on this line and should clear pending state.
+                pending_cfg_test = false;
+            }
+            continue;
+        }
+
+        if is_cfg_test_attr(line) {
+            mask[idx] = true;
+            pending_cfg_test = true;
+            let delta = brace_delta(sanitized_lines[idx]);
+            if delta != 0 {
+                in_cfg_test_block = true;
+                cfg_test_depth = delta;
+                pending_cfg_test = false;
+            }
+            continue;
+        }
+
+        if is_tests_module_decl(line) {
+            mask[idx] = true;
+            let delta = brace_delta(sanitized_lines[idx]);
+            if delta != 0 {
+                in_cfg_test_block = true;
+                cfg_test_depth = delta;
+            }
+        }
+    }
+
+    mask
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn is_invariant_escapable_prefix(prefix: &str) -> bool {
+    matches!(prefix, "unwrap" | "expect" | "unreachable")
+}
+
+fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    let mut i = 0;
+    while i + prefix_bytes.len() <= bytes.len() {
+        if &bytes[i..i + prefix_bytes.len()] == prefix_bytes {
+            if i > 0 && is_ident_char(bytes[i - 1]) {
+                i += 1;
+                continue;
+            }
+            let mut j = i + prefix_bytes.len();
+            while j < bytes.len() && is_ident_char(bytes[j]) {
+                j += 1;
+            }
+            match kind {
+                MatchKind::MacroOnly => {
+                    let mut k = j;
+                    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                        k += 1;
+                    }
+                    if k < bytes.len() && bytes[k] == b'!' {
+                        return Some(i);
+                    }
+                }
+                MatchKind::MacroOrCall => {
+                    if j < bytes.len() && bytes[j] == b'!' {
+                        return Some(i);
+                    }
+                    if j == i + prefix_bytes.len() {
+                        let mut k = j;
+                        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                            k += 1;
+                        }
+                        if k < bytes.len() && bytes[k] == b'(' {
+                            return Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn contains_unsafe_impl_send_or_sync(line: &str) -> bool {
+    let mut saw_unsafe = false;
+    let mut saw_impl = false;
+
+    for token in line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
+        if token.is_empty() {
+            continue;
+        }
+        if !saw_unsafe {
+            if token == "unsafe" {
+                saw_unsafe = true;
+            }
+            continue;
+        }
+        if !saw_impl {
+            if token == "impl" {
+                saw_impl = true;
+            }
+            continue;
+        }
+        if token == "Send" || token == "Sync" {
+            return true;
+        }
+    }
+    false
+}
+
+fn strip_comments_and_strings(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut raw_hashes: Option<usize> = None;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        let next = bytes.get(i + 1).copied().unwrap_or(b'\0');
+
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+                out.push(b);
+            } else {
+                push_placeholder(&mut out, b);
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if b == b'*' && next == b'/' {
+                push_placeholder(&mut out, b);
+                push_placeholder(&mut out, next);
+                in_block_comment = false;
+                i += 2;
+            } else {
+                push_placeholder(&mut out, b);
+                i += 1;
+            }
+            continue;
+        }
+
+        if let Some(hashes) = raw_hashes {
+            if b == b'"' {
+                if hashes == 0 {
+                    push_placeholder(&mut out, b);
+                    raw_hashes = None;
+                    i += 1;
+                    continue;
+                }
+                let mut matches = 0;
+                let mut j = i + 1;
+                while matches < hashes && j < bytes.len() && bytes[j] == b'#' {
+                    matches += 1;
+                    j += 1;
+                }
+                if matches == hashes {
+                    push_placeholder(&mut out, b);
+                    for _ in 0..hashes {
+                        push_placeholder(&mut out, b'#');
+                    }
+                    raw_hashes = None;
+                    i = j;
+                    continue;
+                }
+            }
+            push_placeholder(&mut out, b);
+            i += 1;
+            continue;
+        }
+
+        if in_string {
+            if b == b'\\' {
+                push_placeholder(&mut out, b);
+                if i + 1 < bytes.len() {
+                    push_placeholder(&mut out, bytes[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            push_placeholder(&mut out, b);
+            if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_char {
+            if b == b'\\' {
+                push_placeholder(&mut out, b);
+                if i + 1 < bytes.len() {
+                    push_placeholder(&mut out, bytes[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            push_placeholder(&mut out, b);
+            if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'/' && next == b'/' {
+            push_placeholder(&mut out, b);
+            push_placeholder(&mut out, next);
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && next == b'*' {
+            push_placeholder(&mut out, b);
+            push_placeholder(&mut out, next);
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if b == b'\'' {
+            if is_lifetime_start(bytes, i) {
+                out.push(b);
+            } else {
+                push_placeholder(&mut out, b);
+                in_char = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' {
+            push_placeholder(&mut out, b);
+            in_string = true;
+            i += 1;
+            continue;
+        }
+
+        if b == b'r' || (b == b'b' && next == b'r') {
+            let mut j = i + 1;
+            if b == b'b' {
+                j += 1;
+            }
+            let mut hashes = 0usize;
+            while j < bytes.len() && bytes[j] == b'#' {
+                hashes += 1;
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                push_placeholder(&mut out, b);
+                if b == b'b' {
+                    push_placeholder(&mut out, next);
+                }
+                for _ in 0..hashes {
+                    push_placeholder(&mut out, b'#');
+                }
+                push_placeholder(&mut out, b'"');
+                raw_hashes = Some(hashes);
+                i = j + 1;
+                continue;
+            }
+        }
+
+        out.push(b);
+        i += 1;
+    }
+
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn is_lifetime_start(bytes: &[u8], quote_idx: usize) -> bool {
+    if quote_idx + 1 >= bytes.len() {
+        return false;
+    }
+    let next = bytes[quote_idx + 1];
+    if !(next.is_ascii_alphabetic() || next == b'_') {
+        return false;
+    }
+    if quote_idx + 2 < bytes.len() && bytes[quote_idx + 2] == b'\'' {
+        // Character literal like `'x'`.
+        return false;
+    }
+    let Some(prev) = prev_non_whitespace_byte(bytes, quote_idx) else {
+        return false;
+    };
+    matches!(prev, b'&' | b'<' | b',' | b'(' | b':' | b'+' | b'>' | b'=')
+}
+
+fn prev_non_whitespace_byte(bytes: &[u8], end_idx: usize) -> Option<u8> {
+    if end_idx == 0 {
+        return None;
+    }
+    let mut idx = end_idx;
+    while idx > 0 {
+        idx -= 1;
+        let b = bytes[idx];
+        if !b.is_ascii_whitespace() {
+            return Some(b);
+        }
+    }
+    None
+}
+
+fn push_placeholder(out: &mut Vec<u8>, b: u8) {
+    if b == b'\n' {
+        out.push(b'\n');
+    } else {
+        out.push(b' ');
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        compute_test_line_mask, contains_unsafe_impl_send_or_sync, is_cfg_test_attr,
+        should_skip_file, strip_comments_and_strings,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn cfg_test_single_line_item_does_not_mask_following_production_code() {
+        let lines = vec![
+            "#[cfg(test)]",
+            "fn test_setup() {}",
+            "",
+            "fn prod() { panic!(\"bug\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn cfg_not_test_attr_is_not_treated_as_test_only() {
+        assert!(!is_cfg_test_attr("#[cfg(not(test))]"));
+    }
+
+    #[test]
+    fn cfg_any_test_attr_is_treated_as_test_only() {
+        assert!(is_cfg_test_attr("#[cfg(any(test, feature = \"bench\"))]"));
+    }
+
+    #[test]
+    fn cfg_not_any_test_attr_is_not_treated_as_test_only() {
+        assert!(!is_cfg_test_attr(
+            "#[cfg(not(any(test, feature = \"bench\")))]"
+        ));
+    }
+
+    #[test]
+    fn cfg_feature_string_named_test_is_not_treated_as_cfg_test() {
+        assert!(!is_cfg_test_attr("#[cfg(feature = \"test\")]"));
+    }
+
+    #[test]
+    fn lifetime_annotations_do_not_mask_following_code() {
+        let source = "fn conn() -> &'static str { value.unwrap() }";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(sanitized.contains("value.unwrap()"));
+    }
+
+    #[test]
+    fn should_skip_file_for_test_helpers_in_tests_dir() {
+        assert!(should_skip_file(Path::new("src/tests/helpers.rs")));
+        assert!(should_skip_file(Path::new("crates/api/fixtures/setup.rs")));
+        assert!(!should_skip_file(Path::new("src/testing.rs")));
+    }
+
+    #[test]
+    fn tests_module_declaration_line_is_masked() {
+        let lines = vec!["mod tests;", "fn prod() { panic!(\"bug\"); }"];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, false]);
+    }
+
+    #[test]
+    fn unsafe_impl_send_sync_detection_is_token_aware() {
+        assert!(contains_unsafe_impl_send_or_sync(
+            "unsafe impl Send for Worker {}"
+        ));
+        assert!(contains_unsafe_impl_send_or_sync(
+            "unsafe impl<T> Sync for Cache<T> {}"
+        ));
+        let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
+        assert!(!contains_unsafe_impl_send_or_sync(&sanitized));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "impl Send for Worker {}"
+        ));
+    }
+}
