@@ -1,101 +1,250 @@
 ---
 name: docker-architect
-description: Design deterministic Docker architecture outputs for both Compose/Swarm deployments and image supply-chain pipelines using strict phase ordering, traceability IDs, and hardened defaults.
-compatibility: Requires a POSIX shell. Local launchers are `<skills-file-root>/scripts/docker-architect-compose`, `<skills-file-root>/scripts/docker-architect-image`, and `<skills-file-root>/scripts/docker-architect-ci-gate`.
+description: >-
+  Generate hardened Dockerfiles, docker-compose stacks, and Swarm deploy configs.
+  Containerize any app with multi-stage builds, non-root users, healthchecks, secrets
+  management, .dockerignore, resource limits, and security hardening. Supports Python,
+  Node.js, Rust, Go, Nginx, and custom stacks. Includes CI/CD pipeline scanning with
+  hadolint, trivy, and docker scout. Produces deterministic, production-ready container
+  architecture with digest-pinned images, OCI labels, SBOM, and provenance controls.
+license: MIT
+metadata:
+  author: agent-skills
+  version: "2.0.0"
+compatibility: >-
+  POSIX shell required. Optional: Rust/cargo (for deterministic tooling), docker,
+  docker compose, jq, hadolint, trivy. Launchers at
+  `<skills-file-root>/scripts/docker-architect-compose`,
+  `<skills-file-root>/scripts/docker-architect-image`,
+  `<skills-file-root>/scripts/docker-architect-ci-gate`.
 ---
 
 # Docker Architect
 
-Generate deterministic Docker architecture outputs across two workflows:
+Generate hardened, production-ready Docker architecture across two workflows:
 
-- Compose/Swarm deployment architecture (service topology and runtime hardening)
-- Image/build architecture (Dockerfile, Buildx/Bake, SBOM/provenance/signing)
+- **Compose/Swarm** — service topology, runtime hardening, secrets, healthchecks
+- **Image/Build** — Dockerfile, Buildx/Bake, SBOM/provenance/signing
 
-## Workflow selection
+---
 
-- Use `docker-architect-compose` when the task is mainly stack/deployment architecture (`docker-compose`, Swarm services, runtime operations).
-- Use `docker-architect-image` when the task is mainly image/build architecture (`Dockerfile`, Buildx/Bake, supply-chain controls).
-- When both are required, run compose workflow first, then image workflow, and preserve deterministic traceability IDs.
+## When to use this skill
 
-## Required workflow
+Activate this skill when the user asks to:
 
-1. Parse user inputs and lock the workflow mode.
-2. Extract image references from supplied files/text and classify unresolved interpolations.
-3. Refresh image metadata cache with API-first lookups (registry v2 digest is source of truth).
-4. Render image research blocks from cache.
-5. Validate cache against strictness rules.
-6. Generate final architecture content using required section ordering.
-7. Validate final markdown output contract before returning.
+- Write a Dockerfile or containerize an application
+- Create a docker-compose.yaml or docker-compose stack
+- Set up a Docker Swarm deployment
+- Harden or secure an existing Dockerfile or compose file
+- Add healthchecks to containers
+- Configure Docker secrets management
+- Create a `.dockerignore` file
+- Set up multi-stage Docker builds
+- Add resource limits or security constraints to containers
+- Configure non-root container users
+- Set up a CI/CD pipeline for Docker builds
+- Scan Docker images for vulnerabilities
+- Pin Docker image versions or digests
+- Create init containers or permission sidecars
+- Optimize Docker layer caching or image size
 
-Use absolute skill-rooted paths:
+---
+
+## Primary Directives
+
+The executor shall follow these rules for every output.
+
+### 1. Clarification and defaults
+
+- Ask the user at most **2 clarifying questions** before generating output.
+- When requirements are ambiguous, apply secure defaults and note assumptions inline.
+- Default workflow: if the user mentions "docker-compose" or "deploy", use Compose.
+  If the user mentions "Dockerfile" or "build", use Image. When both apply, emit both.
+
+### 2. Dockerfile invariants
+
+Every generated Dockerfile shall satisfy:
+
+| #  | Rule ID            | Requirement |
+|----|--------------------|-------------|
+| 1  | AC-DF-MULTISTAGE   | Use multi-stage builds; isolate build deps from runtime. |
+| 2  | AC-DF-USER         | Final stage runs as non-root (`USER` instruction). |
+| 3  | (behavioral)       | Use minimal base images (`-slim`, `-alpine`, distroless). |
+| 4  | AC-DF-FROM-DIGEST  | Pin base images by digest in production (tag acceptable for templates). |
+| 5  | AC-DF-HEALTHCHECK  | Include `HEALTHCHECK` in final stage. |
+| 6  | AC-DF-OCI-LABELS   | Include OCI labels: `image.source`, `image.revision`, `image.licenses`. |
+| 7  | AC-DF-CACHE-MOUNTS | Use BuildKit `--mount=type=cache` for package managers. |
+| 8  | AC-DF-SUID-SGID    | Strip SUID/SGID bits in final stage (enforcing only). |
+| 9  | (behavioral)       | Never embed secrets in layers (use build secrets or runtime mounts). |
+| 10 | AC-DF-DOCKERIGNORE | Emit a companion `.dockerignore` file. |
+| 11 | AC-DF-REPRODUCIBLE | Declare `ARG SOURCE_DATE_EPOCH` for reproducible builds. |
+| 12 | AC-DF-PACKAGE-MGR  | Final stage must not invoke runtime package managers (apt, apk, pip, etc.). |
+| 13 | (behavioral)       | Order layers: system deps → app deps (lockfiles) → source code. |
+
+### 3. Compose / Swarm invariants
+
+Every generated compose or stack file shall satisfy:
+
+| #  | Rule ID            | Requirement |
+|----|--------------------|-------------|
+| 1  | AC-CMP-READONLY    | `read_only: true` — immutable root filesystem. |
+| 2  | AC-CMP-CAPDROP     | `cap_drop: [ALL]` — drop all capabilities. |
+| 3  | AC-CMP-NNP         | `security_opt: [no-new-privileges:true]`. |
+| 4  | AC-CMP-USER        | `user:` set to non-root UID:GID. |
+| 5  | AC-CMP-HEALTH      | `healthcheck:` with test, interval, timeout, retries. |
+| 6  | AC-CMP-RESOURCES   | Compose: `cpus`, `mem_limit`, `pids_limit`; Swarm: `deploy.resources.limits`. |
+| 7  | AC-CMP-SECRETS     | Route TOKEN/PASS/KEY values through `secrets:`, not `environment:`. |
+| 8  | AC-CMP-DIGEST / AC-SWM-DIGEST | Pin service images by digest for deterministic pulls. |
+| 9  | AC-CMP-RESTART     | `restart: unless-stopped` (Compose) or `deploy.restart_policy` (Swarm). |
+| 10 | AC-CMP-WRITABLE    | Explicit `tmpfs:` for writable paths under read-only root. |
+| 11 | AC-CMP-PERMS-INIT  | Init-permissions sidecar for non-root volume ownership (Compose only). |
+| 12 | (behavioral)       | Use YAML anchors (`x-defaults: &`) for shared hardening. |
+| 13 | (behavioral)       | Define explicit `networks:` (no default bridge). |
+| 14 | (behavioral)       | Use `depends_on: { svc: { condition: service_healthy } }`. |
+| 15 | (behavioral)       | Use `profiles:` for optional services (init, debug). |
+| 16 | AC-SWM-RESTART     | Swarm: `deploy.restart_policy.condition: on-failure`. |
+
+Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`.
+
+### 3.1 Migration notes
+
+- **Behavior change:** `AC-CMP-PERMS-INIT` and `AC-CMP-RESTART` service
+  exemptions match only the canonical `<service>-init-perms` suffix. Generic
+  `init-*` service names are intentionally no longer exempt from `ensure_key`
+  checks.
+
+### 4. Response format
+
+- Emit each file as a fenced code block labeled with its relative path.
+- Emit order: `.dockerignore` → `Dockerfile` → `docker-compose.yaml`.
+- Include inline comments referencing rule IDs (e.g., `# AC-DF-USER`).
+- After all files, include a brief "Next steps" section with scanning commands.
+
+---
+
+## Scanning Recommendations
+
+After generating container files, recommend the user run:
 
 ```bash
-# Compose/Swarm workflow
-<skills-file-root>/scripts/docker-architect-compose extract <input-file> --format text
-<skills-file-root>/scripts/docker-architect-compose extract <input-file> --format json
+# Lint Dockerfile
+hadolint Dockerfile
+
+# Validate compose schema
+docker compose config -q
+
+# Scan for vulnerabilities (after build)
+trivy image --severity HIGH,CRITICAL <image>
+```
+
+See `references/scanning.md` for full install instructions, CI pipeline ordering,
+and additional tools (docker scout, trivy config scanning).
+
+---
+
+## Fallback Behavior
+
+When the Rust tooling (`docker-architect-compose`, `docker-architect-image`) is
+unavailable (no cargo, no pre-built binary):
+
+1. **Never refuse output.** Generate files directly from the invariants above.
+2. Use templates from `references/fallback-templates.md` as starting points.
+3. Use `.dockerignore` templates from `references/dockerignore-templates.md`.
+4. Apply all Dockerfile and Compose invariants manually.
+5. Note in output that deterministic tooling validation was skipped.
+
+The fallback path produces the same hardened output — the Rust tooling adds
+deterministic metadata enrichment and policy enforcement, not the hardening itself.
+
+---
+
+## Tooling Reference
+
+When the Rust tooling is available, use it for enhanced determinism and policy checks.
+
+### Workflow selection
+
+- Use `docker-architect-compose` for stack/deployment architecture (docker-compose, Swarm).
+- Use `docker-architect-image` for image/build architecture (Dockerfile, Buildx/Bake).
+- When both are required, run compose first, then image, preserving traceability IDs.
+
+### Commands
+
+```bash
+# ── Compose/Swarm workflow ──
+<skills-file-root>/scripts/docker-architect-compose extract <input> --format text
 <skills-file-root>/scripts/docker-architect-compose refresh --cache-dir <skills-file-root>/references/cache --image nginx:1.27 --allow-scrape-fallback
 <skills-file-root>/scripts/docker-architect-compose render --cache-dir <skills-file-root>/references/cache --format markdown
 <skills-file-root>/scripts/docker-architect-compose check --cache-dir <skills-file-root>/references/cache --strictness balanced
 <skills-file-root>/scripts/docker-architect-compose policy-check compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose
 <skills-file-root>/scripts/docker-architect-compose policy-plan compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose
 <skills-file-root>/scripts/docker-architect-compose policy-apply compose.yaml --plan patch-plan.json --output compose.hardened.yaml --mode compose
-<skills-file-root>/scripts/docker-architect-compose policy-check stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
-<skills-file-root>/scripts/docker-architect-compose policy-plan stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
 <skills-file-root>/scripts/docker-architect-compose compose-generate compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --output compose.anchored.yaml --mode compose --anchors auto
-<skills-file-root>/scripts/docker-architect-compose anchor-suggest compose.yaml --policy <skills-file-root>/references/policy-compose-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode compose --format json
 <skills-file-root>/scripts/docker-architect-compose output-check architecture.md --mode compose
 
-# Image/build workflow
-<skills-file-root>/scripts/docker-architect-image extract <input-file> --format text
-<skills-file-root>/scripts/docker-architect-image extract <input-file> --format json
+# ── Swarm workflow ──
+<skills-file-root>/scripts/docker-architect-compose policy-check docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
+<skills-file-root>/scripts/docker-architect-compose policy-plan docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
+<skills-file-root>/scripts/docker-architect-compose policy-apply docker-stack.yaml --plan patch-plan.json --output docker-stack.hardened.yaml --mode swarm
+<skills-file-root>/scripts/docker-architect-compose compose-generate docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --output docker-stack.anchored.yaml --mode swarm --anchors auto
+
+# ── Image/build workflow ──
+<skills-file-root>/scripts/docker-architect-image extract <input> --format text
 <skills-file-root>/scripts/docker-architect-image refresh --cache-dir <skills-file-root>/references/cache --image debian:12-slim --allow-scrape-fallback
 <skills-file-root>/scripts/docker-architect-image render --cache-dir <skills-file-root>/references/cache --format markdown
 <skills-file-root>/scripts/docker-architect-image check --cache-dir <skills-file-root>/references/cache --strictness balanced
 <skills-file-root>/scripts/docker-architect-image policy-check Dockerfile --policy <skills-file-root>/references/policy-dockerfile-balanced.yaml
+# policy-check exits 2 when blocked violations are present.
 <skills-file-root>/scripts/docker-architect-image policy-plan Dockerfile --policy <skills-file-root>/references/policy-dockerfile-balanced.yaml
+# policy-plan is non-gating and always reports to stdout.
+<skills-file-root>/scripts/docker-architect-image policy-apply Dockerfile --plan patch-plan.json --output Dockerfile.hardened --mode dockerfile
 <skills-file-root>/scripts/docker-architect-image output-check architecture.md --mode image
 
-# Generalized deterministic CI gate (fixtures + optional live verify)
+# ── CI gate ──
 <skills-file-root>/scripts/docker-architect-ci-gate
 DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-gate
-DOCKER_ARCHITECT_ENABLE_VERIFY=1 DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<skills-file-root>/references/ci/verify.compose.yaml <skills-file-root>/scripts/docker-architect-ci-gate
 ```
 
-## Portability contract
+### Portability contract
 
-- This skill is intended to be installable and runnable from `<skills-file-root>` only.
-- Runtime entrypoints and references MUST resolve within this skill folder.
+- This skill resolves all paths within `<skills-file-root>`.
 - Cross-skill runtime path dependencies are non-compliant.
 
-## Determinism and hardening
+### Determinism and hardening
 
 - Refresh metadata only in explicit `refresh` operations.
 - Render from cached JSON for normal runs.
 - Prefer official APIs; use scrape fallback only when missing fields block output quality.
-- For Docker Hub images, always prefer registry v2 `Docker-Content-Digest` over Hub tag digest data.
-- Apply hardened image and supply-chain controls by default.
-- Curated deterministic image defaults are versioned in `references/image-knowledge/knowledge.v1.yaml`.
-- Curated deterministic compose anchor defaults are versioned in `references/compose-defaults/defaults.v1.yaml`.
-- Anchor suggestions are report-only and do not mutate defaults unless manually reviewed and applied.
+- For Docker Hub images, prefer registry v2 `Docker-Content-Digest` over Hub tag digest.
+- Input guardrails: policy packs, image lists, and patch plans are capped at 1 MiB; general text inputs are capped at 8 MiB.
+- Curated defaults: `references/image-knowledge/knowledge.v1.yaml`, `references/compose-defaults/defaults.v1.yaml`.
 
-## CI gate
+### CI gate
 
-- `<skills-file-root>/scripts/docker-architect-ci-gate` always runs deterministic fixture-based golden tests (`architect-core` `golden_pipeline` integration test).
-- Live runtime verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`. If requested, Docker availability and daemon reachability are required.
-- Live verify defaults to `references/ci/verify.compose.yaml`; override with `DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE=<path>`.
-- Runtime verify is a baseline hardening gate: it runs `docker compose up -d` and inspects current state without waiting/polling for health transitions.
-- On stacks with real healthchecks, services that are still `starting` at inspection time may fail verify even if they would become healthy later.
-- The verify stage runs `docker-architect-compose verify ...` and fails the gate unless report `success` is `true`.
+- `docker-architect-ci-gate` runs deterministic fixture-based golden tests.
+- Live verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`.
+- Live verify defaults to `references/ci/verify.compose.yaml`.
+
+---
 
 ## References
 
-- Compose protocol: `references/protocol-compose.md`
-- Compose output contract: `references/output-contract-compose.md`
-- Image protocol: `references/protocol-image.md`
-- Image output contract: `references/output-contract-image.md`
-- Cache payload file: `references/cache/image-profiles.json`
-- Compose policy packs: `references/policy-compose-balanced.yaml`, `references/policy-compose-enforcing.yaml`
-- Swarm policy packs: `references/policy-swarm-balanced.yaml`, `references/policy-swarm-enforcing.yaml`
-- Compose defaults: `references/compose-defaults/defaults.v1.yaml`
-- Dockerfile policy packs: `references/policy-dockerfile-balanced.yaml`, `references/policy-dockerfile-enforcing.yaml`
-- CI verify fixture: `references/ci/verify.compose.yaml`
+| File | Purpose |
+|------|---------|
+| `references/fallback-templates.md` | Hardened Dockerfile + Compose templates |
+| `references/dockerignore-templates.md` | .dockerignore templates by language |
+| `references/scanning.md` | Scanner install, usage, CI pipeline order |
+| `references/protocol-compose.md` | Compose workflow protocol |
+| `references/output-contract-compose.md` | Compose output contract |
+| `references/protocol-image.md` | Image workflow protocol |
+| `references/output-contract-image.md` | Image output contract |
+| `references/cache/image-profiles.json` | Cached image metadata |
+| `references/policy-compose-balanced.yaml` | Compose policy (balanced) |
+| `references/policy-compose-enforcing.yaml` | Compose policy (enforcing) |
+| `references/policy-swarm-balanced.yaml` | Swarm policy (balanced) |
+| `references/policy-swarm-enforcing.yaml` | Swarm policy (enforcing) |
+| `references/policy-dockerfile-balanced.yaml` | Dockerfile policy (balanced) |
+| `references/policy-dockerfile-enforcing.yaml` | Dockerfile policy (enforcing) |
+| `references/compose-defaults/defaults.v1.yaml` | Compose anchor defaults |
+| `references/image-knowledge/knowledge.v1.yaml` | Image knowledge base |
+| `references/ci/verify.compose.yaml` | CI verify fixture |
