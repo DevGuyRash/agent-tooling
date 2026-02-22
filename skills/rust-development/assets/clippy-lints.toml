@@ -1,0 +1,77 @@
+# Workspace Clippy + rustc lint configuration.
+#
+# Where to put:
+# - Workspace repo: paste these two sections into the top-level Cargo.toml.
+# - If your workspace requires it, add `[lints] workspace = true` to each member crate.
+# - Single-crate repo: translate to crate-root attributes (see bottom of file).
+#
+# Enforcement:
+#   cargo clippy --workspace --all-targets -- -D warnings
+#   Optional strict mode: add --all-features and --locked.
+#
+# Notes:
+# - Clippy does NOT ban `unwrap_or*` variants; use the banned_family test for that.
+# - `unsafe_code` is a rustc lint (not clippy) and can be forbidden repo-wide.
+# - If you need exceptions (e.g., a CLI printing to stdout), use crate-level `#![allow(...)]`.
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Unused/dead code hygiene
+unused_imports = "warn"
+unused_variables = "warn"
+unused_mut = "warn"
+unused_must_use = "warn"
+dead_code = "warn"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Broad non-idiomatic coverage
+all = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Optional strict profile:
+# pedantic = "warn"
+# nursery = "warn"
+
+# Explicit non-idiomatic bans (restriction-style lints)
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+indexing_slicing = "deny"
+panic_in_result_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# --- Single-crate alternative (paste into lib.rs or main.rs) ---
+# #![forbid(unsafe_code)]
+# #![warn(
+#     unused_imports,
+#     unused_variables,
+#     unused_mut,
+#     unused_must_use,
+#     dead_code,
+#     unreachable_pub,
+#     missing_docs,
+#     clippy::all,
+#     clippy::cargo,
+# )]
+# Optional strict profile:
+# #![warn(clippy::pedantic, clippy::nursery)]
+# #![deny(
+#     clippy::unwrap_used,
+#     clippy::expect_used,
+#     clippy::panic,
+#     clippy::todo,
+#     clippy::unimplemented,
+#     clippy::unreachable,
+#     clippy::dbg_macro,
+#     clippy::indexing_slicing,
+#     clippy::panic_in_result_fn,
+#     clippy::print_stdout,
+#     clippy::print_stderr,
+# )]
