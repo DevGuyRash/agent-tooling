@@ -22,6 +22,8 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]`
 - Security bootstrap (hooks + CI files):
   - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
+- Governance capability preflight (required before governance enforce):
+  - `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]`
 - Hook installation:
   - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]`
 - Sensitive-data pre-commit gate (required before `git commit`):
@@ -52,7 +54,7 @@ When bypassing, record:
 - Receipt generation:
   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]`
 - Governance enforcement:
-  - `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] [--repo owner/repo] [--no-write-codeowners]`
+  - `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] --repo owner/repo [--no-write-codeowners]`
 
 ## Strict mode hints
 

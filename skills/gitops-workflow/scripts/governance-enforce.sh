@@ -4,9 +4,10 @@ set -euo pipefail
 # governance-enforce.sh - Deterministic governance reconciliation sequence.
 #
 # Usage:
-#   bash scripts/governance-enforce.sh [--policy path] [--repo owner/repo] [--no-write-codeowners]
+#   bash scripts/governance-enforce.sh [--policy path] --repo owner/repo [--no-write-codeowners]
 #
 # Behavior:
+# - Runs deterministic GitHub capability preflight (gh-scope-check.sh).
 # - Runs validate -> plan -> apply -> audit in order.
 # - Accepts plan drift exit code 3 and proceeds to apply.
 
@@ -48,10 +49,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-COMMON_ARGS=(--policy "$POLICY")
-if [[ -n "$REPO" ]]; then
-  COMMON_ARGS+=(--repo "$REPO")
+if [[ -z "$REPO" ]]; then
+  die "--repo is required for deterministic governance capability preflight"
 fi
+
+echo "== capability preflight =="
+bash "$SCRIPT_DIR/gh-scope-check.sh" --repo "$REPO"
+echo ""
+
+COMMON_ARGS=(--policy "$POLICY")
+COMMON_ARGS+=(--repo "$REPO")
 
 echo "== validate =="
 python3 "$SCRIPT_DIR/repo-governance.py" validate --policy "$POLICY"
