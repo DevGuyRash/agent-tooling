@@ -999,7 +999,8 @@ pub fn evaluate_dockerfile_policy_with_cache_and_source(
                     op: "insert_after".to_string(),
                     path: DOCKERFILE_PATCH_SENTINEL_FINAL_STAGE_LAST_RUN_OR_FROM.to_string(),
                     value: JsonValue::String(
-                        "RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} \\;".to_string(),
+                        "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
+                            .to_string(),
                     ),
                     rule_id: rule.id.clone(),
                 });
@@ -2516,8 +2517,10 @@ fn has_suid_sgid_strip_in_final_stage(parsed: &ParsedDockerfile) -> bool {
         .iter()
         .any(|instruction| {
             let lower = instruction.arguments.to_ascii_lowercase();
+            let has_suid_sgid_selector = lower.contains("-perm /6000")
+                || (lower.contains("-perm -4000") && lower.contains("-perm -2000"));
             lower.contains("find /")
-                && lower.contains("-perm /6000")
+                && has_suid_sgid_selector
                 && (lower.contains("chmod a-s") || lower.contains("chmod ug-s"))
         })
 }
@@ -4374,6 +4377,35 @@ rules:
             .iter()
             .filter(|patch| patch.rule_id == "AC-DF-SUID")
             .all(|patch| !patch.value.as_str().unwrap_or_default().contains("|| true")));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_accepts_portable_suid_sgid_strip_command() {
+        let dockerfile = r#"
+FROM docker.io/library/debian:12
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} +
+USER 1000:1000
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-SUID
+    severity: block
+    action: require_suid_sgid_strip
+    target: final_stage
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(!result
+            .violations
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-SUID"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-SUID"));
     }
 
     #[test]

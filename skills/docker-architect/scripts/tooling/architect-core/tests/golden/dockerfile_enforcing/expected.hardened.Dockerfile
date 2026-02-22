@@ -6,5 +6,5 @@ LABEL org.opencontainers.image.revision=unknown
 LABEL org.opencontainers.image.source=unknown
 RUN apt-get update && apt-get install -y curl
 # add --mount=type=cache,target=/var/cache/apt for apt and /usr/local/cargo/registry for cargo
-RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} \;
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} +
 CMD ["bash"]
