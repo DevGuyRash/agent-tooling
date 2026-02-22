@@ -232,10 +232,39 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
 
     lower.lines().any(|line| {
         let trimmed = line.trim_start();
-        trimmed.starts_with("error:")
+        line_has_standalone_error_prefix(trimmed)
             || trimmed.contains(" level=error")
             || trimmed.contains("] error")
     })
+}
+
+fn line_has_standalone_error_prefix(line: &str) -> bool {
+    let Some(remainder) = line.strip_prefix("error") else {
+        return false;
+    };
+    if remainder.is_empty() || remainder.starts_with(':') {
+        return true;
+    }
+
+    let Some(first_char) = remainder.chars().next() else {
+        return false;
+    };
+    if !first_char.is_ascii_whitespace() {
+        return false;
+    }
+
+    let first_token = remainder
+        .trim_start()
+        .split(|character: char| {
+            character.is_ascii_whitespace() || character == ':' || character == ','
+        })
+        .next()
+        .unwrap_or_default();
+
+    !matches!(
+        first_token,
+        "tolerance" | "correction" | "rate" | "rates" | "count" | "counts"
+    )
 }
 
 fn is_root_user(user: &str) -> bool {
@@ -354,6 +383,8 @@ mod tests {
         assert!(logs_contain_error_keywords("panic: unable to bind"));
         assert!(logs_contain_error_keywords("Fatal startup error"));
         assert!(logs_contain_error_keywords("error: connection refused"));
+        assert!(logs_contain_error_keywords("ERROR failed to connect"));
+        assert!(logs_contain_error_keywords(" error failed to connect"));
         assert!(logs_contain_error_keywords(
             "write /tmp/x: read-only file system"
         ));
@@ -365,6 +396,8 @@ mod tests {
         ));
         assert!(!logs_contain_error_keywords("error tolerance: none"));
         assert!(!logs_contain_error_keywords("error correction disabled"));
+        assert!(!logs_contain_error_keywords("error count: 0"));
+        assert!(!logs_contain_error_keywords("errors found: 0"));
         assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
     }

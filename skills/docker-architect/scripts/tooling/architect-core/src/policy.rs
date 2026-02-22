@@ -1217,12 +1217,15 @@ pub fn apply_dockerfile_patch_plan(
         }
     }
 
+    let header_insert_before_line = dockerfile_header_insert_before_line(&source_lines);
     let mut rendered_lines: Vec<String> = Vec::new();
-    for value in header_inserts {
-        append_patch_lines(&mut rendered_lines, &value);
-    }
     for (index, source_line) in source_lines.iter().enumerate() {
         let line_no = index + 1;
+        if line_no == header_insert_before_line {
+            for value in &header_inserts {
+                append_patch_lines(&mut rendered_lines, value);
+            }
+        }
         if let Some(replacement) = line_replacements.get(&line_no) {
             rendered_lines.push(replacement.clone());
         } else {
@@ -1232,6 +1235,11 @@ pub fn apply_dockerfile_patch_plan(
             for value in inserts {
                 append_patch_lines(&mut rendered_lines, value);
             }
+        }
+    }
+    if header_insert_before_line > source_lines.len() {
+        for value in &header_inserts {
+            append_patch_lines(&mut rendered_lines, value);
         }
     }
 
@@ -1372,6 +1380,17 @@ fn append_patch_lines(target: &mut Vec<String>, value: &str) {
     for line in value.lines() {
         target.push(line.to_string());
     }
+}
+
+fn dockerfile_header_insert_before_line(source_lines: &[String]) -> usize {
+    for (index, line) in source_lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        return index + 1;
+    }
+    source_lines.len() + 1
 }
 
 fn parse_dockerfile_instruction_line_path(path: &str) -> Option<(String, usize)> {
@@ -3340,6 +3359,29 @@ USER root
     }
 
     #[test]
+    fn apply_dockerfile_patch_plan_inserts_header_after_leading_comment_preamble() {
+        let dockerfile = r#"# syntax=docker/dockerfile:1.7
+# check=error=true
+
+FROM docker.io/library/debian:12-slim
+"#;
+        let plan = vec![PatchOperation {
+            op: "insert_after".to_string(),
+            path: "dockerfile.header".to_string(),
+            value: json!("ARG SOURCE_DATE_EPOCH"),
+            rule_id: "AC-DF-REPRODUCIBLE".to_string(),
+        }];
+
+        let patched = apply_dockerfile_patch_plan(dockerfile, &plan).expect("patch apply works");
+        let lines: Vec<&str> = patched.lines().collect();
+        assert_eq!(lines[0], "# syntax=docker/dockerfile:1.7");
+        assert_eq!(lines[1], "# check=error=true");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "ARG SOURCE_DATE_EPOCH");
+        assert_eq!(lines[4], "FROM docker.io/library/debian:12-slim");
+    }
+
+    #[test]
     fn apply_compose_patch_plan_updates_compose_yaml() {
         let compose = r#"
 services:
@@ -4265,9 +4307,8 @@ rules:
             .and_then(|item| item.value.as_str())
             .expect("image replacement patch should be generated");
         assert!(replacement.starts_with("nginx:1.27@"));
-        assert!(replacement.contains(
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ));
+        assert!(replacement
+            .contains("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
     }
 
     #[test]
