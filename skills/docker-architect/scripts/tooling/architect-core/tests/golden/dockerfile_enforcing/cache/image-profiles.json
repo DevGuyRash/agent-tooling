@@ -1,0 +1,14 @@
+{
+  "schema_version": 3,
+  "profiles": [
+    {
+      "id": "IMG-1",
+      "image": "docker.io/library/debian:12-slim",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "runtime": {
+        "user": "65532:65532"
+      }
+    }
+  ],
+  "unresolved_references": []
+}

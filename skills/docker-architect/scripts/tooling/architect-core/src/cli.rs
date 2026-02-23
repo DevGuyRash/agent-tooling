@@ -117,7 +117,7 @@ pub struct PolicyEvalArgs {
 /// Arguments for patch plan application.
 #[derive(Debug, Args)]
 pub struct PolicyApplyArgs {
-    /// Input compose yaml file path.
+    /// Input compose yaml or Dockerfile path.
     pub input: PathBuf,
     /// Patch plan json file path.
     #[arg(long)]
@@ -125,7 +125,7 @@ pub struct PolicyApplyArgs {
     /// Output file path.
     #[arg(long)]
     pub output: PathBuf,
-    /// Apply mode. Currently only `compose`.
+    /// Apply mode (`compose` or `dockerfile`).
     #[arg(long, default_value = "compose")]
     pub mode: String,
 }

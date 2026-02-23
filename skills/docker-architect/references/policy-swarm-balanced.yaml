@@ -20,7 +20,7 @@ rules:
     target: service.*
     key: read_only
     value: true
-    rationale: Immutable root filesystem by default.
+    rationale: Immutable root filesystem by default (canonical *-init-perms sidecars are exempt from ensure_key checks).
   - id: AC-SWM-WRITABLE
     severity: warn
     action: ensure_writable_paths
@@ -76,4 +76,11 @@ rules:
       memory: 512m
       cpus: "1.0"
       pids_limit: 256
-    rationale: Swarm mode requires explicit deterministic deploy resource limits.
+    rationale: Swarm mode requires explicit deterministic deploy resource limits (cpu/memory).
+  - id: AC-SWM-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: deploy.restart_policy.condition
+    value: on-failure
+    rationale: Swarm services should define a restart policy for orchestrator-managed recovery (canonical *-init-perms sidecars are exempt from ensure_key checks).

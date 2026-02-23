@@ -216,10 +216,9 @@ fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<boo
 
 fn logs_contain_error_keywords(logs: &str) -> bool {
     let lower = logs.to_ascii_lowercase();
-    [
+    if [
         "panic",
         "fatal",
-        "error",
         "exception",
         "read-only file system",
         "permission denied",
@@ -227,6 +226,165 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
     ]
     .iter()
     .any(|keyword| lower.contains(keyword))
+    {
+        return true;
+    }
+
+    lower.lines().any(|line| {
+        let trimmed = line.trim_start();
+        line_contains_standalone_error_token(trimmed)
+            || line_contains_bracketed_error_token(trimmed)
+            || line_has_logfmt_error_level(trimmed)
+            || trimmed.contains("] error")
+    })
+}
+
+fn line_contains_bracketed_error_token(line: &str) -> bool {
+    const NEEDLE: &str = "[error]";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index].chars().next_back().is_some_and(|character| {
+                character.is_ascii_whitespace()
+                    || matches!(character, ']' | ')' | '}' | '>' | ':' | ',' | ';')
+            })
+        };
+
+        boundary_before_ok && line_has_bracketed_error_prefix(&line[index..])
+    })
+}
+
+fn line_contains_standalone_error_token(line: &str) -> bool {
+    const NEEDLE: &str = "error";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index].chars().next_back().is_some_and(|character| {
+                character.is_ascii_whitespace()
+                    || matches!(
+                        character,
+                        '[' | '(' | '{' | '<' | ']' | ')' | '}' | '>' | ':' | ',' | ';'
+                    )
+            })
+        };
+        if !boundary_before_ok {
+            return false;
+        }
+
+        line_has_standalone_error_prefix(&line[index..])
+    })
+}
+
+fn line_has_logfmt_error_level(line: &str) -> bool {
+    const NEEDLE: &str = "level=error";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_whitespace())
+        };
+        if !boundary_before_ok {
+            return false;
+        }
+
+        let suffix = &line[index + NEEDLE.len()..];
+        match suffix.chars().next() {
+            None => true,
+            Some(character) => {
+                character.is_ascii_whitespace() || matches!(character, ',' | ';' | ']' | '}')
+            }
+        }
+    })
+}
+
+fn index_inside_unescaped_double_quotes(line: &str, byte_index: usize) -> bool {
+    let mut inside_quotes = false;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        if index >= byte_index {
+            break;
+        }
+
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        if inside_quotes && character == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if character == '"' {
+            inside_quotes = !inside_quotes;
+        }
+    }
+
+    inside_quotes
+}
+
+fn line_has_bracketed_error_prefix(line: &str) -> bool {
+    let Some(remainder) = line.strip_prefix("[error]") else {
+        return false;
+    };
+    if remainder.is_empty() {
+        return true;
+    }
+    remainder
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_whitespace() || c == ':')
+}
+
+fn line_has_standalone_error_prefix(line: &str) -> bool {
+    let Some(remainder) = line.strip_prefix("error") else {
+        return false;
+    };
+    if remainder.is_empty() {
+        return true;
+    }
+
+    let Some(first_char) = remainder.chars().next() else {
+        return false;
+    };
+    if !(first_char.is_ascii_whitespace() || first_char == ':' || first_char == ',') {
+        return false;
+    }
+    let first_token = remainder
+        .trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || character == ':' || character == ','
+        })
+        .split(|character: char| {
+            character.is_ascii_whitespace() || character == ':' || character == ','
+        })
+        .next()
+        .unwrap_or_default();
+    if first_token.is_empty() {
+        return true;
+    }
+
+    !matches!(
+        first_token,
+        "tolerance" | "correction" | "rate" | "rates" | "count" | "counts" | "0"
+    )
 }
 
 fn is_root_user(user: &str) -> bool {
@@ -256,16 +414,34 @@ fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let exit_status = format_exit_status(&output.status);
         return Err(AppError::InvalidInput {
             reason: format!(
                 "docker command failed `{}` (exit {}): {}",
                 args.join(" "),
-                output.status.code().unwrap_or_default(),
+                exit_status,
                 stderr
             ),
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn format_exit_status(status: &std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return code.to_string();
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+
+    "unknown".to_string()
 }
 
 fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String> {
@@ -302,9 +478,14 @@ fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String>
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
     use serde_json::json;
 
-    use super::{inspect_record_from_value, is_root_user, logs_contain_error_keywords};
+    use super::{
+        format_exit_status, inspect_record_from_value, is_root_user, logs_contain_error_keywords,
+    };
 
     #[test]
     fn is_root_user_handles_numeric_and_named_root() {
@@ -344,6 +525,15 @@ mod tests {
     fn logs_contain_error_keywords_matches_expected_terms() {
         assert!(logs_contain_error_keywords("panic: unable to bind"));
         assert!(logs_contain_error_keywords("Fatal startup error"));
+        assert!(logs_contain_error_keywords("error: connection refused"));
+        assert!(logs_contain_error_keywords("ERROR failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR] failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR]: failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR]"));
+        assert!(logs_contain_error_keywords(" error failed to connect"));
+        assert!(logs_contain_error_keywords(
+            "error,details=failed to connect"
+        ));
         assert!(logs_contain_error_keywords(
             "write /tmp/x: read-only file system"
         ));
@@ -353,6 +543,37 @@ mod tests {
         assert!(logs_contain_error_keywords(
             "mount failed: operation not permitted"
         ));
+        assert!(logs_contain_error_keywords(
+            "level=error msg=\"unable to bind\""
+        ));
+        assert!(logs_contain_error_keywords(
+            "ts=2026-02-22T10:00:00Z level=error msg=\"unable to bind\""
+        ));
+        assert!(logs_contain_error_keywords(
+            "2026-02-22T10:00:00Z ERROR: unable to bind"
+        ));
+        assert!(logs_contain_error_keywords(
+            "2026-02-22T10:00:00Z [ERROR] failed to connect"
+        ));
+        assert!(!logs_contain_error_keywords("error tolerance: none"));
+        assert!(!logs_contain_error_keywords("error correction disabled"));
+        assert!(!logs_contain_error_keywords("error: 0"));
+        assert!(!logs_contain_error_keywords("error count: 0"));
+        assert!(!logs_contain_error_keywords("error,count: 0"));
+        assert!(!logs_contain_error_keywords(
+            "msg=\"set level=error for test coverage\" level=info"
+        ));
+        assert!(!logs_contain_error_keywords("[ERROR]abc"));
+        assert!(!logs_contain_error_keywords("[errors] found"));
+        assert!(!logs_contain_error_keywords("errors found: 0"));
+        assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_reports_signal_termination() {
+        let status = std::process::ExitStatus::from_raw(9);
+        assert_eq!(format_exit_status(&status), "signal 9");
     }
 }

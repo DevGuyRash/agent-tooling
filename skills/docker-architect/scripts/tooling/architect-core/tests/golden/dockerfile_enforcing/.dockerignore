@@ -1,0 +1,6 @@
+.git
+.gitignore
+target/
+node_modules/
+*.log
+.env

@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.28", features = ["derive"] }
+# Cross-process exclusive file locking (maintenance-only crate, stable API surface).
+fs2 = "0.4.3"
 regex = "1.11.1"
 reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.217", features = ["derive"] }

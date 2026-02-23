@@ -1,4 +1,4 @@
 interface:
   display_name: "Docker Architect"
-  short_description: "Deterministic Docker Compose and image architecture"
-  default_prompt: "Analyze Docker deployment and image requirements, then produce deterministic architecture outputs for Compose/Swarm and Docker image supply-chain workflows with strict traceability."
+  short_description: "Generate hardened Dockerfiles, Compose stacks, and container build pipelines"
+  default_prompt: "Generate hardened multi-stage Dockerfiles and Compose/Swarm deployment files with non-root execution, healthchecks, secrets management, and read-only runtime hardening defaults. Include CI/CD scanning guidance with hadolint, Trivy, and Docker Scout. Prefer digest-pinned images, OCI labels, and SBOM/provenance-ready outputs."

@@ -116,6 +116,18 @@
     "rule_id": "AC-CMP-RESOURCES"
   },
   {
+    "op": "set",
+    "path": "services.api.restart",
+    "value": "unless-stopped",
+    "rule_id": "AC-CMP-RESTART"
+  },
+  {
+    "op": "set",
+    "path": "services.worker.restart",
+    "value": "unless-stopped",
+    "rule_id": "AC-CMP-RESTART"
+  },
+  {
     "op": "list_add",
     "path": "services.api.tmpfs",
     "value": "/run:rw,noexec,nosuid,nodev,size=16m",

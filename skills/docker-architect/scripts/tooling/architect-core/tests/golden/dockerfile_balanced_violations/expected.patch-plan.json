@@ -1,0 +1,44 @@
+[
+  {
+    "op": "insert_after",
+    "path": "dockerfile.RUN.line:2",
+    "value": "# add --mount=type=cache,target=/var/cache/apt for apt and /usr/local/cargo/registry for cargo",
+    "rule_id": "AC-DF-CACHE-MOUNTS"
+  },
+  {
+    "op": "replace_instruction",
+    "path": "dockerfile.FROM.line:1",
+    "value": "FROM docker.io/library/debian:12-slim@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "rule_id": "AC-DF-FROM-DIGEST"
+  },
+  {
+    "op": "insert_after",
+    "path": "dockerfile.final_stage.last_run_or_from",
+    "value": "# AC-DF-HEALTHCHECK: add a service-specific HEALTHCHECK instruction",
+    "rule_id": "AC-DF-HEALTHCHECK"
+  },
+  {
+    "op": "insert_after",
+    "path": "dockerfile.final_stage.last_label_or_from",
+    "value": "LABEL org.opencontainers.image.licenses=unknown",
+    "rule_id": "AC-DF-OCI-LABELS"
+  },
+  {
+    "op": "insert_after",
+    "path": "dockerfile.final_stage.last_label_or_from",
+    "value": "LABEL org.opencontainers.image.revision=unknown",
+    "rule_id": "AC-DF-OCI-LABELS"
+  },
+  {
+    "op": "insert_after",
+    "path": "dockerfile.final_stage.last_label_or_from",
+    "value": "LABEL org.opencontainers.image.source=unknown",
+    "rule_id": "AC-DF-OCI-LABELS"
+  },
+  {
+    "op": "insert_after",
+    "path": "dockerfile.header",
+    "value": "ARG SOURCE_DATE_EPOCH",
+    "rule_id": "AC-DF-REPRODUCIBLE"
+  }
+]

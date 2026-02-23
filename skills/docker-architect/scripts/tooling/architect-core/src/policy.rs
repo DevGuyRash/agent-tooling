@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,9 @@ use crate::error::AppError;
 use crate::fetch::normalize_image_reference;
 use crate::heuristics::{self, DeployMode};
 use crate::model::{CachedProfiles, ImageProfile};
+use crate::read_utf8_file_with_size_limit;
+
+const MAX_YAML_MERGE_DEPTH: u8 = 128;
 
 /// Supported policy domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +148,10 @@ pub enum PolicyAction {
     RequireBuildCacheMounts,
     /// Require final-stage SUID/SGID stripping for hardened runtime images.
     RequireSuidSgidStrip,
+    /// Require a final-stage HEALTHCHECK instruction.
+    RequireHealthcheck,
+    /// Require a companion file next to the source Dockerfile (for example `.dockerignore`).
+    RequireCompanionFile { key: String },
 }
 
 /// One compiled policy rule.
@@ -216,6 +223,26 @@ pub struct PolicyEvaluation {
     pub patch_plan: Vec<PatchOperation>,
 }
 
+impl PolicyEvaluation {
+    /// Returns `true` when at least one violation has `Block` severity.
+    pub fn has_blocked_violations(&self) -> bool {
+        self.violations
+            .iter()
+            .any(|violation| violation.severity == RuleSeverity::Block)
+    }
+}
+
+const MAX_YAML_PATH_SEGMENTS: usize = 64;
+const MAX_YAML_PATH_INDEX: usize = 4096;
+const YAML_MERGE_KEY: &str = "<<";
+pub(crate) const MAX_POLICY_PACK_BYTES: u64 = 1_048_576;
+// Dockerfile patch paths are domain-specific sentinels emitted for human-guidance
+// patch plans. They are not YAML/compose paths and must be rejected by compose
+// patch application.
+const DOCKERFILE_PATCH_SENTINEL_HEADER: &str = "dockerfile.header";
+const DOCKERFILE_PATCH_SENTINEL_FINAL_STAGE_LAST_RUN_OR_FROM: &str =
+    "dockerfile.final_stage.last_run_or_from";
+
 #[derive(Debug, Deserialize)]
 struct RawPolicyPack {
     version: u32,
@@ -256,8 +283,16 @@ pub fn load_policy_pack(
     policy_path: &Path,
     expected_domain: PolicyDomain,
 ) -> Result<PolicyPack, AppError> {
-    let text = fs::read_to_string(policy_path)
-        .map_err(|error| AppError::io(policy_path, error.to_string()))?;
+    load_policy_pack_with_limit(policy_path, expected_domain, MAX_POLICY_PACK_BYTES)
+}
+
+/// Load and compile a policy pack from disk with explicit file-size limit.
+pub fn load_policy_pack_with_limit(
+    policy_path: &Path,
+    expected_domain: PolicyDomain,
+    max_bytes: u64,
+) -> Result<PolicyPack, AppError> {
+    let text = read_utf8_file_with_size_limit(policy_path, max_bytes, "policy pack file")?;
     let pack = parse_policy_pack(&text)?;
     if pack.domain != expected_domain {
         return Err(AppError::InvalidInput {
@@ -299,7 +334,7 @@ fn parse_policy_pack(content: &str) -> Result<PolicyPack, AppError> {
                 reason: format!("duplicate policy rule id: {}", raw_rule.id),
             });
         }
-        rules.push(compile_rule(raw_rule)?);
+        rules.push(compile_rule(raw_rule, domain)?);
     }
 
     Ok(PolicyPack {
@@ -310,7 +345,7 @@ fn parse_policy_pack(content: &str) -> Result<PolicyPack, AppError> {
     })
 }
 
-fn compile_rule(raw: RawPolicyRule) -> Result<PolicyRule, AppError> {
+fn compile_rule(raw: RawPolicyRule, domain: PolicyDomain) -> Result<PolicyRule, AppError> {
     let severity = RuleSeverity::parse(&raw.severity)?;
     let mode = raw.mode.unwrap_or_else(|| "compose".to_string());
     let action = match raw.action.as_str() {
@@ -374,12 +409,22 @@ fn compile_rule(raw: RawPolicyRule) -> Result<PolicyRule, AppError> {
         },
         "require_build_cache_mounts" => PolicyAction::RequireBuildCacheMounts,
         "require_suid_sgid_strip" => PolicyAction::RequireSuidSgidStrip,
+        "require_healthcheck" => PolicyAction::RequireHealthcheck,
+        "require_companion_file" => {
+            let key = required_field(raw.key, "key", &raw.id)?;
+            validate_companion_file_key(&key, &raw.id)?;
+            PolicyAction::RequireCompanionFile { key }
+        }
         _ => {
             return Err(AppError::InvalidInput {
                 reason: format!("unsupported policy action: {}", raw.action),
             });
         }
     };
+
+    validate_rule_action_for_domain(domain, &action, &raw.id)?;
+    validate_rule_target(domain, &action, &raw.target, &raw.id)?;
+    validate_rule_action_payload(&action, &raw.id)?;
 
     Ok(PolicyRule {
         id: raw.id,
@@ -388,6 +433,162 @@ fn compile_rule(raw: RawPolicyRule) -> Result<PolicyRule, AppError> {
         target: raw.target,
         rationale: raw.rationale,
     })
+}
+
+fn validate_rule_action_for_domain(
+    domain: PolicyDomain,
+    action: &PolicyAction,
+    rule_id: &str,
+) -> Result<(), AppError> {
+    let supported = match domain {
+        PolicyDomain::Compose => matches!(
+            action,
+            PolicyAction::EnsureKey { .. }
+                | PolicyAction::EnsureListContains { .. }
+                | PolicyAction::RequireImageDigest { .. }
+                | PolicyAction::RequireNonRootUser { .. }
+                | PolicyAction::ForbidKey { .. }
+                | PolicyAction::EnsureVolumePermissions
+                | PolicyAction::SynthesizeHealthcheck
+                | PolicyAction::EnsureWritablePaths
+                | PolicyAction::EnsureCapabilityProfile
+                | PolicyAction::EnsureResourceLimits { .. }
+                | PolicyAction::RequireSensitiveEnvSecrets
+        ),
+        PolicyDomain::Dockerfile => matches!(
+            action,
+            PolicyAction::RequireMultiStage
+                | PolicyAction::RequireNonRootUser { .. }
+                | PolicyAction::RequireLabels { .. }
+                | PolicyAction::ForbidRuntimePackageManager
+                | PolicyAction::RequireFromDigest
+                | PolicyAction::RequireBuildArg { .. }
+                | PolicyAction::RequireBuildCacheMounts
+                | PolicyAction::RequireSuidSgidStrip
+                | PolicyAction::RequireHealthcheck
+                | PolicyAction::RequireCompanionFile { .. }
+        ),
+    };
+    if supported {
+        return Ok(());
+    }
+
+    Err(AppError::InvalidInput {
+        reason: format!(
+            "rule {rule_id} action is not supported for {} policies",
+            domain.as_str()
+        ),
+    })
+}
+
+fn validate_rule_target(
+    domain: PolicyDomain,
+    action: &PolicyAction,
+    target: &str,
+    rule_id: &str,
+) -> Result<(), AppError> {
+    let expected_targets: &[&str] = match domain {
+        PolicyDomain::Compose => &["service.*"],
+        PolicyDomain::Dockerfile => match action {
+            PolicyAction::RequireNonRootUser { .. }
+            | PolicyAction::RequireLabels { .. }
+            | PolicyAction::ForbidRuntimePackageManager
+            | PolicyAction::RequireSuidSgidStrip
+            | PolicyAction::RequireHealthcheck => &["final_stage"],
+            PolicyAction::RequireMultiStage
+            | PolicyAction::RequireFromDigest
+            | PolicyAction::RequireBuildArg { .. }
+            | PolicyAction::RequireBuildCacheMounts
+            | PolicyAction::RequireCompanionFile { .. } => &["dockerfile"],
+            _ => &[],
+        },
+    };
+
+    if expected_targets.contains(&target) {
+        return Ok(());
+    }
+
+    let expected = if expected_targets.is_empty() {
+        "<none>".to_string()
+    } else {
+        expected_targets.join(", ")
+    };
+    Err(AppError::InvalidInput {
+        reason: format!(
+            "rule {rule_id} has unsupported target `{target}` for {} policy/action; expected one of: {expected}",
+            domain.as_str()
+        ),
+    })
+}
+
+fn validate_rule_action_payload(action: &PolicyAction, rule_id: &str) -> Result<(), AppError> {
+    match action {
+        PolicyAction::RequireLabels { labels } => {
+            for label in labels {
+                validate_dockerfile_label_key(label, rule_id)?;
+            }
+            Ok(())
+        }
+        PolicyAction::RequireBuildArg { key } => validate_dockerfile_build_arg_key(key, rule_id),
+        PolicyAction::RequireCompanionFile { key } => validate_companion_file_key(key, rule_id),
+        _ => Ok(()),
+    }
+}
+
+fn validate_dockerfile_label_key(label: &str, rule_id: &str) -> Result<(), AppError> {
+    if label.is_empty() {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} label key must not be empty"),
+        });
+    }
+    if label
+        .chars()
+        .any(|ch| ch.is_ascii_control() || ch.is_whitespace())
+    {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "rule {rule_id} label key `{label}` must not contain control characters or whitespace"
+            ),
+        });
+    }
+    if label.contains('=') {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} label key `{label}` must not contain `=`"),
+        });
+    }
+    if !label
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/'))
+    {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} label key `{label}` contains unsupported characters"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_dockerfile_build_arg_key(key: &str, rule_id: &str) -> Result<(), AppError> {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} build arg key must not be empty"),
+        });
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "rule {rule_id} build arg key `{key}` must start with ASCII letter or `_`"
+            ),
+        });
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "rule {rule_id} build arg key `{key}` must contain only ASCII letters, digits, or `_`"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn parse_resource_limit_defaults(value: Option<&YamlValue>) -> (String, String, u64) {
@@ -451,10 +652,11 @@ pub fn evaluate_compose_policy_with_mode(
         });
     }
 
-    let document: YamlValue =
+    let mut document: YamlValue =
         serde_yaml::from_str(compose_yaml).map_err(|error| AppError::InvalidInput {
             reason: format!("failed to parse compose yaml: {error}"),
         })?;
+    materialize_yaml_merge_keys(&mut document, MAX_YAML_MERGE_DEPTH)?;
     let services = get_services_mapping(&document)?;
 
     let mut service_names: Vec<String> = services
@@ -467,9 +669,9 @@ pub fn evaluate_compose_policy_with_mode(
     let mut violations = Vec::new();
     let mut patches = Vec::new();
     for rule in &policy.rules {
-        if rule.target != "service.*" {
-            continue;
-        }
+        validate_rule_action_for_domain(policy.domain, &rule.action, &rule.id)?;
+        validate_rule_target(policy.domain, &rule.action, &rule.target, &rule.id)?;
+        validate_rule_action_payload(&rule.action, &rule.id)?;
         for service_name in &service_names {
             let service_value = services
                 .get(YamlValue::String(service_name.clone()))
@@ -509,7 +711,7 @@ pub fn evaluate_dockerfile_policy(
     dockerfile_text: &str,
     policy: &PolicyPack,
 ) -> Result<PolicyEvaluation, AppError> {
-    evaluate_dockerfile_policy_with_cache(dockerfile_text, policy, None)
+    evaluate_dockerfile_policy_with_cache_and_source(dockerfile_text, policy, None, None)
 }
 
 /// Evaluate Dockerfile input against a dockerfile policy pack with optional image cache context.
@@ -517,6 +719,16 @@ pub fn evaluate_dockerfile_policy_with_cache(
     dockerfile_text: &str,
     policy: &PolicyPack,
     cache: Option<&CachedProfiles>,
+) -> Result<PolicyEvaluation, AppError> {
+    evaluate_dockerfile_policy_with_cache_and_source(dockerfile_text, policy, cache, None)
+}
+
+/// Evaluate Dockerfile input against a dockerfile policy pack with optional cache and source path.
+pub fn evaluate_dockerfile_policy_with_cache_and_source(
+    dockerfile_text: &str,
+    policy: &PolicyPack,
+    cache: Option<&CachedProfiles>,
+    source_path: Option<&Path>,
 ) -> Result<PolicyEvaluation, AppError> {
     if policy.domain != PolicyDomain::Dockerfile {
         return Err(AppError::InvalidInput {
@@ -538,6 +750,9 @@ pub fn evaluate_dockerfile_policy_with_cache(
     })?;
 
     for rule in &policy.rules {
+        validate_rule_action_for_domain(policy.domain, &rule.action, &rule.id)?;
+        validate_rule_target(policy.domain, &rule.action, &rule.target, &rule.id)?;
+        validate_rule_action_payload(&rule.action, &rule.id)?;
         match &rule.action {
             PolicyAction::RequireMultiStage => {
                 if !parsed.has_multiple_stages() {
@@ -547,15 +762,8 @@ pub fn evaluate_dockerfile_policy_with_cache(
                         target: "dockerfile".to_string(),
                         reason: "dockerfile is not multi-stage".to_string(),
                     });
-                    patches.push(PatchOperation {
-                        op: "insert_after".to_string(),
-                        path: "dockerfile.header".to_string(),
-                        value: JsonValue::String(
-                            "# AC-DF-MULTISTAGE: explicit runtime stage\nFROM scratch AS runtime"
-                                .to_string(),
-                        ),
-                        rule_id: rule.id.clone(),
-                    });
+                    // Multi-stage conversion needs workload-specific artifact boundaries.
+                    // Auto-inserting a stage can silently change runtime semantics.
                 }
             }
             PolicyAction::RequireNonRootUser { .. } => {
@@ -665,6 +873,9 @@ pub fn evaluate_dockerfile_policy_with_cache(
                     let Some(reference) = parse_from_reference(&instruction.arguments) else {
                         continue;
                     };
+                    if is_digest_exempt_from_reference(&reference) {
+                        continue;
+                    }
                     if has_valid_digest_pin(&reference) {
                         continue;
                     }
@@ -724,7 +935,7 @@ pub fn evaluate_dockerfile_policy_with_cache(
                 });
                 patches.push(PatchOperation {
                     op: "insert_after".to_string(),
-                    path: "dockerfile.header".to_string(),
+                    path: DOCKERFILE_PATCH_SENTINEL_HEADER.to_string(),
                     value: JsonValue::String(format!("ARG {key}")),
                     rule_id: rule.id.clone(),
                 });
@@ -786,11 +997,115 @@ pub fn evaluate_dockerfile_policy_with_cache(
                 });
                 patches.push(PatchOperation {
                     op: "insert_after".to_string(),
-                    path: "dockerfile.final_stage.last_run_or_from".to_string(),
+                    path: DOCKERFILE_PATCH_SENTINEL_FINAL_STAGE_LAST_RUN_OR_FROM.to_string(),
                     value: JsonValue::String(
-                        "RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} \\; || true"
+                        "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
                             .to_string(),
                     ),
+                    rule_id: rule.id.clone(),
+                });
+            }
+            PolicyAction::RequireHealthcheck => {
+                let Some(_) = parsed.final_stage_range() else {
+                    violations.push(PolicyViolation {
+                        rule_id: rule.id.clone(),
+                        severity: rule.severity.clone(),
+                        target: "dockerfile.final_stage.HEALTHCHECK".to_string(),
+                        reason: "dockerfile has no FROM stage".to_string(),
+                    });
+                    continue;
+                };
+
+                if !parsed
+                    .final_stage_instructions_by_keyword("HEALTHCHECK")
+                    .is_empty()
+                {
+                    continue;
+                }
+
+                violations.push(PolicyViolation {
+                    rule_id: rule.id.clone(),
+                    severity: rule.severity.clone(),
+                    target: "dockerfile.final_stage.HEALTHCHECK".to_string(),
+                    reason: "final stage is missing HEALTHCHECK instruction".to_string(),
+                });
+                if policy.strictness == PolicyStrictness::Enforcing {
+                    // Enforcing mode is fail-closed: do not emit placeholder guidance
+                    // that could be mistaken for a complete remediation.
+                    continue;
+                }
+                patches.push(PatchOperation {
+                    op: "insert_after".to_string(),
+                    path: DOCKERFILE_PATCH_SENTINEL_FINAL_STAGE_LAST_RUN_OR_FROM.to_string(),
+                    value: JsonValue::String(
+                        "# AC-DF-HEALTHCHECK: add a service-specific HEALTHCHECK instruction"
+                            .to_string(),
+                    ),
+                    rule_id: rule.id.clone(),
+                });
+            }
+            PolicyAction::RequireCompanionFile { key } => {
+                let Some(path) = source_path else {
+                    violations.push(PolicyViolation {
+                        rule_id: rule.id.clone(),
+                        severity: rule.severity.clone(),
+                        target: format!("dockerfile.companion_file[{key}]"),
+                        reason: format!(
+                            "cannot verify companion file `{key}` without a Dockerfile source path"
+                        ),
+                    });
+                    if policy.strictness == PolicyStrictness::Enforcing {
+                        // Enforcing mode is fail-closed: report the violation but avoid
+                        // placeholder patches that could be mistaken for complete remediation.
+                        continue;
+                    }
+                    patches.push(PatchOperation {
+                        op: "insert_after".to_string(),
+                        path: DOCKERFILE_PATCH_SENTINEL_HEADER.to_string(),
+                        value: JsonValue::String(format!(
+                            "# {}: create `{key}` next to Dockerfile",
+                            rule.id
+                        )),
+                        rule_id: rule.id.clone(),
+                    });
+                    continue;
+                };
+
+                let canonical_source_path =
+                    fs::canonicalize(path).map_err(|error| AppError::InvalidInput {
+                        reason: format!(
+                            "failed to canonicalize Dockerfile source path `{}`: {error}",
+                            path.display()
+                        ),
+                    })?;
+                let companion_path = resolve_companion_file_path(&canonical_source_path, key);
+                if companion_path.is_file() {
+                    continue;
+                }
+
+                let reason = if companion_path.exists() {
+                    format!("companion file `{key}` exists but is not a regular file")
+                } else {
+                    format!("missing companion file `{key}`")
+                };
+                violations.push(PolicyViolation {
+                    rule_id: rule.id.clone(),
+                    severity: rule.severity.clone(),
+                    target: format!("dockerfile.companion_file[{key}]"),
+                    reason,
+                });
+                if policy.strictness == PolicyStrictness::Enforcing {
+                    // Enforcing mode is fail-closed: report the violation but avoid
+                    // placeholder patches that could be mistaken for complete remediation.
+                    continue;
+                }
+                patches.push(PatchOperation {
+                    op: "insert_after".to_string(),
+                    path: DOCKERFILE_PATCH_SENTINEL_HEADER.to_string(),
+                    value: JsonValue::String(format!(
+                        "# {}: create `{key}` next to Dockerfile",
+                        rule.id
+                    )),
                     rule_id: rule.id.clone(),
                 });
             }
@@ -815,6 +1130,141 @@ pub fn evaluate_dockerfile_policy_with_cache(
     ))
 }
 
+/// Apply dockerfile patch operations to Dockerfile content.
+pub fn apply_dockerfile_patch_plan(
+    dockerfile_text: &str,
+    patch_plan: &[PatchOperation],
+) -> Result<String, AppError> {
+    if patch_plan.is_empty() {
+        return Ok(dockerfile_text.to_string());
+    }
+
+    let parsed = ParsedDockerfile::parse(dockerfile_text)?;
+    let source_lines: Vec<String> = dockerfile_text.lines().map(str::to_string).collect();
+    let preserve_trailing_newline = dockerfile_text.ends_with('\n');
+    let mut header_inserts: Vec<String> = Vec::new();
+    let mut line_replacements: BTreeMap<usize, String> = BTreeMap::new();
+    let mut line_inserts: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+
+    for patch in patch_plan {
+        match patch.op.as_str() {
+            "insert_after" => {
+                let value = patch.value.as_str().ok_or_else(|| AppError::InvalidInput {
+                    reason: format!(
+                        "dockerfile patch value must be string for op insert_after: {}",
+                        patch.rule_id
+                    ),
+                })?;
+                if patch.path == DOCKERFILE_PATCH_SENTINEL_HEADER {
+                    header_inserts.push(value.to_string());
+                    continue;
+                }
+
+                let line = if patch.path == "dockerfile.final_stage.last_label_or_from" {
+                    final_stage_last_label_or_from_line(&parsed)?
+                } else if patch.path == DOCKERFILE_PATCH_SENTINEL_FINAL_STAGE_LAST_RUN_OR_FROM {
+                    final_stage_last_run_or_from_line(&parsed)?
+                } else if let Some((keyword, line)) =
+                    parse_dockerfile_instruction_line_path(&patch.path)
+                {
+                    if !dockerfile_has_instruction_at_line(&parsed, line, &keyword) {
+                        return Err(AppError::InvalidInput {
+                            reason: format!(
+                                "dockerfile patch path does not match an instruction: {}",
+                                patch.path
+                            ),
+                        });
+                    }
+                    line
+                } else {
+                    return Err(AppError::InvalidInput {
+                        reason: format!(
+                            "unsupported dockerfile insert_after patch path: {}",
+                            patch.path
+                        ),
+                    });
+                };
+                line_inserts
+                    .entry(line)
+                    .or_default()
+                    .push(value.to_string());
+            }
+            "replace_instruction" => {
+                let value = patch.value.as_str().ok_or_else(|| AppError::InvalidInput {
+                    reason: format!(
+                        "dockerfile patch value must be string for op replace_instruction: {}",
+                        patch.rule_id
+                    ),
+                })?;
+                let line = if patch.path == "dockerfile.final_stage.USER" {
+                    final_stage_user_line(&parsed)?
+                } else if let Some((keyword, line)) =
+                    parse_dockerfile_instruction_line_path(&patch.path)
+                {
+                    if !dockerfile_has_instruction_at_line(&parsed, line, &keyword) {
+                        return Err(AppError::InvalidInput {
+                            reason: format!(
+                                "dockerfile patch path does not match an instruction: {}",
+                                patch.path
+                            ),
+                        });
+                    }
+                    line
+                } else {
+                    return Err(AppError::InvalidInput {
+                        reason: format!(
+                            "unsupported dockerfile replace_instruction patch path: {}",
+                            patch.path
+                        ),
+                    });
+                };
+                line_replacements.insert(line, value.to_string());
+            }
+            other => {
+                return Err(AppError::InvalidInput {
+                    reason: format!("unsupported dockerfile patch operation: {other}"),
+                });
+            }
+        }
+    }
+
+    let header_insert_before_line = dockerfile_header_insert_before_line(&source_lines);
+    let mut rendered_lines: Vec<String> = Vec::new();
+    for (index, source_line) in source_lines.iter().enumerate() {
+        let line_no = index + 1;
+        if line_no == header_insert_before_line {
+            for value in &header_inserts {
+                append_patch_lines(&mut rendered_lines, value);
+            }
+        }
+        if let Some(replacement) = line_replacements.get(&line_no) {
+            rendered_lines.push(replacement.clone());
+        } else {
+            rendered_lines.push(source_line.clone());
+        }
+        if let Some(inserts) = line_inserts.get(&line_no) {
+            for value in inserts {
+                append_patch_lines(&mut rendered_lines, value);
+            }
+        }
+    }
+    if header_insert_before_line > source_lines.len() {
+        for value in &header_inserts {
+            append_patch_lines(&mut rendered_lines, value);
+        }
+    }
+
+    if rendered_lines.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut output = rendered_lines.join("\n");
+    if preserve_trailing_newline {
+        output.push('\n');
+    }
+    Ok(output)
+}
+
 /// Apply compose patch operations to compose YAML content.
 pub fn apply_compose_patch_plan(
     compose_yaml: &str,
@@ -835,8 +1285,17 @@ pub fn apply_compose_patch_plan(
             reason: "compose root must be a mapping".to_string(),
         });
     }
+    materialize_yaml_merge_keys(&mut document, MAX_YAML_MERGE_DEPTH)?;
 
     for patch in patch_plan {
+        if patch.path.starts_with("dockerfile.") {
+            return Err(AppError::InvalidInput {
+                reason: format!(
+                    "compose patch apply does not accept dockerfile sentinel path `{}`",
+                    patch.path
+                ),
+            });
+        }
         if patch.op == "inject_service" {
             let service_name = parse_compose_service_root_path(&patch.path).ok_or_else(|| {
                 AppError::InvalidInput {
@@ -923,6 +1382,84 @@ pub fn apply_compose_patch_plan(
         rendered = stripped.to_string();
     }
     Ok(rendered)
+}
+
+fn append_patch_lines(target: &mut Vec<String>, value: &str) {
+    if value.is_empty() {
+        target.push(String::new());
+        return;
+    }
+    for line in value.lines() {
+        target.push(line.to_string());
+    }
+}
+
+fn dockerfile_header_insert_before_line(source_lines: &[String]) -> usize {
+    for (index, line) in source_lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        return index + 1;
+    }
+    source_lines.len() + 1
+}
+
+fn parse_dockerfile_instruction_line_path(path: &str) -> Option<(String, usize)> {
+    let remainder = path.strip_prefix("dockerfile.")?;
+    let (keyword, line_raw) = remainder.split_once(".line:")?;
+    if keyword.is_empty() {
+        return None;
+    }
+    let line = line_raw.parse::<usize>().ok()?;
+    if line == 0 {
+        return None;
+    }
+    Some((keyword.to_ascii_uppercase(), line))
+}
+
+fn dockerfile_has_instruction_at_line(
+    parsed: &ParsedDockerfile,
+    line: usize,
+    keyword: &str,
+) -> bool {
+    parsed
+        .instructions()
+        .iter()
+        .any(|instruction| instruction.line == line && instruction.keyword == keyword)
+}
+
+fn final_stage_from_line(parsed: &ParsedDockerfile) -> Result<usize, AppError> {
+    parsed
+        .final_stage_from_instruction()
+        .map(|instruction| instruction.line)
+        .ok_or_else(|| AppError::InvalidInput {
+            reason: "dockerfile has no FROM stage".to_string(),
+        })
+}
+
+fn final_stage_last_label_or_from_line(parsed: &ParsedDockerfile) -> Result<usize, AppError> {
+    Ok(parsed
+        .final_stage_instructions_by_keyword("LABEL")
+        .last()
+        .map(|instruction| instruction.line)
+        .unwrap_or(final_stage_from_line(parsed)?))
+}
+
+fn final_stage_last_run_or_from_line(parsed: &ParsedDockerfile) -> Result<usize, AppError> {
+    Ok(parsed
+        .last_instruction_in_final_stage("RUN")
+        .map(|instruction| instruction.line)
+        .unwrap_or(final_stage_from_line(parsed)?))
+}
+
+fn final_stage_user_line(parsed: &ParsedDockerfile) -> Result<usize, AppError> {
+    parsed
+        .last_instruction_in_final_stage("USER")
+        .map(|instruction| instruction.line)
+        .ok_or_else(|| AppError::InvalidInput {
+            reason: "final stage is missing USER instruction for replacement".to_string(),
+        })
 }
 
 fn ensure_services_mapping_mut(document: &mut YamlValue) -> Result<&mut Mapping, AppError> {
@@ -1035,6 +1572,80 @@ fn get_services_mapping(document: &YamlValue) -> Result<&Mapping, AppError> {
         })
 }
 
+fn materialize_yaml_merge_keys(value: &mut YamlValue, depth_remaining: u8) -> Result<(), AppError> {
+    if depth_remaining == 0 {
+        return Err(AppError::InvalidInput {
+            reason: "compose yaml nesting depth exceeded".to_string(),
+        });
+    }
+    let next_depth = depth_remaining - 1;
+
+    match value {
+        YamlValue::Mapping(mapping) => {
+            let merge_key = YamlValue::String(YAML_MERGE_KEY.to_string());
+            let merge_value = mapping.remove(&merge_key);
+
+            for child in mapping.values_mut() {
+                materialize_yaml_merge_keys(child, next_depth)?;
+            }
+
+            let Some(mut merge_value) = merge_value else {
+                return Ok(());
+            };
+
+            materialize_yaml_merge_keys(&mut merge_value, next_depth)?;
+            let source_mappings = parse_yaml_merge_sources(merge_value)?;
+            let mut merged = Mapping::new();
+
+            // YAML merge precedence keeps earlier sequence entries authoritative.
+            for source in source_mappings.into_iter().rev() {
+                for (key, source_value) in source {
+                    merged.insert(key, source_value);
+                }
+            }
+
+            for (key, explicit_value) in std::mem::take(mapping) {
+                merged.insert(key, explicit_value);
+            }
+            *mapping = merged;
+            Ok(())
+        }
+        YamlValue::Sequence(items) => {
+            for item in items {
+                materialize_yaml_merge_keys(item, next_depth)?;
+            }
+            Ok(())
+        }
+        YamlValue::Tagged(tagged) => materialize_yaml_merge_keys(&mut tagged.value, next_depth),
+        _ => Ok(()),
+    }
+}
+
+fn parse_yaml_merge_sources(merge_value: YamlValue) -> Result<Vec<Mapping>, AppError> {
+    match merge_value {
+        YamlValue::Mapping(mapping) => Ok(vec![mapping]),
+        YamlValue::Sequence(items) => {
+            let mut mappings = Vec::new();
+            for item in items {
+                match item {
+                    YamlValue::Mapping(mapping) => mappings.push(mapping),
+                    _ => {
+                        return Err(AppError::InvalidInput {
+                            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(mappings)
+        }
+        _ => Err(AppError::InvalidInput {
+            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
+                .to_string(),
+        }),
+    }
+}
+
 struct ServiceRuleContext<'a> {
     service_name: &'a str,
     service: &'a Mapping,
@@ -1059,6 +1670,12 @@ fn evaluate_rule_for_service(
     let service_profile = lookup_profile_for_service(cache, service);
     match &rule.action {
         PolicyAction::EnsureKey { key, value } => {
+            // Init-perms sidecars (names ending in `-init-perms`) are exempt from
+            // EnsureKey and RequireNonRootUser checks only. All other policy actions
+            // (e.g. RequireImageDigest, SynthesizeHealthcheck) still evaluate normally.
+            if is_init_permissions_service_name(service_name) {
+                return Ok(());
+            }
             let current = get_service_path(service, key)?;
             if current != Some(value) {
                 let reason = if current.is_none() {
@@ -1151,6 +1768,7 @@ fn evaluate_rule_for_service(
             }
         }
         PolicyAction::RequireNonRootUser { key } => {
+            // Init-perms sidecar exemption — see EnsureKey comment above.
             if is_init_permissions_service_name(service_name) {
                 return Ok(());
             }
@@ -1388,7 +2006,9 @@ fn evaluate_rule_for_service(
         | PolicyAction::RequireFromDigest
         | PolicyAction::RequireBuildArg { .. }
         | PolicyAction::RequireBuildCacheMounts
-        | PolicyAction::RequireSuidSgidStrip => {}
+        | PolicyAction::RequireSuidSgidStrip
+        | PolicyAction::RequireHealthcheck
+        | PolicyAction::RequireCompanionFile { .. } => {}
     }
     Ok(())
 }
@@ -1409,7 +2029,67 @@ fn add_compose_violation(
 }
 
 fn is_init_permissions_service_name(service_name: &str) -> bool {
-    service_name.ends_with("-init-perms") || service_name.starts_with("init-")
+    // Only sidecars that follow the explicit `<service>-init-perms` naming convention
+    // are exempt from EnsureKey and RequireNonRootUser checks. Generic `init-*`
+    // service names are not. Other policy actions evaluate normally for these services.
+    service_name.ends_with("-init-perms")
+}
+
+fn resolve_companion_file_path(source_path: &Path, key: &str) -> PathBuf {
+    // Callers should pass a canonicalized source path so companion resolution is
+    // rooted at the Dockerfile directory rather than process cwd behavior.
+    source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(key)
+}
+
+fn validate_companion_file_key(key: &str, rule_id: &str) -> Result<(), AppError> {
+    if key.trim().is_empty() {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} requires a non-empty companion file key"),
+        });
+    }
+
+    let path = Path::new(key);
+    if path.is_absolute() {
+        return Err(AppError::InvalidInput {
+            reason: format!("rule {rule_id} companion file key must be relative: `{key}`"),
+        });
+    }
+
+    let mut normal_component_count = 0usize;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => {
+                normal_component_count = normal_component_count.saturating_add(1);
+            }
+            Component::CurDir => {
+                return Err(AppError::InvalidInput {
+                    reason: format!(
+                        "rule {rule_id} companion file key must be a single file name: `{key}`"
+                    ),
+                });
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(AppError::InvalidInput {
+                    reason: format!(
+                        "rule {rule_id} companion file key cannot escape Dockerfile directory: `{key}`"
+                    ),
+                });
+            }
+        }
+    }
+
+    if normal_component_count != 1 {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "rule {rule_id} companion file key must be a single file name: `{key}`"
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 fn service_has_permission_init_sidecar(
@@ -1568,14 +2248,28 @@ fn is_sensitive_env_key(key: &str) -> bool {
         return false;
     }
     let segments: Vec<&str> = normalized.split('_').collect();
-    segments
-        .iter()
-        .any(|segment| matches!(*segment, "TOKEN" | "PASS" | "PASSWORD" | "SECRET" | "KEY"))
-        || normalized.ends_with("TOKEN")
+    segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "TOKEN"
+                | "PASS"
+                | "PASSWORD"
+                | "SECRET"
+                | "KEY"
+                | "CREDENTIAL"
+                | "CREDENTIALS"
+                | "CRED"
+                | "AUTH"
+        )
+    }) || normalized.ends_with("TOKEN")
         || normalized.ends_with("PASS")
         || normalized.ends_with("PASSWORD")
         || normalized.ends_with("SECRET")
         || normalized.ends_with("KEY")
+        || normalized.ends_with("CREDENTIAL")
+        || normalized.ends_with("CREDENTIALS")
+        || normalized.ends_with("CRED")
+        || normalized.ends_with("AUTH")
 }
 
 fn secret_name_for_env_key(key: &str) -> String {
@@ -1607,6 +2301,10 @@ fn has_digest_marker(image: &str) -> bool {
     })
 }
 
+fn is_digest_exempt_from_reference(reference: &str) -> bool {
+    reference.eq_ignore_ascii_case("scratch")
+}
+
 fn has_valid_digest_pin(image: &str) -> bool {
     image
         .split_once('@')
@@ -1634,22 +2332,34 @@ fn lookup_digest_for_image(cache: &CachedProfiles, image: &str) -> Option<String
         .map(|(head, _)| head)
         .unwrap_or(normalized.as_str());
 
-    let mut candidates: BTreeMap<String, String> = BTreeMap::new();
+    let mut exact_candidates: BTreeMap<String, String> = BTreeMap::new();
+    let mut base_candidates: BTreeMap<String, String> = BTreeMap::new();
     for profile in &cache.profiles {
-        let profile_base = profile
-            .image
+        let Ok(normalized_profile) = normalize_image_reference(&profile.image) else {
+            continue;
+        };
+        let profile_base = normalized_profile
             .split_once('@')
             .map(|(head, _)| head)
-            .unwrap_or(&profile.image);
+            .unwrap_or(normalized_profile.as_str());
+        let Some(digest) = &profile.digest else {
+            continue;
+        };
+        if !is_valid_sha256_digest(digest) {
+            continue;
+        }
+        if normalized_profile == normalized {
+            exact_candidates.insert(profile.id.clone(), digest.clone());
+            continue;
+        }
         if normalized_base == profile_base {
-            if let Some(digest) = &profile.digest {
-                if is_valid_sha256_digest(digest) {
-                    candidates.insert(profile.id.clone(), digest.clone());
-                }
-            }
+            base_candidates.insert(profile.id.clone(), digest.clone());
         }
     }
-    candidates.into_values().next()
+    exact_candidates
+        .into_values()
+        .next()
+        .or_else(|| base_candidates.into_values().next())
 }
 
 fn lookup_runtime_user_for_image(cache: &CachedProfiles, image: &str) -> Option<String> {
@@ -1659,20 +2369,31 @@ fn lookup_runtime_user_for_image(cache: &CachedProfiles, image: &str) -> Option<
         .map(|(head, _)| head)
         .unwrap_or(normalized.as_str());
 
-    let mut candidates: BTreeMap<String, String> = BTreeMap::new();
+    let mut exact_candidates: BTreeMap<String, String> = BTreeMap::new();
+    let mut base_candidates: BTreeMap<String, String> = BTreeMap::new();
     for profile in &cache.profiles {
-        let profile_base = profile
-            .image
+        let Ok(normalized_profile) = normalize_image_reference(&profile.image) else {
+            continue;
+        };
+        let profile_base = normalized_profile
             .split_once('@')
             .map(|(head, _)| head)
-            .unwrap_or(&profile.image);
+            .unwrap_or(normalized_profile.as_str());
+        let Some(user) = &profile.runtime.user else {
+            continue;
+        };
+        if normalized_profile == normalized {
+            exact_candidates.insert(profile.id.clone(), user.clone());
+            continue;
+        }
         if normalized_base == profile_base {
-            if let Some(user) = &profile.runtime.user {
-                candidates.insert(profile.id.clone(), user.clone());
-            }
+            base_candidates.insert(profile.id.clone(), user.clone());
         }
     }
-    candidates.into_values().next()
+    exact_candidates
+        .into_values()
+        .next()
+        .or_else(|| base_candidates.into_values().next())
 }
 
 fn lookup_profile_for_service<'a>(
@@ -1688,18 +2409,28 @@ fn lookup_profile_for_service<'a>(
         .map(|(head, _)| head)
         .unwrap_or(normalized.as_str());
 
-    let mut candidates: BTreeMap<String, &ImageProfile> = BTreeMap::new();
+    let mut exact_candidates: BTreeMap<String, &ImageProfile> = BTreeMap::new();
+    let mut base_candidates: BTreeMap<String, &ImageProfile> = BTreeMap::new();
     for profile in &cache.profiles {
-        let profile_base = profile
-            .image
+        let Ok(normalized_profile) = normalize_image_reference(&profile.image) else {
+            continue;
+        };
+        let profile_base = normalized_profile
             .split_once('@')
             .map(|(head, _)| head)
-            .unwrap_or(&profile.image);
+            .unwrap_or(normalized_profile.as_str());
+        if normalized_profile == normalized {
+            exact_candidates.insert(profile.id.clone(), profile);
+            continue;
+        }
         if normalized_base == profile_base {
-            candidates.insert(profile.id.clone(), profile);
+            base_candidates.insert(profile.id.clone(), profile);
         }
     }
-    candidates.into_values().next()
+    exact_candidates
+        .into_values()
+        .next()
+        .or_else(|| base_candidates.into_values().next())
 }
 
 fn extract_final_stage_labels(parsed: &ParsedDockerfile) -> BTreeSet<String> {
@@ -1797,8 +2528,10 @@ fn has_suid_sgid_strip_in_final_stage(parsed: &ParsedDockerfile) -> bool {
         .iter()
         .any(|instruction| {
             let lower = instruction.arguments.to_ascii_lowercase();
+            let has_suid_sgid_selector = lower.contains("-perm /6000")
+                || (lower.contains("-perm -4000") && lower.contains("-perm -2000"));
             lower.contains("find /")
-                && lower.contains("-perm /6000")
+                && has_suid_sgid_selector
                 && (lower.contains("chmod a-s") || lower.contains("chmod ug-s"))
         })
 }
@@ -1911,12 +2644,28 @@ fn parse_yaml_path(path: &str) -> Result<Vec<PathSegment>, AppError> {
             let Some(open) = rest.find('[') else {
                 if !rest.is_empty() {
                     segments.push(PathSegment::Key(rest.to_string()));
+                    if segments.len() > MAX_YAML_PATH_SEGMENTS {
+                        return Err(AppError::InvalidInput {
+                            reason: format!(
+                                "yaml path has {} segments; max supported is {MAX_YAML_PATH_SEGMENTS}",
+                                segments.len()
+                            ),
+                        });
+                    }
                 }
                 break;
             };
             let key = &rest[..open];
             if !key.is_empty() {
                 segments.push(PathSegment::Key(key.to_string()));
+                if segments.len() > MAX_YAML_PATH_SEGMENTS {
+                    return Err(AppError::InvalidInput {
+                        reason: format!(
+                            "yaml path has {} segments; max supported is {MAX_YAML_PATH_SEGMENTS}",
+                            segments.len()
+                        ),
+                    });
+                }
             }
             let after_open = &rest[open + 1..];
             let Some(close_rel) = after_open.find(']') else {
@@ -1930,7 +2679,22 @@ fn parse_yaml_path(path: &str) -> Result<Vec<PathSegment>, AppError> {
                 .map_err(|_| AppError::InvalidInput {
                     reason: format!("invalid yaml path index `{index_text}` in `{path}`"),
                 })?;
+            if index > MAX_YAML_PATH_INDEX {
+                return Err(AppError::InvalidInput {
+                    reason: format!(
+                        "yaml path index `{index}` exceeds max supported value {MAX_YAML_PATH_INDEX}"
+                    ),
+                });
+            }
             segments.push(PathSegment::Index(index));
+            if segments.len() > MAX_YAML_PATH_SEGMENTS {
+                return Err(AppError::InvalidInput {
+                    reason: format!(
+                        "yaml path has {} segments; max supported is {MAX_YAML_PATH_SEGMENTS}",
+                        segments.len()
+                    ),
+                });
+            }
             rest = &after_open[close_rel + 1..];
             if rest.is_empty() {
                 break;
@@ -2194,12 +2958,17 @@ fn ensure_sequence_mut(value: &mut YamlValue) -> Result<&mut Vec<YamlValue>, App
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::{
-        apply_compose_patch_plan, evaluate_compose_policy, evaluate_compose_policy_with_mode,
-        evaluate_dockerfile_policy, evaluate_dockerfile_policy_with_cache, parse_policy_pack,
-        PatchOperation, PolicyAction, PolicyDomain, PolicyStrictness, RuleSeverity,
+        apply_compose_patch_plan, apply_dockerfile_patch_plan, evaluate_compose_policy,
+        evaluate_compose_policy_with_mode, evaluate_dockerfile_policy,
+        evaluate_dockerfile_policy_with_cache, evaluate_dockerfile_policy_with_cache_and_source,
+        load_policy_pack, parse_policy_pack, PatchOperation, PolicyAction, PolicyDomain,
+        PolicyPack, PolicyStrictness, RuleSeverity,
     };
     use crate::error::AppError;
     use crate::heuristics::DeployMode;
@@ -2264,7 +3033,7 @@ rules:
     }
 
     #[test]
-    fn parse_policy_pack_compiles_build_arg_action_alias() {
+    fn parse_policy_pack_compiles_build_arg_action() {
         let yaml = r#"
 version: 1
 domain: dockerfile
@@ -2272,7 +3041,7 @@ strictness: balanced
 rules:
   - id: AC-DF-REPRODUCIBLE
     severity: warn
-    action: ensure_arg
+    action: require_build_arg
     target: dockerfile
     key: SOURCE_DATE_EPOCH
 "#;
@@ -2281,6 +3050,170 @@ rules:
             policy.rules[0].action,
             PolicyAction::RequireBuildArg { .. }
         ));
+    }
+
+    #[test]
+    fn parse_policy_pack_compiles_healthcheck_and_companion_actions() {
+        let yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-HEALTHCHECK
+    severity: warn
+    action: require_healthcheck
+    target: final_stage
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(yaml).expect("policy should parse");
+        assert!(matches!(
+            policy.rules[0].action,
+            PolicyAction::RequireHealthcheck
+        ));
+        assert!(matches!(
+            policy.rules[1].action,
+            PolicyAction::RequireCompanionFile { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_compose_rule_with_invalid_target() {
+        let yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-READONLY
+    severity: warn
+    action: ensure_key
+    target: services.api
+    key: read_only
+    value: true
+"#;
+        let result = parse_policy_pack(yaml);
+        match result {
+            Err(AppError::InvalidInput { reason }) => {
+                assert!(reason.contains("unsupported target"));
+                assert!(reason.contains("service.*"));
+            }
+            other => panic!("expected invalid target error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_dockerfile_rule_with_invalid_target() {
+        let yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-HEALTHCHECK
+    severity: warn
+    action: require_healthcheck
+    target: dockerfile
+"#;
+        let result = parse_policy_pack(yaml);
+        match result {
+            Err(AppError::InvalidInput { reason }) => {
+                assert!(reason.contains("unsupported target"));
+                assert!(reason.contains("final_stage"));
+            }
+            other => panic!("expected invalid target error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_action_not_supported_in_domain() {
+        let yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-WRONG-ACTION
+    severity: warn
+    action: ensure_key
+    target: dockerfile
+    key: read_only
+    value: true
+"#;
+        let result = parse_policy_pack(yaml);
+        match result {
+            Err(AppError::InvalidInput { reason }) => {
+                assert!(reason.contains("not supported"));
+            }
+            other => panic!("expected unsupported action error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_unsafe_label_key() {
+        let yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-OCI-LABELS
+    severity: warn
+    action: require_labels
+    target: final_stage
+    labels:
+      - "org.opencontainers.image.source\nRUN whoami"
+"#;
+        let result = parse_policy_pack(yaml);
+        match result {
+            Err(AppError::InvalidInput { reason }) => {
+                assert!(reason.contains("label key"));
+            }
+            other => panic!("expected invalid label key error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_unsafe_build_arg_key() {
+        let yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-REPRODUCIBLE
+    severity: warn
+    action: require_build_arg
+    target: dockerfile
+    key: SOURCE DATE
+"#;
+        let result = parse_policy_pack(yaml);
+        match result {
+            Err(AppError::InvalidInput { reason }) => {
+                assert!(reason.contains("build arg key"));
+            }
+            other => panic!("expected invalid build arg key error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_pack_accepts_repo_dockerfile_policy_files() {
+        let balanced = include_str!("../../../../references/policy-dockerfile-balanced.yaml");
+        let enforcing = include_str!("../../../../references/policy-dockerfile-enforcing.yaml");
+        let balanced_policy = parse_policy_pack(balanced).expect("balanced policy should parse");
+        let enforcing_policy = parse_policy_pack(enforcing).expect("enforcing policy should parse");
+        assert_eq!(balanced_policy.domain, PolicyDomain::Dockerfile);
+        assert_eq!(enforcing_policy.domain, PolicyDomain::Dockerfile);
+    }
+
+    #[test]
+    fn load_policy_pack_rejects_oversized_file() {
+        let temp = tempdir().expect("temp dir should be created");
+        let policy_path = temp.path().join("policy.yaml");
+        let file = fs::File::create(&policy_path).expect("policy file should be created");
+        file.set_len(1_048_577)
+            .expect("policy file should be sized");
+
+        let result = load_policy_pack(&policy_path, PolicyDomain::Compose);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 
     #[test]
@@ -2315,6 +3248,24 @@ rules:
         assert_eq!(result.strictness, PolicyStrictness::Enforcing);
         assert_eq!(result.violations.len(), 2);
         assert_eq!(result.patch_plan.len(), 2);
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_rejects_invalid_target_in_manual_policy_pack() {
+        let policy = PolicyPack {
+            version: 1,
+            domain: PolicyDomain::Dockerfile,
+            strictness: PolicyStrictness::Balanced,
+            rules: vec![super::PolicyRule {
+                id: "AC-DF-HEALTHCHECK".to_string(),
+                severity: RuleSeverity::Warn,
+                action: PolicyAction::RequireHealthcheck,
+                target: "dockerfile".to_string(),
+                rationale: "invalid target for this action".to_string(),
+            }],
+        };
+        let result = evaluate_dockerfile_policy("FROM alpine:3.20", &policy);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 
     #[test]
@@ -2363,6 +3314,89 @@ rules:
             .patch_plan
             .iter()
             .any(|patch| patch.op == "replace_instruction"));
+    }
+
+    #[test]
+    fn apply_dockerfile_patch_plan_applies_header_replace_and_final_stage_insertions() {
+        let dockerfile = r#"FROM docker.io/library/debian:12-slim
+RUN apt-get update && apt-get install -y curl
+USER root
+"#;
+        let plan = vec![
+            PatchOperation {
+                op: "insert_after".to_string(),
+                path: "dockerfile.header".to_string(),
+                value: json!("ARG SOURCE_DATE_EPOCH"),
+                rule_id: "AC-DF-REPRODUCIBLE".to_string(),
+            },
+            PatchOperation {
+                op: "replace_instruction".to_string(),
+                path: "dockerfile.FROM.line:1".to_string(),
+                value: json!(
+                    "FROM docker.io/library/debian:12-slim@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+                rule_id: "AC-DF-FROM-DIGEST".to_string(),
+            },
+            PatchOperation {
+                op: "replace_instruction".to_string(),
+                path: "dockerfile.final_stage.USER".to_string(),
+                value: json!("USER 65532:65532"),
+                rule_id: "AC-DF-USER".to_string(),
+            },
+            PatchOperation {
+                op: "insert_after".to_string(),
+                path: "dockerfile.final_stage.last_run_or_from".to_string(),
+                value: json!(
+                    "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
+                ),
+                rule_id: "AC-DF-SUID-SGID".to_string(),
+            },
+        ];
+
+        let patched = apply_dockerfile_patch_plan(dockerfile, &plan).expect("patch apply works");
+        assert!(patched.contains("ARG SOURCE_DATE_EPOCH"));
+        assert!(patched
+            .contains("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(patched.contains("USER 65532:65532"));
+        assert!(patched.contains(
+            "RUN find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) -exec chmod a-s {} +"
+        ));
+    }
+
+    #[test]
+    fn apply_dockerfile_patch_plan_rejects_unknown_sentinel_path() {
+        let dockerfile = "FROM docker.io/library/debian:12-slim\n";
+        let plan = vec![PatchOperation {
+            op: "insert_after".to_string(),
+            path: "dockerfile.final_stage.unsupported_anchor".to_string(),
+            value: json!("HEALTHCHECK CMD [\"true\"]"),
+            rule_id: "AC-DF-HEALTHCHECK".to_string(),
+        }];
+        let result = apply_dockerfile_patch_plan(dockerfile, &plan);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn apply_dockerfile_patch_plan_inserts_header_after_leading_comment_preamble() {
+        let dockerfile = r#"# syntax=docker/dockerfile:1.7
+# check=error=true
+
+FROM docker.io/library/debian:12-slim
+"#;
+        let plan = vec![PatchOperation {
+            op: "insert_after".to_string(),
+            path: "dockerfile.header".to_string(),
+            value: json!("ARG SOURCE_DATE_EPOCH"),
+            rule_id: "AC-DF-REPRODUCIBLE".to_string(),
+        }];
+
+        let patched = apply_dockerfile_patch_plan(dockerfile, &plan).expect("patch apply works");
+        let lines: Vec<&str> = patched.lines().collect();
+        assert_eq!(lines[0], "# syntax=docker/dockerfile:1.7");
+        assert_eq!(lines[1], "# check=error=true");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "ARG SOURCE_DATE_EPOCH");
+        assert_eq!(lines[4], "FROM docker.io/library/debian:12-slim");
     }
 
     #[test]
@@ -2452,6 +3486,44 @@ services:
     }
 
     #[test]
+    fn apply_compose_patch_plan_removes_merge_inherited_forbidden_key() {
+        let compose = r#"
+x-defaults: &defaults
+  privileged: true
+services:
+  web:
+    <<: *defaults
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PRIVILEGED
+    severity: warn
+    action: forbid_key
+    target: service.*
+    key: privileged
+"#;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let initial =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert_eq!(initial.patch_plan.len(), 1);
+        assert_eq!(initial.patch_plan[0].op, "remove");
+        assert_eq!(initial.patch_plan[0].path, "services.web.privileged");
+
+        let patched = apply_compose_patch_plan(compose, &initial.patch_plan, DeployMode::Compose)
+            .expect("patch apply should work");
+
+        let reevaluated =
+            evaluate_compose_policy(&patched, &base_cache(), &policy).expect("reeval works");
+        assert!(reevaluated.violations.is_empty());
+        assert!(reevaluated.patch_plan.is_empty());
+    }
+
+    #[test]
     fn evaluate_compose_policy_supports_nested_key_targets() {
         let compose = r#"
 services:
@@ -2501,6 +3573,113 @@ rules:
     action: ensure_key
     target: service.*
     key: healthcheck[
+    value: true
+"#;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_compose_policy(compose, &base_cache(), &policy);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_resolves_merge_key_inherited_values() {
+        let compose = r#"
+x-hardening-core: &hardening_core
+  cap_drop:
+    - ALL
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+services:
+  web:
+    <<: *hardening_core
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-READONLY
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: read_only
+    value: true
+  - id: AC-CMP-CAPDROP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: cap_drop
+    value: ALL
+  - id: AC-CMP-NNP
+    severity: warn
+    action: ensure_list_contains
+    target: service.*
+    key: security_opt
+    value: no-new-privileges:true
+"#;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_resolves_nested_merge_key_values() {
+        let compose = r#"
+x-healthcheck-defaults: &healthcheck_defaults
+  interval: 30s
+  timeout: 5s
+services:
+  web:
+    image: nginx:1.27
+    healthcheck:
+      <<: *healthcheck_defaults
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:8080/health || exit 1
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-HC-INTERVAL
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: healthcheck.interval
+    value: 30s
+"#;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_rejects_invalid_merge_key_source() {
+        let compose = r#"
+services:
+  web:
+    <<: true
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-READONLY
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: read_only
     value: true
 "#;
 
@@ -2770,6 +3949,69 @@ rules:
     }
 
     #[test]
+    fn evaluate_compose_policy_flags_credential_and_auth_env_without_matching_secrets() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    environment:
+      DB_CREDENTIALS: ${DB_CREDENTIALS}
+      REGISTRY_AUTH: ${REGISTRY_AUTH}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-SECRETS
+    severity: warn
+    action: require_sensitive_env_secrets
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert_eq!(result.violations.len(), 2);
+        assert!(result
+            .violations
+            .iter()
+            .any(|item| item.reason.contains("db_credentials")));
+        assert!(result
+            .violations
+            .iter()
+            .any(|item| item.reason.contains("registry_auth")));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_allows_credential_and_auth_env_with_matching_secrets() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    environment:
+      DB_CREDENTIALS: ${DB_CREDENTIALS}
+      REGISTRY_AUTH: ${REGISTRY_AUTH}
+    secrets:
+      - db_credentials
+      - registry_auth
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-SECRETS
+    severity: warn
+    action: require_sensitive_env_secrets
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+    }
+
+    #[test]
     fn evaluate_compose_policy_ensures_writable_paths_for_read_only_services() {
         let compose = r#"
 services:
@@ -3006,6 +4248,25 @@ rules:
     }
 
     #[test]
+    fn evaluate_dockerfile_policy_allows_scratch_from_without_digest() {
+        let dockerfile = "FROM scratch\nCMD [\"/app\"]\n";
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-FROM-DIGEST
+    severity: block
+    action: require_from_digest
+    target: dockerfile
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
     fn evaluate_dockerfile_policy_flags_invalid_from_digest_marker() {
         let dockerfile = "FROM docker.io/library/alpine:3.20@sha256:abc\nRUN echo hi\n";
         let policy_yaml = r#"
@@ -3052,6 +4313,58 @@ rules:
             .iter()
             .any(|item| item.reason.contains("invalid")));
         assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_prefers_exact_tag_digest_match_over_base_fallback() {
+        let compose = r#"
+services:
+  web:
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-DIGEST
+    severity: warn
+    action: require_image_digest
+    target: service.*
+    key: image
+"#;
+        let mut cache = base_cache();
+        cache.profiles = vec![
+            ImageProfile {
+                id: "IMG-1".to_string(),
+                image: "docker.io/library/nginx:latest".to_string(),
+                digest: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                ),
+                ..cache.profiles[0].clone()
+            },
+            ImageProfile {
+                id: "IMG-2".to_string(),
+                image: "docker.io/library/nginx:1.27".to_string(),
+                digest: Some(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                ),
+                ..cache.profiles[0].clone()
+            },
+        ];
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        let replacement = result
+            .patch_plan
+            .iter()
+            .find(|item| item.path == "services.web.image")
+            .and_then(|item| item.value.as_str())
+            .expect("image replacement patch should be generated");
+        assert!(replacement.starts_with("nginx:1.27@"));
+        assert!(replacement
+            .contains("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
     }
 
     #[test]
@@ -3112,6 +4425,40 @@ rules:
         assert!(result.patch_plan.iter().any(|patch| {
             patch.rule_id == "AC-DF-SUID" && patch.path == "dockerfile.final_stage.last_run_or_from"
         }));
+        assert!(result
+            .patch_plan
+            .iter()
+            .filter(|patch| patch.rule_id == "AC-DF-SUID")
+            .all(|patch| !patch.value.as_str().unwrap_or_default().contains("|| true")));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_accepts_portable_suid_sgid_strip_command() {
+        let dockerfile = r#"
+FROM docker.io/library/debian:12
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} +
+USER 1000:1000
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-SUID
+    severity: block
+    action: require_suid_sgid_strip
+    target: final_stage
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(!result
+            .violations
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-SUID"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-SUID"));
     }
 
     #[test]
@@ -3128,6 +4475,35 @@ rules:
   - id: AC-DF-REPRODUCIBLE
     severity: warn
     action: require_build_arg
+    target: dockerfile
+    key: SOURCE_DATE_EPOCH
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(result
+            .violations
+            .iter()
+            .any(|item| item.target == "dockerfile.ARG.SOURCE_DATE_EPOCH"));
+        assert!(result.patch_plan.iter().any(|patch| {
+            patch.path == "dockerfile.header"
+                && patch.value.as_str() == Some("ARG SOURCE_DATE_EPOCH")
+        }));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_accepts_legacy_ensure_arg_action_alias() {
+        let dockerfile = r#"
+FROM docker.io/library/debian:12
+RUN echo hi
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-REPRODUCIBLE
+    severity: warn
+    action: ensure_arg
     target: dockerfile
     key: SOURCE_DATE_EPOCH
 "#;
@@ -3165,5 +4541,424 @@ rules:
         let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
         assert!(result.violations.is_empty());
         assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_reports_missing_healthcheck() {
+        let dockerfile = r#"
+FROM docker.io/library/debian:12
+RUN echo hi
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-HEALTHCHECK
+    severity: warn
+    action: require_healthcheck
+    target: final_stage
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(result
+            .violations
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-HEALTHCHECK"));
+        assert!(result.patch_plan.iter().any(|patch| {
+            patch.rule_id == "AC-DF-HEALTHCHECK"
+                && patch.path == "dockerfile.final_stage.last_run_or_from"
+        }));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_enforcing_missing_healthcheck_has_no_placeholder_patch() {
+        let dockerfile = r#"
+FROM docker.io/library/debian:12
+RUN echo hi
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-HEALTHCHECK
+    severity: block
+    action: require_healthcheck
+    target: final_stage
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy(dockerfile, &policy).expect("evaluation works");
+        assert!(result
+            .violations
+            .iter()
+            .any(|item| item.rule_id == "AC-DF-HEALTHCHECK"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|patch| patch.rule_id == "AC-DF-HEALTHCHECK"));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_reports_missing_companion_file() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
+        assert_eq!(result.violations.len(), 1);
+        assert!(result.violations[0]
+            .reason
+            .contains("missing companion file"));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_accepts_present_companion_file() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let dockerignore_path = temp.path().join(".dockerignore");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        fs::write(&dockerignore_path, "target/\n").expect("dockerignore should be written");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_requires_companion_to_be_file() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let companion_dir_path = temp.path().join(".dockerignore");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        fs::create_dir(&companion_dir_path).expect("companion dir should be created");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
+        assert_eq!(result.violations.len(), 1);
+        assert!(result.violations[0].reason.contains("not a regular file"));
+        assert_eq!(result.patch_plan.len(), 1);
+        assert_eq!(result.patch_plan[0].rule_id, "AC-DF-DOCKERIGNORE");
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_rejects_nonexistent_companion_source_path() {
+        let temp = tempdir().expect("temp dir should be created");
+        let missing_path = temp.path().join("missing.Dockerfile");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(missing_path.as_path()),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(AppError::InvalidInput { ref reason })
+                    if reason.contains("failed to canonicalize Dockerfile source path")
+            ),
+            "expected canonicalization failure for missing source path, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_reports_companion_when_source_path_is_unavailable() {
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_dockerfile_policy_with_cache_and_source(dockerfile, &policy, None, None)
+                .expect("evaluation works");
+        assert_eq!(result.violations.len(), 1);
+        assert!(result.violations[0]
+            .reason
+            .contains("without a Dockerfile source path"));
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_enforcing_mode_suppresses_companion_patch_without_source_path() {
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: block
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_dockerfile_policy_with_cache_and_source(dockerfile, &policy, None, None)
+                .expect("evaluation works");
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].rule_id, "AC-DF-DOCKERIGNORE");
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_enforcing_mode_suppresses_companion_patch_with_source_path() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: block
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].rule_id, "AC-DF-DOCKERIGNORE");
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_does_not_skip_non_sidecar_init_prefix_service() {
+        let compose = r#"
+services:
+  init-api:
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.patch_plan.len(), 1);
+        assert_eq!(result.patch_plan[0].path, "services.init-api.restart");
+    }
+
+    #[test]
+    fn evaluate_compose_policy_skips_init_perms_sidecar_for_ensure_key() {
+        let compose = r#"
+services:
+  api-init-perms:
+    image: alpine:3.20
+    restart: no
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_companion_file_absolute_path() {
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: /etc/passwd
+"#;
+        let result = parse_policy_pack(policy_yaml);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_companion_file_parent_traversal() {
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: ../../secret
+"#;
+        let result = parse_policy_pack(policy_yaml);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_companion_file_curdir_only_key() {
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .
+"#;
+        let result = parse_policy_pack(policy_yaml);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn parse_policy_pack_rejects_companion_file_subdirectory_key() {
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: subdir/.dockerignore
+"#;
+        let result = parse_policy_pack(policy_yaml);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn apply_compose_patch_plan_rejects_oversized_path_index() {
+        let compose = r#"
+services:
+  web:
+    image: nginx:1.27
+"#;
+        let plan = vec![PatchOperation {
+            op: "set".to_string(),
+            path: "services.web.tmpfs[5000]".to_string(),
+            value: json!("/tmp:rw"),
+            rule_id: "AC-CMP-WRITABLE".to_string(),
+        }];
+        let result = apply_compose_patch_plan(compose, &plan, DeployMode::Compose);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn apply_compose_patch_plan_rejects_dockerfile_sentinel_paths() {
+        let compose = r#"
+services:
+  web:
+    image: nginx:1.27
+"#;
+        let plan = vec![PatchOperation {
+            op: "set".to_string(),
+            path: "dockerfile.header".to_string(),
+            value: json!("ARG SOURCE_DATE_EPOCH"),
+            rule_id: "AC-DF-REPRODUCIBLE".to_string(),
+        }];
+        let result = apply_compose_patch_plan(compose, &plan, DeployMode::Compose);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 }

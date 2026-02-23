@@ -20,7 +20,7 @@ rules:
     target: service.*
     key: read_only
     value: true
-    rationale: Immutable root filesystem is mandatory.
+    rationale: Immutable root filesystem is mandatory (canonical *-init-perms sidecars are exempt from ensure_key checks).
   - id: AC-CMP-WRITABLE
     severity: block
     action: ensure_writable_paths
@@ -82,3 +82,10 @@ rules:
       cpus: "1.0"
       pids_limit: 256
     rationale: Compose mode requires explicit deterministic resource limits.
+  - id: AC-CMP-RESTART
+    severity: block
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+    rationale: Services must define a restart policy for production availability (canonical *-init-perms sidecars are exempt from ensure_key checks).

@@ -20,7 +20,7 @@ rules:
     target: service.*
     key: read_only
     value: true
-    rationale: Immutable root filesystem by default.
+    rationale: Immutable root filesystem by default (canonical *-init-perms sidecars are exempt from ensure_key checks).
   - id: AC-CMP-WRITABLE
     severity: warn
     action: ensure_writable_paths
@@ -45,6 +45,12 @@ rules:
     action: require_sensitive_env_secrets
     target: service.*
     rationale: Prefer compose secrets for TOKEN/PASS/KEY variables instead of inline environment values.
+  - id: AC-CMP-DIGEST
+    severity: warn
+    action: require_image_digest
+    target: service.*
+    key: image
+    rationale: Balanced compose stacks should prefer digest-pinned images for deterministic pulls.
   - id: AC-CMP-USER
     severity: warn
     action: require_non_root_user
@@ -76,3 +82,10 @@ rules:
       cpus: "1.0"
       pids_limit: 256
     rationale: Compose mode requires explicit deterministic resource limits.
+  - id: AC-CMP-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+    rationale: Services should restart automatically to maintain availability (canonical *-init-perms sidecars are exempt from ensure_key checks).

@@ -38,3 +38,14 @@ rules:
     action: require_build_cache_mounts
     target: dockerfile
     rationale: BuildKit cache mounts improve deterministic builds and layer hygiene.
+  - id: AC-DF-HEALTHCHECK
+    severity: warn
+    action: require_healthcheck
+    target: final_stage
+    rationale: Final stage should include a HEALTHCHECK instruction for runtime observability.
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+    rationale: A .dockerignore should accompany every Dockerfile to prevent context bloat and secret leakage.

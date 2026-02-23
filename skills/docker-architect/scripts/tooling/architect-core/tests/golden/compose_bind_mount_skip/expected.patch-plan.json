@@ -1,6 +1,12 @@
 [
   {
     "op": "set",
+    "path": "services.api.image",
+    "value": "nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rule_id": "AC-CMP-DIGEST"
+  },
+  {
+    "op": "set",
     "path": "services.api.healthcheck",
     "value": {
       "interval": "10s",
@@ -32,6 +38,12 @@
     "path": "services.api.pids_limit",
     "value": 256,
     "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.restart",
+    "value": "unless-stopped",
+    "rule_id": "AC-CMP-RESTART"
   },
   {
     "op": "list_add",

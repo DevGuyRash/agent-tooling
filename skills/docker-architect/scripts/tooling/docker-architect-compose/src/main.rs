@@ -1,7 +1,7 @@
 //! Binary entrypoint for the deterministic docker-architect-compose CLI.
 
 use architect_core::cli::Command;
-use architect_core::{run, SkillVariant};
+use architect_core::{output_has_blocked_violations, run, SkillVariant};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -17,10 +17,21 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
+    let should_gate_blocked_policy = matches!(&cli.command, Command::PolicyCheck(_));
     match run(cli.command, SkillVariant::Compose) {
         Ok(output) => {
             if !output.is_empty() {
                 println!("{output}");
+            }
+            if should_gate_blocked_policy {
+                match output_has_blocked_violations(&output) {
+                    Ok(true) => std::process::exit(2),
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
         Err(error) => {
