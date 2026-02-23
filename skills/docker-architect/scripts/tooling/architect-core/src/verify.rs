@@ -393,7 +393,9 @@ mod tests {
         assert!(logs_contain_error_keywords("error: connection refused"));
         assert!(logs_contain_error_keywords("ERROR failed to connect"));
         assert!(logs_contain_error_keywords(" error failed to connect"));
-        assert!(logs_contain_error_keywords("error,details=failed to connect"));
+        assert!(logs_contain_error_keywords(
+            "error,details=failed to connect"
+        ));
         assert!(logs_contain_error_keywords(
             "write /tmp/x: read-only file system"
         ));
