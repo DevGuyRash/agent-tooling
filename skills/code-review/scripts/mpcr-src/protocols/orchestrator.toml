@@ -39,7 +39,7 @@ Explorer subagents keep the orchestrator context-free while giving reviewers pre
 
 ## Domain discovery
 
-1. Run `mpcr protocol domains` to load the 11 seed domains.
+1. Run `mpcr protocol domains` to load the 17 seed domains.
 2. Based on the diff summary and explorer summaries, identify additional domains specific to this codebase.
    Examples: i18n, accessibility, regulatory compliance, ML safety, platform-specific, database schema, UX consistency, backwards compat, deployment safety, config management, API versioning.
 3. For each discovered domain, define: name, "defend that..." statement, 2-3 seed challenges.
@@ -161,12 +161,6 @@ You SHALL identify additional domains beyond these seeds. Consider:
 - Backwards compatibility
 - Deployment safety (rollback, canary, feature flags)
 - Configuration management
-- Supply chain security (build provenance, SBOM, dependency pinning)
-- Authentication & authorization (RBAC, OAuth flows, session management)
-- Cryptography & secrets management (key rotation, algorithm selection, secret detection)
-- Input validation & injection prevention (sanitization, WAF rules, schema enforcement)
-- Infrastructure & runtime security (container hardening, network policies, least privilege)
-- Data protection & privacy (PII handling, encryption, audit trails, regulatory compliance)
 
 For each discovered domain, define: name, "defend that..." statement, 2-3 seed challenges.
 You SHALL discover at least 2 additional domains for non-trivial changes.
