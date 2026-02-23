@@ -1079,15 +1079,20 @@ pub fn evaluate_dockerfile_policy_with_cache_and_source(
                         ),
                     })?;
                 let companion_path = resolve_companion_file_path(&canonical_source_path, key);
-                if companion_path.exists() {
+                if companion_path.is_file() {
                     continue;
                 }
 
+                let reason = if companion_path.exists() {
+                    format!("companion file `{key}` exists but is not a regular file")
+                } else {
+                    format!("missing companion file `{key}`")
+                };
                 violations.push(PolicyViolation {
                     rule_id: rule.id.clone(),
                     severity: rule.severity.clone(),
                     target: format!("dockerfile.companion_file[{key}]"),
-                    reason: format!("missing companion file `{key}`"),
+                    reason,
                 });
                 patches.push(PatchOperation {
                     op: "insert_after".to_string(),
@@ -4610,6 +4615,39 @@ rules:
         .expect("evaluation works");
         assert!(result.violations.is_empty());
         assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_requires_companion_to_be_file() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let companion_dir_path = temp.path().join(".dockerignore");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        fs::create_dir(&companion_dir_path).expect("companion dir should be created");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: balanced
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: warn
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
+        assert_eq!(result.violations.len(), 1);
+        assert!(result.violations[0].reason.contains("not a regular file"));
+        assert_eq!(result.patch_plan.len(), 1);
+        assert_eq!(result.patch_plan[0].rule_id, "AC-DF-DOCKERIGNORE");
     }
 
     #[test]

@@ -234,9 +234,65 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
         let trimmed = line.trim_start();
         line_has_standalone_error_prefix(trimmed)
             || line_has_bracketed_error_prefix(trimmed)
-            || trimmed.contains(" level=error")
+            || line_has_logfmt_error_level(trimmed)
             || trimmed.contains("] error")
     })
+}
+
+fn line_has_logfmt_error_level(line: &str) -> bool {
+    const NEEDLE: &str = "level=error";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_whitespace())
+        };
+        if !boundary_before_ok {
+            return false;
+        }
+
+        let suffix = &line[index + NEEDLE.len()..];
+        match suffix.chars().next() {
+            None => true,
+            Some(character) => {
+                character.is_ascii_whitespace() || matches!(character, ',' | ';' | ']' | '}')
+            }
+        }
+    })
+}
+
+fn index_inside_unescaped_double_quotes(line: &str, byte_index: usize) -> bool {
+    let mut inside_quotes = false;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        if index >= byte_index {
+            break;
+        }
+
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        if inside_quotes && character == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if character == '"' {
+            inside_quotes = !inside_quotes;
+        }
+    }
+
+    inside_quotes
 }
 
 fn line_has_bracketed_error_prefix(line: &str) -> bool {
@@ -445,10 +501,19 @@ mod tests {
         assert!(logs_contain_error_keywords(
             "mount failed: operation not permitted"
         ));
+        assert!(logs_contain_error_keywords(
+            "level=error msg=\"unable to bind\""
+        ));
+        assert!(logs_contain_error_keywords(
+            "ts=2026-02-22T10:00:00Z level=error msg=\"unable to bind\""
+        ));
         assert!(!logs_contain_error_keywords("error tolerance: none"));
         assert!(!logs_contain_error_keywords("error correction disabled"));
         assert!(!logs_contain_error_keywords("error count: 0"));
         assert!(!logs_contain_error_keywords("error,count: 0"));
+        assert!(!logs_contain_error_keywords(
+            "msg=\"set level=error for test coverage\" level=info"
+        ));
         assert!(!logs_contain_error_keywords("[ERROR]abc"));
         assert!(!logs_contain_error_keywords("[errors] found"));
         assert!(!logs_contain_error_keywords("errors found: 0"));
