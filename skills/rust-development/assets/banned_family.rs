@@ -522,15 +522,19 @@ fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usiz
                     }
                 }
                 MatchKind::MacroOrCall => {
-                    if j < bytes.len() && bytes[j] == b'!' {
+                    let mut k = j;
+                    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                        k += 1;
+                    }
+                    if k < bytes.len() && bytes[k] == b'!' {
                         return Some(i);
                     }
                     if j == i + prefix_bytes.len() {
-                        let mut k = j;
-                        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-                            k += 1;
+                        let mut call_idx = j;
+                        while call_idx < bytes.len() && bytes[call_idx].is_ascii_whitespace() {
+                            call_idx += 1;
                         }
-                        if k < bytes.len() && bytes[k] == b'(' {
+                        if call_idx < bytes.len() && bytes[call_idx] == b'(' {
                             return Some(i);
                         }
                     }

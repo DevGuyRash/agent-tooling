@@ -48,7 +48,8 @@ script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
 skill_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
 assets_dir="${skill_root}/assets"
 
-CLIPPY_SENTINEL="# rust-development-skill:clippy-lints"
+CLIPPY_SENTINEL="# rust-development-skill:clippy-lints:start"
+CLIPPY_SENTINEL_END="# rust-development-skill:clippy-lints:end"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -286,18 +287,26 @@ if [ "$do_clippy" -eq 1 ]; then
     exit 1
   fi
 
+  append_clippy_config() {
+    if grep -q '^[[:space:]]*\[package\]' "$cargo_toml"; then
+      sed 's/\[workspace\.lints/\[lints/g' "$clippy_src" >> "$cargo_toml"
+    else
+      cat "$clippy_src" >> "$cargo_toml"
+    fi
+  }
+
   if grep -qF "$CLIPPY_SENTINEL" "$cargo_toml" 2>/dev/null; then
     if [ "$force" -eq 0 ]; then
       echo "  ⚠ clippy lints already present (sentinel found; use --force to replace)"
     else
-      echo "  ⚠ --force: all content after sentinel will be replaced"
-      # Remove old sentinel block and re-append
-      # The sentinel marks the start; we remove everything from it to EOF
-      # and re-append the fresh config.
+      echo "  ⚠ --force: managed clippy block will be replaced"
+      # Remove only the managed sentinel block so unrelated Cargo.toml
+      # sections after it are preserved.
       _tmp="$(mktemp "${TMPDIR:-/tmp}/rust-development-scaffold.XXXXXX")"
-      if awk -v sentinel="$CLIPPY_SENTINEL" '
-        $0 ~ sentinel { found=1 }
-        !found
+      if awk -v sentinel="$CLIPPY_SENTINEL" -v sentinel_end="$CLIPPY_SENTINEL_END" '
+        $0 == sentinel { in_block=1; next }
+        in_block && $0 == sentinel_end { in_block=0; next }
+        !in_block
       ' "$cargo_toml" > "$_tmp" && mv "$_tmp" "$cargo_toml"; then
         :
       else
@@ -306,16 +315,17 @@ if [ "$do_clippy" -eq 1 ]; then
         exit 1
       fi
       printf '\n%s\n' "$CLIPPY_SENTINEL" >> "$cargo_toml"
-      cat "$clippy_src" >> "$cargo_toml"
+      append_clippy_config
+      printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
       echo "  ✓ replaced clippy lint config in Cargo.toml"
     fi
-  elif grep -q '\[workspace\.lints' "$cargo_toml" 2>/dev/null; then
-    echo "  ⚠ [workspace.lints] already present (not from this skill). Review manually or use --force."
+  elif grep -Eq '^\s*\[(workspace\.lints|lints)(\.|])' "$cargo_toml" 2>/dev/null; then
+    echo "  ⚠ [workspace.lints]/[lints] already present (not from this skill). Review manually or use --force."
     if [ "$force" -eq 1 ]; then
-      # Remove existing [workspace.lints*] sections before appending
+      # Remove existing [workspace.lints*] or [lints*] sections before appending.
       _tmp="$(mktemp "${TMPDIR:-/tmp}/rust-development-scaffold.XXXXXX")"
       if awk '
-        /^\[workspace\.lints/ { skip=1; next }
+        /^\[(workspace\.lints|lints)/ { skip=1; next }
         /^\[/                 { skip=0 }
         !skip
       ' "$cargo_toml" > "$_tmp" && mv "$_tmp" "$cargo_toml"; then
@@ -326,12 +336,14 @@ if [ "$do_clippy" -eq 1 ]; then
         exit 1
       fi
       printf '\n%s\n' "$CLIPPY_SENTINEL" >> "$cargo_toml"
-      cat "$clippy_src" >> "$cargo_toml"
-      echo "  ✓ replaced existing [workspace.lints] with skill config"
+      append_clippy_config
+      printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
+      echo "  ✓ replaced existing [workspace.lints]/[lints] with skill config"
     fi
   else
     printf '\n%s\n' "$CLIPPY_SENTINEL" >> "$cargo_toml"
-    cat "$clippy_src" >> "$cargo_toml"
+    append_clippy_config
+    printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
     echo "  ✓ appended clippy lint config to Cargo.toml"
   fi
   echo ""

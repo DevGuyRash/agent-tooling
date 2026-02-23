@@ -126,7 +126,7 @@ except ModuleNotFoundError:  # pragma: no cover - best-effort fallback
     except ModuleNotFoundError:
         tomllib = None  # type: ignore
 
-ws_re = re.compile(r"^\s*\[workspace\]\s*$", re.MULTILINE)
+ws_re = re.compile(r"^\s*\[\s*workspace\s*\]", re.MULTILINE)
 workspace_manifests = []
 for manifest in manifests:
     try:
@@ -302,14 +302,12 @@ else:
             except Exception:
                 pass
 
-        assume_all_members = member_manifests is None and not members
         workspaces.append(
             {
                 "root": root,
                 "members": members,
                 "exclude": exclude,
                 "member_manifests": member_manifests,
-                "assume_all_members": assume_all_members,
             }
         )
 
@@ -332,10 +330,6 @@ else:
 
             if not _is_under(manifest.parent, ws["root"]):
                 continue
-            if ws.get("assume_all_members"):
-                is_member = True
-                break
-
             rel = manifest.parent.relative_to(ws["root"]).as_posix()
             if rel == ".":
                 rel = ""

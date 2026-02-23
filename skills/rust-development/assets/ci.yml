@@ -324,6 +324,12 @@ jobs:
             ${{ steps.cfg.outputs.features_flag }} \
             ${{ steps.cfg.outputs.locked_flag }} 2>&1 | tee "$RUST_CI_DIAG_DIR/rust-test.log"
 
+      - name: Install cargo-deny (optional; prebuilt)
+        if: steps.cfg.outputs.run_deny == 'true' && steps.cfg.outputs.install_deny == 'true'
+        uses: taiki-e/install-action@cfdb446e391c69574ebc316dfb7d7849ec12b940 # v2
+        with:
+          tool: cargo-deny
+
       - name: Cargo deny (optional; auto if deny.toml exists)
         if: steps.cfg.outputs.run_deny == 'true'
         working-directory: ${{ matrix.dir }}
@@ -331,9 +337,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v cargo-deny >/dev/null 2>&1; then
-            if [ "${{ steps.cfg.outputs.install_deny }}" = "true" ]; then
-              cargo install cargo-deny --locked
-            elif [ "${{ steps.cfg.outputs.deny_mode }}" = "true" ]; then
+            if [ "${{ steps.cfg.outputs.deny_mode }}" = "true" ]; then
               echo "CI_CARGO_DENY=true but cargo-deny is unavailable and CI_CARGO_DENY_INSTALL is not true" >&2
               exit 1
             else
