@@ -43,16 +43,30 @@ fn banned_family_is_absent_in_production_code() {
     let root = workspace_root().expect("workspace root");
     let scan_roots = resolve_scan_roots(&root);
     let mut violations = Vec::new();
+    let mut seen_files = HashSet::new();
 
     for root in scan_roots {
         for path in collect_rust_files(&root) {
+            let canonical_path = match fs::canonicalize(&path) {
+                Ok(canonical) => canonical,
+                Err(err) => {
+                    eprintln!(
+                        "warn: canonicalize failed for {}: {err}",
+                        path.display()
+                    );
+                    path.clone()
+                }
+            };
+            if !seen_files.insert(canonical_path) {
+                continue;
+            }
             let source = fs::read_to_string(&path).expect("read source");
             let sanitized = strip_comments_and_strings(&source);
             let raw_lines: Vec<&str> = source.lines().collect();
             let sanitized_lines: Vec<&str> = sanitized.lines().collect();
             let skip_lines = compute_test_line_mask(&raw_lines, &sanitized_lines);
 
-            let mut unsafe_impl_state = UnsafeImplState::Searching;
+            let mut unsafe_impl_state = UnsafeImplState::searching();
             for (line_idx, line) in sanitized_lines.iter().enumerate() {
                 if skip_lines.get(line_idx).copied().unwrap_or(false) {
                     continue;
@@ -529,10 +543,33 @@ fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usiz
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UnsafeImplState {
+enum UnsafeImplPhase {
     Searching,
     SawUnsafe,
     SawUnsafeImpl,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UnsafeImplState {
+    phase: UnsafeImplPhase,
+    // Only meaningful when `phase == SawUnsafeImpl`.
+    impl_generic_depth: usize,
+}
+
+impl UnsafeImplState {
+    fn searching() -> Self {
+        Self {
+            phase: UnsafeImplPhase::Searching,
+            impl_generic_depth: 0,
+        }
+    }
+
+    fn set_phase(&mut self, phase: UnsafeImplPhase) {
+        self.phase = phase;
+        if phase != UnsafeImplPhase::SawUnsafeImpl {
+            self.impl_generic_depth = 0;
+        }
+    }
 }
 
 fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) -> bool {
@@ -547,17 +584,36 @@ fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) ->
                 i += 1;
             }
             let token = &line[start..i];
-            *state = match (*state, token) {
-                (UnsafeImplState::Searching, "unsafe") => UnsafeImplState::SawUnsafe,
-                (UnsafeImplState::SawUnsafe, "impl") => UnsafeImplState::SawUnsafeImpl,
-                (UnsafeImplState::SawUnsafeImpl, "Send" | "Sync") => return true,
-                (_, "unsafe") => UnsafeImplState::SawUnsafe,
-                _ => *state,
+            let next_phase = match (state.phase, token) {
+                (_, "unsafe") => UnsafeImplPhase::SawUnsafe,
+                (UnsafeImplPhase::SawUnsafe, "impl") => UnsafeImplPhase::SawUnsafeImpl,
+                (UnsafeImplPhase::SawUnsafeImpl, "for") => UnsafeImplPhase::Searching,
+                (UnsafeImplPhase::SawUnsafeImpl, "where") => UnsafeImplPhase::Searching,
+                (UnsafeImplPhase::SawUnsafeImpl, "Send" | "Sync")
+                    if state.impl_generic_depth == 0 =>
+                {
+                    return true;
+                }
+                (UnsafeImplPhase::SawUnsafe, _) => UnsafeImplPhase::Searching,
+                _ => state.phase,
             };
+            state.set_phase(next_phase);
             continue;
         }
+        if state.phase == UnsafeImplPhase::SawUnsafeImpl {
+            if b == b'<' {
+                state.impl_generic_depth += 1;
+                i += 1;
+                continue;
+            }
+            if b == b'>' && state.impl_generic_depth > 0 {
+                state.impl_generic_depth -= 1;
+                i += 1;
+                continue;
+            }
+        }
         if matches!(b, b';' | b'{' | b'}') {
-            *state = UnsafeImplState::Searching;
+            state.set_phase(UnsafeImplPhase::Searching);
         }
         i += 1;
     }
@@ -906,32 +962,54 @@ mod tests {
 
     #[test]
     fn unsafe_impl_send_sync_detection_is_token_aware() {
-        let mut state = super::UnsafeImplState::Searching;
+        let mut state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl Send for Worker {}",
             &mut state
         ));
-        state = super::UnsafeImplState::Searching;
+        state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl<T> Sync for Cache<T> {}",
             &mut state
         ));
         let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
-        state = super::UnsafeImplState::Searching;
+        state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
-        state = super::UnsafeImplState::Searching;
+        state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync("impl Send for Worker {}", &mut state));
     }
 
     #[test]
     fn unsafe_impl_send_sync_detection_spans_multiple_lines() {
-        let mut state = super::UnsafeImplState::Searching;
+        let mut state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T>",
             &mut state
         ));
         assert!(contains_unsafe_impl_send_or_sync(
             "Send for Worker<T> {}",
+            &mut state
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_send_sync_detection_ignores_generic_bounds() {
+        let mut state = super::UnsafeImplState::searching();
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
+            &mut state
+        ));
+        state = super::UnsafeImplState::searching();
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "unsafe impl<T>",
+            &mut state
+        ));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "Service for Worker<T>",
+            &mut state
+        ));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "where T: Send + Sync {}",
             &mut state
         ));
     }
