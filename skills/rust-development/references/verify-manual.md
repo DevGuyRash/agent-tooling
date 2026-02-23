@@ -36,12 +36,12 @@ rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/
 rg 'todo!\(' --type rust "$@" && echo "ERROR: todo!() found" || echo "✓ No todo!()"
 
 # Non-idiomatic
-rg '\.map\(\|.*\|.*\.clone\(\)\)' --type rust || echo "✓ No .map(|x| x.clone())"
-rg '\.map\(\|.*\|.*\.to_owned\(\)\)' --type rust || echo "✓ No .map(|x| x.to_owned())"
-rg '\.iter\(\)\.count\(\)' --type rust || echo "✓ No .iter().count()"
-rg '\.iter\(\)\.next\(\)' --type rust || echo "✓ No .iter().next()"
-rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust | rg -v '// ALLOW:' || echo "✓ No index loops"
-rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust || echo "✓ No verbose bool comparisons"
+rg '\.map\(\|.*\|.*\.clone\(\)\)' --type rust "$@" || echo "✓ No .map(|x| x.clone())"
+rg '\.map\(\|.*\|.*\.to_owned\(\)\)' --type rust "$@" || echo "✓ No .map(|x| x.to_owned())"
+rg '\.iter\(\)\.count\(\)' --type rust "$@" || echo "✓ No .iter().count()"
+rg '\.iter\(\)\.next\(\)' --type rust "$@" || echo "✓ No .iter().next()"
+rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust "$@" | rg -v '// ALLOW:' || echo "✓ No index loops"
+rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust "$@" || echo "✓ No verbose bool comparisons"
 
 # Debug artifacts
 rg 'dbg!\(' --type rust "$@" || echo "✓ No dbg!()"
@@ -54,28 +54,28 @@ rg '^\s*use\s+(crate|super)::\*;' --type rust "$@" || echo "✓ No glob crate/su
 rg '^\s*use\s+[^;]+::\*;' --type rust "$@" | rg -v 'prelude' || echo "✓ No wildcard imports"
 
 # Parameter anti-patterns
-rg 'fn.*\(&String' --type rust || echo "✓ No &String params"
-rg 'fn.*\(&Vec<' --type rust || echo "✓ No &Vec<T> params"
-rg 'fn.*\(&Box<' --type rust || echo "✓ No &Box<T> params"
+rg 'fn.*\(&String' --type rust "$@" || echo "✓ No &String params"
+rg 'fn.*\(&Vec<' --type rust "$@" || echo "✓ No &Vec<T> params"
+rg 'fn.*\(&Box<' --type rust "$@" || echo "✓ No &Box<T> params"
 
 # Public API anti-patterns
-rg 'pub\s+fn[^\n]*->\s*anyhow::Result' --type rust || echo "✓ No anyhow::Result in pub API"
-rg 'pub\s+fn[^\n]*->\s*Result<[^>]*,\s*anyhow::Error\s*>' --type rust || echo "✓ No anyhow::Error in pub API"
-rg 'pub\s+fn[^\n]*->\s*Result<[^>]*,\s*Box<dyn\s+std::error::Error' --type rust || echo "✓ No Box<dyn Error> in pub API"
+rg 'pub\s+fn[^\n]*->\s*anyhow::Result' --type rust "$@" || echo "✓ No anyhow::Result in pub API"
+rg 'pub\s+fn[^\n]*->\s*Result<[^>]*,\s*anyhow::Error\s*>' --type rust "$@" || echo "✓ No anyhow::Error in pub API"
+rg 'pub\s+fn[^\n]*->\s*Result<[^>]*,\s*Box<dyn\s+std::error::Error' --type rust "$@" || echo "✓ No Box<dyn Error> in pub API"
 
 # Shell injection
-rg 'Command::new\(\s*"(sh|bash|cmd)"\s*\)\s*\.arg\(\s*"(-c|/C)"\s*\)' --type rust || echo "✓ No shell injection"
+rg 'Command::new\(\s*"(sh|bash|cmd)"\s*\)\s*\.arg\(\s*"(-c|/C)"\s*\)' --type rust "$@" || echo "✓ No shell injection"
 rg 'unsafe\s+impl\s+(Send|Sync)' --type rust "$@" || echo "✓ No unsafe impl Send/Sync"
 
 # Empty string allocation
-rg 'String::from\(""\)' --type rust || echo "✓ No String::from(\"\")"
-rg '"".to_string\(\)' --type rust || echo "✓ No \"\".to_string()"
+rg 'String::from\(""\)' --type rust "$@" || echo "✓ No String::from(\"\")"
+rg '"".to_string\(\)' --type rust "$@" || echo "✓ No \"\".to_string()"
 
 # Orphan TODOs
-rg 'TODO' --type rust | rg -v '#[0-9]+' | rg -v 'https?://' || echo "✓ No orphan TODOs"
+rg 'TODO' --type rust "$@" | rg -v '#[0-9]+' | rg -v 'https?://' || echo "✓ No orphan TODOs"
 
 # Unjustified allows
-rg '#\[allow\(' --type rust | rg -v '// Reason:' || echo "✓ All #[allow] justified"
+rg '#\[allow\(' --type rust "$@" | rg -v '// Reason:' || echo "✓ All #[allow] justified"
 ```
 
 WHEN `rg` is unavailable THEN you SHALL use these grep fallbacks:

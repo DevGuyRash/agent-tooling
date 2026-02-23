@@ -144,10 +144,29 @@ Python shim template:
 import os
 import sys
 
-rust_bin = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "tool-name"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+workspace_root = os.path.abspath(os.path.join(script_dir, ".."))
+configured_bin = os.environ.get("TOOL_NAME_BIN")
+target_dir = os.environ.get("CARGO_TARGET_DIR", os.path.join(workspace_root, "target"))
+
+candidates = []
+if configured_bin:
+    candidates.append(configured_bin)
+candidates.extend(
+    [
+        os.path.join(target_dir, "release", "tool-name"),
+        os.path.join(target_dir, "debug", "tool-name"),
+    ]
 )
-os.execv(rust_bin, [rust_bin] + sys.argv[1:])
+
+for rust_bin in candidates:
+    if os.path.isfile(rust_bin) and os.access(rust_bin, os.X_OK):
+        os.execv(rust_bin, [rust_bin] + sys.argv[1:])
+
+sys.stderr.write(
+    "error: tool-name binary not found; build it or set TOOL_NAME_BIN\n"
+)
+sys.exit(127)
 ```
 
 You MAY also use the shell shim template from the repo's `scripts/rust-shim-template.sh`.

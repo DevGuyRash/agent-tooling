@@ -174,7 +174,46 @@ safe_copy() {
   fi
 
   ensure_within_workspace "$dst" || return 1
-  cp "$src" "$dst"
+  dst_parent="$(dirname -- "$dst")"
+  parent_before="$(CDPATH= cd -- "$dst_parent" && pwd -P)"
+  case "$parent_before" in
+    "$workspace_root"|"$workspace_root"/*) ;;
+    *)
+      echo "  ✗ target parent resolves outside workspace root: $dst" >&2
+      return 1
+      ;;
+  esac
+
+  tmp_dst="$(mktemp "${dst_parent}/.scaffold-tmp.XXXXXX")"
+  if ! cp -- "$src" "$tmp_dst"; then
+    rm -f -- "$tmp_dst"
+    return 1
+  fi
+
+  ensure_within_workspace "$dst" || {
+    rm -f -- "$tmp_dst"
+    return 1
+  }
+  if [ -L "$dst" ]; then
+    rm -f -- "$tmp_dst"
+    echo "  ✗ refusing to overwrite symlink destination: $dst" >&2
+    return 1
+  fi
+
+  parent_after="$(CDPATH= cd -- "$dst_parent" && pwd -P)"
+  if [ "$parent_before" != "$parent_after" ]; then
+    rm -f -- "$tmp_dst"
+    echo "  ✗ target parent changed during copy: $dst" >&2
+    return 1
+  fi
+
+  if [ -f "$dst" ] && [ "$force" -eq 0 ]; then
+    rm -f -- "$tmp_dst"
+    echo "  ⚠ already exists (use --force to overwrite): $dst"
+    return 0
+  fi
+
+  mv -f -- "$tmp_dst" "$dst"
   echo "  ✓ $label → $dst"
 }
 

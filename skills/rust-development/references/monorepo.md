@@ -34,7 +34,7 @@ find . -name 'Cargo.toml' -type f
 ## 2. Crate boundaries and dependencies
 
 You SHALL keep dependencies minimal and justified.
-WHEN a tool requires heavy dependencies — more than 50 transitive crates, native libs, or complex runtimes — THEN you SHALL isolate that tool in its own crate.
+WHEN a tool requires heavy dependencies — 50 or more transitive crates, native libs, or complex runtimes — THEN you SHALL isolate that tool in its own crate.
 WHEN a tool requires fewer than 50 transitive crates THEN you SHALL prefer a single crate with multiple binaries.
 You SHALL NOT split crates without demonstrated benefit.
 You SHALL use `default-features = false` when possible.

@@ -52,6 +52,7 @@ fn banned_family_is_absent_in_production_code() {
             let sanitized_lines: Vec<&str> = sanitized.lines().collect();
             let skip_lines = compute_test_line_mask(&raw_lines, &sanitized_lines);
 
+            let mut unsafe_impl_state = UnsafeImplState::Searching;
             for (line_idx, line) in sanitized_lines.iter().enumerate() {
                 if skip_lines.get(line_idx).copied().unwrap_or(false) {
                     continue;
@@ -73,7 +74,7 @@ fn banned_family_is_absent_in_production_code() {
                         ));
                     }
                 }
-                if contains_unsafe_impl_send_or_sync(line) {
+                if contains_unsafe_impl_send_or_sync(line, &mut unsafe_impl_state) {
                     violations.push(format!(
                         "{}:{}:1: banned `unsafe impl Send/Sync`",
                         path.display(),
@@ -527,29 +528,38 @@ fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usiz
     None
 }
 
-fn contains_unsafe_impl_send_or_sync(line: &str) -> bool {
-    let mut saw_unsafe = false;
-    let mut saw_impl = false;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnsafeImplState {
+    Searching,
+    SawUnsafe,
+    SawUnsafeImpl,
+}
 
-    for token in line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')) {
-        if token.is_empty() {
-            continue;
-        }
-        if !saw_unsafe {
-            if token == "unsafe" {
-                saw_unsafe = true;
+fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) -> bool {
+    let mut i = 0;
+    let bytes = line.as_bytes();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
             }
+            let token = &line[start..i];
+            *state = match (*state, token) {
+                (UnsafeImplState::Searching, "unsafe") => UnsafeImplState::SawUnsafe,
+                (UnsafeImplState::SawUnsafe, "impl") => UnsafeImplState::SawUnsafeImpl,
+                (UnsafeImplState::SawUnsafeImpl, "Send" | "Sync") => return true,
+                (_, "unsafe") => UnsafeImplState::SawUnsafe,
+                _ => *state,
+            };
             continue;
         }
-        if !saw_impl {
-            if token == "impl" {
-                saw_impl = true;
-            }
-            continue;
+        if matches!(b, b';' | b'{' | b'}') {
+            *state = UnsafeImplState::Searching;
         }
-        if token == "Send" || token == "Sync" {
-            return true;
-        }
+        i += 1;
     }
     false
 }
@@ -559,7 +569,7 @@ fn strip_comments_and_strings(source: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     let mut in_line_comment = false;
-    let mut in_block_comment = false;
+    let mut block_comment_depth = 0usize;
     let mut in_string = false;
     let mut in_char = false;
     let mut raw_hashes: Option<usize> = None;
@@ -579,11 +589,16 @@ fn strip_comments_and_strings(source: &str) -> String {
             continue;
         }
 
-        if in_block_comment {
-            if b == b'*' && next == b'/' {
+        if block_comment_depth > 0 {
+            if b == b'/' && next == b'*' {
                 push_placeholder(&mut out, b);
                 push_placeholder(&mut out, next);
-                in_block_comment = false;
+                block_comment_depth += 1;
+                i += 2;
+            } else if b == b'*' && next == b'/' {
+                push_placeholder(&mut out, b);
+                push_placeholder(&mut out, next);
+                block_comment_depth -= 1;
                 i += 2;
             } else {
                 push_placeholder(&mut out, b);
@@ -669,7 +684,7 @@ fn strip_comments_and_strings(source: &str) -> String {
         if b == b'/' && next == b'*' {
             push_placeholder(&mut out, b);
             push_placeholder(&mut out, next);
-            in_block_comment = true;
+            block_comment_depth = 1;
             i += 2;
             continue;
         }
@@ -891,16 +906,40 @@ mod tests {
 
     #[test]
     fn unsafe_impl_send_sync_detection_is_token_aware() {
+        let mut state = super::UnsafeImplState::Searching;
         assert!(contains_unsafe_impl_send_or_sync(
-            "unsafe impl Send for Worker {}"
+            "unsafe impl Send for Worker {}",
+            &mut state
         ));
+        state = super::UnsafeImplState::Searching;
         assert!(contains_unsafe_impl_send_or_sync(
-            "unsafe impl<T> Sync for Cache<T> {}"
+            "unsafe impl<T> Sync for Cache<T> {}",
+            &mut state
         ));
         let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
-        assert!(!contains_unsafe_impl_send_or_sync(&sanitized));
+        state = super::UnsafeImplState::Searching;
+        assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
+        state = super::UnsafeImplState::Searching;
+        assert!(!contains_unsafe_impl_send_or_sync("impl Send for Worker {}", &mut state));
+    }
+
+    #[test]
+    fn unsafe_impl_send_sync_detection_spans_multiple_lines() {
+        let mut state = super::UnsafeImplState::Searching;
         assert!(!contains_unsafe_impl_send_or_sync(
-            "impl Send for Worker {}"
+            "unsafe impl<T>",
+            &mut state
         ));
+        assert!(contains_unsafe_impl_send_or_sync(
+            "Send for Worker<T> {}",
+            &mut state
+        ));
+    }
+
+    #[test]
+    fn nested_block_comments_remain_sanitized() {
+        let source = "/* outer /* nested unsafe impl Send */ still comment */\nfn ok() {}";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(!sanitized.contains("unsafe impl Send"));
     }
 }

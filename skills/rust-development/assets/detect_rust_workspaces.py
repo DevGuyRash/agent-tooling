@@ -17,6 +17,9 @@ default_excluded_dirs = {
     "target",
     "node_modules",
     "vendor",
+    "dist",
+    "build",
+    "out",
     "tests",
     "test",
     "testdata",
@@ -113,7 +116,14 @@ except ModuleNotFoundError:  # pragma: no cover - best-effort fallback
 ws_re = re.compile(r"^\s*\[workspace\]\s*$", re.MULTILINE)
 workspace_manifests = []
 for manifest in manifests:
-    txt = manifest.read_text(encoding="utf-8", errors="replace")
+    try:
+        txt = manifest.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(
+            f"warning: skipping unreadable manifest {manifest}: {exc}",
+            file=sys.stderr,
+        )
+        continue
     if ws_re.search(txt):
         workspace_manifests.append(manifest)
 
@@ -130,6 +140,8 @@ def _dir_str(path: Path) -> str:
 
 
 def _validate_matrix_dir(dir_str: str) -> None:
+    # NOTE: Validates paths derived from pathlib traversal (_dir_str output),
+    # not arbitrary external user-provided strings.
     if dir_str == ".":
         return
     normalized = dir_str.replace("\\", "/")
