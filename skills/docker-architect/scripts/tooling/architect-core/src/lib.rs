@@ -4,11 +4,13 @@
 //! This crate provides deterministic extraction, metadata collection, cache management,
 //! rendering, and validation primitives that are consumed by both `docker-architect-compose` and `docker-architect-image`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 pub mod anchor_suggest;
 pub mod cache;
@@ -35,6 +37,8 @@ use crate::model::{CachedProfiles, ImageProfile, RuntimeToolDetail};
 const MAX_POLICY_PLAN_BYTES: u64 = 1_048_576;
 const MAX_IMAGE_LIST_BYTES: u64 = 1_048_576;
 const MAX_GENERAL_TEXT_INPUT_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PROBE_WORKERS: usize = 8;
+const PROBE_CONCURRENCY_ENV: &str = "ARCHITECT_PROBE_CONCURRENCY";
 
 /// Runtime selector for CLI-specific behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,19 +122,25 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                 args.allow_scrape_fallback,
                 variant.user_agent(),
             )?;
+            let mut probe_failure_summary = ProbeFailureSummary::default();
             if args.probe_runtime_tools {
                 let tools = if args.probe_tools.is_empty() {
                     vec!["sh".to_string(), "curl".to_string(), "wget".to_string()]
                 } else {
                     args.probe_tools
                 };
+                let outcomes = collect_probe_outcomes(&profiles, &tools);
+                probe_failure_summary = summarize_probe_failures(&outcomes);
                 for profile in &mut profiles {
-                    match probe::probe_runtime_tools(&profile.image, &tools) {
-                        Ok(result) => {
-                            apply_runtime_probe_results(profile, result);
+                    let Some(outcome) = outcomes.get(&profile.image) else {
+                        continue;
+                    };
+                    match outcome {
+                        ProbeOutcome::Success(result) => {
+                            apply_runtime_probe_results(profile, result.clone());
                         }
-                        Err(error) => {
-                            note_runtime_probe_failure(profile, &error);
+                        ProbeOutcome::Failure { category } => {
+                            note_runtime_probe_failure_category(profile, category);
                         }
                     }
                 }
@@ -149,10 +159,11 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
             };
             cache::with_cache_lock(&cache_path, || cache::write_cache(&cache_path, &payload))?;
             Ok(format!(
-                "wrote {} profiles to {} (unresolved: {})",
+                "wrote {} profiles to {} (unresolved: {}){}",
                 payload.profiles.len(),
                 cache_path.display(),
-                payload.unresolved_references.len()
+                payload.unresolved_references.len(),
+                format_probe_failure_summary(&probe_failure_summary)
             ))
         }
         Command::Render(args) => {
@@ -483,6 +494,7 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
             };
             let payload = cache::with_cache_lock(&cache_path, || cache::read_cache(&cache_path))?;
             let outcomes = collect_probe_outcomes(&payload.profiles, &tools);
+            let failure_summary = summarize_probe_failures(&outcomes);
 
             let profiles_updated = cache::with_cache_lock(&cache_path, || {
                 let mut payload = cache::read_cache(&cache_path)?;
@@ -505,9 +517,10 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                 Ok(profiles_updated)
             })?;
             Ok(format!(
-                "updated runtime probe results for {} profiles in {}",
+                "updated runtime probe results for {} profiles in {}{}",
                 profiles_updated,
-                cache_path.display()
+                cache_path.display(),
+                format_probe_failure_summary(&failure_summary)
             ))
         }
         Command::Verify(args) => {
@@ -609,21 +622,152 @@ enum ProbeOutcome {
     Failure { category: String },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ProbeFailureSummary {
+    total: usize,
+    by_category: BTreeMap<String, usize>,
+}
+
 fn collect_probe_outcomes(
     profiles: &[ImageProfile],
     tools: &[String],
 ) -> BTreeMap<String, ProbeOutcome> {
+    if profiles.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let worker_count = probe_worker_count(profiles.len());
+    let jobs = Arc::new(Mutex::new(
+        profiles
+            .iter()
+            .map(|profile| profile.image.clone())
+            .collect::<VecDeque<_>>(),
+    ));
+    let tools = Arc::new(tools.to_vec());
+    let (results_tx, results_rx) = mpsc::channel::<(String, ProbeOutcome)>();
+
+    let mut workers = Vec::with_capacity(worker_count);
+    for _ in 0..worker_count {
+        let jobs = Arc::clone(&jobs);
+        let tools = Arc::clone(&tools);
+        let results_tx = results_tx.clone();
+        workers.push(thread::spawn(move || loop {
+            let image = {
+                let mut queue = match jobs.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+                match queue.pop_front() {
+                    Some(image) => image,
+                    None => return,
+                }
+            };
+
+            let outcome = match probe::probe_runtime_tools(&image, tools.as_ref()) {
+                Ok(result) => ProbeOutcome::Success(result),
+                Err(error) => ProbeOutcome::Failure {
+                    category: runtime_probe_failure_category(&error).to_string(),
+                },
+            };
+            if results_tx.send((image, outcome)).is_err() {
+                return;
+            }
+        }));
+    }
+    drop(results_tx);
+
     let mut outcomes = BTreeMap::new();
+    for (image, outcome) in results_rx {
+        outcomes.insert(image, outcome);
+    }
+
+    for worker in workers {
+        if worker.join().is_err() {
+            // Panicked workers are handled by the deterministic outcome gap-fill below.
+            continue;
+        }
+    }
+
     for profile in profiles {
-        let outcome = match probe::probe_runtime_tools(&profile.image, tools) {
-            Ok(result) => ProbeOutcome::Success(result),
-            Err(error) => ProbeOutcome::Failure {
-                category: runtime_probe_failure_category(&error).to_string(),
+        if outcomes.contains_key(&profile.image) {
+            continue;
+        }
+        outcomes.insert(
+            profile.image.clone(),
+            ProbeOutcome::Failure {
+                category: "internal-probe-runner".to_string(),
             },
-        };
-        outcomes.insert(profile.image.clone(), outcome);
+        );
     }
     outcomes
+}
+
+fn probe_worker_count(profile_count: usize) -> usize {
+    let default_workers = match thread::available_parallelism() {
+        Ok(parallelism) => parallelism.get(),
+        Err(_) => 1,
+    };
+    effective_probe_worker_count(profile_count, probe_concurrency_override(), default_workers)
+}
+
+fn probe_concurrency_override() -> Option<usize> {
+    std::env::var(PROBE_CONCURRENCY_ENV)
+        .ok()
+        .and_then(|value| parse_probe_concurrency_override(&value))
+}
+
+fn parse_probe_concurrency_override(value: &str) -> Option<usize> {
+    value.parse::<usize>().ok().map(|count| count.max(1))
+}
+
+fn effective_probe_worker_count(
+    profile_count: usize,
+    configured_workers: Option<usize>,
+    default_workers: usize,
+) -> usize {
+    if profile_count == 0 {
+        return 0;
+    }
+
+    let requested_workers = match configured_workers.map(|count| count.max(1)) {
+        Some(count) => count,
+        None => default_workers.max(1),
+    };
+    requested_workers
+        .min(MAX_PROBE_WORKERS)
+        .min(profile_count)
+        .max(1)
+}
+
+fn summarize_probe_failures(outcomes: &BTreeMap<String, ProbeOutcome>) -> ProbeFailureSummary {
+    let mut summary = ProbeFailureSummary::default();
+    for outcome in outcomes.values() {
+        let category = match outcome {
+            ProbeOutcome::Success(_) => continue,
+            ProbeOutcome::Failure { category } => category,
+        };
+        summary.total += 1;
+        let count = summary.by_category.entry(category.clone()).or_insert(0);
+        *count += 1;
+    }
+    summary
+}
+
+fn format_probe_failure_summary(summary: &ProbeFailureSummary) -> String {
+    if summary.total == 0 {
+        return String::new();
+    }
+
+    let category_parts = summary
+        .by_category
+        .iter()
+        .map(|(category, count)| format!("{category}={count}"))
+        .collect::<Vec<_>>();
+    format!(
+        " (probe failures: {}; categories: {})",
+        summary.total,
+        category_parts.join(", ")
+    )
 }
 
 fn apply_runtime_probe_results(
@@ -648,10 +792,6 @@ fn apply_runtime_probe_results(
             "advisory:distroless-avoid-cmd-shell-healthchecks-use-native-health-endpoint-or-dockerfile-healthcheck",
         );
     }
-}
-
-fn note_runtime_probe_failure(profile: &mut ImageProfile, error: &AppError) {
-    note_runtime_probe_failure_category(profile, runtime_probe_failure_category(error));
 }
 
 fn note_runtime_probe_failure_category(profile: &mut ImageProfile, category: &str) {
@@ -691,13 +831,16 @@ fn push_note_once(notes: &mut Vec<String>, note: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs::File;
 
     use tempfile::tempdir;
 
     use super::{
-        output_has_blocked_violations, read_patch_plan_with_size_limit,
-        read_utf8_file_with_size_limit,
+        effective_probe_worker_count, format_probe_failure_summary, output_has_blocked_violations,
+        parse_probe_concurrency_override, read_patch_plan_with_size_limit,
+        read_utf8_file_with_size_limit, summarize_probe_failures, ProbeFailureSummary,
+        ProbeOutcome,
     };
     use crate::error::AppError;
 
@@ -773,5 +916,76 @@ mod tests {
     fn output_has_blocked_violations_errors_when_key_is_missing() {
         let result = output_has_blocked_violations(r#"{"violations":[]}"#);
         assert!(matches!(result, Err(AppError::InvalidInput { .. })));
+    }
+
+    #[test]
+    fn summarize_probe_failures_counts_total_and_categories() {
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "ok.example/app:1".to_string(),
+            ProbeOutcome::Success(BTreeMap::new()),
+        );
+        outcomes.insert(
+            "slow.example/app:2".to_string(),
+            ProbeOutcome::Failure {
+                category: "timeout".to_string(),
+            },
+        );
+        outcomes.insert(
+            "slow.example/app:3".to_string(),
+            ProbeOutcome::Failure {
+                category: "timeout".to_string(),
+            },
+        );
+        outcomes.insert(
+            "io.example/app:4".to_string(),
+            ProbeOutcome::Failure {
+                category: "io".to_string(),
+            },
+        );
+
+        let summary = summarize_probe_failures(&outcomes);
+        let expected = ProbeFailureSummary {
+            total: 3,
+            by_category: BTreeMap::from([
+                ("io".to_string(), 1usize),
+                ("timeout".to_string(), 2usize),
+            ]),
+        };
+        assert_eq!(summary, expected);
+    }
+
+    #[test]
+    fn format_probe_failure_summary_renders_zero_and_non_zero_cases() {
+        let zero = ProbeFailureSummary::default();
+        assert_eq!(format_probe_failure_summary(&zero), "");
+
+        let non_zero = ProbeFailureSummary {
+            total: 2,
+            by_category: BTreeMap::from([
+                ("io".to_string(), 1usize),
+                ("timeout".to_string(), 1usize),
+            ]),
+        };
+        assert_eq!(
+            format_probe_failure_summary(&non_zero),
+            " (probe failures: 2; categories: io=1, timeout=1)"
+        );
+    }
+
+    #[test]
+    fn parse_probe_concurrency_override_supports_serial_mode_values() {
+        assert_eq!(parse_probe_concurrency_override("0"), Some(1));
+        assert_eq!(parse_probe_concurrency_override("1"), Some(1));
+        assert_eq!(parse_probe_concurrency_override("6"), Some(6));
+        assert_eq!(parse_probe_concurrency_override("invalid"), None);
+    }
+
+    #[test]
+    fn effective_probe_worker_count_honors_caps_and_serial_override() {
+        assert_eq!(effective_probe_worker_count(0, Some(1), 4), 0);
+        assert_eq!(effective_probe_worker_count(5, Some(0), 8), 1);
+        assert_eq!(effective_probe_worker_count(5, Some(1), 8), 1);
+        assert_eq!(effective_probe_worker_count(2, Some(100), 32), 2);
     }
 }

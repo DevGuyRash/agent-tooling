@@ -249,7 +249,7 @@ fn line_has_bracketed_error_prefix(line: &str) -> bool {
     remainder
         .chars()
         .next()
-        .is_some_and(|c| c.is_ascii_whitespace())
+        .is_some_and(|c| c.is_ascii_whitespace() || c == ':')
 }
 
 fn line_has_standalone_error_prefix(line: &str) -> bool {
@@ -430,6 +430,8 @@ mod tests {
         assert!(logs_contain_error_keywords("error: connection refused"));
         assert!(logs_contain_error_keywords("ERROR failed to connect"));
         assert!(logs_contain_error_keywords("[ERROR] failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR]: failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR]"));
         assert!(logs_contain_error_keywords(" error failed to connect"));
         assert!(logs_contain_error_keywords(
             "error,details=failed to connect"
@@ -447,6 +449,8 @@ mod tests {
         assert!(!logs_contain_error_keywords("error correction disabled"));
         assert!(!logs_contain_error_keywords("error count: 0"));
         assert!(!logs_contain_error_keywords("error,count: 0"));
+        assert!(!logs_contain_error_keywords("[ERROR]abc"));
+        assert!(!logs_contain_error_keywords("[errors] found"));
         assert!(!logs_contain_error_keywords("errors found: 0"));
         assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
