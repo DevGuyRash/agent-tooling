@@ -1094,6 +1094,11 @@ pub fn evaluate_dockerfile_policy_with_cache_and_source(
                     target: format!("dockerfile.companion_file[{key}]"),
                     reason,
                 });
+                if policy.strictness == PolicyStrictness::Enforcing {
+                    // Enforcing mode is fail-closed: report the violation but avoid
+                    // placeholder patches that could be mistaken for complete remediation.
+                    continue;
+                }
                 patches.push(PatchOperation {
                     op: "insert_after".to_string(),
                     path: DOCKERFILE_PATCH_SENTINEL_HEADER.to_string(),
@@ -4725,6 +4730,37 @@ rules:
         let result =
             evaluate_dockerfile_policy_with_cache_and_source(dockerfile, &policy, None, None)
                 .expect("evaluation works");
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].rule_id, "AC-DF-DOCKERIGNORE");
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_dockerfile_policy_enforcing_mode_suppresses_companion_patch_with_source_path() {
+        let temp = tempdir().expect("temp dir should be created");
+        let dockerfile_path = temp.path().join("Dockerfile");
+        let dockerfile = "FROM docker.io/library/debian:12\n";
+        fs::write(&dockerfile_path, dockerfile).expect("dockerfile should be written");
+        let policy_yaml = r#"
+version: 1
+domain: dockerfile
+strictness: enforcing
+rules:
+  - id: AC-DF-DOCKERIGNORE
+    severity: block
+    action: require_companion_file
+    target: dockerfile
+    key: .dockerignore
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_dockerfile_policy_with_cache_and_source(
+            dockerfile,
+            &policy,
+            None,
+            Some(dockerfile_path.as_path()),
+        )
+        .expect("evaluation works");
 
         assert_eq!(result.violations.len(), 1);
         assert_eq!(result.violations[0].rule_id, "AC-DF-DOCKERIGNORE");
