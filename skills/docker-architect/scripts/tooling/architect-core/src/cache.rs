@@ -17,6 +17,7 @@ use crate::read_utf8_file_with_size_limit;
 
 const MAX_CACHE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const CURRENT_CACHE_SCHEMA_VERSION: u32 = 3;
+const LEGACY_CACHE_SCHEMA_VERSION_V2: u32 = 2;
 static TMP_FILE_NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Write cached profiles to disk.
@@ -109,19 +110,32 @@ fn next_tmp_file_nonce() -> String {
 pub fn read_cache(cache_path: &Path) -> Result<CachedProfiles, AppError> {
     reject_symlink_target(cache_path)?;
     let payload = read_utf8_file_with_size_limit(cache_path, MAX_CACHE_FILE_BYTES, "cache file")?;
-    let parsed: CachedProfiles = serde_json::from_str(&payload)
+    let mut parsed: CachedProfiles = serde_json::from_str(&payload)
         .map_err(|error| AppError::serialization(cache_path, error.to_string()))?;
-    if parsed.schema_version != CURRENT_CACHE_SCHEMA_VERSION {
-        return Err(AppError::InvalidInput {
-            reason: format!(
-                "unsupported cache schema_version {} in {}; expected {}. run refresh to regenerate the cache file",
-                parsed.schema_version,
-                cache_path.display(),
-                CURRENT_CACHE_SCHEMA_VERSION
-            ),
-        });
+    if parsed.schema_version == CURRENT_CACHE_SCHEMA_VERSION {
+        return Ok(parsed);
     }
-    Ok(parsed)
+    if parsed.schema_version == LEGACY_CACHE_SCHEMA_VERSION_V2 {
+        // Schema v2 payloads remain structurally compatible; normalize in-memory.
+        parsed.schema_version = CURRENT_CACHE_SCHEMA_VERSION;
+        return Ok(parsed);
+    }
+    Err(AppError::InvalidInput {
+        reason: format!(
+            "unsupported cache schema_version {} in {}; expected {}. run refresh to regenerate the cache file",
+            parsed.schema_version,
+            cache_path.display(),
+            CURRENT_CACHE_SCHEMA_VERSION
+        ),
+    })
+}
+
+fn path_is_symlink(path: &Path) -> Result<bool, AppError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::io(path, error.to_string())),
+    }
 }
 
 /// Execute an operation while holding an exclusive lock for the cache path.
@@ -220,6 +234,15 @@ fn ensure_lock_identity_supported(cache_path: &Path) -> Result<(), AppError> {
 fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, AppError> {
     use std::os::unix::fs::MetadataExt;
 
+    if path_is_symlink(lock_path)? {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "refusing to lock cache through symlink path {}",
+                lock_path.display()
+            ),
+        });
+    }
+
     let path_meta =
         fs::metadata(lock_path).map_err(|error| AppError::io(lock_path, error.to_string()))?;
     let file_meta = lock_file
@@ -231,6 +254,15 @@ fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, Ap
 #[cfg(windows)]
 fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, AppError> {
     use std::os::windows::fs::MetadataExt;
+
+    if path_is_symlink(lock_path)? {
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "refusing to lock cache through symlink path {}",
+                lock_path.display()
+            ),
+        });
+    }
 
     let path_meta =
         fs::metadata(lock_path).map_err(|error| AppError::io(lock_path, error.to_string()))?;
@@ -371,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn read_cache_rejects_unsupported_schema_version() {
+    fn read_cache_upgrades_schema_version_2_payload() {
         let tmp = tempdir().expect("tempdir should be created");
         let cache_path = tmp.path().join("cache.json");
         fs::write(
@@ -380,10 +412,24 @@ mod tests {
         )
         .expect("cache file should be written");
 
+        let result = read_cache(&cache_path).expect("schema v2 should be accepted");
+        assert_eq!(result.schema_version, CURRENT_CACHE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn read_cache_rejects_unknown_schema_version() {
+        let tmp = tempdir().expect("tempdir should be created");
+        let cache_path = tmp.path().join("cache.json");
+        fs::write(
+            &cache_path,
+            r#"{"schema_version":99,"profiles":[],"unresolved_references":[]}"#,
+        )
+        .expect("cache file should be written");
+
         let result = read_cache(&cache_path);
         match result {
             Err(AppError::InvalidInput { reason }) => {
-                assert!(reason.contains("schema_version 2"));
+                assert!(reason.contains("schema_version 99"));
                 assert!(reason.contains("run refresh"));
             }
             other => panic!("expected InvalidInput for unsupported schema, got {other:?}"),

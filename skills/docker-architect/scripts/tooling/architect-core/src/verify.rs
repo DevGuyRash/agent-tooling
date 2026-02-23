@@ -302,16 +302,34 @@ fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let exit_status = format_exit_status(&output.status);
         return Err(AppError::InvalidInput {
             reason: format!(
                 "docker command failed `{}` (exit {}): {}",
                 args.join(" "),
-                output.status.code().unwrap_or_default(),
+                exit_status,
                 stderr
             ),
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn format_exit_status(status: &std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return code.to_string();
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+
+    "unknown".to_string()
 }
 
 fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String> {
@@ -348,9 +366,14 @@ fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String>
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
     use serde_json::json;
 
-    use super::{inspect_record_from_value, is_root_user, logs_contain_error_keywords};
+    use super::{
+        format_exit_status, inspect_record_from_value, is_root_user, logs_contain_error_keywords,
+    };
 
     #[test]
     fn is_root_user_handles_numeric_and_named_root() {
@@ -412,5 +435,12 @@ mod tests {
         assert!(!logs_contain_error_keywords("errors found: 0"));
         assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_reports_signal_termination() {
+        let status = std::process::ExitStatus::from_raw(9);
+        assert_eq!(format_exit_status(&status), "signal 9");
     }
 }

@@ -185,7 +185,7 @@ When the Rust tooling is available, use it for enhanced determinism and policy c
 # ── Swarm workflow ──
 <skills-file-root>/scripts/docker-architect-compose policy-check docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
 <skills-file-root>/scripts/docker-architect-compose policy-plan docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --mode swarm
-<skills-file-root>/scripts/docker-architect-compose policy-apply docker-stack.yaml --plan patch-plan.json --output docker-stack.hardened.yaml --mode swarm
+# policy-apply currently supports only --mode compose (compose workflow) and --mode dockerfile (image workflow).
 <skills-file-root>/scripts/docker-architect-compose compose-generate docker-stack.yaml --policy <skills-file-root>/references/policy-swarm-balanced.yaml --cache-dir <skills-file-root>/references/cache --output docker-stack.anchored.yaml --mode swarm --anchors auto
 
 # ── Image/build workflow ──
