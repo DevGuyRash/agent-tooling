@@ -49,7 +49,7 @@ When bypassing, record:
 - Inline review reply:
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
   - Literal `\n` in `<reply text>` is normalized to real newlines.
-- Squash merge (deterministic, required):
+- Squash merge (deterministic, required; auto-deletes source branch on success):
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:
   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]`
