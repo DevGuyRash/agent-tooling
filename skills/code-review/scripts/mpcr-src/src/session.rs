@@ -586,7 +586,6 @@ pub struct ChildReviewEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 /// Top-level session file stored as `_session.json` within a session directory.
 pub struct SessionFile {
     /// Schema version string for `_session.json`.
@@ -599,6 +598,9 @@ pub struct SessionFile {
     pub reviewers: Vec<String>,
     /// Review coordination entries.
     pub reviews: Vec<ReviewEntry>,
+    /// Unknown top-level fields preserved for forward compatibility.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -608,6 +610,8 @@ struct SessionFileDisk {
     pub repo_root: String,
     pub reviewers: Vec<String>,
     pub reviews: Vec<ReviewEntryDisk>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -928,6 +932,7 @@ fn flatten_session_file_disk(session: SessionFileDisk) -> SessionFile {
         repo_root: session.repo_root,
         reviewers: reviewers.into_iter().collect(),
         reviews: flat_reviews.into_values().collect(),
+        extra: session.extra,
     };
     reconcile_parent_child_reviews(&mut flattened);
     flattened
@@ -1058,6 +1063,7 @@ fn canonicalize_session_for_write(session: &SessionFile) -> anyhow::Result<Sessi
         repo_root: session.repo_root.clone(),
         reviewers: reviewers.into_iter().collect(),
         reviews,
+        extra: session.extra.clone(),
     })
 }
 
@@ -1593,6 +1599,7 @@ mod tests {
                     child_reviews: Vec::new(),
                 },
             ],
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -1693,6 +1700,7 @@ mod tests {
                     child_reviews: Vec::new(),
                 },
             ],
+            extra: serde_json::Map::new(),
         };
 
         write_session_file_atomic(&session_dir, "deadbeef", &session)?;
@@ -1759,6 +1767,7 @@ mod tests {
                     child_reviews: Vec::new(),
                 },
             ],
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -1835,6 +1844,7 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: Vec::new(),
             reviews: Vec::new(),
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -1880,6 +1890,7 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -1927,6 +1938,7 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -1976,6 +1988,7 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
+            extra: serde_json::Map::new(),
         };
         write_session(&session_dir, &session)?;
 
@@ -2178,6 +2191,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
             repo_root: repo_root.to_string_lossy().to_string(),
             reviewers: vec![],
             reviews: vec![],
+            extra: serde_json::Map::new(),
         }
     };
 
@@ -2495,11 +2509,18 @@ pub fn spawn_child_reviewers(
         let target_matches = r.target_ref == params.target_ref;
         reviewer_matches && session_matches && target_matches
     });
-    let Some(_parent_entry) = parent_entry else {
+    let Some(parent_entry) = parent_entry else {
         return Err(anyhow::anyhow!(
             "parent review entry not found for reviewer_id/session_id/target_ref (run `mpcr reviewer register` for the parent first)"
         ));
     };
+    if parent_entry.status.is_terminal() {
+        return Err(anyhow::anyhow!(
+            "parent review {} is already terminal ({:?}) and cannot spawn new children",
+            params.parent_reviewer_id,
+            parent_entry.status,
+        ));
+    }
     // Children always start with REQUESTING regardless of parent's initiator_status.
     // This ensures children are discoverable/actionable by applicators.
     let initiator_status = InitiatorStatus::Requesting;

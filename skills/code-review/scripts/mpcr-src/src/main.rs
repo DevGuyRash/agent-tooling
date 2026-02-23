@@ -1280,6 +1280,20 @@ fn run() -> anyhow::Result<()> {
 
                 ensure_complete_child_has_parent(&session_locator, &reviewer_id, &session_id)?;
 
+                let proof_note = match (proof_note, proof_note_file) {
+                    (Some(note), None) => Some(note),
+                    (None, Some(path)) => Some(
+                        std::fs::read_to_string(&path)
+                            .with_context(|| format!("read proof note file {}", path.display()))?,
+                    ),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow::anyhow!(
+                            "pass only one of --proof-note or --proof-note-file"
+                        ));
+                    }
+                };
+
                 let res = finalize_review(FinalizeReviewParams {
                     session: session_locator.clone(),
                     reviewer_id: reviewer_id.clone(),
@@ -1297,20 +1311,6 @@ fn run() -> anyhow::Result<()> {
                     auto_close_children_status: ReviewerStatus::Cancelled,
                     now,
                 })?;
-
-                let proof_note = match (proof_note, proof_note_file) {
-                    (Some(note), None) => Some(note),
-                    (None, Some(path)) => Some(
-                        std::fs::read_to_string(&path)
-                            .with_context(|| format!("read proof note file {}", path.display()))?,
-                    ),
-                    (None, None) => None,
-                    (Some(_), Some(_)) => {
-                        return Err(anyhow::anyhow!(
-                            "pass only one of --proof-note or --proof-note-file"
-                        ));
-                    }
-                };
 
                 if let Some(note) = proof_note {
                     append_note(AppendNoteParams {
@@ -1503,22 +1503,47 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     let dispatch_role = std::env::var("MPCR_DISPATCH_ROLE")
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let Some(dispatch_role) = dispatch_role else {
-        return Ok(());
+    let applicator_role = std::env::var("MPCR_APPLICATOR_ROLE")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    let role_name = match (&dispatch_role, &applicator_role) {
+        (Some(role), _) | (None, Some(role)) => role.clone(),
+        (None, None) => return Ok(()),
     };
 
-    let allowed = matches!(
-        command,
-        Commands::Reviewer {
-            command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
-        }
-    );
+    let allowed = match (&dispatch_role, &applicator_role) {
+        (Some(_), _) => matches!(
+            command,
+            Commands::Reviewer {
+                command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
+            }
+        ),
+        (None, Some(_)) => matches!(
+            command,
+            Commands::Applicator {
+                command: ApplicatorCommands::Note { .. }
+                    | ApplicatorCommands::SetStatus { .. }
+            }
+        ),
+        _ => true,
+    };
     if allowed {
         return Ok(());
     }
 
+    let allowed_cmds = if dispatch_role.is_some() {
+        "`mpcr reviewer update` and `mpcr reviewer note`"
+    } else {
+        "`mpcr applicator note` and `mpcr applicator set-status`"
+    };
     Err(anyhow::anyhow!(
-        "MPCR_DISPATCH_ROLE={dispatch_role} restricts this executor to `mpcr reviewer update` and `mpcr reviewer note` only"
+        "{env}={role_name} restricts this executor to {allowed_cmds} only",
+        env = if dispatch_role.is_some() {
+            "MPCR_DISPATCH_ROLE"
+        } else {
+            "MPCR_APPLICATOR_ROLE"
+        },
     ))
 }
 
@@ -1843,7 +1868,8 @@ fn wait_for_reviews(
             .with_context(|| format!("read session file under {}", session_dir.display()))?;
 
         let mut has_pending = false;
-        for r in session_data.reviews {
+        let mut matched_any = false;
+        for r in &session_data.reviews {
             if let Some(tr) = target_ref {
                 if r.target_ref != tr {
                     continue;
@@ -1854,10 +1880,17 @@ fn wait_for_reviews(
                     continue;
                 }
             }
+            matched_any = true;
             if !r.status.is_terminal() {
                 has_pending = true;
                 break;
             }
+        }
+
+        if !matched_any && should_wait_for_session && session_data.reviews.is_empty() {
+            std::thread::sleep(delay);
+            delay = std::cmp::min(delay.saturating_mul(2), max_delay);
+            continue;
         }
 
         if !has_pending {
@@ -1930,6 +1963,7 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
+            extra: serde_json::Map::new(),
         };
         let body = serde_json::to_string_pretty(&session)? + "\n";
         fs::write(session_dir.join("_session.json"), body)?;

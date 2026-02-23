@@ -226,10 +226,12 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         command: "mpcr protocol orchestrator".to_string(),
     });
 
+    let orchestrator: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
+        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
     entries.push(ProtocolListEntry {
         category: "orchestrator".to_string(),
         key: "domains".to_string(),
-        title: "Universal Domains".to_string(),
+        title: orchestrator.domains.title,
         command: "mpcr protocol domains".to_string(),
     });
 
@@ -327,7 +329,31 @@ mod tests {
 
     #[test]
     fn dispatch_templates_parse() -> anyhow::Result<()> {
-        for role in ["scope_mapper", "red_team", "systems_auditor"] {
+        let roles = [
+            "architecture_critic",
+            "contract_guardian",
+            "data_integrity_prover",
+            "error_path_tracer",
+            "security_adversary",
+            "concurrency_prover",
+            "performance_profiler",
+            "observability_oncall",
+            "test_strategist",
+            "docs_consumer",
+            "dependency_auditor",
+            "supply_chain_auditor",
+            "auth_access_prover",
+            "crypto_secrets_auditor",
+            "injection_hunter",
+            "infra_runtime_auditor",
+            "data_privacy_guardian",
+            "domain_specialist",
+            "fresh_eyes",
+            "holistic_integrator",
+            "applicator_worker",
+            "applicator_verifier",
+        ];
+        for role in roles {
             let out = dispatch(role)?;
             ensure!(!out.content.is_empty(), "empty dispatch for {role}");
         }
@@ -337,10 +363,10 @@ mod tests {
     #[test]
     fn list_entries_returns_all() -> anyhow::Result<()> {
         let entries = list_entries()?;
-        // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 3 dispatch = 18
+        // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 22 dispatch = 37
         ensure!(
-            entries.len() >= 18,
-            "expected >= 18 entries, got {}",
+            entries.len() >= 37,
+            "expected >= 37 entries, got {}",
             entries.len()
         );
         Ok(())
