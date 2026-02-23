@@ -340,6 +340,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
             "feedface".to_string(),
         ],
         reviews: vec![in_progress, blocked, finished],
+        extra: serde_json::Map::new(),
     };
 
     (session_locator, session)
@@ -581,6 +582,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         repo_root: dir.path().to_string_lossy().to_string(),
         reviewers: vec!["feedface".to_string()],
         reviews: vec![finished],
+        extra: serde_json::Map::new(),
     };
 
     let result = collect_reports(

@@ -134,6 +134,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
             "feedface".to_string(),
         ],
         reviews: vec![open, blocked, finished],
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -144,6 +145,7 @@ fn empty_session(session_dir: &Path) -> SessionFile {
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: Vec::new(),
         reviews: Vec::new(),
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -170,6 +172,7 @@ fn session_without_notes(session_dir: &Path) -> SessionFile {
             notes: Vec::new(),
             child_reviews: Vec::new(),
         }],
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -478,6 +481,7 @@ fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Re
                 grandchild.reviewer_id.clone(),
             ],
             reviews: vec![parent, child, grandchild],
+            extra: serde_json::Map::new(),
         },
     )?;
 
@@ -2408,6 +2412,7 @@ fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
             notes: Vec::new(),
             child_reviews: Vec::new(),
         }],
+        extra: serde_json::Map::new(),
     };
     write_session_file(&session_dir, &session)?;
 
@@ -3260,6 +3265,23 @@ fn protocol_report_template_all_scales() -> anyhow::Result<()> {
         let content = json_str(&out, "content")?;
         ensure!(content.contains("Verdict"), "missing Verdict for {scale}");
         ensure!(content.contains("Findings"), "missing Findings for {scale}");
+        ensure!(
+            content.contains("Defended"),
+            "missing defended proofs section for {scale}"
+        );
+        ensure!(
+            content.contains("Residual Risk") || content.contains("Risk"),
+            "missing residual risk section for {scale}"
+        );
+    }
+
+    for scale in ["standard", "full"] {
+        let out = run_protocol(&["protocol", "report-template", "--scale", scale])?;
+        let content = json_str(&out, "content")?;
+        ensure!(
+            content.contains("| Domain"),
+            "missing domain ledger table for {scale}"
+        );
     }
     Ok(())
 }
@@ -3273,16 +3295,43 @@ fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
 
 #[test]
 fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
-    for role in ["scope-mapper", "red-team", "systems-auditor"] {
+    for role in [
+        "architecture-critic",
+        "contract-guardian",
+        "data-integrity-prover",
+        "error-path-tracer",
+        "security-adversary",
+        "concurrency-prover",
+        "performance-profiler",
+        "observability-oncall",
+        "test-strategist",
+        "docs-consumer",
+        "dependency-auditor",
+        "supply-chain-auditor",
+        "auth-access-prover",
+        "crypto-secrets-auditor",
+        "injection-hunter",
+        "infra-runtime-auditor",
+        "data-privacy-guardian",
+        "domain-specialist",
+        "fresh-eyes",
+        "holistic-integrator",
+        "applicator-worker",
+        "applicator-verifier",
+    ] {
         let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
         let content = json_str(&out, "content")?;
         ensure!(
-            content.contains("Proof Packet"),
-            "missing Proof Packet for {role}"
+            !content.is_empty(),
+            "empty dispatch content for {role}"
         );
         ensure!(
-            content.contains("read-only"),
-            "missing read-only constraint for {role}"
+            content.contains("MPCR_DISPATCH_ROLE=") || content.contains("MPCR_APPLICATOR_ROLE="),
+            "dispatch content for {role} missing role identity env var"
+        );
+        ensure!(
+            content.contains("## Proof Packet") || content.contains("## Output"),
+            "dispatch content for {role} missing output format section"
         );
     }
     Ok(())
@@ -3301,8 +3350,8 @@ fn protocol_list_json() -> anyhow::Result<()> {
     let entries = out
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("list output was not an array"))?;
-    // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 3 dispatch = 18
-    ensure!(entries.len() >= 18, "expected >= 18, got {}", entries.len());
+    // 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 22 dispatch = 37
+    ensure!(entries.len() >= 37, "expected >= 37, got {}", entries.len());
     Ok(())
 }
 
