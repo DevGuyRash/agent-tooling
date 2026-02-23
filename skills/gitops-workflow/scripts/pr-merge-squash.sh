@@ -10,7 +10,8 @@ set -euo pipefail
 # - Enforces unresolved-thread gate.
 # - Enforces CI required checks and approval gate by default.
 # - Generates deterministic squash message body (including commit short SHA + headline bullets).
-# - Merges with: gh pr merge --squash --subject --body-file --match-head-commit
+# - Merges with: gh pr merge --squash --subject --body-file --match-head-commit --delete-branch
+# - Deletes the source branch after successful merge.
 # - Optional --admin override relaxes approval/check gating and adds --admin to merge command.
 
 die() {
@@ -282,7 +283,7 @@ echo ""
 echo "== Deterministic squash body =="
 cat "$BODY_FILE"
 
-MERGE_ARGS=(pr merge "$PR_NUMBER" --squash --subject "$SUBJECT" --body-file "$BODY_FILE" --match-head-commit "$HEAD_SHA")
+MERGE_ARGS=(pr merge "$PR_NUMBER" --squash --subject "$SUBJECT" --body-file "$BODY_FILE" --match-head-commit "$HEAD_SHA" --delete-branch)
 if [[ -n "$REPO" ]]; then
   MERGE_ARGS+=(--repo "$REPO")
 fi

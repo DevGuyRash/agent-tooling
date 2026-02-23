@@ -652,6 +652,7 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertIn("--subject feat(cli): add deterministic merge", merge_call)
             self.assertIn("--body-file", merge_call)
             self.assertIn("--match-head-commit abcdef1234567890", merge_call)
+            self.assertIn("--delete-branch", merge_call)
 
     def test_merge_squash_admin_override_allows_failed_checks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -684,6 +685,7 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("Admin override enabled; continuing despite required-check failures.", proc.stdout)
             merge_call = log_file.read_text(encoding="utf-8")
+            self.assertIn("--delete-branch", merge_call)
             self.assertIn(" --admin", merge_call)
 
 

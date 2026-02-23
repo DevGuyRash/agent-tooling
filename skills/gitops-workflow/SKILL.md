@@ -107,7 +107,7 @@ Path resolution (mandatory):
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
 | Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
-| Squash merge a PR deterministically | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
+| Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
 | Governance enforcement sequence | `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] --repo owner/repo [--no-write-codeowners]` |
@@ -262,17 +262,18 @@ Guidance for handling automated reviewer feedback:
 
 1. Run deterministic merge wrapper:
    - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>`
-2. Wrapper preconditions (default mode):
+2. Wrapper merge command always includes `--delete-branch` to remove the source branch after successful merge.
+3. Wrapper preconditions (default mode):
    - conversations resolved
    - required CI checks green
    - approvals present
    - PR is not draft and mergeable
-3. Squash merge body is generated deterministically with commit bullets:
+4. Squash merge body is generated deterministically with commit bullets:
    - `- <short-sha> <first-line commit subject>`
-4. Optional escalation path for repository admins:
+5. Optional escalation path for repository admins:
    - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin`
-   - this passes `--admin` to `gh pr merge` and relaxes approval/check gates
-5. After merge, emit a commit receipt:
+   - this passes `--admin` (while preserving `--delete-branch`) to `gh pr merge` and relaxes approval/check gates
+6. After merge, emit a commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
 
 ---

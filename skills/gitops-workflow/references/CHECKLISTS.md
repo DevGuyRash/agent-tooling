@@ -93,6 +93,7 @@ Before pushing *any* updates to a PR:
 - [ ] branch is up to date with base (rebase if required)
 - [ ] run deterministic merge helper:
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number>`
+- [ ] confirm source branch is deleted by helper (`--delete-branch`) unless merge fails.
 - [ ] squash commit body includes `## Commits` bullets:
   - each bullet is `<short-sha> <first-line commit subject>`
 - [ ] if emergency admin merge is required, use:
