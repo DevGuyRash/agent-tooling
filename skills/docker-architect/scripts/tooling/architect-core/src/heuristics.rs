@@ -66,7 +66,7 @@ pub fn ensure_volume_permissions(
     service: &Mapping,
     profile: Option<&ImageProfile>,
 ) -> Result<Vec<HeuristicPatch>, AppError> {
-    if service_name.ends_with("-init-perms") || service_name.starts_with("init-") {
+    if service_name.ends_with("-init-perms") {
         return Ok(Vec::new());
     }
 
@@ -976,6 +976,44 @@ volumes:
             .as_mapping()
             .expect("service value should be a mapping");
         let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
+        assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn ensure_volume_permissions_does_not_skip_non_sidecar_init_prefix_names() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - data:/data
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches = ensure_volume_permissions("init-api", mapping, None).expect("heuristic runs");
+        assert!(patches.iter().any(|patch| patch.op == "inject_service"));
+        assert!(patches
+            .iter()
+            .any(|patch| patch.path == "services.init-api.depends_on.init-api-init-perms"));
+    }
+
+    #[test]
+    fn ensure_volume_permissions_skips_services_ending_with_init_perms() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - data:/data
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches =
+            ensure_volume_permissions("api-init-perms", mapping, None).expect("heuristic runs");
         assert!(patches.is_empty());
     }
 

@@ -1,0 +1,7 @@
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+  worker:
+    image: redis:7.2
+    user: "999:999"

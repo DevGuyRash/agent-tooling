@@ -10,7 +10,8 @@ use regex::Regex;
 use crate::error::AppError;
 use crate::model::RuntimeToolDetail;
 
-const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const DEFAULT_DOCKER_PROBE_TIMEOUT_SECS: u64 = 20;
+const PROBE_TIMEOUT_SECS_ENV: &str = "ARCHITECT_PROBE_TIMEOUT_SECS";
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Probe tool availability for one image using `docker run`.
@@ -26,6 +27,7 @@ pub fn probe_runtime_tools(
     image: &str,
     tools: &[String],
 ) -> Result<BTreeMap<String, RuntimeToolDetail>, AppError> {
+    let timeout = docker_probe_timeout();
     let valid_tool_re =
         Regex::new(r"^[A-Za-z0-9_.+-]+$").map_err(|error| AppError::InvalidInput {
             reason: format!("failed to compile probe tool regex: {error}"),
@@ -45,7 +47,7 @@ pub fn probe_runtime_tools(
             continue;
         }
 
-        if let Some(path) = probe_tool_without_shell(image, tool)? {
+        if let Some(path) = probe_tool_without_shell(image, tool, timeout)? {
             output.insert(
                 tool.clone(),
                 RuntimeToolDetail {
@@ -57,7 +59,7 @@ pub fn probe_runtime_tools(
             continue;
         }
 
-        let shell_probe = probe_tool_with_shell(image, tool)?;
+        let shell_probe = probe_tool_with_shell(image, tool, timeout)?;
         if let Some(path) = shell_probe.path {
             output.insert(
                 tool.clone(),
@@ -83,10 +85,14 @@ pub fn probe_runtime_tools(
     Ok(output)
 }
 
-fn probe_tool_without_shell(image: &str, tool: &str) -> Result<Option<String>, AppError> {
+fn probe_tool_without_shell(
+    image: &str,
+    tool: &str,
+    timeout: Duration,
+) -> Result<Option<String>, AppError> {
     // O(n) where n = number of candidate binary locations (expected: <= 7).
     for candidate in candidate_entrypoints(tool) {
-        let output = run_entrypoint_probe(image, &candidate)?;
+        let output = run_entrypoint_probe(image, &candidate, timeout)?;
         let missing_binary = indicates_missing_binary(&output);
         let discovered =
             classify_entrypoint_probe(&candidate, output.status.success(), missing_binary);
@@ -121,18 +127,25 @@ struct ShellProbeOutcome {
     shell_missing: bool,
 }
 
-fn probe_tool_with_shell(image: &str, tool: &str) -> Result<ShellProbeOutcome, AppError> {
+fn probe_tool_with_shell(
+    image: &str,
+    tool: &str,
+    timeout: Duration,
+) -> Result<ShellProbeOutcome, AppError> {
     let mut missing_shell_count = 0usize;
     for shell in ["/bin/sh", "sh"] {
-        let output = run_docker_probe_command(&[
-            "run".to_string(),
-            "--rm".to_string(),
-            "--entrypoint".to_string(),
-            shell.to_string(),
-            image.to_string(),
-            "-c".to_string(),
-            format!("command -v {tool}"),
-        ])?;
+        let output = run_docker_probe_command(
+            &[
+                "run".to_string(),
+                "--rm".to_string(),
+                "--entrypoint".to_string(),
+                shell.to_string(),
+                image.to_string(),
+                "-c".to_string(),
+                format!("command -v {tool}"),
+            ],
+            timeout,
+        )?;
 
         if output.status.success() {
             let discovered = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -166,18 +179,25 @@ fn candidate_entrypoints(tool: &str) -> Vec<String> {
     ]
 }
 
-fn run_entrypoint_probe(image: &str, entrypoint: &str) -> Result<Output, AppError> {
-    run_docker_probe_command(&[
-        "run".to_string(),
-        "--rm".to_string(),
-        "--entrypoint".to_string(),
-        entrypoint.to_string(),
-        image.to_string(),
-        "--help".to_string(),
-    ])
+fn run_entrypoint_probe(
+    image: &str,
+    entrypoint: &str,
+    timeout: Duration,
+) -> Result<Output, AppError> {
+    run_docker_probe_command(
+        &[
+            "run".to_string(),
+            "--rm".to_string(),
+            "--entrypoint".to_string(),
+            entrypoint.to_string(),
+            image.to_string(),
+            "--help".to_string(),
+        ],
+        timeout,
+    )
 }
 
-fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
+fn run_docker_probe_command(args: &[String], timeout: Duration) -> Result<Output, AppError> {
     let mut child = Command::new("docker")
         .args(args)
         .stdout(Stdio::piped())
@@ -203,13 +223,13 @@ fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
                 });
         }
 
-        if start.elapsed() >= DOCKER_PROBE_TIMEOUT {
+        if start.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             return Err(AppError::InvalidInput {
                 reason: format!(
                     "docker runtime probe timed out after {}s: docker {}",
-                    DOCKER_PROBE_TIMEOUT.as_secs(),
+                    timeout.as_secs(),
                     args.join(" ")
                 ),
             });
@@ -217,6 +237,18 @@ fn run_docker_probe_command(args: &[String]) -> Result<Output, AppError> {
 
         thread::sleep(PROCESS_POLL_INTERVAL);
     }
+}
+
+fn docker_probe_timeout() -> Duration {
+    let configured = std::env::var(PROBE_TIMEOUT_SECS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0);
+    let seconds = match configured {
+        Some(value) => value,
+        None => DEFAULT_DOCKER_PROBE_TIMEOUT_SECS,
+    };
+    Duration::from_secs(seconds)
 }
 
 fn indicates_missing_binary(output: &Output) -> bool {
