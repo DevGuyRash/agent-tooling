@@ -107,7 +107,7 @@ Before pushing *any* updates to a PR:
 
 - [ ] follow required section order:
   - Overview → New Features → What's Changed → Bug Fixes → Breaking Changes → Commits → Refs
-- [ ] omit empty sections except Overview
+- [ ] omit empty optional sections; keep `Overview`, `Commits`, and `Refs`
 - [ ] keep bullets single-line where possible
 - [ ] use `## Refs` as canonical place for issue links
 

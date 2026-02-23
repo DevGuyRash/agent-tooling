@@ -268,8 +268,9 @@ Guidance for handling automated reviewer feedback:
    - required CI checks green
    - approvals present
    - PR is not draft and mergeable
-4. Squash merge body is generated deterministically with commit bullets:
+4. Squash merge body omits empty optional sections and is generated deterministically with commit bullets:
    - `- <short-sha> <first-line commit subject>`
+   - `## Commits` and `## Refs` are always present
 5. Optional escalation path for repository admins:
    - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin`
    - this passes `--admin` (while preserving `--delete-branch`) to `gh pr merge` and relaxes approval/check gates
@@ -287,6 +288,8 @@ Use:
 Optional helper (builds a skeleton from git history):
 
 - `python3 "$SKILL_ROOT/scripts/generate-release-notes.py" --since <tag-or-sha> --version vX.Y.Z`
+  - omits empty optional sections
+  - always emits `## Commits` and `## Refs`
 
 ---
 
