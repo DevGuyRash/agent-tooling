@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """generate-squash-message.py - Generate a structured squash-merge commit message body.
 
-This follows the sectioned format used by this skill (Overview → New Features → What's Changed → Bug Fixes → Breaking Changes → Commits → Refs).
+This follows the sectioned format used by this skill
+(Overview → New Features → What's Changed → Bug Fixes → Breaking Changes → Commits → Refs).
+Optional sections are omitted when empty; Commits and Refs are always emitted.
 
 Usage:
   python3 scripts/generate-squash-message.py --summary "add --json output" --pr 123
@@ -218,26 +220,26 @@ def main() -> int:
         else:
             print("- <describe breaking change>; migration: <steps>")
         print("")
-    # Include commits section only if PR branch had >1 commit
-    if len(commits) > 1:
-        print("## Commits")
-        print("")
+    print("## Commits")
+    print("")
+    if commit_lines:
         print("\n".join(commit_lines))
-        print("")
-    # Refs section
+    else:
+        print("- (none)")
+    print("")
+
     refs: List[str] = []
     if args.pr:
         refs.append(f"#{args.pr}")
     refs.extend(args.refs)
+
+    print("## Refs")
+    print("")
     if refs:
-        print("## Refs")
-        print("")
         for r in refs:
             print(f"- {r}")
     else:
-        print("## Refs")
-        print("")
-        print("- #123")
+        print("- (none provided)")
     return 0
 
 

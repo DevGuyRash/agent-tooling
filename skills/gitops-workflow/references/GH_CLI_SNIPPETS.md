@@ -63,7 +63,7 @@ Strict PR workflow wrapper:
 bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> --watch-checks
 ```
 
-Deterministic squash merge wrapper:
+Deterministic squash merge wrapper (auto-deletes source branch on success):
 ```bash
 bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 ```

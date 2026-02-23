@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -591,6 +592,23 @@ class MergeSquashScriptTests(unittest.TestCase):
             "  exit 0\n"
             "fi\n"
             "if [[ \"$cmd1\" == \"pr\" && \"$cmd2\" == \"view\" ]]; then\n"
+            "  if [[ \"${MERGE_MINIMAL_SECTIONS:-0}\" == \"1\" ]]; then\n"
+            "    cat <<'JSON'\n"
+            "{\n"
+            "  \"number\": 7,\n"
+            "  \"title\": \"feat(cli): add deterministic merge\",\n"
+            "  \"isDraft\": false,\n"
+            "  \"url\": \"https://github.com/acme/widget/pull/7\",\n"
+            "  \"reviewDecision\": \"APPROVED\",\n"
+            "  \"mergeStateStatus\": \"CLEAN\",\n"
+            "  \"headRefOid\": \"abcdef1234567890\",\n"
+            "  \"commits\": [\n"
+            "    {\"oid\": \"1111111aaaaaaa\", \"messageHeadline\": \"feat(cli): add deterministic merge\", \"messageBody\": \"\"}\n"
+            "  ]\n"
+            "}\n"
+            "JSON\n"
+            "    exit 0\n"
+            "  fi\n"
             "  cat <<'JSON'\n"
             "{\n"
             "  \"number\": 7,\n"
@@ -652,6 +670,42 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertIn("--subject feat(cli): add deterministic merge", merge_call)
             self.assertIn("--body-file", merge_call)
             self.assertIn("--match-head-commit abcdef1234567890", merge_call)
+            self.assertIn("--delete-branch", merge_call)
+
+    def test_merge_squash_omits_empty_optional_sections(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            log_file = temp_path / "calls.log"
+
+            fake_gh = fake_bin / "gh"
+            self._write_fake_gh(fake_gh)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(log_file)
+            env["MERGE_MINIMAL_SECTIONS"] = "1"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-merge-squash.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("## New Features", proc.stdout)
+            self.assertNotIn("## Bug Fixes", proc.stdout)
+            self.assertNotIn("## Breaking Changes", proc.stdout)
+            self.assertIn("## Commits", proc.stdout)
+            self.assertIn("## Refs", proc.stdout)
+            self.assertNotIn("_none_", proc.stdout)
 
     def test_merge_squash_admin_override_allows_failed_checks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -684,7 +738,115 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("Admin override enabled; continuing despite required-check failures.", proc.stdout)
             merge_call = log_file.read_text(encoding="utf-8")
+            self.assertIn("--delete-branch", merge_call)
             self.assertIn(" --admin", merge_call)
+
+
+class DeterministicGeneratorScriptTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "checkout", "-b", "main"], cwd=repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        run(["git", "add", "README.md"], cwd=repo)
+        run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+    def test_generate_squash_message_omits_empty_sections_and_keeps_refs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "feat/omit-empty"], cwd=repo)
+            (repo / "feature.txt").write_text("hello\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat(cli): add json output"], cwd=repo)
+
+            proc = run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "generate-squash-message.py"),
+                    "--summary",
+                    "add json output",
+                    "--base",
+                    "main",
+                    "--pr",
+                    "77",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("## New Features", proc.stdout)
+            self.assertNotIn("## Bug Fixes", proc.stdout)
+            self.assertNotIn("## Breaking Changes", proc.stdout)
+            self.assertIn("## Commits", proc.stdout)
+            self.assertIn("## Refs", proc.stdout)
+            self.assertIn("- #77", proc.stdout)
+            self.assertNotIn("- #123", proc.stdout)
+
+    def test_generate_release_notes_omits_empty_sections_and_keeps_refs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            (repo / "docs.md").write_text("docs\n", encoding="utf-8")
+            run(["git", "add", "docs.md"], cwd=repo)
+            run(["git", "commit", "-m", "docs: add docs"], cwd=repo)
+
+            proc = run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "generate-release-notes.py"),
+                    "--since",
+                    "HEAD~1",
+                    "--version",
+                    "v0.1.0",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertNotIn("## New Features", proc.stdout)
+            self.assertNotIn("## Bug Fixes", proc.stdout)
+            self.assertIn("## Commits", proc.stdout)
+            self.assertIn("- (none)", proc.stdout)
+            self.assertIn("## Refs", proc.stdout)
+            self.assertIn("- HEAD~1", proc.stdout)
+            self.assertNotIn("- #123", proc.stdout)
+
+    def test_pr_create_omits_optional_placeholder_sections(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "feat/pr-body"], cwd=repo)
+            (repo / "feature.txt").write_text("hello\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add body generation test"], cwd=repo)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-create.sh"),
+                    "--title",
+                    "feat(test): ensure body generation",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/pr-body",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            match = re.search(r"PR body file created: (.+)", proc.stdout)
+            self.assertIsNotNone(match, proc.stdout)
+            body_path = Path(match.group(1).strip())
+            body = body_path.read_text(encoding="utf-8")
+
+            self.assertNotIn("# Screenshots / logs (optional)", body)
+            self.assertIn("# Refs", body)
+            self.assertIn("- (none provided)", body)
+            self.assertNotIn("#<issue-if-applicable>", body)
 
 
 class PrCommentScriptTests(unittest.TestCase):

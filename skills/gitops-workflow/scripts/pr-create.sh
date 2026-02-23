@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # Behavior:
 # - Writes a prefilled PR body with deterministic sections derived from git metadata.
+# - Omits optional sections that have no deterministic content.
 # - By default, does NOT create a PR; it prints the body path for human/agent review.
 # - `--create` requires `--force-create` to run `gh pr create --body-file <file>`.
 # - If --create is not provided, prints the file path so you can edit it first.
@@ -151,6 +152,21 @@ render_test_commands() {
   echo "git diff --stat \"$BASE...$HEAD\""
 }
 
+render_refs_section() {
+  local refs=()
+  mapfile -t refs < <(grep -Eo '#[0-9]+' "$COMMITS_FILE" | awk '!seen[$0]++' || true)
+
+  if [[ "${#refs[@]}" -eq 0 ]]; then
+    echo "- (none provided)"
+    return 0
+  fi
+
+  local ref
+  for ref in "${refs[@]}"; do
+    echo "- Related to $ref"
+  done
+}
+
 OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
 {
   echo "# Summary"
@@ -179,13 +195,9 @@ OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
   echo "- Breaking changes? **No**"
   echo "- Rollback plan (if risky): Revert the PR merge commit."
   echo
-  echo "# Screenshots / logs (optional)"
-  echo
-  echo "Not user-facing."
-  echo
   echo "# Refs"
   echo
-  echo "Related to #<issue-if-applicable>"
+  render_refs_section
   echo
   echo "# Reviewers / bots"
   echo

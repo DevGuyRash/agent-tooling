@@ -9,8 +9,10 @@ set -euo pipefail
 # Behavior:
 # - Enforces unresolved-thread gate.
 # - Enforces CI required checks and approval gate by default.
-# - Generates deterministic squash message body (including commit short SHA + headline bullets).
-# - Merges with: gh pr merge --squash --subject --body-file --match-head-commit
+# - Generates deterministic squash message body (omits empty optional sections).
+# - Always keeps Overview + Commits + Refs sections.
+# - Merges with: gh pr merge --squash --subject --body-file --match-head-commit --delete-branch
+# - Deletes the source branch after successful merge.
 # - Optional --admin override relaxes approval/check gating and adds --admin to merge command.
 
 die() {
@@ -190,49 +192,45 @@ for c in commits:
     if is_breaking:
         breaking.append(f"- {scope_prefix}{desc}; migration: <add steps>")
 
-if not feat:
-    feat = ["- _none_"]
-if not fixes:
-    fixes = ["- _none_"]
-if not changes:
-    changes = ["- _none_"]
-if not breaking:
-    breaking = ["- _none_"]
-if not commit_lines:
-    commit_lines = ["- _no commits reported by API_"]
-
 number = data.get("number")
-pr_ref = f"#{number}" if number is not None else "#<pr>"
+pr_ref = f"#{number}" if number is not None else "<pr>"
+
+def append_section(lines, title, bullets, always=False, empty_bullet="- (none)"):
+    if not bullets and not always:
+        return
+    lines.extend([f"## {title}", ""])
+    if bullets:
+        lines.extend(bullets)
+    else:
+        lines.append(empty_bullet)
+    lines.append("")
 
 lines = [
     "## Overview",
     "",
     f"Squash merge for PR {pr_ref}.",
     "",
-    "## New Features",
-    "",
-    *feat,
-    "",
-    "## What's Changed",
-    "",
-    *changes,
-    "",
-    "## Bug Fixes",
-    "",
-    *fixes,
-    "",
-    "## Breaking Changes",
-    "",
-    *breaking,
-    "",
-    "## Commits",
-    "",
-    *commit_lines,
-    "",
-    "## Refs",
-    "",
-    f"- {pr_ref}",
 ]
+
+append_section(lines, "New Features", feat)
+append_section(lines, "What's Changed", changes)
+append_section(lines, "Bug Fixes", fixes)
+append_section(lines, "Breaking Changes", breaking)
+append_section(
+    lines,
+    "Commits",
+    commit_lines,
+    always=True,
+    empty_bullet="- (none reported by API)",
+)
+
+ref_lines = []
+if number is not None:
+    ref_lines.append(f"- #{number}")
+append_section(lines, "Refs", ref_lines, always=True, empty_bullet="- (none provided)")
+
+if lines and lines[-1] == "":
+    lines.pop()
 
 with open(body_file, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
@@ -282,7 +280,7 @@ echo ""
 echo "== Deterministic squash body =="
 cat "$BODY_FILE"
 
-MERGE_ARGS=(pr merge "$PR_NUMBER" --squash --subject "$SUBJECT" --body-file "$BODY_FILE" --match-head-commit "$HEAD_SHA")
+MERGE_ARGS=(pr merge "$PR_NUMBER" --squash --subject "$SUBJECT" --body-file "$BODY_FILE" --match-head-commit "$HEAD_SHA" --delete-branch)
 if [[ -n "$REPO" ]]; then
   MERGE_ARGS+=(--repo "$REPO")
 fi

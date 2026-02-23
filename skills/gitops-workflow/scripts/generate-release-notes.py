@@ -2,6 +2,7 @@
 """generate-release-notes.py - Generate a release notes skeleton from git history.
 
 This script is intentionally conservative: it generates a structured *draft* that you can edit.
+Optional sections are omitted when empty.
 
 Usage:
   python3 scripts/generate-release-notes.py --version v1.2.3
@@ -118,7 +119,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--since", default=None, help="Tag/SHA to start from (exclusive). Default: last tag.")
     parser.add_argument("--version", default=None, help="Version string for header (e.g., v1.2.3).")
-    parser.add_argument("--include-commits", action="store_true", help="Include a ## Commits section.")
+    parser.add_argument(
+        "--include-commits",
+        action="store_true",
+        help="Include commit bullets in ## Commits (section is always emitted).",
+    )
     args = parser.parse_args()
 
     inside = try_run(["git", "rev-parse", "--is-inside-work-tree"])
@@ -196,19 +201,23 @@ def main() -> int:
         print("")
         print("\n".join(breaking))
         print("")
-    if args.include_commits:
-        print("## Commits")
-        print("")
-        if commit_lines:
-            print("\n".join(commit_lines))
-        else:
-            print("- (none)")
-        print("")
+    print("## Commits")
+    print("")
+    if commit_lines:
+        print("\n".join(commit_lines))
+    else:
+        print("- (none)")
+    print("")
     print("## Refs")
     print("")
-    print("- #123")
+    refs: List[str] = []
     if since:
-        print(f"- {since}")
+        refs.append(since)
+    if refs:
+        for ref in refs:
+            print(f"- {ref}")
+    else:
+        print("- (none provided)")
     return 0
 
 
