@@ -1285,6 +1285,7 @@ pub fn apply_compose_patch_plan(
             reason: "compose root must be a mapping".to_string(),
         });
     }
+    materialize_yaml_merge_keys(&mut document, MAX_YAML_MERGE_DEPTH)?;
 
     for patch in patch_plan {
         if patch.path.starts_with("dockerfile.") {
@@ -3482,6 +3483,44 @@ services:
         let patched = apply_compose_patch_plan(compose, &plan, DeployMode::Compose)
             .expect("patch apply should work");
         assert!(!patched.contains("privileged: true"));
+    }
+
+    #[test]
+    fn apply_compose_patch_plan_removes_merge_inherited_forbidden_key() {
+        let compose = r#"
+x-defaults: &defaults
+  privileged: true
+services:
+  web:
+    <<: *defaults
+    image: nginx:1.27
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PRIVILEGED
+    severity: warn
+    action: forbid_key
+    target: service.*
+    key: privileged
+"#;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let initial =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert_eq!(initial.patch_plan.len(), 1);
+        assert_eq!(initial.patch_plan[0].op, "remove");
+        assert_eq!(initial.patch_plan[0].path, "services.web.privileged");
+
+        let patched = apply_compose_patch_plan(compose, &initial.patch_plan, DeployMode::Compose)
+            .expect("patch apply should work");
+
+        let reevaluated =
+            evaluate_compose_policy(&patched, &base_cache(), &policy).expect("reeval works");
+        assert!(reevaluated.violations.is_empty());
+        assert!(reevaluated.patch_plan.is_empty());
     }
 
     #[test]

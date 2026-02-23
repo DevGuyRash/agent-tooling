@@ -232,10 +232,56 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
 
     lower.lines().any(|line| {
         let trimmed = line.trim_start();
-        line_has_standalone_error_prefix(trimmed)
-            || line_has_bracketed_error_prefix(trimmed)
+        line_contains_standalone_error_token(trimmed)
+            || line_contains_bracketed_error_token(trimmed)
             || line_has_logfmt_error_level(trimmed)
             || trimmed.contains("] error")
+    })
+}
+
+fn line_contains_bracketed_error_token(line: &str) -> bool {
+    const NEEDLE: &str = "[error]";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index].chars().next_back().is_some_and(|character| {
+                character.is_ascii_whitespace()
+                    || matches!(character, ']' | ')' | '}' | '>' | ':' | ',' | ';')
+            })
+        };
+
+        boundary_before_ok && line_has_bracketed_error_prefix(&line[index..])
+    })
+}
+
+fn line_contains_standalone_error_token(line: &str) -> bool {
+    const NEEDLE: &str = "error";
+    line.match_indices(NEEDLE).any(|(index, _)| {
+        if index_inside_unescaped_double_quotes(line, index) {
+            return false;
+        }
+
+        let boundary_before_ok = if index == 0 {
+            true
+        } else {
+            line[..index].chars().next_back().is_some_and(|character| {
+                character.is_ascii_whitespace()
+                    || matches!(
+                        character,
+                        '[' | '(' | '{' | '<' | ']' | ')' | '}' | '>' | ':' | ',' | ';'
+                    )
+            })
+        };
+        if !boundary_before_ok {
+            return false;
+        }
+
+        line_has_standalone_error_prefix(&line[index..])
     })
 }
 
@@ -322,10 +368,6 @@ fn line_has_standalone_error_prefix(line: &str) -> bool {
     if !(first_char.is_ascii_whitespace() || first_char == ':' || first_char == ',') {
         return false;
     }
-    if first_char == ':' {
-        return true;
-    }
-
     let first_token = remainder
         .trim_start_matches(|character: char| {
             character.is_ascii_whitespace() || character == ':' || character == ','
@@ -341,7 +383,7 @@ fn line_has_standalone_error_prefix(line: &str) -> bool {
 
     !matches!(
         first_token,
-        "tolerance" | "correction" | "rate" | "rates" | "count" | "counts"
+        "tolerance" | "correction" | "rate" | "rates" | "count" | "counts" | "0"
     )
 }
 
@@ -507,8 +549,15 @@ mod tests {
         assert!(logs_contain_error_keywords(
             "ts=2026-02-22T10:00:00Z level=error msg=\"unable to bind\""
         ));
+        assert!(logs_contain_error_keywords(
+            "2026-02-22T10:00:00Z ERROR: unable to bind"
+        ));
+        assert!(logs_contain_error_keywords(
+            "2026-02-22T10:00:00Z [ERROR] failed to connect"
+        ));
         assert!(!logs_contain_error_keywords("error tolerance: none"));
         assert!(!logs_contain_error_keywords("error correction disabled"));
+        assert!(!logs_contain_error_keywords("error: 0"));
         assert!(!logs_contain_error_keywords("error count: 0"));
         assert!(!logs_contain_error_keywords("error,count: 0"));
         assert!(!logs_contain_error_keywords(

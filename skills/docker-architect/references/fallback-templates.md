@@ -39,7 +39,7 @@ LABEL org.opencontainers.image.source="" \
       org.opencontainers.image.licenses=""
 
 # ── AC-DF-SUID-SGID: strip privilege escalation bits ──
-RUN find / -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + 2>/dev/null || true
 
 # ── AC-DF-USER: non-root runtime ──
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
@@ -92,7 +92,7 @@ LABEL org.opencontainers.image.source="" \
       org.opencontainers.image.licenses=""
 
 # ── AC-DF-SUID-SGID ──
-RUN find / -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + 2>/dev/null || true
 
 # ── AC-DF-USER ──
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
@@ -139,7 +139,7 @@ LABEL org.opencontainers.image.source="" \
       org.opencontainers.image.licenses=""
 
 # ── AC-DF-SUID-SGID ──
-RUN find / -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + 2>/dev/null || true
 
 # ── AC-DF-USER: nginx unprivileged mode ──
 RUN sed -i 's/listen\s*80;/listen 8080;/' /etc/nginx/conf.d/default.conf
@@ -230,7 +230,7 @@ LABEL org.opencontainers.image.source="" \
       org.opencontainers.image.licenses=""
 
 # ── AC-DF-SUID-SGID ──
-RUN find / -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + 2>/dev/null || true
 
 # ── AC-DF-USER ──
 RUN groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app
