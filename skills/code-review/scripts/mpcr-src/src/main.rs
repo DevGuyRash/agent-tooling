@@ -1522,8 +1522,7 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
         (None, Some(_)) => matches!(
             command,
             Commands::Applicator {
-                command: ApplicatorCommands::Note { .. }
-                    | ApplicatorCommands::SetStatus { .. }
+                command: ApplicatorCommands::Note { .. } | ApplicatorCommands::SetStatus { .. }
             }
         ),
         _ => true,

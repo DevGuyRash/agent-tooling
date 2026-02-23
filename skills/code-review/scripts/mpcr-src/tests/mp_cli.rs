@@ -3321,10 +3321,7 @@ fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
     ] {
         let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
         let content = json_str(&out, "content")?;
-        ensure!(
-            !content.is_empty(),
-            "empty dispatch content for {role}"
-        );
+        ensure!(!content.is_empty(), "empty dispatch content for {role}");
         ensure!(
             content.contains("MPCR_DISPATCH_ROLE=") || content.contains("MPCR_APPLICATOR_ROLE="),
             "dispatch content for {role} missing role identity env var"
