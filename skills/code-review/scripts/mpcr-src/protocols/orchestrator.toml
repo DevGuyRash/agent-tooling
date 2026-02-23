@@ -1,77 +1,134 @@
 # Orchestrator protocol: guidance for multi-agent review coordination.
-# The orchestrator is a thin coordinator; review substance goes to workers.
+# The orchestrator is a thin coordinator; all substance goes to workers.
 # Content is served by `mpcr protocol orchestrator`.
 # Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
 
 [orchestrator]
 title = "Multi-Agent Orchestration"
 content = """
-You are the orchestrator. You SHALL decompose, dispatch, and synthesize.
-You SHALL NOT read code files beyond the diffstat.
-You SHALL NOT fetch patch hunks or full file contents.
-You SHALL NOT perform the review yourself — workers do.
-You SHALL NOT generate theorems, attempt disproofs, or write findings directly.
+You are the orchestrator. You decompose, dispatch, validate, and synthesize. You do NOTHING else.
+
+## Iron rules
+- You SHALL NOT read code files beyond the diffstat.
+- You SHALL NOT fetch patch hunks or full file contents.
+- You SHALL NOT generate theorems, attempt disproofs, write findings, or apply patches.
+- You SHALL NOT forward conversation history to workers.
+- WHEN you need code context, you SHALL spawn explorer subagents (see Explorer Tier below).
+
+## Explorer tier
+
+BEFORE dispatching reviewer workers, you SHALL gather context via explorer subagents:
+
+1. Run diff summary: `git diff --stat`, `git diff --name-only`.
+2. Identify 2-5 file clusters by directory or concern.
+3. For each cluster, spawn an explorer subagent with this prompt pattern:
+   ```
+   You are an explorer subagent. You gather context only. You do NOT review, produce findings, or apply patches.
+   Files: [file list]
+   Task: Read the assigned files and return a structured summary (≤ 200 lines) containing:
+   - File purposes and key abstractions
+   - Public API surfaces and entry points
+   - Dependency relationships between files
+   - Key patterns and idioms used
+   - Anything unusual or noteworthy
+   You SHALL NOT produce opinions, findings, or recommendations.
+   ```
+4. Collect explorer summaries. Pass them to reviewer workers as `Explorer context:` in dispatch prompts.
+
+Explorer subagents keep the orchestrator context-free while giving reviewers pre-digested context.
+
+## Domain discovery
+
+1. Run `mpcr protocol domains` to load the 11 seed domains.
+2. Based on the diff summary and explorer summaries, identify additional domains specific to this codebase.
+   Examples: i18n, accessibility, regulatory compliance, ML safety, platform-specific, database schema, UX consistency, backwards compat, deployment safety, config management, API versioning.
+3. For each discovered domain, define: name, "defend that..." statement, 2-3 seed challenges.
+4. You SHALL discover at least 2 additional domains beyond the seeds for non-trivial changes.
+5. Spawn one specialist reviewer per domain (seed + discovered).
 
 ## Decomposition
-1. You SHALL read ONLY a diff summary (diffstat + file list), not patch hunks.
+1. Read ONLY diff summary, not patch hunks.
    - Allowed: `git diff --stat`, `git diff --numstat`, `git diff --name-only`
    - Forbidden: `git diff`, `git show -p`, or any command that prints patch hunks
-   - You SHALL rerun broad commands with narrower output when output volume is large.
-2. You SHALL identify 2-4 focus areas by file cluster or concern.
-3. You SHALL assign each area to a worker role. Default roles:
-   - scope-mapper: contract surfaces, API boundaries, compatibility
-   - red-team: security, error handling, edge cases, adversarial inputs
-   - systems-auditor: concurrency, performance, resource management, observability
-4. You SHALL minimize file overlap between workers. Each file SHALL be owned by one worker.
+2. Determine file assignments: each file SHALL be assigned to every domain-specialist whose domain is relevant to it.
+   Files MAY appear in multiple specialists' scopes (domains are orthogonal to files).
+3. Determine which seed domains are in-scope (at least 3 for non-trivial changes).
+4. Classify remaining seed domains as out-of-scope with rationale.
 
 ## Dispatch
-You SHALL register yourself first, then spawn children:
+Register yourself (this returns your `<PARENT_ID8>` and `<SESSION_ID8>`), then spawn children:
 ```
 mpcr reviewer register --target-ref <REF>
-mpcr reviewer spawn-children --parent-id <YOUR_ID> --session-id <SID> --target-ref <REF> --count N
+# Output: reviewer_id=<PARENT_ID8> session_id=<SESSION_ID8>
+mpcr reviewer spawn-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --target-ref <REF> --count N
+# Output: child IDs (one <CHILD_ID8> per child)
 ```
 
-For each worker, you SHALL:
-1. Run `mpcr protocol dispatch --role <ROLE>` to get the dispatch prompt.
-2. Customize the prompt with the assigned file list and focus areas.
-3. Include only assigned files, focus domains, and acceptance criteria in the prompt.
-4. You SHALL NOT include full diffs, full file contents, or full conversation history in worker prompts.
-5. Launch the worker as a subagent (e.g., via the Task tool or equivalent).
-6. Provide child mpcr context (`session_dir`, `session_id`, child `reviewer_id`) so workers can run `mpcr reviewer update`/`note`.
+For each domain (seed in-scope + discovered):
+1. Run `mpcr protocol dispatch --role <ROLE>` (use closest match; `domain-specialist` for dynamic domains).
+2. Customize prompt with: assigned files, domain focus, explorer context summary, child mpcr IDs.
+3. Include ONLY: assigned files, domain definition, explorer summary, acceptance criteria, child IDs.
+4. Launch as a parallel subagent.
 
-You SHALL launch ALL workers as actual subagents. IF a subagent mechanism is not available,
-you SHALL fall back to single-agent mode and perform the review yourself using `mpcr protocol reviewer`.
+### Multi-agent mode only
+WHEN in multi-agent mode (diff > 500 lines OR user requests it):
+- You SHALL launch at least 1 `fresh-eyes` reviewer across the full file set.
+- For changes touching ≥ 3 modules, you SHALL launch 1 `holistic-integrator`.
+
+### Single-agent mode
+WHEN in single-agent mode (diff ≤ 500 lines AND user did not request multi-agent):
+- You SHALL spawn exactly 1 worker subagent using `mpcr protocol reviewer` for the full workflow.
+- The domain-per-specialist, fresh-eyes, and holistic-integrator requirements do NOT apply.
+
+### Subagent fallback
+IF the runtime does not support spawning subagents, you SHALL perform the review yourself
+using `mpcr protocol reviewer` phase-by-phase (you become the single reviewer, not an orchestrator).
+
+## Quality validation
+
+AFTER collecting all Proof Packets, you SHALL validate each:
+
+| Criterion | Pass | Fail |
+|-----------|------|------|
+| Domain Ledger | Table with Domain/Scope/Theorems/Disproofs/Findings/Defended | Missing or incomplete |
+| Theorem specificity | References `file:line` + falsifiable invariant | Generic ("code works") or absent |
+| Disproof effort | Specific input/sequence/scenario | "I tried and it works" or empty |
+| Evidence grounding | Code anchors that exist | Fabricated or missing |
+| Proportionality | ≥ 2 theorems per 100 lines reviewed | Trivial single theorem for large scope |
+| Section completeness | Coverage + Findings/none + Defended + Residual Risk | Missing sections |
+
+WHEN a packet fails:
+1. Note specific failures.
+2. Re-dispatch with feedback (max 1 retry per worker).
+3. IF retry also fails, record gap as Residual Risk.
+4. You SHALL NOT fabricate findings.
 
 ## Child lifecycle
 WHEN you spawn children via mpcr but do NOT dispatch subagents for them, you SHALL
-close unused children via:
-`mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <ID8> --set-status CANCELLED`.
+close unused children: `mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --set-status CANCELLED`.
 You SHALL NOT leave children in INITIALIZING state.
 
 ## Synthesis
-1. You SHALL wait for all worker subagents to return their Proof Packets.
-2. For each completed worker packet, you SHALL run:
-   `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
-   (or stdin) and attach proof summary via `--proof-note`/`--proof-note-file`.
-3. For abandoned or failed workers, you SHALL close unresolved children:
-   `mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <ID8> --set-status CANCELLED`.
-4. You SHALL merge findings, deduplicate, and resolve conflicts (keep the higher severity).
-5. You SHALL run `mpcr protocol report-template --scale standard` for the report skeleton.
-6. You SHALL write the merged report and finalize:
-   `mpcr reviewer finalize --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
-   (default behavior moves `<PATH>` into the canonical session report path and auto-closes unresolved children).
+1. Wait for all worker subagents to return Proof Packets.
+2. For each completed worker (use the child's ID from spawn-children output):
+   `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+3. For abandoned/failed workers (use your parent ID):
+   `mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --set-status CANCELLED`
+4. Merge findings across all packets. Deduplicate (same anchor + same issue = keep higher severity).
+5. Write merged report: `mpcr protocol report-template --scale <SCALE>`
+6. Finalize (use your parent ID): `mpcr reviewer finalize --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
 
-## Constraints
-- You own session registration/spawn/final completion/parent finalize.
-- Workers SHALL only run child-scoped `mpcr reviewer update` and `mpcr reviewer note`.
-- Workers are read-only: they SHALL NOT edit files.
-- IF a worker finds nothing, that is valid. You SHALL NOT pad findings.
-- You SHALL update phase status via `mpcr reviewer update --phase <PHASE>` at each transition.
+## Phase tracking
+You SHALL update phase status at each transition:
+`mpcr reviewer update --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --phase <PHASE>`
+Phases: INGESTION → DOMAIN_COVERAGE → THEOREM_GENERATION → ADVERSARIAL_PROOFS → SYNTHESIS → REPORT_WRITING
 """
 
 [domains]
-title = "Universal Domains"
+title = "Universal Domains (Seeds)"
 content = """
+These are SEED domains. You SHALL also discover additional domains specific to the codebase.
+
 | # | Domain | Defend that... | Seed challenges |
 |---|--------|---------------|-----------------|
 | 1 | Architecture | design is justified, simple, consistent | over-abstraction, separation of concerns, simpler alternatives, idiomatic patterns |
@@ -85,6 +142,44 @@ content = """
 | 9 | Testing | tests defend the contract, not the implementation | missing edge cases, brittle mocks, test-only code paths, coverage gaps |
 | 10 | Documentation | docs match the code and cover all public surfaces | stale docs, missing examples, undocumented error codes, misleading comments |
 | 11 | Dependencies | third-party risk is bounded and auditable | version pinning, license compliance, supply chain, transitive vulnerabilities |
+| 12 | Supply chain security | build pipeline, artifact provenance, and dependency resolution are tamper-proof | dependency confusion, typosquatting, compromised build scripts, unsigned artifacts, phantom dependency injection |
+| 13 | Authentication & authorization | identity verification and access control are correct under all code paths | privilege escalation, broken access control, token/session mismanagement, insecure defaults, missing re-auth on sensitive ops |
+| 14 | Cryptography & secrets | all cryptographic usage is correct, current, and secrets are never exposed | weak algorithms, hardcoded secrets, insufficient entropy, improper key management, nonce reuse, timing side-channels |
+| 15 | Input validation & injection | every external input boundary enforces strict validation before processing | SQL/NoSQL/command/LDAP injection, XSS, SSRF, template injection, header injection, deserialization attacks |
+| 16 | Infrastructure & runtime security | deployment configuration and runtime environment enforce least privilege | container escapes, misconfigured network policies, overly permissive IAM/RBAC, exposed debug endpoints, insecure defaults |
+| 17 | Data protection & privacy | sensitive data is classified, encrypted at rest/in-transit, and access-logged | PII leakage, missing encryption, excessive data collection, broken anonymization, missing audit trails, regulatory violations |
+| 12 | Supply chain security | build pipeline, artifact provenance, and dependency resolution are tamper-proof | dependency confusion, typosquatting, compromised build scripts, unsigned artifacts, phantom dependency injection |
+| 13 | Authentication & authorization | identity verification and access control are correct under all code paths | privilege escalation, broken access control, token/session mismanagement, insecure defaults, missing re-auth on sensitive ops |
+| 14 | Cryptography & secrets | all cryptographic usage is correct, current, and secrets are never exposed | weak algorithms, hardcoded secrets, insufficient entropy, improper key management, nonce reuse, timing side-channels |
+| 15 | Input validation & injection | every external input boundary enforces strict validation before processing | SQL/NoSQL/command/LDAP injection, XSS, SSRF, template injection, header injection, deserialization attacks |
+| 16 | Infrastructure & runtime security | deployment configuration and runtime environment enforce least privilege | container escapes, misconfigured network policies, overly permissive IAM/RBAC, exposed debug endpoints, insecure defaults |
+| 17 | Data protection & privacy | sensitive data is classified, encrypted at rest/in-transit, and access-logged | PII leakage, missing encryption, excessive data collection, broken anonymization, missing audit trails, regulatory violations |
 
-You SHALL use these domains during the DOMAIN_COVERAGE phase. You SHALL classify each as In-scope, Out-of-scope, or Unknown.
+## Dynamic domain discovery
+You SHALL identify additional domains beyond these seeds. Consider:
+- i18n / localization
+- Accessibility (a11y)
+- Regulatory compliance (GDPR, HIPAA, PCI, SOC2)
+- ML / AI safety (bias, drift, explainability)
+- Platform-specific (OS, browser, device)
+- Database-specific (query plans, migrations, indexing)
+- UX consistency
+- Backwards compatibility
+- Deployment safety (rollback, canary, feature flags)
+- Configuration management
+- Supply chain security (build provenance, SBOM, dependency pinning)
+- Authentication & authorization (RBAC, OAuth flows, session management)
+- Cryptography & secrets management (key rotation, algorithm selection, secret detection)
+- Input validation & injection prevention (sanitization, WAF rules, schema enforcement)
+- Infrastructure & runtime security (container hardening, network policies, least privilege)
+- Data protection & privacy (PII handling, encryption, audit trails, regulatory compliance)
+- Supply chain security (build provenance, SBOM, dependency pinning)
+- Authentication & authorization (RBAC, OAuth flows, session management)
+- Cryptography & secrets management (key rotation, algorithm selection, secret detection)
+- Input validation & injection prevention (sanitization, WAF rules, schema enforcement)
+- Infrastructure & runtime security (container hardening, network policies, least privilege)
+- Data protection & privacy (PII handling, encryption, audit trails, regulatory compliance)
+
+For each discovered domain, define: name, "defend that..." statement, 2-3 seed challenges.
+You SHALL discover at least 2 additional domains for non-trivial changes.
 """

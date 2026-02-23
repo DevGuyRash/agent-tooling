@@ -1,113 +1,140 @@
 # Reviewer protocol: phase-appropriate guidance for adversarial code review.
-# Each phase outputs compact, actionable guidance (target: 20-40 lines per phase).
 # Content is served by `mpcr protocol reviewer --phase <PHASE>`.
 # Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
 
 [phases.INGESTION]
 title = "Ingestion"
 content = """
-You SHALL read the diff and surrounding context, then produce a change inventory:
-
-1. You SHALL list files touched, approximate churn, and change intent (why).
-2. You SHALL identify contract surfaces affected: APIs, schemas, CLI args, config, DB migrations.
-3. You SHALL flag 1-3 depth targets: highest-risk code areas deserving adversarial proofs.
-4. You SHALL note repo conventions, lints, CI constraints, and test patterns.
+You SHALL read the diff and surrounding context. You SHALL produce a change inventory:
+- Files touched, approximate churn, change intent (why).
+- Contract surfaces affected: APIs, schemas, CLI args, config, DB migrations.
+- 1-3 depth targets: highest-risk code areas.
+- Repo conventions, lints, CI constraints.
 
 You SHALL resolve context autonomously:
 - WHEN a git hosting CLI is available (e.g., `gh`, `glab`), you SHALL check for associated PRs/MRs.
-- You SHALL read commit messages for intent. IF no PR/MR exists, you SHALL derive acceptance criteria from the diff and mark them [Assumed].
+- You SHALL derive acceptance criteria from PR/MR description, commits, or diff. Mark [Assumed] if inferred.
 - You SHALL NOT ask the user for context you can discover programmatically.
-- IF you are genuinely blocked (e.g., cannot determine what code to review), you SHALL ask ONE clarifying question.
+- You MAY spawn explorer subagents for context gathering if your assigned scope is large.
 
-You SHALL run: `mpcr reviewer update --status IN_PROGRESS --phase INGESTION`
+You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
 """
 
 [phases.DOMAIN_COVERAGE]
 title = "Domain Coverage"
 content = """
-You SHALL classify each Universal Domain for the change under review.
-Run `mpcr protocol domains` for the full domain table.
+You SHALL classify your assigned domain for the change.
 
-For each domain, you SHALL record one of:
-- In-scope: change touches this concern; you SHALL generate theorems for it.
-- Out-of-scope: change cannot affect this concern; you SHALL state why.
-- Unknown: insufficient context; you SHALL note what is missing.
+IF you are a specialist with ONE assigned domain:
+- You SHALL determine if your domain is In-scope or Out-of-scope for this change.
+- IF In-scope: proceed to Theorem Generation.
+- IF Out-of-scope: state why in your Proof Packet and produce a minimal packet.
 
-Coverage rules:
-- You SHALL mark at least 3 domains as In-scope for any non-trivial change.
-- WHEN any API or system boundary is touched, Security and Contracts SHALL be In-scope.
-- WHEN structural changes are made, Architecture SHALL be In-scope.
+IF you are a generalist (fresh-eyes, holistic-integrator):
+- You SHALL classify all seed domains plus any you discover.
+- For each: In-scope (generate theorems), Out-of-scope (state why), or Unknown (note gap).
+- You SHALL mark at least 3 domains as In-scope for non-trivial changes.
 
-You SHALL run: `mpcr reviewer update --phase DOMAIN_COVERAGE`
+You SHALL produce a Domain Ledger in your output — a machine-parseable table:
+
+| Domain | Scope | Theorems | Disproofs | Findings | Defended |
+|--------|-------|----------|-----------|----------|----------|
+| <name> | In-scope / Out-of-scope | N | N | N | N |
+
+The Ledger starts with Scope filled in; counts are updated as you progress.
+
+You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase DOMAIN_COVERAGE`
 """
 
 [phases.THEOREM_GENERATION]
 title = "Theorem Generation"
 content = """
-For each In-scope domain, you SHALL generate must-prove theorems.
-
-A theorem is a concrete, falsifiable claim about the code. Examples:
-- "The new endpoint validates auth tokens before accessing user data."
-- "The migration is backward-compatible: existing rows remain valid."
-- "The retry loop has bounded iterations and cannot infinite-loop."
-
-Rules:
-- Each theorem SHALL reference a specific code location (file:line or function).
-- You SHALL prioritize theorems for depth targets identified during Ingestion.
-- You SHALL generate at least 1 theorem per In-scope domain.
-- You SHALL generate 2-3 theorems for depth target areas.
+For each In-scope domain, you SHALL generate must-prove theorems:
+- Concrete, falsifiable claims referencing specific code locations (file:line).
+- You SHALL prioritize depth targets. At least 2 theorems per In-scope domain.
 - Theorems SHALL be disprovable — you SHALL NOT write truisms like "the code compiles."
+- Each theorem SHALL reference a concrete `file:line` and a specific invariant.
 
-You SHALL run: `mpcr reviewer update --phase THEOREM_GENERATION`
+Anti-laziness rules:
+- A theorem that merely restates the function signature is NOT acceptable.
+- A theorem that claims "the function does what it says" is NOT acceptable.
+- Theorems SHALL make claims about BEHAVIOR under specific conditions.
+
+You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase THEOREM_GENERATION`
 """
 
 [phases.ADVERSARIAL_PROOFS]
 title = "Adversarial Proofs"
 content = """
-For each theorem, you SHALL attempt a concrete disproof:
+For each theorem, you SHALL attempt concrete disproof:
+1. Construct a SPECIFIC scenario/input that would violate the theorem.
+2. Trace the code path with that input. Record outcome:
+   - DEFENDED: disproof failed; code handles it correctly.
+   - FINDING: disproof succeeded; classify severity.
 
-1. You SHALL construct a specific scenario, input, or sequence that would violate the theorem.
-2. You SHALL trace the code path to determine if the scenario succeeds or fails.
-3. You SHALL record the outcome:
-   - DEFENDED: disproof attempt failed; the code handles it correctly. You SHALL note evidence.
-   - FINDING: disproof succeeded; the code has a deficiency. You SHALL classify severity.
+Severity: BLOCKER (must fix) > MAJOR (should fix) > MINOR (improvement) > NIT (style).
 
-Severity classification:
-- BLOCKER: correctness/security flaw that SHALL be fixed before merge.
-- MAJOR: significant issue that SHOULD be fixed; workaround may exist.
-- MINOR: improvement opportunity; not blocking.
-- NIT: style, naming, or trivial issue.
+### Critical-issue escalation
+
+WHEN your domain involves security, data integrity, authentication, cryptography, injection, or privacy:
+- You SHALL apply a HIGHER disproof standard: at least 3 disproof attempts per theorem (not 1).
+- For each attempt, you SHALL vary the attack vector:
+  1. **Direct exploitation**: the simplest, most obvious attack against the claim.
+  2. **Indirect/chained exploitation**: an attack that combines multiple steps or leverages a different entry point.
+  3. **Edge-case/boundary exploitation**: malformed input, race conditions, integer limits, encoding tricks, null bytes, Unicode normalization, or protocol-level manipulation.
+- BLOCKER findings in security-adjacent domains SHALL include:
+  - A concrete proof-of-concept scenario (specific input bytes/sequence, not abstract descriptions).
+  - The precise code path traced from entry to impact.
+  - Impact assessment: what an attacker gains (data exfil, privilege escalation, RCE, DoS, etc.).
+  - Exploitability rating: trivial (no auth needed), moderate (requires specific preconditions), hard (requires chained conditions).
+
+### Grounding requirements for ALL findings
+
+Every finding you produce SHALL meet ALL of these criteria:
+1. **Anchor exists**: The `file:line` you reference SHALL exist in the current codebase. You SHALL verify this by reading the file.
+2. **Scenario is concrete**: You SHALL provide specific input values, not abstract descriptions like "a malicious input."
+3. **Code path is traced**: You SHALL describe the exact sequence of function calls from entry point to the vulnerable/buggy line.
+4. **Impact is stated**: You SHALL describe what goes wrong (crash, data loss, security breach, wrong output), not just "this could be a problem."
+5. **Fix is actionable**: Your recommendation SHALL be implementable without further research by the applicator.
+
+WHEN a finding fails ANY of these criteria, it is NOT a valid finding. Do NOT include it.
+
+### Anti-laziness rules
+
+- "I reviewed the code and it looks fine" is NOT a valid disproof attempt.
+- You SHALL describe the SPECIFIC input, sequence, or condition you tested.
+- You SHALL trace at least the critical path through the code for each disproof.
+- WHEN your disproof fails, you SHALL explain WHY the code correctly handles the scenario.
+- "This function could be vulnerable to X" is NOT a finding — show the concrete path or do not report it.
+- Generic findings (e.g., "consider adding input validation") WITHOUT a concrete exploit scenario SHALL be NIT at most.
+
+### Saturation rules
 
 Saturation rule: you SHALL stop when 3 consecutive disproof attempts fail to find new issues.
-IF you keep finding issues, you SHALL keep going.
+EXCEPTION: for security-adjacent domains, saturation requires 5 consecutive failures (higher bar for critical domains).
 
 WHEN tests exist that are relevant to your findings, you SHALL run them to validate your proofs.
-IF a test suite is available and your findings touch testable code, you SHALL run it.
 
-You SHALL run: `mpcr reviewer update --phase ADVERSARIAL_PROOFS`
+You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase ADVERSARIAL_PROOFS`
 """
 
 [phases.SYNTHESIS]
 title = "Synthesis"
 content = """
-You SHALL compile results from adversarial proofs into structured findings.
+You SHALL compile findings into your Proof Packet.
 
-For each FINDING, you SHALL record:
-- Severity (BLOCKER/MAJOR/MINOR/NIT)
-- Title (concise, actionable)
-- Anchor (file:line or function reference)
-- Claim (what the code should do)
-- Disproof (the concrete scenario that breaks it)
-- Evidence (code trace or reasoning)
-- Recommendation (specific fix — you SHALL NOT give vague advice)
-- Verification (how to confirm the fix works)
+For each FINDING:
+- Severity, title, anchor (file:line), claim, disproof scenario, evidence, recommendation, verification plan.
+- ALL fields are REQUIRED. A finding without an anchor is not a finding.
 
-For each DEFENDED theorem, you SHALL record:
-- Anchor, disproof attempt, evidence of defense, confidence level (HIGH/MEDIUM/LOW).
+For each DEFENDED theorem:
+- Anchor (file:line), theorem statement, disproof attempt (specific scenario), evidence, confidence (HIGH/MEDIUM/LOW).
+- "Reviewed and found no issues" is NOT a valid defended proof. You SHALL describe what you tried.
 
+You SHALL update your Domain Ledger with final counts.
 You SHALL identify residual risk: areas where coverage was insufficient or Unknown.
 
-You SHALL run: `mpcr reviewer update --phase SYNTHESIS`
+You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase SYNTHESIS`
 """
 
 [phases.REPORT_WRITING]
@@ -119,6 +146,7 @@ You SHALL produce the final review report. Choose template scale based on change
 - Run `mpcr protocol report-template --scale full` for large/high-risk changes.
 
 You SHALL fill in the template with findings from Synthesis.
+You SHALL include the Domain Ledger in your report.
 You SHALL NOT invent findings that were not produced during Adversarial Proofs.
 
 You SHALL finalize via mpcr:
