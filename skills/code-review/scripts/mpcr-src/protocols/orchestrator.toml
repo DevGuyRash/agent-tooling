@@ -148,12 +148,6 @@ These are SEED domains. You SHALL also discover additional domains specific to t
 | 15 | Input validation & injection | every external input boundary enforces strict validation before processing | SQL/NoSQL/command/LDAP injection, XSS, SSRF, template injection, header injection, deserialization attacks |
 | 16 | Infrastructure & runtime security | deployment configuration and runtime environment enforce least privilege | container escapes, misconfigured network policies, overly permissive IAM/RBAC, exposed debug endpoints, insecure defaults |
 | 17 | Data protection & privacy | sensitive data is classified, encrypted at rest/in-transit, and access-logged | PII leakage, missing encryption, excessive data collection, broken anonymization, missing audit trails, regulatory violations |
-| 12 | Supply chain security | build pipeline, artifact provenance, and dependency resolution are tamper-proof | dependency confusion, typosquatting, compromised build scripts, unsigned artifacts, phantom dependency injection |
-| 13 | Authentication & authorization | identity verification and access control are correct under all code paths | privilege escalation, broken access control, token/session mismanagement, insecure defaults, missing re-auth on sensitive ops |
-| 14 | Cryptography & secrets | all cryptographic usage is correct, current, and secrets are never exposed | weak algorithms, hardcoded secrets, insufficient entropy, improper key management, nonce reuse, timing side-channels |
-| 15 | Input validation & injection | every external input boundary enforces strict validation before processing | SQL/NoSQL/command/LDAP injection, XSS, SSRF, template injection, header injection, deserialization attacks |
-| 16 | Infrastructure & runtime security | deployment configuration and runtime environment enforce least privilege | container escapes, misconfigured network policies, overly permissive IAM/RBAC, exposed debug endpoints, insecure defaults |
-| 17 | Data protection & privacy | sensitive data is classified, encrypted at rest/in-transit, and access-logged | PII leakage, missing encryption, excessive data collection, broken anonymization, missing audit trails, regulatory violations |
 
 ## Dynamic domain discovery
 You SHALL identify additional domains beyond these seeds. Consider:
@@ -167,12 +161,6 @@ You SHALL identify additional domains beyond these seeds. Consider:
 - Backwards compatibility
 - Deployment safety (rollback, canary, feature flags)
 - Configuration management
-- Supply chain security (build provenance, SBOM, dependency pinning)
-- Authentication & authorization (RBAC, OAuth flows, session management)
-- Cryptography & secrets management (key rotation, algorithm selection, secret detection)
-- Input validation & injection prevention (sanitization, WAF rules, schema enforcement)
-- Infrastructure & runtime security (container hardening, network policies, least privilege)
-- Data protection & privacy (PII handling, encryption, audit trails, regulatory compliance)
 - Supply chain security (build provenance, SBOM, dependency pinning)
 - Authentication & authorization (RBAC, OAuth flows, session management)
 - Cryptography & secrets management (key rotation, algorithm selection, secret detection)

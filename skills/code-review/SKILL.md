@@ -208,7 +208,7 @@ mpcr protocol orchestrator
 mpcr protocol domains
 mpcr protocol dispatch --role <ROLE>
 mpcr reviewer spawn-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --target-ref <REF> --count N
-mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase <PHASE>
+mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase <PHASE>
 mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict ... --report-file ...
 mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8>
 mpcr reviewer finalize --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --verdict <V> --report-file report.md
