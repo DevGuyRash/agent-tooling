@@ -105,15 +105,18 @@ WHEN the original tool was synchronous THEN the Rust version SHALL be synchronou
 You SHALL run both original and Rust tool with identical inputs and diff outputs:
 
 ```bash
-<original-tool> <args> > /tmp/original.out 2> /tmp/original.err
-echo $? > /tmp/original.exit
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
 
-<rust-tool> <args> > /tmp/rust.out 2> /tmp/rust.err
-echo $? > /tmp/rust.exit
+<original-tool> <args> > "$tmp_dir/original.out" 2> "$tmp_dir/original.err"
+echo $? > "$tmp_dir/original.exit"
 
-diff /tmp/original.out /tmp/rust.out
-diff /tmp/original.err /tmp/rust.err
-diff /tmp/original.exit /tmp/rust.exit
+<rust-tool> <args> > "$tmp_dir/rust.out" 2> "$tmp_dir/rust.err"
+echo $? > "$tmp_dir/rust.exit"
+
+diff "$tmp_dir/original.out" "$tmp_dir/rust.out"
+diff "$tmp_dir/original.err" "$tmp_dir/rust.err"
+diff "$tmp_dir/original.exit" "$tmp_dir/rust.exit"
 ```
 
 You SHALL confirm all diffs are empty.

@@ -168,12 +168,15 @@ safe_copy() {
     return 1
   fi
 
+  ensure_within_workspace "$dst" || return 1
+  if [ -d "$dst" ]; then
+    echo "  ✗ refusing to overwrite directory destination: $dst" >&2
+    return 1
+  fi
   if [ -f "$dst" ] && [ "$force" -eq 0 ]; then
     echo "  ⚠ already exists (use --force to overwrite): $dst"
     return 0
   fi
-
-  ensure_within_workspace "$dst" || return 1
   dst_parent="$(dirname -- "$dst")"
   parent_before="$(CDPATH= cd -- "$dst_parent" && pwd -P)"
   case "$parent_before" in
@@ -207,13 +210,23 @@ safe_copy() {
     return 1
   fi
 
+  # Re-check after copy in case the destination appeared between preflight and move.
   if [ -f "$dst" ] && [ "$force" -eq 0 ]; then
     rm -f -- "$tmp_dst"
     echo "  ⚠ already exists (use --force to overwrite): $dst"
     return 0
   fi
+  if [ -d "$dst" ]; then
+    rm -f -- "$tmp_dst"
+    echo "  ✗ refusing to overwrite directory destination: $dst" >&2
+    return 1
+  fi
 
-  mv -f -- "$tmp_dst" "$dst"
+  mv -f -- "$tmp_dst" "$dst" || return 1
+  if [ ! -f "$dst" ]; then
+    echo "  ✗ destination missing after move: $dst" >&2
+    return 1
+  fi
   echo "  ✓ $label → $dst"
 }
 

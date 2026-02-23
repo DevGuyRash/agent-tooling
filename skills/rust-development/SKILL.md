@@ -100,10 +100,12 @@ You SHALL follow the rules in `references/guidelines.md`.
 
 You SHALL NOT use these patterns in non-test code:
 - You SHALL NOT use `.unwrap()` / `.expect()` without a same-line `// INVARIANT:` comment.
-- You SHALL NOT use `panic!()`, `todo!()`, `unimplemented!()`, `unreachable!()`, or `dbg!()`.
+- You SHALL NOT use `panic!()`, `todo!()`, `unimplemented!()`, or `dbg!()`.
+- You SHALL NOT use `unreachable!()` without a same-line `// INVARIANT:` comment.
 - You SHALL NOT use `println!()` / `eprintln!()` outside entrypoints.
 - You SHALL NOT use glob imports outside tests.
 - You SHALL NOT use `&String` / `&Vec<T>` / `&Box<T>` parameters.
+- You SHALL NOT use `.iter().next()` on slices/`Vec`; for collections without `.first()`, you MAY use `.iter().next()` only with same-line `// ALLOW: non-slice-next`.
 
 You SHALL use these idioms:
 - You SHALL use `?` for error propagation.

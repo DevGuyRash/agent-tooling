@@ -48,7 +48,7 @@ WHEN using `.expect()` with an invariant THEN you SHALL prefer `.expect("descrip
 | `.iter().collect::<Vec<_>>()` then immediately iterate | Unnecessary alloc | Chain iterators directly |
 | `.into_iter().collect::<Vec<_>>()` on a `Vec` | Unnecessary alloc | Remove; already a `Vec` |
 | `.iter().count()` with no filter/map | O(n) | `.len()` |
-| `.iter().next()` on slice/`Vec` | Verbose | `.first()` |
+| `.iter().next()` on slice/`Vec` without same-line `// ALLOW: non-slice-next` for non-slice collections | Verbose | `.first()`, or annotate a justified non-slice use with same-line `// ALLOW: non-slice-next` |
 | `for i in 0..x.len()` | Often non-idiomatic | Iterators/enumerate; add `// ALLOW:` only if indexing required |
 | `if x == true` / `if x == false` | Verbose | `if x` / `if !x` |
 | `if x != true` / `if x != false` | Verbose | `if !x` / `if x` |

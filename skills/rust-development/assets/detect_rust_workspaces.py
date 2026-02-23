@@ -105,6 +105,19 @@ if mode == "true" and not cargo_available:
         file=sys.stderr,
     )
 
+metadata_timeout_raw = os.environ.get("CI_CARGO_METADATA_TIMEOUT_SECONDS", "20").strip()
+try:
+    metadata_timeout_seconds = max(1, int(metadata_timeout_raw))
+except ValueError:
+    print(
+        (
+            f"Invalid CI_CARGO_METADATA_TIMEOUT_SECONDS='{metadata_timeout_raw}', "
+            "defaulting to 20"
+        ),
+        file=sys.stderr,
+    )
+    metadata_timeout_seconds = 20
+
 try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - best-effort fallback
@@ -213,7 +226,17 @@ def _cargo_metadata(manifest_path: Path):
             ],
             text=True,
             capture_output=True,
+            timeout=metadata_timeout_seconds,
         )
+    except subprocess.TimeoutExpired:
+        print(
+            (
+                f"cargo metadata timed out after {metadata_timeout_seconds}s for "
+                f"{manifest_path}"
+            ),
+            file=sys.stderr,
+        )
+        return None
     except Exception as exc:
         print(f"cargo metadata failed for {manifest_path}: {exc}", file=sys.stderr)
         return None

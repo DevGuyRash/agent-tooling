@@ -110,7 +110,19 @@ _search() {
     if [ "$skip_entry" = "exclude_entrypoints" ]; then
       set -- "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs'
     fi
-    _matches=$(rg "$@" -- "$pattern" 2>/dev/null | head -5)
+    _rg_tmp="$(mktemp)"
+    if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
+      _rg_status=0
+    else
+      _rg_status=$?
+    fi
+    if [ "$_rg_status" -gt 1 ]; then
+      rm -f "$_rg_tmp"
+      fail "$_label (search failed)"
+      return 1
+    fi
+    _matches="$(sed -n '1,5p' "$_rg_tmp")"
+    rm -f "$_rg_tmp"
     if [ -n "$_matches" ]; then
       printf '%s\n' "$_matches"
       fail "$_label"
@@ -170,7 +182,30 @@ _search_excluding() {
         -g '!**/*_test.rs' \
         -g '!**/tests.rs'
     fi
-    _matches=$(rg "$@" -- "$pattern" 2>/dev/null | grep -v "$exclude_pattern" | head -5)
+    _rg_tmp="$(mktemp)"
+    _filtered_tmp="$(mktemp)"
+    if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
+      _rg_status=0
+    else
+      _rg_status=$?
+    fi
+    if [ "$_rg_status" -gt 1 ]; then
+      rm -f "$_rg_tmp" "$_filtered_tmp"
+      fail "$_label (search failed)"
+      return 1
+    fi
+    if grep -v "$exclude_pattern" "$_rg_tmp" >"$_filtered_tmp"; then
+      :
+    else
+      _grep_status=$?
+      if [ "$_grep_status" -gt 1 ]; then
+        rm -f "$_rg_tmp" "$_filtered_tmp"
+        fail "$_label (filter failed)"
+        return 1
+      fi
+    fi
+    _matches="$(sed -n '1,5p' "$_filtered_tmp")"
+    rm -f "$_rg_tmp" "$_filtered_tmp"
     if [ -n "$_matches" ]; then
       printf '%s\n' "$_matches"
       fail "$_label"
@@ -228,7 +263,7 @@ echo "Non-idiomatic patterns:"
 _search '\.map\(\|.*\|.*\.clone\(\)\)' "" "no .map(|x| x.clone())" || true
 _search '\.map\(\|.*\|.*\.to_owned\(\)\)' "" "no .map(|x| x.to_owned())" || true
 _search '\.iter\(\)\.count\(\)' "" "no .iter().count()" || true
-_search '\.iter\(\)\.next\(\)' "" "no .iter().next()" || true
+_search_excluding '\.iter\(\)\.next\(\)' '// ALLOW: non-slice-next' "no disallowed .iter().next()" || true
 # ERE-compatible: \s → [[:space:]], \w → [[:alnum:]_]
 _search_excluding 'for[[:space:]]+[[:alnum:]_]+[[:space:]]+in[[:space:]]+0\.\..*\.len[[:space:]]*\(' '// ALLOW:' "no index loops" || true
 _search '==[[:space:]]*true|==[[:space:]]*false|!=[[:space:]]*true|!=[[:space:]]*false' "" "no verbose bool comparisons" || true

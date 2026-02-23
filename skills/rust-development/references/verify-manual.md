@@ -39,7 +39,9 @@ rg 'todo!\(' --type rust "$@" && echo "ERROR: todo!() found" || echo "✓ No tod
 rg '\.map\(\|.*\|.*\.clone\(\)\)' --type rust "$@" || echo "✓ No .map(|x| x.clone())"
 rg '\.map\(\|.*\|.*\.to_owned\(\)\)' --type rust "$@" || echo "✓ No .map(|x| x.to_owned())"
 rg '\.iter\(\)\.count\(\)' --type rust "$@" || echo "✓ No .iter().count()"
-rg '\.iter\(\)\.next\(\)' --type rust "$@" || echo "✓ No .iter().next()"
+# NOTE: `.iter().next()` is allowed for collections without `.first()`;
+# annotate intentional uses with `// ALLOW: non-slice-next`.
+rg '\.iter\(\)\.next\(\)' --type rust "$@" | rg -v '// ALLOW: non-slice-next' || echo "✓ No disallowed .iter().next()"
 rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust "$@" | rg -v '// ALLOW:' || echo "✓ No index loops"
 rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust "$@" || echo "✓ No verbose bool comparisons"
 
