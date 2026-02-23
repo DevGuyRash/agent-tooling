@@ -233,9 +233,23 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
     lower.lines().any(|line| {
         let trimmed = line.trim_start();
         line_has_standalone_error_prefix(trimmed)
+            || line_has_bracketed_error_prefix(trimmed)
             || trimmed.contains(" level=error")
             || trimmed.contains("] error")
     })
+}
+
+fn line_has_bracketed_error_prefix(line: &str) -> bool {
+    let Some(remainder) = line.strip_prefix("[error]") else {
+        return false;
+    };
+    if remainder.is_empty() {
+        return true;
+    }
+    remainder
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_whitespace())
 }
 
 fn line_has_standalone_error_prefix(line: &str) -> bool {
@@ -415,6 +429,7 @@ mod tests {
         assert!(logs_contain_error_keywords("Fatal startup error"));
         assert!(logs_contain_error_keywords("error: connection refused"));
         assert!(logs_contain_error_keywords("ERROR failed to connect"));
+        assert!(logs_contain_error_keywords("[ERROR] failed to connect"));
         assert!(logs_contain_error_keywords(" error failed to connect"));
         assert!(logs_contain_error_keywords(
             "error,details=failed to connect"
