@@ -11,11 +11,12 @@ use mpcr::lock::{self, LockConfig};
 use mpcr::protocol;
 use mpcr::session::{
     append_note, close_child_reviews, collect_reports, finalize_review, load_session,
-    register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
+    purge_reviews, register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
     AppendNoteParams, CloseChildReviewsParams, FinalizeReportInput, FinalizeReviewParams,
-    InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions,
-    ReportsResult, ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
-    SetInitiatorStatusParams, SeverityCounts, SpawnChildReviewersParams, UpdateReviewParams,
+    InitiatorStatus, NoteRole, NoteType, PurgeReviewsParams, RegisterReviewerParams,
+    ReportsFilters, ReportsOptions, ReportsResult, ReportsView, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
+    SpawnChildReviewersParams, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -226,6 +227,105 @@ enum SessionCommands {
     Reports {
         #[command(subcommand)]
         command: ReportsCommands,
+    },
+    /// Purge review entries and optionally their report files.
+    #[command(after_long_help = r#"Examples:
+  # Dry-run: preview what would be purged (safe, no changes):
+  mpcr session cleanup --dry-run
+
+  # Purge all entries for a specific reviewer (and their children):
+  mpcr session cleanup --reviewer-id <ID8> --include-children --delete-report-files
+
+  # Purge entries older than a timestamp:
+  mpcr session cleanup --before 2026-01-15T00:00:00Z --delete-report-files
+
+  # Purge entries between two timestamps:
+  mpcr session cleanup --after 2026-01-01T00:00:00Z --before 2026-02-01T00:00:00Z
+
+  # Purge only CANCELLED reviews:
+  mpcr session cleanup --reviewer-status CANCELLED --delete-report-files
+
+  # Purge entries for a specific session:
+  mpcr session cleanup --session-id <ID8> --include-children --delete-report-files
+
+  # Purge by verdict:
+  mpcr session cleanup --verdict APPROVE --delete-report-files
+"#)]
+    Cleanup {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Only purge reviews matching this reviewer id."
+        )]
+        reviewer_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Only purge reviews matching this session id."
+        )]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Only purge reviews matching this target ref."
+        )]
+        target_ref: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "STATUS",
+            help = "Only purge reviews with these reviewer statuses."
+        )]
+        reviewer_status: Vec<ReviewerStatus>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "STATUS",
+            help = "Only purge reviews with these initiator statuses."
+        )]
+        initiator_status: Vec<InitiatorStatus>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "VERDICT",
+            help = "Only purge reviews with these verdicts."
+        )]
+        verdict: Vec<ReviewVerdict>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Only purge reviews started at or after this timestamp (e.g. 2026-01-15T00:00:00Z)."
+        )]
+        after: Option<String>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Only purge reviews started at or before this timestamp (e.g. 2026-02-01T00:00:00Z)."
+        )]
+        before: Option<String>,
+        #[arg(
+            long,
+            help = "Also purge child entries whose parent matches the filters."
+        )]
+        include_children: bool,
+        #[arg(
+            long,
+            help = "Delete report markdown files from disk for purged entries."
+        )]
+        delete_report_files: bool,
+        #[arg(
+            long,
+            help = "Preview what would be purged without modifying anything."
+        )]
+        dry_run: bool,
     },
 }
 
@@ -941,9 +1041,14 @@ enum ProtocolCommands {
         #[arg(
             long,
             value_name = "ROLE",
-            help = "Subagent role (scope-mapper, red-team, systems-auditor)."
+            help = "Subagent role (e.g. architecture-critic, security-adversary, domain-specialist). Use `mpcr protocol list` for all roles."
         )]
         role: String,
+    },
+    /// Session management guidance (cleanup, housekeeping).
+    Session {
+        #[arg(long, value_name = "PHASE", help = "Session phase (CLEANUP).")]
+        phase: String,
     },
     /// List all available protocol entries.
     List,
@@ -1047,6 +1152,38 @@ fn run() -> anyhow::Result<()> {
                     )?;
                 }
             },
+            SessionCommands::Cleanup {
+                session,
+                reviewer_id,
+                session_id,
+                target_ref,
+                reviewer_status,
+                initiator_status,
+                verdict,
+                after,
+                before,
+                include_children,
+                delete_report_files,
+                dry_run,
+            } => {
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let session_locator = SessionLocator::new(resolved.session_dir);
+                let result = purge_reviews(&PurgeReviewsParams {
+                    session: session_locator,
+                    reviewer_id,
+                    session_id,
+                    target_ref,
+                    reviewer_statuses: reviewer_status,
+                    initiator_statuses: initiator_status,
+                    verdicts: verdict,
+                    after,
+                    before,
+                    include_children,
+                    delete_report_files,
+                    dry_run,
+                })?;
+                write_result(json, json_pretty, &result)?;
+            }
         },
 
         Commands::Reviewer { command } => match command {
@@ -1477,6 +1614,14 @@ fn run() -> anyhow::Result<()> {
             }
             ProtocolCommands::Dispatch { role } => {
                 let out = protocol::dispatch(&role)?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Session { phase } => {
+                let out = protocol::session_phase(&phase)?;
                 if json {
                     write_json(json_pretty, &out)?;
                 } else {

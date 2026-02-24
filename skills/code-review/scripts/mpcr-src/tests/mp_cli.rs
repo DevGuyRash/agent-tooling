@@ -3371,3 +3371,244 @@ fn protocol_reviewer_text_output() -> anyhow::Result<()> {
     ensure!(!out.contains("\"title\""));
     Ok(())
 }
+
+// ── Session cleanup tests ────────────────────────────────────────────────────
+
+#[test]
+fn cleanup_dry_run_does_not_modify_session() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--reviewer-id",
+        "feedface",
+        "--dry-run",
+    ])?;
+
+    ensure!(json_bool(&result, "dry_run")?, "expected dry_run=true");
+    ensure!(
+        json_u64(&result, "matched")? > 0,
+        "expected at least one match"
+    );
+    ensure!(json_u64(&result, "purged")? == 0, "expected purged=0");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 3, "session should be unmodified");
+    Ok(())
+}
+
+#[test]
+fn cleanup_purges_by_reviewer_id() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--reviewer-id",
+        "feedface",
+    ])?;
+
+    ensure!(!json_bool(&result, "dry_run")?, "expected dry_run=false");
+    ensure!(json_u64(&result, "purged")? == 1, "expected purged=1");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "one entry should be removed");
+    let reviewer_ids: Vec<&str> = reviews
+        .iter()
+        .filter_map(|r| r.get("reviewer_id").and_then(Value::as_str))
+        .collect();
+    ensure!(
+        !reviewer_ids.contains(&"feedface"),
+        "feedface should be purged"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_purges_children_with_include_children() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let mut session = sample_session(session_dir);
+
+    let child = ReviewEntry {
+        reviewer_id: "ch1ld001".to_string(),
+        session_id: "sess0001".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::Finished,
+        parent_id: Some("deadbeef".to_string()),
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: Some("2026-01-11T01:30:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::Approve),
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+    };
+    session.reviewers.push("ch1ld001".to_string());
+    session.reviews.push(child);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--reviewer-id",
+        "deadbeef",
+        "--include-children",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "purged")? == 2,
+        "expected parent + child purged"
+    );
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "parent and child should be removed");
+    Ok(())
+}
+
+#[test]
+fn cleanup_deletes_report_files() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(&report_path, "# Test report")?;
+    ensure!(report_path.exists(), "report file should exist");
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--reviewer-id",
+        "feedface",
+        "--delete-report-files",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "files_deleted")? == 1,
+        "expected 1 file deleted"
+    );
+    ensure!(!report_path.exists(), "report file should be deleted");
+    Ok(())
+}
+
+#[test]
+fn cleanup_filters_by_before_timestamp() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let mut session = sample_session(session_dir);
+
+    session.reviews[0].started_at = "2026-01-10T00:00:00Z".to_string();
+    session.reviews[1].started_at = "2026-01-12T00:00:00Z".to_string();
+    session.reviews[2].started_at = "2026-01-14T00:00:00Z".to_string();
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--before",
+        "2026-01-11T00:00:00Z",
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 1, "expected 1 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "one entry should be removed");
+    Ok(())
+}
+
+#[test]
+fn cleanup_filters_by_reviewer_status() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+        "--reviewer-status",
+        "BLOCKED",
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 1, "expected 1 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "blocked entry should be removed");
+    let reviewer_ids: Vec<&str> = reviews
+        .iter()
+        .filter_map(|r| r.get("reviewer_id").and_then(Value::as_str))
+        .collect();
+    ensure!(
+        !reviewer_ids.contains(&"cafebabe"),
+        "cafebabe should be purged"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_no_filters_purges_all() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir.to_str().unwrap(),
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 3, "expected all 3 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.is_empty(), "all entries should be removed");
+    let reviewers = json_array(&after, "reviewers")?;
+    ensure!(reviewers.is_empty(), "reviewers list should be empty");
+    Ok(())
+}
+
+#[test]
+fn protocol_session_cleanup_phase() -> anyhow::Result<()> {
+    let result = run_cmd_json(&["protocol", "session", "--phase", "CLEANUP"])?;
+    let content = json_str(&result, "content")?;
+    ensure!(
+        content.contains("mpcr session cleanup"),
+        "cleanup guidance should mention the command"
+    );
+    ensure!(
+        content.contains("--dry-run"),
+        "cleanup guidance should mention dry-run"
+    );
+    Ok(())
+}

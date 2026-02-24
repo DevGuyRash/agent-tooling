@@ -14,6 +14,7 @@ const APPLICATOR_TOML: &str = include_str!("../protocols/applicator.toml");
 const ORCHESTRATOR_TOML: &str = include_str!("../protocols/orchestrator.toml");
 const TEMPLATES_TOML: &str = include_str!("../protocols/templates.toml");
 const DISPATCH_TOML: &str = include_str!("../protocols/dispatch.toml");
+const SESSION_TOML: &str = include_str!("../protocols/session.toml");
 
 // ── Deserialization types ────────────────────────────────────────────────────
 
@@ -266,6 +267,20 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         }
     }
 
+    let session_file: PhasesFile =
+        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
+    let mut session_keys: Vec<_> = session_file.phases.keys().cloned().collect();
+    session_keys.sort();
+    for key in session_keys {
+        if let Some(phase) = session_file.phases.get(&key) {
+            entries.push(ProtocolListEntry {
+                category: "session".to_string(),
+                key: key.clone(),
+                title: phase.title.clone(),
+                command: format!("mpcr protocol session --phase {key}"),
+            });
+        }
+    }
     Ok(entries)
 }
 
@@ -380,4 +395,22 @@ mod tests {
         ensure!(dispatch("NONEXISTENT").is_err());
         Ok(())
     }
+}
+
+/// Retrieve phase guidance for a session management phase.
+///
+/// # Errors
+/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
+pub fn session_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
+    let file: PhasesFile =
+        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
+    let key = phase.to_ascii_uppercase();
+    let entry = file
+        .phases
+        .get(&key)
+        .ok_or_else(|| anyhow::anyhow!("unknown session phase: {phase}"))?;
+    Ok(ProtocolOutput {
+        title: entry.title.clone(),
+        content: entry.content.clone(),
+    })
 }

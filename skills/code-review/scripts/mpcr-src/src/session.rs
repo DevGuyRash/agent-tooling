@@ -1441,6 +1441,244 @@ impl SessionLocator {
     }
 }
 
+/// Parameters for [`purge_reviews`].
+pub struct PurgeReviewsParams {
+    /// Session directory locator.
+    pub session: SessionLocator,
+    /// Only purge reviews matching this reviewer id.
+    pub reviewer_id: Option<String>,
+    /// Only purge reviews matching this session id.
+    pub session_id: Option<String>,
+    /// Only purge reviews matching this target ref.
+    pub target_ref: Option<String>,
+    /// Only purge reviews with these reviewer statuses.
+    pub reviewer_statuses: Vec<ReviewerStatus>,
+    /// Only purge reviews with these initiator statuses.
+    pub initiator_statuses: Vec<InitiatorStatus>,
+    /// Only purge reviews with these verdicts.
+    pub verdicts: Vec<ReviewVerdict>,
+    /// Only purge reviews started at or after this RFC3339 timestamp.
+    pub after: Option<String>,
+    /// Only purge reviews started at or before this RFC3339 timestamp.
+    pub before: Option<String>,
+    /// When true, also purge child entries whose parent matches the filters.
+    pub include_children: bool,
+    /// When true, delete report markdown files from disk.
+    pub delete_report_files: bool,
+    /// When true, only preview what would be purged without modifying anything.
+    pub dry_run: bool,
+}
+
+/// A single purged review entry in the result.
+#[derive(Debug, Clone, Serialize)]
+pub struct PurgedReview {
+    /// Reviewer id of the purged entry.
+    pub reviewer_id: String,
+    /// Session id of the purged entry.
+    pub session_id: String,
+    /// Report file that was (or would be) deleted.
+    pub report_file: Option<String>,
+    /// Whether the report file was actually deleted from disk.
+    pub report_deleted: bool,
+}
+
+/// Result returned by [`purge_reviews`].
+#[derive(Debug, Clone, Serialize)]
+pub struct PurgeReviewsResult {
+    /// Number of review entries that matched all filters.
+    pub matched: usize,
+    /// Number of review entries actually removed (0 in dry-run).
+    pub purged: usize,
+    /// Number of report files deleted from disk (0 in dry-run).
+    pub files_deleted: usize,
+    /// Whether this was a dry-run preview.
+    pub dry_run: bool,
+    /// Individual purged review details.
+    pub reviews: Vec<PurgedReview>,
+}
+
+fn collect_purge_results(
+    session: &SessionFile,
+    purge_ids: &[(String, String)],
+    repo_root: &Path,
+    params: &PurgeReviewsParams,
+) -> (Vec<PurgedReview>, usize) {
+    let mut reviews = Vec::with_capacity(purge_ids.len());
+    let mut files_deleted = 0usize;
+    for (rid, sid) in purge_ids {
+        let entry = session
+            .reviews
+            .iter()
+            .find(|e| e.reviewer_id == *rid && e.session_id == *sid);
+        let report_file = entry.and_then(|e| e.report_file.clone());
+        let mut report_deleted = false;
+
+        if !params.dry_run && params.delete_report_files {
+            if let Some(ref rf) = report_file {
+                let path = resolve_report_file_path(repo_root, params.session.session_dir(), rf);
+                if path.exists() && std::fs::remove_file(&path).is_ok() {
+                    report_deleted = true;
+                    files_deleted += 1;
+                }
+            }
+        }
+
+        reviews.push(PurgedReview {
+            reviewer_id: rid.clone(),
+            session_id: sid.clone(),
+            report_file,
+            report_deleted,
+        });
+    }
+    (reviews, files_deleted)
+}
+
+/// Purge (permanently remove) review entries and optionally their report files.
+///
+/// Matching entries are removed from `_session.json`. When `include_children` is true,
+/// child entries whose `parent_id` matches a purged parent are also removed. When
+/// `delete_report_files` is true, report markdown files referenced by purged entries
+/// are deleted from disk.
+///
+/// # Errors
+/// Returns an error if the session cannot be read/written or identifiers are invalid.
+pub fn purge_reviews(params: &PurgeReviewsParams) -> anyhow::Result<PurgeReviewsResult> {
+    if let Some(ref id) = params.reviewer_id {
+        validate_id8(id, "reviewer_id")?;
+    }
+    if let Some(ref id) = params.session_id {
+        validate_id8(id, "session_id")?;
+    }
+
+    let lock_owner = mpcr_lock_owner();
+    let _guard = lock::acquire_lock(
+        params.session.session_dir(),
+        lock_owner.clone(),
+        LockConfig::default(),
+    )?;
+    let mut session = read_session_file(params.session.session_dir())?;
+    let repo_root = Path::new(&session.repo_root);
+
+    // Determine which top-level entries match the filters.
+    let mut matched_ids: Vec<(String, String)> = Vec::new();
+    for entry in &session.reviews {
+        if !entry_matches_purge_filters(entry, params) {
+            continue;
+        }
+        matched_ids.push((entry.reviewer_id.clone(), entry.session_id.clone()));
+    }
+
+    // When include_children is set, also collect children of matched parents.
+    let mut child_ids: Vec<(String, String)> = Vec::new();
+    if params.include_children {
+        for entry in &session.reviews {
+            if let Some(ref parent_id) = entry.parent_id {
+                let is_parent_matched = matched_ids.iter().any(|(rid, _)| rid == parent_id);
+                if is_parent_matched
+                    && !matched_ids
+                        .iter()
+                        .any(|(rid, sid)| rid == &entry.reviewer_id && sid == &entry.session_id)
+                {
+                    child_ids.push((entry.reviewer_id.clone(), entry.session_id.clone()));
+                }
+            }
+        }
+    }
+
+    let all_purge_ids: Vec<(String, String)> = matched_ids
+        .iter()
+        .chain(child_ids.iter())
+        .cloned()
+        .collect();
+
+    let (reviews, files_deleted) =
+        collect_purge_results(&session, &all_purge_ids, repo_root, params);
+
+    let matched = all_purge_ids.len();
+    let purged;
+    if params.dry_run {
+        purged = 0;
+    } else {
+        // Remove matched entries from session.
+        session.reviews.retain(|e| {
+            !all_purge_ids
+                .iter()
+                .any(|(rid, sid)| e.reviewer_id == *rid && e.session_id == *sid)
+        });
+
+        // Remove purged children from parent child_reviews arrays.
+        for entry in &mut session.reviews {
+            entry.child_reviews.retain(|c| {
+                !all_purge_ids
+                    .iter()
+                    .any(|(rid, sid)| c.reviewer_id == *rid && c.session_id == *sid)
+            });
+        }
+
+        // Remove purged reviewer ids from the reviewers list if they have no remaining entries.
+        session
+            .reviewers
+            .retain(|rid| session.reviews.iter().any(|e| e.reviewer_id == *rid));
+
+        purged = matched;
+        write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+    }
+
+    Ok(PurgeReviewsResult {
+        matched,
+        purged,
+        files_deleted,
+        dry_run: params.dry_run,
+        reviews,
+    })
+}
+
+fn mpcr_lock_owner() -> String {
+    "mpcr_purge".to_string()
+}
+
+fn entry_matches_purge_filters(entry: &ReviewEntry, params: &PurgeReviewsParams) -> bool {
+    if let Some(ref reviewer_id) = params.reviewer_id {
+        if entry.reviewer_id != *reviewer_id {
+            return false;
+        }
+    }
+    if let Some(ref session_id) = params.session_id {
+        if entry.session_id != *session_id {
+            return false;
+        }
+    }
+    if let Some(ref target_ref) = params.target_ref {
+        if entry.target_ref != *target_ref {
+            return false;
+        }
+    }
+    if !params.reviewer_statuses.is_empty() && !params.reviewer_statuses.contains(&entry.status) {
+        return false;
+    }
+    if !params.initiator_statuses.is_empty()
+        && !params.initiator_statuses.contains(&entry.initiator_status)
+    {
+        return false;
+    }
+    if !params.verdicts.is_empty() {
+        match entry.verdict {
+            Some(v) if params.verdicts.contains(&v) => {}
+            _ => return false,
+        }
+    }
+    if let Some(ref after) = params.after {
+        if entry.started_at.as_str() < after.as_str() {
+            return false;
+        }
+    }
+    if let Some(ref before) = params.before {
+        if entry.started_at.as_str() > before.as_str() {
+            return false;
+        }
+    }
+    true
+}
 #[cfg(test)]
 mod tests {
     use super::*;
