@@ -86,7 +86,12 @@ You SHALL create at minimum one happy-path and one error/edge-case test stub.
 You SHALL verify stubs compile:
 
 ```bash
-cargo check && echo "✓ Stubs compile" || echo "BLOCKED"
+if cargo check; then
+  echo "✓ Stubs compile"
+else
+  echo "BLOCKED: Stubs must compile before proceeding."
+  exit 1
+fi
 ```
 
 You SHALL present stubs for review with evidence: requirement summary, complete stub files, `cargo check` output, and an approval request.

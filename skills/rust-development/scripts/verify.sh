@@ -317,15 +317,15 @@ echo "Panic-inducing patterns:"
 # NOTE: exclude_tests is path-based and excludes conventional test-only dirs.
 # Keep banned_family.rs as the stricter parser-aware backstop for cfg(test) masking.
 # unwrap family: .unwrap(), .unwrap_err(), .unwrap_unchecked() — but NOT .unwrap_or*()
-_search_excluding '\.unwrap\(\)|\.unwrap_err\(\)|\.unwrap_unchecked\(\)' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
-# expect family: .expect(), .expect_err() — dot-prefix avoids matching function names
-_search_excluding '\.expect\(|\.expect_err\(' '// INVARIANT:' "no panic-inducing expect family" "exclude_tests" || true
+_search_excluding '\.unwrap(_err|_unchecked)?[[:space:]]*\(' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
+# expect family: .expect(), .expect_err() — but NOT .expectation(...)
+_search_excluding '\.expect(_err)?[[:space:]]*\(' '// INVARIANT:' "no panic-inducing expect family" "exclude_tests" || true
 # panic macros
 _search 'panic!\(' "" "no panic!()" "exclude_tests" || true
 _search 'unimplemented!\(' "" "no unimplemented!()" "exclude_tests" || true
 _search_excluding 'unreachable!\(' '// INVARIANT:' "no bare unreachable!()" "exclude_tests" || true
-# assert macros outside tests (debug_assert is fine with // INVARIANT:)
-_search_excluding 'assert!\(|assert_eq!\(|assert_ne!\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
+# assert macros outside tests (debug_assert is intentionally excluded)
+_search_excluding '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
 # process exit
 _search 'std::process::exit\(' "" "no exit() outside entrypoints" "exclude_tests" "exclude_entrypoints" || true
 
@@ -338,7 +338,7 @@ echo "Non-idiomatic patterns:"
 _search '\.map\(\|.*\|.*\.clone\(\)\)' "" "no .map(|x| x.clone())" || true
 _search '\.map\(\|.*\|.*\.to_owned\(\)\)' "" "no .map(|x| x.to_owned())" || true
 _search '\.iter\(\)\.count\(\)' "" "no .iter().count()" || true
-_search_excluding '\.iter\(\)\.next\(\)' '// ALLOW: non-slice-next' "no disallowed .iter().next()" || true
+_search_excluding '\.iter\(\)[[:space:]]*\.next\(\)' '// ALLOW: non-slice-next' "no disallowed .iter().next()" || true
 # ERE-compatible: \s → [[:space:]], \w → [[:alnum:]_]
 _search_excluding 'for[[:space:]]+[[:alnum:]_]+[[:space:]]+in[[:space:]]+0\.\..*\.len[[:space:]]*\(' '// ALLOW:' "no index loops" || true
 _search '==[[:space:]]*true|==[[:space:]]*false|!=[[:space:]]*true|!=[[:space:]]*false' "" "no verbose bool comparisons" || true
@@ -386,7 +386,7 @@ _search_excluding 'unsafe[[:space:]]*\{' '// SAFETY:' "no unsafe block without /
 echo ""
 echo "Idiomatic checks:"
 _search '\.len\(\)[[:space:]]*(==|!=)[[:space:]]*0' "" "use .is_empty() instead of .len() == 0" || true
-_search 'format!("\{\}",[[:space:]]' "" "use .to_string() or variable directly instead of format!(\"{}\", x)" || true
+_search 'format![[:space:]]*\([[:space:]]*"\{\}"[[:space:]]*,[[:space:]]*' "" "use .to_string() or variable directly instead of format!(\"{}\", x)" || true
 _search_excluding '#\[allow\(' '// Reason:' "no #[allow] without justification" "exclude_tests" || true
 
 echo ""

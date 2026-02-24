@@ -25,8 +25,8 @@ set -- \
   -g '!**/tests.rs'
 
 # Panic-inducing patterns (excluding tests)
-rg '\.unwrap[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare .unwrap()"
-rg '\.expect[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare .expect()"
+rg '\.unwrap(_err|_unchecked)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No panic-inducing unwrap family"
+rg '\.expect(_err)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No panic-inducing expect family"
 rg 'panic!\(' --type rust "$@" || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust "$@" && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!()"
 rg 'unreachable!\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
@@ -83,8 +83,8 @@ rg '#\[allow\(' --type rust "$@" | rg -v '// Reason:' || echo "✓ All #[allow] 
 WHEN `rg` is unavailable THEN you SHALL use these grep fallbacks:
 
 ```bash
-find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE '\.unwrap[[:space:]]*\(' {} + | grep -v '// INVARIANT:' || echo "✓"
-find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE '\.expect[[:space:]]*\(' {} + | grep -v '// INVARIANT:' || echo "✓"
+find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE '\.unwrap(_err|_unchecked)?[[:space:]]*\(' {} + | grep -v '// INVARIANT:' || echo "✓"
+find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE '\.expect(_err)?[[:space:]]*\(' {} + | grep -v '// INVARIANT:' || echo "✓"
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nF 'panic!(' {} + || echo "✓"
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nF 'todo!(' {} + && echo "ERROR" || echo "✓"
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nF 'dbg!(' {} + || echo "✓"

@@ -416,10 +416,9 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
   - free of `{:?}`/`{:#?}` output.
 - Error messages SHALL NOT leak secrets, credentials, or PII.
 - You SHALL NOT use panics for normal control flow.
-- You SHALL NOT use any panic-inducing unwrap or expect method in non-test code. This includes `.unwrap()`, `.unwrap_err()`, `.unwrap_unchecked()`, `.expect()`, and `.expect_err()`. The ONLY exception is when ALL of the following are true:
-  - An invariant guarantees the value exists.
-  - You add a same-line comment: `// INVARIANT: <explanation>`.
-  - You use `.expect("descriptive message")` rather than `.unwrap()`.
+- You SHALL NOT use panic-inducing unwrap or expect methods in non-test code. This includes `.unwrap()`, `.unwrap_err()`, `.expect()`, and `.expect_err()`.
+- IF an invariant guarantees the value exists and you must keep a panic boundary, THEN you MAY use `.expect("descriptive message")` with a same-line comment `// INVARIANT: <explanation>`.
+- You SHALL NOT use `.unwrap_unchecked()` in non-test code unless an `unsafe` block with a same-line `// SAFETY:` explanation proves soundness.
 - You SHALL NOT use `assert!()`, `assert_eq!()`, or `assert_ne!()` outside test code. Use `debug_assert!` variants with `// INVARIANT:` when a runtime check is needed, or return `Result`.
 - IF you are writing a library, THEN you SHALL expose a structured error type.
 - IF you are writing an application/CLI, THEN you SHALL:
@@ -620,8 +619,8 @@ Run the following commands and report the output. IF any patterns are found, THE
 ```bash
 # Panic-inducing unwrap/expect family (excluding tests)
 # Catches .unwrap(), .unwrap_err(), .unwrap_unchecked() but NOT .unwrap_or(), .unwrap_or_default(), .unwrap_or_else()
-rg '\.unwrap\(\)|\.unwrap_err\(\)|\.unwrap_unchecked\(\)' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing unwrap family"
-rg '\.expect\(|\.expect_err\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing expect family"
+rg '\.unwrap(_err|_unchecked)?[[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing unwrap family"
+rg '\.expect(_err)?[[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing expect family"
 
 # Panic macros (excluding tests)
 rg 'panic!\(' --type rust -g '!*test*' || echo "✓ No panic!()"
@@ -629,7 +628,7 @@ rg 'unimplemented!\(' --type rust -g '!*test*' && echo "ERROR: unimplemented!() 
 rg 'unreachable!\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
 
 # Assert macros in non-test code (should only appear in tests)
-rg 'assert!\(|assert_eq!\(|assert_ne!\(' --type rust -g '!*test*' | rg -v '// INVARIANT:\|debug_assert' || echo "✓ No assert macros outside tests"
+rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
 
 # Process control flow (should be at entrypoints only)
 rg 'std::process::exit\(' --type rust -g '!*test*' -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No std::process::exit() outside entrypoints"
@@ -641,7 +640,7 @@ rg 'todo!\(' --type rust && echo "ERROR: Unimplemented todo!() found" || echo "�
 rg '\.map\(\|.*\|.*\.clone\(\)\)' --type rust || echo "✓ No .map(|x| x.clone())"
 rg '\.map\(\|.*\|.*\.to_owned\(\)\)' --type rust || echo "✓ No .map(|x| x.to_owned())"
 rg '\.iter\(\)\.count\(\)' --type rust || echo "✓ No .iter().count()"
-rg '\.iter\(\)\.next\(\)' --type rust -g '!**/banned_family.rs' | rg -v '// ALLOW: non-slice-next' || echo "✓ No .iter().next()"
+rg '\.iter\(\)[[:space:]]*\.next\(\)' --type rust -g '!**/banned_family.rs' | rg -v '// ALLOW: non-slice-next' || echo "✓ No .iter().next()"
 rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust || echo "✓ No index loops"
 rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust || echo "✓ No verbose bool comparisons"
 rg '\.len\(\)\s*(==|!=)\s*0' --type rust || echo "✓ No .len() == 0 (use .is_empty())"
@@ -653,7 +652,7 @@ rg 'static\s+mut\s' --type rust -g '!*test*' || echo "✓ No static mut"
 rg 'unsafe\s*\{' --type rust -g '!*test*' | rg -v '// SAFETY:' || echo "✓ No unsafe block without // SAFETY:"
 
 # Idiomatic extras
-rg 'format!("\{\}",\s' --type rust || echo "✓ No format!(\"{}\", x) — use .to_string() or variable directly"
+rg 'format![[:space:]]*\([[:space:]]*"\{\}"[[:space:]]*,[[:space:]]*' --type rust || echo "✓ No format!(\"{}\", x) — use .to_string() or variable directly"
 rg '#\[allow\(' --type rust -g '!*test*' | rg -v '// Reason:' || echo "✓ All #[allow] have // Reason: justification"
 
 # Formatting/debug artifacts

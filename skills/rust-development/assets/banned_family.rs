@@ -6,7 +6,7 @@
 // - Fails the test if *non-test* Rust code contains banned-family calls.
 // - Skips test-only code: `#[cfg(test)]` blocks, `mod tests { ... }`, and
 //   test-only directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
-// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable`.
+// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable` families.
 // - Use this together with clippy lints (see clippy-lints.toml) to cover
 //   broader non-idiomatic patterns.
 //
@@ -30,7 +30,10 @@ enum MatchKind {
 
 const BANNED_PREFIXES: &[(&str, MatchKind)] = &[
     ("unwrap", MatchKind::MacroOrCall),
+    ("unwrap_err", MatchKind::MacroOrCall),
+    ("unwrap_unchecked", MatchKind::MacroOrCall),
     ("expect", MatchKind::MacroOrCall),
+    ("expect_err", MatchKind::MacroOrCall),
     ("panic", MatchKind::MacroOrCall),
     ("todo", MatchKind::MacroOrCall),
     ("unimplemented", MatchKind::MacroOrCall),
@@ -528,7 +531,15 @@ fn is_ident_char(b: u8) -> bool {
 }
 
 fn is_invariant_escapable_prefix(prefix: &str) -> bool {
-    matches!(prefix, "unwrap" | "expect" | "unreachable")
+    matches!(
+        prefix,
+        "unwrap"
+            | "unwrap_err"
+            | "unwrap_unchecked"
+            | "expect"
+            | "expect_err"
+            | "unreachable"
+    )
 }
 
 fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usize> {
@@ -1023,8 +1034,9 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_test_line_mask, contains_unsafe_impl_send_or_sync, is_cfg_test_attr,
-        resolve_scan_roots, should_skip_file, strip_comments_and_strings,
+        compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
+        is_cfg_test_attr, resolve_scan_roots, should_skip_file, strip_comments_and_strings,
+        MatchKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1125,6 +1137,38 @@ mod tests {
         let source = "fn conn() -> &'static str { value.unwrap() }";
         let sanitized = strip_comments_and_strings(source);
         assert!(sanitized.contains("value.unwrap()"));
+    }
+
+    #[test]
+    fn find_banned_prefix_detects_unwrap_expect_err_variants() {
+        assert_eq!(
+            find_banned_prefix("value.unwrap_err()", "unwrap_err", &MatchKind::MacroOrCall),
+            Some(6)
+        );
+        assert_eq!(
+            find_banned_prefix(
+                "unsafe { value.unwrap_unchecked() }",
+                "unwrap_unchecked",
+                &MatchKind::MacroOrCall
+            ),
+            Some(15)
+        );
+        assert_eq!(
+            find_banned_prefix("result.expect_err(\"boom\")", "expect_err", &MatchKind::MacroOrCall),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn find_banned_prefix_does_not_match_similar_non_banned_names() {
+        assert_eq!(
+            find_banned_prefix("value.unwrap_or_default()", "unwrap", &MatchKind::MacroOrCall),
+            None
+        );
+        assert_eq!(
+            find_banned_prefix("ctx.expectation()", "expect", &MatchKind::MacroOrCall),
+            None
+        );
     }
 
     #[test]
