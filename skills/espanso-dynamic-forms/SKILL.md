@@ -1,6 +1,15 @@
 ---
 name: espanso-dynamic-forms
-description: Build portable dynamic Espanso forms using runtime-generated layouts, a shared env contract, reusable scaffolding, and latency-safe output patterns.
+description: >-
+  Build portable dynamic Espanso forms using runtime-generated layouts, a shared
+  env contract, reusable scaffolding, and latency-safe output patterns. Use when
+  the task involves: (1) Creating or modifying Espanso form triggers or match
+  files, (2) Building dynamic Espanso forms where a script generates form layouts
+  at runtime, (3) Scaffolding a new Espanso form provider pattern,
+  (4) Configuring Espanso YAML for runtime-generated choices or fields,
+  (5) Debugging or linting Espanso form configurations, (6) Implementing
+  latency-safe clipboard or output patterns for Espanso, or (7) Any task
+  involving Espanso text expansion with dynamic or scripted form UIs.
 license: MIT
 metadata:
   author: DevGuyRash

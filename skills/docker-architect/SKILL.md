@@ -1,12 +1,17 @@
 ---
 name: docker-architect
 description: >-
-  Generate hardened Dockerfiles, docker-compose stacks, and Swarm deploy configs.
-  Containerize any app with multi-stage builds, non-root users, healthchecks, secrets
-  management, .dockerignore, resource limits, and security hardening. Supports Python,
-  Node.js, Rust, Go, Nginx, and custom stacks. Includes CI/CD pipeline scanning with
-  hadolint, trivy, and docker scout. Produces deterministic, production-ready container
-  architecture with digest-pinned images, OCI labels, SBOM, and provenance controls.
+  Generate hardened, production-ready Docker architecture including Dockerfiles,
+  docker-compose stacks, and Swarm deploy configs. Use when the task involves:
+  (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing
+  an application (Python, Node.js, Rust, Go, Nginx, or custom stacks),
+  (3) Creating or modifying docker-compose.yaml or Docker Swarm deployments,
+  (4) Hardening container security (non-root users, read-only filesystems,
+  resource limits, secrets management), (5) Adding healthchecks to containers,
+  (6) Setting up CI/CD container scanning with hadolint, trivy, or docker scout,
+  (7) Configuring .dockerignore files, (8) Implementing image supply-chain
+  controls (digest-pinned images, OCI labels, SBOM, provenance), or (9) Any task
+  involving Docker, containers, or container orchestration.
 license: MIT
 metadata:
   author: agent-skills
