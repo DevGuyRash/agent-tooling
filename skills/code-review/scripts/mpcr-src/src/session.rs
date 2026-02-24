@@ -1656,11 +1656,8 @@ pub fn purge_reviews(params: &PurgeReviewsParams) -> anyhow::Result<PurgeReviews
         LockConfig::default(),
     )?;
     let mut session = read_session_file(params.session.session_dir())?;
-    let repo_root_for_cleanup = match infer_repo_root_from_session_dir(params.session.session_dir())
-    {
-        Some(inferred) => inferred,
-        None => params.repo_root.clone(),
-    };
+    let repo_root_for_cleanup = infer_repo_root_from_session_dir(params.session.session_dir())
+        .map_or_else(|| params.repo_root.clone(), std::convert::identity);
     let repo_root = repo_root_for_cleanup.as_path();
 
     // Determine which top-level entries match the filters.
