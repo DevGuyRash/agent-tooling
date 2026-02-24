@@ -1,6 +1,14 @@
 ---
 name: code-review
-description: Perform and apply adversarial code reviews via parallel subagent orchestration and coordinate artifacts via mpcr.
+description: >-
+  Perform and apply adversarial code reviews via parallel subagent orchestration
+  and coordinate artifacts via mpcr. Use when the task involves: (1) Reviewing
+  code changes, diffs, or pull requests for quality and correctness,
+  (2) Applying code review feedback to a codebase, (3) Running a full-cycle
+  review (review then apply fixes in one pass), (4) Generating structured code
+  review reports, (5) Performing security-focused or adversarial code audits,
+  or (6) Any task where code needs to be critically reviewed before merging.
+  Supports reviewer, applicator, and full-cycle modes.
 compatibility: Requires a POSIX shell. If `<skills-file-root>/scripts/mpcr` is not prebuilt, requires a Rust toolchain (`cargo`/`rustc`) to build `<skills-file-root>/scripts/mpcr-src`.
 ---
 

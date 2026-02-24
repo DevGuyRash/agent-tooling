@@ -1,6 +1,16 @@
 ---
 name: gitops-workflow
-description: "End-to-end GitOps workflow governance and automation: branching from the default branch, Conventional Commits, PR creation/update/merge hygiene, CI gating, squash-merge message + release notes structure, and helper scripts (git + GitHub CLI). Use when creating branches/commits/PRs/releases or enforcing team Git workflow standards."
+description: >-
+  End-to-end GitOps workflow governance and automation covering branching,
+  Conventional Commits, PR lifecycle, CI gating, and release management. Use
+  when the task involves: (1) Creating a Git branch from the default branch,
+  (2) Writing or enforcing Conventional Commit messages, (3) Creating, updating,
+  reviewing, or merging pull requests, (4) Generating squash-merge commit
+  messages or release notes, (5) Setting up or enforcing CI gating policies,
+  (6) Automating Git or GitHub CLI (gh) workflows, (7) Enforcing team Git
+  workflow standards or branch naming conventions, or (8) Any task requiring
+  structured Git operations with auditability and governance. Includes helper
+  scripts for git and GitHub CLI.
 license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
