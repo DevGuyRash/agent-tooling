@@ -206,8 +206,22 @@ def _is_under(path: Path, root: Path) -> bool:
 
 
 def _matches_any(rel: str, patterns) -> bool:
-    rel_path = Path(rel)
-    return any(rel_path.match(pat) for pat in patterns)
+    rel_norm = rel.replace("\\", "/")
+    rel_path = Path(rel_norm if rel_norm else ".")
+    for pat in patterns:
+        pat_norm = pat.replace("\\", "/").strip()
+        if not pat_norm:
+            continue
+        if pat_norm in {".", "./"}:
+            if rel_norm in {"", ".", "./"}:
+                return True
+            continue
+        try:
+            if rel_path.match(pat_norm):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _cargo_metadata(manifest_path: Path):

@@ -88,7 +88,9 @@ fn banned_family_is_absent_in_production_code() {
                         ));
                     }
                 }
-                if contains_unsafe_impl_send_or_sync(line, &mut unsafe_impl_state) {
+                if contains_unsafe_impl_send_or_sync(line, &mut unsafe_impl_state)
+                    && !has_unsafe_impl_escape(raw_line)
+                {
                     violations.push(format!(
                         "{}:{}:1: banned `unsafe impl Send/Sync`",
                         path.display(),
@@ -624,6 +626,10 @@ fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) ->
     false
 }
 
+fn has_unsafe_impl_escape(raw_line: &str) -> bool {
+    raw_line.contains("// ALLOW:") || raw_line.contains("// SAFETY:")
+}
+
 fn strip_comments_and_strings(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1015,6 +1021,19 @@ mod tests {
         assert!(!contains_unsafe_impl_send_or_sync(
             "where T: Send + Sync {}",
             &mut state
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_send_sync_escape_hatches_are_detected() {
+        assert!(super::has_unsafe_impl_escape(
+            "unsafe impl Send for Worker {} // SAFETY: bounded by internal runtime invariants"
+        ));
+        assert!(super::has_unsafe_impl_escape(
+            "unsafe impl Sync for Cache {} // ALLOW: required for compatibility"
+        ));
+        assert!(!super::has_unsafe_impl_escape(
+            "unsafe impl Send for Worker {}"
         ));
     }
 

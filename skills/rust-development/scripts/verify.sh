@@ -51,8 +51,8 @@ FILE_SIZE_THRESHOLD="${FILE_SIZE_THRESHOLD:-300}"
 ENTRYPOINT_THRESHOLD="${ENTRYPOINT_THRESHOLD:-100}"
 
 # Counters are written to temp files so they survive subshells.
-_fail_file="$(mktemp)"
-_warn_file="$(mktemp)"
+_fail_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-fail.XXXXXX")"
+_warn_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-warn.XXXXXX")"
 echo 0 > "$_fail_file"
 echo 0 > "$_warn_file"
 trap 'rm -f "$_fail_file" "$_warn_file"' EXIT
@@ -110,7 +110,7 @@ _search() {
     if [ "$skip_entry" = "exclude_entrypoints" ]; then
       set -- "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs'
     fi
-    _rg_tmp="$(mktemp)"
+    _rg_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-rg.XXXXXX")"
     if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
       _rg_status=0
     else
@@ -182,8 +182,8 @@ _search_excluding() {
         -g '!**/*_test.rs' \
         -g '!**/tests.rs'
     fi
-    _rg_tmp="$(mktemp)"
-    _filtered_tmp="$(mktemp)"
+    _rg_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-rg.XXXXXX")"
+    _filtered_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-filtered.XXXXXX")"
     if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
       _rg_status=0
     else

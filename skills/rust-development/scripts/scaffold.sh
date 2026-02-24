@@ -288,7 +288,13 @@ if [ "$do_clippy" -eq 1 ]; then
   fi
 
   append_clippy_config() {
-    if grep -q '^[[:space:]]*\[package\]' "$cargo_toml"; then
+    has_workspace_manifest=0
+    if grep -q '^[[:space:]]*\[workspace\]' "$cargo_toml"; then
+      has_workspace_manifest=1
+    fi
+    # Mixed root manifests can contain both [workspace] and [package].
+    # Keep workspace-scoped lint tables in that case.
+    if [ "$has_workspace_manifest" -eq 0 ] && grep -q '^[[:space:]]*\[package\]' "$cargo_toml"; then
       sed 's/\[workspace\.lints/\[lints/g' "$clippy_src" >> "$cargo_toml"
     else
       cat "$clippy_src" >> "$cargo_toml"
