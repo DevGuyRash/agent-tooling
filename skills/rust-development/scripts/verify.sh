@@ -316,11 +316,17 @@ echo ""
 echo "Panic-inducing patterns:"
 # NOTE: exclude_tests is path-based and excludes conventional test-only dirs.
 # Keep banned_family.rs as the stricter parser-aware backstop for cfg(test) masking.
-_search_excluding '\.unwrap[[:space:]]*\(' '// INVARIANT:' "no bare .unwrap()" "exclude_tests" || true
-_search_excluding '\.expect[[:space:]]*\(' '// INVARIANT:' "no bare .expect()" "exclude_tests" || true
+# unwrap family: .unwrap(), .unwrap_err(), .unwrap_unchecked() — but NOT .unwrap_or*()
+_search_excluding '\.unwrap\(\)|\.unwrap_err\(\)|\.unwrap_unchecked\(\)' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
+# expect family: .expect(), .expect_err() — dot-prefix avoids matching function names
+_search_excluding '\.expect\(|\.expect_err\(' '// INVARIANT:' "no panic-inducing expect family" "exclude_tests" || true
+# panic macros
 _search 'panic!\(' "" "no panic!()" "exclude_tests" || true
 _search 'unimplemented!\(' "" "no unimplemented!()" "exclude_tests" || true
 _search_excluding 'unreachable!\(' '// INVARIANT:' "no bare unreachable!()" "exclude_tests" || true
+# assert macros outside tests (debug_assert is fine with // INVARIANT:)
+_search_excluding 'assert!\(|assert_eq!\(|assert_ne!\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
+# process exit
 _search 'std::process::exit\(' "" "no exit() outside entrypoints" "exclude_tests" "exclude_entrypoints" || true
 
 echo ""
@@ -370,6 +376,15 @@ echo ""
 echo "String allocation:"
 _search 'String::from\(""\)' "" 'no String::from("")' || true
 _search '"".to_string\(\)' "" 'no "".to_string()' || true
+
+echo ""
+echo "Resource safety:"
+_search_excluding 'mem::forget\(' '// ALLOW:' "no mem::forget()" "exclude_tests" || true
+_search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || true
+
+echo ""
+echo "Idiomatic checks:"
+_search '\.len\(\)[[:space:]]*(==|!=)[[:space:]]*0' "" "use .is_empty() instead of .len() == 0" || true
 
 echo ""
 echo "Meta:"

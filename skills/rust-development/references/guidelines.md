@@ -48,10 +48,15 @@
 
 | Pattern | Fix |
 |---|---|
-| `.unwrap*()`/`.expect*()` without same-line `// INVARIANT:` | `?`, `if let`, `match` |
+| `.unwrap()`/`.unwrap_err()`/`.unwrap_unchecked()` without `// INVARIANT:` | `?`, `if let`, `match` |
+| `.expect()`/`.expect_err()` without `// INVARIANT:` | `?`, `if let`, `match` |
+| `assert!()`/`assert_eq!()`/`assert_ne!()` outside tests | Return `Result`, or use `debug_assert!` with `// INVARIANT:` |
 | `panic!()`, `unimplemented!()`, `todo!()` | Return `Result`/`Option` |
 | `unreachable!()` without same-line `// INVARIANT:` | Refactor or add invariant |
 | `std::process::exit()` outside entrypoints | Return `Result`, map exit codes |
+| `.len() == 0` / `.len() != 0` | `.is_empty()` / `!.is_empty()` |
+| `mem::forget()` / `Box::leak()` without `// ALLOW:` | Restructure ownership |
+| `static mut` | Use `OnceLock`, `Mutex`, or `AtomicT` |
 | `dbg!()` | Remove |
 | `println!()`/`eprintln!()` outside entrypoints | Use tracing/log or remove |
 | `&String`, `&Vec<T>`, `&Box<T>` in parameters | `&str`, `&[T]`, `&T` |
@@ -147,8 +152,9 @@
 - You SHALL structure error messages as: what failed, why it failed, what to do next.
 - WHEN an error is user-facing THEN you SHALL write a single sentence, lowercase, with no debug dumps, no `{:?}`, no secrets, and no PII.
 - You SHALL NOT use panics for normal control flow.
-- WHEN using `.unwrap*()` or `.expect*()` THEN you SHALL annotate with `// INVARIANT:` on the same line.
-- You SHOULD prefer `.expect("descriptive message")` over `.unwrap()`.
+- You SHALL NOT use any panic-inducing method in non-test code. This includes `.unwrap()`, `.unwrap_err()`, `.unwrap_unchecked()`, `.expect()`, and `.expect_err()`. The ONLY exception is when an invariant guarantees correctness AND you add `// INVARIANT:` on the same line.
+- You SHALL NOT use `assert!()`, `assert_eq!()`, or `assert_ne!()` outside test code. Use `debug_assert!` with `// INVARIANT:` when a runtime check is needed, or return `Result`.
+- You SHOULD prefer `.expect("descriptive message")` over `.unwrap()` when `// INVARIANT:` is used.
 - WHEN writing a library THEN you SHALL define a structured error enum.
 - WHEN writing an application THEN you SHALL map errors to exit codes and print user-friendly messages to stderr.
 

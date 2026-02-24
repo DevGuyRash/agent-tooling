@@ -241,8 +241,12 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 
 | Pattern                                                                    | Reason                         | Fix                                                                   |
 | -------------------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `.unwrap*()` without invariant comment                                     | Silent panic                   | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
-| `.expect*()` without invariant comment                                     | Silent panic                   | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.unwrap()` without `// INVARIANT:`                                        | Panics on `None`/`Err`         | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.unwrap_err()` without `// INVARIANT:`                                    | Panics on `Ok`                 | Match both variants, or add `// INVARIANT: ...` comment               |
+| `.unwrap_unchecked()` (unsafe)                                             | UB if wrong variant            | Use safe alternatives; if required, add `// SAFETY:` comment          |
+| `.expect()` without `// INVARIANT:`                                        | Panics on `None`/`Err`         | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.expect_err()` without `// INVARIANT:`                                    | Panics on `Ok`                 | Match both variants, or add `// INVARIANT: ...` comment               |
+| `assert!()`/`assert_eq!()`/`assert_ne!()` outside tests                   | Panics on failure              | Return `Result` or use `debug_assert!` with `// INVARIANT:`           |
 | `panic!()` in non-test code                                                | Unrecoverable                  | Return `Result` or `Option`                                           |
 | `unimplemented!()` in non-test code                                        | Placeholder                    | Implement or delete                                                   |
 | `todo!()` outside tests after Phase 0                                      | Placeholder                    | Implement before Phase 2; Phase 2 scan MUST be empty                  |
@@ -266,6 +270,10 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 | `use some::path::*;` outside tests                                         | Glob import hides dependencies | Import explicitly; allow only with `// ALLOW:`                        |
 | `Box<dyn std::error::Error>` in `pub` APIs                                 | Opaque errors                  | Use a structured error enum                                           |
 | `anyhow::Result` / `anyhow::Error` in `pub` APIs                           | Opaque errors                  | Use a structured error enum; keep `anyhow` at app boundary            |
+| `.len() == 0` / `.len() != 0`                                              | Non-idiomatic                  | Use `.is_empty()` / `!.is_empty()`                                    |
+| `mem::forget()` without `// ALLOW:`                                        | Resource leak                  | Drop explicitly or restructure ownership; add `// ALLOW:` if required |
+| `Box::leak()` without `// ALLOW:`                                          | Intentional leak               | Use scoped ownership; add `// ALLOW:` if required                     |
+| `static mut` in non-test code                                              | Unsound shared state           | Use `OnceLock`, `Mutex`, or `AtomicT`                                 |
 | `impl Into<X>` when only one concrete type is passed                       | Over-generic                   | Use concrete type                                                     |
 | `impl AsRef<X>` when only one concrete type is passed                      | Over-generic                   | Use concrete type                                                     |
 | `dbg!()` in non-test code                                                  | Debug artifact                 | Remove                                                                |
@@ -408,10 +416,11 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
   - free of `{:?}`/`{:#?}` output.
 - Error messages SHALL NOT leak secrets, credentials, or PII.
 - You SHALL NOT use panics for normal control flow.
-- You SHALL NOT use `.unwrap*()` or `.expect*()` in non-test code except when ALL of the following are true:
+- You SHALL NOT use any panic-inducing unwrap or expect method in non-test code. This includes `.unwrap()`, `.unwrap_err()`, `.unwrap_unchecked()`, `.expect()`, and `.expect_err()`. The ONLY exception is when ALL of the following are true:
   - An invariant guarantees the value exists.
   - You add a same-line comment: `// INVARIANT: <explanation>`.
   - You use `.expect("descriptive message")` rather than `.unwrap()`.
+- You SHALL NOT use `assert!()`, `assert_eq!()`, or `assert_ne!()` outside test code. Use `debug_assert!` variants with `// INVARIANT:` when a runtime check is needed, or return `Result`.
 - IF you are writing a library, THEN you SHALL expose a structured error type.
 - IF you are writing an application/CLI, THEN you SHALL:
   - Map errors to appropriate exit codes.
@@ -609,12 +618,18 @@ After completing implementation, you SHALL run the following verification checks
 Run the following commands and report the output. IF any patterns are found, THEN you SHALL fix them before proceeding.
 
 ```bash
-# Panic-inducing patterns (excluding tests)
-rg '\.unwrap\(\)' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare .unwrap()"
-rg '\.expect\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare .expect()"
+# Panic-inducing unwrap/expect family (excluding tests)
+# Catches .unwrap(), .unwrap_err(), .unwrap_unchecked() but NOT .unwrap_or(), .unwrap_or_default(), .unwrap_or_else()
+rg '\.unwrap\(\)|\.unwrap_err\(\)|\.unwrap_unchecked\(\)' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing unwrap family"
+rg '\.expect\(|\.expect_err\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing expect family"
+
+# Panic macros (excluding tests)
 rg 'panic!\(' --type rust -g '!*test*' || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust -g '!*test*' && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!() remaining"
 rg 'unreachable!\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
+
+# Assert macros in non-test code (should only appear in tests)
+rg 'assert!\(|assert_eq!\(|assert_ne!\(' --type rust -g '!*test*' | rg -v '// INVARIANT:\|debug_assert' || echo "✓ No assert macros outside tests"
 
 # Process control flow (should be at entrypoints only)
 rg 'std::process::exit\(' --type rust -g '!*test*' -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No std::process::exit() outside entrypoints"
@@ -629,6 +644,12 @@ rg '\.iter\(\)\.count\(\)' --type rust || echo "✓ No .iter().count()"
 rg '\.iter\(\)\.next\(\)' --type rust -g '!**/banned_family.rs' | rg -v '// ALLOW: non-slice-next' || echo "✓ No .iter().next()"
 rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust || echo "✓ No index loops"
 rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust || echo "✓ No verbose bool comparisons"
+rg '\.len\(\)\s*(==|!=)\s*0' --type rust || echo "✓ No .len() == 0 (use .is_empty())"
+
+# Resource safety
+rg 'mem::forget\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No mem::forget()"
+rg 'Box::leak\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No Box::leak()"
+rg 'static\s+mut\s' --type rust -g '!*test*' || echo "✓ No static mut"
 
 # Formatting/debug artifacts
 rg 'dbg!\(' --type rust -g '!*test*' || echo "✓ No dbg!()"
