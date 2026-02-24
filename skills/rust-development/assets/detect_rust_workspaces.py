@@ -207,6 +207,24 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
+def _literal_prefix_for_anchor(pattern: str) -> str:
+    """Return the literal path prefix before any glob meta characters."""
+    prefix = []
+    escape = False
+    for ch in pattern:
+        if escape:
+            prefix.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch in {"*", "?", "["}:
+            break
+        prefix.append(ch)
+    return "".join(prefix)
+
+
 def _matches_any(rel: str, patterns) -> bool:
     rel_norm = rel.replace("\\", "/")
     rel_path = Path(rel_norm if rel_norm else ".")
@@ -218,6 +236,15 @@ def _matches_any(rel: str, patterns) -> bool:
             if rel_norm in {"", ".", "./"}:
                 return True
             continue
+        while pat_norm.startswith("./"):
+            pat_norm = pat_norm[2:]
+        literal_prefix = _literal_prefix_for_anchor(pat_norm).lstrip("/")
+        if literal_prefix:
+            anchored_prefix = literal_prefix.rstrip("/")
+            if not (
+                rel_norm == anchored_prefix or rel_norm.startswith(f"{anchored_prefix}/")
+            ):
+                continue
         try:
             if rel_path.match(pat_norm):
                 return True
