@@ -140,7 +140,14 @@ You SHALL run: `mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --ph
 [phases.REPORT_WRITING]
 title = "Report Writing"
 content = """
-You SHALL produce the final review report. Choose template scale based on change size:
+You SHALL produce the final review report.
+
+Before writing the report, you SHALL pull supplemental rubrics as needed:
+- Run `mpcr protocol reviewer --phase OVERENGINEERING_GUARD` and apply its smell tests during findings review.
+- Run `mpcr protocol reviewer --phase COMPLEXITY_ANALYSIS` and include Big-O verdicts for flagged code paths.
+- Run `mpcr protocol reviewer --phase SHIP_READINESS` and place the ship-readiness verdict at the top of the report.
+
+Choose template scale based on change size:
 - Run `mpcr protocol report-template --scale compact` for small changes (<100 lines, single concern).
 - Run `mpcr protocol report-template --scale standard` for medium changes.
 - Run `mpcr protocol report-template --scale full` for large/high-risk changes.
@@ -165,4 +172,88 @@ Finalize artifact rules:
 - IF you want finalize to fail when open children exist, you SHALL pass `--no-auto-close-children`.
 
 You SHALL NOT skip finalization. The review is incomplete until `mpcr reviewer finalize` succeeds.
+
+Artifact cleanup:
+- AFTER finalize succeeds, you SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- You SHALL NOT leave report drafts, dispatch prompts, or packet files in the worktree.
 """
+
+# -- Supplemental rubrics (progressive disclosure) --------------------------------
+# Agents pull these JIT via `mpcr protocol reviewer --phase <PHASE>`.
+# Hooks in REPORT_WRITING above trigger the pull; content stays out of context
+# until actually needed.
+
+[phases.OVERENGINEERING_GUARD]
+title = "Overengineering Guardrails"
+content = """
+You SHALL apply these overengineering smell tests when reviewing DOMAIN_COVERAGE and THEOREM_GENERATION artifacts.
+
+## Smell tests (any YES -> flag as FINDING)
+1. Abstraction without a second consumer: is there an interface/trait/base-class used by exactly one implementation?
+2. Speculative generality: does the code parameterize behavior that the current change never varies?
+3. Premature framework: does the code introduce a plugin system, registry, or factory for <= 2 concrete cases?
+4. Config-driven complexity: are there config knobs that no caller currently sets to non-default values?
+5. Indirection depth: does a call path cross > 3 abstraction boundaries to reach the actual work?
+
+## How to use
+- For each In-scope domain theorem, cross-check against the smell tests above.
+- WHEN a smell test fires, create a FINDING (MINOR for single smell, MAJOR when >= 2 co-occur on the same code path).
+- The recommendation SHALL always include a concrete simplification (inline the function, remove the trait, collapse the layers).
+- You SHALL NOT flag established patterns the codebase already relies on -- only NEW abstractions introduced by this change.
+"""
+
+[phases.COMPLEXITY_ANALYSIS]
+title = "Big-O Complexity Rubric"
+content = """
+You SHALL evaluate algorithmic complexity during ADVERSARIAL_PROOFS for code paths that process collections, loops, or recursive structures.
+
+## Evaluation dimensions
+
+### Time complexity
+- Identify the asymptotic time complexity of each hot path or newly introduced loop/recursion.
+- WHEN complexity is O(n^2) or worse for input sizes that can realistically exceed 100 elements, flag it.
+- Check for hidden quadratic behavior: nested iteration, repeated linear scans, string concatenation in loops.
+
+### Space complexity
+- Check for unbounded allocations: growing buffers, caches without eviction, accumulator patterns without limits.
+- WHEN an allocation scales with untrusted input size, flag it unless a bound is enforced.
+
+### Data structure fitness
+- Verify the chosen data structure matches the access pattern (e.g., Vec for random-access vs sequential scan, HashMap vs BTreeMap for ordered iteration).
+- WHEN a simpler or more cache-friendly structure achieves the same correctness, recommend the alternative.
+
+### Algorithm choice
+- Check for known-better algorithms: linear search where binary search applies, bubble/insertion sort on large inputs, brute-force where memoization or DP is obvious.
+- WHEN a standard-library or well-known algorithm exists for the task, prefer it over hand-rolled logic.
+
+## Severity mapping
+- BLOCKER: unbounded O(n^2)+ on untrusted input in a hot path (DoS vector).
+- MAJOR: O(n^2)+ on bounded but realistically large input (> 1000 elements), or unbounded allocation without cap.
+- MINOR: suboptimal structure/algorithm with measurable but non-critical impact.
+- NIT: micro-optimization opportunity with negligible real-world effect.
+"""
+
+[phases.SHIP_READINESS]
+title = "Ship-Readiness Rubric"
+content = """
+You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in the report.
+
+## Verdict (pick ONE)
+- **SHIP**: all findings are NIT-only or no findings. No changes required before merge.
+- **SHIP_WITH_FIXES**: findings exist (MINOR+) but are all fixable in this PR cycle. List the required fixes.
+- **DO_NOT_SHIP**: BLOCKER or MAJOR findings that require design rethinking, or cumulative MINOR risk is too high. List blocking items.
+
+## Evaluation matrix
+
+| Axis | PASS | CONDITIONAL | FAIL |
+|------|------|-------------|------|
+| Correctness | No BLOCKER findings | BLOCKERs have clear, bounded fixes | Unfixable correctness flaw |
+| Safety | No security/data-integrity BLOCKERs | Security BLOCKERs with mitigations proposed | Unmitigated security flaw |
+| Complexity budget | No MAJOR overengineering or O(n^2+) on hot paths | MAJORs with agreed refactor plan | Architectural overengineering blocking comprehension |
+| Test coverage | New code has tests; existing tests pass | Missing tests for edge cases (MINOR) | No tests for new behavior |
+| Acceptance criteria | All criteria met | Partial; gaps are MINOR and tracked | Critical criteria unmet |
+
+## Placement
+Place the ship-readiness verdict as the FIRST section of the report, immediately after the metadata header.
+"""
+

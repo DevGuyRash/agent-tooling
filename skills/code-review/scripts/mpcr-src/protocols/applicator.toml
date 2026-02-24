@@ -25,7 +25,7 @@ You SHALL decide a disposition for EVERY finding. You SHALL NOT skip any.
 
 BEFORE accepting any finding at face value, you SHALL independently verify its legitimacy:
 
-1. **Anchor verification**: You SHALL confirm the finding's anchor (`file:line`) exists and contains the code the reviewer claims.
+1. **Anchor verification**: You SHALL spawn an explorer subagent to confirm the finding's anchor (`file:line`) exists and contains the code the reviewer claims.
    IF the anchor is wrong, fabricated, or points to unrelated code → DECLINE with reason "invalid anchor".
 
 2. **Disproof reproduction**: You SHALL attempt to reproduce the reviewer's disproof scenario yourself.
@@ -78,14 +78,15 @@ You SHALL apply accepted feedback using parallel applicator subagents:
 1. Group APPLIED findings by file cluster.
 2. For each cluster, get dispatch prompt: `mpcr protocol dispatch --role applicator-worker`
 3. Customize with: assigned findings (full detail including disproof scenarios), file list, acceptance criteria.
-4. Launch applicator-worker subagents in parallel.
-5. Each worker applies fixes and returns an Application Report.
-6. Collect results. Verify all APPLIED findings were addressed.
-7. WHEN feasible, launch an applicator-verifier subagent to spot-check fixes against original disproofs.
+4. Launch applicator-worker subagents in parallel (subject to concurrency cap of 8).
+5. Each worker SHALL spawn explorer subagents for context gathering rather than reading unassigned files directly.
+6. Each worker applies fixes and returns an Application Report.
+7. Collect results. Verify all APPLIED findings were addressed.
+8. WHEN feasible, launch an applicator-verifier subagent to spot-check fixes against original disproofs.
 
 ## Worker mode (you are a subagent applying fixes)
 IF MPCR_APPLICATOR_ROLE is set, you are a worker:
-1. For each assigned finding, FIRST verify the disproof scenario is reproducible against the current code.
+1. For each assigned finding, FIRST spawn an explorer subagent to verify the disproof scenario is reproducible against the current code.
 2. IF the finding fails verification (anchor wrong, scenario not reproducible, code already handles it), report back DECLINED with specific evidence rather than applying a spurious fix.
 3. For verified findings, make the code change.
 4. Verify each change addresses the specific scenario from the disproof.
@@ -117,8 +118,23 @@ You SHALL present the user a summary:
 IF this application is part of a full-cycle (review → apply → re-review):
 1. After finalization, the orchestrator SHALL run a scoped re-review targeting ONLY files modified during application.
 2. The re-review SHALL NOT re-examine previously reviewed code that was not modified.
+3. The re-review SHALL use fresh subagents (not reuse previous cycle workers).
+4. Convergence: IF the re-review produces zero net-new BLOCKER or MAJOR → stop.
+5. IF net-new issues exist: one more cycle (max 2 total cycles).
+6. After cycle 2: remaining issues become Residual Risk. Present to user for decision.
+7. The orchestrator SHALL track and enforce the cycle count limit.
+
+## Full-cycle convergence (when running as part of full-cycle mode)
+IF this application is part of a full-cycle (review → apply → re-review):
+1. After finalization, the orchestrator SHALL run a scoped re-review targeting ONLY files modified during application.
+2. The re-review SHALL NOT re-examine previously reviewed code that was not modified.
 3. Convergence: IF the re-review produces zero net-new BLOCKER or MAJOR → stop.
 4. IF net-new issues exist: one more cycle (max 2 total cycles).
 5. After cycle 2: remaining issues become Residual Risk. Present to user for decision.
 6. Each cycle SHALL use fresh subagents.
+
+## Artifact cleanup
+AFTER finalization completes:
+- You SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- You SHALL NOT leave dispatch prompts, report templates, packet files, or any other scratch artifacts in the worktree.
 """

@@ -29,9 +29,23 @@ fn lock_acquire_blocks_until_timeout_then_release() -> anyhow::Result<()> {
     let owner1 = "deadbeef";
     let owner2 = "cafebabe";
 
-    let guard = lock::acquire_lock(dir.path(), owner1, LockConfig { max_retries: 0 })?;
+    let guard = lock::acquire_lock(
+        dir.path(),
+        owner1,
+        LockConfig {
+            max_retries: 0,
+            ..LockConfig::default()
+        },
+    )?;
 
-    let result = lock::acquire_lock(dir.path(), owner2, LockConfig { max_retries: 0 });
+    let result = lock::acquire_lock(
+        dir.path(),
+        owner2,
+        LockConfig {
+            max_retries: 0,
+            ..LockConfig::default()
+        },
+    );
     let Err(err) = result else {
         bail!("second acquire should fail");
     };
@@ -42,7 +56,14 @@ fn lock_acquire_blocks_until_timeout_then_release() -> anyhow::Result<()> {
 
     guard.release()?;
 
-    let guard2 = lock::acquire_lock(dir.path(), owner2, LockConfig { max_retries: 0 })?;
+    let guard2 = lock::acquire_lock(
+        dir.path(),
+        owner2,
+        LockConfig {
+            max_retries: 0,
+            ..LockConfig::default()
+        },
+    )?;
     guard2.release()?;
 
     Ok(())
@@ -287,6 +308,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: None,
         notes: vec![note],
         child_reviews: Vec::new(),
+        extra: Default::default(),
     };
 
     let blocked = ReviewEntry {
@@ -305,6 +327,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: Default::default(),
     };
 
     let finished = ReviewEntry {
@@ -328,6 +351,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: Default::default(),
     };
 
     let session = SessionFile {
@@ -574,6 +598,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         report_file: Some(report_file.to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: Default::default(),
     };
 
     let session = SessionFile {

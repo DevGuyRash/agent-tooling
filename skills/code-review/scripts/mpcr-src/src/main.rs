@@ -598,7 +598,7 @@ enum ReviewerCommands {
             value_enum,
             default_value = "CANCELLED",
             value_name = "STATUS",
-            help = "Reviewer status to apply to matching child entries."
+            help = "Reviewer status to apply to matching child entries (allowed: CANCELLED, ERROR)."
         )]
         set_status: ReviewerStatus,
 
@@ -1000,6 +1000,13 @@ Examples:
             help = "If set, only wait for reviews matching this session_id."
         )]
         session_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "SECS",
+            default_value = "3600",
+            help = "Maximum seconds to wait before exiting with an error (default: 3600)."
+        )]
+        timeout_secs: u64,
     },
 }
 
@@ -1027,6 +1034,8 @@ enum ProtocolCommands {
     Orchestrator,
     /// Universal Domains reference table.
     Domains,
+    /// Full-cycle orchestration guidance (review → apply → re-review convergence).
+    Fullcycle,
     /// Report template skeleton at the specified scale.
     ReportTemplate {
         #[arg(
@@ -1070,6 +1079,7 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     enforce_worker_mode_restrictions(&cli.command)?;
+    enforce_worker_session_dir_binding(&cli.command)?;
     let json = cli.json || cli.json_pretty;
     let json_pretty = cli.json_pretty;
     let use_env = cli.use_env;
@@ -1102,7 +1112,10 @@ fn run() -> anyhow::Result<()> {
                 max_retries,
             } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let cfg = LockConfig { max_retries };
+                let cfg = LockConfig {
+                    max_retries,
+                    ..LockConfig::default()
+                };
                 let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
                 std::mem::forget(guard);
                 write_ok(json, json_pretty)?;
@@ -1170,6 +1183,7 @@ fn run() -> anyhow::Result<()> {
                 let session_locator = SessionLocator::new(resolved.session_dir);
                 let result = purge_reviews(&PurgeReviewsParams {
                     session: session_locator,
+                    repo_root: resolved.repo_root,
                     reviewer_id,
                     session_id,
                     target_ref,
@@ -1558,6 +1572,7 @@ fn run() -> anyhow::Result<()> {
                 session,
                 target_ref,
                 session_id,
+                timeout_secs,
             } => {
                 let target_ref = target_ref.or_else(|| opt_env_string(use_env, "MPCR_TARGET_REF"));
                 let session_id = session_id.or_else(|| opt_env_string(use_env, "MPCR_SESSION_ID"));
@@ -1566,6 +1581,7 @@ fn run() -> anyhow::Result<()> {
                     &resolved.session_dir,
                     target_ref.as_deref(),
                     session_id.as_deref(),
+                    timeout_secs,
                 )?;
                 write_ok(json, json_pretty)?;
             }
@@ -1598,6 +1614,14 @@ fn run() -> anyhow::Result<()> {
             }
             ProtocolCommands::Domains => {
                 let out = protocol::domains()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Fullcycle => {
+                let out = protocol::fullcycle()?;
                 if json {
                     write_json(json_pretty, &out)?;
                 } else {
@@ -1672,23 +1696,228 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
         ),
         _ => true,
     };
-    if allowed {
-        return Ok(());
+    if !allowed {
+        let allowed_cmds = if dispatch_role.is_some() {
+            "`mpcr reviewer update` and `mpcr reviewer note`"
+        } else {
+            "`mpcr applicator note` and `mpcr applicator set-status`"
+        };
+        return Err(anyhow::anyhow!(
+            "{env}={role_name} restricts this executor to {allowed_cmds} only",
+            env = if dispatch_role.is_some() {
+                "MPCR_DISPATCH_ROLE"
+            } else {
+                "MPCR_APPLICATOR_ROLE"
+            },
+        ));
     }
 
-    let allowed_cmds = if dispatch_role.is_some() {
-        "`mpcr reviewer update` and `mpcr reviewer note`"
-    } else {
-        "`mpcr applicator note` and `mpcr applicator set-status`"
-    };
-    Err(anyhow::anyhow!(
-        "{env}={role_name} restricts this executor to {allowed_cmds} only",
-        env = if dispatch_role.is_some() {
-            "MPCR_DISPATCH_ROLE"
-        } else {
-            "MPCR_APPLICATOR_ROLE"
+    enforce_worker_identity_binding(command)?;
+    Ok(())
+}
+
+fn worker_mode_env_active() -> bool {
+    std::env::var("MPCR_DISPATCH_ROLE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some()
+        || std::env::var("MPCR_APPLICATOR_ROLE")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_some()
+}
+
+/// Validates that CLI-supplied `--reviewer-id` and `--session-id` match the
+/// worker identity declared via `MPCR_REVIEWER_ID` / `MPCR_SESSION_ID`.
+///
+/// Only enforced when both the environment variable AND the CLI flag are
+/// present — a `None` CLI flag means "use env default" and is always allowed.
+///
+/// # Arguments
+/// * `command` - The parsed CLI command to inspect for identity fields.
+///
+/// # Returns
+/// * `Ok(())` when no mismatch is detected.
+/// * `Err` with a descriptive message when a provided CLI id contradicts the env.
+///
+/// # Examples
+/// ```no_run
+/// # // Conceptual usage — called internally by enforce_worker_mode_restrictions.
+/// # // enforce_worker_identity_binding(&command)?;
+/// ```
+fn enforce_worker_identity_binding(command: &Commands) -> anyhow::Result<()> {
+    let env_reviewer_id = std::env::var("MPCR_REVIEWER_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let env_session_id = std::env::var("MPCR_SESSION_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+
+    // Worker mode requires identity binding — fail fast if role is set but IDs are missing.
+    if worker_mode_env_active() {
+        if env_reviewer_id.is_none() {
+            return Err(anyhow::anyhow!(
+                "worker mode requires MPCR_REVIEWER_ID to be set"
+            ));
+        }
+        if env_session_id.is_none() {
+            return Err(anyhow::anyhow!(
+                "worker mode requires MPCR_SESSION_ID to be set"
+            ));
+        }
+    }
+
+    let (cmd_reviewer_id, cmd_session_id) = extract_identity_fields(command);
+
+    if let (Some(provided), Some(expected)) = (cmd_reviewer_id, env_reviewer_id.as_deref()) {
+        if provided != expected {
+            return Err(anyhow::anyhow!(
+                "worker identity mismatch: --reviewer-id {provided} does not match MPCR_REVIEWER_ID={expected}"
+            ));
+        }
+    }
+
+    if let (Some(provided), Some(expected)) = (cmd_session_id, env_session_id.as_deref()) {
+        if provided != expected {
+            return Err(anyhow::anyhow!(
+                "worker identity mismatch: --session-id {provided} does not match MPCR_SESSION_ID={expected}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Extracts optional `reviewer_id` and `session_id` references from the given
+/// command variant, returning `(Option<&str>, Option<&str>)`.
+///
+/// Only the command variants reachable under worker-mode dispatch
+/// (`ReviewerCommands::Update`, `ReviewerCommands::Note`,
+/// `ApplicatorCommands::Note`, `ApplicatorCommands::SetStatus`) carry identity
+/// fields. All other variants return `(None, None)`.
+///
+/// # Arguments
+/// * `command` - The parsed top-level CLI command.
+///
+/// # Returns
+/// A tuple of `(reviewer_id, session_id)` as optional string slices.
+fn extract_identity_fields(command: &Commands) -> (Option<&str>, Option<&str>) {
+    match command {
+        Commands::Reviewer { command: sub } => match sub {
+            ReviewerCommands::Update {
+                reviewer_id,
+                session_id,
+                ..
+            }
+            | ReviewerCommands::Note {
+                reviewer_id,
+                session_id,
+                ..
+            } => (reviewer_id.as_deref(), session_id.as_deref()),
+            ReviewerCommands::Register { .. }
+            | ReviewerCommands::SpawnChildren { .. }
+            | ReviewerCommands::CloseChildren { .. }
+            | ReviewerCommands::CompleteChild { .. }
+            | ReviewerCommands::Finalize { .. } => (None, None),
         },
-    ))
+        Commands::Applicator { command: sub } => match sub {
+            ApplicatorCommands::Note {
+                reviewer_id,
+                session_id,
+                ..
+            }
+            | ApplicatorCommands::SetStatus {
+                reviewer_id,
+                session_id,
+                ..
+            } => (reviewer_id.as_deref(), session_id.as_deref()),
+            ApplicatorCommands::Wait { .. } => (None, None),
+        },
+        _ => (None, None),
+    }
+}
+
+/// Extracts the optional `session_dir` from the `SessionDirArgs` embedded in
+/// any command variant that carries one.  Returns `None` for variants without
+/// a session-dir field.
+fn extract_session_dir_field(command: &Commands) -> Option<&Path> {
+    let args: Option<&SessionDirArgs> = match command {
+        Commands::Reviewer { command: sub } => match sub {
+            ReviewerCommands::Register { session, .. }
+            | ReviewerCommands::SpawnChildren { session, .. }
+            | ReviewerCommands::CloseChildren { session, .. }
+            | ReviewerCommands::CompleteChild { session, .. }
+            | ReviewerCommands::Update { session, .. }
+            | ReviewerCommands::Finalize { session, .. }
+            | ReviewerCommands::Note { session, .. } => Some(session),
+        },
+        Commands::Applicator { command: sub } => match sub {
+            ApplicatorCommands::SetStatus { session, .. }
+            | ApplicatorCommands::Note { session, .. }
+            | ApplicatorCommands::Wait { session, .. } => Some(session),
+        },
+        Commands::Lock { command: sub } => match sub {
+            LockCommands::Acquire { session, .. } | LockCommands::Release { session, .. } => {
+                Some(session)
+            }
+        },
+        Commands::Session { command: sub } => match sub {
+            SessionCommands::Show { session, .. } | SessionCommands::Cleanup { session, .. } => {
+                Some(session)
+            }
+            SessionCommands::Reports { .. } => None,
+        },
+        _ => None,
+    };
+    args.and_then(|a| a.session_dir.as_deref())
+}
+
+/// Ensures that when running in worker mode, any explicit `--session-dir` CLI
+/// argument matches the `MPCR_SESSION_DIR` environment variable.
+///
+/// If no env var is set or no CLI flag is provided, the check passes.
+fn enforce_worker_session_dir_binding(command: &Commands) -> anyhow::Result<()> {
+    if !worker_mode_env_active() {
+        return Ok(());
+    }
+    let env_session_dir = std::env::var("MPCR_SESSION_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let Some(env_session_dir) = env_session_dir else {
+        return Err(anyhow::anyhow!(
+            "worker mode requires MPCR_SESSION_DIR to be set"
+        ));
+    };
+    let cmd_session_dir = extract_session_dir_field(command);
+    let env_path = std::path::PathBuf::from(&env_session_dir);
+    match cmd_session_dir {
+        Some(provided) => {
+            let canonical_provided = provided
+                .canonicalize()
+                .ok()
+                .map_or_else(|| provided.to_path_buf(), |p| p);
+            let canonical_env = env_path
+                .canonicalize()
+                .ok()
+                .map_or_else(|| env_path.clone(), |p| p);
+            if canonical_provided != canonical_env {
+                return Err(anyhow::anyhow!(
+                    "worker mode: --session-dir {} does not match MPCR_SESSION_DIR={}",
+                    provided.display(),
+                    env_session_dir,
+                ));
+            }
+        }
+        None => {
+            if !env_path.is_dir() {
+                return Err(anyhow::anyhow!(
+                    "worker mode: MPCR_SESSION_DIR={} is not a valid directory",
+                    env_session_dir,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn resolve_session_input(
@@ -1717,6 +1946,7 @@ fn resolve_session_input_from_cwd(
     default_date: Date,
     cwd: &Path,
 ) -> anyhow::Result<ResolvedSessionInput> {
+    let worker_mode = worker_mode_env_active();
     let repo_root = args
         .repo_root
         .clone()
@@ -1735,6 +1965,7 @@ fn resolve_session_input_from_cwd(
     let session_dir = args
         .session_dir
         .clone()
+        .or_else(|| opt_env_pathbuf(worker_mode, "MPCR_SESSION_DIR"))
         .or_else(|| opt_env_pathbuf(use_env, "MPCR_SESSION_DIR"))
         .map_or_else(
             || mpcr::paths::session_paths(&repo_root, session_date).session_dir,
@@ -1985,9 +2216,11 @@ fn wait_for_reviews(
     session_dir: &Path,
     target_ref: Option<&str>,
     session_id: Option<&str>,
+    timeout_secs: u64,
 ) -> anyhow::Result<()> {
     let mut delay = std::time::Duration::from_secs(1);
     let max_delay = std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let session = SessionLocator::new(session_dir.to_path_buf());
     let should_wait_for_session = target_ref.is_some() || session_id.is_some();
 
@@ -1999,6 +2232,11 @@ fn wait_for_reviews(
     }
 
     loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "timed out after {timeout_secs}s waiting for reviews to reach terminal status"
+            ));
+        }
         if !session.session_file().exists() {
             if !should_wait_for_session {
                 return Ok(());
@@ -2100,6 +2338,7 @@ mod tests {
             report_file: Some("report.md".to_string()),
             notes: Vec::new(),
             child_reviews: Vec::new(),
+            extra: Default::default(),
         };
         let session = SessionFile {
             schema_version: "1.1.0".to_string(),
@@ -2112,7 +2351,7 @@ mod tests {
         let body = serde_json::to_string_pretty(&session)? + "\n";
         fs::write(session_dir.join("_session.json"), body)?;
 
-        wait_for_reviews(&session_dir, None, None)?;
+        wait_for_reviews(&session_dir, None, None, 60)?;
         Ok(())
     }
 

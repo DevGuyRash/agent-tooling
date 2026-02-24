@@ -34,6 +34,7 @@ You are an orchestrator by default. Worker mode (see below) takes precedence whe
 - **Single-agent mode** (diff ≤ 500 lines AND user did not request multi-agent): you SHALL spawn exactly ONE worker subagent and wait for its result. You do not review code yourself.
 - **Multi-agent mode** (diff > 500 lines OR user requests it): you SHALL spawn multiple specialist workers in parallel.
 - **Subagent fallback**: IF the runtime cannot spawn subagents, you SHALL perform the review yourself using `mpcr protocol reviewer` phase-by-phase.
+- **Concurrency cap**: you SHALL run at most 8 parallel subagents (explorers + reviewers + applicators combined). WHEN 8 are running, you SHALL wait for one to finish before launching another.
 - In orchestrator modes you coordinate, dispatch, validate, synthesize, and finalize. You do NOT read code, generate theorems, attempt disproofs, write findings, or apply patches.
 
 ## Role detection (precedence: WORKER > ORCHESTRATOR)
@@ -48,6 +49,7 @@ IF the incoming prompt includes any of:
 
 THEN you are in WORKER mode:
 - You SHALL run only child-scoped `mpcr` commands for your assigned identity.
+- You SHALL include worker identity bindings in your execution context: `MPCR_REVIEWER_ID`, `MPCR_SESSION_ID`, and `MPCR_SESSION_DIR`.
 - You SHALL NOT run `mpcr reviewer register`, `spawn-children`, `complete-child`, or parent `finalize`.
 - You SHALL NOT run repo-wide `git diff` or `git show`.
 - You SHALL work ONLY within your assigned scope.
@@ -67,6 +69,23 @@ WHEN you are NOT in WORKER mode, you are the ORCHESTRATOR:
 - You SHALL treat large tool outputs as toxic; prefer `--stat`, `--name-only`, `--numstat`, `head`, `sed -n`.
 - Code excerpts: ≤ 12 lines, ≤ 3 excerpts total.
 - Worker prompts: scope + acceptance criteria only. No repo-wide context, no conversation history.
+
+## Artifact hygiene
+
+The code-review skill SHALL NOT leave scratch files in the user's worktree.
+
+- You SHALL NOT write dispatch prompts, report templates, test lists, or working files to the repo root or any directory outside `.local/tmp/`.
+- IF you must write intermediate files (dispatch prompts, draft reports, packet files), you SHALL write them under `.local/tmp/` and you SHALL delete them when the workflow completes.
+- `mpcr reviewer finalize --report-file` moves the report into `.local/reports/`; you SHALL NOT leave a copy behind unless `--copy-report-input` is explicitly passed.
+- You SHALL pipe report markdown via stdin to `mpcr reviewer finalize` instead of writing temporary report files when possible.
+- AFTER the reviewer workflow completes (finalize succeeds), the orchestrator SHALL delete `.local/tmp/` if it exists.
+- AFTER the applicator workflow completes (status set to APPLIED), the orchestrator SHALL delete `.local/tmp/` if it exists.
+- You SHALL NOT write files with names like `selected_tests.txt`, `report.md`, or any other scratch artifact to the repo root.
+- WHEN running AGENTS.md verification commands (Phase 2 scans, `cargo test`, etc.), you SHALL NOT redirect output to files in the worktree. Capture output in your context or pipe to `/dev/null`.
+
+IF `.local/tmp/` exists at the start of a workflow, you MAY clean it up after confirming no other agent is using it.
+The `.local/` directory itself is gitignored in this repo, but consumers of this skill may not have it in their `.gitignore`.
+
 
 ## Workflow selection
 
@@ -97,6 +116,13 @@ Get dispatch prompts via: `mpcr protocol dispatch --role <ROLE>
 # Cybersecurity specialist roles: supply-chain-auditor, auth-access-prover, crypto-secrets-auditor,
 #   injection-hunter, infra-runtime-auditor, data-privacy-guardian`
 
+Additionally, two supplemental specialists run after domain reviewers:
+- `complexity-analyst`: evaluates Big-O time/space complexity, data structure fitness, and algorithm choice across all changed code.
+- `overengineering-guard`: applies smell tests for unnecessary abstraction introduced by this change.
+
+After all Proof Packets are collected, one synthesis specialist runs:
+- `ship-readiness-assessor`: synthesizes all Proof Packets into a SHIP / SHIP_WITH_FIXES / DO_NOT_SHIP verdict.
+
 ### Applicator subagents
 
 Each applicator subagent owns a subset of findings.
@@ -121,17 +147,20 @@ The orchestrator SHALL discover at least 2 additional domains beyond the 17 seed
 2. Get orchestration guidance: `mpcr protocol orchestrator`
 3. Spawn explorer subagents to pre-digest code context for each file cluster.
 4. Run `mpcr protocol domains` and perform dynamic domain discovery.
-5. For each domain (seed + discovered):
+5. Spawn children in mpcr: `mpcr reviewer spawn-children --parent-id <ID> --session-id <SID> --target-ref <REF> --count N`
+6. For each domain (seed + discovered):
    a. Get the closest matching dispatch profile: `mpcr protocol dispatch --role <ROLE>`
-   b. Customize the prompt with: assigned files, domain focus, explorer context summary, child mpcr IDs.
+   b. Customize the prompt with: assigned files, domain focus, explorer context summary, child mpcr IDs, and worker env contract (`MPCR_REVIEWER_ID`, `MPCR_SESSION_ID`, `MPCR_SESSION_DIR`).
    c. Launch as a parallel subagent.
-6. Spawn children in mpcr: `mpcr reviewer spawn-children --parent-id <ID> --session-id <SID> --target-ref <REF> --count N`
 7. Wait for all workers to return Proof Packets.
 8. Run quality validation on each packet (see Quality Gate below).
-9. Re-dispatch workers whose packets fail validation (max 1 retry per worker).
-10. Synthesize: merge findings, deduplicate, resolve severity conflicts (keep higher).
-11. Write report using `mpcr protocol report-template --scale <SCALE>`.
-12. Finalize: `mpcr reviewer finalize --verdict <V> --report-file report.md`
+9. Dispatch `complexity-analyst` and `overengineering-guard` as supplemental reviewers (they review the full changed file set).
+10. After all Proof Packets arrive, dispatch `ship-readiness-assessor` with all collected packets.
+11. Wait for ship-readiness verdict.
+12. Re-dispatch workers whose packets fail validation (max 1 retry per worker).
+13. Synthesize: merge findings, deduplicate, resolve severity conflicts (keep higher). Include the ship-readiness verdict as section 1 of the report.
+14. Write report using `mpcr protocol report-template --scale <SCALE>`.
+15. Finalize: `mpcr reviewer finalize --verdict <V> --report-file report.md`
 
 ### Quality gate
 
@@ -143,6 +172,7 @@ AFTER collecting all Proof Packets, you SHALL validate each against this rubric:
 | Theorem specificity | Every theorem references a concrete `file:line` and a falsifiable invariant | Generic claims like "the code works" |
 | Disproof effort | Every disproof describes a specific input, sequence, or scenario | "I tried and it works" or empty |
 | Evidence grounding | Findings cite actual code locations that exist | No anchors or fabricated references |
+| Severity evidence | BLOCKER/MAJOR findings include concrete trigger path + impact evidence | Severity asserted without concrete exploit/impact path |
 | Proportionality | Depth proportional to assigned code complexity (≥ 2 theorems per 100 lines reviewed) | Single trivial theorem for large scope |
 | Section completeness | Coverage, Findings (or explicit "none"), Defended Proofs, Residual Risk all present | Missing required sections |
 
@@ -158,9 +188,9 @@ WHEN a packet fails validation:
 2. Build a finding inventory grouped by file cluster.
 3. For each cluster, get dispatch prompt: `mpcr protocol dispatch --role applicator-worker`
 4. Customize with: assigned findings, file list, verification criteria.
-5. Launch applicator subagents in parallel (one per file cluster).
-6. Each worker runs the **evidence challenge protocol** before applying any fix:
-   - Verify finding anchors actually exist and contain the claimed code.
+5. Launch applicator subagents in parallel (one per file cluster), subject to concurrency cap of 8.
+6. Each worker runs the **evidence challenge protocol** before applying any fix (spawning explorer subagents to verify):
+   - Spawn an explorer subagent to verify finding anchors actually exist and contain the claimed code.
    - Reproduce the reviewer's disproof scenario independently.
    - Check for hallucinated findings (references to nonexistent code/functions).
    - Validate severity is proportionate to actual exploitability.
@@ -172,17 +202,38 @@ WHEN a packet fails validation:
 
 ## Full-cycle workflow
 
-Full-cycle runs Reviewer then Applicator with convergence control.
+Full-cycle runs Reviewer → Applicator → Re-review with convergence control. You SHALL follow `mpcr protocol fullcycle` when available, or this section as fallback.
 
-1. Run Reviewer workflow (above). Produce report.
-2. IF verdict is APPROVE with zero BLOCKER/MAJOR → stop. Review complete.
-3. OTHERWISE run Applicator workflow on the findings.
-4. After application, run a scoped re-review:
-   - The re-review SHALL target ONLY the delta (files changed by the applicator).
-   - The re-review SHALL NOT re-examine code that was already reviewed and not modified.
-5. Convergence rule: IF the re-review produces no net-new BLOCKER or MAJOR findings → stop.
-6. Hard limit: maximum 2 full cycles (review → apply → re-review). After cycle 2, any remaining issues are reported as Residual Risk and presented to the user for decision.
-7. Each cycle SHALL use fresh subagents to avoid convergent laziness.
+### Phase 1: Initial review
+1. Run the complete Reviewer workflow (above). Produce merged report with ship-readiness verdict.
+2. IF ship-readiness verdict is **SHIP** (zero BLOCKER/MAJOR) → STOP. Present report to user. Done.
+3. OTHERWISE → proceed to Phase 2.
+
+### Phase 2: Application
+4. Run the Applicator workflow on findings from Phase 1.
+5. Dispatch applicator-worker subagents for APPLIED findings (subject to concurrency cap of 8).
+6. Each applicator-worker SHALL spawn explorer subagents for evidence challenge verification.
+7. Collect Application Reports. Record all dispositions.
+
+### Phase 3: Scoped re-review
+8. Identify the delta: files modified by applicator-workers in Phase 2.
+9. Run a NEW reviewer workflow targeting ONLY the delta files.
+   - You SHALL use fresh subagents (not reuse Phase 1 workers).
+   - You SHALL NOT re-examine code reviewed in Phase 1 that was not modified.
+   - Spawn domain specialists relevant to the delta only (not all 17+).
+   - The ship-readiness-assessor runs last, as in Phase 1.
+10. Collect re-review report and ship-readiness verdict.
+
+### Phase 4: Convergence
+11. IF the re-review produces zero net-new BLOCKER or MAJOR → STOP. Present final report.
+12. IF net-new issues exist AND this is cycle 1 → repeat Phases 2-3 on net-new findings only.
+13. IF this is cycle 2 → HARD STOP. Remaining issues become Residual Risk. Present to user for decision.
+
+### Full-cycle constraints
+- Maximum 2 full cycles (review → apply → re-review). No infinite loops.
+- Each cycle SHALL use fresh subagents to prevent convergent laziness.
+- The orchestrator SHALL track cycle count and enforce the hard limit.
+- At each stop point, present a cycle summary: Applied N, Declined N, Deferred N, Net-new N, Ship-readiness verdict.
 
 ## Autonomous operation
 
@@ -207,6 +258,9 @@ mpcr reviewer register --target-ref <REF>
 mpcr protocol orchestrator
 mpcr protocol domains
 mpcr protocol dispatch --role <ROLE>
+mpcr protocol dispatch --role complexity-analyst
+mpcr protocol dispatch --role overengineering-guard
+mpcr protocol dispatch --role ship-readiness-assessor
 mpcr reviewer spawn-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --target-ref <REF> --count N
 mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase <PHASE>
 mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict ... --report-file ...

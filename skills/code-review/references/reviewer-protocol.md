@@ -8,6 +8,7 @@ IF `mpcr protocol` works, you SHALL use it instead — it serves phase-appropria
 1. **Register** with mpcr, then iterate through 6 phases.
 2. At each phase, you SHALL update mpcr status and produce the required artifacts.
 3. Scale report depth to change complexity (compact/standard/full).
+4. Enforce a concurrency cap of 8 parallel subagents. WHEN 8 are running, wait for one to finish.
 
 ## Phase 1: Ingestion
 
@@ -23,7 +24,7 @@ You SHALL resolve context autonomously:
 - You SHALL NOT ask the user for context you can discover programmatically.
 - You MAY spawn explorer subagents for context gathering if your assigned scope is large.
 
-`mpcr reviewer update --status IN_PROGRESS --phase INGESTION`
+`mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
 
 ## Phase 2: Domain Coverage
 
@@ -68,7 +69,7 @@ You SHALL produce a machine-parseable Domain Ledger:
 |--------|-------|----------|-----------|----------|----------|
 | <name> | In-scope / Out-of-scope | N | N | N | N |
 
-`mpcr reviewer update --phase DOMAIN_COVERAGE`
+`mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase DOMAIN_COVERAGE`
 
 ## Phase 3: Theorem Generation
 
@@ -83,7 +84,7 @@ Anti-laziness:
 - "The function does what it says" is NOT a theorem.
 - Theorems SHALL make claims about BEHAVIOR under specific conditions.
 
-`mpcr reviewer update --phase THEOREM_GENERATION`
+`mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase THEOREM_GENERATION`
 
 ## Phase 4: Adversarial Proofs
 
@@ -129,7 +130,7 @@ Saturation rule: stop when 3 consecutive disproof attempts fail (5 for security-
 
 WHEN tests exist that are relevant, you SHALL run them to validate your proofs.
 
-`mpcr reviewer update --phase ADVERSARIAL_PROOFS`
+`mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase ADVERSARIAL_PROOFS`
 
 ## Phase 5: Synthesis
 
@@ -138,9 +139,14 @@ For each DEFENDED theorem: anchor, theorem statement, disproof attempt, evidence
 You SHALL update your Domain Ledger with final counts.
 You SHALL note residual risk: areas with insufficient coverage.
 
-`mpcr reviewer update --phase SYNTHESIS`
+`mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --phase SYNTHESIS`
 
 ## Phase 6: Report Writing
+
+Before writing the report, pull supplemental rubrics as needed:
+- Overengineering Guardrails: apply smell tests to catch unnecessary abstraction (see below).
+- Big-O Complexity Rubric: include complexity verdicts for flagged code paths (see below).
+- Ship-Readiness Rubric: place the ship-readiness verdict at the top of the report (see below).
 
 Select template scale based on change size:
 
@@ -156,6 +162,7 @@ All sections: Change Inventory, Acceptance Criteria, Domain Ledger, Theorems, Fi
 You SHALL finalize:
 ```
 mpcr reviewer finalize --verdict APPROVE|REQUEST_CHANGES|BLOCK \
+  --reviewer-id <ID8> --session-id <ID8> \
   --blocker N --major N --minor N --nit N --report-file report.md
 ```
 
@@ -165,6 +172,99 @@ Finalize artifact rules:
 - IF `--report-file` is omitted, pipe report markdown via stdin.
 - Parent finalize auto-closes unresolved child reviews by default (`CANCELLED`).
 - If you need strict failure when children remain open, pass `--no-auto-close-children`.
+
+Artifact cleanup:
+- AFTER finalize succeeds, you SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- You SHALL NOT leave report drafts, dispatch prompts, or packet files in the worktree.
+
+
+## Supplemental Specialist Roles
+
+In multi-agent mode, the orchestrator SHALL dispatch these supplemental specialists:
+- `complexity-analyst`: evaluates Big-O time/space complexity across all changed code.
+- `overengineering-guard`: applies smell tests for unnecessary new abstraction.
+
+AFTER ALL reviewer and supplemental Proof Packets are collected, the orchestrator SHALL dispatch EXACTLY ONE final agent:
+- `ship-readiness-assessor`: synthesizes ALL collected Proof Packets into a ship-readiness verdict. This is the LAST subagent spawned in the reviewer workflow.
+
+These are dispatch roles available via `mpcr protocol dispatch --role <ROLE>`.
+
+## Full-Cycle Protocol
+
+Full-cycle runs Reviewer → Applicator → Re-review with convergence control.
+
+### Phase 1: Initial review
+1. Run the complete Reviewer workflow. Produce merged report with ship-readiness verdict.
+2. IF ship-readiness verdict is **SHIP** (zero BLOCKER/MAJOR) → STOP. Done.
+3. OTHERWISE → proceed to Phase 2.
+
+### Phase 2: Application
+4. Run the Applicator workflow. Dispatch applicator-worker subagents (concurrency cap: 8).
+5. Each applicator-worker SHALL spawn explorer subagents for evidence challenge verification.
+
+### Phase 3: Scoped re-review
+6. Identify delta: files modified by applicator-workers.
+7. Run a NEW reviewer workflow targeting ONLY delta files with fresh subagents.
+8. Ship-readiness-assessor runs last, as in Phase 1.
+
+### Phase 4: Convergence
+9. Zero net-new BLOCKER/MAJOR → STOP.
+10. Net-new issues + cycle 1 → repeat Phases 2-3 on net-new findings only.
+11. Cycle 2 → HARD STOP. Remaining issues become Residual Risk.
+
+Constraints: max 2 cycles, fresh subagents each cycle, orchestrator tracks cycle count.
+
+## Supplemental Rubrics
+
+These rubrics are applied during report writing. They are listed here for fallback only;
+the primary delivery mechanism is `mpcr protocol reviewer --phase <PHASE>`.
+
+### Overengineering Guardrails
+
+Smell tests (any YES → flag as FINDING):
+1. Abstraction without a second consumer: interface/trait/base-class used by exactly one implementation?
+2. Speculative generality: parameterized behavior the current change never varies?
+3. Premature framework: plugin system, registry, or factory for ≤ 2 concrete cases?
+4. Config-driven complexity: config knobs no caller sets to non-default values?
+5. Indirection depth: call path crosses > 3 abstraction boundaries to reach actual work?
+
+Rules:
+- Cross-check each theorem against the smell tests.
+- MINOR for single smell, MAJOR when ≥ 2 co-occur on the same code path.
+- Recommendation SHALL include a concrete simplification.
+- Only flag NEW abstractions introduced by this change.
+
+### Big-O Complexity Rubric
+
+Evaluate during adversarial proofs for code paths that process collections, loops, or recursion:
+
+| Dimension | What to check |
+|-----------|--------------|
+| Time | Asymptotic complexity of hot paths; hidden O(n²): nested iteration, repeated scans, string concat in loops |
+| Space | Unbounded allocations, caches without eviction, accumulator patterns without limits |
+| Data structure | Structure matches access pattern; prefer simpler/cache-friendly alternatives |
+| Algorithm | Known-better algorithms; prefer stdlib over hand-rolled |
+
+Severity: BLOCKER (unbounded O(n²)+ on untrusted input, DoS vector) > MAJOR (O(n²)+ on large bounded input or unbounded alloc) > MINOR (suboptimal, non-critical) > NIT (micro-opt).
+
+### Ship-Readiness Rubric
+
+Produce ONE verdict:
+- **SHIP**: NIT-only or no findings.
+- **SHIP_WITH_FIXES**: MINOR+ findings, all fixable in this PR cycle. List fixes.
+- **DO_NOT_SHIP**: BLOCKER/MAJOR requiring design rethink, or cumulative MINOR risk too high. List blockers.
+
+Evaluation matrix:
+
+| Axis | PASS | CONDITIONAL | FAIL |
+|------|------|-------------|------|
+| Correctness | No BLOCKERs | BLOCKERs with clear fixes | Unfixable correctness flaw |
+| Safety | No security/data-integrity BLOCKERs | BLOCKERs with mitigations | Unmitigated security flaw |
+| Complexity budget | No MAJOR overengineering or O(n²+) | MAJORs with refactor plan | Overengineering blocking comprehension |
+| Test coverage | New code tested; existing pass | Missing edge-case tests (MINOR) | No tests for new behavior |
+| Acceptance criteria | All met | Partial; gaps MINOR and tracked | Critical criteria unmet |
+
+Place verdict as FIRST section of the report, after the metadata header.
 
 ## Non-negotiable rules
 
@@ -179,8 +279,8 @@ Finalize artifact rules:
 
 ```
 mpcr reviewer register --target-ref <REF>
-mpcr reviewer update --status IN_PROGRESS --phase <PHASE>
-mpcr reviewer note --note-type question|blocker_preview|domain_observation --content "..."
+mpcr reviewer update --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase <PHASE>
+mpcr reviewer note --reviewer-id <ID8> --session-id <ID8> --note-type question|blocker_preview|domain_observation --content "..."
 mpcr reviewer finalize --verdict <V> [--blocker N --major N --minor N --nit N] [--report-file path] [--copy-report-input] [--no-auto-close-children]
 mpcr reviewer complete-child --reviewer-id <ID8> --session-id <ID8> --verdict <V> [--blocker N --major N --minor N --nit N] [--report-file path] [--proof-note TEXT]
 mpcr session reports open|closed|in-progress [--include-report-contents]

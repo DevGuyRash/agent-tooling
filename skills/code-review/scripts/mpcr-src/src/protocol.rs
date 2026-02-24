@@ -45,6 +45,8 @@ struct NamedSection {
 struct OrchestratorFile {
     orchestrator: NamedSection,
     domains: NamedSection,
+    #[serde(default)]
+    fullcycle: Option<NamedSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +149,22 @@ pub fn domains() -> anyhow::Result<ProtocolOutput> {
     })
 }
 
+/// Retrieve full-cycle orchestration guidance.
+///
+/// # Errors
+/// Returns an error if the embedded TOML cannot be parsed or the section is absent.
+pub fn fullcycle() -> anyhow::Result<ProtocolOutput> {
+    let file: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
+        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
+    let section = file
+        .fullcycle
+        .ok_or_else(|| anyhow::anyhow!("fullcycle section not found in orchestrator.toml"))?;
+    Ok(ProtocolOutput {
+        title: section.title,
+        content: section.content,
+    })
+}
+
 /// Retrieve a report template at the given scale.
 ///
 /// # Errors
@@ -226,6 +244,12 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         title: "Multi-Agent Orchestration".to_string(),
         command: "mpcr protocol orchestrator".to_string(),
     });
+    entries.push(ProtocolListEntry {
+        category: "orchestrator".to_string(),
+        key: "fullcycle".to_string(),
+        title: "Full-Cycle Convergence".to_string(),
+        command: "mpcr protocol fullcycle".to_string(),
+    });
 
     let orchestrator: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
         .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
@@ -282,6 +306,24 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         }
     }
     Ok(entries)
+}
+
+/// Retrieve phase guidance for a session management phase.
+///
+/// # Errors
+/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
+pub fn session_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
+    let file: PhasesFile =
+        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
+    let key = phase.to_ascii_uppercase();
+    let entry = file
+        .phases
+        .get(&key)
+        .ok_or_else(|| anyhow::anyhow!("unknown session phase: {phase}"))?;
+    Ok(ProtocolOutput {
+        title: entry.title.clone(),
+        content: entry.content.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -367,6 +409,9 @@ mod tests {
             "holistic_integrator",
             "applicator_worker",
             "applicator_verifier",
+            "complexity_analyst",
+            "overengineering_guard",
+            "ship_readiness_assessor",
         ];
         for role in roles {
             let out = dispatch(role)?;
@@ -378,12 +423,20 @@ mod tests {
     #[test]
     fn list_entries_returns_all() -> anyhow::Result<()> {
         let entries = list_entries()?;
-        // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 22 dispatch = 37
+        // 9 reviewer + 4 applicator + 3 orchestrator + 3 templates + 25 dispatch + 1 session = 45
         ensure!(
-            entries.len() >= 37,
+            entries.len() >= 40,
             "expected >= 37 entries, got {}",
             entries.len()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fullcycle_parses() -> anyhow::Result<()> {
+        let out = fullcycle()?;
+        ensure!(out.content.contains("Convergence"));
+        ensure!(out.content.contains("fresh subagents"));
         Ok(())
     }
 
@@ -395,22 +448,4 @@ mod tests {
         ensure!(dispatch("NONEXISTENT").is_err());
         Ok(())
     }
-}
-
-/// Retrieve phase guidance for a session management phase.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
-pub fn session_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: PhasesFile =
-        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
-    let key = phase.to_ascii_uppercase();
-    let entry = file
-        .phases
-        .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown session phase: {phase}"))?;
-    Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: entry.content.clone(),
-    })
 }

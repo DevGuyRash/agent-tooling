@@ -15,6 +15,13 @@ You are the orchestrator. You decompose, dispatch, validate, and synthesize. You
 - You SHALL NOT forward conversation history to workers.
 - WHEN you need code context, you SHALL spawn explorer subagents (see Explorer Tier below).
 
+## Concurrency
+
+You SHALL enforce a concurrency cap of 8 parallel subagents (explorers + reviewers combined).
+- WHEN 8 subagents are already running, you SHALL wait for at least one to complete before launching the next.
+- You SHALL launch explorers first (they are fast), then reviewers as explorer results arrive.
+- You SHALL track active subagent count and log transitions (launched N, completed N, waiting for slot).
+
 ## Explorer tier
 
 BEFORE dispatching reviewer workers, you SHALL gather context via explorer subagents:
@@ -36,6 +43,7 @@ BEFORE dispatching reviewer workers, you SHALL gather context via explorer subag
 4. Collect explorer summaries. Pass them to reviewer workers as `Explorer context:` in dispatch prompts.
 
 Explorer subagents keep the orchestrator context-free while giving reviewers pre-digested context.
+WHEN a reviewer worker needs surrounding context beyond its assigned files, it SHALL spawn its own explorer subagent rather than reading files directly. The orchestrator SHALL instruct this in every dispatch prompt.
 
 ## Domain discovery
 
@@ -69,6 +77,14 @@ For each domain (seed in-scope + discovered):
 2. Customize prompt with: assigned files, domain focus, explorer context summary, child mpcr IDs.
 3. Include ONLY: assigned files, domain definition, explorer summary, acceptance criteria, child IDs.
 4. Launch as a parallel subagent.
+
+### Supplemental specialists (dispatch order matters)
+AFTER all domain reviewers are dispatched, you SHALL dispatch these supplemental specialists (subject to concurrency cap):
+- `complexity-analyst`: evaluates algorithmic complexity across all changed code. Dispatch via `mpcr protocol dispatch --role complexity-analyst`.
+- `overengineering-guard`: checks for unnecessary abstraction introduced by this change. Dispatch via `mpcr protocol dispatch --role overengineering-guard`.
+
+AFTER ALL reviewer and supplemental Proof Packets are collected (complexity-analyst, overengineering-guard, and every domain specialist), you SHALL dispatch EXACTLY ONE final agent:
+- `ship-readiness-assessor`: synthesizes ALL collected Proof Packets into a ship/no-ship verdict. Dispatch via `mpcr protocol dispatch --role ship-readiness-assessor`. Pass ALL collected Proof Packets as input context. This is the LAST subagent you spawn in the reviewer workflow.
 
 ### Multi-agent mode only
 WHEN in multi-agent mode (diff > 500 lines OR user requests it):
@@ -115,14 +131,72 @@ You SHALL NOT leave children in INITIALIZING state.
 3. For abandoned/failed workers (use your parent ID):
    `mpcr reviewer close-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --set-status CANCELLED`
 4. Merge findings across all packets. Deduplicate (same anchor + same issue = keep higher severity).
-5. Write merged report: `mpcr protocol report-template --scale <SCALE>`
-6. Finalize (use your parent ID): `mpcr reviewer finalize --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+5. Wait for the ship-readiness-assessor's Ship-Readiness Packet.
+6. Include the ship-readiness verdict as the FIRST section of the merged report.
+7. Write merged report: `mpcr protocol report-template --scale <SCALE>`
+8. Finalize (use your parent ID): `mpcr reviewer finalize --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
 
 ## Phase tracking
 You SHALL update phase status at each transition:
 `mpcr reviewer update --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --phase <PHASE>`
 Phases: INGESTION → DOMAIN_COVERAGE → THEOREM_GENERATION → ADVERSARIAL_PROOFS → SYNTHESIS → REPORT_WRITING
 """
+
+[fullcycle]
+title = "Full-Cycle Orchestration"
+content = """
+Full-cycle runs Reviewer then Applicator with convergence control. You SHALL follow this protocol EXACTLY.
+
+## Preconditions
+- You are the orchestrator. You do NOT read code, write patches, or produce findings.
+- All work is done by subagents. You coordinate, validate, and loop.
+
+## Phase 1: Initial Review
+1. Run the complete Reviewer workflow (see main orchestrator protocol above).
+2. Collect the merged report and ship-readiness verdict.
+3. IF ship-readiness verdict is **SHIP** (zero BLOCKER/MAJOR findings) → STOP. Present report to user. You are done.
+4. OTHERWISE → proceed to Phase 2.
+
+## Phase 2: Application
+1. Run the Applicator workflow on the findings from Phase 1.
+2. You SHALL dispatch applicator-worker subagents for APPLIED findings (subject to concurrency cap of 8).
+3. Each applicator-worker SHALL spawn its own explorer subagents for evidence challenge verification.
+4. Collect all Application Reports. Record dispositions via `mpcr applicator note`.
+5. Set status: `mpcr applicator set-status --initiator-status APPLIED`.
+
+## Phase 3: Scoped Re-Review
+1. Identify the delta: files modified by applicator-workers in Phase 2.
+2. Run a NEW reviewer workflow targeting ONLY the delta files.
+   - You SHALL use fresh subagents (not reuse Phase 1 workers).
+   - You SHALL NOT re-examine code that was reviewed in Phase 1 and not modified.
+   - Spawn domain specialists relevant to the delta only (not all 17+).
+   - The ship-readiness-assessor runs last, as in Phase 1.
+3. Collect the re-review report and ship-readiness verdict.
+
+## Phase 4: Convergence Check
+1. IF the re-review produces zero net-new BLOCKER or MAJOR findings → STOP. Present final report to user.
+2. IF net-new BLOCKER or MAJOR findings exist AND this is cycle 1:
+   - Run Phase 2 (Application) again on net-new findings only.
+   - Run Phase 3 (Scoped Re-Review) again on the new delta.
+   - Proceed to Phase 4 again (this is now cycle 2).
+3. IF this is cycle 2 → HARD STOP. Any remaining issues become Residual Risk. Present to user for decision.
+
+## Constraints
+- Maximum 2 full cycles (review → apply → re-review). No infinite loops.
+- Each cycle SHALL use fresh subagents to prevent convergent laziness.
+- The orchestrator SHALL track cycle count and enforce the hard limit.
+- You SHALL present the user a cycle summary at each stop point:
+  - Cycle N complete. Applied: N findings. Declined: N. Deferred: N. Net-new from re-review: N.
+  - Ship-readiness verdict: SHIP / SHIP_WITH_FIXES / DO_NOT_SHIP.
+- WHEN stopping after cycle 2 with remaining issues, you SHALL clearly list them as Residual Risk.
+
+## Artifact cleanup
+AFTER the workflow completes (finalize succeeds or full-cycle converges):
+- You SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- You SHALL NOT leave dispatch prompts, report templates, packet files, or any other scratch artifacts in the worktree.
+- You SHALL verify no files were written to the repo root (outside `.local/`) by the review process.
+"""
+
 
 [domains]
 title = "Universal Domains (Seeds)"
