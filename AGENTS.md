@@ -1,6 +1,6 @@
 # MANDATORY Rust Coding Guidelines
 
-You SHALL prioritize idiomatic Rust, memory safety, clarity, and maintainability without imposing a new architecture if an existing one is already in use.
+You SHALL prioritize idiomatic Rust, memory safety, zero-dependency design, and async-ready concurrency. You SHALL prefer `std`-only solutions and SHALL NOT add external crates unless no reasonable `std` alternative exists and the dependency is justified in writing. You SHALL NOT impose a new architecture if an existing one is already in use.
 
 ---
 
@@ -140,7 +140,12 @@ mod tests {
 **Verification command**:
 
 ```bash
-cargo check && echo "✓ Stubs compile" || echo "BLOCKED: Fix compilation errors before Phase 0.5"
+if cargo check; then
+  echo "✓ Stubs compile"
+else
+  echo "BLOCKED: Fix compilation errors before Phase 0.5"
+  exit 1
+fi
 ```
 
 ### 0.5 Stub review checkpoint (MANDATORY)
@@ -161,9 +166,46 @@ Before writing Phase 1 implementation code:
 
 ---
 
-## PHASE 1: Implementation
+## PHASE 1: Implementation (Red/Green/Refactor)
 
 You SHALL implement code only after Phase 0 is complete.
+You SHALL use a red/green/refactor TDD cycle as the inner loop of Phase 1.
+
+Phase 0 produces compilable stubs with `todo!()` function bodies and `todo!()` test bodies.
+These stubs are the starting material for the TDD cycle below.
+
+You SHALL work through one function or logical unit at a time.
+For each unit, you SHALL complete all three sub-phases in order before moving to the next.
+
+### Phase 1.1 (RED): Write a failing test
+
+- You SHALL replace the `todo!()` body in **one** test stub with real setup and assertions.
+- The test SHALL call the function under test and assert its expected behavior.
+- You SHALL run `cargo test <test_name>` and confirm the test **fails**.
+- WHEN the test fails for the wrong reason (compilation error, unrelated panic) THEN you SHALL fix the test itself before proceeding.
+- You SHALL NOT fill in multiple test stubs simultaneously.
+- **Evidence**: record the test name and the failure output.
+
+### Phase 1.2 (GREEN): Write the minimal implementation to pass
+
+- You SHALL replace the `todo!()` in the function under test with the simplest code that makes the failing test pass.
+- You SHALL NOT write more code than the current set of tests demands.
+- You SHALL run `cargo test` and confirm the targeted test **passes** and no previously-passing tests regressed.
+- **Evidence**: record the `cargo test` passing output.
+
+### Phase 1.3 (REFACTOR): Improve under green
+
+- WHEN the implementation or test can be simplified, deduplicated, or clarified THEN you SHALL refactor now.
+- You SHALL NOT change observable behavior during refactor.
+- You SHALL run `cargo test` after every refactor pass and confirm all tests remain green.
+- WHEN no meaningful refactor is needed THEN you SHALL note "No refactor needed" and proceed.
+
+### TDD cycle control
+
+- After completing Phase 1.1–1.2–1.3 for one unit, loop back to Phase 1.1 for the next test stub.
+- Continue until all `todo!()` bodies in both test and production code are replaced.
+- WHEN a new edge case or regression scenario is discovered during implementation THEN you SHALL add a new test stub, enter RED, and cycle through GREEN and REFACTOR before continuing.
+- WHEN a bug-fix task arrives THEN you SHALL write a failing test reproducing the bug (RED) before writing the fix (GREEN).
 
 ---
 
@@ -199,8 +241,12 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 
 | Pattern                                                                    | Reason                         | Fix                                                                   |
 | -------------------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `.unwrap*()` without invariant comment                                     | Silent panic                   | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
-| `.expect*()` without invariant comment                                     | Silent panic                   | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.unwrap()` without `// INVARIANT:`                                        | Panics on `None`/`Err`         | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.unwrap_err()` without `// INVARIANT:`                                    | Panics on `Ok`                 | Match both variants, or add `// INVARIANT: ...` comment               |
+| `.unwrap_unchecked()` (unsafe)                                             | UB if wrong variant            | Use safe alternatives; if required, add `// SAFETY:` comment          |
+| `.expect()` without `// INVARIANT:`                                        | Panics on `None`/`Err`         | Use `?`, `if let`, `match`, or add `// INVARIANT: ...` comment        |
+| `.expect_err()` without `// INVARIANT:`                                    | Panics on `Ok`                 | Match both variants, or add `// INVARIANT: ...` comment               |
+| `assert!()`/`assert_eq!()`/`assert_ne!()` outside tests                   | Panics on failure              | Return `Result` or use `debug_assert!` with `// INVARIANT:`           |
 | `panic!()` in non-test code                                                | Unrecoverable                  | Return `Result` or `Option`                                           |
 | `unimplemented!()` in non-test code                                        | Placeholder                    | Implement or delete                                                   |
 | `todo!()` outside tests after Phase 0                                      | Placeholder                    | Implement before Phase 2; Phase 2 scan MUST be empty                  |
@@ -224,6 +270,10 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 | `use some::path::*;` outside tests                                         | Glob import hides dependencies | Import explicitly; allow only with `// ALLOW:`                        |
 | `Box<dyn std::error::Error>` in `pub` APIs                                 | Opaque errors                  | Use a structured error enum                                           |
 | `anyhow::Result` / `anyhow::Error` in `pub` APIs                           | Opaque errors                  | Use a structured error enum; keep `anyhow` at app boundary            |
+| `.len() == 0` / `.len() != 0`                                              | Non-idiomatic                  | Use `.is_empty()` / `!.is_empty()`                                    |
+| `mem::forget()` without `// ALLOW:`                                        | Resource leak                  | Drop explicitly or restructure ownership; add `// ALLOW:` if required |
+| `Box::leak()` without `// ALLOW:`                                          | Intentional leak               | Use scoped ownership; add `// ALLOW:` if required                     |
+| `static mut` in non-test code                                              | Unsound shared state           | Use `OnceLock`, `Mutex`, or `AtomicT`                                 |
 | `impl Into<X>` when only one concrete type is passed                       | Over-generic                   | Use concrete type                                                     |
 | `impl AsRef<X>` when only one concrete type is passed                      | Over-generic                   | Use concrete type                                                     |
 | `dbg!()` in non-test code                                                  | Debug artifact                 | Remove                                                                |
@@ -366,10 +416,10 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
   - free of `{:?}`/`{:#?}` output.
 - Error messages SHALL NOT leak secrets, credentials, or PII.
 - You SHALL NOT use panics for normal control flow.
-- You SHALL NOT use `.unwrap*()` or `.expect*()` in non-test code except when ALL of the following are true:
-  - An invariant guarantees the value exists.
-  - You add a same-line comment: `// INVARIANT: <explanation>`.
-  - You use `.expect("descriptive message")` rather than `.unwrap()`.
+- You SHALL NOT use panic-inducing unwrap or expect methods in non-test code. This includes `.unwrap()`, `.unwrap_err()`, `.expect()`, and `.expect_err()`.
+- IF an invariant guarantees the value exists and you must keep a panic boundary, THEN you MAY use `.expect("descriptive message")` with a same-line comment `// INVARIANT: <explanation>`.
+- You SHALL NOT use `.unwrap_unchecked()` in non-test code unless an `unsafe` block with a same-line `// SAFETY:` explanation proves soundness.
+- You SHALL NOT use `assert!()`, `assert_eq!()`, or `assert_ne!()` outside test code. Use `debug_assert!` variants with `// INVARIANT:` when a runtime check is needed, or return `Result`.
 - IF you are writing a library, THEN you SHALL expose a structured error type.
 - IF you are writing an application/CLI, THEN you SHALL:
   - Map errors to appropriate exit codes.
@@ -381,11 +431,13 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 
 ### 11.1 When to use async
 
-- You SHALL choose async intentionally.
-- IF the workload involves fewer than 10 concurrent I/O operations, THEN you SHALL use synchronous code.
-- IF the workload involves 10+ concurrent I/O operations, THEN you MAY use async.
-- IF the repository already uses an async runtime, THEN you SHALL use that runtime.
-- IF the repository does not use an async runtime, THEN you SHALL NOT introduce one without explicit approval.
+- You SHALL choose async intentionally and you SHALL prefer `std`-native async primitives.
+- You SHALL use `async fn`, `std::future::Future`, `std::task::Poll`, and `std::task::Waker` as your primary async building blocks.
+- You SHALL NOT add an async runtime crate (`tokio`, `async-std`, `smol`) unless the repository already depends on one.
+- WHEN the repository has no async runtime THEN you SHALL implement concurrency using `std::thread`, `std::sync::mpsc`, or manual `Future` implementations with `std::task::Context`.
+- IF the workload involves fewer than 10 concurrent I/O operations, THEN you SHALL use synchronous code with `std::thread` for parallelism.
+- IF the workload involves 10+ concurrent I/O operations AND the repository already uses an async runtime, THEN you SHALL use that runtime.
+- WHEN writing new async code THEN you SHALL prefer composing `std::future::poll_fn`, `std::future::ready`, and `std::pin::Pin` over pulling in utility crates like `futures`, `futures-lite`, or `pin-project`.
 
 ### 11.2 Blocking inside async
 
@@ -476,6 +528,18 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 
 ## 15) Testing and regression coverage
 
+### 15a) Red/Green/Refactor discipline
+
+- You SHALL use a red/green/refactor TDD cycle during Phase 1 (see PHASE 1 above).
+- RED: write one failing test that asserts expected behavior, then run `cargo test` and confirm it fails.
+- GREEN: write the minimal implementation that makes the failing test pass, then run `cargo test` and confirm all tests pass.
+- REFACTOR: improve code quality under green; run `cargo test` after every change to confirm no regressions.
+- You SHALL complete one full RED/GREEN/REFACTOR cycle before starting the next test.
+- WHEN fixing a bug THEN you SHALL write a failing test reproducing the bug (RED) before writing the fix (GREEN).
+- WHEN a new edge case is discovered during implementation THEN you SHALL add a failing test for it before fixing it.
+
+### 15b) Test quality
+
 - You SHALL add tests for new behavior and bug fixes.
 - Tests SHALL be hermetic and deterministic:
   - Use temp dirs for file operations.
@@ -507,12 +571,18 @@ The following patterns are BANNED in non-test code. IF you write any of these, T
 
 ## 17) Dependencies and feature discipline
 
-- You SHALL keep dependencies minimal.
-- IF you add a dependency, THEN you SHALL:
-  - Justify why it is needed (not just convenience).
-  - Use `default-features = false` when possible.
-  - Enable only required features.
-- You SHALL NOT add a dependency for functionality that is trivial to implement (< 20 lines).
+- You SHALL default to ZERO external dependencies. The `std` library is your first, second, and third choice.
+- You SHALL NOT add an external crate when `std` provides equivalent or composable functionality — even if a crate is more ergonomic.
+- WHEN `std` cannot satisfy the requirement AND the implementation would exceed 50 lines of non-trivial, error-prone code THEN you MAY propose ONE dependency. You SHALL:
+  - State what `std` alternative was considered and why it is insufficient.
+  - Justify that the crate is well-maintained (>1k downloads/week, recent release, no `unsafe` in public API).
+  - Use `default-features = false` and enable only required features.
+- You SHALL NOT add transitive dependency trees exceeding 5 crates for any single direct dependency.
+- You SHALL NOT add a dependency for functionality that is trivial to implement (< 50 lines).
+- You SHALL NOT use `tokio`, `async-std`, or any async runtime crate UNLESS the repository already depends on one. For new async code you SHALL use `std::future::Future`, `std::task`, and manual polling or `async fn` with `std::future::poll_fn` before reaching for a runtime.
+- You SHALL NOT use `serde` for internal serialization when `std::fmt::Display`/`FromStr` or manual parsing suffices.
+- You SHALL NOT use `anyhow`/`eyre`/`thiserror` in libraries — define your own error enum. In binaries you MAY use `anyhow` only if the repository already depends on it.
+- WHEN reviewing or writing `Cargo.toml` you SHALL audit `cargo tree --depth 1` output and flag any dependency that duplicates `std` functionality.
 
 ---
 
@@ -547,12 +617,18 @@ After completing implementation, you SHALL run the following verification checks
 Run the following commands and report the output. IF any patterns are found, THEN you SHALL fix them before proceeding.
 
 ```bash
-# Panic-inducing patterns (excluding tests)
-rg '\.unwrap(_|\()' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare unwrap*()"
-rg '\.expect(_|\()' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare expect*()"
+# Panic-inducing unwrap/expect family (excluding tests)
+# Catches .unwrap(), .unwrap_err(), .unwrap_unchecked() but NOT .unwrap_or(), .unwrap_or_default(), .unwrap_or_else()
+rg '\.unwrap(_err|_unchecked)?[[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing unwrap family"
+rg '\.expect(_err)?[[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No panic-inducing expect family"
+
+# Panic macros (excluding tests)
 rg 'panic!\(' --type rust -g '!*test*' || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust -g '!*test*' && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!() remaining"
 rg 'unreachable!\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
+
+# Assert macros in non-test code (should only appear in tests)
+rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust -g '!*test*' | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
 
 # Process control flow (should be at entrypoints only)
 rg 'std::process::exit\(' --type rust -g '!*test*' -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No std::process::exit() outside entrypoints"
@@ -564,9 +640,20 @@ rg 'todo!\(' --type rust && echo "ERROR: Unimplemented todo!() found" || echo "�
 rg '\.map\(\|.*\|.*\.clone\(\)\)' --type rust || echo "✓ No .map(|x| x.clone())"
 rg '\.map\(\|.*\|.*\.to_owned\(\)\)' --type rust || echo "✓ No .map(|x| x.to_owned())"
 rg '\.iter\(\)\.count\(\)' --type rust || echo "✓ No .iter().count()"
-rg '\.iter\(\)\.next\(\)' --type rust || echo "✓ No .iter().next()"
+rg '\.iter\(\)[[:space:]]*\.next\(\)' --type rust -g '!**/banned_family.rs' | rg -v '// ALLOW: non-slice-next' || echo "✓ No .iter().next()"
 rg 'for\s+\w+\s+in\s+0\.\.[^\n]*\.len\(\)' --type rust || echo "✓ No index loops"
 rg '==\s*true|==\s*false|!=\s*true|!=\s*false' --type rust || echo "✓ No verbose bool comparisons"
+rg '\.len\(\)\s*(==|!=)\s*0' --type rust || echo "✓ No .len() == 0 (use .is_empty())"
+
+# Resource safety
+rg 'mem::forget\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No mem::forget()"
+rg 'Box::leak\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No Box::leak()"
+rg 'static\s+mut\s' --type rust -g '!*test*' || echo "✓ No static mut"
+rg 'unsafe\s*\{' --type rust -g '!*test*' | rg -v '// SAFETY:' || echo "✓ No unsafe block without // SAFETY:"
+
+# Idiomatic extras
+rg 'format![[:space:]]*\([[:space:]]*"\{\}"[[:space:]]*,[[:space:]]*' --type rust || echo "✓ No format!(\"{}\", x) — use .to_string() or variable directly"
+rg '#\[allow\(' --type rust -g '!*test*' | rg -v '// Reason:' || echo "✓ All #[allow] have // Reason: justification"
 
 # Formatting/debug artifacts
 rg 'dbg!\(' --type rust -g '!*test*' || echo "✓ No dbg!()"
@@ -635,8 +722,8 @@ if command -v rustfmt >/dev/null 2>&1; then
 else
   echo "SKIP: rustfmt not installed (rustup component add rustfmt)"
 fi
-if command -v cargo-clippy >/dev/null 2>&1; then
-  cargo clippy -- -D warnings
+if cargo clippy --version >/dev/null 2>&1; then
+  cargo clippy --workspace --all-targets -- -D warnings
 else
   echo "SKIP: clippy not installed (rustup component add clippy)"
 fi
@@ -665,11 +752,12 @@ Before marking the task complete, you SHALL verify each item and provide evidenc
 
 - [ ] **Phase 0 completed**: Stubs with doc comments were written and compiled BEFORE implementation.
 - [ ] **Round −1 observations addressed**: All intuitive concerns from Fresh Eyes phase were either resolved or documented as acceptable.
+- [ ] **TDD cycle followed**: Each function has RED (failing test) → GREEN (minimal pass) → REFACTOR evidence in the implementation log.
 - [ ] **All banned patterns fixed**: Phase 2.1 scan shows no violations.
 - [ ] **No oversized files**: Phase 2.2 shows files do not exceed reasonable size thresholds (or justification provided).
 - [ ] **Build passes**: `cargo build` succeeds.
 - [ ] **Format clean**: `cargo fmt --check` succeeds.
-- [ ] **Clippy clean**: `cargo clippy -- -D warnings` succeeds.
+- [ ] **Clippy clean**: `cargo clippy --workspace --all-targets -- -D warnings` succeeds.
 - [ ] **Tests pass**: `cargo test` succeeds.
 - [ ] **No todo!() remaining**: `rg 'todo!\(' --type rust` returns no matches.
 - [ ] **New tests added**: At least one happy-path and one error-case test exist for new functionality.
