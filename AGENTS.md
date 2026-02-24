@@ -650,6 +650,11 @@ rg '\.len\(\)\s*(==|!=)\s*0' --type rust || echo "✓ No .len() == 0 (use .is_em
 rg 'mem::forget\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No mem::forget()"
 rg 'Box::leak\(' --type rust -g '!*test*' | rg -v '// ALLOW:' || echo "✓ No Box::leak()"
 rg 'static\s+mut\s' --type rust -g '!*test*' || echo "✓ No static mut"
+rg 'unsafe\s*\{' --type rust -g '!*test*' | rg -v '// SAFETY:' || echo "✓ No unsafe block without // SAFETY:"
+
+# Idiomatic extras
+rg 'format!("\{\}",\s' --type rust || echo "✓ No format!(\"{}\", x) — use .to_string() or variable directly"
+rg '#\[allow\(' --type rust -g '!*test*' | rg -v '// Reason:' || echo "✓ All #[allow] have // Reason: justification"
 
 # Formatting/debug artifacts
 rg 'dbg!\(' --type rust -g '!*test*' || echo "✓ No dbg!()"

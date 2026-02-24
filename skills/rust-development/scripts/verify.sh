@@ -381,10 +381,13 @@ echo ""
 echo "Resource safety:"
 _search_excluding 'mem::forget\(' '// ALLOW:' "no mem::forget()" "exclude_tests" || true
 _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || true
+_search_excluding 'unsafe[[:space:]]*\{' '// SAFETY:' "no unsafe block without // SAFETY:" "exclude_tests" || true
 
 echo ""
 echo "Idiomatic checks:"
 _search '\.len\(\)[[:space:]]*(==|!=)[[:space:]]*0' "" "use .is_empty() instead of .len() == 0" || true
+_search 'format!("\{\}",[[:space:]]' "" "use .to_string() or variable directly instead of format!(\"{}\", x)" || true
+_search_excluding '#\[allow\(' '// Reason:' "no #[allow] without justification" "exclude_tests" || true
 
 echo ""
 echo "Meta:"
