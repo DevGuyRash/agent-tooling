@@ -44,8 +44,8 @@ if command -v readlink >/dev/null 2>&1; then
   done
 fi
 
-script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
-skill_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
+skill_root="$(CDPATH='' cd -- "$script_dir/.." && pwd)"
 assets_dir="${skill_root}/assets"
 
 CLIPPY_SENTINEL="# rust-development-skill:clippy-lints:start"
@@ -102,7 +102,7 @@ if [ ! -d "$workspace_root" ]; then
   exit 1
 fi
 
-workspace_root="$(CDPATH= cd -- "$workspace_root" && pwd -P)"
+workspace_root="$(CDPATH='' cd -- "$workspace_root" && pwd -P)"
 
 if [ ! -f "$workspace_root/Cargo.toml" ]; then
   echo "error: workspace root must contain Cargo.toml: $workspace_root" >&2
@@ -113,7 +113,7 @@ git_root=""
 if command -v git >/dev/null 2>&1; then
   git_root="$(git -C "$workspace_root" rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$git_root" ]; then
-    git_root="$(CDPATH= cd -- "$git_root" && pwd -P)"
+    git_root="$(CDPATH='' cd -- "$git_root" && pwd -P)"
     case "$workspace_root" in
       "$git_root"|"$git_root"/*) ;;
       *)
@@ -141,7 +141,7 @@ ensure_within_workspace() {
 
   parent_dir="$(dirname -- "$candidate")"
   mkdir -p "$parent_dir"
-  parent_real="$(CDPATH= cd -- "$parent_dir" && pwd -P)"
+  parent_real="$(CDPATH='' cd -- "$parent_dir" && pwd -P)"
   case "$parent_real" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
@@ -179,7 +179,7 @@ safe_copy() {
     return 0
   fi
   dst_parent="$(dirname -- "$dst")"
-  parent_before="$(CDPATH= cd -- "$dst_parent" && pwd -P)"
+  parent_before="$(CDPATH='' cd -- "$dst_parent" && pwd -P)"
   case "$parent_before" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
@@ -204,7 +204,7 @@ safe_copy() {
     return 1
   fi
 
-  parent_after="$(CDPATH= cd -- "$dst_parent" && pwd -P)"
+  parent_after="$(CDPATH='' cd -- "$dst_parent" && pwd -P)"
   if [ "$parent_before" != "$parent_after" ]; then
     rm -f -- "$tmp_dst"
     echo "  ✗ target parent changed during copy: $dst" >&2
@@ -240,22 +240,35 @@ resolve_banned_test_destination() {
     return
   fi
 
-  member_manifest="$(
-    find "$workspace_root" -name Cargo.toml -print \
-      | LC_ALL=C sort \
-      | awk -v workspace_root="$workspace_root" -v root_manifest="$root_manifest" '
-        $0 == root_manifest { next }
-        {
-          rel = $0
-          prefix = workspace_root "/"
-          if (index(rel, prefix) == 1) {
-            rel = substr(rel, length(prefix) + 1)
+  member_manifest=""
+  if command -v cargo >/dev/null 2>&1; then
+    member_manifest="$(
+      cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
+        | tr ',' '\n' \
+        | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
+        | LC_ALL=C sort \
+        | awk -v root_manifest="$root_manifest" '$0 != root_manifest { print; exit }'
+    )"
+  fi
+
+  if [ -z "$member_manifest" ]; then
+    member_manifest="$(
+      find "$workspace_root" -name Cargo.toml -print \
+        | LC_ALL=C sort \
+        | awk -v workspace_root="$workspace_root" -v root_manifest="$root_manifest" '
+          $0 == root_manifest { next }
+          {
+            rel = $0
+            prefix = workspace_root "/"
+            if (index(rel, prefix) == 1) {
+              rel = substr(rel, length(prefix) + 1)
+            }
           }
-        }
-        rel ~ /(^|\/)(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)(\/|$)/ { next }
-        { print; exit }
-      '
-  )"
+          rel ~ /(^|\/)(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)(\/|$)/ { next }
+          { print; exit }
+        '
+    )"
+  fi
 
   if [ -n "$member_manifest" ]; then
     printf '%s/tests/banned_family.rs\n' "$(dirname -- "$member_manifest")"
@@ -313,7 +326,11 @@ if [ "$do_clippy" -eq 1 ]; then
         $0 == sentinel { in_block=1; next }
         in_block && $0 == sentinel_end { in_block=0; next }
         !in_block
-      ' "$cargo_toml" > "$_tmp" && mv "$_tmp" "$cargo_toml"; then
+      ' "$cargo_toml" > "$_tmp" && \
+      # Remove old single-sentinel format ("...clippy-lints" without :start/:end suffix).
+      sed '/^# rust-development-skill:clippy-lints$/d' "$_tmp" > "${_tmp}.clean" && \
+      mv "${_tmp}.clean" "$_tmp" && \
+      mv "$_tmp" "$cargo_toml"; then
         :
       else
         rm -f "$_tmp"
@@ -325,7 +342,7 @@ if [ "$do_clippy" -eq 1 ]; then
       printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
       echo "  ✓ replaced clippy lint config in Cargo.toml"
     fi
-  elif grep -Eq '^\s*\[(workspace\.lints|lints)(\.|])' "$cargo_toml" 2>/dev/null; then
+  elif grep -Eq '^[[:space:]]*\[(workspace\.lints|lints)(\.|])' "$cargo_toml" 2>/dev/null; then
     echo "  ⚠ [workspace.lints]/[lints] already present (not from this skill). Review manually or use --force."
     if [ "$force" -eq 1 ]; then
       # Remove existing [workspace.lints*] or [lints*] sections before appending.

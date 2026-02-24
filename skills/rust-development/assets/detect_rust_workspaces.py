@@ -72,10 +72,26 @@ def _is_excluded_manifest(manifest_path: Path) -> bool:
     return False
 
 
+all_manifests = sorted(repo.rglob("Cargo.toml"))
+ws_re = re.compile(r"^\s*\[\s*workspace\s*\]", re.MULTILINE)
+workspace_manifests = []
+for manifest in all_manifests:
+    try:
+        txt = manifest.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(
+            f"warning: skipping unreadable manifest {manifest}: {exc}",
+            file=sys.stderr,
+        )
+        continue
+    if ws_re.search(txt):
+        workspace_manifests.append(manifest)
+
+workspace_manifest_set = {manifest.resolve() for manifest in workspace_manifests}
 manifests = [
     manifest
-    for manifest in sorted(repo.rglob("Cargo.toml"))
-    if not _is_excluded_manifest(manifest)
+    for manifest in all_manifests
+    if manifest.resolve() in workspace_manifest_set or not _is_excluded_manifest(manifest)
 ]
 
 github_output = os.environ.get("GITHUB_OUTPUT")
@@ -125,20 +141,6 @@ except ModuleNotFoundError:  # pragma: no cover - best-effort fallback
         import tomli as tomllib  # type: ignore
     except ModuleNotFoundError:
         tomllib = None  # type: ignore
-
-ws_re = re.compile(r"^\s*\[\s*workspace\s*\]", re.MULTILINE)
-workspace_manifests = []
-for manifest in manifests:
-    try:
-        txt = manifest.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        print(
-            f"warning: skipping unreadable manifest {manifest}: {exc}",
-            file=sys.stderr,
-        )
-        continue
-    if ws_re.search(txt):
-        workspace_manifests.append(manifest)
 
 workspace_roots = sorted({manifest.parent for manifest in workspace_manifests})
 
@@ -327,7 +329,6 @@ else:
 
         _add_include(root, True, include, included_dirs)
 
-    workspace_manifest_set = {manifest.resolve() for manifest in workspace_manifests}
     for manifest in manifests:
         manifest_resolved = manifest.resolve()
         if manifest_resolved in workspace_manifest_set:

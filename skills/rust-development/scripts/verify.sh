@@ -50,12 +50,45 @@ echo "Scanning: $(pwd)"
 FILE_SIZE_THRESHOLD="${FILE_SIZE_THRESHOLD:-300}"
 ENTRYPOINT_THRESHOLD="${ENTRYPOINT_THRESHOLD:-100}"
 
+_require_non_negative_int() {
+  _name="$1"
+  _value="$2"
+  case "$_value" in
+    ''|*[!0-9]*)
+      echo "error: ${_name} must be a non-negative integer (got '${_value}')" >&2
+      exit 2
+      ;;
+  esac
+}
+
+_require_non_negative_int "FILE_SIZE_THRESHOLD" "$FILE_SIZE_THRESHOLD"
+_require_non_negative_int "ENTRYPOINT_THRESHOLD" "$ENTRYPOINT_THRESHOLD"
+
 # Counters are written to temp files so they survive subshells.
 _fail_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-fail.XXXXXX")"
 _warn_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-warn.XXXXXX")"
 echo 0 > "$_fail_file"
 echo 0 > "$_warn_file"
-trap 'rm -f "$_fail_file" "$_warn_file"' EXIT
+# Accumulate per-call temp files so _cleanup can remove them.
+_tmp_files=""
+_register_tmp() {
+  if [ -z "$_tmp_files" ]; then
+    _tmp_files="$1"
+  else
+    _tmp_files="$_tmp_files
+$1"
+  fi
+}
+# shellcheck disable=SC2329 # Invoked via trap on EXIT.
+_cleanup() {
+  rm -f "$_fail_file" "$_warn_file"
+  if [ -n "$_tmp_files" ]; then
+    printf '%s\n' "$_tmp_files" | while IFS= read -r _tmp; do
+      [ -n "$_tmp" ] && rm -f -- "$_tmp"
+    done
+  fi
+}
+trap '_cleanup' EXIT
 
 pass() { printf '  ✓ %s\n' "$1"; }
 fail() {
@@ -76,6 +109,31 @@ add_warning_count_from_file() {
   echo $((n + count)) > "$_warn_file"
 }
 
+_has_candidate_rust_files() {
+  skip_tests="${1:-}"
+  skip_entry="${2:-}"
+  set -- . -name '*.rs' -not -path '*/target/*'
+  if [ "$skip_tests" = "exclude_tests" ]; then
+    set -- "$@" \
+      -not -path '*/test/*' \
+      -not -path '*/tests/*' \
+      -not -path '*/testdata/*' \
+      -not -path '*/bench/*' \
+      -not -path '*/benches/*' \
+      -not -path '*/example/*' \
+      -not -path '*/examples/*' \
+      -not -path '*/fixture/*' \
+      -not -path '*/fixtures/*' \
+      -not -name '*_test.rs' \
+      -not -name 'tests.rs'
+  fi
+  if [ "$skip_entry" = "exclude_entrypoints" ]; then
+    set -- "$@" -not -path '*/src/main.rs' -not -path '*/src/bin/*'
+  fi
+  _first_match="$(find "$@" -print -quit)"
+  [ -n "$_first_match" ]
+}
+
 # ---------------------------------------------------------------------------
 # Search helper — uses rg when available, grep -rn -E otherwise.
 # Arguments:
@@ -92,6 +150,10 @@ _search() {
   skip_entry="${5:-}"
 
   if command -v rg >/dev/null 2>&1; then
+    if ! _has_candidate_rust_files "$skip_tests" "$skip_entry"; then
+      pass "$_label"
+      return 0
+    fi
     set -- --type rust
     if [ "$skip_tests" = "exclude_tests" ]; then
       set -- "$@" \
@@ -111,6 +173,7 @@ _search() {
       set -- "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs'
     fi
     _rg_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-rg.XXXXXX")"
+    _register_tmp "$_rg_tmp"
     if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
       _rg_status=0
     else
@@ -167,6 +230,10 @@ _search_excluding() {
   skip_tests="${4:-}"
 
   if command -v rg >/dev/null 2>&1; then
+    if ! _has_candidate_rust_files "$skip_tests" ""; then
+      pass "$_label"
+      return 0
+    fi
     set -- --type rust
     if [ "$skip_tests" = "exclude_tests" ]; then
       set -- "$@" \
@@ -183,7 +250,9 @@ _search_excluding() {
         -g '!**/tests.rs'
     fi
     _rg_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-rg.XXXXXX")"
+    _register_tmp "$_rg_tmp"
     _filtered_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-filtered.XXXXXX")"
+    _register_tmp "$_filtered_tmp"
     if rg "$@" -- "$pattern" >"$_rg_tmp" 2>/dev/null; then
       _rg_status=0
     else
@@ -194,7 +263,7 @@ _search_excluding() {
       fail "$_label (search failed)"
       return 1
     fi
-    if grep -v "$exclude_pattern" "$_rg_tmp" >"$_filtered_tmp"; then
+    if grep -Ev "$exclude_pattern" "$_rg_tmp" >"$_filtered_tmp"; then
       :
     else
       _grep_status=$?
@@ -228,7 +297,7 @@ _search_excluding() {
         -not -name 'tests.rs'
     fi
     _matches=$(find "$@" -exec grep -nE -- "$pattern" {} + 2>/dev/null \
-       | grep -v "$exclude_pattern" | head -5)
+       | grep -Ev "$exclude_pattern" | head -5)
     if [ -n "$_matches" ]; then
       printf '%s\n' "$_matches"
       fail "$_label"
@@ -398,7 +467,7 @@ if command -v rustfmt >/dev/null 2>&1; then
     fail "cargo fmt --all --check"
   fi
 else
-  warn "rustfmt not installed (rustup component add rustfmt)"
+  fail "rustfmt not installed (rustup component add rustfmt)"
 fi
 
 echo ""
@@ -410,7 +479,7 @@ if cargo clippy --version >/dev/null 2>&1; then
     fail "cargo clippy --workspace --all-targets -- -D warnings"
   fi
 else
-  warn "clippy not installed (rustup component add clippy)"
+  fail "clippy not installed (rustup component add clippy)"
 fi
 
 echo ""

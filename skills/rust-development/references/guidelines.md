@@ -74,7 +74,7 @@
 - WHEN a value may be absent THEN you SHALL use `Option<T>` — you SHALL NOT use sentinel values.
 - WHEN a value is one of N alternatives THEN you SHALL use an enum — you SHALL NOT use magic strings or numbers.
 - You SHALL use `.cloned()` — you SHALL NOT use `.map(|x| x.clone())`.
-- You SHALL use `.first()` for slices and `Vec` — you SHALL NOT use `.iter().next()` for those collections; use `.iter().next()` for collections that do not provide `.first()`.
+- You SHALL use `.first()` for slices and `Vec` — you SHALL NOT use `.iter().next()` for those collections; for collections without `.first()`, `.iter().next()` is allowed only with same-line `// ALLOW: non-slice-next`.
 - WHEN the collection length is needed without filtering THEN you SHALL use `.len()` — you SHALL NOT use `.iter().count()`.
 - You SHALL use `if x` or `if !x` — you SHALL NOT use `if x == true` or `if x == false`.
 
@@ -156,9 +156,11 @@
 
 ### 13.1 When to Use Async
 
-- WHEN fewer than 10 concurrent I/O operations are needed THEN you SHALL use synchronous I/O.
-- WHEN the repository already uses an async runtime THEN you SHALL use that runtime.
-- You SHALL NOT introduce a new async runtime without explicit approval.
+- You SHALL prefer `std`-native async primitives: `async fn`, `std::future::Future`, `std::task::Poll`, `std::task::Waker`.
+- You SHALL NOT add an async runtime crate (`tokio`, `async-std`, `smol`) unless the repository already depends on one.
+- WHEN the repository has no async runtime THEN you SHALL implement concurrency using `std::thread`, `std::sync::mpsc`, or manual `Future` implementations.
+- WHEN fewer than 10 concurrent I/O operations are needed THEN you SHALL use synchronous I/O with `std::thread` for parallelism.
+- WHEN writing new async code THEN you SHALL prefer composing `std::future::poll_fn` and `std::pin::Pin` over utility crates like `futures` or `pin-project`.
 
 ### 13.2 Blocking Inside Async
 
@@ -226,6 +228,18 @@
 
 ## 18. Testing
 
+### 18.1 Red/Green/Refactor discipline
+
+- You SHALL use a red/green/refactor TDD cycle during Phase 1.
+- RED: write one failing test that asserts expected behavior, then run `cargo test` and confirm it fails.
+- GREEN: write the minimal implementation that makes the failing test pass, then run `cargo test` and confirm all tests pass.
+- REFACTOR: improve code quality under green; run `cargo test` after every change to confirm no regressions.
+- You SHALL complete one full RED/GREEN/REFACTOR cycle before starting the next test.
+- WHEN fixing a bug THEN you SHALL write a failing test reproducing the bug (RED) before writing the fix (GREEN).
+- WHEN a new edge case is discovered during implementation THEN you SHALL add a failing test for it before fixing it.
+
+### 18.2 Test quality
+
 - WHEN adding new behavior THEN you SHALL add tests.
 - WHEN fixing a bug THEN you SHALL add a regression test.
 - You SHALL keep tests hermetic and deterministic: temp dirs, fixed seeds, no timing-sensitive sleeps, no network in default tests.
@@ -234,12 +248,15 @@
 
 ## 19. Dependencies
 
-- You SHALL minimize external dependencies.
-- You SHALL prefer Rust-native `std` solutions over third-party crates.
-- WHEN functionality is trivial to implement in fewer than 20 lines THEN you SHALL NOT add a dependency.
-- You SHALL use `default-features = false` when possible.
-- You SHALL enable only the features that are required.
-- WHEN adding a new dependency THEN you SHALL justify its inclusion.
+- You SHALL default to ZERO external dependencies. `std` is your first, second, and third choice.
+- You SHALL NOT add an external crate when `std` provides equivalent or composable functionality — even if a crate is more ergonomic.
+- WHEN `std` cannot satisfy the requirement AND the implementation would exceed 50 lines of non-trivial code THEN you MAY propose ONE dependency with written justification of what `std` alternative was considered.
+- You SHALL NOT add a dependency for functionality that is trivial to implement (< 50 lines).
+- You SHALL use `default-features = false` and enable only the features that are required.
+- You SHALL NOT use `tokio`, `async-std`, or any async runtime unless the repository already depends on one.
+- You SHALL NOT use `serde` for internal serialization when `Display`/`FromStr` or manual parsing suffices.
+- You SHALL NOT use `anyhow`/`eyre`/`thiserror` in libraries — define your own error enum.
+- WHEN adding a new dependency THEN you SHALL audit `cargo tree --depth 1` and reject any crate that duplicates `std` functionality.
 
 ## 20. Unsafe Code and FFI
 

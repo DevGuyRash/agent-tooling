@@ -27,7 +27,7 @@ WHEN the task does not clearly match a row THEN you SHALL default to Standard.
 
 | Task | Workflow |
 |---|---|
-| New Rust code, feature, bugfix | **Standard** — Round −1 → Phase 0→1→2→3 → Round 5 |
+| New Rust code, feature, bugfix | **Standard** — Round −1 → Phase 0→1 (TDD)→2→3 → Round 5 |
 | Monorepo: new crate or cross-crate change | **Monorepo** — Standard + `references/monorepo.md` |
 | Migrate existing tool to Rust | **Migration** — `references/migration.md` |
 | Set up CI/CD, lint config, workspace | **Bootstrap** — see Bootstrap section |
@@ -93,10 +93,56 @@ You SHALL present stubs for review with evidence: requirement summary, complete 
 WHEN stubs do not compile THEN you SHALL fix them before proceeding.
 You SHALL NOT proceed to Phase 1 until stubs compile and are approved.
 
-### Phase 1 — Implement
+### Phase 1 — Implement (Red/Green/Refactor)
 
-You SHALL replace all `todo!()` with real code.
+You SHALL implement code using a red/green/refactor TDD cycle.
 You SHALL follow the rules in `references/guidelines.md`.
+Phase 0 produces compilable stubs with `todo!()` bodies and test stubs -- these are your starting point.
+
+You SHALL work through one function or logical unit at a time.
+For each unit, you SHALL complete all three sub-phases before moving to the next unit.
+
+#### Phase 1.1 — RED: Write a failing test
+
+You SHALL replace the `todo!()` body in one test stub with real assertions and setup.
+The test SHALL call the function under test and assert the expected behavior.
+You SHALL run `cargo test` and confirm the test fails (red).
+WHEN the test fails for the wrong reason (compilation error, wrong assertion, panic in unrelated code) THEN you SHALL fix the test before proceeding.
+
+You SHALL target one test per cycle -- do not fill in multiple test stubs at once.
+
+```bash
+cargo test <test_name> 2>&1 | tail -20
+# Expected: FAILED (the function body is still todo!() or returns a wrong value)
+```
+
+Evidence: you SHALL record the test name and the failure output.
+
+#### Phase 1.2 — GREEN: Write the minimal implementation to pass
+
+You SHALL replace the `todo!()` in the function under test with the simplest code that makes the red test pass.
+You SHALL NOT write more code than the current set of passing tests demands.
+You SHALL run `cargo test` and confirm the targeted test passes (green).
+You SHALL also confirm no previously-passing tests regressed.
+
+```bash
+cargo test 2>&1 | tail -5
+# Expected: ok. N passed; 0 failed
+```
+
+Evidence: you SHALL record the passing test output.
+
+#### Phase 1.3 — REFACTOR: Improve under green
+
+WHEN the implementation or test can be simplified, deduplicated, or clarified THEN you SHALL refactor now.
+You SHALL NOT change observable behavior during refactor -- all tests SHALL remain green.
+You SHALL run `cargo test` after every refactor pass and confirm all tests still pass.
+WHEN no meaningful refactor is needed THEN you SHALL note "No refactor needed" and proceed.
+
+After completing 1.1-1.2-1.3 for one unit, you SHALL loop back to Phase 1.1 for the next test stub.
+You SHALL continue until all `todo!()` bodies in both tests and functions are replaced.
+
+#### Phase 1 rules (apply across all sub-phases)
 
 You SHALL NOT use these patterns in non-test code:
 - You SHALL NOT use `.unwrap()` / `.expect()` without a same-line `// INVARIANT:` comment.
@@ -117,9 +163,11 @@ You SHALL use these idioms:
 You SHALL prefer borrowing over cloning and `let` over `let mut`.
 You SHALL format error messages as: what failed → why → what to do next, lowercase, no debug dumps, no secrets.
 
-You SHALL minimize external dependencies.
-You SHALL prefer Rust-native `std` solutions.
-IF a dependency is trivial to implement in fewer than 20 lines THEN you SHALL NOT add it.
+You SHALL default to ZERO external dependencies — `std` is your first, second, and third choice.
+You SHALL NOT add an external crate when `std` provides equivalent functionality, even if a crate is more ergonomic.
+IF a dependency is trivial to implement in fewer than 50 lines THEN you SHALL NOT add it.
+You SHALL NOT introduce async runtime crates (`tokio`, `async-std`) unless the repository already uses one — prefer `std::future`, `std::task`, and `std::thread`.
+You SHALL NOT use `serde`, `anyhow`, or `thiserror` in libraries — use `std` traits and custom error enums.
 
 ### Phase 2 — Verify
 
@@ -139,6 +187,7 @@ You SHALL confirm every item below and paste the checklist with `[x]` marks and 
 
 - [ ] You SHALL confirm Phase 0 stubs compiled before implementation.
 - [ ] You SHALL confirm Round −1 observations were addressed or documented as acceptable.
+- [ ] You SHALL confirm TDD cycle was followed: each function has RED (failing test) → GREEN (minimal pass) → REFACTOR evidence.
 - [ ] You SHALL confirm all banned patterns are fixed — scan clean.
 - [ ] You SHALL confirm no oversized files exist, or justification is provided.
 - [ ] You SHALL confirm `cargo build` passes.

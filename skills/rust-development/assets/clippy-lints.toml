@@ -35,12 +35,15 @@ cargo = { level = "warn", priority = -1 }
 # nursery = "warn"
 
 # Explicit non-idiomatic bans (restriction-style lints)
-unwrap_used = "deny"
-expect_used = "deny"
+#
+# `unwrap/expect/unreachable` are enforced via verify/banned-family checks with
+# same-line invariant comments, so clippy leaves those to the repository policy.
+unwrap_used = "allow"
+expect_used = "allow"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
-unreachable = "deny"
+unreachable = "allow"
 dbg_macro = "deny"
 indexing_slicing = "deny"
 panic_in_result_fn = "deny"

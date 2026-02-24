@@ -11,7 +11,7 @@
 //   broader non-idiomatic patterns.
 //
 // Defaults:
-// - Scans `crates/` if it exists; otherwise scans the workspace root.
+// - Always scans the workspace root; also scans `crates/` if it exists.
 // - You can override scan roots via env var: BANNED_FAMILY_ROOTS="src,crates,apps"
 //   (comma-separated, relative to workspace root).
 //
@@ -50,10 +50,7 @@ fn banned_family_is_absent_in_production_code() {
             let canonical_path = match fs::canonicalize(&path) {
                 Ok(canonical) => canonical,
                 Err(err) => {
-                    eprintln!(
-                        "warn: canonicalize failed for {}: {err}",
-                        path.display()
-                    );
+                    eprintln!("warn: canonicalize failed for {}: {err}", path.display());
                     path.clone()
                 }
             };
@@ -88,9 +85,7 @@ fn banned_family_is_absent_in_production_code() {
                         ));
                     }
                 }
-                if contains_unsafe_impl_send_or_sync(line, &mut unsafe_impl_state)
-                    && !has_unsafe_impl_escape(raw_line)
-                {
+                if is_unsafe_impl_send_or_sync_violation(line, raw_line, &mut unsafe_impl_state) {
                     violations.push(format!(
                         "{}:{}:1: banned `unsafe impl Send/Sync`",
                         path.display(),
@@ -108,7 +103,7 @@ fn banned_family_is_absent_in_production_code() {
             message.push_str(&violation);
             message.push('\n');
         }
-        panic!("{message}");
+        panic!("{}", message);
     }
 }
 
@@ -164,16 +159,10 @@ fn resolve_scan_roots(root: &Path) -> Vec<PathBuf> {
         }
     }
 
-    let mut roots = Vec::new();
-    if root.join("src").is_dir() {
-        roots.push(root.to_path_buf());
-    }
+    let mut roots = vec![root.to_path_buf()];
     let crates_dir = root.join("crates");
     if crates_dir.is_dir() {
         roots.push(crates_dir);
-    }
-    if roots.is_empty() {
-        roots.push(root.to_path_buf());
     }
     roots
 }
@@ -332,7 +321,7 @@ fn has_non_negated_test_token(expr: &str) -> bool {
     let bytes = compact.as_bytes();
     let mut idx = 0usize;
     let mut in_string = false;
-    let mut stack: Vec<bool> = Vec::new();
+    let mut stack: Vec<(bool, bool)> = Vec::new();
 
     while idx < bytes.len() {
         let b = bytes[idx];
@@ -362,18 +351,24 @@ fn has_non_negated_test_token(expr: &str) -> bool {
             }
             let ident = &compact[start..idx];
             if idx < bytes.len() && bytes[idx] == b'(' {
-                stack.push(ident == "not");
+                let is_not = ident == "not";
+                let is_any = ident == "any";
+                stack.push((is_not, is_any));
                 idx += 1;
                 continue;
             }
-            if ident == "test" && !stack.iter().any(|frame_is_not| *frame_is_not) {
-                return true;
+            if ident == "test" {
+                let negated = stack.iter().any(|(is_not, _)| *is_not);
+                let inside_any = stack.iter().any(|(_, is_any)| *is_any);
+                if !negated && !inside_any {
+                    return true;
+                }
             }
             continue;
         }
 
         if b == b'(' {
-            stack.push(false);
+            stack.push((false, false));
         } else if b == b')' {
             stack.pop();
         }
@@ -412,6 +407,26 @@ fn brace_delta(line: &str) -> i32 {
     delta
 }
 
+enum CfgAnnotatedItemState {
+    Pending,
+    Complete,
+    Block(i32),
+}
+
+fn cfg_annotated_item_state(line: &str) -> CfgAnnotatedItemState {
+    if line.contains('{') {
+        let delta = brace_delta(line);
+        if delta > 0 {
+            return CfgAnnotatedItemState::Block(delta);
+        }
+        return CfgAnnotatedItemState::Complete;
+    }
+    if line.contains(';') {
+        return CfgAnnotatedItemState::Complete;
+    }
+    CfgAnnotatedItemState::Pending
+}
+
 fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool> {
     let mut mask = vec![false; lines.len()];
     let mut pending_cfg_test = false;
@@ -441,15 +456,18 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
                 idx += 1;
                 continue;
             }
-            let delta = brace_delta(sanitized_lines[idx]);
-            if delta != 0 {
-                in_cfg_test_block = true;
-                cfg_test_depth = delta;
-                pending_cfg_test = false;
-            } else {
-                // Single-line annotated items (`fn helper() {}`, `use`, `type`, etc.)
-                // are complete on this line and should clear pending state.
-                pending_cfg_test = false;
+            match cfg_annotated_item_state(sanitized_lines[idx]) {
+                CfgAnnotatedItemState::Block(delta) => {
+                    in_cfg_test_block = true;
+                    cfg_test_depth = delta;
+                    pending_cfg_test = false;
+                }
+                CfgAnnotatedItemState::Complete => {
+                    pending_cfg_test = false;
+                }
+                CfgAnnotatedItemState::Pending => {
+                    pending_cfg_test = true;
+                }
             }
             idx += 1;
             continue;
@@ -469,8 +487,22 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
                     in_cfg_test_block = true;
                     cfg_test_depth = delta;
                     pending_cfg_test = false;
-                } else {
-                    pending_cfg_test = !has_trailing_item;
+                } else if !has_trailing_item {
+                    pending_cfg_test = true;
+                } else if let Some((_, trailing)) = sanitized_lines[attr_end_idx].split_once(")]") {
+                    match cfg_annotated_item_state(trailing) {
+                        CfgAnnotatedItemState::Block(inner_delta) => {
+                            in_cfg_test_block = true;
+                            cfg_test_depth = inner_delta;
+                            pending_cfg_test = false;
+                        }
+                        CfgAnnotatedItemState::Complete => {
+                            pending_cfg_test = false;
+                        }
+                        CfgAnnotatedItemState::Pending => {
+                            pending_cfg_test = true;
+                        }
+                    }
                 }
                 idx = attr_end_idx + 1;
                 continue;
@@ -560,6 +592,8 @@ struct UnsafeImplState {
     phase: UnsafeImplPhase,
     // Only meaningful when `phase == SawUnsafeImpl`.
     impl_generic_depth: usize,
+    // Escape marker discovered on `unsafe impl` line before `Send`/`Sync` appears.
+    impl_escape_pending: bool,
 }
 
 impl UnsafeImplState {
@@ -567,6 +601,7 @@ impl UnsafeImplState {
         Self {
             phase: UnsafeImplPhase::Searching,
             impl_generic_depth: 0,
+            impl_escape_pending: false,
         }
     }
 
@@ -574,11 +609,23 @@ impl UnsafeImplState {
         self.phase = phase;
         if phase != UnsafeImplPhase::SawUnsafeImpl {
             self.impl_generic_depth = 0;
+            self.impl_escape_pending = false;
         }
+    }
+
+    fn take_pending_escape(&mut self) -> bool {
+        let pending = self.impl_escape_pending;
+        self.impl_escape_pending = false;
+        pending
     }
 }
 
-fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) -> bool {
+fn contains_unsafe_impl_send_or_sync(
+    line: &str,
+    raw_line: &str,
+    state: &mut UnsafeImplState,
+) -> bool {
+    let has_escape_marker = has_unsafe_impl_escape(raw_line);
     let mut i = 0;
     let bytes = line.as_bytes();
     while i < bytes.len() {
@@ -592,7 +639,12 @@ fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) ->
             let token = &line[start..i];
             let next_phase = match (state.phase, token) {
                 (_, "unsafe") => UnsafeImplPhase::SawUnsafe,
-                (UnsafeImplPhase::SawUnsafe, "impl") => UnsafeImplPhase::SawUnsafeImpl,
+                (UnsafeImplPhase::SawUnsafe, "impl") => {
+                    if has_escape_marker {
+                        state.impl_escape_pending = true;
+                    }
+                    UnsafeImplPhase::SawUnsafeImpl
+                }
                 (UnsafeImplPhase::SawUnsafeImpl, "for") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "where") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "Send" | "Sync")
@@ -626,8 +678,130 @@ fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) ->
     false
 }
 
+fn is_unsafe_impl_send_or_sync_violation(
+    sanitized_line: &str,
+    raw_line: &str,
+    state: &mut UnsafeImplState,
+) -> bool {
+    if !contains_unsafe_impl_send_or_sync(sanitized_line, raw_line, state) {
+        return false;
+    }
+    let escaped_on_current_line = has_unsafe_impl_escape(raw_line);
+    let escaped_on_impl_line = state.take_pending_escape();
+    state.set_phase(UnsafeImplPhase::Searching);
+    !escaped_on_current_line && !escaped_on_impl_line
+}
+
 fn has_unsafe_impl_escape(raw_line: &str) -> bool {
-    raw_line.contains("// ALLOW:") || raw_line.contains("// SAFETY:")
+    let bytes = raw_line.as_bytes();
+    let mut i = 0usize;
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut raw_hashes: Option<usize> = None;
+    let mut block_comment_depth = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        let next = bytes.get(i + 1).copied().unwrap_or(b'\0');
+
+        if let Some(hashes) = raw_hashes {
+            if b == b'"' {
+                if hashes == 0 {
+                    raw_hashes = None;
+                    i += 1;
+                    continue;
+                }
+                let mut matched = 0usize;
+                let mut j = i + 1;
+                while matched < hashes && j < bytes.len() && bytes[j] == b'#' {
+                    matched += 1;
+                    j += 1;
+                }
+                if matched == hashes {
+                    raw_hashes = None;
+                    i = j;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        if block_comment_depth > 0 {
+            if b == b'/' && next == b'*' {
+                block_comment_depth += 1;
+                i += 2;
+                continue;
+            }
+            if b == b'*' && next == b'/' {
+                block_comment_depth -= 1;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_string {
+            if b == b'\\' {
+                i += usize::from(i + 1 < bytes.len()) + 1;
+            } else {
+                if b == b'"' {
+                    in_string = false;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if in_char {
+            if b == b'\\' {
+                i += usize::from(i + 1 < bytes.len()) + 1;
+            } else {
+                if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if b == b'/' && next == b'/' {
+            let comment = &raw_line[i..];
+            return comment.contains("// ALLOW:") || comment.contains("// SAFETY:");
+        }
+        if b == b'/' && next == b'*' {
+            block_comment_depth = 1;
+            i += 2;
+            continue;
+        }
+
+        if b == b'r' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] == b'#' {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                raw_hashes = Some(j - (i + 1));
+                i = j + 1;
+                continue;
+            }
+        }
+
+        if b == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+
+    false
 }
 
 fn strip_comments_and_strings(source: &str) -> String {
@@ -886,8 +1060,8 @@ mod tests {
     }
 
     #[test]
-    fn cfg_any_test_attr_is_treated_as_test_only() {
-        assert!(is_cfg_test_attr("#[cfg(any(test, feature = \"bench\"))]"));
+    fn cfg_any_test_with_non_test_branch_is_not_treated_as_test_only() {
+        assert!(!is_cfg_test_attr("#[cfg(any(test, feature = \"bench\"))]"));
     }
 
     #[test]
@@ -933,6 +1107,20 @@ mod tests {
     }
 
     #[test]
+    fn cfg_test_brace_on_next_line_masks_entire_item() {
+        let lines = vec![
+            "#[cfg(test)]",
+            "fn helper()",
+            "{",
+            "    panic!(\"only in tests\");",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, false]);
+    }
+
+    #[test]
     fn lifetime_annotations_do_not_mask_following_code() {
         let source = "fn conn() -> &'static str { value.unwrap() }";
         let sanitized = strip_comments_and_strings(source);
@@ -975,29 +1163,46 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl Send for Worker {}",
+            "unsafe impl Send for Worker {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl<T> Sync for Cache<T> {}",
+            "unsafe impl<T> Sync for Cache<T> {}",
             &mut state
         ));
         let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            &sanitized,
+            "let msg = \"unsafe impl Send\";",
+            &mut state
+        ));
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync("impl Send for Worker {}", &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "impl Send for Worker {}",
+            "impl Send for Worker {}",
+            &mut state
+        ));
     }
 
     #[test]
     fn unsafe_impl_send_sync_detection_spans_multiple_lines() {
         let mut state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            "unsafe impl<T>",
             "unsafe impl<T>",
             &mut state
         ));
-        assert!(contains_unsafe_impl_send_or_sync(
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
             "Send for Worker<T> {}",
+            "Send for Worker<T> {}",
+            &mut state
+        ));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            "let keep_scanning = Send;",
+            "let keep_scanning = Send;",
             &mut state
         ));
     }
@@ -1007,18 +1212,22 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
+            "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T>",
+            "unsafe impl<T>",
             &mut state
         ));
         assert!(!contains_unsafe_impl_send_or_sync(
             "Service for Worker<T>",
+            "Service for Worker<T>",
             &mut state
         ));
         assert!(!contains_unsafe_impl_send_or_sync(
+            "where T: Send + Sync {}",
             "where T: Send + Sync {}",
             &mut state
         ));
@@ -1034,6 +1243,56 @@ mod tests {
         ));
         assert!(!super::has_unsafe_impl_escape(
             "unsafe impl Send for Worker {}"
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_escape_on_same_line_is_not_a_violation() {
+        let raw = "unsafe impl Send for Worker {} // SAFETY: bounded by runtime invariants";
+        let sanitized = strip_comments_and_strings(raw);
+        let mut state = super::UnsafeImplState::searching();
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, raw, &mut state
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_escape_ignores_string_literal_markers() {
+        let raw = "static DOCS: &str = \"// SAFETY: fake\"; unsafe impl Send for Worker {}";
+        let sanitized = strip_comments_and_strings(raw);
+        let mut state = super::UnsafeImplState::searching();
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, raw, &mut state
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_escape_ignores_block_comment_markers() {
+        let raw = "/* // SAFETY: fake */ unsafe impl Send for Worker {}";
+        let sanitized = strip_comments_and_strings(raw);
+        let mut state = super::UnsafeImplState::searching();
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, raw, &mut state
+        ));
+    }
+
+    #[test]
+    fn unsafe_impl_escape_on_impl_line_applies_to_multiline_send() {
+        let mut state = super::UnsafeImplState::searching();
+        let raw_impl_line = "unsafe impl<T> // SAFETY: marker applies to the impl";
+        let impl_line = strip_comments_and_strings(raw_impl_line);
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            &impl_line,
+            raw_impl_line,
+            &mut state
+        ));
+        assert_eq!(state.phase, super::UnsafeImplPhase::SawUnsafeImpl);
+        assert!(state.impl_escape_pending);
+        let raw_send_line = "Send for Worker<T> {}";
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            raw_send_line,
+            raw_send_line,
+            &mut state
         ));
     }
 
