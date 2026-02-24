@@ -288,8 +288,9 @@ Use:
 Optional helper (builds a skeleton from git history):
 
 - `python3 "$SKILL_ROOT/scripts/generate-release-notes.py" --since <tag-or-sha> --version vX.Y.Z`
-  - omits empty optional sections
+  - omits empty optional sections (`## New Features`, `## What's Changed`, `## Bug Fixes`, `## Breaking Changes`)
   - always emits `## Commits` and `## Refs`
+  - `--include-commits` adds per-commit SHA bullets inside `## Commits`; the section is emitted regardless
 
 ---
 
