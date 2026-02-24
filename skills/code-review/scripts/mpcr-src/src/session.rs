@@ -656,7 +656,7 @@ impl ReviewEntryDisk {
             report_file: entry.report_file.clone(),
             notes: entry.notes.clone(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -884,7 +884,7 @@ fn ensure_path_contained(path: &Path, boundary: &Path) -> anyhow::Result<PathBuf
                 .map_or_else(|| boundary.to_path_buf(), Path::to_path_buf);
             let canonical = canonical_parent.join(
                 path.file_name()
-                    .map_or_else(|| std::ffi::OsStr::new(""), |n| n),
+                    .map_or_else(|| std::ffi::OsStr::new(""), std::convert::identity),
             );
             anyhow::ensure!(
                 canonical.starts_with(&canonical_boundary),
@@ -1864,7 +1864,7 @@ mod tests {
                 content: Value::String("context".to_string()),
             }],
             child_reviews: vec![],
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }
     }
 
@@ -1962,7 +1962,7 @@ mod tests {
                     report_file: None,
                     notes: Vec::new(),
                     child_reviews: Vec::new(),
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
                 ReviewEntry {
                     reviewer_id: "cafebabe".to_string(),
@@ -1980,7 +1980,7 @@ mod tests {
                     report_file: None,
                     notes: Vec::new(),
                     child_reviews: Vec::new(),
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
             ],
             extra: serde_json::Map::new(),
@@ -2060,7 +2060,7 @@ mod tests {
                         report_file: None,
                         notes_count: 0,
                     }],
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
                 ReviewEntry {
                     reviewer_id: "cafebabe".to_string(),
@@ -2083,7 +2083,7 @@ mod tests {
                         content: Value::String("domain coverage".to_string()),
                     }],
                     child_reviews: Vec::new(),
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
             ],
             extra: serde_json::Map::new(),
@@ -2134,7 +2134,7 @@ mod tests {
                     report_file: None,
                     notes: Vec::new(),
                     child_reviews: Vec::new(),
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
                 ReviewEntry {
                     reviewer_id: "cafebabe".to_string(),
@@ -2152,7 +2152,7 @@ mod tests {
                     report_file: None,
                     notes: Vec::new(),
                     child_reviews: Vec::new(),
-                    extra: Default::default(),
+                    extra: serde_json::Map::default(),
                 },
             ],
             extra: serde_json::Map::new(),
@@ -2271,7 +2271,7 @@ mod tests {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -2320,7 +2320,7 @@ mod tests {
             report_file: Some("report.md".to_string()),
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -2377,7 +2377,7 @@ mod tests {
             report_file: Some("existing.md".to_string()),
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -2428,7 +2428,7 @@ mod tests {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -2552,29 +2552,41 @@ mod tests {
     }
 
     #[test]
-    fn resolve_report_rejects_parent_dir_components() {
+    fn resolve_report_rejects_parent_dir_components() -> anyhow::Result<()> {
         let repo = Path::new("/repo");
         let sess = Path::new("/repo/.sessions/s1");
-        let err = resolve_report_file_path(repo, sess, "../../../etc/passwd")
-            .expect_err("should reject path with '..' components");
+        let err = match resolve_report_file_path(repo, sess, "../../../etc/passwd") {
+            Ok(path) => bail!(
+                "should reject path with '..' components, got {}",
+                path.display()
+            ),
+            Err(err) => err,
+        };
         let msg = err.to_string();
-        assert!(
+        ensure!(
             msg.contains(".."),
             "error should mention '..' components: {msg}"
         );
+        Ok(())
     }
 
     #[test]
-    fn resolve_report_rejects_hidden_parent_dir() {
+    fn resolve_report_rejects_hidden_parent_dir() -> anyhow::Result<()> {
         let repo = Path::new("/repo");
         let sess = Path::new("/repo/.sessions/s1");
-        let err = resolve_report_file_path(repo, sess, "subdir/../../escape.md")
-            .expect_err("should reject path with embedded '..' component");
+        let err = match resolve_report_file_path(repo, sess, "subdir/../../escape.md") {
+            Ok(path) => bail!(
+                "should reject path with embedded '..' component, got {}",
+                path.display()
+            ),
+            Err(err) => err,
+        };
         let msg = err.to_string();
-        assert!(
+        ensure!(
             msg.contains(".."),
             "error should mention '..' components: {msg}"
         );
+        Ok(())
     }
 
     #[test]
@@ -2582,7 +2594,7 @@ mod tests {
         let repo = Path::new("/repo");
         let sess = Path::new("/repo/.sessions/s1");
         let result = resolve_report_file_path(repo, sess, ".local/reports/review.md")?;
-        assert_eq!(result, PathBuf::from("/repo/.local/reports/review.md"));
+        ensure!(result == PathBuf::from("/repo/.local/reports/review.md"));
         Ok(())
     }
 
@@ -2591,7 +2603,7 @@ mod tests {
         let repo = Path::new("/repo");
         let sess = Path::new("/repo/.sessions/s1");
         let result = resolve_report_file_path(repo, sess, "report.md")?;
-        assert_eq!(result, PathBuf::from("/repo/.sessions/s1/report.md"));
+        ensure!(result == PathBuf::from("/repo/.sessions/s1/report.md"));
         Ok(())
     }
 
@@ -2600,7 +2612,7 @@ mod tests {
         let repo = Path::new("/repo");
         let sess = Path::new("/repo/.sessions/s1");
         let result = resolve_report_file_path(repo, sess, "/repo/reports/review.md")?;
-        assert_eq!(result, PathBuf::from("/repo/reports/review.md"));
+        ensure!(result == PathBuf::from("/repo/reports/review.md"));
         Ok(())
     }
 
@@ -2911,7 +2923,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         report_file: None,
         notes: vec![],
         child_reviews: vec![],
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     });
 
     if parent_id_for_result.is_some() {
@@ -3081,7 +3093,7 @@ pub fn spawn_child_reviewers(
             report_file: None,
             notes: vec![],
             child_reviews: vec![],
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         });
         child_refs.push((reviewer_id.clone(), params.session_id.clone()));
         children.push(SpawnedChildReviewer {

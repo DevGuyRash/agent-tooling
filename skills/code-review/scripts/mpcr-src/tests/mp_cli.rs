@@ -81,7 +81,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: None,
         notes: vec![note],
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let blocked = ReviewEntry {
@@ -100,7 +100,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let finished = ReviewEntry {
@@ -124,7 +124,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     SessionFile {
@@ -174,7 +174,7 @@ fn session_without_notes(session_dir: &Path) -> SessionFile {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }],
         extra: serde_json::Map::new(),
     }
@@ -463,7 +463,7 @@ fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Re
         report_file: Some(parent_report.to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
     let mut child = parent.clone();
     child.reviewer_id = "cafe1234".to_string();
@@ -2470,7 +2470,7 @@ fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         }],
         extra: serde_json::Map::new(),
     };
@@ -3542,7 +3542,7 @@ fn cleanup_purges_children_with_include_children() -> anyhow::Result<()> {
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
     session.reviewers.push("ch1ld001".to_string());
     session.reviews.push(child);
@@ -3971,6 +3971,9 @@ fn spawn_children_rejects_terminal_parent() -> anyhow::Result<()> {
 
     let report_path = repo_root.path().join("report.md");
     std::fs::write(&report_path, "# Test Report")?;
+    let report_path_str = report_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 report path"))?;
 
     run_cmd_json(&[
         "reviewer",
@@ -3984,7 +3987,7 @@ fn spawn_children_rejects_terminal_parent() -> anyhow::Result<()> {
         "--verdict",
         "APPROVE",
         "--report-file",
-        report_path.to_str().unwrap(),
+        report_path_str,
         "--blocker",
         "0",
         "--major",
@@ -4019,6 +4022,7 @@ fn spawn_children_rejects_terminal_parent() -> anyhow::Result<()> {
 // ── Cross-session include-children purge test ──────────────────────────────
 
 #[test]
+#[allow(clippy::too_many_lines)] // Reason: scenario intentionally covers multi-session parent/child permutations end-to-end.
 fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     let session_dir = tmp.path();
@@ -4040,7 +4044,7 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let parent_sess2 = ReviewEntry {
@@ -4059,7 +4063,7 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let child_sess2 = ReviewEntry {
@@ -4078,7 +4082,7 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     session.reviewers.push("ch1ld001".to_string());
@@ -4132,12 +4136,11 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
         .get("child_reviews")
         .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow::anyhow!("child_reviews missing"))?;
-    let child_ids: Vec<&str> = children
-        .iter()
-        .filter_map(|c| c.get("reviewer_id").and_then(|v| v.as_str()))
-        .collect();
     ensure!(
-        child_ids.contains(&"ch1ld002"),
+        children
+            .iter()
+            .filter_map(|c| c.get("reviewer_id").and_then(|v| v.as_str()))
+            .any(|id| id == "ch1ld002"),
         "child from sess9999 should survive as nested child"
     );
     Ok(())

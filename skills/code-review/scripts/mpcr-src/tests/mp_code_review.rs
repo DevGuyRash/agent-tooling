@@ -308,7 +308,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: None,
         notes: vec![note],
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let blocked = ReviewEntry {
@@ -327,7 +327,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let finished = ReviewEntry {
@@ -351,7 +351,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let session = SessionFile {
@@ -598,7 +598,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
         report_file: Some(report_file.to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
-        extra: Default::default(),
+        extra: serde_json::Map::default(),
     };
 
     let session = SessionFile {

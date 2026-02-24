@@ -1894,12 +1894,10 @@ fn enforce_worker_session_dir_binding(command: &Commands) -> anyhow::Result<()> 
         Some(provided) => {
             let canonical_provided = provided
                 .canonicalize()
-                .ok()
-                .map_or_else(|| provided.to_path_buf(), |p| p);
+                .map_or_else(|_| provided.to_path_buf(), std::convert::identity);
             let canonical_env = env_path
                 .canonicalize()
-                .ok()
-                .map_or_else(|| env_path.clone(), |p| p);
+                .map_or_else(|_| env_path.clone(), std::convert::identity);
             if canonical_provided != canonical_env {
                 return Err(anyhow::anyhow!(
                     "worker mode: --session-dir {} does not match MPCR_SESSION_DIR={}",
@@ -1911,8 +1909,7 @@ fn enforce_worker_session_dir_binding(command: &Commands) -> anyhow::Result<()> 
         None => {
             if !env_path.is_dir() {
                 return Err(anyhow::anyhow!(
-                    "worker mode: MPCR_SESSION_DIR={} is not a valid directory",
-                    env_session_dir,
+                    "worker mode: MPCR_SESSION_DIR={env_session_dir} is not a valid directory",
                 ));
             }
         }
@@ -2338,7 +2335,7 @@ mod tests {
             report_file: Some("report.md".to_string()),
             notes: Vec::new(),
             child_reviews: Vec::new(),
-            extra: Default::default(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: "1.1.0".to_string(),

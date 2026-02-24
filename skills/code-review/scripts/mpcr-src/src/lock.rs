@@ -48,9 +48,7 @@ pub struct LockGuard {
 
 fn parse_lock_owner_and_pid(raw: &str) -> (String, Option<u32>) {
     let mut lines = raw.lines();
-    let owner = lines
-        .next()
-        .map_or_else(String::new, |line| line.to_string());
+    let owner = lines.next().map_or_else(String::new, ToString::to_string);
     let pid = lines.next().and_then(|line| {
         line.strip_prefix("pid:")
             .and_then(|rest| rest.trim().parse::<u32>().ok())
@@ -107,6 +105,9 @@ impl LockGuard {
     }
 
     /// Refresh the lock file mtime as a heartbeat signal.
+    ///
+    /// # Errors
+    /// Returns an error if the lock file exists and cannot be opened, written, or flushed.
     pub fn touch_lock(&self) -> anyhow::Result<()> {
         if let Some(ref lock_file) = self.lock_file {
             let mut f = std::fs::OpenOptions::new()
