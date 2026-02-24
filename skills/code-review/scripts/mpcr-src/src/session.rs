@@ -656,7 +656,7 @@ impl ReviewEntryDisk {
             report_file: entry.report_file.clone(),
             notes: entry.notes.clone(),
             child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
+            extra: entry.extra.clone(),
         }
     }
 
@@ -1614,6 +1614,23 @@ fn plan_purge_results(
     (reviews, files_to_delete)
 }
 
+fn infer_repo_root_from_session_dir(session_dir: &Path) -> Option<PathBuf> {
+    let canonical_session_dir = session_dir.canonicalize().ok()?;
+    let code_reviews_dir = canonical_session_dir.parent()?;
+    if code_reviews_dir.file_name()? != "code_reviews" {
+        return None;
+    }
+    let reports_dir = code_reviews_dir.parent()?;
+    if reports_dir.file_name()? != "reports" {
+        return None;
+    }
+    let local_dir = reports_dir.parent()?;
+    if local_dir.file_name()? != ".local" {
+        return None;
+    }
+    Some(local_dir.parent()?.to_path_buf())
+}
+
 /// Purge (permanently remove) review entries and optionally their report files.
 ///
 /// Matching entries are removed from `_session.json`. When `include_children` is true,
@@ -1639,7 +1656,12 @@ pub fn purge_reviews(params: &PurgeReviewsParams) -> anyhow::Result<PurgeReviews
         LockConfig::default(),
     )?;
     let mut session = read_session_file(params.session.session_dir())?;
-    let repo_root = params.repo_root.as_path();
+    let repo_root_for_cleanup = match infer_repo_root_from_session_dir(params.session.session_dir())
+    {
+        Some(inferred) => inferred,
+        None => params.repo_root.clone(),
+    };
+    let repo_root = repo_root_for_cleanup.as_path();
 
     // Determine which top-level entries match the filters.
     let parsed_after = params
@@ -2548,6 +2570,83 @@ mod tests {
         fs::write(&report_path, "report")?;
 
         ensure!(strip_repo_root_best_effort(&repo_root, &report_path).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn infer_repo_root_from_session_dir_extracts_default_layout_root() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo_root = dir.path().join("repo");
+        let session_dir = repo_root
+            .join(".local")
+            .join("reports")
+            .join("code_reviews")
+            .join("2026-01-11");
+        fs::create_dir_all(&session_dir)?;
+        let actual = infer_repo_root_from_session_dir(&session_dir)
+            .ok_or_else(|| anyhow::anyhow!("failed to infer repo root"))?;
+        ensure!(actual == repo_root);
+        Ok(())
+    }
+
+    #[test]
+    fn infer_repo_root_from_session_dir_returns_none_for_non_default_layout() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        ensure!(infer_repo_root_from_session_dir(&session_dir).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn write_session_file_atomic_preserves_review_unknown_fields() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+
+        let raw_session = serde_json::json!({
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "session_date": "2026-01-11",
+            "repo_root": dir.path().to_string_lossy(),
+            "reviewers": ["deadbeef"],
+            "reviews": [{
+                "reviewer_id": "deadbeef",
+                "session_id": "sess0001",
+                "target_ref": "refs/heads/main",
+                "initiator_status": "REQUESTING",
+                "status": "IN_PROGRESS",
+                "parent_id": null,
+                "started_at": "2026-01-11T00:00:00Z",
+                "updated_at": "2026-01-11T01:00:00Z",
+                "finished_at": null,
+                "current_phase": "INGESTION",
+                "verdict": null,
+                "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
+                "report_file": null,
+                "notes": [],
+                "future_extension": {"token": "abc123"}
+            }]
+        });
+        fs::write(
+            session_dir.join("_session.json"),
+            format!("{}\n", serde_json::to_string_pretty(&raw_session)?),
+        )?;
+
+        let session = read_session_file(&session_dir)?;
+        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
+
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(session_dir.join("_session.json"))?)?;
+        let reviews = written
+            .get("reviews")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing reviews"))?;
+        let future_extension = reviews
+            .first()
+            .and_then(|review| review.get("future_extension"))
+            .ok_or_else(|| anyhow::anyhow!("missing review future_extension"))?;
+        ensure!(future_extension["token"] == "abc123");
         Ok(())
     }
 

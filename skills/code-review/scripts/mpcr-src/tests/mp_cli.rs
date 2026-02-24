@@ -3650,6 +3650,61 @@ fn cleanup_does_not_trust_persisted_repo_root_for_absolute_report_paths() -> any
 }
 
 #[test]
+fn cleanup_deletes_repo_relative_report_with_explicit_session_dir() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let foreign_repo_root = tmp.path().join("foreign-repo");
+    let session_dir = foreign_repo_root
+        .join(".local")
+        .join("reports")
+        .join("code_reviews")
+        .join("2026-01-11");
+    fs::create_dir_all(&session_dir)?;
+
+    let mut session = sample_session(&session_dir);
+    let report_rel = ".local/reports/code_reviews/2026-01-11/foreign-report.md";
+    if let Some(review) = session
+        .reviews
+        .iter_mut()
+        .find(|review| review.reviewer_id == "feedface")
+    {
+        review.report_file = Some(report_rel.to_string());
+    }
+    write_session_file(&session_dir, &session)?;
+
+    let report_path = foreign_repo_root.join(report_rel);
+    if let Some(parent) = report_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&report_path, "# foreign report")?;
+    ensure!(
+        report_path.exists(),
+        "foreign report should exist before cleanup"
+    );
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+        "--delete-report-files",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "files_deleted")? == 1,
+        "cleanup should delete the report under the session-dir repo root"
+    );
+    ensure!(
+        !report_path.exists(),
+        "report should be deleted when session-dir points at another repo"
+    );
+    Ok(())
+}
+
+#[test]
 fn cleanup_filters_by_before_timestamp() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     let session_dir = tmp.path();
