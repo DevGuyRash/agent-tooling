@@ -1,0 +1,70 @@
+# Session management protocol: guidance for session housekeeping operations.
+# Content is served by `mpcr protocol session --phase <PHASE>`.
+# Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
+
+[phases.CLEANUP]
+title = "Session Cleanup"
+content = """
+You SHALL use `mpcr session cleanup` to remove review entries and their report files from a session.
+
+## When to clean up
+- AFTER a review cycle is fully complete and all findings have been actioned.
+- WHEN the user explicitly requests cleanup of old or stale reviews.
+- WHEN scratch files or abandoned child reviews accumulate in `.local/`.
+
+## Dry-run first (always)
+You SHALL ALWAYS run a dry-run preview first:
+```
+mpcr session cleanup --dry-run [filters...]
+```
+Present the preview to the user and confirm before proceeding.
+
+## Filter reference
+All filters are optional and combine with AND logic (only entries matching ALL filters are purged).
+
+| Filter | Flag | Example |
+|--------|------|---------|
+| By reviewer | `--reviewer-id <ID8>` | Purge one reviewer and children |
+| By session | `--session-id <ID8>` | Purge an entire session |
+| By target | `--target-ref <REF>` | Purge reviews for a specific branch/PR |
+| By status | `--reviewer-status <S>` | `CANCELLED`, `FINISHED`, `ERROR` |
+| By initiator | `--initiator-status <S>` | `APPLIED`, `CANCELLED` |
+| By verdict | `--verdict <V>` | `APPROVE`, `REQUEST_CHANGES`, `BLOCK` |
+| After date | `--after <RFC3339>` | Reviews started at or after timestamp |
+| Before date | `--before <RFC3339>` | Reviews started at or before timestamp |
+
+## Common cleanup patterns
+
+### Purge a completed reviewer and all children
+```
+mpcr session cleanup --reviewer-id <ID8> --include-children --delete-report-files
+```
+
+### Purge all reviews before a date
+```
+mpcr session cleanup --before 2026-01-15T00:00:00Z --delete-report-files
+```
+
+### Purge only cancelled/error reviews (safe housekeeping)
+```
+mpcr session cleanup --reviewer-status CANCELLED,ERROR --include-children --delete-report-files
+```
+
+### Purge reviews in a date range
+```
+mpcr session cleanup --after 2026-01-01T00:00:00Z --before 2026-02-01T00:00:00Z --delete-report-files
+```
+
+## Flags
+- `--include-children`: Also remove child entries whose parent matches the filters.
+- `--delete-report-files`: Delete report markdown files from disk (without this, only session entries are removed).
+- `--dry-run`: Preview only; no changes written. You SHALL use this first.
+
+## Scratch file cleanup
+Child review agents sometimes leave scratch files in `.local/tmp/` (dispatch prompts, report templates, working files).
+These are NOT managed by `mpcr session cleanup`. To remove them:
+```
+rm -rf .local/tmp/
+```
+You SHALL confirm with the user before deleting `.local/tmp/` contents.
+"""
