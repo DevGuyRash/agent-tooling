@@ -11,11 +11,12 @@ use mpcr::lock::{self, LockConfig};
 use mpcr::protocol;
 use mpcr::session::{
     append_note, close_child_reviews, collect_reports, finalize_review, load_session,
-    register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
+    purge_reviews, register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
     AppendNoteParams, CloseChildReviewsParams, FinalizeReportInput, FinalizeReviewParams,
-    InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams, ReportsFilters, ReportsOptions,
-    ReportsResult, ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
-    SetInitiatorStatusParams, SeverityCounts, SpawnChildReviewersParams, UpdateReviewParams,
+    InitiatorStatus, NoteRole, NoteType, PurgeReviewsParams, RegisterReviewerParams,
+    ReportsFilters, ReportsOptions, ReportsResult, ReportsView, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
+    SpawnChildReviewersParams, UpdateReviewParams,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -226,6 +227,105 @@ enum SessionCommands {
     Reports {
         #[command(subcommand)]
         command: ReportsCommands,
+    },
+    /// Purge review entries and optionally their report files.
+    #[command(after_long_help = r#"Examples:
+  # Dry-run: preview what would be purged (safe, no changes):
+  mpcr session cleanup --dry-run
+
+  # Purge all entries for a specific reviewer (and their children):
+  mpcr session cleanup --reviewer-id <ID8> --include-children --delete-report-files
+
+  # Purge entries older than a timestamp:
+  mpcr session cleanup --before 2026-01-15T00:00:00Z --delete-report-files
+
+  # Purge entries between two timestamps:
+  mpcr session cleanup --after 2026-01-01T00:00:00Z --before 2026-02-01T00:00:00Z
+
+  # Purge only CANCELLED reviews:
+  mpcr session cleanup --reviewer-status CANCELLED --delete-report-files
+
+  # Purge entries for a specific session:
+  mpcr session cleanup --session-id <ID8> --include-children --delete-report-files
+
+  # Purge by verdict:
+  mpcr session cleanup --verdict APPROVE --delete-report-files
+"#)]
+    Cleanup {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Only purge reviews matching this reviewer id."
+        )]
+        reviewer_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Only purge reviews matching this session id."
+        )]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Only purge reviews matching this target ref."
+        )]
+        target_ref: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "STATUS",
+            help = "Only purge reviews with these reviewer statuses."
+        )]
+        reviewer_status: Vec<ReviewerStatus>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "STATUS",
+            help = "Only purge reviews with these initiator statuses."
+        )]
+        initiator_status: Vec<InitiatorStatus>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            num_args = 1..,
+            value_name = "VERDICT",
+            help = "Only purge reviews with these verdicts."
+        )]
+        verdict: Vec<ReviewVerdict>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Only purge reviews started at or after this timestamp (e.g. 2026-01-15T00:00:00Z)."
+        )]
+        after: Option<String>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Only purge reviews started at or before this timestamp (e.g. 2026-02-01T00:00:00Z)."
+        )]
+        before: Option<String>,
+        #[arg(
+            long,
+            help = "Also purge child entries whose parent matches the filters."
+        )]
+        include_children: bool,
+        #[arg(
+            long,
+            help = "Delete report markdown files from disk for purged entries."
+        )]
+        delete_report_files: bool,
+        #[arg(
+            long,
+            help = "Preview what would be purged without modifying anything."
+        )]
+        dry_run: bool,
     },
 }
 
@@ -498,7 +598,7 @@ enum ReviewerCommands {
             value_enum,
             default_value = "CANCELLED",
             value_name = "STATUS",
-            help = "Reviewer status to apply to matching child entries."
+            help = "Reviewer status to apply to matching child entries (allowed: CANCELLED, ERROR)."
         )]
         set_status: ReviewerStatus,
 
@@ -900,6 +1000,13 @@ Examples:
             help = "If set, only wait for reviews matching this session_id."
         )]
         session_id: Option<String>,
+        #[arg(
+            long,
+            value_name = "SECS",
+            default_value = "3600",
+            help = "Maximum seconds to wait before exiting with an error (default: 3600)."
+        )]
+        timeout_secs: u64,
     },
 }
 
@@ -927,6 +1034,8 @@ enum ProtocolCommands {
     Orchestrator,
     /// Universal Domains reference table.
     Domains,
+    /// Full-cycle orchestration guidance (review → apply → re-review convergence).
+    Fullcycle,
     /// Report template skeleton at the specified scale.
     ReportTemplate {
         #[arg(
@@ -941,9 +1050,14 @@ enum ProtocolCommands {
         #[arg(
             long,
             value_name = "ROLE",
-            help = "Subagent role (scope-mapper, red-team, systems-auditor)."
+            help = "Subagent role (e.g. architecture-critic, security-adversary, domain-specialist). Use `mpcr protocol list` for all roles."
         )]
         role: String,
+    },
+    /// Session management guidance (cleanup, housekeeping).
+    Session {
+        #[arg(long, value_name = "PHASE", help = "Session phase (CLEANUP).")]
+        phase: String,
     },
     /// List all available protocol entries.
     List,
@@ -965,6 +1079,7 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     enforce_worker_mode_restrictions(&cli.command)?;
+    enforce_worker_session_dir_binding(&cli.command)?;
     let json = cli.json || cli.json_pretty;
     let json_pretty = cli.json_pretty;
     let use_env = cli.use_env;
@@ -997,7 +1112,10 @@ fn run() -> anyhow::Result<()> {
                 max_retries,
             } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let cfg = LockConfig { max_retries };
+                let cfg = LockConfig {
+                    max_retries,
+                    ..LockConfig::default()
+                };
                 let guard = lock::acquire_lock(&resolved.session_dir, owner, cfg)?;
                 std::mem::forget(guard);
                 write_ok(json, json_pretty)?;
@@ -1047,6 +1165,39 @@ fn run() -> anyhow::Result<()> {
                     )?;
                 }
             },
+            SessionCommands::Cleanup {
+                session,
+                reviewer_id,
+                session_id,
+                target_ref,
+                reviewer_status,
+                initiator_status,
+                verdict,
+                after,
+                before,
+                include_children,
+                delete_report_files,
+                dry_run,
+            } => {
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let session_locator = SessionLocator::new(resolved.session_dir);
+                let result = purge_reviews(&PurgeReviewsParams {
+                    session: session_locator,
+                    repo_root: resolved.repo_root,
+                    reviewer_id,
+                    session_id,
+                    target_ref,
+                    reviewer_statuses: reviewer_status,
+                    initiator_statuses: initiator_status,
+                    verdicts: verdict,
+                    after,
+                    before,
+                    include_children,
+                    delete_report_files,
+                    dry_run,
+                })?;
+                write_result(json, json_pretty, &result)?;
+            }
         },
 
         Commands::Reviewer { command } => match command {
@@ -1280,6 +1431,20 @@ fn run() -> anyhow::Result<()> {
 
                 ensure_complete_child_has_parent(&session_locator, &reviewer_id, &session_id)?;
 
+                let proof_note = match (proof_note, proof_note_file) {
+                    (Some(note), None) => Some(note),
+                    (None, Some(path)) => Some(
+                        std::fs::read_to_string(&path)
+                            .with_context(|| format!("read proof note file {}", path.display()))?,
+                    ),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow::anyhow!(
+                            "pass only one of --proof-note or --proof-note-file"
+                        ));
+                    }
+                };
+
                 let res = finalize_review(FinalizeReviewParams {
                     session: session_locator.clone(),
                     reviewer_id: reviewer_id.clone(),
@@ -1297,20 +1462,6 @@ fn run() -> anyhow::Result<()> {
                     auto_close_children_status: ReviewerStatus::Cancelled,
                     now,
                 })?;
-
-                let proof_note = match (proof_note, proof_note_file) {
-                    (Some(note), None) => Some(note),
-                    (None, Some(path)) => Some(
-                        std::fs::read_to_string(&path)
-                            .with_context(|| format!("read proof note file {}", path.display()))?,
-                    ),
-                    (None, None) => None,
-                    (Some(_), Some(_)) => {
-                        return Err(anyhow::anyhow!(
-                            "pass only one of --proof-note or --proof-note-file"
-                        ));
-                    }
-                };
 
                 if let Some(note) = proof_note {
                     append_note(AppendNoteParams {
@@ -1421,6 +1572,7 @@ fn run() -> anyhow::Result<()> {
                 session,
                 target_ref,
                 session_id,
+                timeout_secs,
             } => {
                 let target_ref = target_ref.or_else(|| opt_env_string(use_env, "MPCR_TARGET_REF"));
                 let session_id = session_id.or_else(|| opt_env_string(use_env, "MPCR_SESSION_ID"));
@@ -1429,6 +1581,7 @@ fn run() -> anyhow::Result<()> {
                     &resolved.session_dir,
                     target_ref.as_deref(),
                     session_id.as_deref(),
+                    timeout_secs,
                 )?;
                 write_ok(json, json_pretty)?;
             }
@@ -1467,6 +1620,14 @@ fn run() -> anyhow::Result<()> {
                     println!("{}", out.content.trim());
                 }
             }
+            ProtocolCommands::Fullcycle => {
+                let out = protocol::fullcycle()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
             ProtocolCommands::ReportTemplate { scale } => {
                 let out = protocol::report_template(&scale)?;
                 if json {
@@ -1477,6 +1638,14 @@ fn run() -> anyhow::Result<()> {
             }
             ProtocolCommands::Dispatch { role } => {
                 let out = protocol::dispatch(&role)?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::Session { phase } => {
+                let out = protocol::session_phase(&phase)?;
                 if json {
                     write_json(json_pretty, &out)?;
                 } else {
@@ -1503,23 +1672,249 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     let dispatch_role = std::env::var("MPCR_DISPATCH_ROLE")
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let Some(dispatch_role) = dispatch_role else {
-        return Ok(());
+    let applicator_role = std::env::var("MPCR_APPLICATOR_ROLE")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    let role_name = match (&dispatch_role, &applicator_role) {
+        (Some(role), _) | (None, Some(role)) => role.clone(),
+        (None, None) => return Ok(()),
     };
 
-    let allowed = matches!(
-        command,
-        Commands::Reviewer {
-            command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
-        }
-    );
-    if allowed {
-        return Ok(());
+    let allowed = match (&dispatch_role, &applicator_role) {
+        (Some(_), _) => matches!(
+            command,
+            Commands::Reviewer {
+                command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
+            }
+        ),
+        (None, Some(_)) => matches!(
+            command,
+            Commands::Applicator {
+                command: ApplicatorCommands::Note { .. } | ApplicatorCommands::SetStatus { .. }
+            }
+        ),
+        _ => true,
+    };
+    if !allowed {
+        let allowed_cmds = if dispatch_role.is_some() {
+            "`mpcr reviewer update` and `mpcr reviewer note`"
+        } else {
+            "`mpcr applicator note` and `mpcr applicator set-status`"
+        };
+        return Err(anyhow::anyhow!(
+            "{env}={role_name} restricts this executor to {allowed_cmds} only",
+            env = if dispatch_role.is_some() {
+                "MPCR_DISPATCH_ROLE"
+            } else {
+                "MPCR_APPLICATOR_ROLE"
+            },
+        ));
     }
 
-    Err(anyhow::anyhow!(
-        "MPCR_DISPATCH_ROLE={dispatch_role} restricts this executor to `mpcr reviewer update` and `mpcr reviewer note` only"
-    ))
+    enforce_worker_identity_binding(command)?;
+    Ok(())
+}
+
+fn worker_mode_env_active() -> bool {
+    std::env::var("MPCR_DISPATCH_ROLE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some()
+        || std::env::var("MPCR_APPLICATOR_ROLE")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_some()
+}
+
+/// Validates that CLI-supplied `--reviewer-id` and `--session-id` match the
+/// worker identity declared via `MPCR_REVIEWER_ID` / `MPCR_SESSION_ID`.
+///
+/// Only enforced when both the environment variable AND the CLI flag are
+/// present — a `None` CLI flag means "use env default" and is always allowed.
+///
+/// # Arguments
+/// * `command` - The parsed CLI command to inspect for identity fields.
+///
+/// # Returns
+/// * `Ok(())` when no mismatch is detected.
+/// * `Err` with a descriptive message when a provided CLI id contradicts the env.
+///
+/// # Examples
+/// ```no_run
+/// # // Conceptual usage — called internally by enforce_worker_mode_restrictions.
+/// # // enforce_worker_identity_binding(&command)?;
+/// ```
+fn enforce_worker_identity_binding(command: &Commands) -> anyhow::Result<()> {
+    let env_reviewer_id = std::env::var("MPCR_REVIEWER_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let env_session_id = std::env::var("MPCR_SESSION_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+
+    // Worker mode requires identity binding — fail fast if role is set but IDs are missing.
+    if worker_mode_env_active() {
+        if env_reviewer_id.is_none() {
+            return Err(anyhow::anyhow!(
+                "worker mode requires MPCR_REVIEWER_ID to be set"
+            ));
+        }
+        if env_session_id.is_none() {
+            return Err(anyhow::anyhow!(
+                "worker mode requires MPCR_SESSION_ID to be set"
+            ));
+        }
+    }
+
+    let (cmd_reviewer_id, cmd_session_id) = extract_identity_fields(command);
+
+    if let (Some(provided), Some(expected)) = (cmd_reviewer_id, env_reviewer_id.as_deref()) {
+        if provided != expected {
+            return Err(anyhow::anyhow!(
+                "worker identity mismatch: --reviewer-id {provided} does not match MPCR_REVIEWER_ID={expected}"
+            ));
+        }
+    }
+
+    if let (Some(provided), Some(expected)) = (cmd_session_id, env_session_id.as_deref()) {
+        if provided != expected {
+            return Err(anyhow::anyhow!(
+                "worker identity mismatch: --session-id {provided} does not match MPCR_SESSION_ID={expected}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Extracts optional `reviewer_id` and `session_id` references from the given
+/// command variant, returning `(Option<&str>, Option<&str>)`.
+///
+/// Only the command variants reachable under worker-mode dispatch
+/// (`ReviewerCommands::Update`, `ReviewerCommands::Note`,
+/// `ApplicatorCommands::Note`, `ApplicatorCommands::SetStatus`) carry identity
+/// fields. All other variants return `(None, None)`.
+///
+/// # Arguments
+/// * `command` - The parsed top-level CLI command.
+///
+/// # Returns
+/// A tuple of `(reviewer_id, session_id)` as optional string slices.
+fn extract_identity_fields(command: &Commands) -> (Option<&str>, Option<&str>) {
+    match command {
+        Commands::Reviewer { command: sub } => match sub {
+            ReviewerCommands::Update {
+                reviewer_id,
+                session_id,
+                ..
+            }
+            | ReviewerCommands::Note {
+                reviewer_id,
+                session_id,
+                ..
+            } => (reviewer_id.as_deref(), session_id.as_deref()),
+            ReviewerCommands::Register { .. }
+            | ReviewerCommands::SpawnChildren { .. }
+            | ReviewerCommands::CloseChildren { .. }
+            | ReviewerCommands::CompleteChild { .. }
+            | ReviewerCommands::Finalize { .. } => (None, None),
+        },
+        Commands::Applicator { command: sub } => match sub {
+            ApplicatorCommands::Note {
+                reviewer_id,
+                session_id,
+                ..
+            }
+            | ApplicatorCommands::SetStatus {
+                reviewer_id,
+                session_id,
+                ..
+            } => (reviewer_id.as_deref(), session_id.as_deref()),
+            ApplicatorCommands::Wait { .. } => (None, None),
+        },
+        _ => (None, None),
+    }
+}
+
+/// Extracts the optional `session_dir` from the `SessionDirArgs` embedded in
+/// any command variant that carries one.  Returns `None` for variants without
+/// a session-dir field.
+fn extract_session_dir_field(command: &Commands) -> Option<&Path> {
+    let args: Option<&SessionDirArgs> = match command {
+        Commands::Reviewer { command: sub } => match sub {
+            ReviewerCommands::Register { session, .. }
+            | ReviewerCommands::SpawnChildren { session, .. }
+            | ReviewerCommands::CloseChildren { session, .. }
+            | ReviewerCommands::CompleteChild { session, .. }
+            | ReviewerCommands::Update { session, .. }
+            | ReviewerCommands::Finalize { session, .. }
+            | ReviewerCommands::Note { session, .. } => Some(session),
+        },
+        Commands::Applicator { command: sub } => match sub {
+            ApplicatorCommands::SetStatus { session, .. }
+            | ApplicatorCommands::Note { session, .. }
+            | ApplicatorCommands::Wait { session, .. } => Some(session),
+        },
+        Commands::Lock { command: sub } => match sub {
+            LockCommands::Acquire { session, .. } | LockCommands::Release { session, .. } => {
+                Some(session)
+            }
+        },
+        Commands::Session { command: sub } => match sub {
+            SessionCommands::Show { session, .. } | SessionCommands::Cleanup { session, .. } => {
+                Some(session)
+            }
+            SessionCommands::Reports { .. } => None,
+        },
+        _ => None,
+    };
+    args.and_then(|a| a.session_dir.as_deref())
+}
+
+/// Ensures that when running in worker mode, any explicit `--session-dir` CLI
+/// argument matches the `MPCR_SESSION_DIR` environment variable.
+///
+/// If no env var is set or no CLI flag is provided, the check passes.
+fn enforce_worker_session_dir_binding(command: &Commands) -> anyhow::Result<()> {
+    if !worker_mode_env_active() {
+        return Ok(());
+    }
+    let env_session_dir = std::env::var("MPCR_SESSION_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let Some(env_session_dir) = env_session_dir else {
+        return Err(anyhow::anyhow!(
+            "worker mode requires MPCR_SESSION_DIR to be set"
+        ));
+    };
+    let cmd_session_dir = extract_session_dir_field(command);
+    let env_path = std::path::PathBuf::from(&env_session_dir);
+    match cmd_session_dir {
+        Some(provided) => {
+            let canonical_provided = provided
+                .canonicalize()
+                .map_or_else(|_| provided.to_path_buf(), std::convert::identity);
+            let canonical_env = env_path
+                .canonicalize()
+                .map_or_else(|_| env_path.clone(), std::convert::identity);
+            if canonical_provided != canonical_env {
+                return Err(anyhow::anyhow!(
+                    "worker mode: --session-dir {} does not match MPCR_SESSION_DIR={}",
+                    provided.display(),
+                    env_session_dir,
+                ));
+            }
+        }
+        None => {
+            if !env_path.is_dir() {
+                return Err(anyhow::anyhow!(
+                    "worker mode: MPCR_SESSION_DIR={env_session_dir} is not a valid directory",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn resolve_session_input(
@@ -1548,6 +1943,7 @@ fn resolve_session_input_from_cwd(
     default_date: Date,
     cwd: &Path,
 ) -> anyhow::Result<ResolvedSessionInput> {
+    let worker_mode = worker_mode_env_active();
     let repo_root = args
         .repo_root
         .clone()
@@ -1566,6 +1962,7 @@ fn resolve_session_input_from_cwd(
     let session_dir = args
         .session_dir
         .clone()
+        .or_else(|| opt_env_pathbuf(worker_mode, "MPCR_SESSION_DIR"))
         .or_else(|| opt_env_pathbuf(use_env, "MPCR_SESSION_DIR"))
         .map_or_else(
             || mpcr::paths::session_paths(&repo_root, session_date).session_dir,
@@ -1816,9 +2213,11 @@ fn wait_for_reviews(
     session_dir: &Path,
     target_ref: Option<&str>,
     session_id: Option<&str>,
+    timeout_secs: u64,
 ) -> anyhow::Result<()> {
     let mut delay = std::time::Duration::from_secs(1);
     let max_delay = std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let session = SessionLocator::new(session_dir.to_path_buf());
     let should_wait_for_session = target_ref.is_some() || session_id.is_some();
 
@@ -1830,6 +2229,11 @@ fn wait_for_reviews(
     }
 
     loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "timed out after {timeout_secs}s waiting for reviews to reach terminal status"
+            ));
+        }
         if !session.session_file().exists() {
             if !should_wait_for_session {
                 return Ok(());
@@ -1843,7 +2247,8 @@ fn wait_for_reviews(
             .with_context(|| format!("read session file under {}", session_dir.display()))?;
 
         let mut has_pending = false;
-        for r in session_data.reviews {
+        let mut matched_any = false;
+        for r in &session_data.reviews {
             if let Some(tr) = target_ref {
                 if r.target_ref != tr {
                     continue;
@@ -1854,10 +2259,17 @@ fn wait_for_reviews(
                     continue;
                 }
             }
+            matched_any = true;
             if !r.status.is_terminal() {
                 has_pending = true;
                 break;
             }
+        }
+
+        if !matched_any && should_wait_for_session && session_data.reviews.is_empty() {
+            std::thread::sleep(delay);
+            delay = std::cmp::min(delay.saturating_mul(2), max_delay);
+            continue;
         }
 
         if !has_pending {
@@ -1923,6 +2335,7 @@ mod tests {
             report_file: Some("report.md".to_string()),
             notes: Vec::new(),
             child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
         };
         let session = SessionFile {
             schema_version: "1.1.0".to_string(),
@@ -1930,11 +2343,12 @@ mod tests {
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
+            extra: serde_json::Map::new(),
         };
         let body = serde_json::to_string_pretty(&session)? + "\n";
         fs::write(session_dir.join("_session.json"), body)?;
 
-        wait_for_reviews(&session_dir, None, None)?;
+        wait_for_reviews(&session_dir, None, None, 60)?;
         Ok(())
     }
 

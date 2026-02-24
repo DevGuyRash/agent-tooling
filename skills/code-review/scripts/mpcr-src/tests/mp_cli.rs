@@ -81,6 +81,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: None,
         notes: vec![note],
         child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
     };
 
     let blocked = ReviewEntry {
@@ -99,6 +100,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: None,
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
     };
 
     let finished = ReviewEntry {
@@ -122,6 +124,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
         report_file: Some("12-00-00-000_refs_heads_main_feedface.md".to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
     };
 
     SessionFile {
@@ -134,6 +137,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
             "feedface".to_string(),
         ],
         reviews: vec![open, blocked, finished],
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -144,6 +148,7 @@ fn empty_session(session_dir: &Path) -> SessionFile {
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: Vec::new(),
         reviews: Vec::new(),
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -169,7 +174,9 @@ fn session_without_notes(session_dir: &Path) -> SessionFile {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
         }],
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -456,6 +463,7 @@ fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Re
         report_file: Some(parent_report.to_string()),
         notes: Vec::new(),
         child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
     };
     let mut child = parent.clone();
     child.reviewer_id = "cafe1234".to_string();
@@ -478,6 +486,7 @@ fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Re
                 grandchild.reviewer_id.clone(),
             ],
             reviews: vec![parent, child, grandchild],
+            extra: serde_json::Map::new(),
         },
     )?;
 
@@ -1232,6 +1241,57 @@ fn reviewer_update_does_not_read_env_without_use_env() -> anyhow::Result<()> {
     ensure!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     ensure!(stderr.contains("--reviewer-id"));
+    Ok(())
+}
+
+#[test]
+fn reviewer_update_does_not_use_session_dir_env_without_use_env() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "a1b2c3d4",
+        "--session-id",
+        "s1e2s3s4",
+    ])?;
+    let env_session_dir = json_str(&out, "session_dir")?.to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--reviewer-id",
+            "a1b2c3d4",
+            "--session-id",
+            "s1e2s3s4",
+            "--status",
+            "IN_PROGRESS",
+            "--phase",
+            "DOMAIN_COVERAGE",
+            "--json",
+        ])
+        .env("MPCR_SESSION_DIR", &env_session_dir)
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "MPCR_SESSION_DIR should be ignored without --use-env"
+    );
+
+    let session = read_session_json(Path::new(&env_session_dir))?;
+    let entry = find_review(&session, "a1b2c3d4", "s1e2s3s4")?;
+    ensure!(
+        json_str(entry, "status")? == "INITIALIZING",
+        "entry should remain unchanged when env session-dir is ignored"
+    );
     Ok(())
 }
 
@@ -2212,11 +2272,11 @@ fn worker_dispatch_role_blocks_non_progress_commands() -> anyhow::Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
         .arg("id")
         .arg("id8")
-        .env("MPCR_DISPATCH_ROLE", "red-team")
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
         .output()?;
     ensure!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    ensure!(stderr.contains("MPCR_DISPATCH_ROLE=red-team"));
+    ensure!(stderr.contains("MPCR_DISPATCH_ROLE=security-adversary"));
     Ok(())
 }
 
@@ -2253,7 +2313,10 @@ fn worker_dispatch_role_allows_reviewer_update() -> anyhow::Result<()> {
             "--status",
             "IN_PROGRESS",
         ])
-        .env("MPCR_DISPATCH_ROLE", "red-team")
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
+        .env("MPCR_REVIEWER_ID", "deadbeef")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .env("MPCR_SESSION_DIR", &session_dir)
         .output()?;
     ensure!(output.status.success());
     Ok(())
@@ -2407,7 +2470,9 @@ fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
             report_file: None,
             notes: Vec::new(),
             child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
         }],
+        extra: serde_json::Map::new(),
     };
     write_session_file(&session_dir, &session)?;
 
@@ -3196,6 +3261,9 @@ fn protocol_reviewer_all_phases() -> anyhow::Result<()> {
         "ADVERSARIAL_PROOFS",
         "SYNTHESIS",
         "REPORT_WRITING",
+        "OVERENGINEERING_GUARD",
+        "COMPLEXITY_ANALYSIS",
+        "SHIP_READINESS",
     ];
     for phase in phases {
         let out = run_protocol(&["protocol", "reviewer", "--phase", phase])?;
@@ -3260,6 +3328,23 @@ fn protocol_report_template_all_scales() -> anyhow::Result<()> {
         let content = json_str(&out, "content")?;
         ensure!(content.contains("Verdict"), "missing Verdict for {scale}");
         ensure!(content.contains("Findings"), "missing Findings for {scale}");
+        ensure!(
+            content.contains("Defended"),
+            "missing defended proofs section for {scale}"
+        );
+        ensure!(
+            content.contains("Residual Risk") || content.contains("Risk"),
+            "missing residual risk section for {scale}"
+        );
+    }
+
+    for scale in ["standard", "full"] {
+        let out = run_protocol(&["protocol", "report-template", "--scale", scale])?;
+        let content = json_str(&out, "content")?;
+        ensure!(
+            content.contains("| Domain"),
+            "missing domain ledger table for {scale}"
+        );
     }
     Ok(())
 }
@@ -3273,16 +3358,55 @@ fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
 
 #[test]
 fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
-    for role in ["scope-mapper", "red-team", "systems-auditor"] {
+    for role in [
+        "architecture-critic",
+        "contract-guardian",
+        "data-integrity-prover",
+        "error-path-tracer",
+        "security-adversary",
+        "concurrency-prover",
+        "performance-profiler",
+        "observability-oncall",
+        "test-strategist",
+        "docs-consumer",
+        "dependency-auditor",
+        "supply-chain-auditor",
+        "auth-access-prover",
+        "crypto-secrets-auditor",
+        "injection-hunter",
+        "infra-runtime-auditor",
+        "data-privacy-guardian",
+        "domain-specialist",
+        "fresh-eyes",
+        "holistic-integrator",
+        "applicator-worker",
+        "applicator-verifier",
+        "complexity-analyst",
+        "overengineering-guard",
+        "ship-readiness-assessor",
+    ] {
         let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
         let content = json_str(&out, "content")?;
+        ensure!(!content.is_empty(), "empty dispatch content for {role}");
         ensure!(
-            content.contains("Proof Packet"),
-            "missing Proof Packet for {role}"
+            content.contains("MPCR_DISPATCH_ROLE=") || content.contains("MPCR_APPLICATOR_ROLE="),
+            "dispatch content for {role} missing role identity env var"
         );
         ensure!(
-            content.contains("read-only"),
-            "missing read-only constraint for {role}"
+            content.contains("## Proof Packet") || content.contains("## Output"),
+            "dispatch content for {role} missing output format section"
+        );
+        ensure!(
+            content.contains("MPCR_REVIEWER_ID="),
+            "dispatch content for {role} missing MPCR_REVIEWER_ID binding"
+        );
+        ensure!(
+            content.contains("MPCR_SESSION_ID="),
+            "dispatch content for {role} missing MPCR_SESSION_ID binding"
+        );
+        ensure!(
+            content.contains("MPCR_SESSION_DIR="),
+            "dispatch content for {role} missing MPCR_SESSION_DIR binding"
         );
     }
     Ok(())
@@ -3301,8 +3425,8 @@ fn protocol_list_json() -> anyhow::Result<()> {
     let entries = out
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("list output was not an array"))?;
-    // At least: 6 reviewer + 4 applicator + 2 orchestrator + 3 templates + 3 dispatch = 18
-    ensure!(entries.len() >= 18, "expected >= 18, got {}", entries.len());
+    // Includes reviewer/applicator/session phases plus orchestrator, fullcycle, domains, templates, and dispatch roles.
+    ensure!(entries.len() >= 40, "expected >= 40, got {}", entries.len());
     Ok(())
 }
 
@@ -3312,8 +3436,10 @@ fn protocol_list_text_output() -> anyhow::Result<()> {
     ensure!(out.contains("reviewer"));
     ensure!(out.contains("applicator"));
     ensure!(out.contains("orchestrator"));
+    ensure!(out.contains("fullcycle"));
     ensure!(out.contains("report-template"));
     ensure!(out.contains("dispatch"));
+    ensure!(out.contains("session"));
     Ok(())
 }
 
@@ -3323,5 +3449,754 @@ fn protocol_reviewer_text_output() -> anyhow::Result<()> {
     // Text mode should output content directly (no JSON envelope)
     ensure!(out.contains("change inventory"));
     ensure!(!out.contains("\"title\""));
+    Ok(())
+}
+
+// ── Session cleanup tests ────────────────────────────────────────────────────
+
+#[test]
+fn cleanup_dry_run_does_not_modify_session() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+        "--dry-run",
+    ])?;
+
+    ensure!(json_bool(&result, "dry_run")?, "expected dry_run=true");
+    ensure!(
+        json_u64(&result, "matched")? > 0,
+        "expected at least one match"
+    );
+    ensure!(json_u64(&result, "purged")? == 0, "expected purged=0");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 3, "session should be unmodified");
+    Ok(())
+}
+
+#[test]
+fn cleanup_purges_by_reviewer_id() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+    ])?;
+
+    ensure!(!json_bool(&result, "dry_run")?, "expected dry_run=false");
+    ensure!(json_u64(&result, "purged")? == 1, "expected purged=1");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "one entry should be removed");
+    ensure!(
+        !reviews
+            .iter()
+            .filter_map(|r| r.get("reviewer_id").and_then(Value::as_str))
+            .any(|id| id == "feedface"),
+        "feedface should be purged"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_purges_children_with_include_children() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let mut session = sample_session(session_dir);
+
+    let child = ReviewEntry {
+        reviewer_id: "ch1ld001".to_string(),
+        session_id: "sess0001".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::Finished,
+        parent_id: Some("deadbeef".to_string()),
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: Some("2026-01-11T01:30:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::Approve),
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+    session.reviewers.push("ch1ld001".to_string());
+    session.reviews.push(child);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "deadbeef",
+        "--include-children",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "purged")? == 2,
+        "expected parent + child purged"
+    );
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "parent and child should be removed");
+    Ok(())
+}
+
+#[test]
+fn cleanup_deletes_report_files() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(&report_path, "# Test report")?;
+    ensure!(report_path.exists(), "report file should exist");
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+        "--delete-report-files",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "files_deleted")? == 1,
+        "expected 1 file deleted"
+    );
+    ensure!(!report_path.exists(), "report file should be deleted");
+    Ok(())
+}
+
+#[test]
+fn cleanup_does_not_trust_persisted_repo_root_for_absolute_report_paths() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+
+    let outside_report = tmp.path().join("outside-report.md");
+    fs::write(&outside_report, "# outside report")?;
+    ensure!(
+        outside_report.exists(),
+        "outside report should exist before cleanup"
+    );
+
+    let mut session = sample_session(&session_dir);
+    session.repo_root = tmp.path().to_string_lossy().to_string();
+    if let Some(review) = session
+        .reviews
+        .iter_mut()
+        .find(|review| review.reviewer_id == "feedface")
+    {
+        review.report_file = Some(outside_report.to_string_lossy().to_string());
+    }
+    write_session_file(&session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+        "--delete-report-files",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "files_deleted")? == 0,
+        "cleanup should not delete files outside trusted runtime repo root"
+    );
+    ensure!(
+        outside_report.exists(),
+        "outside report should not be deleted based on persisted repo_root"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_deletes_repo_relative_report_with_explicit_session_dir() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let foreign_repo_root = tmp.path().join("foreign-repo");
+    let session_dir = foreign_repo_root
+        .join(".local")
+        .join("reports")
+        .join("code_reviews")
+        .join("2026-01-11");
+    fs::create_dir_all(&session_dir)?;
+
+    let mut session = sample_session(&session_dir);
+    let report_rel = ".local/reports/code_reviews/2026-01-11/foreign-report.md";
+    if let Some(review) = session
+        .reviews
+        .iter_mut()
+        .find(|review| review.reviewer_id == "feedface")
+    {
+        review.report_file = Some(report_rel.to_string());
+    }
+    write_session_file(&session_dir, &session)?;
+
+    let report_path = foreign_repo_root.join(report_rel);
+    if let Some(parent) = report_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&report_path, "# foreign report")?;
+    ensure!(
+        report_path.exists(),
+        "foreign report should exist before cleanup"
+    );
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-id",
+        "feedface",
+        "--delete-report-files",
+    ])?;
+
+    ensure!(
+        json_u64(&result, "files_deleted")? == 1,
+        "cleanup should delete the report under the session-dir repo root"
+    );
+    ensure!(
+        !report_path.exists(),
+        "report should be deleted when session-dir points at another repo"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_filters_by_before_timestamp() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let mut session = sample_session(session_dir);
+
+    session
+        .reviews
+        .get_mut(0)
+        .ok_or_else(|| anyhow::anyhow!("missing review 0"))?
+        .started_at = "2026-01-10T00:00:00Z".to_string();
+    session
+        .reviews
+        .get_mut(1)
+        .ok_or_else(|| anyhow::anyhow!("missing review 1"))?
+        .started_at = "2026-01-12T00:00:00Z".to_string();
+    session
+        .reviews
+        .get_mut(2)
+        .ok_or_else(|| anyhow::anyhow!("missing review 2"))?
+        .started_at = "2026-01-14T00:00:00Z".to_string();
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--before",
+        "2026-01-11T00:00:00Z",
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 1, "expected 1 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "one entry should be removed");
+    Ok(())
+}
+
+#[test]
+fn cleanup_filters_by_reviewer_status() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+        "--reviewer-status",
+        "BLOCKED",
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 1, "expected 1 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.len() == 2, "blocked entry should be removed");
+    ensure!(
+        !reviews
+            .iter()
+            .filter_map(|r| r.get("reviewer_id").and_then(Value::as_str))
+            .any(|id| id == "cafebabe"),
+        "cafebabe should be purged"
+    );
+    Ok(())
+}
+
+#[test]
+fn cleanup_no_filters_purges_all() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let session = sample_session(session_dir);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?,
+    ])?;
+
+    ensure!(json_u64(&result, "purged")? == 3, "expected all 3 purged");
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    ensure!(reviews.is_empty(), "all entries should be removed");
+    let reviewers = json_array(&after, "reviewers")?;
+    ensure!(reviewers.is_empty(), "reviewers list should be empty");
+    Ok(())
+}
+
+#[test]
+fn protocol_session_cleanup_phase() -> anyhow::Result<()> {
+    let result = run_cmd_json(&["protocol", "session", "--phase", "CLEANUP"])?;
+    let content = json_str(&result, "content")?;
+    ensure!(
+        content.contains("mpcr session cleanup"),
+        "cleanup guidance should mention the command"
+    );
+    ensure!(
+        content.contains("--dry-run"),
+        "cleanup guidance should mention dry-run"
+    );
+    Ok(())
+}
+
+// ── Worker boundary negative tests ──────────────────────────────────────────
+
+#[test]
+fn worker_dispatch_role_rejects_missing_reviewer_id() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--session-dir",
+            "/tmp",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--status",
+            "IN_PROGRESS",
+        ])
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail without MPCR_REVIEWER_ID"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        stderr.contains("MPCR_REVIEWER_ID"),
+        "error should mention MPCR_REVIEWER_ID"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_dispatch_role_rejects_missing_session_id() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--session-dir",
+            "/tmp",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--status",
+            "IN_PROGRESS",
+        ])
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
+        .env("MPCR_REVIEWER_ID", "deadbeef")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail without MPCR_SESSION_ID"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        stderr.contains("MPCR_SESSION_ID"),
+        "error should mention MPCR_SESSION_ID"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_dispatch_role_rejects_mismatched_reviewer_id() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--session-dir",
+            "/tmp",
+            "--reviewer-id",
+            "aaaaaaaa",
+            "--session-id",
+            "sess0001",
+            "--status",
+            "IN_PROGRESS",
+        ])
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
+        .env("MPCR_REVIEWER_ID", "bbbbbbbb")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail with mismatched reviewer_id"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        stderr.contains("identity mismatch"),
+        "error should mention identity mismatch"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_dispatch_role_rejects_session_dir_mismatch() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "reviewer",
+            "update",
+            "--session-dir",
+            "/tmp/other",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--status",
+            "IN_PROGRESS",
+        ])
+        .env("MPCR_DISPATCH_ROLE", "security-adversary")
+        .env("MPCR_REVIEWER_ID", "deadbeef")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .env("MPCR_SESSION_DIR", "/tmp/correct")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail with mismatched session-dir"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        stderr.contains("MPCR_SESSION_DIR"),
+        "error should mention MPCR_SESSION_DIR"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_applicator_role_rejects_missing_reviewer_id() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "applicator",
+            "set-status",
+            "--session-dir",
+            "/tmp",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--initiator-status",
+            "REVIEWED",
+        ])
+        .env("MPCR_APPLICATOR_ROLE", "applicator-worker")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .env("MPCR_SESSION_DIR", "/tmp")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail without MPCR_REVIEWER_ID in applicator worker mode"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("MPCR_REVIEWER_ID"));
+    Ok(())
+}
+
+#[test]
+fn worker_applicator_role_rejects_missing_session_dir_binding() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "applicator",
+            "set-status",
+            "--session-dir",
+            "/tmp",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--initiator-status",
+            "REVIEWED",
+        ])
+        .env("MPCR_APPLICATOR_ROLE", "applicator-worker")
+        .env("MPCR_REVIEWER_ID", "deadbeef")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "should fail without MPCR_SESSION_DIR in applicator worker mode"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("MPCR_SESSION_DIR"));
+    Ok(())
+}
+
+// ── Terminal-parent spawn rejection test ────────────────────────────────────
+
+#[test]
+fn spawn_children_rejects_terminal_parent() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let parent = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+    let session_dir = json_str(&parent, "session_dir")?.to_string();
+
+    let report_path = repo_root.path().join("report.md");
+    std::fs::write(&report_path, "# Test Report")?;
+    let report_path_str = report_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 report path"))?;
+
+    run_cmd_json(&[
+        "reviewer",
+        "finalize",
+        "--session-dir",
+        &session_dir,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--verdict",
+        "APPROVE",
+        "--report-file",
+        report_path_str,
+        "--blocker",
+        "0",
+        "--major",
+        "0",
+        "--minor",
+        "0",
+        "--nit",
+        "0",
+    ])?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "spawn-children",
+        "--target-ref",
+        "refs/heads/main",
+        "--session-dir",
+        &session_dir,
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "deadbeef",
+        "--count",
+        "1",
+    ])?;
+    ensure!(
+        stderr.contains("terminal"),
+        "should reject spawn on terminal parent"
+    );
+    Ok(())
+}
+
+// ── Cross-session include-children purge test ──────────────────────────────
+
+#[test]
+#[allow(clippy::too_many_lines)] // Reason: scenario intentionally covers multi-session parent/child permutations end-to-end.
+fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path();
+    let mut session = sample_session(session_dir);
+
+    let child_sess1 = ReviewEntry {
+        reviewer_id: "ch1ld001".to_string(),
+        session_id: "sess0001".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::InProgress,
+        parent_id: Some("deadbeef".to_string()),
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: None,
+        current_phase: Some(ReviewPhase::Ingestion),
+        verdict: None,
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+
+    let parent_sess2 = ReviewEntry {
+        reviewer_id: "deadbeef".to_string(),
+        session_id: "sess9999".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::InProgress,
+        parent_id: None,
+        started_at: "2026-01-11T00:00:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: None,
+        current_phase: Some(ReviewPhase::Ingestion),
+        verdict: None,
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+
+    let child_sess2 = ReviewEntry {
+        reviewer_id: "ch1ld002".to_string(),
+        session_id: "sess9999".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Requesting,
+        status: ReviewerStatus::InProgress,
+        parent_id: Some("deadbeef".to_string()),
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T01:00:00Z".to_string(),
+        finished_at: None,
+        current_phase: Some(ReviewPhase::Ingestion),
+        verdict: None,
+        counts: SeverityCounts::zero(),
+        report_file: None,
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+
+    session.reviewers.push("ch1ld001".to_string());
+    session.reviews.push(child_sess1);
+    session.reviewers.push("deadbeef".to_string());
+    session.reviews.push(parent_sess2);
+    session.reviewers.push("ch1ld002".to_string());
+    session.reviews.push(child_sess2);
+    write_session_file(session_dir, &session)?;
+
+    let result = run_cmd_json(&[
+        "session",
+        "cleanup",
+        "--session-dir",
+        session_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8"))?,
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--include-children",
+    ])?;
+
+    let purged = json_u64(&result, "purged")?;
+    ensure!(
+        purged == 2,
+        "expected parent + its child purged, got {purged}"
+    );
+
+    let after = read_session_json(session_dir)?;
+    let reviews = json_array(&after, "reviews")?;
+    let top_level_ids: Vec<&str> = reviews
+        .iter()
+        .filter_map(|r| r.get("reviewer_id").and_then(|v| v.as_str()))
+        .collect();
+    ensure!(
+        top_level_ids.contains(&"deadbeef"),
+        "parent from sess9999 should survive (different session_id)"
+    );
+    ensure!(
+        !top_level_ids.contains(&"ch1ld001"),
+        "child from sess0001 should be purged"
+    );
+
+    let deadbeef_review = reviews
+        .iter()
+        .find(|r| r.get("reviewer_id").and_then(|v| v.as_str()) == Some("deadbeef"))
+        .ok_or_else(|| anyhow::anyhow!("deadbeef/sess9999 missing"))?;
+    let children = deadbeef_review
+        .get("child_reviews")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("child_reviews missing"))?;
+    ensure!(
+        children
+            .iter()
+            .filter_map(|c| c.get("reviewer_id").and_then(|v| v.as_str()))
+            .any(|id| id == "ch1ld002"),
+        "child from sess9999 should survive as nested child"
+    );
     Ok(())
 }
