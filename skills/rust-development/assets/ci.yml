@@ -335,13 +335,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
           # Look for verify.sh in well-known skill locations
           verify_script=""
           for candidate in \
+            "$repo_root/.github/scripts/verify.sh" \
+            "$repo_root/scripts/verify.sh" \
             ".github/scripts/verify.sh" \
             "scripts/verify.sh" \
           ; do
-            if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            if [ -f "$candidate" ]; then
               verify_script="$candidate"
               break
             fi
@@ -351,7 +354,7 @@ jobs:
             exit 0
           fi
           echo "Running banned-pattern scan via $verify_script"
-          "$verify_script" 2>&1 | tee "$RUST_CI_DIAG_DIR/verify.log"
+          bash "$verify_script" 2>&1 | tee "$RUST_CI_DIAG_DIR/verify.log"
 
       - name: Install cargo-deny (optional; prebuilt)
         if: steps.cfg.outputs.run_deny == 'true' && steps.cfg.outputs.install_deny == 'true'

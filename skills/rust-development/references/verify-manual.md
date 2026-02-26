@@ -25,12 +25,18 @@ if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok
 
 # [lints] workspace = true in member crates (workspace only)
 if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
-  missing=""
-  for m in $(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml'); do
-    if grep -qF '[package]' "$m" 2>/dev/null && ! grep -qE '^\[lints\]' "$m" 2>/dev/null; then
-      missing="$missing $m"
+  missing=$(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' -print0 2>/dev/null | while IFS= read -r -d '' m; do
+    if grep -qF '[package]' "$m" 2>/dev/null; then
+      if ! awk '
+        BEGIN { in_lints = 0; ok = 0 }
+        /^\[/ { in_lints = ($0 == "[lints]") }
+        in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+        END { exit ok ? 0 : 1 }
+      ' "$m" 2>/dev/null; then
+        printf ' %s' "$m"
+      fi
     fi
-  done
+  done)
   if [ -z "$missing" ]; then echo "ok: all member crates inherit workspace lints"; else echo "WARN: missing [lints] workspace = true:$missing"; fi
 fi
 ```

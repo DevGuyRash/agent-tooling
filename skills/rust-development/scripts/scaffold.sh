@@ -131,11 +131,22 @@ fi
 
 ensure_within_workspace() {
   candidate="$1"
+  allow_git_root="${2:-0}"
   case "$candidate" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target escapes workspace root: $candidate" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$candidate" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target escapes allowed roots: $candidate" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target escapes workspace root: $candidate" >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -145,8 +156,18 @@ ensure_within_workspace() {
   case "$parent_real" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target parent resolves outside workspace root: $candidate" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$parent_real" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target parent resolves outside allowed roots: $candidate" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target parent resolves outside workspace root: $candidate" >&2
+        return 1
+      fi
       ;;
   esac
 }
@@ -158,6 +179,7 @@ safe_copy() {
   src="$1"
   dst="$2"
   label="$3"
+  allow_git_root="${4:-0}"
 
   if [ ! -f "$src" ]; then
     echo "  ✗ source not found: $src" >&2
@@ -169,7 +191,7 @@ safe_copy() {
     return 1
   fi
 
-  ensure_within_workspace "$dst" || return 1
+  ensure_within_workspace "$dst" "$allow_git_root" || return 1
   if [ -d "$dst" ]; then
     echo "  ✗ refusing to overwrite directory destination: $dst" >&2
     return 1
@@ -183,8 +205,18 @@ safe_copy() {
   case "$parent_before" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target parent resolves outside workspace root: $dst" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$parent_before" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target parent resolves outside allowed roots: $dst" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target parent resolves outside workspace root: $dst" >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -194,7 +226,7 @@ safe_copy() {
     return 1
   fi
 
-  ensure_within_workspace "$dst" || {
+  ensure_within_workspace "$dst" "$allow_git_root" || {
     rm -f -- "$tmp_dst"
     return 1
   }
@@ -477,11 +509,13 @@ if [ "$do_ci" -eq 1 ]; then
   safe_copy \
     "${assets_dir}/detect_rust_workspaces.py" \
     "${ci_base}/.github/scripts/detect_rust_workspaces.py" \
-    "detect_rust_workspaces.py"
+    "detect_rust_workspaces.py" \
+    "1"
   safe_copy \
     "${assets_dir}/ci.yml" \
     "${ci_base}/.github/workflows/ci.yml" \
-    "ci.yml"
+    "ci.yml" \
+    "1"
   echo ""
 fi
 

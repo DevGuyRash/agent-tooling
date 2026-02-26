@@ -326,11 +326,7 @@ echo ""
 _install_ok=1
 
 # Check 1: banned_family.rs test harness
-_found_banned=""
-for _bf in $(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' 2>/dev/null); do
-  _found_banned="$_bf"
-  break
-done
+_found_banned="$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit 2>/dev/null || true)"
 if [ -n "$_found_banned" ]; then
   pass "banned_family.rs installed: $_found_banned"
 else
@@ -377,14 +373,23 @@ fi
 
 # Check 4: [lints] workspace = true in member crates (workspace only)
 if grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
-  _members_missing_lints=""
-  for _member_toml in $(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' 2>/dev/null); do
-    if grep -qF '[package]' "$_member_toml" 2>/dev/null; then
-      if ! grep -qE '^\[lints\]' "$_member_toml" 2>/dev/null; then
-        _members_missing_lints="${_members_missing_lints} ${_member_toml}"
-      fi
-    fi
-  done
+  _members_missing_lints="$(
+    find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' \
+      -exec sh -c '
+        for _member_toml do
+          if grep -qF "[package]" "$_member_toml" 2>/dev/null; then
+            if ! awk '"'"'
+              BEGIN { in_lints = 0; ok = 0 }
+              /^\[/ { in_lints = ($0 == "[lints]") }
+              in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+              END { exit ok ? 0 : 1 }
+            '"'"' "$_member_toml" 2>/dev/null; then
+              printf " %s" "$_member_toml"
+            fi
+          fi
+        done
+      ' sh {} + 2>/dev/null
+  )"
   if [ -z "$_members_missing_lints" ]; then
     pass "all member crates inherit workspace lints"
   else
