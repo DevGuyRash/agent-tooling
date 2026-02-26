@@ -433,6 +433,10 @@ if [ "$do_clippy" -eq 1 ]; then
     _find_member_manifests | while IFS= read -r member_toml; do
       [ -f "$member_toml" ] || continue
       [ ! -L "$member_toml" ] || continue
+      if ! grep -qE '^[[:space:]]*\[package\][[:space:]]*$' "$member_toml" 2>/dev/null; then
+        echo "    ℹ skipping non-package manifest: $member_toml"
+        continue
+      fi
       if grep -qE '^\[lints\]' "$member_toml" 2>/dev/null; then
         echo "    ⚠ already has [lints]: $member_toml"
         continue
