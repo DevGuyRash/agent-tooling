@@ -110,7 +110,21 @@ echo "── 3. CRLF Line Ending Check ──"
 crlf_count=0
 crlf_critical=0
 
-while IFS= read -r file; do
+crlf_list=$(mktemp)
+script_list=$(mktemp)
+shebang_list=$(mktemp)
+cleanup_lists() {
+    rm -f "$crlf_list" "$script_list" "$shebang_list"
+}
+trap cleanup_lists EXIT INT TERM
+
+find "$SKILL_DIR" -type f \
+    -not -path '*/target/*' -not -path '*/.git/*' \
+    -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' \
+    -not -name '*.woff' -not -name '*.ttf' \
+    -print0 2>/dev/null > "$crlf_list"
+
+while IFS= read -r -d '' file; do
     if tr -d '\r' < "$file" | cmp -s - "$file"; then
         :
     else
@@ -144,13 +158,7 @@ while IFS= read -r file; do
         esac
         crlf_count=$((crlf_count + 1))
     fi
-done <<EOF
-$(find "$SKILL_DIR" -type f \
-    -not -path '*/target/*' -not -path '*/.git/*' \
-    -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' \
-    -not -name '*.woff' -not -name '*.ttf' \
-    2>/dev/null)
-EOF
+done < "$crlf_list"
 
 if [ "$crlf_count" -eq 0 ]; then
     echo "  ✓ No CRLF line endings detected"
@@ -171,7 +179,11 @@ echo "── 4. Script Permissions & Shebangs ──"
 script_count=0
 perm_issues=0
 
-while IFS= read -r file; do
+find "$SKILL_DIR" -type f \( -name '*.sh' -o -name '*.py' \) \
+    -not -path '*/target/*' -not -path '*/.git/*' \
+    -print0 2>/dev/null > "$script_list"
+
+while IFS= read -r -d '' file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
     script_count=$((script_count + 1))
@@ -194,13 +206,14 @@ while IFS= read -r file; do
     else
         echo "  ⚠ No shebang: $relpath"
     fi
-done <<EOF
-$(find "$SKILL_DIR" -type f \( -name '*.sh' -o -name '*.py' \) \
-    -not -path '*/target/*' -not -path '*/.git/*' 2>/dev/null)
-EOF
+done < "$script_list"
 
 # Also check files without extensions that have shebangs
-while IFS= read -r file; do
+find "$SKILL_DIR" -maxdepth 2 -type f ! -name '*.*' \
+    -not -path '*/target/*' -not -path '*/.git/*' \
+    -print0 2>/dev/null > "$shebang_list"
+
+while IFS= read -r -d '' file; do
     [ -z "$file" ] && continue
     if head -1 "$file" 2>/dev/null | grep -q '^#!/'; then
         relpath="${file#"$SKILL_DIR"/}"
@@ -218,10 +231,7 @@ while IFS= read -r file; do
             echo "  ✓ $relpath: $shebang"
         fi
     fi
-done <<EOF
-$(find "$SKILL_DIR" -maxdepth 2 -type f ! -name '*.*' \
-    -not -path '*/target/*' -not -path '*/.git/*' 2>/dev/null)
-EOF
+done < "$shebang_list"
 
 if [ "$script_count" -eq 0 ]; then
     echo "  (no scripts found)"

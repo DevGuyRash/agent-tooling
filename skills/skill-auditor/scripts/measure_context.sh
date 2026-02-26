@@ -79,7 +79,18 @@ printf "  %-45s %6s %8s %8s\n" "----" "-----" "-----" "-------"
 total_chars=0
 total_lines=0
 
-while IFS= read -r file; do
+doc_list=$(mktemp)
+toml_list=$(mktemp)
+cleanup_lists() {
+    rm -f "$doc_list" "$toml_list"
+}
+trap cleanup_lists EXIT INT TERM
+
+find "$SKILL_DIR" -type f -name '*.md' \
+    -not -path '*/target/*' -not -path '*/.git/*' \
+    -print0 2>/dev/null | sort -z > "$doc_list"
+
+while IFS= read -r -d '' file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
 
@@ -90,13 +101,14 @@ while IFS= read -r file; do
     printf "  %-45s %6d %8d %8d\n" "$relpath" "$lines" "$chars" "$tokens"
     total_chars=$((total_chars + chars))
     total_lines=$((total_lines + lines))
-done <<EOF
-$(find "$SKILL_DIR" -type f -name '*.md' \
-    -not -path '*/target/*' -not -path '*/.git/*' 2>/dev/null | sort)
-EOF
+done < "$doc_list"
 
 # Also measure TOML protocol files if they exist
-while IFS= read -r file; do
+find "$SKILL_DIR" -type f -name '*.toml' \
+    -not -path '*/target/*' -not -path '*/.git/*' \
+    -not -name 'Cargo.*' -print0 2>/dev/null | sort -z > "$toml_list"
+
+while IFS= read -r -d '' file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
 
@@ -107,11 +119,7 @@ while IFS= read -r file; do
     printf "  %-45s %6d %8d %8d\n" "$relpath" "$lines" "$chars" "$tokens"
     total_chars=$((total_chars + chars))
     total_lines=$((total_lines + lines))
-done <<EOF
-$(find "$SKILL_DIR" -type f -name '*.toml' \
-    -not -path '*/target/*' -not -path '*/.git/*' \
-    -not -name 'Cargo.*' 2>/dev/null | sort)
-EOF
+done < "$toml_list"
 
 printf "  %-45s %6s %8s %8s\n" "" "-----" "-----" "-------"
 printf "  %-45s %6d %8d %8d\n" "TOTAL (documents)" "$total_lines" "$total_chars" "$(( total_chars / 4 ))"
@@ -122,6 +130,11 @@ echo ""
 # 2. CLI protocol output measurements (if CLI provided)
 # ---------------------------------------------------------------------------
 if [ -n "$CLI_BIN" ]; then
+    resolved_cli=$(command -v "$CLI_BIN" 2>/dev/null || true)
+    if [ -n "$resolved_cli" ]; then
+        CLI_BIN="$resolved_cli"
+    fi
+
     if [ ! -x "$CLI_BIN" ]; then
         echo "── 2. CLI Protocol Outputs ──"
         echo "  ⚠ CLI binary not executable: $CLI_BIN"
@@ -146,9 +159,35 @@ if [ -n "$CLI_BIN" ]; then
         # Discover available subcommands from --help output.
         # This is generic — works with any CLI, not just mpcr.
         help_output=$("$CLI_BIN" --help 2>&1 || true)
-        subcmds=$(echo "$help_output" | \
-            awk '/^[[:space:]]+[a-z][-a-z0-9]*/ { print $1 }' | \
-            grep -v '^-' | sort -u || true)
+
+        extract_subcommands() {
+            awk '
+                BEGIN { in_commands = 0 }
+                {
+                    line = tolower($0)
+                    if (line ~ /^[[:space:]]*(available[[:space:]]+)?commands?:[[:space:]]*$/ ||
+                        line ~ /^[[:space:]]*(core|additional|management|utility|other)[[:space:]]+commands?:[[:space:]]*$/) {
+                        in_commands = 1
+                        next
+                    }
+
+                    if (in_commands && line ~ /^[[:space:]]*$/) {
+                        in_commands = 0
+                        next
+                    }
+
+                    if (in_commands && $0 ~ /^[[:space:]][[:space:]]+[a-z0-9][a-z0-9-]*/) {
+                        sub(/^[[:space:]]+/, "", $0)
+                        split($0, a, /[^a-z0-9-]/)
+                        if (a[1] != "" && a[1] !~ /^-/) {
+                            print a[1]
+                        }
+                    }
+                }
+            ' | sort -u
+        }
+
+        subcmds=$(printf '%s\n' "$help_output" | extract_subcommands || true)
 
         if [ -z "$subcmds" ]; then
             # Fallback: try the binary with no args
@@ -171,7 +210,7 @@ if [ -n "$CLI_BIN" ]; then
 
             # Skip commands that produce errors or empty output
             case "$exit_word" in
-                *error*|*Error*|*unknown*|*Unknown*|*Usage*|*usage*|"")
+                *error*|*Error*|*unknown*|*Unknown*|"")
                     continue
                     ;;
             esac
@@ -188,9 +227,7 @@ if [ -n "$CLI_BIN" ]; then
 
             # Probe one level deeper: try subcommand --help for sub-subcommands
             sub_help=$("$CLI_BIN" "$subcmd" --help 2>&1 || true)
-            sub_subcmds=$(echo "$sub_help" | \
-                awk '/^[[:space:]]+[a-z][-a-z0-9]*/ { print $1 }' | \
-                grep -v '^-' | sort -u || true)
+            sub_subcmds=$(printf '%s\n' "$sub_help" | extract_subcommands || true)
 
             for sub in $sub_subcmds; do
                 case "$CLI_MODE" in
@@ -203,7 +240,7 @@ if [ -n "$CLI_BIN" ]; then
                 esac
                 sub_first=$(echo "$sub_output" | head -1)
                 case "$sub_first" in
-                    *error*|*Error*|*unknown*|*Unknown*|*Usage*|*usage*|"")
+                    *error*|*Error*|*unknown*|*Unknown*|"")
                         continue
                         ;;
                 esac
