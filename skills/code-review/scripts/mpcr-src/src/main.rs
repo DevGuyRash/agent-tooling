@@ -8,7 +8,6 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
-use mpcr::{analyze, protocol};
 use mpcr::session::{
     append_note, close_child_reviews, collect_reports, finalize_review, load_session,
     purge_reviews, register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
@@ -18,6 +17,7 @@ use mpcr::session::{
     ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
     SpawnChildReviewersParams, UpdateReviewParams,
 };
+use mpcr::{analyze, protocol};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -1093,7 +1093,11 @@ enum AnalyzeCommands {
     },
     /// Run a single named check.
     Check {
-        #[arg(long, value_name = "CHECK", help = "Check name (dead-code, todos, long-functions, long-lines, unreachable, duplicates, complexity).")]
+        #[arg(
+            long,
+            value_name = "CHECK",
+            help = "Check name (dead-code, todos, long-functions, long-lines, unreachable, duplicates, complexity)."
+        )]
         name: String,
         #[arg(
             value_name = "FILE",
@@ -1774,26 +1778,34 @@ fn run() -> anyhow::Result<()> {
             AnalyzeCommands::Check { name, files } => {
                 let file_map = load_file_map(&files)?;
                 if name == "duplicates" {
-                    let report = analyze::run_all(&file_map)?;
+                    let duplicate_blocks = analyze::find_duplicate_blocks(&file_map);
                     if json {
-                        write_json(json_pretty, &report.duplicate_blocks)?;
+                        write_json(json_pretty, &duplicate_blocks)?;
                     } else {
-                        for dup in &report.duplicate_blocks {
-                            println!("Duplicate block ({} lines, {} locations):", dup.line_count, dup.locations.len());
+                        for dup in &duplicate_blocks {
+                            println!(
+                                "Duplicate block ({} lines, {} locations):",
+                                dup.line_count,
+                                dup.locations.len()
+                            );
                             for loc in &dup.locations {
                                 println!("  {}:{}", loc.file, loc.start_line);
                             }
                         }
                     }
                 } else if name == "complexity" {
-                    let report = analyze::run_all(&file_map)?;
+                    let complexity_hotspots = analyze::find_complexity_hotspots(&file_map);
                     if json {
-                        write_json(json_pretty, &report.complexity_hotspots)?;
+                        write_json(json_pretty, &complexity_hotspots)?;
                     } else {
-                        for spot in &report.complexity_hotspots {
+                        for spot in &complexity_hotspots {
                             println!(
                                 "{}:{} {} (nesting={}, branches={})",
-                                spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count
+                                spot.file,
+                                spot.start_line,
+                                spot.name_hint,
+                                spot.max_nesting,
+                                spot.branch_count
                             );
                         }
                     }
@@ -1842,7 +1854,10 @@ fn load_file_map(paths: &[PathBuf]) -> anyhow::Result<std::collections::HashMap<
 }
 
 fn print_analysis_text(report: &analyze::AnalysisReport) {
-    println!("Scanned {} files ({} lines)", report.files_scanned, report.total_lines);
+    println!(
+        "Scanned {} files ({} lines)",
+        report.files_scanned, report.total_lines
+    );
     if !report.findings.is_empty() {
         println!("\n--- Findings ({}) ---", report.findings.len());
         for f in &report.findings {
@@ -1850,29 +1865,43 @@ fn print_analysis_text(report: &analyze::AnalysisReport) {
         }
     }
     if !report.duplicate_blocks.is_empty() {
-        println!("\n--- Duplicate Blocks ({}) ---", report.duplicate_blocks.len());
+        println!(
+            "\n--- Duplicate Blocks ({}) ---",
+            report.duplicate_blocks.len()
+        );
         for dup in &report.duplicate_blocks {
-            println!("Block ({} lines, {} locations):", dup.line_count, dup.locations.len());
+            println!(
+                "Block ({} lines, {} locations):",
+                dup.line_count,
+                dup.locations.len()
+            );
             for loc in &dup.locations {
                 println!("  {}:{}", loc.file, loc.start_line);
             }
         }
     }
     if !report.complexity_hotspots.is_empty() {
-        println!("\n--- Complexity Hotspots ({}) ---", report.complexity_hotspots.len());
+        println!(
+            "\n--- Complexity Hotspots ({}) ---",
+            report.complexity_hotspots.len()
+        );
         for spot in &report.complexity_hotspots {
-            println!("  {}:{} {} (nesting={}, branches={})", spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count);
+            println!(
+                "  {}:{} {} (nesting={}, branches={})",
+                spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count
+            );
         }
     }
     if !report.dead_markers.is_empty() {
-        println!("\n--- Dead Code Markers ({}) ---", report.dead_markers.len());
+        println!(
+            "\n--- Dead Code Markers ({}) ---",
+            report.dead_markers.len()
+        );
         for d in &report.dead_markers {
             println!("  {}:{} — {}", d.file, d.line, d.detail);
         }
     }
 }
-
-
 
 fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     let dispatch_role = std::env::var("MPCR_DISPATCH_ROLE")
@@ -1895,11 +1924,12 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     let allowed = match (&dispatch_role, &applicator_role) {
         (Some(_), _) => matches!(
             command,
-            Commands::Reviewer {
-                command: ReviewerCommands::Update { .. }
-                    | ReviewerCommands::Note { .. }
-                    | ReviewerCommands::CompleteChild { .. }
-            }
+            Commands::Analyze { .. }
+                | Commands::Reviewer {
+                    command: ReviewerCommands::Update { .. }
+                        | ReviewerCommands::Note { .. }
+                        | ReviewerCommands::CompleteChild { .. }
+                }
         ),
         (None, Some(_)) => matches!(
             command,
@@ -1911,7 +1941,7 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     };
     if !allowed {
         let allowed_cmds = if dispatch_role.is_some() {
-            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, and `mpcr protocol *`"
+            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, `mpcr analyze *`, and `mpcr protocol *`"
         } else {
             "`mpcr applicator note`, `mpcr applicator set-status`, and `mpcr protocol *`"
         };

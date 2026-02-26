@@ -145,13 +145,28 @@ pub fn run_check(
 /// List available check names.
 pub fn available_checks() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("dead-code", "Detect dead code markers (#[dead_code], #if 0, if False, etc.)"),
+        (
+            "dead-code",
+            "Detect dead code markers (#[dead_code], #if 0, if False, etc.)",
+        ),
         ("todos", "Surface TODO/FIXME/HACK/XXX/SAFETY annotations"),
-        ("long-functions", "Flag functions/methods exceeding 60 lines"),
+        (
+            "long-functions",
+            "Flag functions/methods exceeding 60 lines",
+        ),
         ("long-lines", "Flag lines exceeding 120 characters"),
-        ("unreachable", "Detect unreachable code markers (unreachable!, panic!, todo!)"),
-        ("duplicates", "Find duplicate text blocks (≥4 lines) across files"),
-        ("complexity", "Identify high-nesting/high-branching hotspots"),
+        (
+            "unreachable",
+            "Detect unreachable code markers (unreachable!, panic!, todo!)",
+        ),
+        (
+            "duplicates",
+            "Find duplicate text blocks (≥4 lines) across files",
+        ),
+        (
+            "complexity",
+            "Identify high-nesting/high-branching hotspots",
+        ),
     ]
 }
 
@@ -231,12 +246,21 @@ fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
 fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let threshold = 60;
     let fn_patterns = [
-        "fn ", "def ", "func ", "function ", "sub ", "method ",
-        "public ", "private ", "protected ", "static ",
+        "fn ",
+        "def ",
+        "func ",
+        "function ",
+        "sub ",
+        "method ",
+        "public ",
+        "private ",
+        "protected ",
+        "static ",
     ];
     let mut func_start: Option<(usize, String)> = None;
     let mut brace_depth: i32 = 0;
     let mut indent_start: Option<usize> = None;
+    let mut saw_open_brace = false;
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -252,20 +276,27 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
             func_start = Some((idx + 1, name));
             brace_depth = 0;
             indent_start = Some(line.len() - line.trim_start().len());
+            saw_open_brace = false;
         }
 
-        brace_depth += trimmed.chars().filter(|&c| c == '{').count() as i32;
-        brace_depth -= trimmed.chars().filter(|&c| c == '}').count() as i32;
+        let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
+        let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
+        if open_braces > 0 {
+            saw_open_brace = true;
+        }
+        brace_depth += open_braces;
+        brace_depth -= close_braces;
 
         if let Some((start, ref name)) = func_start {
             let func_len = idx + 1 - start;
-            let at_end = brace_depth <= 0 && func_len > 1;
-            let at_dedent = indent_start.map_or(false, |is| {
-                let current_indent = line.len() - line.trim_start().len();
-                current_indent <= is && func_len > 1 && !trimmed.is_empty()
-            });
+            let at_brace_end = saw_open_brace && brace_depth <= 0 && func_len > 1;
+            let at_dedent = !saw_open_brace
+                && indent_start.is_some_and(|is| {
+                    let current_indent = line.len() - line.trim_start().len();
+                    current_indent <= is && func_len > 1 && !trimmed.is_empty()
+                });
 
-            if at_end || at_dedent {
+            if at_brace_end || at_dedent {
                 if func_len > threshold {
                     out.push(AnalysisFinding {
                         check: "long-function".to_string(),
@@ -279,7 +310,21 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
                 }
                 func_start = None;
                 indent_start = None;
+                saw_open_brace = false;
             }
+        }
+    }
+
+    if let Some((start, ref name)) = func_start {
+        let func_len = lines.len() + 1 - start;
+        if func_len > threshold {
+            out.push(AnalysisFinding {
+                check: "long-function".to_string(),
+                file: path.to_string(),
+                line: start,
+                excerpt: format!("{name} ({func_len} lines)"),
+                detail: format!("Function exceeds {threshold}-line threshold ({func_len} lines)"),
+            });
         }
     }
 }
@@ -316,10 +361,14 @@ fn check_long_lines(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
 /// Detect unreachable/panic/todo! markers in code.
 fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let markers = [
-        "unreachable!(", "unreachable!()",
-        "todo!(", "todo!()",
-        "unimplemented!(", "unimplemented!()",
-        "panic!(", "raise NotImplementedError",
+        "unreachable!(",
+        "unreachable!()",
+        "todo!(",
+        "todo!()",
+        "unimplemented!(",
+        "unimplemented!()",
+        "panic!(",
+        "raise NotImplementedError",
         "throw new Error(\"not implemented",
         "throw new Error(\"unreachable",
     ];
@@ -353,7 +402,7 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
 // ── Cross-file checks ────────────────────────────────────────────────────────
 
 /// Find duplicate text blocks (≥4 consecutive non-blank lines) across files.
-fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock> {
+pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock> {
     let min_block = 4;
     let mut fingerprints: HashMap<u64, Vec<DuplicateLocation>> = HashMap::new();
 
@@ -420,13 +469,15 @@ fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock>
 }
 
 /// Identify functions/blocks with high nesting depth or high branch count.
-fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHotspot> {
+pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHotspot> {
     let mut hotspots = Vec::new();
 
     for (path, content) in files {
         let lines: Vec<&str> = content.lines().collect();
         let fn_patterns = ["fn ", "def ", "func ", "function "];
-        let branch_patterns = ["if ", "else ", "elif ", "else if", "match ", "case ", "switch "];
+        let branch_patterns = [
+            "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
+        ];
 
         let mut func_start: Option<(usize, String)> = None;
         let mut max_nesting: usize = 0;
@@ -468,7 +519,10 @@ fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHo
                 if relative > max_nesting {
                     max_nesting = relative;
                 }
-                if branch_patterns.iter().any(|p| trimmed.starts_with(p) || trimmed.contains(p)) {
+                if branch_patterns
+                    .iter()
+                    .any(|p| trimmed.starts_with(p) || trimmed.contains(p))
+                {
                     branch_count += 1;
                 }
             }
@@ -572,7 +626,10 @@ mod tests {
         );
         let report = run_all(&files).expect("analysis failed");
         assert!(
-            report.findings.iter().any(|f| f.check == "dead-code-marker"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "dead-code-marker"),
             "should detect #[allow(dead_code)]"
         );
     }
@@ -638,8 +695,30 @@ mod tests {
         );
         let report = run_all(&files).expect("analysis failed");
         assert!(
-            report.findings.iter().all(|f| f.check != "dead-code-marker"),
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker"),
             "string literals should not be reported as dead-code markers"
+        );
+    }
+
+    #[test]
+    fn long_python_function_is_detected_without_braces() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def heavy():\n");
+        for i in 0..70 {
+            src.push_str(&format!("    value_{i} = {i}\n"));
+        }
+        src.push_str("print('done')\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.check == "long-function" && f.file == "sample.py" && f.line == 1),
+            "long python function should be reported"
         );
     }
 }

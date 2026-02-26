@@ -4251,15 +4251,16 @@ fn protocol_dispatch_list() -> anyhow::Result<()> {
     let roles = out
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("dispatch-list output was not an array"))?;
-    let role_strs: Vec<&str> = roles
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+    let role_strs: Vec<&str> = roles.iter().filter_map(|v| v.as_str()).collect();
     ensure!(role_strs.contains(&"architecture-critic"));
     ensure!(role_strs.contains(&"explorer"));
     ensure!(role_strs.contains(&"security-adversary"));
     ensure!(role_strs.contains(&"applicator-worker"));
-    ensure!(roles.len() >= 26, "expected >= 26 roles, got {}", roles.len());
+    ensure!(
+        roles.len() >= 26,
+        "expected >= 26 roles, got {}",
+        roles.len()
+    );
     Ok(())
 }
 
@@ -4267,8 +4268,14 @@ fn protocol_dispatch_list() -> anyhow::Result<()> {
 fn protocol_dispatch_explorer_no_proof_packet() -> anyhow::Result<()> {
     let out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
     let content = json_str(&out, "content")?;
-    ensure!(!content.contains("## Proof Packet:"), "explorer should not use Proof Packet output format");
-    ensure!(content.contains("context only"), "explorer should mention context-only role");
+    ensure!(
+        !content.contains("## Proof Packet:"),
+        "explorer should not use Proof Packet output format"
+    );
+    ensure!(
+        content.contains("context only"),
+        "explorer should mention context-only role"
+    );
     Ok(())
 }
 
@@ -4284,6 +4291,33 @@ fn worker_guard_allows_protocol_commands() -> anyhow::Result<()> {
     ensure!(
         output.status.success(),
         "worker should be allowed to run protocol list: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_guard_allows_analyze_run() -> anyhow::Result<()> {
+    let fixture_dir = tempfile::tempdir()?;
+    let sample = fixture_dir.path().join("sample.rs");
+    let session_dir = fixture_dir.path().to_string_lossy().to_string();
+    fs::write(
+        &sample,
+        "fn sample() {\n    let x = 1;\n    if x > 0 { println!(\"ok\"); }\n}\n",
+    )?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", &session_dir)
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .arg("analyze")
+        .arg("run")
+        .arg(sample.to_string_lossy().to_string())
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run analyze run: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
@@ -4309,7 +4343,12 @@ fn worker_guard_blocks_register() -> anyhow::Result<()> {
 
 #[test]
 fn supplemental_phases_accepted() -> anyhow::Result<()> {
-    for phase in ["OVERENGINEERING_GUARD", "COMPLEXITY_ANALYSIS", "SHIP_READINESS", "COMPLETED"] {
+    for phase in [
+        "OVERENGINEERING_GUARD",
+        "COMPLEXITY_ANALYSIS",
+        "SHIP_READINESS",
+        "COMPLETED",
+    ] {
         let result = phase.parse::<ReviewPhase>();
         ensure!(
             result.is_ok(),
