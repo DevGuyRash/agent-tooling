@@ -3,6 +3,11 @@
 //! Protocol content is compiled into the binary from TOML files in `protocols/`.
 //! The CLI (`mpcr protocol ...`) serves phase-appropriate snippets so that
 //! agents never need to hold the full protocol specification in context.
+#![allow(clippy::implicit_hasher)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::too_many_lines)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

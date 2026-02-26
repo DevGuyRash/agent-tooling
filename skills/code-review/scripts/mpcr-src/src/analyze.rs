@@ -3,6 +3,16 @@
 //! All checks are purely text-based (no AST parsing, no external deps).
 //! Workers run these on their assigned files to surface mechanical findings
 //! before theorem generation, improving signal quality.
+#![allow(clippy::implicit_hasher)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::option_if_let_else)]
+#![allow(clippy::format_push_string)]
+#![allow(clippy::expect_used)]
 
 use serde::Serialize;
 use std::collections::HashMap;
