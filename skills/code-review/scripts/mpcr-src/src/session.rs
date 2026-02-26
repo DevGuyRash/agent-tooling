@@ -226,9 +226,7 @@ impl ValueEnum for ReviewPhase {
             Self::ShipReadiness => {
                 PossibleValue::new("SHIP_READINESS").help("Ship-readiness assessment")
             }
-            Self::Completed => {
-                PossibleValue::new("COMPLETED").help("Review completed by worker")
-            }
+            Self::Completed => PossibleValue::new("COMPLETED").help("Review completed by worker"),
         };
         Some(pv)
     }
@@ -2610,10 +2608,7 @@ mod tests {
         fs::create_dir_all(&session_dir)?;
         let actual = infer_repo_root_from_session_dir(&session_dir)
             .ok_or_else(|| anyhow::anyhow!("failed to infer repo root"))?;
-        let expected = repo_root
-            .canonicalize()
-            .unwrap_or_else(|_| repo_root.clone());
-        ensure!(actual == expected);
+        ensure!(actual == repo_root);
         Ok(())
     }
 

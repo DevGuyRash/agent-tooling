@@ -61,22 +61,13 @@ fn read_lock_owner_and_pid(lock_file: &Path) -> std::io::Result<(String, Option<
     Ok(parse_lock_owner_and_pid(&raw))
 }
 
+#[allow(clippy::missing_const_for_fn)]
 fn is_pid_alive(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
         Path::new("/proc").join(pid.to_string()).exists()
     }
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .map_or(false, |o| {
-                String::from_utf8_lossy(&o.stdout).contains(&pid.to_string())
-            })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(target_os = "linux"))]
     {
         let _ = pid;
         true

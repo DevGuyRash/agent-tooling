@@ -304,7 +304,9 @@ pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
         assembled = assembled.replace("<ROLE_TITLE>", &entry.title);
         assembled
     } else {
-        return Err(anyhow::anyhow!("dispatch role {role}: missing both content and domain_focus+common"));
+        return Err(anyhow::anyhow!(
+            "dispatch role {role}: missing both content and domain_focus+common"
+        ));
     };
 
     Ok(ProtocolOutput {
@@ -380,11 +382,31 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         command: "mpcr protocol domains".to_string(),
     });
     for (key, cmd, section) in [
-        ("invocation-aliases", "mpcr protocol invocation-aliases", &orchestrator.invocation_aliases),
-        ("workflow-selection", "mpcr protocol workflow-selection", &orchestrator.workflow_selection),
-        ("quality-gate", "mpcr protocol quality-gate", &orchestrator.quality_gate),
-        ("change-classification", "mpcr protocol change-classification", &orchestrator.change_classification),
-        ("analyze", "mpcr protocol analyze-guidance", &orchestrator.analyze),
+        (
+            "invocation-aliases",
+            "mpcr protocol invocation-aliases",
+            &orchestrator.invocation_aliases,
+        ),
+        (
+            "workflow-selection",
+            "mpcr protocol workflow-selection",
+            &orchestrator.workflow_selection,
+        ),
+        (
+            "quality-gate",
+            "mpcr protocol quality-gate",
+            &orchestrator.quality_gate,
+        ),
+        (
+            "change-classification",
+            "mpcr protocol change-classification",
+            &orchestrator.change_classification,
+        ),
+        (
+            "analyze",
+            "mpcr protocol analyze-guidance",
+            &orchestrator.analyze,
+        ),
     ] {
         if let Some(ref s) = section {
             entries.push(ProtocolListEntry {

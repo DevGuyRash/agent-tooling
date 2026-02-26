@@ -6,6 +6,8 @@
 //! - Helpers for computing session paths and writing report files
 //! - Typed read/modify/write operations on `_session.json`
 
+/// Language-agnostic static analysis checks for code review workers.
+pub mod analyze;
 /// Random identifier generation (id8 / hex).
 pub mod id;
 /// File-based lock for coordinating `_session.json` writers.
@@ -16,5 +18,3 @@ pub mod paths;
 pub mod protocol;
 /// Session file (`_session.json`) schema and update operations.
 pub mod session;
-/// Language-agnostic static analysis checks for code review workers.
-pub mod analyze;
