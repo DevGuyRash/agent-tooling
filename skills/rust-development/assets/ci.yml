@@ -324,6 +324,35 @@ jobs:
             ${{ steps.cfg.outputs.features_flag }} \
             ${{ steps.cfg.outputs.locked_flag }} 2>&1 | tee "$RUST_CI_DIAG_DIR/rust-test.log"
 
+
+      # -----------------------------------------------------------------------
+      # Banned-pattern scan via verify.sh (optional; runs if script exists)
+      # CI_RUN_VERIFY=true|false (default: auto — runs if verify.sh is present)
+      # -----------------------------------------------------------------------
+      - name: Banned-pattern scan
+        if: steps.cfg.outputs.run_tests == 'true'
+        working-directory: ${{ matrix.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Look for verify.sh in well-known skill locations
+          verify_script=""
+          for candidate in \
+            ".github/scripts/verify.sh" \
+            "scripts/verify.sh" \
+          ; do
+            if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+              verify_script="$candidate"
+              break
+            fi
+          done
+          if [ -z "$verify_script" ]; then
+            echo "verify.sh not found; skipping banned-pattern scan"
+            exit 0
+          fi
+          echo "Running banned-pattern scan via $verify_script"
+          "$verify_script" 2>&1 | tee "$RUST_CI_DIAG_DIR/verify.log"
+
       - name: Install cargo-deny (optional; prebuilt)
         if: steps.cfg.outputs.run_deny == 'true' && steps.cfg.outputs.install_deny == 'true'
         uses: taiki-e/install-action@cfdb446e391c69574ebc316dfb7d7849ec12b940 # v2

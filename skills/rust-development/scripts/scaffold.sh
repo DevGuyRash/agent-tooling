@@ -369,6 +369,46 @@ if [ "$do_clippy" -eq 1 ]; then
     printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
     echo "  ✓ appended clippy lint config to Cargo.toml"
   fi
+
+  # -----------------------------------------------------------------------
+  # Propagate [lints] workspace = true to member crates
+  # -----------------------------------------------------------------------
+  if grep -q '^\[workspace\]' "$cargo_toml" 2>/dev/null; then
+    echo "  Propagating [lints] workspace = true to member crates..."
+    _find_member_manifests() {
+      if command -v cargo >/dev/null 2>&1; then
+        cargo metadata --format-version 1 --no-deps \
+          --manifest-path "$cargo_toml" 2>/dev/null \
+          | tr ',' '\n' \
+          | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
+          | while IFS= read -r _mpath; do
+              _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
+              case "$_mpath_real" in
+                "$cargo_toml") continue ;;
+              esac
+              printf '%s\n' "$_mpath_real"
+            done
+        return
+      fi
+      find "$workspace_root" -name Cargo.toml -not -path '*/target/*' -print \
+        | while IFS= read -r _mpath; do
+            case "$_mpath" in
+              "$cargo_toml") continue ;;
+            esac
+            printf '%s\n' "$_mpath"
+          done
+    }
+    _find_member_manifests | while IFS= read -r member_toml; do
+      [ -f "$member_toml" ] || continue
+      [ ! -L "$member_toml" ] || continue
+      if grep -qE '^\[lints\]' "$member_toml" 2>/dev/null; then
+        echo "    ⚠ already has [lints]: $member_toml"
+        continue
+      fi
+      printf '\n[lints]\nworkspace = true\n' >> "$member_toml"
+      echo "    ✓ added [lints] workspace = true: $member_toml"
+    done
+  fi
   echo ""
 fi
 
@@ -378,6 +418,37 @@ fi
 if [ "$do_banned" -eq 1 ]; then
   echo "═══ Banned-family test harness ═══"
   banned_dst="$(resolve_banned_test_destination)"
+
+  # Warn if virtual workspace has no member crates to compile the test
+  _root_manifest="${workspace_root}/Cargo.toml"
+  if grep -q '^\[workspace\]' "$_root_manifest" 2>/dev/null \
+     && ! grep -Eq '^[[:space:]]*\[package\][[:space:]]*$' "$_root_manifest" 2>/dev/null; then
+    _has_members=0
+    if command -v cargo >/dev/null 2>&1; then
+      _member_count="$(
+        cargo metadata --format-version 1 --no-deps \
+          --manifest-path "$_root_manifest" 2>/dev/null \
+          | tr ',' '\n' \
+          | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
+          | awk -v root="$_root_manifest" '$0 != root' \
+          | head -n 1 | wc -l
+      )"
+      [ "${_member_count:-0}" -gt 0 ] && _has_members=1
+    fi
+    if [ "$_has_members" -eq 0 ]; then
+      _fallback_count="$(
+        find "$workspace_root" -name Cargo.toml \
+          -not -path '*/target/*' \
+          -not -path "$_root_manifest" \
+          -print 2>/dev/null | head -n 1 | wc -l
+      )"
+      [ "${_fallback_count:-0}" -gt 0 ] && _has_members=1
+    fi
+    if [ "$_has_members" -eq 0 ]; then
+      echo "  ⚠ virtual workspace has no member crates — banned_family.rs cannot be compiled" >&2
+    fi
+  fi
+
   if [ "$banned_dst" != "${workspace_root}/tests/banned_family.rs" ]; then
     echo "  ℹ virtual workspace detected; placing harness under: $(dirname -- "$banned_dst")"
   fi
@@ -393,13 +464,23 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$do_ci" -eq 1 ]; then
   echo "═══ GitHub Actions CI workflow ═══"
+
+  # CI files belong at the repository root, not the Rust workspace root.
+  ci_base="$workspace_root"
+  if [ -n "$git_root" ]; then
+    ci_base="$git_root"
+    if [ "$ci_base" != "$workspace_root" ]; then
+      echo "  ℹ using git root for .github/ paths: $ci_base"
+    fi
+  fi
+
   safe_copy \
     "${assets_dir}/detect_rust_workspaces.py" \
-    "${workspace_root}/.github/scripts/detect_rust_workspaces.py" \
+    "${ci_base}/.github/scripts/detect_rust_workspaces.py" \
     "detect_rust_workspaces.py"
   safe_copy \
     "${assets_dir}/ci.yml" \
-    "${workspace_root}/.github/workflows/ci.yml" \
+    "${ci_base}/.github/workflows/ci.yml" \
     "ci.yml"
   echo ""
 fi

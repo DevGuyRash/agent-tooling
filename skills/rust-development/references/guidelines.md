@@ -45,28 +45,7 @@
 ## 3. Banned Patterns
 
 - You SHALL consult `references/banned-patterns.md` for the full banned-patterns table.
-
-| Pattern | Fix |
-|---|---|
-| `.unwrap()`/`.unwrap_err()`/`.unwrap_unchecked()` without `// INVARIANT:` | `?`, `if let`, `match` |
-| `.expect()`/`.expect_err()` without `// INVARIANT:` | `?`, `if let`, `match` |
-| `assert!()`/`assert_eq!()`/`assert_ne!()` outside tests | Return `Result`, or use `debug_assert!` with `// INVARIANT:` |
-| `panic!()`, `unimplemented!()`, `todo!()` | Return `Result`/`Option` |
-| `unreachable!()` without same-line `// INVARIANT:` | Refactor or add invariant |
-| `std::process::exit()` outside entrypoints | Return `Result`, map exit codes |
-| `.len() == 0` / `.len() != 0` | `.is_empty()` / `!.is_empty()` |
-| `mem::forget()` / `Box::leak()` without `// ALLOW:` | Restructure ownership |
-| `static mut` | Use `OnceLock`, `Mutex`, or `AtomicT` |
-| `dbg!()` | Remove |
-| `println!()`/`eprintln!()` outside entrypoints | Use tracing/log or remove |
-| `&String`, `&Vec<T>`, `&Box<T>` in parameters | `&str`, `&[T]`, `&T` |
-| `use crate::*;`/`use super::*;` outside tests | Import explicitly |
-| `anyhow::Result`/`Box<dyn Error>` in `pub` APIs | Structured error enum |
-| `#[allow(...)]` without `// Reason:` | Add justification |
-| `Command::new("sh").arg("-c")` | Build argv explicitly |
-| `String::from("")`/`"".to_string()` | `String::new()` |
-
-- You SHALL NOT use any pattern listed in the banned-patterns table in non-test code.
+- You SHALL NOT use any pattern listed in `references/banned-patterns.md` in non-test code.
 - WHEN a banned pattern has a specific escape hatch (for example `// INVARIANT:`) THEN you SHALL use that specific escape hatch.
 - WHEN no pattern-specific escape hatch exists and the pattern is intentionally kept THEN you SHALL add `// ALLOW: <reason>` on the same line.
 

@@ -309,6 +309,96 @@ _search_excluding() {
 }
 
 # ---------------------------------------------------------------------------
+
+# Resolve git root for CI file detection.
+git_root_dir=""
+if command -v git >/dev/null 2>&1; then
+  git_root_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 2.0: Installation checks — verify skill artifacts are present
+# ---------------------------------------------------------------------------
+echo ""
+echo "═══ Phase 2.0: Installation checks ═══"
+echo ""
+
+_install_ok=1
+
+# Check 1: banned_family.rs test harness
+_found_banned=""
+for _bf in $(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' 2>/dev/null); do
+  _found_banned="$_bf"
+  break
+done
+if [ -n "$_found_banned" ]; then
+  pass "banned_family.rs installed: $_found_banned"
+else
+  warn "banned_family.rs not found (run scaffold.sh --banned-test)"
+  _install_ok=0
+fi
+
+# Check 2: CI workflow
+_ci_yml=""
+_ci_script=""
+if [ -f ".github/workflows/ci.yml" ]; then
+  _ci_yml=".github/workflows/ci.yml"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/workflows/ci.yml" ]; then
+  _ci_yml="$git_root_dir/.github/workflows/ci.yml"
+fi
+if [ -f ".github/scripts/detect_rust_workspaces.py" ]; then
+  _ci_script=".github/scripts/detect_rust_workspaces.py"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/scripts/detect_rust_workspaces.py" ]; then
+  _ci_script="$git_root_dir/.github/scripts/detect_rust_workspaces.py"
+fi
+if [ -n "$_ci_yml" ]; then
+  pass "CI workflow installed: $_ci_yml"
+else
+  warn "CI workflow not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+if [ -n "$_ci_script" ]; then
+  pass "CI detector script installed: $_ci_script"
+else
+  warn "CI detector script not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+
+# Check 3: Clippy lint config in Cargo.toml
+_root_manifest="$(pwd)/Cargo.toml"
+if [ -f "$_root_manifest" ]; then
+  if grep -qE '^\[workspace\.lints|^\[lints' "$_root_manifest" 2>/dev/null; then
+    pass "clippy lint config present in Cargo.toml"
+  else
+    warn "no [workspace.lints] or [lints] section in Cargo.toml (run scaffold.sh --clippy)"
+    _install_ok=0
+  fi
+fi
+
+# Check 4: [lints] workspace = true in member crates (workspace only)
+if grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
+  _members_missing_lints=""
+  for _member_toml in $(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' 2>/dev/null); do
+    if grep -qF '[package]' "$_member_toml" 2>/dev/null; then
+      if ! grep -qE '^\[lints\]' "$_member_toml" 2>/dev/null; then
+        _members_missing_lints="${_members_missing_lints} ${_member_toml}"
+      fi
+    fi
+  done
+  if [ -z "$_members_missing_lints" ]; then
+    pass "all member crates inherit workspace lints"
+  else
+    warn "member crates missing [lints] workspace = true:${_members_missing_lints}"
+    _install_ok=0
+  fi
+fi
+
+if [ "$_install_ok" -eq 0 ]; then
+  echo ""
+  echo "  hint: run scaffold.sh --all to install missing artifacts"
+fi
+
+echo ""
 echo "═══ Phase 2.1: Banned pattern scan ═══"
 echo ""
 # ---------------------------------------------------------------------------
@@ -381,7 +471,61 @@ echo ""
 echo "Resource safety:"
 _search_excluding 'mem::forget\(' '// ALLOW:' "no mem::forget()" "exclude_tests" || true
 _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || true
-_search_excluding 'unsafe[[:space:]]*\{' '// SAFETY:' "no unsafe block without // SAFETY:" "exclude_tests" || true
+# Check unsafe blocks: // SAFETY: may be on the same line OR the preceding line
+{
+  _unsafe_label="no unsafe block without // SAFETY:"
+  _unsafe_violations=""
+  if command -v rg >/dev/null 2>&1; then
+    _unsafe_hits="$(rg -n --type rust \
+      -g '!**/test/**' -g '!**/tests/**' -g '!**/testdata/**' \
+      -g '!**/bench/**' -g '!**/benches/**' \
+      -g '!**/example/**' -g '!**/examples/**' \
+      -g '!**/fixture/**' -g '!**/fixtures/**' \
+      -g '!**/*_test.rs' -g '!**/tests.rs' \
+      -- 'unsafe[[:space:]]*\{' 2>/dev/null)" || true
+  else
+    _unsafe_hits="$(find . -name '*.rs' -not -path '*/target/*' \
+      -not -path '*/test/*' -not -path '*/tests/*' \
+      -not -path '*/testdata/*' -not -path '*/bench/*' \
+      -not -path '*/benches/*' -not -path '*/example/*' \
+      -not -path '*/examples/*' -not -path '*/fixture/*' \
+      -not -path '*/fixtures/*' -not -name '*_test.rs' \
+      -not -name 'tests.rs' \
+      -exec grep -nE 'unsafe[[:space:]]*\{' {} + 2>/dev/null)" || true
+  fi
+  if [ -n "$_unsafe_hits" ]; then
+    while IFS= read -r _hit; do
+      [ -z "$_hit" ] && continue
+      _file="${_hit%%:*}"
+      _rest="${_hit#*:}"
+      _lineno="${_rest%%:*}"
+      _line_content="${_rest#*:}"
+      # Check same line for // SAFETY:
+      if printf '%s\n' "$_line_content" | grep -q '// SAFETY:'; then
+        continue
+      fi
+      # Check preceding line for // SAFETY:
+      if [ "$_lineno" -gt 1 ] 2>/dev/null; then
+        _prev_lineno=$(( _lineno - 1 ))
+        _prev_line="$(sed -n "${_prev_lineno}p" "$_file" 2>/dev/null)" || true
+        if printf '%s\n' "$_prev_line" | grep -q '// SAFETY:'; then
+          continue
+        fi
+      fi
+      _unsafe_violations="${_unsafe_violations}${_hit}
+"
+    done <<UNSAFE_EOF
+$_unsafe_hits
+UNSAFE_EOF
+  fi
+  _unsafe_violations="$(printf '%s' "$_unsafe_violations" | sed '/^$/d' | head -5)"
+  if [ -n "$_unsafe_violations" ]; then
+    printf '%s\n' "$_unsafe_violations"
+    fail "$_unsafe_label"
+  else
+    pass "$_unsafe_label"
+  fi
+} || true
 
 echo ""
 echo "Idiomatic checks:"

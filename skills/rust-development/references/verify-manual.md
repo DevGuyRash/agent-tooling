@@ -6,6 +6,40 @@ IF any check fails THEN you SHALL fix the issue and re-run.
 
 ---
 
+## 0. Installation checks
+
+Before running pattern scans, you SHALL confirm the skill's artifacts are installed.
+
+```bash
+# banned_family.rs test harness
+found_banned=$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit)
+if [ -n "$found_banned" ]; then echo "ok: banned_family.rs installed: $found_banned"; else echo "WARN: banned_family.rs not found (run scaffold.sh --banned-test)"; fi
+
+# CI workflow
+git_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -f ".github/workflows/ci.yml" ] || { [ -n "$git_root" ] && [ -f "$git_root/.github/workflows/ci.yml" ]; }; then echo "ok: CI workflow installed"; else echo "WARN: CI workflow not found (run scaffold.sh --ci)"; fi
+if [ -f ".github/scripts/detect_rust_workspaces.py" ] || { [ -n "$git_root" ] && [ -f "$git_root/.github/scripts/detect_rust_workspaces.py" ]; }; then echo "ok: CI detector script installed"; else echo "WARN: CI detector script not found (run scaffold.sh --ci)"; fi
+
+# Clippy lint config
+if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok: clippy lint config present"; else echo "WARN: no [workspace.lints] or [lints] in Cargo.toml (run scaffold.sh --clippy)"; fi
+
+# [lints] workspace = true in member crates (workspace only)
+if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
+  missing=""
+  for m in $(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml'); do
+    if grep -qF '[package]' "$m" 2>/dev/null && ! grep -qE '^\[lints\]' "$m" 2>/dev/null; then
+      missing="$missing $m"
+    fi
+  done
+  if [ -z "$missing" ]; then echo "ok: all member crates inherit workspace lints"; else echo "WARN: missing [lints] workspace = true:$missing"; fi
+fi
+```
+
+IF any installation check warns THEN you SHALL run `scaffold.sh --all` before proceeding.
+
+---
+
+
 ## 1. Banned pattern scan
 
 `// INVARIANT:` exemptions apply only when the comment appears on the same line as the banned call.
