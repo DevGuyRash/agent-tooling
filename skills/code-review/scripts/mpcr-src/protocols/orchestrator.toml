@@ -195,8 +195,148 @@ AFTER the workflow completes (finalize succeeds or full-cycle converges):
 - You SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
 - You SHALL NOT leave dispatch prompts, report templates, packet files, or any other scratch artifacts in the worktree.
 - You SHALL verify no files were written to the repo root (outside `.local/`) by the review process.
+
+
+## Worker dispatch prompt updates
+WHEN dispatching workers, you SHALL include ALL phase transitions in the task steps, not only INGESTION:
+1. `mpcr reviewer update ... --phase INGESTION` — after reading assigned files
+2. `mpcr reviewer update ... --phase DOMAIN_COVERAGE` — after scoping decisions
+3. `mpcr reviewer update ... --phase THEOREM_GENERATION` — after generating theorems
+4. `mpcr reviewer update ... --phase ADVERSARIAL_PROOFS` — after attempting disproofs
+5. `mpcr reviewer update ... --phase SYNTHESIS` — after synthesizing findings
+6. `mpcr reviewer update ... --phase REPORT_WRITING` — while producing the Proof Packet
+7. `mpcr reviewer complete-child ... --verdict <V>` — self-completion (final step)
+
+WHEN dispatching supplemental specialists, use the matching phase:
+- complexity-analyst: `--phase COMPLEXITY_ANALYSIS`
+- overengineering-guard: `--phase OVERENGINEERING_GUARD`
+- ship-readiness-assessor: `--phase SHIP_READINESS`
+
+## Worker dedup hints
+WHEN multiple domain reviewers share files, you SHALL add an overlap note to each dispatch prompt:
+```
+## Overlap note
+These files are also assigned to: [list other domain names].
+Focus ONLY on your domain perspective. Do NOT duplicate findings from other domains.
+```
+
+## Error recovery
+WHEN a worker returns malformed output (missing Proof Packet sections, no Domain Ledger, garbled):
+1. Re-dispatch the worker with feedback: "Previous output was malformed. Missing: [sections]. Resubmit."
+2. IF retry also fails, record the gap as Residual Risk. Do NOT fabricate findings.
+3. WHEN a worker crashes or times out, mark child as ERROR and note the gap.
 """
 
+
+[invocation_aliases]
+title = "Invocation Alias Mapping"
+content = """
+You SHALL recognize these user prompts as skill triggers (case-insensitive):
+
+| User says | Mode |
+|-----------|------|
+| `code-review reviewer [ctx]` | Reviewer only |
+| `code-review review [ctx]` | Reviewer only |
+| `code-review applicator [ctx]` | Applicator only |
+| `code-review apply [ctx]` | Applicator only |
+| `code-review full-cycle [ctx]` | Full-cycle |
+| `code-review full [ctx]` | Full-cycle |
+| `code-review auto [ctx]` | Full-cycle |
+| `code-review [ctx]` (no keyword) | Infer (see workflow_selection) |
+
+`[ctx]` is optional scope context (file paths, PR links, focus areas). Pass through to workflow.
+"""
+
+
+[workflow_selection]
+title = "Workflow Selection"
+content = """
+WHEN the user provides no explicit mode keyword, infer from context:
+
+- IF existing review report → Applicator mode (apply outstanding findings)
+- IF user mentions "fix", "apply", "address" → Applicator mode
+- IF no prior review exists → Reviewer mode
+- IF user mentions "full", "end-to-end", "auto" → Full-cycle mode
+
+## Autonomous context resolution
+You SHALL resolve these WITHOUT asking the user:
+- Target ref: infer from current branch. WHEN a git hosting CLI is available (`gh`, `glab`), check for associated PRs/MRs.
+- Acceptance criteria: derive from PR/MR description, commit messages, or diff content. Mark [Assumed] if inferred.
+- PR/MR/issue context: check silently. IF found, use it. IF not, proceed with the diff.
+- Parallelism: single-agent for ≤ 500 line diffs (still spawns 1 worker), multi-agent otherwise.
+
+You SHALL only ask the user IF you are genuinely blocked (e.g., cannot determine what code to review).
+"""
+
+
+[quality_gate]
+title = "Proof Packet Quality Gate"
+content = """
+BEFORE accepting a worker's Proof Packet, the orchestrator SHALL verify:
+
+| Criterion | Minimum |
+|-----------|---------|
+| Domain Ledger present | Required — reject if missing |
+| ≥ 2 theorems with file:line anchors | Required |
+| Each theorem has disproof attempt | Required |
+| Findings have all 7 fields (Severity, Anchor, Claim, Disproof, Evidence, Recommendation, Verification) | Required |
+| Defended proofs reference specific scenarios | Required |
+| Residual Risk section present | Required |
+| Code excerpts ≤ 10 lines, ≤ 3 total | Required |
+
+IF a Proof Packet fails the quality gate:
+1. Re-dispatch the worker with feedback on what was insufficient.
+2. IF the retry also fails, record the gap as Residual Risk.
+3. You SHALL NOT fabricate findings to fill the gap.
+"""
+
+
+[change_classification]
+title = "Change Size Classification"
+content = """
+WHEN classifying change size, use the largest matching class from `git diff --stat`:
+
+| Class | Diff lines | Files changed | Expected agents | Domains |
+|-------|-----------|---------------|-----------------|---------|
+| Trivial | ≤ 50 | ≤ 3 | 1 (single-agent) | 1-2 |
+| Small | 51-500 | ≤ 10 | 1 (single-agent) | 2-4 |
+| Medium | 501-2000 | ≤ 30 | 3-6 (multi-agent) | 4-8 |
+| Large | > 2000 | > 30 | 6-8 (multi-agent) | 6+ |
+
+This replaces any ambiguous use of "non-trivial changes" — apply the table.
+"""
+
+
+[analyze]
+title = "Static Analysis Integration"
+content = """
+BEFORE dispatching domain reviewers, the orchestrator or workers MAY run `mpcr analyze` on assigned files for mechanical pre-screening.
+
+## Available commands
+```
+mpcr analyze list-checks                     # List all checks
+mpcr analyze run <file1> <file2> ...         # Run all checks
+mpcr analyze check --name <CHECK> <files>    # Run a single check
+```
+
+## Checks
+| Check | Detects |
+|-------|---------|
+| dead-code | `#[allow(dead_code)]`, `if False`, `#if 0`, deprecated markers |
+| todos | TODO, FIXME, HACK, XXX, SAFETY annotations |
+| long-functions | Functions exceeding 60 lines |
+| long-lines | Lines exceeding 120 characters |
+| unreachable | `unreachable!()`, `todo!()`, `panic!()`, `raise NotImplementedError` |
+| duplicates | Duplicate text blocks (≥4 lines) across files |
+| complexity | High-nesting (>4) or high-branching (>10) functions |
+
+## Worker integration
+WHEN a worker runs `mpcr analyze run` on its assigned files:
+- Findings from `dead-code` and `unreachable` checks SHALL seed theorem candidates.
+- Findings from `duplicates` MAY indicate dedup or refactoring opportunities.
+- Findings from `complexity` MAY indicate overengineering or testability concerns.
+- Workers SHALL NOT treat analysis findings as review findings directly — they are inputs to the adversarial proof process.
+"""
 
 [domains]
 title = "Universal Domains (Seeds)"

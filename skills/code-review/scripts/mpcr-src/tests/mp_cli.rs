@@ -3358,7 +3358,7 @@ fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
 
 #[test]
 fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
-    for role in [
+    let worker_roles = [
         "architecture-critic",
         "contract-guardian",
         "data-integrity-prover",
@@ -3384,7 +3384,8 @@ fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
         "complexity-analyst",
         "overengineering-guard",
         "ship-readiness-assessor",
-    ] {
+    ];
+    for role in worker_roles {
         let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
         let content = json_str(&out, "content")?;
         ensure!(!content.is_empty(), "empty dispatch content for {role}");
@@ -3409,6 +3410,10 @@ fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
             "dispatch content for {role} missing MPCR_SESSION_DIR binding"
         );
     }
+    // Explorer is a context-only role — no identity bindings or Proof Packet required.
+    let explorer_out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
+    let explorer_content = json_str(&explorer_out, "content")?;
+    ensure!(!explorer_content.is_empty(), "empty dispatch for explorer");
     Ok(())
 }
 
@@ -4198,5 +4203,119 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
             .any(|id| id == "ch1ld002"),
         "child from sess9999 should survive as nested child"
     );
+    Ok(())
+}
+
+// ── Tests for audit-driven changes ──────────────────────────────────────────
+
+#[test]
+fn protocol_invocation_aliases() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "invocation-aliases"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("code-review reviewer"));
+    ensure!(content.contains("Full-cycle"));
+    Ok(())
+}
+
+#[test]
+fn protocol_workflow_selection() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "workflow-selection"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Applicator mode"));
+    ensure!(content.contains("Reviewer mode"));
+    Ok(())
+}
+
+#[test]
+fn protocol_quality_gate() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "quality-gate"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Domain Ledger"));
+    ensure!(content.contains("Residual Risk"));
+    Ok(())
+}
+
+#[test]
+fn protocol_change_classification() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "change-classification"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Trivial"));
+    ensure!(content.contains("Medium"));
+    ensure!(content.contains("Large"));
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_list() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "dispatch-list"])?;
+    let roles = out
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("dispatch-list output was not an array"))?;
+    let role_strs: Vec<&str> = roles
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    ensure!(role_strs.contains(&"architecture-critic"));
+    ensure!(role_strs.contains(&"explorer"));
+    ensure!(role_strs.contains(&"security-adversary"));
+    ensure!(role_strs.contains(&"applicator-worker"));
+    ensure!(roles.len() >= 26, "expected >= 26 roles, got {}", roles.len());
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_explorer_no_proof_packet() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(!content.contains("## Proof Packet:"), "explorer should not use Proof Packet output format");
+    ensure!(content.contains("context only"), "explorer should mention context-only role");
+    Ok(())
+}
+
+#[test]
+fn worker_guard_allows_protocol_commands() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", "/tmp")
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .args(["protocol", "list"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run protocol list: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_guard_blocks_register() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", "/tmp")
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .args(["reviewer", "register", "--target-ref", "main"])
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "worker should NOT be allowed to run reviewer register"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("restricts this executor"));
+    Ok(())
+}
+
+#[test]
+fn supplemental_phases_accepted() -> anyhow::Result<()> {
+    for phase in ["OVERENGINEERING_GUARD", "COMPLEXITY_ANALYSIS", "SHIP_READINESS", "COMPLETED"] {
+        let result = phase.parse::<ReviewPhase>();
+        ensure!(
+            result.is_ok(),
+            "ReviewPhase should accept {phase} but got: {:?}",
+            result.err()
+        );
+    }
     Ok(())
 }

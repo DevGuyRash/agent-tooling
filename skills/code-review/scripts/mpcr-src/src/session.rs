@@ -174,6 +174,14 @@ pub enum ReviewPhase {
     Synthesis,
     /// Final report writing phase.
     ReportWriting,
+    /// Overengineering guard supplemental phase.
+    OverengineeringGuard,
+    /// Complexity analysis supplemental phase.
+    ComplexityAnalysis,
+    /// Ship-readiness assessment supplemental phase.
+    ShipReadiness,
+    /// Review completed (worker self-signaling).
+    Completed,
 }
 
 impl ValueEnum for ReviewPhase {
@@ -185,6 +193,10 @@ impl ValueEnum for ReviewPhase {
             Self::AdversarialProofs,
             Self::Synthesis,
             Self::ReportWriting,
+            Self::OverengineeringGuard,
+            Self::ComplexityAnalysis,
+            Self::ShipReadiness,
+            Self::Completed,
         ]
     }
 
@@ -205,6 +217,18 @@ impl ValueEnum for ReviewPhase {
             Self::ReportWriting => {
                 PossibleValue::new("REPORT_WRITING").help("Write the final report")
             }
+            Self::OverengineeringGuard => {
+                PossibleValue::new("OVERENGINEERING_GUARD").help("Overengineering guard analysis")
+            }
+            Self::ComplexityAnalysis => {
+                PossibleValue::new("COMPLEXITY_ANALYSIS").help("Complexity analysis phase")
+            }
+            Self::ShipReadiness => {
+                PossibleValue::new("SHIP_READINESS").help("Ship-readiness assessment")
+            }
+            Self::Completed => {
+                PossibleValue::new("COMPLETED").help("Review completed by worker")
+            }
         };
         Some(pv)
     }
@@ -221,6 +245,10 @@ impl std::str::FromStr for ReviewPhase {
             s if s.eq_ignore_ascii_case("ADVERSARIAL_PROOFS") => Ok(Self::AdversarialProofs),
             s if s.eq_ignore_ascii_case("SYNTHESIS") => Ok(Self::Synthesis),
             s if s.eq_ignore_ascii_case("REPORT_WRITING") => Ok(Self::ReportWriting),
+            s if s.eq_ignore_ascii_case("OVERENGINEERING_GUARD") => Ok(Self::OverengineeringGuard),
+            s if s.eq_ignore_ascii_case("COMPLEXITY_ANALYSIS") => Ok(Self::ComplexityAnalysis),
+            s if s.eq_ignore_ascii_case("SHIP_READINESS") => Ok(Self::ShipReadiness),
+            s if s.eq_ignore_ascii_case("COMPLETED") => Ok(Self::Completed),
             _ => Err(anyhow::anyhow!("invalid ReviewPhase: {s}")),
         }
     }

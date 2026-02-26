@@ -8,7 +8,7 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
-use mpcr::protocol;
+use mpcr::{analyze, protocol};
 use mpcr::session::{
     append_note, close_child_reviews, collect_reports, finalize_review, load_session,
     purge_reviews, register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
@@ -123,6 +123,11 @@ enum Commands {
     Protocol {
         #[command(subcommand)]
         command: ProtocolCommands,
+    },
+    /// Language-agnostic static analysis (dead code, duplicates, complexity, TODOs).
+    Analyze {
+        #[command(subcommand)]
+        command: AnalyzeCommands,
     },
 }
 
@@ -1059,8 +1064,46 @@ enum ProtocolCommands {
         #[arg(long, value_name = "PHASE", help = "Session phase (CLEANUP).")]
         phase: String,
     },
+    /// Invocation alias mapping (user trigger phrases → modes).
+    InvocationAliases,
+    /// Workflow selection guidance (how to infer mode from context).
+    WorkflowSelection,
+    /// Proof Packet quality gate rubric.
+    QualityGate,
+    /// Change size classification table.
+    ChangeClassification,
+    /// Static analysis integration guidance.
+    AnalyzeGuidance,
+    /// List all available dispatch role slugs.
+    DispatchList,
     /// List all available protocol entries.
     List,
+}
+
+#[derive(Subcommand)]
+enum AnalyzeCommands {
+    /// Run all static checks on the given files.
+    Run {
+        #[arg(
+            value_name = "FILE",
+            num_args = 1..,
+            help = "Files to analyze."
+        )]
+        files: Vec<PathBuf>,
+    },
+    /// Run a single named check.
+    Check {
+        #[arg(long, value_name = "CHECK", help = "Check name (dead-code, todos, long-functions, long-lines, unreachable, duplicates, complexity).")]
+        name: String,
+        #[arg(
+            value_name = "FILE",
+            num_args = 1..,
+            help = "Files to analyze."
+        )]
+        files: Vec<PathBuf>,
+    },
+    /// List available checks.
+    ListChecks,
 }
 
 #[derive(Debug, Serialize)]
@@ -1070,7 +1113,7 @@ struct OkResult {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("{err:?}");
+        eprintln!("error: {err:#}");
         std::process::exit(1);
     }
 }
@@ -1268,6 +1311,10 @@ fn run() -> anyhow::Result<()> {
                 parent_id,
                 count,
             } => {
+                if count == 0 {
+                    return Err(anyhow::anyhow!("--count must be at least 1"));
+                }
+
                 let target_ref =
                     require_arg_or_env(target_ref, use_env, "MPCR_TARGET_REF", "--target-ref")?;
                 let session_id =
@@ -1652,6 +1699,57 @@ fn run() -> anyhow::Result<()> {
                     println!("{}", out.content.trim());
                 }
             }
+            ProtocolCommands::InvocationAliases => {
+                let out = protocol::invocation_aliases()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::WorkflowSelection => {
+                let out = protocol::workflow_selection()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::QualityGate => {
+                let out = protocol::quality_gate()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::ChangeClassification => {
+                let out = protocol::change_classification()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::AnalyzeGuidance => {
+                let out = protocol::analyze_guidance()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::DispatchList => {
+                let roles = protocol::dispatch_list()?;
+                if json {
+                    let j = serde_json::to_string_pretty(&roles)?;
+                    println!("{j}");
+                } else {
+                    for role in &roles {
+                        println!("{role}");
+                    }
+                }
+            }
             ProtocolCommands::List => {
                 let entries = protocol::list_entries()?;
                 if json {
@@ -1663,10 +1761,118 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         },
+        Commands::Analyze { command } => match command {
+            AnalyzeCommands::Run { files } => {
+                let file_map = load_file_map(&files)?;
+                let report = analyze::run_all(&file_map)?;
+                if json {
+                    write_json(json_pretty, &report)?;
+                } else {
+                    print_analysis_text(&report);
+                }
+            }
+            AnalyzeCommands::Check { name, files } => {
+                let file_map = load_file_map(&files)?;
+                if name == "duplicates" {
+                    let report = analyze::run_all(&file_map)?;
+                    if json {
+                        write_json(json_pretty, &report.duplicate_blocks)?;
+                    } else {
+                        for dup in &report.duplicate_blocks {
+                            println!("Duplicate block ({} lines, {} locations):", dup.line_count, dup.locations.len());
+                            for loc in &dup.locations {
+                                println!("  {}:{}", loc.file, loc.start_line);
+                            }
+                        }
+                    }
+                } else if name == "complexity" {
+                    let report = analyze::run_all(&file_map)?;
+                    if json {
+                        write_json(json_pretty, &report.complexity_hotspots)?;
+                    } else {
+                        for spot in &report.complexity_hotspots {
+                            println!(
+                                "{}:{} {} (nesting={}, branches={})",
+                                spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count
+                            );
+                        }
+                    }
+                } else {
+                    let findings = analyze::run_check(&file_map, &name)?;
+                    if json {
+                        write_json(json_pretty, &findings)?;
+                    } else {
+                        for f in &findings {
+                            println!("[{}] {}:{} — {}", f.check, f.file, f.line, f.detail);
+                            if !f.excerpt.is_empty() {
+                                println!("  > {}", f.excerpt);
+                            }
+                        }
+                    }
+                }
+            }
+            AnalyzeCommands::ListChecks => {
+                let checks = analyze::available_checks();
+                if json {
+                    let list: Vec<serde_json::Value> = checks
+                        .iter()
+                        .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
+                        .collect();
+                    write_json(json_pretty, &list)?;
+                } else {
+                    for (name, desc) in &checks {
+                        println!("{name:20} {desc}");
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
 }
+fn load_file_map(paths: &[PathBuf]) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    for path in paths {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+        let key = path.to_string_lossy().to_string();
+        map.insert(key, content);
+    }
+    Ok(map)
+}
+
+fn print_analysis_text(report: &analyze::AnalysisReport) {
+    println!("Scanned {} files ({} lines)", report.files_scanned, report.total_lines);
+    if !report.findings.is_empty() {
+        println!("\n--- Findings ({}) ---", report.findings.len());
+        for f in &report.findings {
+            println!("[{}] {}:{} — {}", f.check, f.file, f.line, f.detail);
+        }
+    }
+    if !report.duplicate_blocks.is_empty() {
+        println!("\n--- Duplicate Blocks ({}) ---", report.duplicate_blocks.len());
+        for dup in &report.duplicate_blocks {
+            println!("Block ({} lines, {} locations):", dup.line_count, dup.locations.len());
+            for loc in &dup.locations {
+                println!("  {}:{}", loc.file, loc.start_line);
+            }
+        }
+    }
+    if !report.complexity_hotspots.is_empty() {
+        println!("\n--- Complexity Hotspots ({}) ---", report.complexity_hotspots.len());
+        for spot in &report.complexity_hotspots {
+            println!("  {}:{} {} (nesting={}, branches={})", spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count);
+        }
+    }
+    if !report.dead_markers.is_empty() {
+        println!("\n--- Dead Code Markers ({}) ---", report.dead_markers.len());
+        for d in &report.dead_markers {
+            println!("  {}:{} — {}", d.file, d.line, d.detail);
+        }
+    }
+}
+
+
 
 fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     let dispatch_role = std::env::var("MPCR_DISPATCH_ROLE")
@@ -1681,11 +1887,18 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
         (None, None) => return Ok(()),
     };
 
+    // Protocol commands are always allowed for all worker roles (read-only guidance).
+    if matches!(command, Commands::Protocol { .. }) {
+        return Ok(());
+    }
+
     let allowed = match (&dispatch_role, &applicator_role) {
         (Some(_), _) => matches!(
             command,
             Commands::Reviewer {
-                command: ReviewerCommands::Update { .. } | ReviewerCommands::Note { .. }
+                command: ReviewerCommands::Update { .. }
+                    | ReviewerCommands::Note { .. }
+                    | ReviewerCommands::CompleteChild { .. }
             }
         ),
         (None, Some(_)) => matches!(
@@ -1698,9 +1911,9 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     };
     if !allowed {
         let allowed_cmds = if dispatch_role.is_some() {
-            "`mpcr reviewer update` and `mpcr reviewer note`"
+            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, and `mpcr protocol *`"
         } else {
-            "`mpcr applicator note` and `mpcr applicator set-status`"
+            "`mpcr applicator note`, `mpcr applicator set-status`, and `mpcr protocol *`"
         };
         return Err(anyhow::anyhow!(
             "{env}={role_name} restricts this executor to {allowed_cmds} only",
@@ -1813,11 +2026,15 @@ fn extract_identity_fields(command: &Commands) -> (Option<&str>, Option<&str>) {
                 reviewer_id,
                 session_id,
                 ..
+            }
+            | ReviewerCommands::CompleteChild {
+                reviewer_id,
+                session_id,
+                ..
             } => (reviewer_id.as_deref(), session_id.as_deref()),
             ReviewerCommands::Register { .. }
             | ReviewerCommands::SpawnChildren { .. }
             | ReviewerCommands::CloseChildren { .. }
-            | ReviewerCommands::CompleteChild { .. }
             | ReviewerCommands::Finalize { .. } => (None, None),
         },
         Commands::Applicator { command: sub } => match sub {
@@ -1878,6 +2095,10 @@ fn extract_session_dir_field(command: &Commands) -> Option<&Path> {
 /// If no env var is set or no CLI flag is provided, the check passes.
 fn enforce_worker_session_dir_binding(command: &Commands) -> anyhow::Result<()> {
     if !worker_mode_env_active() {
+        return Ok(());
+    }
+    // Protocol and Id commands never need a session directory.
+    if matches!(command, Commands::Protocol { .. } | Commands::Id { .. }) {
         return Ok(());
     }
     let env_session_dir = std::env::var("MPCR_SESSION_DIR")

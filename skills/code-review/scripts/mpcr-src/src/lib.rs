@@ -16,3 +16,5 @@ pub mod paths;
 pub mod protocol;
 /// Session file (`_session.json`) schema and update operations.
 pub mod session;
+/// Language-agnostic static analysis checks for code review workers.
+pub mod analyze;
