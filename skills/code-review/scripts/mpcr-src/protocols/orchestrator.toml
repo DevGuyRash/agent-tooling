@@ -64,10 +64,15 @@ WHEN a reviewer worker needs surrounding context beyond its assigned files, it S
 4. Classify remaining seed domains as out-of-scope with rationale.
 
 ## Dispatch
-Register yourself (this returns your `<PARENT_ID8>` and `<SESSION_ID8>`), then spawn children:
+Register yourself, validate dispatch, THEN spawn children:
 ```
 mpcr reviewer register --target-ref <REF>
 # Output: reviewer_id=<PARENT_ID8> session_id=<SESSION_ID8>
+
+# Validate at least one dispatch template resolves BEFORE spawning children:
+mpcr protocol dispatch --role architecture-critic
+# IF this fails, fix the role name via `mpcr protocol dispatch-list` before proceeding.
+
 mpcr reviewer spawn-children --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --target-ref <REF> --count N
 # Output: child IDs (one <CHILD_ID8> per child)
 ```

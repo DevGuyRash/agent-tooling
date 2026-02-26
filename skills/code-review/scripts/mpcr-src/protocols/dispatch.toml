@@ -73,7 +73,12 @@ For each theorem where disproof failed:
 
 ### Residual Risk
 <Areas not fully verified within this domain>
+
+OUTPUT_COMPLETE
 ```
+
+You MUST emit the full Proof Packet as your final message. Do NOT exit without it.
+The `OUTPUT_COMPLETE` line lets the orchestrator detect truncation.
 """
 
 [roles.architecture_critic]
