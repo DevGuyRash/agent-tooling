@@ -122,9 +122,9 @@ find "$SKILL_DIR" -type f \
     -not -path '*/target/*' -not -path '*/.git/*' \
     -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' \
     -not -name '*.woff' -not -name '*.ttf' \
-    -print0 2>/dev/null > "$crlf_list"
+    2>/dev/null > "$crlf_list"
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
     if tr -d '\r' < "$file" | cmp -s - "$file"; then
         :
     else
@@ -181,9 +181,9 @@ perm_issues=0
 
 find "$SKILL_DIR" -type f \( -name '*.sh' -o -name '*.py' \) \
     -not -path '*/target/*' -not -path '*/.git/*' \
-    -print0 2>/dev/null > "$script_list"
+    2>/dev/null > "$script_list"
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
     script_count=$((script_count + 1))
@@ -211,9 +211,9 @@ done < "$script_list"
 # Also check files without extensions that have shebangs
 find "$SKILL_DIR" -maxdepth 2 -type f ! -name '*.*' \
     -not -path '*/target/*' -not -path '*/.git/*' \
-    -print0 2>/dev/null > "$shebang_list"
+    2>/dev/null > "$shebang_list"
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
     [ -z "$file" ] && continue
     if head -1 "$file" 2>/dev/null | grep -q '^#!/'; then
         relpath="${file#"$SKILL_DIR"/}"

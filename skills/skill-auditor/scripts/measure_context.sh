@@ -88,9 +88,9 @@ trap cleanup_lists EXIT INT TERM
 
 find "$SKILL_DIR" -type f -name '*.md' \
     -not -path '*/target/*' -not -path '*/.git/*' \
-    -print0 2>/dev/null | sort -z > "$doc_list"
+    2>/dev/null | sort > "$doc_list"
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
 
@@ -106,9 +106,9 @@ done < "$doc_list"
 # Also measure TOML protocol files if they exist
 find "$SKILL_DIR" -type f -name '*.toml' \
     -not -path '*/target/*' -not -path '*/.git/*' \
-    -not -name 'Cargo.*' -print0 2>/dev/null | sort -z > "$toml_list"
+    -not -name 'Cargo.*' 2>/dev/null | sort > "$toml_list"
 
-while IFS= read -r -d '' file; do
+while IFS= read -r file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
 
