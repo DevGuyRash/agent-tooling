@@ -164,7 +164,7 @@ Full-cycle runs Reviewer then Applicator with convergence control. You SHALL fol
 
 ## Phase 2: Application
 1. Run the Applicator workflow on the findings from Phase 1.
-2. You SHALL dispatch applicator-worker subagents for APPLIED findings (subject to concurrency cap of 8).
+2. You SHALL dispatch applicator-worker subagents for APPLIED findings (subject to the runtime concurrency cap).
 3. Each applicator-worker SHALL spawn its own explorer subagents for evidence challenge verification.
 4. Collect all Application Reports. Record dispositions via `mpcr applicator note`.
 5. Set status: `mpcr applicator set-status --initiator-status APPLIED`.

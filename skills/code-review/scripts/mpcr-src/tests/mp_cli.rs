@@ -632,7 +632,7 @@ fn reviewer_register_creates_session() -> anyhow::Result<()> {
     let session_dir = json_str(&out, "session_dir")?;
     let session_file = json_str(&out, "session_file")?;
 
-    ensure!(session_dir.ends_with(".local/reports/code_reviews/2026-01-11"));
+    ensure!(session_dir.replace('\\', "/").ends_with(".local/reports/code_reviews/2026-01-11"));
     ensure!(session_file.ends_with("_session.json"));
 
     let session = read_session_json(Path::new(session_dir))?;

@@ -1,10 +1,16 @@
 ---
 name: code-review
 description: Multi-agent code review/apply orchestration via `mpcr` protocols.
-compatibility: Cross-platform. On POSIX, `scripts/mpcr` runs directly. On Windows, `mpcr.cmd` tries `bash` then falls back to `mpcr.ps1` (PowerShell 5.1+). If the binary is not prebuilt, requires a Rust toolchain to build `scripts/mpcr-src`.
+compatibility: Cross-platform. On POSIX, `<skills-file-root>/scripts/mpcr` runs directly. On Windows, `<skills-file-root>/scripts/mpcr.cmd` tries `bash` then falls back to `<skills-file-root>/scripts/mpcr.ps1` (PowerShell 5.1+). If the binary is not prebuilt, requires a Rust toolchain to build `<skills-file-root>/scripts/mpcr-src`.
 ---
 
 # Code Review
+
+## Path Resolution
+All relative paths in this skill resolve from `<skills-file-root>` — the directory containing this `SKILL.md` file.
+- **mpcr binary:** `<skills-file-root>/scripts/mpcr` (POSIX) or `<skills-file-root>/scripts/mpcr.cmd` (Windows)
+- **Protocol references:** `<skills-file-root>/references/`
+- **Source:** `<skills-file-root>/scripts/mpcr-src/`
 
 ## Role Detection
 IF prompt contains `MPCR_DISPATCH_ROLE=`, `MPCR_APPLICATOR_ROLE=`, or `## Proof Packet:` THEN you are a WORKER.

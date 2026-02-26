@@ -2610,7 +2610,10 @@ mod tests {
         fs::create_dir_all(&session_dir)?;
         let actual = infer_repo_root_from_session_dir(&session_dir)
             .ok_or_else(|| anyhow::anyhow!("failed to infer repo root"))?;
-        ensure!(actual == repo_root);
+        let expected = repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| repo_root.clone());
+        ensure!(actual == expected);
         Ok(())
     }
 

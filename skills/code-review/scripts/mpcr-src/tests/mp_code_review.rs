@@ -125,7 +125,7 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
 
     ensure!(Path::new(&fin.report_path).exists());
     ensure!(
-        fin.report_file
+        fin.report_file.replace('\\', "/")
             == ".local/reports/code_reviews/2026-01-11/12-34-56-789_refs_heads_main_deadbeef.md"
     );
 
@@ -136,7 +136,7 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
         .first()
         .ok_or_else(|| anyhow::anyhow!("expected review entry"))?;
     ensure!(
-        entry.report_file.as_deref()
+        entry.report_file.as_deref().map(|s| s.replace('\\', "/")).as_deref()
             == Some(
                 ".local/reports/code_reviews/2026-01-11/12-34-56-789_refs_heads_main_deadbeef.md"
             )
