@@ -272,7 +272,14 @@ pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
     let entry = file
         .roles
         .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown dispatch role: {role}"))?;
+        .ok_or_else(|| {
+            let mut valid: Vec<_> = file.roles.keys().map(|k| k.replace('_', "-")).collect();
+            valid.sort();
+            anyhow::anyhow!(
+                "unknown dispatch role: {role}\n\nValid roles:\n  {}\n\nHint: run `mpcr protocol dispatch-list` to list all roles.",
+                valid.join("\n  ")
+            )
+        })?;
 
     let assembled = if let Some(ref full) = entry.content {
         full.clone()

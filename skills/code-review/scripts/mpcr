@@ -54,4 +54,11 @@ if [ "${needs_build}" -eq 1 ]; then
   cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release
 fi
 
+# Suppress pagers in non-interactive (agent) sessions.
+if [ ! -t 1 ]; then
+  export PAGER=cat
+  export GIT_PAGER=cat
+  export NO_PAGER=1
+fi
+
 exec "${bin}" "$@"
