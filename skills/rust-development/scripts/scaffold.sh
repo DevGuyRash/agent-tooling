@@ -407,43 +407,57 @@ if [ "$do_clippy" -eq 1 ]; then
   # -----------------------------------------------------------------------
   if grep -q '^\[workspace\]' "$cargo_toml" 2>/dev/null; then
     echo "  Propagating [lints] workspace = true to member crates..."
-    _find_member_manifests() {
-      if command -v cargo >/dev/null 2>&1; then
-        cargo metadata --format-version 1 --no-deps \
-          --manifest-path "$cargo_toml" 2>/dev/null \
-          | tr ',' '\n' \
-          | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
-          | while IFS= read -r _mpath; do
-              _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
-              case "$_mpath_real" in
-                "$cargo_toml") continue ;;
-              esac
-              printf '%s\n' "$_mpath_real"
-            done
-        return
-      fi
-      find "$workspace_root" -name Cargo.toml -not -path '*/target/*' -print \
-        | while IFS= read -r _mpath; do
-            case "$_mpath" in
-              "$cargo_toml") continue ;;
-            esac
-            printf '%s\n' "$_mpath"
-          done
-    }
-    _find_member_manifests | while IFS= read -r member_toml; do
-      [ -f "$member_toml" ] || continue
-      [ ! -L "$member_toml" ] || continue
+    _update_member_manifest_lints() {
+      member_toml="$1"
+      [ -f "$member_toml" ] || return 0
+      [ ! -L "$member_toml" ] || return 0
       if ! grep -qE '^[[:space:]]*\[package\][[:space:]]*$' "$member_toml" 2>/dev/null; then
         echo "    ℹ skipping non-package manifest: $member_toml"
-        continue
+        return 0
       fi
       if grep -qE '^\[lints\]' "$member_toml" 2>/dev/null; then
         echo "    ⚠ already has [lints]: $member_toml"
-        continue
+        return 0
       fi
       printf '\n[lints]\nworkspace = true\n' >> "$member_toml"
       echo "    ✓ added [lints] workspace = true: $member_toml"
-    done
+    }
+
+    if command -v cargo >/dev/null 2>&1; then
+      cargo metadata --format-version 1 --no-deps \
+        --manifest-path "$cargo_toml" 2>/dev/null \
+        | tr ',' '\n' \
+        | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
+        | while IFS= read -r _mpath; do
+            _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
+            case "$_mpath_real" in
+              "$cargo_toml") continue ;;
+            esac
+            _update_member_manifest_lints "$_mpath_real"
+          done
+    else
+      # Use find -exec with batched positional args to avoid delimiter-based path splitting.
+      find "$workspace_root" -name Cargo.toml -not -path '*/target/*' \
+        -exec sh -eu -c '
+          cargo_toml="$1"
+          shift
+          for member_toml in "$@"; do
+            [ "$member_toml" = "$cargo_toml" ] && continue
+            [ -f "$member_toml" ] || continue
+            [ ! -L "$member_toml" ] || continue
+            if ! grep -qE "^[[:space:]]*\\[package\\][[:space:]]*$" "$member_toml" 2>/dev/null; then
+              printf "    ℹ skipping non-package manifest: %s\n" "$member_toml"
+              continue
+            fi
+            if grep -qE "^\\[lints\\]" "$member_toml" 2>/dev/null; then
+              printf "    ⚠ already has [lints]: %s\n" "$member_toml"
+              continue
+            fi
+            printf "\n[lints]\nworkspace = true\n" >> "$member_toml"
+            printf "    ✓ added [lints] workspace = true: %s\n" "$member_toml"
+          done
+        ' sh "$cargo_toml" {} +
+    fi
   fi
   echo ""
 fi
