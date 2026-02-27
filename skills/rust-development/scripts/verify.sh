@@ -13,6 +13,9 @@
 # Environment:
 #   FILE_SIZE_THRESHOLD   Max lines before warning (default: 300)
 #   ENTRYPOINT_THRESHOLD  Max entrypoint lines before warning (default: 100)
+#   VERIFY_RUN_FMT        Run fmt gate in Phase 2.3 (default: true)
+#   VERIFY_RUN_CLIPPY     Run clippy gate in Phase 2.3 (default: true)
+#   VERIFY_RUN_TESTS      Run test gate in Phase 2.3 (default: true)
 #
 # Requires: rg (ripgrep). grep fallback is provided but limited.
 
@@ -49,6 +52,9 @@ echo "Scanning: $(pwd)"
 
 FILE_SIZE_THRESHOLD="${FILE_SIZE_THRESHOLD:-300}"
 ENTRYPOINT_THRESHOLD="${ENTRYPOINT_THRESHOLD:-100}"
+VERIFY_RUN_FMT="${VERIFY_RUN_FMT:-true}"
+VERIFY_RUN_CLIPPY="${VERIFY_RUN_CLIPPY:-true}"
+VERIFY_RUN_TESTS="${VERIFY_RUN_TESTS:-true}"
 
 _require_non_negative_int() {
   _name="$1"
@@ -63,6 +69,22 @@ _require_non_negative_int() {
 
 _require_non_negative_int "FILE_SIZE_THRESHOLD" "$FILE_SIZE_THRESHOLD"
 _require_non_negative_int "ENTRYPOINT_THRESHOLD" "$ENTRYPOINT_THRESHOLD"
+
+_require_bool_flag() {
+  _name="$1"
+  _value="$2"
+  case "$_value" in
+    true|false) ;;
+    *)
+      echo "error: ${_name} must be true|false (got '${_value}')" >&2
+      exit 2
+      ;;
+  esac
+}
+
+_require_bool_flag "VERIFY_RUN_FMT" "$VERIFY_RUN_FMT"
+_require_bool_flag "VERIFY_RUN_CLIPPY" "$VERIFY_RUN_CLIPPY"
+_require_bool_flag "VERIFY_RUN_TESTS" "$VERIFY_RUN_TESTS"
 
 # Counters are written to temp files so they survive subshells.
 _fail_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-fail.XXXXXX")"
@@ -309,6 +331,143 @@ _search_excluding() {
 }
 
 # ---------------------------------------------------------------------------
+list_workspace_member_manifests_from_metadata() {
+  root_manifest="$1"
+  command -v cargo >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
+    | python3 - "$root_manifest" <<'PY'
+import json
+import sys
+
+root_manifest = sys.argv[1]
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+workspace_members = payload.get("workspace_members")
+packages = payload.get("packages")
+if not isinstance(workspace_members, list) or not isinstance(packages, list):
+    sys.exit(1)
+
+member_ids = {value for value in workspace_members if isinstance(value, str)}
+member_paths = set()
+for pkg in packages:
+    if not isinstance(pkg, dict):
+        continue
+    if pkg.get("id") not in member_ids:
+        continue
+    manifest_path = pkg.get("manifest_path")
+    if not isinstance(manifest_path, str):
+        continue
+    if manifest_path == root_manifest:
+        continue
+    member_paths.add(manifest_path)
+
+for manifest_path in sorted(member_paths):
+    print(manifest_path)
+PY
+}
+
+list_workspace_member_manifests_from_manifest() {
+  root_manifest="$1"
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  python3 - "$root_manifest" <<'PY'
+import fnmatch
+import sys
+from pathlib import Path
+
+try:
+    import tomllib  # type: ignore[attr-defined]
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib  # type: ignore[assignment]
+    except ModuleNotFoundError:
+        sys.exit(1)
+
+root_manifest = Path(sys.argv[1]).resolve()
+workspace_root = root_manifest.parent
+
+try:
+    data = tomllib.loads(root_manifest.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+
+workspace = data.get("workspace") if isinstance(data, dict) else None
+if not isinstance(workspace, dict):
+    sys.exit(1)
+
+raw_members = workspace.get("members")
+if isinstance(raw_members, str):
+    raw_members = [raw_members]
+if not isinstance(raw_members, list):
+    sys.exit(1)
+members = [value.strip().replace("\\", "/") for value in raw_members if isinstance(value, str) and value.strip()]
+if not members:
+    sys.exit(1)
+
+raw_exclude = workspace.get("exclude")
+if isinstance(raw_exclude, str):
+    raw_exclude = [raw_exclude]
+exclude = []
+if isinstance(raw_exclude, list):
+    exclude = [value.strip().replace("\\", "/") for value in raw_exclude if isinstance(value, str) and value.strip()]
+
+def _matches_any(rel_path: str, patterns):
+    rel_norm = rel_path.replace("\\", "/")
+    for pattern in patterns:
+        normalized = pattern.replace("\\", "/").strip()
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        if not normalized:
+            continue
+        if fnmatch.fnmatch(rel_norm, normalized):
+            return True
+    return False
+
+manifests = set()
+for pattern in members:
+    normalized = pattern
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if not normalized:
+        continue
+
+    has_glob = any(ch in normalized for ch in "*?[")
+    matched_any = False
+    for candidate in workspace_root.glob(normalized):
+        matched_any = True
+        manifest_path = candidate if candidate.name == "Cargo.toml" else candidate / "Cargo.toml"
+        if manifest_path.is_file():
+            manifests.add(manifest_path.resolve())
+
+    if not has_glob and not matched_any:
+        manifest_path = workspace_root / normalized / "Cargo.toml"
+        if manifest_path.is_file():
+            manifests.add(manifest_path.resolve())
+
+filtered = []
+for manifest_path in sorted(manifests):
+    if manifest_path == root_manifest:
+        continue
+    try:
+        rel = manifest_path.parent.relative_to(workspace_root).as_posix()
+    except ValueError:
+        continue
+    if exclude and _matches_any(rel, exclude):
+        continue
+    filtered.append(manifest_path)
+
+for manifest_path in filtered:
+    print(manifest_path)
+PY
+}
+
+# ---------------------------------------------------------------------------
 
 # Resolve git root for CI file detection.
 git_root_dir=""
@@ -372,30 +531,49 @@ if [ -f "$_root_manifest" ]; then
 fi
 
 # Check 4: [lints] workspace = true in member crates (workspace only)
-if grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
-  _members_missing_lints="$(
-    find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' \
-      -exec sh -c '
-        for _member_toml do
-          if grep -qF "[package]" "$_member_toml" 2>/dev/null; then
-            if ! awk '"'"'
-              BEGIN { in_lints = 0; ok = 0 }
-              /^\[lints\]/ { in_lints = 1; next }
-              /^\[/ { in_lints = 0 }
-              in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
-              END { exit ok ? 0 : 1 }
-            '"'"' "$_member_toml" 2>/dev/null; then
-              printf " %s" "$_member_toml"
-            fi
-          fi
-        done
-      ' sh {} + 2>/dev/null
-  )"
-  if [ -z "$_members_missing_lints" ]; then
-    pass "all member crates inherit workspace lints"
-  else
-    warn "member crates missing [lints] workspace = true:${_members_missing_lints}"
+if [ -f "$_root_manifest" ] && grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
+  _member_source=""
+  _member_manifest_list=""
+  if _member_manifest_list="$(list_workspace_member_manifests_from_metadata "$_root_manifest" 2>/dev/null)"; then
+    _member_source="cargo metadata"
+  elif _member_manifest_list="$(list_workspace_member_manifests_from_manifest "$_root_manifest" 2>/dev/null)"; then
+    _member_source="workspace.members"
+  fi
+
+  if [ -z "$_member_source" ]; then
+    warn "unable to resolve workspace members for lint inheritance check"
     _install_ok=0
+  elif [ -z "$_member_manifest_list" ]; then
+    pass "workspace has no member crates requiring lint inheritance"
+  else
+    _members_missing_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-missing-members.XXXXXX")"
+    _register_tmp "$_members_missing_tmp"
+    while IFS= read -r _member_toml; do
+      [ -n "$_member_toml" ] || continue
+      [ -f "$_member_toml" ] || continue
+      if ! grep -qF '[package]' "$_member_toml" 2>/dev/null; then
+        continue
+      fi
+      if ! awk '
+        BEGIN { in_lints = 0; ok = 0 }
+        /^\[lints\]/ { in_lints = 1; next }
+        /^\[/ { in_lints = 0 }
+        in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+        END { exit ok ? 0 : 1 }
+      ' "$_member_toml" 2>/dev/null; then
+        printf '%s\n' "$_member_toml" >> "$_members_missing_tmp"
+      fi
+    done <<MEMBER_MANIFEST_EOF
+$_member_manifest_list
+MEMBER_MANIFEST_EOF
+
+    _members_missing_lints="$(tr '\n' ' ' < "$_members_missing_tmp" | sed 's/[[:space:]]\+$//')"
+    if [ -z "$_members_missing_lints" ]; then
+      pass "all member crates inherit workspace lints"
+    else
+      warn "member crates missing [lints] workspace = true:${_members_missing_lints}"
+      _install_ok=0
+    fi
   fi
 fi
 
@@ -480,9 +658,11 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
 # Check unsafe blocks: // SAFETY: may be on the same line OR the preceding line
 {
   _unsafe_label="no unsafe block without // SAFETY:"
-  _unsafe_violations=""
+  _unsafe_violations_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-unsafe.XXXXXX")"
+  _register_tmp "$_unsafe_violations_tmp"
+  _unsafe_files=""
   if command -v rg >/dev/null 2>&1; then
-    _unsafe_hits="$(rg -n --type rust \
+    _unsafe_files="$(rg -l --type rust \
       -g '!**/test/**' -g '!**/tests/**' -g '!**/testdata/**' \
       -g '!**/bench/**' -g '!**/benches/**' \
       -g '!**/example/**' -g '!**/examples/**' \
@@ -490,41 +670,37 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       -g '!**/*_test.rs' -g '!**/tests.rs' \
       -- 'unsafe[[:space:]]*\{' 2>/dev/null)" || true
   else
-    _unsafe_hits="$(find . -name '*.rs' -not -path '*/target/*' \
+    _unsafe_files="$(find . -name '*.rs' -not -path '*/target/*' \
       -not -path '*/test/*' -not -path '*/tests/*' \
       -not -path '*/testdata/*' -not -path '*/bench/*' \
       -not -path '*/benches/*' -not -path '*/example/*' \
       -not -path '*/examples/*' -not -path '*/fixture/*' \
       -not -path '*/fixtures/*' -not -name '*_test.rs' \
       -not -name 'tests.rs' \
-      -exec grep -nE 'unsafe[[:space:]]*\{' {} + 2>/dev/null)" || true
+      -exec grep -lE 'unsafe[[:space:]]*\{' {} + 2>/dev/null)" || true
   fi
-  if [ -n "$_unsafe_hits" ]; then
-    while IFS= read -r _hit; do
-      [ -z "$_hit" ] && continue
-      _file="${_hit%%:*}"
-      _rest="${_hit#*:}"
-      _lineno="${_rest%%:*}"
-      _line_content="${_rest#*:}"
-      # Check same line for // SAFETY:
-      if printf '%s\n' "$_line_content" | grep -q '// SAFETY:'; then
-        continue
-      fi
-      # Check preceding line for // SAFETY:
-      if [ "$_lineno" -gt 1 ] 2>/dev/null; then
-        _prev_lineno=$(( _lineno - 1 ))
-        _prev_line="$(sed -n "${_prev_lineno}p" "$_file" 2>/dev/null)" || true
-        if printf '%s\n' "$_prev_line" | grep -q '// SAFETY:'; then
-          continue
-        fi
-      fi
-      _unsafe_violations="${_unsafe_violations}${_hit}
-"
-    done <<UNSAFE_EOF
-$_unsafe_hits
-UNSAFE_EOF
+  if [ -n "$_unsafe_files" ]; then
+    while IFS= read -r _unsafe_file; do
+      [ -n "$_unsafe_file" ] || continue
+      [ -f "$_unsafe_file" ] || continue
+      awk '
+        BEGIN { prev_has_safety = 0 }
+        {
+          line = $0
+          cur_has_safety = (index(line, "// SAFETY:") > 0)
+          if (line ~ /unsafe[[:space:]]*\{/) {
+            if (!(cur_has_safety || prev_has_safety)) {
+              printf "%s:%d:%s\n", FILENAME, NR, line
+            }
+          }
+          prev_has_safety = cur_has_safety
+        }
+      ' "$_unsafe_file" >> "$_unsafe_violations_tmp"
+    done <<UNSAFE_FILES_EOF
+$_unsafe_files
+UNSAFE_FILES_EOF
   fi
-  _unsafe_violations="$(printf '%s' "$_unsafe_violations" | sed '/^$/d' | head -5)"
+  _unsafe_violations="$(sed -n '1,5p' "$_unsafe_violations_tmp")"
   if [ -n "$_unsafe_violations" ]; then
     printf '%s\n' "$_unsafe_violations"
     fail "$_unsafe_label"
@@ -628,34 +804,46 @@ echo ""
 # ---------------------------------------------------------------------------
 
 echo "Format check:"
-if command -v rustfmt >/dev/null 2>&1; then
-  if cargo fmt --all --check 2>&1; then
-    pass "cargo fmt --all --check"
+if [ "$VERIFY_RUN_FMT" = "true" ]; then
+  if command -v rustfmt >/dev/null 2>&1; then
+    if cargo fmt --all --check 2>&1; then
+      pass "cargo fmt --all --check"
+    else
+      fail "cargo fmt --all --check"
+    fi
   else
-    fail "cargo fmt --all --check"
+    fail "rustfmt not installed (rustup component add rustfmt)"
   fi
 else
-  fail "rustfmt not installed (rustup component add rustfmt)"
+  pass "cargo fmt --all --check (skipped: VERIFY_RUN_FMT=false)"
 fi
 
 echo ""
 echo "Clippy:"
-if cargo clippy --version >/dev/null 2>&1; then
-  if cargo clippy --workspace --all-targets -- -D warnings 2>&1; then
-    pass "cargo clippy --workspace --all-targets -- -D warnings"
+if [ "$VERIFY_RUN_CLIPPY" = "true" ]; then
+  if cargo clippy --version >/dev/null 2>&1; then
+    if cargo clippy --workspace --all-targets -- -D warnings 2>&1; then
+      pass "cargo clippy --workspace --all-targets -- -D warnings"
+    else
+      fail "cargo clippy --workspace --all-targets -- -D warnings"
+    fi
   else
-    fail "cargo clippy --workspace --all-targets -- -D warnings"
+    fail "clippy not installed (rustup component add clippy)"
   fi
 else
-  fail "clippy not installed (rustup component add clippy)"
+  pass "cargo clippy --workspace --all-targets -- -D warnings (skipped: VERIFY_RUN_CLIPPY=false)"
 fi
 
 echo ""
 echo "Tests:"
-if cargo test --workspace 2>&1; then
-  pass "cargo test --workspace"
+if [ "$VERIFY_RUN_TESTS" = "true" ]; then
+  if cargo test --workspace 2>&1; then
+    pass "cargo test --workspace"
+  else
+    fail "cargo test --workspace"
+  fi
 else
-  fail "cargo test --workspace"
+  pass "cargo test --workspace (skipped: VERIFY_RUN_TESTS=false)"
 fi
 
 echo ""

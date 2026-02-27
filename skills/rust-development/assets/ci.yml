@@ -119,6 +119,7 @@ jobs:
           #   CI_RUN_FMT=true|false         (default: true)
           #   CI_RUN_CLIPPY=true|false      (default: true)
           #   CI_RUN_TESTS=true|false       (default: true)
+          #   CI_RUN_VERIFY=true|false|auto (default: auto)
           #
           #   CI_ALL_FEATURES=true|false    (default: false)
           #   CI_LOCKED=auto|true|false     (default: auto)
@@ -131,6 +132,7 @@ jobs:
           run_fmt="${CI_RUN_FMT:-true}"
           run_clippy="${CI_RUN_CLIPPY:-true}"
           run_tests="${CI_RUN_TESTS:-true}"
+          run_verify_mode="${CI_RUN_VERIFY:-auto}"
 
           all_features="${CI_ALL_FEATURES:-false}"
           locked_mode="${CI_LOCKED:-auto}"
@@ -139,6 +141,45 @@ jobs:
 
           use_mold="${CI_USE_MOLD:-false}"
           use_sccache="${CI_USE_SCCACHE:-false}"
+
+          run_verify="false"
+          case "$run_verify_mode" in
+            true)
+              run_verify="true"
+              ;;
+            false)
+              run_verify="false"
+              ;;
+            auto|"")
+              repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+              for candidate in \
+                "$repo_root/.github/scripts/verify.sh" \
+                "$repo_root/scripts/verify.sh" \
+                ".github/scripts/verify.sh" \
+                "scripts/verify.sh" \
+              ; do
+                if [ -f "$candidate" ]; then
+                  run_verify="true"
+                  break
+                fi
+              done
+              ;;
+            *)
+              echo "Unknown CI_RUN_VERIFY='$run_verify_mode' (expected auto|true|false); treating as auto" >&2
+              repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+              for candidate in \
+                "$repo_root/.github/scripts/verify.sh" \
+                "$repo_root/scripts/verify.sh" \
+                ".github/scripts/verify.sh" \
+                "scripts/verify.sh" \
+              ; do
+                if [ -f "$candidate" ]; then
+                  run_verify="true"
+                  break
+                fi
+              done
+              ;;
+          esac
 
           # Decide --locked dynamically if in auto mode.
           locked_flag=""
@@ -204,6 +245,7 @@ jobs:
             echo "run_fmt=$run_fmt"
             echo "run_clippy=$run_clippy"
             echo "run_tests=$run_tests"
+            echo "run_verify=$run_verify"
             echo "use_mold=$use_mold"
             echo "use_sccache=$use_sccache"
             echo "run_deny=$run_deny"
@@ -327,12 +369,16 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Banned-pattern scan via verify.sh (optional; runs if script exists)
-      # CI_RUN_VERIFY=true|false (default: auto — runs if verify.sh is present)
+      # CI_RUN_VERIFY=true|false|auto (default: auto — runs if verify.sh is present)
       # -----------------------------------------------------------------------
       - name: Banned-pattern scan
-        if: steps.cfg.outputs.run_tests == 'true'
+        if: steps.cfg.outputs.run_verify == 'true'
         working-directory: ${{ matrix.dir }}
         shell: bash
+        env:
+          VERIFY_RUN_FMT: ${{ steps.cfg.outputs.run_fmt }}
+          VERIFY_RUN_CLIPPY: ${{ steps.cfg.outputs.run_clippy }}
+          VERIFY_RUN_TESTS: ${{ steps.cfg.outputs.run_tests }}
         run: |
           set -euo pipefail
           repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -350,8 +396,8 @@ jobs:
             fi
           done
           if [ -z "$verify_script" ]; then
-            echo "verify.sh not found; skipping banned-pattern scan"
-            exit 0
+            echo "verify.sh not found but CI_RUN_VERIFY resolved to true" >&2
+            exit 1
           fi
           echo "Running banned-pattern scan via $verify_script"
           bash "$verify_script" 2>&1 | tee "$RUST_CI_DIAG_DIR/verify.log"
