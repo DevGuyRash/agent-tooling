@@ -20,6 +20,17 @@ SKILL_DIR=""
 CLI_BIN=""
 CLI_MODE="help"
 
+require_opt_value() {
+    opt="$1"
+    val="${2-}"
+    case "$val" in
+        ""|--*)
+            echo "error: option $opt requires a value"
+            exit 1
+            ;;
+    esac
+}
+
 # Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,12 +47,18 @@ while [ $# -gt 0 ]; do
             exit 0
             ;;
         --cli)
+            require_opt_value "--cli" "${2-}"
             shift
             CLI_BIN="$1"
             ;;
         --cli-mode)
+            require_opt_value "--cli-mode" "${2-}"
             shift
             CLI_MODE="$1"
+            ;;
+        --*)
+            echo "error: unknown option: $1"
+            exit 1
             ;;
         *)
             if [ -z "$SKILL_DIR" ]; then

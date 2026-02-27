@@ -164,8 +164,9 @@ this tests the *experience* of following the instructions as a whole.
 
 2. **Initialize version control** if the skill works with diffs or branches:
    ```bash
-   cd audit-workspace && git init
-   git config user.email "audit@test.com" && git config user.name "Auditor"
+   git -C audit-workspace init
+   git -C audit-workspace config user.email "audit@test.com"
+   git -C audit-workspace config user.name "Auditor"
    # Create initial commit, then a feature branch with changes
    ```
 

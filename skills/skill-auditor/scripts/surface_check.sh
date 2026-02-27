@@ -30,7 +30,16 @@ case "$1" in
         echo "  - File size inventory"
         exit 0
         ;;
+    --*)
+        echo "error: unknown option: $1"
+        exit 1
+        ;;
 esac
+
+if [ $# -gt 1 ]; then
+    echo "error: unexpected argument: $2"
+    exit 1
+fi
 
 SKILL_DIR="$1"
 
@@ -110,6 +119,9 @@ crlf_count=0
 crlf_critical=0
 binary_skipped_count=0
 
+# Keep CRLF candidate filters in one place so scan and fix guidance stay aligned.
+CRLF_FIND_EXCLUDES="-not -path */target/* -not -path */.git/* -not -name *.lock -not -name *.png -not -name *.jpg -not -name *.woff -not -name *.ttf"
+
 crlf_list=$(mktemp)
 script_list=$(mktemp)
 shebang_list=$(mktemp)
@@ -118,11 +130,10 @@ cleanup_lists() {
 }
 trap cleanup_lists EXIT INT TERM
 
-find "$SKILL_DIR" -type f \
-    -not -path '*/target/*' -not -path '*/.git/*' \
-    -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' \
-    -not -name '*.woff' -not -name '*.ttf' \
-    2>/dev/null > "$crlf_list"
+set -f
+# Intentionally expand static exclusion flags.
+find "$SKILL_DIR" -type f $CRLF_FIND_EXCLUDES 2>/dev/null > "$crlf_list"
+set +f
 
 while IFS= read -r file; do
     if [ -s "$file" ] && ! LC_ALL=C grep -Iq . "$file" 2>/dev/null; then
@@ -176,8 +187,8 @@ else
     if [ "$binary_skipped_count" -gt 0 ]; then
         echo "  Skipped probable binary files: $binary_skipped_count"
     fi
-    echo "  Fix (GNU sed):    find \"$SKILL_DIR\" -type f -not -path '*/target/*' -not -path '*/.git/*' -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' -not -name '*.woff' -not -name '*.ttf' -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
-    echo "  Fix (BSD/macOS):  find \"$SKILL_DIR\" -type f -not -path '*/target/*' -not -path '*/.git/*' -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' -not -name '*.woff' -not -name '*.ttf' -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"\" \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
+    echo "  Fix (GNU sed):    find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
+    echo "  Fix (BSD/macOS):  find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"\" \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
 fi
 
 echo ""
