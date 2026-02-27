@@ -26,6 +26,7 @@ if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok
 # [lints] workspace = true in member crates (workspace only)
 if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
   members=""
+  members_resolved=0
   if command -v cargo >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     metadata_json=$(mktemp "${TMPDIR:-/tmp}/rust-verify-manual-metadata.XXXXXX")
     if cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml >"$metadata_json" 2>/dev/null; then
@@ -75,12 +76,15 @@ for manifest_path in sorted(paths):
     print(manifest_path)
 PY
 )"
+      members_resolved=1
     fi
     rm -f -- "$metadata_json"
   fi
 
-  if [ -z "$members" ]; then
+  if [ "$members_resolved" -eq 0 ]; then
     echo "WARN: unable to resolve workspace members for lint inheritance check"
+  elif [ -z "$members" ]; then
+    echo "ok: workspace has no member crates requiring lint inheritance"
   else
     missing=$(printf '%s\n' "$members" | while IFS= read -r m; do
       [ -n "$m" ] || continue

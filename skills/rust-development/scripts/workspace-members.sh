@@ -121,15 +121,25 @@ if not isinstance(workspace, dict):
     sys.exit(1)
 
 raw_members = workspace.get("members")
+if raw_members is None:
+    # [workspace] without explicit members is valid; treat as no member manifests.
+    sys.exit(0)
 if isinstance(raw_members, str):
     raw_members = [raw_members]
 if not isinstance(raw_members, list):
     print(f"{root_manifest} has invalid [workspace].members", file=sys.stderr)
     sys.exit(1)
-members = [value.strip().replace("\\", "/") for value in raw_members if isinstance(value, str) and value.strip()]
+members = []
+for value in raw_members:
+    if not isinstance(value, str):
+        print(f"{root_manifest} has non-string [workspace].members entry", file=sys.stderr)
+        sys.exit(1)
+    normalized = value.strip().replace("\\", "/")
+    if normalized:
+        members.append(normalized)
 if not members:
-    print(f"{root_manifest} has empty [workspace].members", file=sys.stderr)
-    sys.exit(1)
+    # Empty members list is valid and means no additional member manifests.
+    sys.exit(0)
 
 raw_exclude = workspace.get("exclude")
 if isinstance(raw_exclude, str):
