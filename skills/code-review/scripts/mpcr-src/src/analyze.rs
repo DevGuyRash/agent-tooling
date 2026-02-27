@@ -15,7 +15,7 @@
 #![allow(clippy::expect_used)]
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // ── Output types ─────────────────────────────────────────────────────────────
 
@@ -125,7 +125,13 @@ pub fn run_all(files: &HashMap<String, String>) -> anyhow::Result<AnalysisReport
     let mut findings = Vec::new();
     let mut total_lines = 0usize;
 
-    for (path, content) in files {
+    let mut file_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
         total_lines += lines.len();
         check_dead_code_markers(&lines, path, &mut findings);
@@ -134,6 +140,12 @@ pub fn run_all(files: &HashMap<String, String>) -> anyhow::Result<AnalysisReport
         check_long_lines(&lines, path, &mut findings);
         check_unreachable_markers(&lines, path, &mut findings);
     }
+    findings.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.check.cmp(&b.check))
+    });
 
     let duplicate_blocks = find_duplicate_blocks(files);
     let complexity_hotspots = find_complexity_hotspots(files);
@@ -194,7 +206,13 @@ fn run_line_check(
     check_name: &str,
 ) -> anyhow::Result<Vec<AnalysisFinding>> {
     let mut findings = Vec::new();
-    for (path, content) in files {
+    let mut file_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
         match check_name {
             "dead-code" => check_dead_code_markers(&lines, path, &mut findings),
@@ -205,6 +223,12 @@ fn run_line_check(
             _ => return Err(anyhow::anyhow!("unknown check: {check_name}")),
         }
     }
+    findings.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.check.cmp(&b.check))
+    });
     Ok(findings)
 }
 
@@ -457,6 +481,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
 fn check_long_lines(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let threshold = 120;
     let mut count = 0u32;
+    let mut first_overflow_line: Option<usize> = None;
     for (idx, line) in lines.iter().enumerate() {
         if line.len() > threshold {
             count += 1;
@@ -468,14 +493,17 @@ fn check_long_lines(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
                     excerpt: truncate_line(line, 80),
                     detail: format!("Line is {} chars (threshold: {threshold})", line.len()),
                 });
+            } else if first_overflow_line.is_none() {
+                first_overflow_line = Some(idx + 1);
             }
         }
     }
     if count > 5 {
+        let overflow_line = first_overflow_line.map_or(1, |line| line);
         out.push(AnalysisFinding {
             check: "long-line".to_string(),
             file: path.to_string(),
-            line: 0,
+            line: overflow_line,
             excerpt: String::new(),
             detail: format!("{count} lines exceed {threshold} chars (showing first 5)"),
         });
@@ -528,9 +556,15 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
 /// Find duplicate text blocks (≥4 consecutive lines) across files.
 pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock> {
     let min_block = 4;
-    let mut fingerprints: HashMap<u64, Vec<DuplicateLocation>> = HashMap::new();
+    let mut fingerprints: BTreeMap<u64, Vec<DuplicateLocation>> = BTreeMap::new();
 
-    for (path, content) in files {
+    let mut file_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
         if lines.len() < min_block {
             continue;
@@ -548,7 +582,7 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
                 .entry(hash)
                 .or_default()
                 .push(DuplicateLocation {
-                    file: path.clone(),
+                    file: path.to_string(),
                     start_line: start + 1,
                 });
         }
@@ -584,7 +618,12 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
             });
         }
     }
-    duplicates.sort_by(|a, b| b.locations.len().cmp(&a.locations.len()));
+    duplicates.sort_by(|a, b| {
+        b.locations
+            .len()
+            .cmp(&a.locations.len())
+            .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+    });
     duplicates.truncate(20);
     duplicates
 }
@@ -593,7 +632,13 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
 pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHotspot> {
     let mut hotspots = Vec::new();
 
-    for (path, content) in files {
+    let mut file_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
         let branch_patterns = [
             "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
@@ -617,7 +662,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                 if let Some((start, ref name)) = func_start {
                     if max_nesting > 4 || branch_count > 10 {
                         hotspots.push(ComplexityHotspot {
-                            file: path.clone(),
+                            file: path.to_string(),
                             start_line: start,
                             name_hint: name.clone(),
                             max_nesting,
@@ -650,7 +695,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
         if let Some((start, ref name)) = func_start {
             if max_nesting > 4 || branch_count > 10 {
                 hotspots.push(ComplexityHotspot {
-                    file: path.clone(),
+                    file: path.to_string(),
                     start_line: start,
                     name_hint: name.clone(),
                     max_nesting,
@@ -664,6 +709,9 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
         b.max_nesting
             .cmp(&a.max_nesting)
             .then(b.branch_count.cmp(&a.branch_count))
+            .then_with(|| a.file.cmp(&b.file))
+            .then_with(|| a.start_line.cmp(&b.start_line))
+            .then_with(|| a.name_hint.cmp(&b.name_hint))
     });
     hotspots.truncate(10);
     hotspots
@@ -747,20 +795,33 @@ fn is_probable_string_literal_line(line: &str) -> bool {
 }
 
 fn is_marker_inside_double_quotes(line: &str, marker: &str) -> bool {
-    let Some(marker_idx) = line.find(marker) else {
+    if marker.is_empty() || !line.contains(marker) {
         return false;
-    };
-    let before = &line[..marker_idx];
-    let after = &line[marker_idx + marker.len()..];
-    let quote_before = before.rfind('"');
-    let quote_after = after.find('"');
-    match (quote_before, quote_after) {
-        (Some(_), Some(_)) => {
-            // Marker is wrapped by a quote before and after, e.g. `let x = "#if 0";`.
-            true
-        }
-        _ => false,
     }
+
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut saw_quoted_marker = false;
+
+    for (idx, ch) in line.char_indices() {
+        if !in_string && line[idx..].starts_with(marker) {
+            return false;
+        }
+        if in_string && line[idx..].starts_with(marker) {
+            saw_quoted_marker = true;
+        }
+
+        if ch == '\\' {
+            escaped = in_string && !escaped;
+            continue;
+        }
+        if ch == '"' && !escaped {
+            in_string = !in_string;
+        }
+        escaped = false;
+    }
+
+    saw_quoted_marker
 }
 
 #[cfg(test)]
@@ -985,5 +1046,72 @@ mod tests {
                 .any(|f| { f.file == "sample.rs" && f.check == "complexity" && f.line == 1 }),
             "expected complexity hotspot findings from run_check"
         );
+    }
+
+    #[test]
+    fn marker_detection_handles_mixed_quoted_and_unquoted_occurrences() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "let s = \"todo!()\";\nfn main() { todo!(); }\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "unreachable-marker" && f.line == 2),
+            "unquoted marker should still be detected when quoted marker appears elsewhere"
+        );
+    }
+
+    #[test]
+    fn long_line_overflow_summary_uses_positive_line_number() {
+        let mut files = HashMap::new();
+        let mut src = String::new();
+        for _ in 0..6 {
+            src.push('x');
+            src.push_str(&"y".repeat(130));
+            src.push('\n');
+        }
+        files.insert("sample.txt".to_string(), src);
+
+        let findings = run_check(&files, "long-lines").expect("analysis failed");
+        let overflow = findings
+            .iter()
+            .find(|f| f.detail.contains("showing first 5"))
+            .expect("overflow summary missing");
+        assert_eq!(overflow.line, 6);
+    }
+
+    #[test]
+    fn run_all_output_order_is_deterministic_across_insertion_orders() {
+        let a_src = "fn a() {\n    // TODO: alpha\n    unreachable!();\n}\n";
+        let b_src = "fn b() {\n    // TODO: beta\n    panic!(\"boom\");\n}\n";
+
+        let mut files_ab = HashMap::new();
+        files_ab.insert("a.rs".to_string(), a_src.to_string());
+        files_ab.insert("b.rs".to_string(), b_src.to_string());
+
+        let mut files_ba = HashMap::new();
+        files_ba.insert("b.rs".to_string(), b_src.to_string());
+        files_ba.insert("a.rs".to_string(), a_src.to_string());
+
+        let report_ab = run_all(&files_ab).expect("analysis failed");
+        let report_ba = run_all(&files_ba).expect("analysis failed");
+
+        let findings_ab = serde_json::to_string(&report_ab.findings).expect("serialize findings");
+        let findings_ba = serde_json::to_string(&report_ba.findings).expect("serialize findings");
+        assert_eq!(
+            findings_ab, findings_ba,
+            "findings ordering should be stable"
+        );
+
+        let dead_ab =
+            serde_json::to_string(&report_ab.dead_markers).expect("serialize dead markers");
+        let dead_ba =
+            serde_json::to_string(&report_ba.dead_markers).expect("serialize dead markers");
+        assert_eq!(dead_ab, dead_ba, "dead_markers ordering should be stable");
     }
 }
