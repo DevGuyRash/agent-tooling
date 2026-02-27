@@ -1038,10 +1038,10 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 
 #[cfg(test)]
 mod tests {
-    use super::MatchKind;
     use super::{
         compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
         is_cfg_test_attr, resolve_scan_roots, should_skip_file, strip_comments_and_strings,
+        MatchKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
