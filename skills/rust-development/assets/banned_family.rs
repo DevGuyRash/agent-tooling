@@ -1,4 +1,14 @@
 // Banned-family test harness for Rust workspaces.
+// Reason: Generated test harness intentionally uses indexing, printing, and
+// assertions for portability; these lints do not apply to the harness itself.
+#![allow(
+    clippy::collapsible_if,
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    clippy::print_stderr,
+    clippy::panic,
+    missing_docs
+)]
 //
 // Copy into any Rust repo as `tests/banned_family.rs` (or any crate's tests/).
 //
@@ -478,8 +488,8 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
 
         if let Some((expr, attr_end_idx)) = parse_cfg_test_attribute_at(lines, idx) {
             if has_non_negated_test_token(&expr) {
-                for mark in idx..=attr_end_idx {
-                    mask[mark] = true;
+                for item in mask.iter_mut().take(attr_end_idx + 1).skip(idx) {
+                    *item = true;
                 }
                 let delta = brace_delta(sanitized_lines[attr_end_idx]);
                 let has_trailing_item = sanitized_lines[attr_end_idx]
@@ -533,12 +543,7 @@ fn is_ident_char(b: u8) -> bool {
 fn is_invariant_escapable_prefix(prefix: &str) -> bool {
     matches!(
         prefix,
-        "unwrap"
-            | "unwrap_err"
-            | "unwrap_unchecked"
-            | "expect"
-            | "expect_err"
-            | "unreachable"
+        "unwrap" | "unwrap_err" | "unwrap_unchecked" | "expect" | "expect_err" | "unreachable"
     )
 }
 
@@ -1154,7 +1159,11 @@ mod tests {
             Some(15)
         );
         assert_eq!(
-            find_banned_prefix("result.expect_err(\"boom\")", "expect_err", &MatchKind::MacroOrCall),
+            find_banned_prefix(
+                "result.expect_err(\"boom\")",
+                "expect_err",
+                &MatchKind::MacroOrCall
+            ),
             Some(7)
         );
     }
@@ -1162,7 +1171,11 @@ mod tests {
     #[test]
     fn find_banned_prefix_does_not_match_similar_non_banned_names() {
         assert_eq!(
-            find_banned_prefix("value.unwrap_or_default()", "unwrap", &MatchKind::MacroOrCall),
+            find_banned_prefix(
+                "value.unwrap_or_default()",
+                "unwrap",
+                &MatchKind::MacroOrCall
+            ),
             None
         );
         assert_eq!(

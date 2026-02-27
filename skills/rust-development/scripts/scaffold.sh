@@ -47,6 +47,14 @@ fi
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
 skill_root="$(CDPATH='' cd -- "$script_dir/.." && pwd)"
 assets_dir="${skill_root}/assets"
+workspace_members_lib="${script_dir}/workspace-members.sh"
+
+if [ ! -f "$workspace_members_lib" ]; then
+  echo "error: helper library not found: $workspace_members_lib" >&2
+  exit 1
+fi
+# shellcheck source=workspace-members.sh
+. "$workspace_members_lib"
 
 CLIPPY_SENTINEL="# rust-development-skill:clippy-lints:start"
 CLIPPY_SENTINEL_END="# rust-development-skill:clippy-lints:end"
@@ -131,11 +139,22 @@ fi
 
 ensure_within_workspace() {
   candidate="$1"
+  allow_git_root="${2:-0}"
   case "$candidate" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target escapes workspace root: $candidate" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$candidate" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target escapes allowed roots: $candidate" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target escapes workspace root: $candidate" >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -145,8 +164,18 @@ ensure_within_workspace() {
   case "$parent_real" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target parent resolves outside workspace root: $candidate" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$parent_real" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target parent resolves outside allowed roots: $candidate" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target parent resolves outside workspace root: $candidate" >&2
+        return 1
+      fi
       ;;
   esac
 }
@@ -158,6 +187,7 @@ safe_copy() {
   src="$1"
   dst="$2"
   label="$3"
+  allow_git_root="${4:-0}"
 
   if [ ! -f "$src" ]; then
     echo "  ✗ source not found: $src" >&2
@@ -169,7 +199,7 @@ safe_copy() {
     return 1
   fi
 
-  ensure_within_workspace "$dst" || return 1
+  ensure_within_workspace "$dst" "$allow_git_root" || return 1
   if [ -d "$dst" ]; then
     echo "  ✗ refusing to overwrite directory destination: $dst" >&2
     return 1
@@ -183,8 +213,18 @@ safe_copy() {
   case "$parent_before" in
     "$workspace_root"|"$workspace_root"/*) ;;
     *)
-      echo "  ✗ target parent resolves outside workspace root: $dst" >&2
-      return 1
+      if [ "$allow_git_root" -eq 1 ] && [ -n "$git_root" ]; then
+        case "$parent_before" in
+          "$git_root"|"$git_root"/*) ;;
+          *)
+            echo "  ✗ target parent resolves outside allowed roots: $dst" >&2
+            return 1
+            ;;
+        esac
+      else
+        echo "  ✗ target parent resolves outside workspace root: $dst" >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -194,7 +234,7 @@ safe_copy() {
     return 1
   fi
 
-  ensure_within_workspace "$dst" || {
+  ensure_within_workspace "$dst" "$allow_git_root" || {
     rm -f -- "$tmp_dst"
     return 1
   }
@@ -241,33 +281,9 @@ resolve_banned_test_destination() {
   fi
 
   member_manifest=""
-  if command -v cargo >/dev/null 2>&1; then
-    member_manifest="$(
-      cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
-        | tr ',' '\n' \
-        | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
-        | LC_ALL=C sort \
-        | awk -v root_manifest="$root_manifest" '$0 != root_manifest { print; exit }'
-    )"
-  fi
-
-  if [ -z "$member_manifest" ]; then
-    member_manifest="$(
-      find "$workspace_root" -name Cargo.toml -print \
-        | LC_ALL=C sort \
-        | awk -v workspace_root="$workspace_root" -v root_manifest="$root_manifest" '
-          $0 == root_manifest { next }
-          {
-            rel = $0
-            prefix = workspace_root "/"
-            if (index(rel, prefix) == 1) {
-              rel = substr(rel, length(prefix) + 1)
-            }
-          }
-          rel ~ /(^|\/)(\.git|\.github|target|node_modules|vendor|tests|test|testdata|fixtures|fixture|examples|benches)(\/|$)/ { next }
-          { print; exit }
-        '
-    )"
+  member_manifest_candidates="$(list_workspace_member_manifests "$root_manifest" 2>/dev/null || true)"
+  if [ -n "$member_manifest_candidates" ]; then
+    member_manifest="$(printf '%s\n' "$member_manifest_candidates" | awk 'NF { print; exit }')"
   fi
 
   if [ -n "$member_manifest" ]; then
@@ -369,6 +385,61 @@ if [ "$do_clippy" -eq 1 ]; then
     printf '\n%s\n' "$CLIPPY_SENTINEL_END" >> "$cargo_toml"
     echo "  ✓ appended clippy lint config to Cargo.toml"
   fi
+
+  # -----------------------------------------------------------------------
+  # Propagate [lints] workspace = true to member crates
+  # -----------------------------------------------------------------------
+  if grep -q '^\[workspace\]' "$cargo_toml" 2>/dev/null; then
+    echo "  Propagating [lints] workspace = true to member crates..."
+    _update_member_manifest_lints() {
+      member_toml="$1"
+      [ -f "$member_toml" ] || return 0
+      [ ! -L "$member_toml" ] || return 0
+      if ! grep -qE '^[[:space:]]*\[package\][[:space:]]*$' "$member_toml" 2>/dev/null; then
+        echo "    ℹ skipping non-package manifest: $member_toml"
+        return 0
+      fi
+      if grep -qE '^[[:space:]]*\[lints([.][^]]+)?\][[:space:]]*$' "$member_toml" 2>/dev/null; then
+        echo "    ⚠ already has [lints] configuration: $member_toml"
+        return 0
+      fi
+      printf '\n[lints]\nworkspace = true\n' >> "$member_toml"
+      echo "    ✓ added [lints] workspace = true: $member_toml"
+    }
+
+    _member_manifest_list=""
+    _member_manifest_source=""
+    _member_manifest_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-scaffold-members.XXXXXX")"
+    if list_workspace_member_manifests "$cargo_toml" >"$_member_manifest_tmp"; then
+      _member_manifest_source="$WORKSPACE_MEMBERS_LAST_SOURCE"
+      _member_manifest_list="$(cat "$_member_manifest_tmp")"
+    fi
+    rm -f -- "$_member_manifest_tmp"
+    if [ -n "$_member_manifest_source" ] && [ -n "$_member_manifest_list" ]; then
+      printf '%s\n' "$_member_manifest_list" | while IFS= read -r _mpath; do
+        [ -n "$_mpath" ] || continue
+        _mpath_dir="$(dirname -- "$_mpath")"
+        if ! _mpath_dir_real="$(CDPATH='' cd -- "$_mpath_dir" 2>/dev/null && pwd -P)"; then
+          echo "    ⚠ unable to resolve member manifest path: $_mpath"
+          continue
+        fi
+        _mpath_real="${_mpath_dir_real}/$(basename -- "$_mpath")"
+        case "$_mpath_real" in
+          "$workspace_root"/Cargo.toml|"$cargo_toml") continue ;;
+          "$workspace_root"/*) ;;
+          *)
+            echo "    ⚠ skipping member manifest outside workspace root: $_mpath_real"
+            continue
+            ;;
+        esac
+        _update_member_manifest_lints "$_mpath_real"
+      done
+    elif [ -n "$_member_manifest_source" ]; then
+      echo "    ℹ no workspace member manifests detected for lint propagation ($_member_manifest_source)"
+    else
+      echo "    ⚠ unable to resolve workspace members; skipping [lints] propagation fallback"
+    fi
+  fi
   echo ""
 fi
 
@@ -378,6 +449,22 @@ fi
 if [ "$do_banned" -eq 1 ]; then
   echo "═══ Banned-family test harness ═══"
   banned_dst="$(resolve_banned_test_destination)"
+
+  # Warn if virtual workspace has no member crates to compile the test
+  _root_manifest="${workspace_root}/Cargo.toml"
+  if grep -q '^\[workspace\]' "$_root_manifest" 2>/dev/null \
+     && ! grep -Eq '^[[:space:]]*\[package\][[:space:]]*$' "$_root_manifest" 2>/dev/null; then
+    _has_members=0
+    _first_member="$(
+      list_workspace_member_manifests "$_root_manifest" 2>/dev/null \
+        | awk 'NF { print; exit }'
+    )"
+    [ -n "$_first_member" ] && _has_members=1
+    if [ "$_has_members" -eq 0 ]; then
+      echo "  ⚠ virtual workspace has no member crates — banned_family.rs cannot be compiled" >&2
+    fi
+  fi
+
   if [ "$banned_dst" != "${workspace_root}/tests/banned_family.rs" ]; then
     echo "  ℹ virtual workspace detected; placing harness under: $(dirname -- "$banned_dst")"
   fi
@@ -393,14 +480,26 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$do_ci" -eq 1 ]; then
   echo "═══ GitHub Actions CI workflow ═══"
+
+  # CI files belong at the repository root, not the Rust workspace root.
+  ci_base="$workspace_root"
+  if [ -n "$git_root" ]; then
+    ci_base="$git_root"
+    if [ "$ci_base" != "$workspace_root" ]; then
+      echo "  ℹ using git root for .github/ paths: $ci_base"
+    fi
+  fi
+
   safe_copy \
     "${assets_dir}/detect_rust_workspaces.py" \
-    "${workspace_root}/.github/scripts/detect_rust_workspaces.py" \
-    "detect_rust_workspaces.py"
+    "${ci_base}/.github/scripts/detect_rust_workspaces.py" \
+    "detect_rust_workspaces.py" \
+    "1"
   safe_copy \
     "${assets_dir}/ci.yml" \
-    "${workspace_root}/.github/workflows/ci.yml" \
-    "ci.yml"
+    "${ci_base}/.github/workflows/ci.yml" \
+    "ci.yml" \
+    "1"
   echo ""
 fi
 

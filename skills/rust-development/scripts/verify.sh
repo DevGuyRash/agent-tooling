@@ -13,10 +13,45 @@
 # Environment:
 #   FILE_SIZE_THRESHOLD   Max lines before warning (default: 300)
 #   ENTRYPOINT_THRESHOLD  Max entrypoint lines before warning (default: 100)
+#   VERIFY_RUN_FMT        Run fmt gate in Phase 2.3 (default: true)
+#   VERIFY_RUN_CLIPPY     Run clippy gate in Phase 2.3 (default: true)
+#   VERIFY_RUN_TESTS      Run test gate in Phase 2.3 (default: true)
 #
 # Requires: rg (ripgrep). grep fallback is provided but limited.
 
 set -eu
+
+# Resolve script location so helper sourcing works regardless of cwd.
+script_path="$0"
+case "$script_path" in
+  */*) : ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    case "$resolved" in
+      */*) script_path="$resolved" ;;
+    esac
+    ;;
+esac
+
+if command -v readlink >/dev/null 2>&1; then
+  while [ -L "$script_path" ]; do
+    link="$(readlink "$script_path" 2>/dev/null || true)"
+    [ -n "$link" ] || break
+    case "$link" in
+      /*) script_path="$link" ;;
+      *) script_path="$(dirname -- "$script_path")/$link" ;;
+    esac
+  done
+fi
+
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
+workspace_members_lib="${script_dir}/workspace-members.sh"
+if [ ! -f "$workspace_members_lib" ]; then
+  echo "error: helper library not found: $workspace_members_lib" >&2
+  exit 1
+fi
+# shellcheck source=workspace-members.sh
+. "$workspace_members_lib"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -49,6 +84,9 @@ echo "Scanning: $(pwd)"
 
 FILE_SIZE_THRESHOLD="${FILE_SIZE_THRESHOLD:-300}"
 ENTRYPOINT_THRESHOLD="${ENTRYPOINT_THRESHOLD:-100}"
+VERIFY_RUN_FMT="${VERIFY_RUN_FMT:-true}"
+VERIFY_RUN_CLIPPY="${VERIFY_RUN_CLIPPY:-true}"
+VERIFY_RUN_TESTS="${VERIFY_RUN_TESTS:-true}"
 
 _require_non_negative_int() {
   _name="$1"
@@ -63,6 +101,22 @@ _require_non_negative_int() {
 
 _require_non_negative_int "FILE_SIZE_THRESHOLD" "$FILE_SIZE_THRESHOLD"
 _require_non_negative_int "ENTRYPOINT_THRESHOLD" "$ENTRYPOINT_THRESHOLD"
+
+_require_bool_flag() {
+  _name="$1"
+  _value="$2"
+  case "$_value" in
+    true|false) ;;
+    *)
+      echo "error: ${_name} must be true|false (got '${_value}')" >&2
+      exit 2
+      ;;
+  esac
+}
+
+_require_bool_flag "VERIFY_RUN_FMT" "$VERIFY_RUN_FMT"
+_require_bool_flag "VERIFY_RUN_CLIPPY" "$VERIFY_RUN_CLIPPY"
+_require_bool_flag "VERIFY_RUN_TESTS" "$VERIFY_RUN_TESTS"
 
 # Counters are written to temp files so they survive subshells.
 _fail_file="$(mktemp "${TMPDIR:-/tmp}/rust-verify-fail.XXXXXX")"
@@ -308,7 +362,121 @@ _search_excluding() {
   return 0
 }
 
+# Resolve git root for CI file detection.
+git_root_dir=""
+if command -v git >/dev/null 2>&1; then
+  git_root_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+
 # ---------------------------------------------------------------------------
+# Phase 2.0: Installation checks — verify skill artifacts are present
+# ---------------------------------------------------------------------------
+echo ""
+echo "═══ Phase 2.0: Installation checks ═══"
+echo ""
+
+_install_ok=1
+
+# Check 1: banned_family.rs test harness
+_found_banned="$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit 2>/dev/null || true)"
+if [ -n "$_found_banned" ]; then
+  pass "banned_family.rs installed: $_found_banned"
+else
+  warn "banned_family.rs not found (run scaffold.sh --banned-test)"
+  _install_ok=0
+fi
+
+# Check 2: CI workflow
+_ci_yml=""
+_ci_script=""
+if [ -f ".github/workflows/ci.yml" ]; then
+  _ci_yml=".github/workflows/ci.yml"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/workflows/ci.yml" ]; then
+  _ci_yml="$git_root_dir/.github/workflows/ci.yml"
+fi
+if [ -f ".github/scripts/detect_rust_workspaces.py" ]; then
+  _ci_script=".github/scripts/detect_rust_workspaces.py"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/scripts/detect_rust_workspaces.py" ]; then
+  _ci_script="$git_root_dir/.github/scripts/detect_rust_workspaces.py"
+fi
+if [ -n "$_ci_yml" ]; then
+  pass "CI workflow installed: $_ci_yml"
+else
+  warn "CI workflow not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+if [ -n "$_ci_script" ]; then
+  pass "CI detector script installed: $_ci_script"
+else
+  warn "CI detector script not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+
+# Check 3: Clippy lint config in Cargo.toml
+_root_manifest="$(pwd)/Cargo.toml"
+if [ -f "$_root_manifest" ]; then
+  if grep -qE '^\[workspace\.lints|^\[lints' "$_root_manifest" 2>/dev/null; then
+    pass "clippy lint config present in Cargo.toml"
+  else
+    warn "no [workspace.lints] or [lints] section in Cargo.toml (run scaffold.sh --clippy)"
+    _install_ok=0
+  fi
+fi
+
+# Check 4: [lints] workspace = true in member crates (workspace only)
+if [ -f "$_root_manifest" ] && grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
+  _member_source=""
+  _member_manifest_list=""
+  _member_manifest_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-members.XXXXXX")"
+  _register_tmp "$_member_manifest_tmp"
+  if list_workspace_member_manifests "$_root_manifest" >"$_member_manifest_tmp"; then
+    _member_source="$WORKSPACE_MEMBERS_LAST_SOURCE"
+    _member_manifest_list="$(cat "$_member_manifest_tmp")"
+  fi
+
+  if [ -z "$_member_source" ]; then
+    warn "unable to resolve workspace members for lint inheritance check"
+    _install_ok=0
+  elif [ -z "$_member_manifest_list" ]; then
+    pass "workspace has no member crates requiring lint inheritance"
+  else
+    _members_missing_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-missing-members.XXXXXX")"
+    _register_tmp "$_members_missing_tmp"
+    while IFS= read -r _member_toml; do
+      [ -n "$_member_toml" ] || continue
+      [ -f "$_member_toml" ] || continue
+      if ! grep -qF '[package]' "$_member_toml" 2>/dev/null; then
+        continue
+      fi
+      if ! awk '
+        BEGIN { in_lints = 0; ok = 0 }
+        /^\[lints\]/ { in_lints = 1; next }
+        /^\[/ { in_lints = 0 }
+        in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+        END { exit ok ? 0 : 1 }
+      ' "$_member_toml" 2>/dev/null; then
+        printf '%s\n' "$_member_toml" >> "$_members_missing_tmp"
+      fi
+    done <<MEMBER_MANIFEST_EOF
+$_member_manifest_list
+MEMBER_MANIFEST_EOF
+
+    _members_missing_lints="$(tr '\n' ' ' < "$_members_missing_tmp" | sed 's/[[:space:]]\+$//')"
+    if [ -z "$_members_missing_lints" ]; then
+      pass "all member crates inherit workspace lints"
+    else
+      warn "member crates missing [lints] workspace = true:${_members_missing_lints}"
+      _install_ok=0
+    fi
+  fi
+fi
+
+if [ "$_install_ok" -eq 0 ]; then
+  echo ""
+  echo "  hint: run scaffold.sh --all to install missing artifacts"
+fi
+
+echo ""
 echo "═══ Phase 2.1: Banned pattern scan ═══"
 echo ""
 # ---------------------------------------------------------------------------
@@ -381,7 +549,206 @@ echo ""
 echo "Resource safety:"
 _search_excluding 'mem::forget\(' '// ALLOW:' "no mem::forget()" "exclude_tests" || true
 _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || true
-_search_excluding 'unsafe[[:space:]]*\{' '// SAFETY:' "no unsafe block without // SAFETY:" "exclude_tests" || true
+# Check unsafe blocks: // SAFETY: may be on the same line OR the preceding line
+{
+  _unsafe_label="no unsafe block without // SAFETY:"
+  _unsafe_violations_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-unsafe.XXXXXX")"
+  _register_tmp "$_unsafe_violations_tmp"
+  _unsafe_files=""
+  if command -v rg >/dev/null 2>&1; then
+    _unsafe_files="$(rg -l --type rust \
+      -g '!**/test/**' -g '!**/tests/**' -g '!**/testdata/**' \
+      -g '!**/bench/**' -g '!**/benches/**' \
+      -g '!**/example/**' -g '!**/examples/**' \
+      -g '!**/fixture/**' -g '!**/fixtures/**' \
+      -g '!**/*_test.rs' -g '!**/tests.rs' \
+      -- 'unsafe[[:space:]]*\{' 2>/dev/null)" || true
+  else
+    _unsafe_files="$(find . -name '*.rs' -not -path '*/target/*' \
+      -not -path '*/test/*' -not -path '*/tests/*' \
+      -not -path '*/testdata/*' -not -path '*/bench/*' \
+      -not -path '*/benches/*' -not -path '*/example/*' \
+      -not -path '*/examples/*' -not -path '*/fixture/*' \
+      -not -path '*/fixtures/*' -not -name '*_test.rs' \
+      -not -name 'tests.rs' \
+      -exec grep -lE 'unsafe[[:space:]]*\{' {} + 2>/dev/null)" || true
+  fi
+  if [ -n "$_unsafe_files" ]; then
+    while IFS= read -r _unsafe_file; do
+      [ -n "$_unsafe_file" ] || continue
+      [ -f "$_unsafe_file" ] || continue
+      awk '
+        function make_raw_term(hash_count,    k, term) {
+          term = "\""
+          for (k = 1; k <= hash_count; k++) {
+            term = term "#"
+          }
+          return term
+        }
+        function detect_raw_start(line, pos,    j) {
+          j = pos + 1
+          if (substr(line, pos, 1) == "b" && substr(line, pos + 1, 1) == "r") {
+            j = pos + 2
+          } else if (substr(line, pos, 1) != "r") {
+            return 0
+          }
+
+          raw_hash_count = 0
+          while (j <= length(line) && substr(line, j, 1) == "#") {
+            raw_hash_count++
+            j++
+          }
+          if (j <= length(line) && substr(line, j, 1) == "\"") {
+            raw_term = make_raw_term(raw_hash_count)
+            raw_term_len = length(raw_term)
+            in_raw = 1
+            return j - pos + 1
+          }
+          raw_hash_count = 0
+          return 0
+        }
+        BEGIN {
+          prev_is_safety_comment = 0
+          in_block_comment = 0
+          in_double = 0
+          in_single = 0
+          escaped = 0
+          in_raw = 0
+          raw_hash_count = 0
+          raw_term = ""
+          raw_term_len = 0
+          _scan_code = ""
+          _scan_comment = ""
+        }
+        {
+          line = $0
+          _scan_code = ""
+          _scan_comment = ""
+          i = 1
+          while (i <= length(line)) {
+            c = substr(line, i, 1)
+            nextc = (i < length(line) ? substr(line, i + 1, 1) : "")
+
+            if (in_block_comment > 0) {
+              if (c == "/" && nextc == "*") {
+                in_block_comment++
+                i += 2
+                continue
+              }
+              if (c == "*" && nextc == "/") {
+                in_block_comment--
+                i += 2
+                continue
+              }
+              i++
+              continue
+            }
+
+            if (in_raw) {
+              if (substr(line, i, raw_term_len) == raw_term) {
+                close_len = raw_term_len
+                in_raw = 0
+                raw_hash_count = 0
+                raw_term = ""
+                raw_term_len = 0
+                i += close_len
+                continue
+              }
+              i++
+              continue
+            }
+
+            if (in_double) {
+              if (escaped) {
+                escaped = 0
+                i++
+                continue
+              }
+              if (c == "\\") {
+                escaped = 1
+                i++
+                continue
+              }
+              if (c == "\"") {
+                in_double = 0
+              }
+              i++
+              continue
+            }
+
+            if (in_single) {
+              if (escaped) {
+                escaped = 0
+                i++
+                continue
+              }
+              if (c == "\\") {
+                escaped = 1
+                i++
+                continue
+              }
+              if (c == "'\''") {
+                in_single = 0
+              }
+              i++
+              continue
+            }
+
+            raw_consumed = 0
+            if (c == "r" || c == "b") {
+              raw_consumed = detect_raw_start(line, i)
+              if (raw_consumed > 0) {
+                i += raw_consumed
+                continue
+              }
+            }
+
+            if (c == "/" && nextc == "/") {
+              _scan_comment = substr(line, i)
+              break
+            }
+            if (c == "/" && nextc == "*") {
+              in_block_comment = 1
+              i += 2
+              continue
+            }
+            if (c == "\"") {
+              in_double = 1
+              i++
+              continue
+            }
+            if (c == "'\''") {
+              in_single = 1
+              i++
+              continue
+            }
+
+            _scan_code = _scan_code c
+            i++
+          }
+
+          cur_has_inline_safety = (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
+          cur_is_safety_comment = (_scan_code ~ /^[[:space:]]*$/) && (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
+          if (_scan_code ~ /unsafe[[:space:]]*\{/) {
+            if (!(cur_has_inline_safety || prev_is_safety_comment)) {
+              printf "%s:%d:%s\n", FILENAME, NR, line
+            }
+          }
+          prev_is_safety_comment = cur_is_safety_comment
+        }
+      ' "$_unsafe_file" >> "$_unsafe_violations_tmp"
+    done <<UNSAFE_FILES_EOF
+$_unsafe_files
+UNSAFE_FILES_EOF
+  fi
+  _unsafe_violations="$(sed -n '1,5p' "$_unsafe_violations_tmp")"
+  if [ -n "$_unsafe_violations" ]; then
+    printf '%s\n' "$_unsafe_violations"
+    fail "$_unsafe_label"
+  else
+    pass "$_unsafe_label"
+  fi
+} || true
 
 echo ""
 echo "Idiomatic checks:"
@@ -478,34 +845,46 @@ echo ""
 # ---------------------------------------------------------------------------
 
 echo "Format check:"
-if command -v rustfmt >/dev/null 2>&1; then
-  if cargo fmt --all --check 2>&1; then
-    pass "cargo fmt --all --check"
+if [ "$VERIFY_RUN_FMT" = "true" ]; then
+  if command -v rustfmt >/dev/null 2>&1; then
+    if cargo fmt --all --check 2>&1; then
+      pass "cargo fmt --all --check"
+    else
+      fail "cargo fmt --all --check"
+    fi
   else
-    fail "cargo fmt --all --check"
+    fail "rustfmt not installed (rustup component add rustfmt)"
   fi
 else
-  fail "rustfmt not installed (rustup component add rustfmt)"
+  pass "cargo fmt --all --check (skipped: VERIFY_RUN_FMT=false)"
 fi
 
 echo ""
 echo "Clippy:"
-if cargo clippy --version >/dev/null 2>&1; then
-  if cargo clippy --workspace --all-targets -- -D warnings 2>&1; then
-    pass "cargo clippy --workspace --all-targets -- -D warnings"
+if [ "$VERIFY_RUN_CLIPPY" = "true" ]; then
+  if cargo clippy --version >/dev/null 2>&1; then
+    if cargo clippy --workspace --all-targets -- -D warnings 2>&1; then
+      pass "cargo clippy --workspace --all-targets -- -D warnings"
+    else
+      fail "cargo clippy --workspace --all-targets -- -D warnings"
+    fi
   else
-    fail "cargo clippy --workspace --all-targets -- -D warnings"
+    fail "clippy not installed (rustup component add clippy)"
   fi
 else
-  fail "clippy not installed (rustup component add clippy)"
+  pass "cargo clippy --workspace --all-targets -- -D warnings (skipped: VERIFY_RUN_CLIPPY=false)"
 fi
 
 echo ""
 echo "Tests:"
-if cargo test --workspace 2>&1; then
-  pass "cargo test --workspace"
+if [ "$VERIFY_RUN_TESTS" = "true" ]; then
+  if cargo test --workspace 2>&1; then
+    pass "cargo test --workspace"
+  else
+    fail "cargo test --workspace"
+  fi
 else
-  fail "cargo test --workspace"
+  pass "cargo test --workspace (skipped: VERIFY_RUN_TESTS=false)"
 fi
 
 echo ""

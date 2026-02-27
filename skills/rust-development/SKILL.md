@@ -14,7 +14,7 @@ description: >-
   test harness, and GitHub Actions CI template.
 metadata:
   author: agent-skills
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Rust Development
@@ -47,6 +47,16 @@ WHEN the task does not clearly match a row THEN you SHALL default to Standard.
 You SHALL read through existing code or the change request before any structured work.
 You SHALL record unfiltered observations — smells, risks, unclear intent, potential simplifications.
 You SHALL NOT consult checklists or rules during this round.
+
+You SHALL output your observations using the block below. You SHALL NOT skip this block.
+
+> **Required output — Round \u22121**
+>
+>     ### Round \u22121 \u2014 Observations
+>
+>     1. <observation>
+>     2. <observation>
+>     3. ...
 
 ### Phase 0 — Plan and stub
 
@@ -99,9 +109,31 @@ else
 fi
 ```
 
+NOTE: Use `cargo check` (not `cargo clippy`) during Phase 0. The clippy config denies `todo!()`, which is expected in stubs. Clippy runs later in Phase 2.
+
 You SHALL present stubs for review with evidence: requirement summary, complete stub files, `cargo check` output, and an approval request.
 WHEN stubs do not compile THEN you SHALL fix them before proceeding.
 You SHALL NOT proceed to Phase 1 until stubs compile and are approved.
+
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — Phase 0 Stub Review**
+>
+>     ### Phase 0 — Stub Review
+>
+>     **Requirement summary:** <2-5 sentences>
+>
+>     **Files:** <list of files created or modified>
+>
+>     **Stub code:** <complete stub files>
+>
+>     **cargo check output:**
+>     <paste cargo check output>
+>
+>     **Approval request:** Stubs compile. Proceed to Phase 1?
+
+WHEN working in non-interactive mode (approval policy is `never`) THEN you SHALL emit the block and proceed without waiting.
+WHEN working in interactive mode THEN you SHALL wait for explicit approval before proceeding.
 
 ### Phase 1 — Implement (Red/Green/Refactor)
 
@@ -126,7 +158,12 @@ cargo test <test_name> 2>&1 | tail -20
 # Expected: FAILED (the function body is still todo!() or returns a wrong value)
 ```
 
-Evidence: you SHALL record the test name and the failure output.
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — RED**
+>
+>     #### RED — `<test_name>`
+>     <paste cargo test failure output>
 
 #### Phase 1.2 — GREEN: Write the minimal implementation to pass
 
@@ -140,7 +177,12 @@ cargo test 2>&1 | tail -5
 # Expected: ok. N passed; 0 failed
 ```
 
-Evidence: you SHALL record the passing test output.
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — GREEN**
+>
+>     #### GREEN — `<test_name>`
+>     <paste cargo test passing output>
 
 #### Phase 1.3 — REFACTOR: Improve under green
 
@@ -149,19 +191,22 @@ You SHALL NOT change observable behavior during refactor -- all tests SHALL rema
 You SHALL run `cargo test` after every refactor pass and confirm all tests still pass.
 WHEN no meaningful refactor is needed THEN you SHALL note "No refactor needed" and proceed.
 
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — REFACTOR**
+>
+>     #### REFACTOR — `<function_or_unit_name>`
+>     <description of changes, or "No refactor needed.">
+>     <paste cargo test output confirming all tests still pass>
+
 After completing 1.1-1.2-1.3 for one unit, you SHALL loop back to Phase 1.1 for the next test stub.
 You SHALL continue until all `todo!()` bodies in both tests and functions are replaced.
 
 #### Phase 1 rules (apply across all sub-phases)
 
-You SHALL NOT use these patterns in non-test code:
-- You SHALL NOT use `.unwrap()` / `.expect()` without a same-line `// INVARIANT:` comment.
-- You SHALL NOT use `panic!()`, `todo!()`, `unimplemented!()`, or `dbg!()`.
-- You SHALL NOT use `unreachable!()` without a same-line `// INVARIANT:` comment.
-- You SHALL NOT use `println!()` / `eprintln!()` outside entrypoints.
-- You SHALL NOT use glob imports outside tests.
-- You SHALL NOT use `&String` / `&Vec<T>` / `&Box<T>` parameters.
-- You SHALL NOT use `.iter().next()` on slices/`Vec`; for collections without `.first()`, you MAY use `.iter().next()` only with same-line `// ALLOW: non-slice-next`.
+You SHALL NOT use any pattern listed in `references/banned-patterns.md`.
+WHEN a banned pattern has a specific escape hatch (for example `// INVARIANT:`) THEN you SHALL use that escape hatch.
+WHEN no pattern-specific escape hatch exists and the pattern must remain THEN you SHALL add `// ALLOW: <reason>` on the same line.
 
 You SHALL use these idioms:
 - You SHALL use `?` for error propagation.
@@ -179,6 +224,12 @@ IF a dependency is trivial to implement in fewer than 50 lines THEN you SHALL NO
 You SHALL NOT introduce async runtime crates (`tokio`, `async-std`) unless the repository already uses one — prefer `std::future`, `std::task`, and `std::thread`.
 You SHALL NOT use `serde`, `anyhow`, or `thiserror` in libraries — use `std` traits and custom error enums.
 
+#### Phase 1 — Test coverage rule
+
+You SHALL write at minimum one happy-path and one error/edge-case test per public function.
+You SHALL exercise every variant of every error enum defined in the module.
+WHEN an error variant exists but no test triggers it THEN you SHALL add a test that does before Phase 1 is complete.
+
 ### Phase 2 — Verify
 
 You SHALL run the verification script:
@@ -189,6 +240,22 @@ You SHALL run the verification script:
 
 WHEN `verify.sh` is unavailable THEN you SHALL run the checks from `references/verify-manual.md`.
 You SHALL paste the output of all Phase 2 commands as evidence.
+
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — Phase 2 Verification**
+>
+>     ### Phase 2 — Verification Evidence
+>
+>     <paste full verify.sh output or manual check output>
+
+`verify.sh` now includes installation checks (Phase 2.0) that confirm:
+- `banned_family.rs` test harness is installed in a crate's `tests/` directory.
+- `.github/workflows/ci.yml` and `.github/scripts/detect_rust_workspaces.py` are present.
+- Clippy lint config is present in the root `Cargo.toml`.
+- All workspace member crates inherit lints via `[lints] workspace = true`.
+
+IF installation checks report missing artifacts THEN you SHALL run `scaffold.sh --all` first.
 IF any checks fail THEN you SHALL fix the issues and re-run verification.
 
 ### Phase 3 — Completion checklist
@@ -206,7 +273,29 @@ You SHALL confirm every item below and paste the checklist with `[x]` marks and 
 - [ ] You SHALL confirm `cargo test` passes.
 - [ ] You SHALL confirm no `todo!()` remains.
 - [ ] You SHALL confirm new tests cover happy-path and error-case.
+- [ ] You SHALL confirm every error enum variant is exercised by at least one test.
 - [ ] You SHALL confirm doc comments are complete on all public items with Examples.
+
+You SHALL output the checklist above with `[x]` marks and supporting evidence as a single block.
+You SHALL NOT skip this block or return a null/empty completion message.
+
+> **Required output — Phase 3 Checklist**
+>
+>     ### Phase 3 — Completion Checklist
+>
+>     - [x] Phase 0 stubs compiled: `cargo check` output above.
+>     - [x] Round −1 observations addressed: <brief note or "see Round −1">.
+>     - [x] TDD cycle followed: RED/GREEN/REFACTOR evidence above for each unit.
+>     - [x] Banned patterns clean: verify.sh scan above.
+>     - [x] No oversized files: verify.sh complexity check above.
+>     - [x] `cargo build` passes.
+>     - [x] `cargo fmt --check` passes.
+>     - [x] `cargo clippy --workspace --all-targets -- -D warnings` passes.
+>     - [x] `cargo test` passes.
+>     - [x] No `todo!()` remains.
+>     - [x] Tests cover happy-path and error-case for all functions.
+>     - [x] Every error enum variant exercised by at least one test.
+>     - [x] Doc comments complete on all public items with Examples.
 
 ### Round 5 — Final sanity check
 
@@ -214,6 +303,18 @@ You SHALL set aside all checklists and evaluate holistically.
 You SHALL revisit Round −1 observations and confirm each was addressed or documented.
 WHEN something still feels wrong but you cannot pinpoint why THEN you SHALL note it explicitly.
 You SHALL include a brief holistic assessment confirming Round −1 observations were revisited.
+
+You SHALL output the block below as evidence. You SHALL NOT skip this block.
+
+> **Required output — Round 5**
+>
+>     ### Round 5 — Holistic Assessment
+>
+>     **Round −1 revisit:**
+>     - Observation 1: <addressed / accepted / still open>
+>     - Observation 2: ...
+>
+>     **Overall assessment:** <1-3 sentences on code quality, test coverage, residual concerns.>
 
 ---
 
@@ -283,3 +384,4 @@ You SHALL load only the reference needed for the current task.
 | `assets/clippy-lints.toml` | `scaffold.sh --clippy` — workspace lint snippet |
 | `assets/banned_family.rs` | `scaffold.sh --banned-test` — test harness |
 | `assets/ci.yml` | `scaffold.sh --ci` — GitHub Actions workflow |
+| `assets/detect_rust_workspaces.py` | `scaffold.sh --ci` — CI workspace detector |
