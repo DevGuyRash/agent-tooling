@@ -181,7 +181,7 @@ jobs:
             true)
               if verify_script="$(resolve_verify_script_override)"; then
                 run_verify="true"
-              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+              elif [ -n "${CI_VERIFY_SCRIPT:-}" ]; then
                 exit 1
               elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
@@ -196,7 +196,7 @@ jobs:
             auto|"")
               if verify_script="$(resolve_verify_script_override)"; then
                 run_verify="true"
-              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+              elif [ -n "${CI_VERIFY_SCRIPT:-}" ]; then
                 exit 1
               elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
@@ -206,7 +206,7 @@ jobs:
               echo "Unknown CI_RUN_VERIFY='$run_verify_mode' (expected auto|true|false); treating as auto" >&2
               if verify_script="$(resolve_verify_script_override)"; then
                 run_verify="true"
-              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+              elif [ -n "${CI_VERIFY_SCRIPT:-}" ]; then
                 exit 1
               elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
