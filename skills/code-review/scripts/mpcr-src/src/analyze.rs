@@ -340,7 +340,7 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
         for marker in &markers {
             let marker_lower = marker.to_ascii_lowercase();
             if trimmed.contains(&marker_lower) {
-                if is_marker_inside_double_quotes(&lower_line, &marker_lower) {
+                if is_marker_inside_quotes(&lower_line, &marker_lower) {
                     continue;
                 }
                 out.push(AnalysisFinding {
@@ -535,7 +535,7 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
         let lower_line = line.to_ascii_lowercase();
         for marker in &markers {
             if trimmed.contains(marker) {
-                if is_marker_inside_double_quotes(&lower_line, &marker.to_ascii_lowercase()) {
+                if is_marker_inside_quotes(&lower_line, &marker.to_ascii_lowercase()) {
                     continue;
                 }
                 out.push(AnalysisFinding {
@@ -733,18 +733,7 @@ fn truncate_line(line: &str, max: usize) -> String {
     format!("{}...", &trimmed[..safe_end])
 }
 
-const FUNCTION_START_PATTERNS: &[&str] = &[
-    "fn ",
-    "def ",
-    "func ",
-    "function ",
-    "sub ",
-    "method ",
-    "public ",
-    "private ",
-    "protected ",
-    "static ",
-];
+const FUNCTION_START_PATTERNS: &[&str] = &["fn ", "def ", "func ", "function ", "sub ", "method "];
 
 fn should_skip_line_for_function_analysis(line: &str) -> bool {
     let trimmed = line.trim();
@@ -756,11 +745,15 @@ fn should_skip_line_for_function_analysis(line: &str) -> bool {
 
 fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
     let trimmed = line.trim();
-    let lower_line = line.to_ascii_lowercase();
+    let lower_line = trimmed.to_ascii_lowercase();
     let inline_fn_syntax = lower_line.contains("fn ")
         && (trimmed.contains('(') || trimmed.contains('{'))
-        && !is_marker_inside_double_quotes(&lower_line, "fn ");
-    fn_patterns.iter().any(|p| trimmed.starts_with(p)) || inline_fn_syntax
+        && !is_marker_inside_quotes(&lower_line, "fn ");
+    let callable_modifier_start = is_callable_modifier_declaration(&lower_line);
+
+    fn_patterns.iter().any(|p| lower_line.starts_with(p))
+        || callable_modifier_start
+        || inline_fn_syntax
 }
 
 fn extract_name_hint(line: &str) -> String {
@@ -802,34 +795,59 @@ fn is_probable_string_literal_line(line: &str) -> bool {
         || trimmed.starts_with("\"\"\"")
 }
 
-fn is_marker_inside_double_quotes(line: &str, marker: &str) -> bool {
+fn is_marker_inside_quotes(line: &str, marker: &str) -> bool {
     if marker.is_empty() || !line.contains(marker) {
         return false;
     }
 
-    let mut in_string = false;
+    let mut in_quote: Option<char> = None;
     let mut escaped = false;
     let mut saw_quoted_marker = false;
 
     for (idx, ch) in line.char_indices() {
-        if !in_string && line[idx..].starts_with(marker) {
+        if in_quote.is_none() && line[idx..].starts_with(marker) {
             return false;
         }
-        if in_string && line[idx..].starts_with(marker) {
+        if in_quote.is_some() && line[idx..].starts_with(marker) {
             saw_quoted_marker = true;
         }
 
         if ch == '\\' {
-            escaped = in_string && !escaped;
+            escaped = in_quote.is_some() && !escaped;
             continue;
         }
-        if ch == '"' && !escaped {
-            in_string = !in_string;
+
+        if let Some(quote_char) = in_quote {
+            if ch == quote_char && !escaped {
+                in_quote = None;
+            }
+        } else if (ch == '"' || ch == '\'') && !escaped {
+            in_quote = Some(ch);
         }
+
         escaped = false;
     }
 
     saw_quoted_marker
+}
+
+fn is_callable_modifier_declaration(lower_line: &str) -> bool {
+    const MODIFIER_PREFIXES: &[&str] = &["public ", "private ", "protected ", "static "];
+    const NON_CALLABLE_TOKENS: &[&str] = &[" class ", " interface ", " enum ", " struct "];
+
+    if !MODIFIER_PREFIXES
+        .iter()
+        .any(|prefix| lower_line.starts_with(prefix))
+    {
+        return false;
+    }
+    if !lower_line.contains('(') || lower_line.ends_with(';') {
+        return false;
+    }
+
+    !NON_CALLABLE_TOKENS
+        .iter()
+        .any(|token| lower_line.contains(token))
 }
 
 #[cfg(test)]
@@ -919,6 +937,40 @@ mod tests {
                 .iter()
                 .all(|f| f.check != "dead-code-marker"),
             "string literals should not be reported as dead-code markers"
+        );
+    }
+
+    #[test]
+    fn dead_code_marker_in_single_quoted_literal_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.js".to_string(),
+            "const marker = '#if 0';\nconst dead = '#[allow(dead_code)]';\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker"),
+            "single-quoted literals should not be reported as dead-code markers"
+        );
+    }
+
+    #[test]
+    fn unreachable_marker_in_single_quoted_literal_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.js".to_string(),
+            "const msg = 'todo!()';\nconst panic_text = 'panic!(\"boom\")';\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "unreachable-marker"),
+            "single-quoted literals should not be reported as unreachable markers"
         );
     }
 
@@ -1089,6 +1141,56 @@ mod tests {
                 .any(|f| f.check == "unreachable-marker" && f.line == 2),
             "unquoted marker should still be detected when quoted marker appears elsewhere"
         );
+    }
+
+    #[test]
+    fn marker_detection_handles_single_quoted_and_unquoted_occurrences() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.js".to_string(),
+            "const s = 'todo!()';\nfunction main() { todo!(); }\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "unreachable-marker" && f.line == 2),
+            "unquoted marker should still be detected when single-quoted marker appears elsewhere"
+        );
+    }
+
+    #[test]
+    fn function_start_detection_ignores_non_callable_modifier_lines() {
+        assert!(!is_function_start(
+            "public class Foo {",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "private int value;",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "protected string name;",
+            FUNCTION_START_PATTERNS
+        ));
+    }
+
+    #[test]
+    fn function_start_detection_accepts_callable_modifier_lines() {
+        assert!(is_function_start(
+            "public void run() {",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(is_function_start(
+            "private static int calc(int x) {",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(is_function_start(
+            "protected Task ExecuteAsync() {",
+            FUNCTION_START_PATTERNS
+        ));
     }
 
     #[test]
