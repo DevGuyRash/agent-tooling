@@ -120,6 +120,7 @@ jobs:
           #   CI_RUN_CLIPPY=true|false      (default: true)
           #   CI_RUN_TESTS=true|false       (default: true)
           #   CI_RUN_VERIFY=true|false|auto (default: auto)
+          #   CI_VERIFY_SCRIPT=<path>       (optional explicit override)
           #
           #   CI_ALL_FEATURES=true|false    (default: false)
           #   CI_LOCKED=auto|true|false     (default: auto)
@@ -141,31 +142,51 @@ jobs:
 
           use_mold="${CI_USE_MOLD:-false}"
           use_sccache="${CI_USE_SCCACHE:-false}"
+          repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
           find_verify_script() {
-            repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-            for candidate in \
-              "$repo_root/.github/scripts/verify.sh" \
-              "$repo_root/scripts/verify.sh" \
-              ".github/scripts/verify.sh" \
-              "scripts/verify.sh" \
-            ; do
-              if [ -f "$candidate" ]; then
-                printf '%s\n' "$candidate"
-                return 0
-              fi
-            done
+            # Auto-discovery intentionally limits to the namespaced CI-owned
+            # path to avoid executing unrelated project verify scripts.
+            candidate="$repo_root/.github/scripts/verify.sh"
+            if [ -f "$candidate" ]; then
+              printf '%s\n' "$candidate"
+              return 0
+            fi
             return 1
+          }
+
+          resolve_verify_script_override() {
+            override="${CI_VERIFY_SCRIPT:-}"
+            if [ -z "$override" ]; then
+              return 1
+            fi
+
+            case "$override" in
+              /*) candidate="$override" ;;
+              *) candidate="$repo_root/$override" ;;
+            esac
+
+            if [ -f "$candidate" ]; then
+              printf '%s\n' "$candidate"
+              return 0
+            fi
+
+            echo "CI_VERIFY_SCRIPT is set but does not exist: $candidate" >&2
+            return 2
           }
 
           verify_script=""
           run_verify="false"
           case "$run_verify_mode" in
             true)
-              if verify_script="$(find_verify_script)"; then
+              if verify_script="$(resolve_verify_script_override)"; then
+                run_verify="true"
+              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+                exit 1
+              elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
               else
-                echo "CI_RUN_VERIFY=true but verify.sh was not found" >&2
+                echo "CI_RUN_VERIFY=true but .github/scripts/verify.sh was not found (or set CI_VERIFY_SCRIPT)" >&2
                 exit 1
               fi
               ;;
@@ -173,13 +194,21 @@ jobs:
               run_verify="false"
               ;;
             auto|"")
-              if verify_script="$(find_verify_script)"; then
+              if verify_script="$(resolve_verify_script_override)"; then
+                run_verify="true"
+              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+                exit 1
+              elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
               fi
               ;;
             *)
               echo "Unknown CI_RUN_VERIFY='$run_verify_mode' (expected auto|true|false); treating as auto" >&2
-              if verify_script="$(find_verify_script)"; then
+              if verify_script="$(resolve_verify_script_override)"; then
+                run_verify="true"
+              elif [ "${CI_VERIFY_SCRIPT:-}" != "" ]; then
+                exit 1
+              elif verify_script="$(find_verify_script)"; then
                 run_verify="true"
               fi
               ;;
@@ -374,7 +403,9 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Banned-pattern scan via verify.sh (optional; runs if script exists)
-      # CI_RUN_VERIFY=true|false|auto (default: auto — runs if verify.sh is present)
+      # CI_RUN_VERIFY=true|false|auto (default: auto — runs only when
+      # .github/scripts/verify.sh is present)
+      # CI_VERIFY_SCRIPT optionally overrides the verify script path.
       # -----------------------------------------------------------------------
       - name: Banned-pattern scan
         if: steps.cfg.outputs.run_verify == 'true'
@@ -386,6 +417,7 @@ jobs:
           VERIFY_RUN_TESTS: ${{ steps.cfg.outputs.run_tests }}
         run: |
           set -euo pipefail
+          repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
           verify_script="${{ steps.cfg.outputs.verify_script }}"
           if [ -z "$verify_script" ]; then
             echo "verify.sh not found but CI_RUN_VERIFY resolved to true" >&2
@@ -395,6 +427,13 @@ jobs:
             echo "verify.sh path from cfg step is not a file: $verify_script" >&2
             exit 1
           fi
+          case "$verify_script" in
+            "$repo_root"/*) ;;
+            *)
+              echo "verify.sh path from cfg step is outside repository root: $verify_script" >&2
+              exit 1
+              ;;
+          esac
           echo "Running banned-pattern scan via $verify_script"
           bash "$verify_script" 2>&1 | tee "$RUST_CI_DIAG_DIR/verify.log"
 
