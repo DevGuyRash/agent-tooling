@@ -578,67 +578,155 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       [ -n "$_unsafe_file" ] || continue
       [ -f "$_unsafe_file" ] || continue
       awk '
-        function split_comment(line,    i, c, nextc, in_double, in_single, escaped, comment_idx) {
+        function make_raw_term(hash_count,    k, term) {
+          term = "\""
+          for (k = 1; k <= hash_count; k++) {
+            term = term "#"
+          }
+          return term
+        }
+        function detect_raw_start(line, pos,    j) {
+          j = pos + 1
+          if (substr(line, pos, 1) == "b" && substr(line, pos + 1, 1) == "r") {
+            j = pos + 2
+          } else if (substr(line, pos, 1) != "r") {
+            return 0
+          }
+
+          raw_hash_count = 0
+          while (j <= length(line) && substr(line, j, 1) == "#") {
+            raw_hash_count++
+            j++
+          }
+          if (j <= length(line) && substr(line, j, 1) == "\"") {
+            raw_term = make_raw_term(raw_hash_count)
+            raw_term_len = length(raw_term)
+            in_raw = 1
+            return j - pos + 1
+          }
+          raw_hash_count = 0
+          return 0
+        }
+        BEGIN {
+          prev_is_safety_comment = 0
+          in_block_comment = 0
           in_double = 0
           in_single = 0
           escaped = 0
-          comment_idx = 0
-          for (i = 1; i <= length(line); i++) {
+          in_raw = 0
+          raw_hash_count = 0
+          raw_term = ""
+          raw_term_len = 0
+          _scan_code = ""
+          _scan_comment = ""
+        }
+        {
+          line = $0
+          _scan_code = ""
+          _scan_comment = ""
+          i = 1
+          while (i <= length(line)) {
             c = substr(line, i, 1)
             nextc = (i < length(line) ? substr(line, i + 1, 1) : "")
+
+            if (in_block_comment > 0) {
+              if (c == "/" && nextc == "*") {
+                in_block_comment++
+                i += 2
+                continue
+              }
+              if (c == "*" && nextc == "/") {
+                in_block_comment--
+                i += 2
+                continue
+              }
+              i++
+              continue
+            }
+
+            if (in_raw) {
+              if (substr(line, i, raw_term_len) == raw_term) {
+                close_len = raw_term_len
+                in_raw = 0
+                raw_hash_count = 0
+                raw_term = ""
+                raw_term_len = 0
+                i += close_len
+                continue
+              }
+              i++
+              continue
+            }
+
             if (in_double) {
               if (escaped) {
                 escaped = 0
+                i++
                 continue
               }
               if (c == "\\") {
                 escaped = 1
+                i++
                 continue
               }
               if (c == "\"") {
                 in_double = 0
               }
+              i++
               continue
             }
+
             if (in_single) {
               if (escaped) {
                 escaped = 0
+                i++
                 continue
               }
               if (c == "\\") {
                 escaped = 1
+                i++
                 continue
               }
               if (c == "'\''") {
                 in_single = 0
               }
+              i++
+              continue
+            }
+
+            raw_consumed = 0
+            if (c == "r" || c == "b") {
+              raw_consumed = detect_raw_start(line, i)
+              if (raw_consumed > 0) {
+                i += raw_consumed
+                continue
+              }
+            }
+
+            if (c == "/" && nextc == "/") {
+              _scan_comment = substr(line, i)
+              break
+            }
+            if (c == "/" && nextc == "*") {
+              in_block_comment = 1
+              i += 2
               continue
             }
             if (c == "\"") {
               in_double = 1
+              i++
               continue
             }
             if (c == "'\''") {
               in_single = 1
+              i++
               continue
             }
-            if (c == "/" && nextc == "/") {
-              comment_idx = i
-              break
-            }
+
+            _scan_code = _scan_code c
+            i++
           }
-          if (comment_idx > 0) {
-            _scan_code = substr(line, 1, comment_idx - 1)
-            _scan_comment = substr(line, comment_idx)
-          } else {
-            _scan_code = line
-            _scan_comment = ""
-          }
-        }
-        BEGIN { prev_is_safety_comment = 0; _scan_code = ""; _scan_comment = "" }
-        {
-          line = $0
-          split_comment(line)
+
           cur_has_inline_safety = (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
           cur_is_safety_comment = (_scan_code ~ /^[[:space:]]*$/) && (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
           if (_scan_code ~ /unsafe[[:space:]]*\{/) {

@@ -193,17 +193,10 @@ jobs:
             false)
               run_verify="false"
               ;;
-            auto|"")
-              if verify_script="$(resolve_verify_script_override)"; then
-                run_verify="true"
-              elif [ -n "${CI_VERIFY_SCRIPT:-}" ]; then
-                exit 1
-              elif verify_script="$(find_verify_script)"; then
-                run_verify="true"
+            auto|""|*)
+              if [ "$run_verify_mode" != "auto" ] && [ -n "$run_verify_mode" ]; then
+                echo "Unknown CI_RUN_VERIFY='$run_verify_mode' (expected auto|true|false); treating as auto" >&2
               fi
-              ;;
-            *)
-              echo "Unknown CI_RUN_VERIFY='$run_verify_mode' (expected auto|true|false); treating as auto" >&2
               if verify_script="$(resolve_verify_script_override)"; then
                 run_verify="true"
               elif [ -n "${CI_VERIFY_SCRIPT:-}" ]; then
