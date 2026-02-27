@@ -1746,8 +1746,7 @@ fn run() -> anyhow::Result<()> {
             ProtocolCommands::DispatchList => {
                 let roles = protocol::dispatch_list()?;
                 if json {
-                    let j = serde_json::to_string_pretty(&roles)?;
-                    println!("{j}");
+                    write_json(json_pretty, &roles)?;
                 } else {
                     for role in &roles {
                         println!("{role}");
@@ -1777,50 +1776,11 @@ fn run() -> anyhow::Result<()> {
             }
             AnalyzeCommands::Check { name, files } => {
                 let file_map = load_file_map(&files)?;
-                if name == "duplicates" {
-                    let duplicate_blocks = analyze::find_duplicate_blocks(&file_map);
-                    if json {
-                        write_json(json_pretty, &duplicate_blocks)?;
-                    } else {
-                        for dup in &duplicate_blocks {
-                            println!(
-                                "Duplicate block ({} lines, {} locations):",
-                                dup.line_count,
-                                dup.locations.len()
-                            );
-                            for loc in &dup.locations {
-                                println!("  {}:{}", loc.file, loc.start_line);
-                            }
-                        }
-                    }
-                } else if name == "complexity" {
-                    let complexity_hotspots = analyze::find_complexity_hotspots(&file_map);
-                    if json {
-                        write_json(json_pretty, &complexity_hotspots)?;
-                    } else {
-                        for spot in &complexity_hotspots {
-                            println!(
-                                "{}:{} {} (nesting={}, branches={})",
-                                spot.file,
-                                spot.start_line,
-                                spot.name_hint,
-                                spot.max_nesting,
-                                spot.branch_count
-                            );
-                        }
-                    }
+                let output = analyze::run_check_output(&file_map, &name)?;
+                if json {
+                    write_json(json_pretty, &output)?;
                 } else {
-                    let findings = analyze::run_check(&file_map, &name)?;
-                    if json {
-                        write_json(json_pretty, &findings)?;
-                    } else {
-                        for f in &findings {
-                            println!("[{}] {}:{} — {}", f.check, f.file, f.line, f.detail);
-                            if !f.excerpt.is_empty() {
-                                println!("  > {}", f.excerpt);
-                            }
-                        }
-                    }
+                    print_analysis_check_text(&output);
                 }
             }
             AnalyzeCommands::ListChecks => {
@@ -1899,6 +1859,44 @@ fn print_analysis_text(report: &analyze::AnalysisReport) {
         );
         for d in &report.dead_markers {
             println!("  {}:{} — {}", d.file, d.line, d.detail);
+        }
+    }
+}
+
+fn print_analysis_check_text(output: &analyze::CheckOutput) {
+    match output {
+        analyze::CheckOutput::Findings { findings, .. } => {
+            for f in findings {
+                println!("[{}] {}:{} — {}", f.check, f.file, f.line, f.detail);
+                if !f.excerpt.is_empty() {
+                    println!("  > {}", f.excerpt);
+                }
+            }
+        }
+        analyze::CheckOutput::DuplicateBlocks {
+            duplicate_blocks, ..
+        } => {
+            for dup in duplicate_blocks {
+                println!(
+                    "Duplicate block ({} lines, {} locations):",
+                    dup.line_count,
+                    dup.locations.len()
+                );
+                for loc in &dup.locations {
+                    println!("  {}:{}", loc.file, loc.start_line);
+                }
+            }
+        }
+        analyze::CheckOutput::ComplexityHotspots {
+            complexity_hotspots,
+            ..
+        } => {
+            for spot in complexity_hotspots {
+                println!(
+                    "{}:{} {} (nesting={}, branches={})",
+                    spot.file, spot.start_line, spot.name_hint, spot.max_nesting, spot.branch_count
+                );
+            }
         }
     }
 }

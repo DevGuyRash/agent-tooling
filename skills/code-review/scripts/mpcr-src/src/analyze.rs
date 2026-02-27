@@ -86,6 +86,33 @@ pub struct ComplexityHotspot {
     pub branch_count: usize,
 }
 
+/// Typed output for a single `analyze check` invocation.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CheckOutput {
+    /// Line-oriented checks that emit standard findings.
+    Findings {
+        /// Check name supplied by the caller.
+        check: String,
+        /// Findings emitted by the check.
+        findings: Vec<AnalysisFinding>,
+    },
+    /// Cross-file duplicate text blocks.
+    DuplicateBlocks {
+        /// Check name supplied by the caller.
+        check: String,
+        /// Duplicate blocks detected across inputs.
+        duplicate_blocks: Vec<DuplicateBlock>,
+    },
+    /// Functions/blocks with elevated complexity.
+    ComplexityHotspots {
+        /// Check name supplied by the caller.
+        check: String,
+        /// Complexity hotspots detected across inputs.
+        complexity_hotspots: Vec<ComplexityHotspot>,
+    },
+}
+
 // ── Analysis engine ──────────────────────────────────────────────────────────
 
 /// Run all static checks on the given file contents.
@@ -134,6 +161,34 @@ pub fn run_all(files: &HashMap<String, String>) -> anyhow::Result<AnalysisReport
 
 /// Run a single named check. Returns only findings from that check.
 pub fn run_check(
+    files: &HashMap<String, String>,
+    check_name: &str,
+) -> anyhow::Result<Vec<AnalysisFinding>> {
+    run_line_check(files, check_name)
+}
+
+/// Run a single named check and return typed output for the check family.
+pub fn run_check_output(
+    files: &HashMap<String, String>,
+    check_name: &str,
+) -> anyhow::Result<CheckOutput> {
+    match check_name {
+        "duplicates" => Ok(CheckOutput::DuplicateBlocks {
+            check: check_name.to_string(),
+            duplicate_blocks: find_duplicate_blocks(files),
+        }),
+        "complexity" => Ok(CheckOutput::ComplexityHotspots {
+            check: check_name.to_string(),
+            complexity_hotspots: find_complexity_hotspots(files),
+        }),
+        _ => Ok(CheckOutput::Findings {
+            check: check_name.to_string(),
+            findings: run_line_check(files, check_name)?,
+        }),
+    }
+}
+
+fn run_line_check(
     files: &HashMap<String, String>,
     check_name: &str,
 ) -> anyhow::Result<Vec<AnalysisFinding>> {
@@ -274,12 +329,19 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+            || is_probable_string_literal_line(line)
+        {
             continue;
         }
 
-        let is_fn_start = fn_patterns.iter().any(|p| trimmed.starts_with(p))
-            || (trimmed.contains("fn ") && (trimmed.contains('(') || trimmed.contains('{')));
+        let lower_line = line.to_ascii_lowercase();
+        let inline_fn_syntax = lower_line.contains("fn ")
+            && (trimmed.contains('(') || trimmed.contains('{'))
+            && !is_marker_inside_double_quotes(&lower_line, "fn ");
+        let is_fn_start = fn_patterns.iter().any(|p| trimmed.starts_with(p)) || inline_fn_syntax;
 
         if is_fn_start && func_start.is_none() {
             let name = extract_name_hint(trimmed);
@@ -730,5 +792,63 @@ mod tests {
                 .any(|f| f.check == "long-function" && f.file == "sample.py" && f.line == 1),
             "long python function should be reported"
         );
+    }
+
+    #[test]
+    fn long_python_function_at_threshold_is_not_reported_on_dedent() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def exact_threshold():\n");
+        for i in 0..59 {
+            src.push_str(&format!("    value_{i} = {i}\n"));
+        }
+        src.push_str("print('outside')\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "exact-threshold function should not be reported"
+        );
+    }
+
+    #[test]
+    fn long_function_detection_ignores_function_like_strings() {
+        let mut files = HashMap::new();
+        let mut src = String::from("println!(\"this is a function: fn foo() {\");\n");
+        for i in 0..70 {
+            src.push_str(&format!("let value_{i} = {i};\n"));
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "function-like strings should not start long-function spans"
+        );
+    }
+
+    #[test]
+    fn run_check_output_returns_duplicates_variant() {
+        let mut files = HashMap::new();
+        let block = "line one\nline two\nline three\nline four\n";
+        files.insert("a.rs".to_string(), block.to_string());
+        files.insert("b.rs".to_string(), block.to_string());
+
+        let output = run_check_output(&files, "duplicates").expect("analysis failed");
+        assert!(
+            matches!(output, CheckOutput::DuplicateBlocks { .. }),
+            "expected duplicate blocks output"
+        );
+        if let CheckOutput::DuplicateBlocks {
+            check,
+            duplicate_blocks,
+        } = output
+        {
+            assert_eq!(check, "duplicates");
+            assert!(
+                !duplicate_blocks.is_empty(),
+                "should detect duplicate blocks"
+            );
+        }
     }
 }

@@ -4265,6 +4265,26 @@ fn protocol_dispatch_list() -> anyhow::Result<()> {
 }
 
 #[test]
+fn protocol_dispatch_list_json_is_compact_by_default() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(["protocol", "dispatch-list", "--json"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "dispatch-list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    ensure!(
+        !stdout.trim_end().contains('\n'),
+        "expected compact single-line JSON, got multi-line output:\n{stdout}"
+    );
+    let parsed: Value = serde_json::from_str(stdout.trim_end())?;
+    ensure!(parsed.is_array(), "dispatch-list json should be an array");
+    Ok(())
+}
+
+#[test]
 fn protocol_dispatch_explorer_no_proof_packet() -> anyhow::Result<()> {
     let out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
     let content = json_str(&out, "content")?;
