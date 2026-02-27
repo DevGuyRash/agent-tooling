@@ -34,14 +34,22 @@ import json
 import sys
 from pathlib import Path
 
+root_manifest = Path("Cargo.toml").resolve()
+workspace_root = root_manifest.parent
+
 try:
     payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except Exception:
+except OSError as exc:
+    print(f"WARN: failed to read metadata file {sys.argv[1]}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+except json.JSONDecodeError as exc:
+    print(f"WARN: failed to parse metadata JSON {sys.argv[1]}: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
 workspace_members = payload.get("workspace_members")
 packages = payload.get("packages")
 if not isinstance(workspace_members, list) or not isinstance(packages, list):
+    print("WARN: metadata JSON missing workspace_members/packages arrays", file=sys.stderr)
     raise SystemExit(1)
 
 member_ids = {value for value in workspace_members if isinstance(value, str)}
@@ -52,8 +60,16 @@ for pkg in packages:
     if pkg.get("id") not in member_ids:
         continue
     manifest_path = pkg.get("manifest_path")
-    if isinstance(manifest_path, str):
-        paths.add(manifest_path)
+    if not isinstance(manifest_path, str):
+        continue
+    candidate = Path(manifest_path).resolve()
+    if candidate == root_manifest:
+        continue
+    try:
+        candidate.relative_to(workspace_root)
+    except ValueError:
+        continue
+    paths.add(str(candidate))
 
 for manifest_path in sorted(paths):
     print(manifest_path)
