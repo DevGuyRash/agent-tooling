@@ -25,20 +25,59 @@ if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok
 
 # [lints] workspace = true in member crates (workspace only)
 if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
-  missing=$(find . -name Cargo.toml -not -path '*/target/*' -not -path './Cargo.toml' -print0 2>/dev/null | while IFS= read -r -d '' m; do
-    if grep -qF '[package]' "$m" 2>/dev/null; then
-      if ! awk '
-        BEGIN { in_lints = 0; ok = 0 }
-        /^\[lints\]/ { in_lints = 1; next }
-        /^\[/ { in_lints = 0 }
-        in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
-        END { exit ok ? 0 : 1 }
-      ' "$m" 2>/dev/null; then
-        printf ' %s' "$m"
+  members=""
+  if command -v cargo >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    members="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml 2>/dev/null | python3 - <<'PY'
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+workspace_members = payload.get("workspace_members")
+packages = payload.get("packages")
+if not isinstance(workspace_members, list) or not isinstance(packages, list):
+    raise SystemExit(1)
+
+member_ids = {value for value in workspace_members if isinstance(value, str)}
+paths = set()
+for pkg in packages:
+    if not isinstance(pkg, dict):
+        continue
+    if pkg.get("id") not in member_ids:
+        continue
+    manifest_path = pkg.get("manifest_path")
+    if isinstance(manifest_path, str):
+        paths.add(manifest_path)
+
+for manifest_path in sorted(paths):
+    print(manifest_path)
+PY
+)"
+  fi
+
+  if [ -z "$members" ]; then
+    echo "WARN: unable to resolve workspace members for lint inheritance check"
+  else
+    missing=$(printf '%s\n' "$members" | while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      [ "$m" = "$(pwd)/Cargo.toml" ] && continue
+      if grep -qF '[package]' "$m" 2>/dev/null; then
+        if ! awk '
+          BEGIN { in_lints = 0; ok = 0 }
+          /^\[lints\]/ { in_lints = 1; next }
+          /^\[/ { in_lints = 0 }
+          in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+          END { exit ok ? 0 : 1 }
+        ' "$m" 2>/dev/null; then
+          printf ' %s' "$m"
+        fi
       fi
-    fi
-  done)
-  if [ -z "$missing" ]; then echo "ok: all member crates inherit workspace lints"; else echo "WARN: missing [lints] workspace = true:$missing"; fi
+    done)
+    if [ -z "$missing" ]; then echo "ok: all member crates inherit workspace lints"; else echo "WARN: missing [lints] workspace = true:$missing"; fi
+  fi
 fi
 ```
 
