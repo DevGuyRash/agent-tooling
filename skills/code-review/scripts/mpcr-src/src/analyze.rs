@@ -789,9 +789,17 @@ fn simple_hash(text: &str) -> u64 {
 fn is_probable_string_literal_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with('"')
+        || trimmed.starts_with('\'')
         || trimmed.starts_with("r\"")
         || trimmed.starts_with("r#\"")
         || trimmed.starts_with("b\"")
+        || trimmed.starts_with("b'")
+        || trimmed.starts_with("f\"")
+        || trimmed.starts_with("f'")
+        || trimmed.starts_with("u\"")
+        || trimmed.starts_with("u'")
+        || trimmed.starts_with("'''")
+        || trimmed.starts_with("\"\"\"")
 }
 
 fn is_marker_inside_double_quotes(line: &str, marker: &str) -> bool {
@@ -963,6 +971,23 @@ mod tests {
         assert!(
             findings.is_empty(),
             "function-like strings should not start long-function spans"
+        );
+    }
+
+    #[test]
+    fn long_function_detection_ignores_function_like_python_triple_quotes() {
+        let mut files = HashMap::new();
+        let mut src = String::from("\"\"\"def fake():\n");
+        for i in 0..70 {
+            src.push_str(&format!("line_{i}\n"));
+        }
+        src.push_str("\"\"\"\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "triple-quoted string content should not start long-function spans"
         );
     }
 
