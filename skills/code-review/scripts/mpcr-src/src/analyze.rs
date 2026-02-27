@@ -164,7 +164,8 @@ pub fn run_check(
     files: &HashMap<String, String>,
     check_name: &str,
 ) -> anyhow::Result<Vec<AnalysisFinding>> {
-    run_line_check(files, check_name)
+    let output = run_check_output(files, check_name)?;
+    Ok(check_output_findings(output))
 }
 
 /// Run a single named check and return typed output for the check family.
@@ -205,6 +206,57 @@ fn run_line_check(
         }
     }
     Ok(findings)
+}
+
+fn check_output_findings(output: CheckOutput) -> Vec<AnalysisFinding> {
+    match output {
+        CheckOutput::Findings { findings, .. } => findings,
+        CheckOutput::DuplicateBlocks {
+            duplicate_blocks, ..
+        } => {
+            let mut findings = Vec::new();
+            for block in duplicate_blocks {
+                let location_count = block.locations.len();
+                let excerpt = format!(
+                    "duplicate block {} ({} lines, {} locations)",
+                    block.fingerprint, block.line_count, location_count
+                );
+                let detail = format!(
+                    "Duplicate block appears in {location_count} locations (fingerprint {})",
+                    block.fingerprint
+                );
+                for location in block.locations {
+                    findings.push(AnalysisFinding {
+                        check: "duplicates".to_string(),
+                        file: location.file,
+                        line: location.start_line,
+                        excerpt: excerpt.clone(),
+                        detail: detail.clone(),
+                    });
+                }
+            }
+            findings
+        }
+        CheckOutput::ComplexityHotspots {
+            complexity_hotspots,
+            ..
+        } => complexity_hotspots
+            .into_iter()
+            .map(|spot| AnalysisFinding {
+                check: "complexity".to_string(),
+                file: spot.file,
+                line: spot.start_line,
+                excerpt: format!(
+                    "{} (nesting={}, branches={})",
+                    spot.name_hint, spot.max_nesting, spot.branch_count
+                ),
+                detail: format!(
+                    "Complexity hotspot: nesting={}, branches={}",
+                    spot.max_nesting, spot.branch_count
+                ),
+            })
+            .collect(),
+    }
 }
 
 /// List available check names.
@@ -310,18 +362,6 @@ fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
 /// Flag functions/methods/blocks exceeding 60 lines.
 fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let threshold = 60;
-    let fn_patterns = [
-        "fn ",
-        "def ",
-        "func ",
-        "function ",
-        "sub ",
-        "method ",
-        "public ",
-        "private ",
-        "protected ",
-        "static ",
-    ];
     let mut func_start: Option<(usize, String)> = None;
     let mut brace_depth: i32 = 0;
     let mut indent_start: Option<usize> = None;
@@ -329,19 +369,36 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("//")
-            || trimmed.starts_with('#')
-            || is_probable_string_literal_line(line)
-        {
+        if should_skip_line_for_function_analysis(line) {
             continue;
         }
 
-        let lower_line = line.to_ascii_lowercase();
-        let inline_fn_syntax = lower_line.contains("fn ")
-            && (trimmed.contains('(') || trimmed.contains('{'))
-            && !is_marker_inside_double_quotes(&lower_line, "fn ");
-        let is_fn_start = fn_patterns.iter().any(|p| trimmed.starts_with(p)) || inline_fn_syntax;
+        if let Some((start, ref name)) = func_start {
+            let func_len = idx + 1 - start;
+            let at_dedent = !saw_open_brace
+                && indent_start.is_some_and(|is| {
+                    let current_indent = line.len() - line.trim_start().len();
+                    current_indent <= is && func_len > 1 && !trimmed.is_empty()
+                });
+            if at_dedent {
+                if func_len > threshold {
+                    out.push(AnalysisFinding {
+                        check: "long-function".to_string(),
+                        file: path.to_string(),
+                        line: start,
+                        excerpt: format!("{name} ({func_len} lines)"),
+                        detail: format!(
+                            "Function exceeds {threshold}-line threshold ({func_len} lines)"
+                        ),
+                    });
+                }
+                func_start = None;
+                indent_start = None;
+                saw_open_brace = false;
+            }
+        }
+
+        let is_fn_start = is_function_start(line, FUNCTION_START_PATTERNS);
 
         if is_fn_start && func_start.is_none() {
             let name = extract_name_hint(trimmed);
@@ -362,11 +419,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
         if let Some((start, ref name)) = func_start {
             let func_len = idx + 1 - start;
             let at_brace_end = saw_open_brace && brace_depth <= 0 && func_len > 1;
-            let at_dedent = !saw_open_brace
-                && indent_start.is_some_and(|is| {
-                    let current_indent = line.len() - line.trim_start().len();
-                    current_indent <= is && func_len > 1 && !trimmed.is_empty()
-                });
+            let at_dedent = false;
 
             if at_brace_end || at_dedent {
                 if func_len > threshold {
@@ -473,7 +526,7 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
 
 // ── Cross-file checks ────────────────────────────────────────────────────────
 
-/// Find duplicate text blocks (≥4 consecutive non-blank lines) across files.
+/// Find duplicate text blocks (≥4 consecutive lines) across files.
 pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock> {
     let min_block = 4;
     let mut fingerprints: HashMap<u64, Vec<DuplicateLocation>> = HashMap::new();
@@ -489,9 +542,6 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
                 .map(|l| l.trim())
                 .collect();
             if block.iter().all(|l| l.is_empty()) {
-                continue;
-            }
-            if block.iter().any(|l| l.is_empty()) {
                 continue;
             }
             let hash = simple_hash(&block.join("\n"));
@@ -546,7 +596,6 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
 
     for (path, content) in files {
         let lines: Vec<&str> = content.lines().collect();
-        let fn_patterns = ["fn ", "def ", "func ", "function "];
         let branch_patterns = [
             "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
         ];
@@ -559,11 +608,11 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with("//") {
+            if should_skip_line_for_function_analysis(line) {
                 continue;
             }
 
-            let is_fn = fn_patterns.iter().any(|p| trimmed.starts_with(p));
+            let is_fn = is_function_start(line, FUNCTION_START_PATTERNS);
 
             if is_fn {
                 if let Some((start, ref name)) = func_start {
@@ -635,6 +684,36 @@ fn truncate_line(line: &str, max: usize) -> String {
         .last()
         .map_or(0, |(i, _)| i);
     format!("{}...", &trimmed[..safe_end])
+}
+
+const FUNCTION_START_PATTERNS: &[&str] = &[
+    "fn ",
+    "def ",
+    "func ",
+    "function ",
+    "sub ",
+    "method ",
+    "public ",
+    "private ",
+    "protected ",
+    "static ",
+];
+
+fn should_skip_line_for_function_analysis(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed.starts_with("//")
+        || trimmed.starts_with('#')
+        || is_probable_string_literal_line(line)
+}
+
+fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
+    let trimmed = line.trim();
+    let lower_line = line.to_ascii_lowercase();
+    let inline_fn_syntax = lower_line.contains("fn ")
+        && (trimmed.contains('(') || trimmed.contains('{'))
+        && !is_marker_inside_double_quotes(&lower_line, "fn ");
+    fn_patterns.iter().any(|p| trimmed.starts_with(p)) || inline_fn_syntax
 }
 
 fn extract_name_hint(line: &str) -> String {
@@ -850,5 +929,62 @@ mod tests {
                 "should detect duplicate blocks"
             );
         }
+    }
+
+    #[test]
+    fn run_check_supports_duplicates_with_blank_lines() {
+        let mut files = HashMap::new();
+        let block = "line one\nline two\n\nline four\n";
+        files.insert("a.rs".to_string(), block.to_string());
+        files.insert("b.rs".to_string(), block.to_string());
+
+        let findings = run_check(&files, "duplicates").expect("analysis failed");
+        assert!(
+            findings.iter().any(|f| f.check == "duplicates"),
+            "expected flattened duplicate findings"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "a.rs" || f.file == "b.rs"),
+            "expected duplicate findings to point at duplicate file locations"
+        );
+    }
+
+    #[test]
+    fn long_function_detection_handles_new_function_on_dedent_line() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def first():\n    x = 1\ndef second():\n");
+        for i in 0..70 {
+            src.push_str(&format!("    value_{i} = {i}\n"));
+        }
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.line == 3 && f.check == "long-function"),
+            "expected second function to be analyzed after dedent transition"
+        );
+    }
+
+    #[test]
+    fn run_check_supports_complexity_for_pub_async_fn() {
+        let mut files = HashMap::new();
+        let mut src = String::from("pub async fn hot_path() {\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if cond_{i} {{\n        work();\n    }}\n"));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| { f.file == "sample.rs" && f.check == "complexity" && f.line == 1 }),
+            "expected complexity hotspot findings from run_check"
+        );
     }
 }
