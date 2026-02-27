@@ -158,9 +158,9 @@ if [ -n "$CLI_BIN" ]; then
                         next
                     }
 
-                    if (in_commands && $0 ~ /^[[:space:]][[:space:]]+[a-z0-9][a-z0-9-]*/) {
+                    if (in_commands && $0 ~ /^[[:space:]][[:space:]]+[a-z0-9_][a-z0-9_-]*/) {
                         sub(/^[[:space:]]+/, "", $0)
-                        split($0, a, /[^a-z0-9-]/)
+                        split($0, a, /[^a-z0-9_-]/)
                         if (a[1] != "" && a[1] !~ /^-/) {
                             print a[1]
                         }
@@ -173,9 +173,15 @@ if [ -n "$CLI_BIN" ]; then
 
         if [ -z "$subcmds" ]; then
             # Fallback: try the binary with no args
-            subcmds=$(echo "$help_output" | \
+            noarg_output=$("$CLI_BIN" 2>&1 || true)
+            subcmds=$(printf '%s\n' "$noarg_output" | \
                 sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
-                sed 's/^[[:space:]]*//' | grep -v '^$' || true)
+                sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
+            if [ -z "$subcmds" ]; then
+                subcmds=$(printf '%s\n' "$help_output" | \
+                    sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
+                    sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
+            fi
         fi
 
         # Measure each discovered subcommand

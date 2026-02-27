@@ -108,6 +108,7 @@ echo "── 3. CRLF Line Ending Check ──"
 
 crlf_count=0
 crlf_critical=0
+binary_skipped_count=0
 
 crlf_list=$(mktemp)
 script_list=$(mktemp)
@@ -124,6 +125,11 @@ find "$SKILL_DIR" -type f \
     2>/dev/null > "$crlf_list"
 
 while IFS= read -r file; do
+    if [ -s "$file" ] && ! LC_ALL=C grep -Iq . "$file" 2>/dev/null; then
+        binary_skipped_count=$((binary_skipped_count + 1))
+        continue
+    fi
+
     if tr -d '\r' < "$file" | cmp -s - "$file"; then
         :
     else
@@ -161,9 +167,15 @@ done < "$crlf_list"
 
 if [ "$crlf_count" -eq 0 ]; then
     echo "  ✓ No CRLF line endings detected"
+    if [ "$binary_skipped_count" -gt 0 ]; then
+        echo "  ℹ Skipped probable binary files: $binary_skipped_count"
+    fi
 else
     echo ""
     echo "  Total files with CRLF: $crlf_count ($crlf_critical critical/scripts)"
+    if [ "$binary_skipped_count" -gt 0 ]; then
+        echo "  Skipped probable binary files: $binary_skipped_count"
+    fi
     echo "  Fix (GNU sed):    find $SKILL_DIR -type f -exec sed -i 's/\\r\\$//' {} +"
     echo "  Fix (BSD/macOS):  find $SKILL_DIR -type f -exec sed -i '' 's/\\r\\$//' {} +"
 fi
