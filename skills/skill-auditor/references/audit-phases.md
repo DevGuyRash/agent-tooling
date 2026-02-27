@@ -4,6 +4,16 @@ This document contains the step-by-step procedure for each audit phase. Read
 it before starting Phase 1 so you have the full picture, then refer back to
 each section as you enter that phase.
 
+## Table of contents
+
+- [Phase 1: Environment & Build](#phase-1-environment--build)
+- [Phase 2: API Surface](#phase-2-api-surface)
+- [Phase 3: Workflow Simulation](#phase-3-workflow-simulation)
+- [Phase 4: Context & Token Analysis](#phase-4-context--token-analysis)
+- [Phase 5: Output Quality](#phase-5-output-quality)
+- [Finding accumulation](#finding-accumulation)
+- [Time management](#time-management)
+
 ---
 
 ## Phase 1: Environment & Build

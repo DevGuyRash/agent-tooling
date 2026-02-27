@@ -84,11 +84,12 @@ Before committing any skill file:
 # Detect CRLF in the skill directory
 find <skill-dir> -type f \( -name '*.sh' -o -name '*.py' -o -name '*.rs' \
   -o -name '*.toml' -o -name '*.yml' -o -name '*.md' \) \
-  -exec grep -Plc '\r' {} + 2>/dev/null
+  -exec sh -c 'tr -d "\r" < "$1" | cmp -s - "$1" || echo "$1"' _ {} \;
 ```
 
-If any files match, fix them: `sed -i 's/\r$//' <file>`. Enforce this in CI
-or use `.gitattributes` with `* text=auto eol=lf`.
+If any files match, fix them (e.g., `sed -i 's/\r$//' <file>` on Linux,
+`sed -i '' 's/\r$//' <file>` on macOS). Enforce this in CI or use
+`.gitattributes` with `* text=auto eol=lf`.
 
 Shell scripts additionally SHALL have executable permission (`chmod +x`) and a
 valid shebang (e.g., `#!/usr/bin/env sh`).

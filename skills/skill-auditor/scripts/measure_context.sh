@@ -31,6 +31,15 @@ require_opt_value() {
     esac
 }
 
+probe_output=""
+run_probe() {
+    set +e
+    probe_output=$("$@" 2>&1)
+    probe_status=$?
+    set -e
+    [ "$probe_status" -eq 0 ]
+}
+
 # Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -157,7 +166,9 @@ if [ -n "$CLI_BIN" ]; then
 
         # Discover available subcommands from --help output.
         # This is generic — works with any CLI, not just mpcr.
-        help_output=$("$CLI_BIN" --help 2>&1 || true)
+        help_output=""
+        run_probe "$CLI_BIN" --help || true
+        help_output=$probe_output
 
         extract_subcommands() {
             awk '
@@ -201,7 +212,8 @@ if [ -n "$CLI_BIN" ]; then
             # In run mode, fallback to no-arg invocation (may have side effects).
             # Help mode must stay side-effect-safe and never invoke default command.
             if [ "$CLI_MODE" = "run" ]; then
-                noarg_output=$("$CLI_BIN" 2>&1 || true)
+                run_probe "$CLI_BIN" || true
+                noarg_output=$probe_output
                 subcmds=$(printf '%s\n' "$noarg_output" | \
                     sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
                     sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
@@ -217,10 +229,18 @@ if [ -n "$CLI_BIN" ]; then
         for subcmd in $subcmds; do
             case "$CLI_MODE" in
                 help)
-                    output=$("$CLI_BIN" "$subcmd" --help 2>&1 || true)
+                    if run_probe "$CLI_BIN" "$subcmd" --help; then
+                        output=$probe_output
+                    else
+                        continue
+                    fi
                     ;;
                 run)
-                    output=$("$CLI_BIN" "$subcmd" 2>&1 || true)
+                    if run_probe "$CLI_BIN" "$subcmd"; then
+                        output=$probe_output
+                    else
+                        continue
+                    fi
                     ;;
             esac
             exit_word=$(echo "$output" | head -1)
@@ -243,16 +263,26 @@ if [ -n "$CLI_BIN" ]; then
             cli_total_chars=$((cli_total_chars + chars))
 
             # Probe one level deeper: try subcommand --help for sub-subcommands
-            sub_help=$("$CLI_BIN" "$subcmd" --help 2>&1 || true)
+            sub_help=""
+            run_probe "$CLI_BIN" "$subcmd" --help || true
+            sub_help=$probe_output
             sub_subcmds=$(printf '%s\n' "$sub_help" | extract_subcommands || true)
 
             for sub in $sub_subcmds; do
                 case "$CLI_MODE" in
                     help)
-                        sub_output=$("$CLI_BIN" "$subcmd" "$sub" --help 2>&1 || true)
+                        if run_probe "$CLI_BIN" "$subcmd" "$sub" --help; then
+                            sub_output=$probe_output
+                        else
+                            continue
+                        fi
                         ;;
                     run)
-                        sub_output=$("$CLI_BIN" "$subcmd" "$sub" 2>&1 || true)
+                        if run_probe "$CLI_BIN" "$subcmd" "$sub"; then
+                            sub_output=$probe_output
+                        else
+                            continue
+                        fi
                         ;;
                 esac
                 sub_first=$(echo "$sub_output" | head -1)
