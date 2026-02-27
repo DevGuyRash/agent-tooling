@@ -219,9 +219,9 @@ while IFS= read -r file; do
     fi
 done < "$script_list"
 
-# Also check files without extensions that have shebangs
-find "$SKILL_DIR" -maxdepth 2 -type f ! -name '*.*' \
-    -not -path '*/target/*' -not -path '*/.git/*' \
+# Also check files without extensions that have shebangs (recursive).
+find "$SKILL_DIR" -type f ! -name '*.*' \
+    -not -path '*/target/*' -not -path '*/.git/*' -not -path '*/node_modules/*' \
     2>/dev/null > "$shebang_list"
 
 while IFS= read -r file; do

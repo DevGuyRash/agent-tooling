@@ -144,26 +144,35 @@ if [ -n "$CLI_BIN" ]; then
 
         extract_subcommands() {
             awk '
-                BEGIN { in_commands = 0 }
+                function emit(token) {
+                    if (token == "" || token ~ /^-/) {
+                        return
+                    }
+                    if (token ~ /^[A-Za-z0-9_][A-Za-z0-9_-]*$/) {
+                        print token
+                    }
+                }
                 {
-                    line = tolower($0)
-                    if (line ~ /^[[:space:]]*(available[[:space:]]+)?commands?:[[:space:]]*$/ ||
-                        line ~ /^[[:space:]]*(core|additional|management|utility|other)[[:space:]]+commands?:[[:space:]]*$/) {
-                        in_commands = 1
-                        next
+                    raw = $0
+
+                    # Parse table-style command rows seen in many help formats:
+                    #   "  add      Add file contents..."
+                    #   "    status   Show status"
+                    if (raw ~ /^[[:space:]]+[A-Za-z0-9_][A-Za-z0-9_-]*([[:space:]][[:space:]]+|\t)/) {
+                        sub(/^[[:space:]]+/, "", raw)
+                        split(raw, fields, /[[:space:]]+/)
+                        emit(fields[1])
                     }
 
-                    if (in_commands && line ~ /^[[:space:]]*$/) {
-                        in_commands = 0
-                        next
-                    }
-
-                    if (in_commands && $0 ~ /^[[:space:]][[:space:]]+[a-z0-9_][a-z0-9_-]*/) {
-                        sub(/^[[:space:]]+/, "", $0)
-                        split($0, a, /[^a-z0-9_-]/)
-                        if (a[1] != "" && a[1] !~ /^-/) {
-                            print a[1]
+                    # Parse brace lists such as "{build,test,lint}".
+                    while (match(raw, /\{[^{}]+\}/)) {
+                        block = substr(raw, RSTART + 1, RLENGTH - 2)
+                        count = split(block, values, /,/)
+                        for (i = 1; i <= count; i++) {
+                            gsub(/^[[:space:]]+|[[:space:]]+$/, "", values[i])
+                            emit(values[i])
                         }
+                        raw = substr(raw, RSTART + RLENGTH)
                     }
                 }
             ' | sort -u
@@ -181,11 +190,6 @@ if [ -n "$CLI_BIN" ]; then
                     sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
             fi
 
-            if [ -z "$subcmds" ]; then
-                subcmds=$(printf '%s\n' "$help_output" | \
-                    sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
-                    sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
-            fi
         fi
 
         if [ -z "$subcmds" ]; then
