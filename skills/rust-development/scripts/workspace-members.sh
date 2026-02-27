@@ -1,6 +1,25 @@
 #!/usr/bin/env sh
 # Shared workspace member manifest helpers for rust-development scripts.
 
+WORKSPACE_MEMBERS_LAST_SOURCE=""
+
+_workspace_members_debug_enabled() {
+  case "${RUST_WORKSPACE_MEMBERS_DEBUG:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_workspace_members_prefix_stderr() {
+  _label="$1"
+  _err_file="$2"
+  [ -s "$_err_file" ] || return 0
+  while IFS= read -r _line; do
+    [ -n "$_line" ] || continue
+    printf 'workspace-members (%s): %s\n' "$_label" "$_line" >&2
+  done < "$_err_file"
+}
+
 list_workspace_member_manifests_from_metadata() {
   root_manifest="$1"
   command -v cargo >/dev/null 2>&1 || return 1
@@ -17,17 +36,23 @@ import json
 import sys
 from pathlib import Path
 
-root_manifest = sys.argv[1]
+root_manifest = Path(sys.argv[1]).resolve()
+workspace_root = root_manifest.parent
 metadata_path = Path(sys.argv[2])
 
 try:
     payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-except Exception:
+except OSError as exc:
+    print(f"failed to read metadata file {metadata_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+except json.JSONDecodeError as exc:
+    print(f"failed to parse metadata JSON {metadata_path}: {exc}", file=sys.stderr)
     sys.exit(1)
 
 workspace_members = payload.get("workspace_members")
 packages = payload.get("packages")
 if not isinstance(workspace_members, list) or not isinstance(packages, list):
+    print("metadata JSON missing workspace_members/packages arrays", file=sys.stderr)
     sys.exit(1)
 
 member_ids = {value for value in workspace_members if isinstance(value, str)}
@@ -40,9 +65,15 @@ for pkg in packages:
     manifest_path = pkg.get("manifest_path")
     if not isinstance(manifest_path, str):
         continue
-    if manifest_path == root_manifest:
+    candidate = Path(manifest_path).resolve()
+    if candidate == root_manifest:
         continue
-    member_paths.add(manifest_path)
+    try:
+        candidate.relative_to(workspace_root)
+    except ValueError:
+        # Reject manifests that resolve outside the workspace root.
+        continue
+    member_paths.add(str(candidate))
 
 for manifest_path in sorted(member_paths):
     print(manifest_path)
@@ -77,20 +108,27 @@ workspace_root = root_manifest.parent
 
 try:
     data = tomllib.loads(root_manifest.read_text(encoding="utf-8"))
-except Exception:
+except OSError as exc:
+    print(f"failed to read workspace manifest {root_manifest}: {exc}", file=sys.stderr)
+    sys.exit(1)
+except tomllib.TOMLDecodeError as exc:
+    print(f"failed to parse TOML in {root_manifest}: {exc}", file=sys.stderr)
     sys.exit(1)
 
 workspace = data.get("workspace") if isinstance(data, dict) else None
 if not isinstance(workspace, dict):
+    print(f"{root_manifest} has no [workspace] table", file=sys.stderr)
     sys.exit(1)
 
 raw_members = workspace.get("members")
 if isinstance(raw_members, str):
     raw_members = [raw_members]
 if not isinstance(raw_members, list):
+    print(f"{root_manifest} has invalid [workspace].members", file=sys.stderr)
     sys.exit(1)
 members = [value.strip().replace("\\", "/") for value in raw_members if isinstance(value, str) and value.strip()]
 if not members:
+    print(f"{root_manifest} has empty [workspace].members", file=sys.stderr)
     sys.exit(1)
 
 raw_exclude = workspace.get("exclude")
@@ -152,13 +190,35 @@ PY
 
 list_workspace_member_manifests() {
   root_manifest="$1"
-  if _metadata_members="$(list_workspace_member_manifests_from_metadata "$root_manifest" 2>/dev/null)"; then
-    printf '%s\n' "$_metadata_members"
+  WORKSPACE_MEMBERS_LAST_SOURCE=""
+
+  _metadata_out="$(mktemp "${TMPDIR:-/tmp}/workspace-members.meta.out.XXXXXX")"
+  _metadata_err="$(mktemp "${TMPDIR:-/tmp}/workspace-members.meta.err.XXXXXX")"
+  _manifest_out="$(mktemp "${TMPDIR:-/tmp}/workspace-members.manifest.out.XXXXXX")"
+  _manifest_err="$(mktemp "${TMPDIR:-/tmp}/workspace-members.manifest.err.XXXXXX")"
+
+  if list_workspace_member_manifests_from_metadata "$root_manifest" >"$_metadata_out" 2>"$_metadata_err"; then
+    WORKSPACE_MEMBERS_LAST_SOURCE="cargo metadata"
+    cat "$_metadata_out"
+    rm -f -- "$_metadata_out" "$_metadata_err" "$_manifest_out" "$_manifest_err"
     return 0
   fi
-  if _manifest_members="$(list_workspace_member_manifests_from_manifest "$root_manifest" 2>/dev/null)"; then
-    printf '%s\n' "$_manifest_members"
+
+  if list_workspace_member_manifests_from_manifest "$root_manifest" >"$_manifest_out" 2>"$_manifest_err"; then
+    WORKSPACE_MEMBERS_LAST_SOURCE="workspace.members"
+    if _workspace_members_debug_enabled; then
+      _workspace_members_prefix_stderr "cargo metadata fallback" "$_metadata_err"
+    fi
+    cat "$_manifest_out"
+    rm -f -- "$_metadata_out" "$_metadata_err" "$_manifest_out" "$_manifest_err"
     return 0
   fi
+
+  _workspace_members_prefix_stderr "cargo metadata" "$_metadata_err"
+  _workspace_members_prefix_stderr "workspace.members" "$_manifest_err"
+  if [ ! -s "$_metadata_err" ] && [ ! -s "$_manifest_err" ]; then
+    printf 'workspace-members: unable to resolve members for %s\n' "$root_manifest" >&2
+  fi
+  rm -f -- "$_metadata_out" "$_metadata_err" "$_manifest_out" "$_manifest_err"
   return 1
 }

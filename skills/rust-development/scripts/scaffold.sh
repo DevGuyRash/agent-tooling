@@ -399,8 +399,8 @@ if [ "$do_clippy" -eq 1 ]; then
         echo "    ℹ skipping non-package manifest: $member_toml"
         return 0
       fi
-      if grep -qE '^\[lints\]' "$member_toml" 2>/dev/null; then
-        echo "    ⚠ already has [lints]: $member_toml"
+      if grep -qE '^[[:space:]]*\[lints([.][^]]+)?\][[:space:]]*$' "$member_toml" 2>/dev/null; then
+        echo "    ⚠ already has [lints] configuration: $member_toml"
         return 0
       fi
       printf '\n[lints]\nworkspace = true\n' >> "$member_toml"
@@ -409,17 +409,28 @@ if [ "$do_clippy" -eq 1 ]; then
 
     _member_manifest_list=""
     _member_manifest_source=""
-    if _member_manifest_list="$(list_workspace_member_manifests_from_metadata "$cargo_toml" 2>/dev/null)"; then
-      _member_manifest_source="cargo metadata"
-    elif _member_manifest_list="$(list_workspace_member_manifests_from_manifest "$cargo_toml" 2>/dev/null)"; then
-      _member_manifest_source="workspace.members"
+    _member_manifest_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-scaffold-members.XXXXXX")"
+    if list_workspace_member_manifests "$cargo_toml" >"$_member_manifest_tmp"; then
+      _member_manifest_source="$WORKSPACE_MEMBERS_LAST_SOURCE"
+      _member_manifest_list="$(cat "$_member_manifest_tmp")"
     fi
+    rm -f -- "$_member_manifest_tmp"
     if [ -n "$_member_manifest_source" ] && [ -n "$_member_manifest_list" ]; then
       printf '%s\n' "$_member_manifest_list" | while IFS= read -r _mpath; do
         [ -n "$_mpath" ] || continue
-        _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
+        _mpath_dir="$(dirname -- "$_mpath")"
+        if ! _mpath_dir_real="$(CDPATH='' cd -- "$_mpath_dir" 2>/dev/null && pwd -P)"; then
+          echo "    ⚠ unable to resolve member manifest path: $_mpath"
+          continue
+        fi
+        _mpath_real="${_mpath_dir_real}/$(basename -- "$_mpath")"
         case "$_mpath_real" in
-          "$cargo_toml") continue ;;
+          "$workspace_root"/Cargo.toml|"$cargo_toml") continue ;;
+          "$workspace_root"/*) ;;
+          *)
+            echo "    ⚠ skipping member manifest outside workspace root: $_mpath_real"
+            continue
+            ;;
         esac
         _update_member_manifest_lints "$_mpath_real"
       done

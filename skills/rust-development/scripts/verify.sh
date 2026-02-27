@@ -427,10 +427,11 @@ fi
 if [ -f "$_root_manifest" ] && grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
   _member_source=""
   _member_manifest_list=""
-  if _member_manifest_list="$(list_workspace_member_manifests_from_metadata "$_root_manifest" 2>/dev/null)"; then
-    _member_source="cargo metadata"
-  elif _member_manifest_list="$(list_workspace_member_manifests_from_manifest "$_root_manifest" 2>/dev/null)"; then
-    _member_source="workspace.members"
+  _member_manifest_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-members.XXXXXX")"
+  _register_tmp "$_member_manifest_tmp"
+  if list_workspace_member_manifests "$_root_manifest" >"$_member_manifest_tmp"; then
+    _member_source="$WORKSPACE_MEMBERS_LAST_SOURCE"
+    _member_manifest_list="$(cat "$_member_manifest_tmp")"
   fi
 
   if [ -z "$_member_source" ]; then
@@ -577,12 +578,70 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       [ -n "$_unsafe_file" ] || continue
       [ -f "$_unsafe_file" ] || continue
       awk '
-        BEGIN { prev_is_safety_comment = 0 }
+        function split_comment(line,    i, c, nextc, in_double, in_single, escaped, comment_idx) {
+          in_double = 0
+          in_single = 0
+          escaped = 0
+          comment_idx = 0
+          for (i = 1; i <= length(line); i++) {
+            c = substr(line, i, 1)
+            nextc = (i < length(line) ? substr(line, i + 1, 1) : "")
+            if (in_double) {
+              if (escaped) {
+                escaped = 0
+                continue
+              }
+              if (c == "\\") {
+                escaped = 1
+                continue
+              }
+              if (c == "\"") {
+                in_double = 0
+              }
+              continue
+            }
+            if (in_single) {
+              if (escaped) {
+                escaped = 0
+                continue
+              }
+              if (c == "\\") {
+                escaped = 1
+                continue
+              }
+              if (c == "'\''") {
+                in_single = 0
+              }
+              continue
+            }
+            if (c == "\"") {
+              in_double = 1
+              continue
+            }
+            if (c == "'\''") {
+              in_single = 1
+              continue
+            }
+            if (c == "/" && nextc == "/") {
+              comment_idx = i
+              break
+            }
+          }
+          if (comment_idx > 0) {
+            _scan_code = substr(line, 1, comment_idx - 1)
+            _scan_comment = substr(line, comment_idx)
+          } else {
+            _scan_code = line
+            _scan_comment = ""
+          }
+        }
+        BEGIN { prev_is_safety_comment = 0; _scan_code = ""; _scan_comment = "" }
         {
           line = $0
-          cur_has_inline_safety = (index(line, "// SAFETY:") > 0)
-          cur_is_safety_comment = (line ~ /^[[:space:]]*\/\/[[:space:]]*SAFETY:/)
-          if (line ~ /unsafe[[:space:]]*\{/) {
+          split_comment(line)
+          cur_has_inline_safety = (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
+          cur_is_safety_comment = (_scan_code ~ /^[[:space:]]*$/) && (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
+          if (_scan_code ~ /unsafe[[:space:]]*\{/) {
             if (!(cur_has_inline_safety || prev_is_safety_comment)) {
               printf "%s:%d:%s\n", FILENAME, NR, line
             }
