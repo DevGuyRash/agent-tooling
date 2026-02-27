@@ -27,12 +27,15 @@ if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok
 if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
   members=""
   if command -v cargo >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-    members="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml 2>/dev/null | python3 - <<'PY'
+    metadata_json=$(mktemp "${TMPDIR:-/tmp}/rust-verify-manual-metadata.XXXXXX")
+    if cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml >"$metadata_json" 2>/dev/null; then
+      members="$(python3 - "$metadata_json" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 try:
-    payload = json.load(sys.stdin)
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(1)
 
@@ -56,6 +59,8 @@ for manifest_path in sorted(paths):
     print(manifest_path)
 PY
 )"
+    fi
+    rm -f -- "$metadata_json"
   fi
 
   if [ -z "$members" ]; then

@@ -21,6 +21,38 @@
 
 set -eu
 
+# Resolve script location so helper sourcing works regardless of cwd.
+script_path="$0"
+case "$script_path" in
+  */*) : ;;
+  *)
+    resolved="$(command -v -- "$script_path" 2>/dev/null || true)"
+    case "$resolved" in
+      */*) script_path="$resolved" ;;
+    esac
+    ;;
+esac
+
+if command -v readlink >/dev/null 2>&1; then
+  while [ -L "$script_path" ]; do
+    link="$(readlink "$script_path" 2>/dev/null || true)"
+    [ -n "$link" ] || break
+    case "$link" in
+      /*) script_path="$link" ;;
+      *) script_path="$(dirname -- "$script_path")/$link" ;;
+    esac
+  done
+fi
+
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
+workspace_members_lib="${script_dir}/workspace-members.sh"
+if [ ! -f "$workspace_members_lib" ]; then
+  echo "error: helper library not found: $workspace_members_lib" >&2
+  exit 1
+fi
+# shellcheck source=workspace-members.sh
+. "$workspace_members_lib"
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -330,145 +362,6 @@ _search_excluding() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-list_workspace_member_manifests_from_metadata() {
-  root_manifest="$1"
-  command -v cargo >/dev/null 2>&1 || return 1
-  command -v python3 >/dev/null 2>&1 || return 1
-
-  cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
-    | python3 - "$root_manifest" <<'PY'
-import json
-import sys
-
-root_manifest = sys.argv[1]
-
-try:
-    payload = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-
-workspace_members = payload.get("workspace_members")
-packages = payload.get("packages")
-if not isinstance(workspace_members, list) or not isinstance(packages, list):
-    sys.exit(1)
-
-member_ids = {value for value in workspace_members if isinstance(value, str)}
-member_paths = set()
-for pkg in packages:
-    if not isinstance(pkg, dict):
-        continue
-    if pkg.get("id") not in member_ids:
-        continue
-    manifest_path = pkg.get("manifest_path")
-    if not isinstance(manifest_path, str):
-        continue
-    if manifest_path == root_manifest:
-        continue
-    member_paths.add(manifest_path)
-
-for manifest_path in sorted(member_paths):
-    print(manifest_path)
-PY
-}
-
-list_workspace_member_manifests_from_manifest() {
-  root_manifest="$1"
-  command -v python3 >/dev/null 2>&1 || return 1
-
-  python3 - "$root_manifest" <<'PY'
-import fnmatch
-import sys
-from pathlib import Path
-
-try:
-    import tomllib  # type: ignore[attr-defined]
-except ModuleNotFoundError:
-    try:
-        import tomli as tomllib  # type: ignore[assignment]
-    except ModuleNotFoundError:
-        sys.exit(1)
-
-root_manifest = Path(sys.argv[1]).resolve()
-workspace_root = root_manifest.parent
-
-try:
-    data = tomllib.loads(root_manifest.read_text(encoding="utf-8"))
-except Exception:
-    sys.exit(1)
-
-workspace = data.get("workspace") if isinstance(data, dict) else None
-if not isinstance(workspace, dict):
-    sys.exit(1)
-
-raw_members = workspace.get("members")
-if isinstance(raw_members, str):
-    raw_members = [raw_members]
-if not isinstance(raw_members, list):
-    sys.exit(1)
-members = [value.strip().replace("\\", "/") for value in raw_members if isinstance(value, str) and value.strip()]
-if not members:
-    sys.exit(1)
-
-raw_exclude = workspace.get("exclude")
-if isinstance(raw_exclude, str):
-    raw_exclude = [raw_exclude]
-exclude = []
-if isinstance(raw_exclude, list):
-    exclude = [value.strip().replace("\\", "/") for value in raw_exclude if isinstance(value, str) and value.strip()]
-
-def _matches_any(rel_path: str, patterns):
-    rel_norm = rel_path.replace("\\", "/")
-    for pattern in patterns:
-        normalized = pattern.replace("\\", "/").strip()
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        if not normalized:
-            continue
-        if fnmatch.fnmatch(rel_norm, normalized):
-            return True
-    return False
-
-manifests = set()
-for pattern in members:
-    normalized = pattern
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    if not normalized:
-        continue
-
-    has_glob = any(ch in normalized for ch in "*?[")
-    matched_any = False
-    for candidate in workspace_root.glob(normalized):
-        matched_any = True
-        manifest_path = candidate if candidate.name == "Cargo.toml" else candidate / "Cargo.toml"
-        if manifest_path.is_file():
-            manifests.add(manifest_path.resolve())
-
-    if not has_glob and not matched_any:
-        manifest_path = workspace_root / normalized / "Cargo.toml"
-        if manifest_path.is_file():
-            manifests.add(manifest_path.resolve())
-
-filtered = []
-for manifest_path in sorted(manifests):
-    if manifest_path == root_manifest:
-        continue
-    try:
-        rel = manifest_path.parent.relative_to(workspace_root).as_posix()
-    except ValueError:
-        continue
-    if exclude and _matches_any(rel, exclude):
-        continue
-    filtered.append(manifest_path)
-
-for manifest_path in filtered:
-    print(manifest_path)
-PY
-}
-
-# ---------------------------------------------------------------------------
-
 # Resolve git root for CI file detection.
 git_root_dir=""
 if command -v git >/dev/null 2>&1; then
@@ -684,16 +577,17 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       [ -n "$_unsafe_file" ] || continue
       [ -f "$_unsafe_file" ] || continue
       awk '
-        BEGIN { prev_has_safety = 0 }
+        BEGIN { prev_is_safety_comment = 0 }
         {
           line = $0
-          cur_has_safety = (index(line, "// SAFETY:") > 0)
+          cur_has_inline_safety = (index(line, "// SAFETY:") > 0)
+          cur_is_safety_comment = (line ~ /^[[:space:]]*\/\/[[:space:]]*SAFETY:/)
           if (line ~ /unsafe[[:space:]]*\{/) {
-            if (!(cur_has_safety || prev_has_safety)) {
+            if (!(cur_has_inline_safety || prev_is_safety_comment)) {
               printf "%s:%d:%s\n", FILENAME, NR, line
             }
           }
-          prev_has_safety = cur_has_safety
+          prev_is_safety_comment = cur_is_safety_comment
         }
       ' "$_unsafe_file" >> "$_unsafe_violations_tmp"
     done <<UNSAFE_FILES_EOF
