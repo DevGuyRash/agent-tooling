@@ -67,7 +67,16 @@ fn is_pid_alive(pid: u32) -> bool {
     {
         Path::new("/proc").join(pid.to_string()).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        // Use direct argv (no shell) to probe process existence on Unix-like hosts.
+        let status = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status();
+        matches!(status, Ok(exit) if exit.success())
+    }
+    #[cfg(not(unix))]
     {
         let _ = pid;
         true
@@ -339,5 +348,18 @@ mod tests {
             "lock should still belong to active-owner"
         );
         Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    #[test]
+    fn unix_non_linux_pid_probe_reflects_live_and_missing_pids() {
+        assert!(
+            is_pid_alive(std::process::id()),
+            "current process should report as alive"
+        );
+        assert!(
+            !is_pid_alive(u32::MAX),
+            "unlikely pid should report as not alive"
+        );
     }
 }

@@ -4378,3 +4378,46 @@ fn supplemental_phases_accepted() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn launcher_files_keep_expected_line_endings_and_ps_compat_markers() -> anyhow::Result<()> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let scripts_dir = manifest_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("missing scripts dir parent"))?;
+
+    let posix_launcher = fs::read_to_string(scripts_dir.join("mpcr"))?;
+    ensure!(
+        !posix_launcher.contains('\r'),
+        "posix launcher should use LF only"
+    );
+
+    let powershell_launcher = fs::read_to_string(scripts_dir.join("mpcr.ps1"))?;
+    ensure!(
+        !powershell_launcher.contains('\r'),
+        "powershell launcher should use LF only"
+    );
+    ensure!(
+        powershell_launcher.contains("$PSVersionTable.PSEdition"),
+        "powershell launcher should use 5.1-compatible edition check"
+    );
+    ensure!(
+        !powershell_launcher.contains("$IsWindows"),
+        "powershell launcher should avoid PowerShell Core-only $IsWindows variable"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn protocol_files_use_lf_line_endings() -> anyhow::Result<()> {
+    let protocols_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("protocols");
+    for name in ["dispatch.toml", "session.toml"] {
+        let content = fs::read_to_string(protocols_dir.join(name))?;
+        ensure!(
+            !content.contains('\r'),
+            "protocol file should use LF-only line endings: {name}"
+        );
+    }
+    Ok(())
+}

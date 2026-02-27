@@ -8,7 +8,8 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SrcDir    = Join-Path $ScriptDir 'mpcr-src'
-$BinName   = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'mpcr.exe' } else { 'mpcr' }
+$WindowsNtHost = (($PSVersionTable.PSEdition -eq 'Desktop') -or ($env:OS -eq 'Windows_NT'))
+$BinName       = if ($WindowsNtHost) { 'mpcr.exe' } else { 'mpcr' }
 $Bin       = Join-Path $SrcDir 'target' 'release' $BinName
 $CargoToml = Join-Path $SrcDir 'Cargo.toml'
 $CargoLock = Join-Path $SrcDir 'Cargo.lock'

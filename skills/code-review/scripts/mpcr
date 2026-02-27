@@ -27,7 +27,7 @@ if command -v readlink >/dev/null 2>&1; then
   done
 fi
 
-script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
 src_dir="${script_dir}/mpcr-src"
 bin="${src_dir}/target/release/mpcr"
 
