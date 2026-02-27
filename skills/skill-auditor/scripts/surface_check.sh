@@ -91,13 +91,12 @@ echo ""
 # Show tree (2 levels, with sizes)
 if command -v find >/dev/null 2>&1; then
     find "$SKILL_DIR" -maxdepth 3 -not -path '*/target/*' -not -path '*/.git/*' \
-        -not -path '*/node_modules/*' -type f -exec sh -c '
-            for f do
-                size=$(wc -c < "$f")
-                rel="${f#'"$SKILL_DIR"'/}"
-                printf "  %8d  %s\n" "$size" "$rel"
-            done
-        ' _ {} + 2>/dev/null | sort -k2 || true
+        -not -path '*/node_modules/*' -type f 2>/dev/null | \
+        while IFS= read -r f; do
+            size=$(wc -c < "$f")
+            rel="${f#"$SKILL_DIR"/}"
+            printf "  %8d  %s\n" "$size" "$rel"
+        done | sort -k2 || true
 fi
 
 echo ""

@@ -80,15 +80,15 @@ total_chars=0
 total_lines=0
 
 doc_list=$(mktemp)
-toml_list=$(mktemp)
 cleanup_lists() {
-    rm -f "$doc_list" "$toml_list"
+    rm -f "$doc_list"
 }
 trap cleanup_lists EXIT INT TERM
 
-find "$SKILL_DIR" -type f -name '*.md' \
+find "$SKILL_DIR" -type f \
+    \( -name '*.md' -o -name '*.toml' -o -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) \
     -not -path '*/target/*' -not -path '*/.git/*' \
-    2>/dev/null | sort > "$doc_list"
+    -not -name 'Cargo.*' 2>/dev/null | sort > "$doc_list"
 
 while IFS= read -r file; do
     [ -z "$file" ] && continue
@@ -103,26 +103,8 @@ while IFS= read -r file; do
     total_lines=$((total_lines + lines))
 done < "$doc_list"
 
-# Also measure TOML protocol files if they exist
-find "$SKILL_DIR" -type f -name '*.toml' \
-    -not -path '*/target/*' -not -path '*/.git/*' \
-    -not -name 'Cargo.*' 2>/dev/null | sort > "$toml_list"
-
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    relpath="${file#"$SKILL_DIR"/}"
-
-    lines=$(wc -l < "$file" 2>/dev/null || echo 0)
-    chars=$(wc -c < "$file" 2>/dev/null || echo 0)
-    tokens=$(( chars / 4 ))
-
-    printf "  %-45s %6d %8d %8d\n" "$relpath" "$lines" "$chars" "$tokens"
-    total_chars=$((total_chars + chars))
-    total_lines=$((total_lines + lines))
-done < "$toml_list"
-
 printf "  %-45s %6s %8s %8s\n" "" "-----" "-----" "-------"
-printf "  %-45s %6d %8d %8d\n" "TOTAL (documents)" "$total_lines" "$total_chars" "$(( total_chars / 4 ))"
+printf "  %-45s %6d %8d %8d\n" "TOTAL (documents/config)" "$total_lines" "$total_chars" "$(( total_chars / 4 ))"
 
 echo ""
 
