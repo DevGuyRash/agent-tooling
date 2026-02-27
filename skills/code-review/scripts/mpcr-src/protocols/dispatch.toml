@@ -28,7 +28,7 @@ Explorer context: [ORCHESTRATOR FILLS IN]
 
 task_steps = """
 1. Read assigned files (or explorer summaries).
-2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
+2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase INGESTION`
 3. OPTIONAL: Run `mpcr analyze run <assigned-files>` for mechanical pre-screening; use findings to seed theorem candidates.
 4. Scope your domain: `mpcr reviewer update ... --phase DOMAIN_COVERAGE`
 5. Generate >= 2 must-prove theorems referencing concrete `file:line`: `mpcr reviewer update ... --phase THEOREM_GENERATION`
@@ -36,7 +36,7 @@ task_steps = """
 7. Synthesize findings or defended proofs: `mpcr reviewer update ... --phase SYNTHESIS`
 8. WHEN relevant tests exist, you SHALL run them.
 9. Produce your Proof Packet: `mpcr reviewer update ... --phase REPORT_WRITING`
-10. Self-complete: `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <ID8> --verdict <APPROVE|REQUEST_CHANGES|BLOCK> --blocker N --major N --minor N --nit N --proof-note "summary"`
+10. Self-complete: `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <APPROVE|REQUEST_CHANGES|BLOCK> --blocker N --major N --minor N --nit N --proof-note "summary"`
 """
 
 output_format = """
@@ -266,7 +266,7 @@ Defend against blind spots by selecting the 1-3 most consequential concerns foun
 """
 task_override = """
 1. Read assigned files with no preconceptions.
-2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
+2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase INGESTION`
 3. Select 1-3 highest-risk concerns and scope them: `mpcr reviewer update ... --phase DOMAIN_COVERAGE`
 4. Generate >= 2 must-prove theorems per chosen concern: `mpcr reviewer update ... --phase THEOREM_GENERATION`
 5. Attempt concrete disproof for each theorem: `mpcr reviewer update ... --phase ADVERSARIAL_PROOFS`
@@ -296,7 +296,7 @@ methodology = """
 """
 task_override = """
 1. Read assigned files and identify complexity-sensitive paths.
-2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
+2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase INGESTION`
 3. Scope complexity claims: `mpcr reviewer update ... --phase DOMAIN_COVERAGE`
 4. Produce complexity theorems: `mpcr reviewer update ... --phase COMPLEXITY_ANALYSIS`
 5. Attempt disproof scenarios with realistic input growth.
@@ -312,7 +312,7 @@ Seed challenges: speculative generality, single-consumer abstractions, unnecessa
 """
 task_override = """
 1. Read assigned files and identify newly introduced abstractions.
-2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
+2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase INGESTION`
 3. Scope simplification opportunities: `mpcr reviewer update ... --phase DOMAIN_COVERAGE`
 4. Produce overengineering theorems: `mpcr reviewer update ... --phase OVERENGINEERING_GUARD`
 5. Attempt disproof: show where abstraction is justified.
@@ -340,7 +340,7 @@ Acceptance criteria: [ORCHESTRATOR FILLS IN]
 
 ## Task
 1. Ingest all provided Proof Packets.
-2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <ID8> --status IN_PROGRESS --phase SHIP_READINESS`
+2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase SHIP_READINESS`
 3. Evaluate: correctness, safety, complexity budget, test coverage, acceptance criteria.
 4. Derive verdict: SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP.
 5. Self-complete via `mpcr reviewer complete-child ...`.
