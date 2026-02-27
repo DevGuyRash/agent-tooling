@@ -419,9 +419,8 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
         if let Some((start, ref name)) = func_start {
             let func_len = idx + 1 - start;
             let at_brace_end = saw_open_brace && brace_depth <= 0 && func_len > 1;
-            let at_dedent = false;
 
-            if at_brace_end || at_dedent {
+            if at_brace_end {
                 if func_len > threshold {
                     out.push(AnalysisFinding {
                         check: "long-function".to_string(),
