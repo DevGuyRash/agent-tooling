@@ -15,7 +15,7 @@
 #![allow(clippy::expect_used)]
 
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 // ── Output types ─────────────────────────────────────────────────────────────
 
@@ -402,7 +402,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
             let at_dedent = !saw_open_brace
                 && indent_start.is_some_and(|is| {
                     let current_indent = line.len() - line.trim_start().len();
-                    current_indent <= is && func_len > 1 && !trimmed.is_empty()
+                    current_indent <= is && !trimmed.is_empty()
                 });
             if at_dedent {
                 if func_len > threshold {
@@ -442,7 +442,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
 
         if let Some((start, ref name)) = func_start {
             let func_len = idx + 1 - start;
-            let at_brace_end = saw_open_brace && brace_depth <= 0 && func_len > 1;
+            let at_brace_end = saw_open_brace && brace_depth <= 0;
 
             if at_brace_end {
                 if func_len > threshold {
@@ -604,7 +604,8 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
                 deduped.push(loc);
             }
         }
-        if deduped.len() >= 2 {
+        let unique_files: BTreeSet<&str> = deduped.iter().map(|l| l.file.as_str()).collect();
+        if unique_files.len() >= 2 {
             duplicates.push(DuplicateBlock {
                 fingerprint: format!("{hash:016x}"),
                 locations: deduped
@@ -916,6 +917,31 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_blocks_require_distinct_files() {
+        let mut files = HashMap::new();
+        files.insert(
+            "solo.rs".to_string(),
+            [
+                "line one",
+                "line two",
+                "line three",
+                "line four",
+                "line one",
+                "line two",
+                "line three",
+                "line four",
+            ]
+            .join("\n"),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.duplicate_blocks.is_empty(),
+            "duplicate blocks must require at least two distinct files"
+        );
+    }
+
+    #[test]
     fn available_checks_listed() {
         let checks = available_checks();
         assert!(checks.len() >= 7);
@@ -1103,6 +1129,22 @@ mod tests {
                 .iter()
                 .any(|f| f.file == "sample.py" && f.line == 3 && f.check == "long-function"),
             "expected second function to be analyzed after dedent transition"
+        );
+    }
+
+    #[test]
+    fn single_line_function_closes_before_skipped_lines() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn noop() {}\n");
+        for _ in 0..80 {
+            src.push_str("// trailing comment\n");
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "single-line function should not stay active across skipped lines"
         );
     }
 
