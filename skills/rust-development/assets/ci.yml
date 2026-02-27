@@ -405,9 +405,11 @@ jobs:
         working-directory: ${{ matrix.dir }}
         shell: bash
         env:
-          VERIFY_RUN_FMT: ${{ steps.cfg.outputs.run_fmt }}
-          VERIFY_RUN_CLIPPY: ${{ steps.cfg.outputs.run_clippy }}
-          VERIFY_RUN_TESTS: ${{ steps.cfg.outputs.run_tests }}
+          # Keep verify focused on installation + banned-pattern checks; fmt/clippy/tests
+          # are already enforced by dedicated CI steps in this job.
+          VERIFY_RUN_FMT: "false"
+          VERIFY_RUN_CLIPPY: "false"
+          VERIFY_RUN_TESTS: "false"
         run: |
           set -euo pipefail
           repo_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
