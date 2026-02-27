@@ -172,6 +172,34 @@ ensure_within_workspace() {
   esac
 }
 
+list_workspace_member_manifests_from_metadata() {
+  root_manifest="$1"
+  command -v cargo >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
+    | python3 - "$root_manifest" <<'PY'
+import json
+import sys
+
+root_manifest = sys.argv[1]
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+paths = {
+    pkg.get("manifest_path")
+    for pkg in payload.get("packages", [])
+    if isinstance(pkg.get("manifest_path"), str) and pkg.get("manifest_path") != root_manifest
+}
+
+for manifest_path in sorted(paths):
+    print(manifest_path)
+PY
+}
+
 # ---------------------------------------------------------------------------
 # Helper: safe copy (idempotent — skips if target exists and --force not set)
 # ---------------------------------------------------------------------------
@@ -273,14 +301,11 @@ resolve_banned_test_destination() {
   fi
 
   member_manifest=""
-  if command -v cargo >/dev/null 2>&1; then
-    member_manifest="$(
-      cargo metadata --format-version 1 --no-deps --manifest-path "$root_manifest" 2>/dev/null \
-        | tr ',' '\n' \
-        | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
-        | LC_ALL=C sort \
-        | awk -v root_manifest="$root_manifest" '$0 != root_manifest { print; exit }'
-    )"
+  member_manifest_candidates="$(
+    list_workspace_member_manifests_from_metadata "$root_manifest" 2>/dev/null || true
+  )"
+  if [ -n "$member_manifest_candidates" ]; then
+    member_manifest="$(printf '%s\n' "$member_manifest_candidates" | awk 'NF { print; exit }')"
   fi
 
   if [ -z "$member_manifest" ]; then
@@ -423,18 +448,18 @@ if [ "$do_clippy" -eq 1 ]; then
       echo "    ✓ added [lints] workspace = true: $member_toml"
     }
 
-    if command -v cargo >/dev/null 2>&1; then
-      cargo metadata --format-version 1 --no-deps \
-        --manifest-path "$cargo_toml" 2>/dev/null \
-        | tr ',' '\n' \
-        | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
-        | while IFS= read -r _mpath; do
-            _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
-            case "$_mpath_real" in
-              "$cargo_toml") continue ;;
-            esac
-            _update_member_manifest_lints "$_mpath_real"
-          done
+    _member_manifest_list="$(
+      list_workspace_member_manifests_from_metadata "$cargo_toml" 2>/dev/null || true
+    )"
+    if [ -n "$_member_manifest_list" ]; then
+      printf '%s\n' "$_member_manifest_list" | while IFS= read -r _mpath; do
+        [ -n "$_mpath" ] || continue
+        _mpath_real="$(CDPATH='' cd -- "$(dirname -- "$_mpath")" && pwd -P)/$(basename -- "$_mpath")"
+        case "$_mpath_real" in
+          "$cargo_toml") continue ;;
+        esac
+        _update_member_manifest_lints "$_mpath_real"
+      done
     else
       # Use find -exec with batched positional args to avoid delimiter-based path splitting.
       find "$workspace_root" -name Cargo.toml -not -path '*/target/*' \
@@ -474,17 +499,11 @@ if [ "$do_banned" -eq 1 ]; then
   if grep -q '^\[workspace\]' "$_root_manifest" 2>/dev/null \
      && ! grep -Eq '^[[:space:]]*\[package\][[:space:]]*$' "$_root_manifest" 2>/dev/null; then
     _has_members=0
-    if command -v cargo >/dev/null 2>&1; then
-      _member_count="$(
-        cargo metadata --format-version 1 --no-deps \
-          --manifest-path "$_root_manifest" 2>/dev/null \
-          | tr ',' '\n' \
-          | sed -n 's/.*"manifest_path":"\([^"]*\)".*/\1/p' \
-          | awk -v root="$_root_manifest" '$0 != root' \
-          | head -n 1 | wc -l
-      )"
-      [ "${_member_count:-0}" -gt 0 ] && _has_members=1
-    fi
+    _first_member="$(
+      list_workspace_member_manifests_from_metadata "$_root_manifest" 2>/dev/null \
+        | awk 'NF { print; exit }'
+    )"
+    [ -n "$_first_member" ] && _has_members=1
     if [ "$_has_members" -eq 0 ]; then
       _fallback_count="$(
         find "$workspace_root" -name Cargo.toml \

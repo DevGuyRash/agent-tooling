@@ -29,7 +29,8 @@ if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
     if grep -qF '[package]' "$m" 2>/dev/null; then
       if ! awk '
         BEGIN { in_lints = 0; ok = 0 }
-        /^\[/ { in_lints = ($0 == "[lints]") }
+        /^\[lints\]/ { in_lints = 1; next }
+        /^\[/ { in_lints = 0 }
         in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
         END { exit ok ? 0 : 1 }
       ' "$m" 2>/dev/null; then

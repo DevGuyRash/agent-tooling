@@ -380,7 +380,8 @@ if grep -qF '[workspace]' "$_root_manifest" 2>/dev/null; then
           if grep -qF "[package]" "$_member_toml" 2>/dev/null; then
             if ! awk '"'"'
               BEGIN { in_lints = 0; ok = 0 }
-              /^\[/ { in_lints = ($0 == "[lints]") }
+              /^\[lints\]/ { in_lints = 1; next }
+              /^\[/ { in_lints = 0 }
               in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
               END { exit ok ? 0 : 1 }
             '"'"' "$_member_toml" 2>/dev/null; then

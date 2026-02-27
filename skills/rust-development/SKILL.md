@@ -284,7 +284,7 @@ You SHALL NOT skip this block or return a null/empty completion message.
 >     ### Phase 3 — Completion Checklist
 >
 >     - [x] Phase 0 stubs compiled: `cargo check` output above.
->     - [x] Round -1 observations addressed: <brief note or "see Round -1">.
+>     - [x] Round −1 observations addressed: <brief note or "see Round −1">.
 >     - [x] TDD cycle followed: RED/GREEN/REFACTOR evidence above for each unit.
 >     - [x] Banned patterns clean: verify.sh scan above.
 >     - [x] No oversized files: verify.sh complexity check above.
@@ -310,7 +310,7 @@ You SHALL output the block below as evidence. You SHALL NOT skip this block.
 >
 >     ### Round 5 — Holistic Assessment
 >
->     **Round -1 revisit:**
+>     **Round −1 revisit:**
 >     - Observation 1: <addressed / accepted / still open>
 >     - Observation 2: ...
 >
