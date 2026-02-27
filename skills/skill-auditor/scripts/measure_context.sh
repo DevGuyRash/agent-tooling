@@ -172,16 +172,24 @@ if [ -n "$CLI_BIN" ]; then
         subcmds=$(printf '%s\n' "$help_output" | extract_subcommands || true)
 
         if [ -z "$subcmds" ]; then
-            # Fallback: try the binary with no args
-            noarg_output=$("$CLI_BIN" 2>&1 || true)
-            subcmds=$(printf '%s\n' "$noarg_output" | \
-                sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
-                sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
+            # In run mode, fallback to no-arg invocation (may have side effects).
+            # Help mode must stay side-effect-safe and never invoke default command.
+            if [ "$CLI_MODE" = "run" ]; then
+                noarg_output=$("$CLI_BIN" 2>&1 || true)
+                subcmds=$(printf '%s\n' "$noarg_output" | \
+                    sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
+                    sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
+            fi
+
             if [ -z "$subcmds" ]; then
                 subcmds=$(printf '%s\n' "$help_output" | \
                     sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
                     sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
             fi
+        fi
+
+        if [ -z "$subcmds" ]; then
+            echo "  ℹ No subcommands discovered; skipping CLI subcommand probing."
         fi
 
         # Measure each discovered subcommand

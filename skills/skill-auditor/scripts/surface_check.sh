@@ -176,8 +176,8 @@ else
     if [ "$binary_skipped_count" -gt 0 ]; then
         echo "  Skipped probable binary files: $binary_skipped_count"
     fi
-    echo "  Fix (GNU sed):    find $SKILL_DIR -type f -exec sed -i 's/\\r\\$//' {} +"
-    echo "  Fix (BSD/macOS):  find $SKILL_DIR -type f -exec sed -i '' 's/\\r\\$//' {} +"
+    echo "  Fix (GNU sed):    find \"$SKILL_DIR\" -type f -not -path '*/target/*' -not -path '*/.git/*' -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' -not -name '*.woff' -not -name '*.ttf' -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
+    echo "  Fix (BSD/macOS):  find \"$SKILL_DIR\" -type f -not -path '*/target/*' -not -path '*/.git/*' -not -name '*.lock' -not -name '*.png' -not -name '*.jpg' -not -name '*.woff' -not -name '*.ttf' -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"\" \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
 fi
 
 echo ""
