@@ -6,6 +6,111 @@ IF any check fails THEN you SHALL fix the issue and re-run.
 
 ---
 
+## 0. Installation checks
+
+Before running pattern scans, you SHALL confirm the skill's artifacts are installed.
+
+```bash
+# banned_family.rs test harness
+found_banned=$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit)
+if [ -n "$found_banned" ]; then echo "ok: banned_family.rs installed: $found_banned"; else echo "WARN: banned_family.rs not found (run scaffold.sh --banned-test)"; fi
+
+# CI workflow
+git_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -f ".github/workflows/ci.yml" ] || { [ -n "$git_root" ] && [ -f "$git_root/.github/workflows/ci.yml" ]; }; then echo "ok: CI workflow installed"; else echo "WARN: CI workflow not found (run scaffold.sh --ci)"; fi
+if [ -f ".github/scripts/detect_rust_workspaces.py" ] || { [ -n "$git_root" ] && [ -f "$git_root/.github/scripts/detect_rust_workspaces.py" ]; }; then echo "ok: CI detector script installed"; else echo "WARN: CI detector script not found (run scaffold.sh --ci)"; fi
+
+# Clippy lint config
+if grep -qE '^\[workspace\.lints|^\[lints' Cargo.toml 2>/dev/null; then echo "ok: clippy lint config present"; else echo "WARN: no [workspace.lints] or [lints] in Cargo.toml (run scaffold.sh --clippy)"; fi
+
+# [lints] workspace = true in member crates (workspace only)
+if grep -qF '[workspace]' Cargo.toml 2>/dev/null; then
+  members=""
+  members_resolved=0
+  if command -v cargo >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    metadata_json=$(mktemp "${TMPDIR:-/tmp}/rust-verify-manual-metadata.XXXXXX")
+    if cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml >"$metadata_json" 2>/dev/null; then
+      members="$(python3 - "$metadata_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root_manifest = Path("Cargo.toml").resolve()
+workspace_root = root_manifest.parent
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except OSError as exc:
+    print(f"WARN: failed to read metadata file {sys.argv[1]}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+except json.JSONDecodeError as exc:
+    print(f"WARN: failed to parse metadata JSON {sys.argv[1]}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+workspace_members = payload.get("workspace_members")
+packages = payload.get("packages")
+if not isinstance(workspace_members, list) or not isinstance(packages, list):
+    print("WARN: metadata JSON missing workspace_members/packages arrays", file=sys.stderr)
+    raise SystemExit(1)
+
+member_ids = {value for value in workspace_members if isinstance(value, str)}
+paths = set()
+for pkg in packages:
+    if not isinstance(pkg, dict):
+        continue
+    if pkg.get("id") not in member_ids:
+        continue
+    manifest_path = pkg.get("manifest_path")
+    if not isinstance(manifest_path, str):
+        continue
+    candidate = Path(manifest_path).resolve()
+    if candidate == root_manifest:
+        continue
+    try:
+        candidate.relative_to(workspace_root)
+    except ValueError:
+        continue
+    paths.add(str(candidate))
+
+for manifest_path in sorted(paths):
+    print(manifest_path)
+PY
+)"
+      members_resolved=1
+    fi
+    rm -f -- "$metadata_json"
+  fi
+
+  if [ "$members_resolved" -eq 0 ]; then
+    echo "WARN: unable to resolve workspace members for lint inheritance check"
+  elif [ -z "$members" ]; then
+    echo "ok: workspace has no member crates requiring lint inheritance"
+  else
+    missing=$(printf '%s\n' "$members" | while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      [ "$m" = "$(pwd)/Cargo.toml" ] && continue
+      if grep -qF '[package]' "$m" 2>/dev/null; then
+        if ! awk '
+          BEGIN { in_lints = 0; ok = 0 }
+          /^\[lints\]/ { in_lints = 1; next }
+          /^\[/ { in_lints = 0 }
+          in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ { ok = 1 }
+          END { exit ok ? 0 : 1 }
+        ' "$m" 2>/dev/null; then
+          printf ' %s' "$m"
+        fi
+      fi
+    done)
+    if [ -z "$missing" ]; then echo "ok: all member crates inherit workspace lints"; else echo "WARN: missing [lints] workspace = true:$missing"; fi
+  fi
+fi
+```
+
+IF any installation check warns THEN you SHALL run `scaffold.sh --all` before proceeding.
+
+---
+
+
 ## 1. Banned pattern scan
 
 `// INVARIANT:` exemptions apply only when the comment appears on the same line as the banned call.

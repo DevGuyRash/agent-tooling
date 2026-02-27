@@ -172,8 +172,6 @@ sys.stderr.write(
 sys.exit(127)
 ```
 
-You MAY also use the shell shim template from the repo's `scripts/rust-shim-template.sh`.
-
 ---
 
 ## Incremental migration

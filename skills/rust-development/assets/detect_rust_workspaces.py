@@ -96,13 +96,18 @@ manifests = [
 
 github_output = os.environ.get("GITHUB_OUTPUT")
 if not github_output:
-    print("GITHUB_OUTPUT is not set", file=sys.stderr)
-    raise SystemExit(1)
+    # When running outside CI (e.g. local testing), print the matrix to stdout
+    # instead of failing.  Set GITHUB_OUTPUT to a file path to capture output.
+    print("GITHUB_OUTPUT is not set — printing matrix to stdout", file=sys.stderr)
+    github_output = None  # sentinel: write to stdout later
 
 if not manifests:
-    with open(github_output, "a", encoding="utf-8") as f:
-        f.write("has_rust=false\n")
-        f.write('matrix={"include":[]}\n')
+    _no_rust = "has_rust=false\nmatrix={\"include\":[]}\n"
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as f:
+            f.write(_no_rust)
+    else:
+        sys.stdout.write(_no_rust)
     raise SystemExit(0)
 
 mode = os.environ.get("CI_USE_CARGO_METADATA", "auto").strip().lower()
@@ -408,6 +413,9 @@ if len(include) > max_entries:
     )
     raise SystemExit(1)
 
-with open(github_output, "a", encoding="utf-8") as f:
-    f.write(f"has_rust={'true' if include else 'false'}\n")
-    f.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
+_output = f"has_rust={'true' if include else 'false'}\nmatrix={json.dumps(matrix, separators=(',', ':'))}\n"
+if github_output:
+    with open(github_output, "a", encoding="utf-8") as f:
+        f.write(_output)
+else:
+    sys.stdout.write(_output)
