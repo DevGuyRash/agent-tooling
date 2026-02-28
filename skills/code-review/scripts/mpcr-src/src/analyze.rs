@@ -797,11 +797,9 @@ fn should_skip_line_for_function_analysis(line: &str) -> bool {
 }
 
 fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
-    let trimmed = line.trim();
+    let trimmed = strip_leading_rust_attributes(line.trim());
     let lower_line = trimmed.to_ascii_lowercase();
-    let inline_fn_syntax = lower_line.contains("fn ")
-        && (trimmed.contains('(') || trimmed.contains('{'))
-        && !is_marker_inside_quotes(&lower_line, "fn ");
+    let inline_fn_syntax = is_inline_rust_fn_declaration(trimmed, &lower_line);
     let callable_modifier_start = is_callable_modifier_declaration(&lower_line);
 
     fn_patterns.iter().any(|p| lower_line.starts_with(p))
@@ -810,6 +808,67 @@ fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
             .any(|p| lower_line.starts_with(p))
         || callable_modifier_start
         || inline_fn_syntax
+}
+
+fn strip_leading_rust_attributes(mut line: &str) -> &str {
+    loop {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("#[") {
+            return trimmed;
+        }
+
+        let Some(end_idx) = trimmed.find(']') else {
+            return trimmed;
+        };
+        line = &trimmed[end_idx + 1..];
+    }
+}
+
+fn is_inline_rust_fn_declaration(trimmed: &str, lower_line: &str) -> bool {
+    if is_marker_inside_quotes(lower_line, "fn ") {
+        return false;
+    }
+    if !trimmed.contains('(') && !trimmed.contains('{') {
+        return false;
+    }
+    if trimmed.ends_with(';') {
+        return false;
+    }
+
+    let Some(fn_idx) = lower_line.find("fn ") else {
+        return false;
+    };
+    let prefix = lower_line[..fn_idx].trim();
+    if prefix.contains('=') {
+        return false;
+    }
+    if !prefix.is_empty() && !is_allowed_rust_fn_prefix(prefix) {
+        return false;
+    }
+
+    let remainder = trimmed[fn_idx + 3..].trim_start();
+    remainder
+        .chars()
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+}
+
+fn is_allowed_rust_fn_prefix(prefix: &str) -> bool {
+    const TOKENS: &[&str] = &[
+        "pub",
+        "pub(crate)",
+        "pub(super)",
+        "pub(self)",
+        "unsafe",
+        "const",
+        "async",
+        "default",
+        "extern",
+    ];
+
+    prefix
+        .split_whitespace()
+        .all(|token| TOKENS.contains(&token) || token.starts_with('"') || token.starts_with('\''))
 }
 
 fn is_hash_comment_line(trimmed: &str) -> bool {
@@ -1427,6 +1486,34 @@ mod tests {
             "protected Task ExecuteAsync() {",
             FUNCTION_START_PATTERNS
         ));
+    }
+
+    #[test]
+    fn function_start_detection_ignores_rust_function_pointer_type_aliases() {
+        assert!(!is_function_start(
+            "type Handler = fn(Request) -> Response;",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "let callback: fn(i32) -> i32 = |v| v + 1;",
+            FUNCTION_START_PATTERNS
+        ));
+    }
+
+    #[test]
+    fn long_function_detection_ignores_function_pointer_alias_lines() {
+        let mut files = HashMap::new();
+        let mut src = String::from("type Handler = fn(Request) -> Response;\n");
+        for _ in 0..80 {
+            src.push_str("let value = 1;\n");
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "function pointer aliases should not open synthetic function spans"
+        );
     }
 
     #[test]

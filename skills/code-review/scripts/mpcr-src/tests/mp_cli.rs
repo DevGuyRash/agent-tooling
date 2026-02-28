@@ -2268,15 +2268,17 @@ fn applicator_note_rejects_reviewer_note_types() -> anyhow::Result<()> {
 }
 
 #[test]
-fn worker_dispatch_role_blocks_non_progress_commands() -> anyhow::Result<()> {
+fn worker_dispatch_role_allows_id_commands() -> anyhow::Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
         .arg("id")
         .arg("id8")
         .env("MPCR_DISPATCH_ROLE", "security-adversary")
         .output()?;
-    ensure!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    ensure!(stderr.contains("MPCR_DISPATCH_ROLE=security-adversary"));
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run id commands: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 

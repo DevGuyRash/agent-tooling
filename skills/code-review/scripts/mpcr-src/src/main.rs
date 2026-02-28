@@ -1914,8 +1914,8 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
         (None, None) => return Ok(()),
     };
 
-    // Protocol commands are always allowed for all worker roles (read-only guidance).
-    if matches!(command, Commands::Protocol { .. }) {
+    // Protocol and Id commands are always allowed for all worker roles.
+    if matches!(command, Commands::Protocol { .. } | Commands::Id { .. }) {
         return Ok(());
     }
 
@@ -1939,9 +1939,9 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     };
     if !allowed {
         let allowed_cmds = if dispatch_role.is_some() {
-            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, `mpcr analyze *`, and `mpcr protocol *`"
+            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, `mpcr analyze *`, `mpcr protocol *`, and `mpcr id *`"
         } else {
-            "`mpcr applicator note`, `mpcr applicator set-status`, and `mpcr protocol *`"
+            "`mpcr applicator note`, `mpcr applicator set-status`, `mpcr protocol *`, and `mpcr id *`"
         };
         return Err(anyhow::anyhow!(
             "{env}={role_name} restricts this executor to {allowed_cmds} only",
