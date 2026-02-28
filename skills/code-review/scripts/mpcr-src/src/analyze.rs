@@ -786,12 +786,13 @@ fn truncate_line(line: &str, max: usize) -> String {
 }
 
 const FUNCTION_START_PATTERNS: &[&str] = &["fn ", "def ", "func ", "function ", "sub ", "method "];
+const ASYNC_FUNCTION_START_PATTERNS: &[&str] = &["async fn ", "async def ", "async function "];
 
 fn should_skip_line_for_function_analysis(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.is_empty()
         || trimmed.starts_with("//")
-        || trimmed.starts_with('#')
+        || is_hash_comment_line(trimmed)
         || is_probable_string_literal_line(line)
 }
 
@@ -804,8 +805,26 @@ fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
     let callable_modifier_start = is_callable_modifier_declaration(&lower_line);
 
     fn_patterns.iter().any(|p| lower_line.starts_with(p))
+        || ASYNC_FUNCTION_START_PATTERNS
+            .iter()
+            .any(|p| lower_line.starts_with(p))
         || callable_modifier_start
         || inline_fn_syntax
+}
+
+fn is_hash_comment_line(trimmed: &str) -> bool {
+    if !trimmed.starts_with('#') {
+        return false;
+    }
+
+    if let Some(attr_tail) = trimmed.strip_prefix("#[") {
+        if let Some(end_idx) = attr_tail.find(']') {
+            let remainder = attr_tail[end_idx + 1..].trim_start();
+            return !is_function_start(remainder, FUNCTION_START_PATTERNS);
+        }
+    }
+
+    true
 }
 
 fn extract_name_hint(line: &str) -> String {
@@ -1215,6 +1234,60 @@ mod tests {
                 .iter()
                 .any(|f| { f.file == "sample.rs" && f.check == "complexity" && f.line == 1 }),
             "expected complexity hotspot findings from run_check"
+        );
+    }
+
+    #[test]
+    fn function_analysis_tracks_attribute_prefixed_function_declaration() {
+        let mut files = HashMap::new();
+        let mut src = String::from("#[cfg(unix)] fn flagged() {\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if cond_{i} {{\n        work();\n    }}\n"));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let complexity = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            complexity
+                .iter()
+                .any(|f| f.file == "sample.rs" && f.check == "complexity" && f.line == 1),
+            "attribute-prefixed function should be tracked for complexity"
+        );
+    }
+
+    #[test]
+    fn async_function_start_patterns_are_detected() {
+        assert!(is_function_start(
+            "async def worker():",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(is_function_start(
+            "async function worker() {",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(is_function_start(
+            "async fn worker() {",
+            FUNCTION_START_PATTERNS
+        ));
+    }
+
+    #[test]
+    fn long_function_detection_supports_async_python_signatures() {
+        let mut files = HashMap::new();
+        let mut src = String::from("async def heavy():\n");
+        for i in 0..70 {
+            src.push_str(&format!("    value_{i} = {i}\n"));
+        }
+        src.push_str("print('done')\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.check == "long-function" && f.file == "sample.py" && f.line == 1),
+            "long async python function should be reported"
         );
     }
 
