@@ -393,18 +393,14 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if should_skip_line_for_function_analysis(line) {
-            continue;
-        }
 
         if let Some((start, ref name)) = func_start {
-            let func_len = idx + 1 - start;
+            let current_indent = line.len() - line.trim_start().len();
             let at_dedent = !saw_open_brace
-                && indent_start.is_some_and(|is| {
-                    let current_indent = line.len() - line.trim_start().len();
-                    current_indent <= is && !trimmed.is_empty()
-                });
+                && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
             if at_dedent {
+                // Dedent means the active indentation-based function ended on the previous line.
+                let func_len = idx + 1 - start;
                 if func_len > threshold {
                     out.push(AnalysisFinding {
                         check: "long-function".to_string(),
@@ -420,6 +416,10 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
                 indent_start = None;
                 saw_open_brace = false;
             }
+        }
+
+        if should_skip_line_for_function_analysis(line) {
+            continue;
         }
 
         let is_fn_start = is_function_start(line, FUNCTION_START_PATTERNS);
@@ -650,9 +650,27 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
         let mut branch_count: usize = 0;
         let mut base_depth: i32 = 0;
         let mut depth: i32 = 0;
+        let mut indent_start: Option<usize> = None;
+        let mut saw_open_brace = false;
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
+            let current_indent = line.len() - line.trim_start().len();
+
+            if let Some((start, ref name)) = func_start {
+                let at_dedent = !saw_open_brace
+                    && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
+                if at_dedent {
+                    // Dedent means the active indentation-based function ended on the previous line.
+                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
+                    func_start = None;
+                    max_nesting = 0;
+                    branch_count = 0;
+                    indent_start = None;
+                    saw_open_brace = false;
+                }
+            }
+
             if should_skip_line_for_function_analysis(line) {
                 continue;
             }
@@ -661,24 +679,23 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
 
             if is_fn {
                 if let Some((start, ref name)) = func_start {
-                    if max_nesting > 4 || branch_count > 10 {
-                        hotspots.push(ComplexityHotspot {
-                            file: path.to_string(),
-                            start_line: start,
-                            name_hint: name.clone(),
-                            max_nesting,
-                            branch_count,
-                        });
-                    }
+                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
                 }
                 func_start = Some((idx + 1, extract_name_hint(trimmed)));
                 base_depth = depth;
                 max_nesting = 0;
                 branch_count = 0;
+                indent_start = Some(current_indent);
+                saw_open_brace = false;
             }
 
-            depth += trimmed.chars().filter(|&c| c == '{').count() as i32;
-            depth -= trimmed.chars().filter(|&c| c == '}').count() as i32;
+            let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
+            let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
+            if open_braces > 0 {
+                saw_open_brace = true;
+            }
+            depth += open_braces;
+            depth -= close_braces;
 
             if func_start.is_some() {
                 let relative = (depth - base_depth).max(0) as usize;
@@ -692,17 +709,21 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                     branch_count += 1;
                 }
             }
+
+            if let Some((start, ref name)) = func_start {
+                let at_brace_end = saw_open_brace && depth <= base_depth;
+                if at_brace_end {
+                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
+                    func_start = None;
+                    max_nesting = 0;
+                    branch_count = 0;
+                    indent_start = None;
+                    saw_open_brace = false;
+                }
+            }
         }
         if let Some((start, ref name)) = func_start {
-            if max_nesting > 4 || branch_count > 10 {
-                hotspots.push(ComplexityHotspot {
-                    file: path.to_string(),
-                    start_line: start,
-                    name_hint: name.clone(),
-                    max_nesting,
-                    branch_count,
-                });
-            }
+            maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
         }
     }
 
@@ -716,6 +737,25 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
     });
     hotspots.truncate(10);
     hotspots
+}
+
+fn maybe_push_hotspot(
+    hotspots: &mut Vec<ComplexityHotspot>,
+    path: &str,
+    start_line: usize,
+    name_hint: &str,
+    max_nesting: usize,
+    branch_count: usize,
+) {
+    if max_nesting > 4 || branch_count > 10 {
+        hotspots.push(ComplexityHotspot {
+            file: path.to_string(),
+            start_line,
+            name_hint: name_hint.to_string(),
+            max_nesting,
+            branch_count,
+        });
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1164,6 +1204,38 @@ mod tests {
                 .iter()
                 .any(|f| { f.file == "sample.rs" && f.check == "complexity" && f.line == 1 }),
             "expected complexity hotspot findings from run_check"
+        );
+    }
+
+    #[test]
+    fn long_function_dedent_closes_before_skipped_top_level_comment_lines() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def short_fn():\n    x = 1\n");
+        for _ in 0..80 {
+            src.push_str("# top-level comment\n");
+        }
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "brace-less function should close on dedent before skipped lines"
+        );
+    }
+
+    #[test]
+    fn complexity_dedent_closes_scope_before_top_level_branches() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def helper():\n    x = 1\n");
+        for i in 0..12 {
+            src.push_str(&format!("if cond_{i}:\n    pass\n"));
+        }
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "top-level branches after dedent should not be attributed to previous function"
         );
     }
 
