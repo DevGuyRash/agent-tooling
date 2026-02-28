@@ -272,7 +272,7 @@ task_override = """
 5. Attempt concrete disproof for each theorem: `mpcr reviewer update ... --phase ADVERSARIAL_PROOFS`
 6. Synthesize findings/defended proofs: `mpcr reviewer update ... --phase SYNTHESIS`
 7. Produce Proof Packet: `mpcr reviewer update ... --phase REPORT_WRITING`
-8. Self-complete via `mpcr reviewer complete-child ...`
+8. Self-complete: `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <APPROVE|REQUEST_CHANGES|BLOCK> --blocker N --major N --minor N --nit N --proof-note "summary"`
 """
 
 [roles.holistic_integrator]
@@ -301,7 +301,7 @@ task_override = """
 4. Produce complexity theorems: `mpcr reviewer update ... --phase COMPLEXITY_ANALYSIS`
 5. Attempt disproof scenarios with realistic input growth.
 6. Synthesize findings and defended proofs.
-7. Produce Proof Packet and self-complete via `mpcr reviewer complete-child ...`
+7. Produce Proof Packet and self-complete: `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <APPROVE|REQUEST_CHANGES|BLOCK> --blocker N --major N --minor N --nit N --proof-note "summary"`
 """
 
 [roles.overengineering_guard]
@@ -317,7 +317,7 @@ task_override = """
 4. Produce overengineering theorems: `mpcr reviewer update ... --phase OVERENGINEERING_GUARD`
 5. Attempt disproof: show where abstraction is justified.
 6. Synthesize findings and defended proofs.
-7. Produce Proof Packet and self-complete via `mpcr reviewer complete-child ...`
+7. Produce Proof Packet and self-complete: `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <APPROVE|REQUEST_CHANGES|BLOCK> --blocker N --major N --minor N --nit N --proof-note "summary"`
 """
 
 [roles.ship_readiness_assessor]
@@ -343,7 +343,7 @@ Acceptance criteria: [ORCHESTRATOR FILLS IN]
 2. `mpcr reviewer update --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase SHIP_READINESS`
 3. Evaluate: correctness, safety, complexity budget, test coverage, acceptance criteria.
 4. Derive verdict: SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP.
-5. Self-complete via `mpcr reviewer complete-child ...`.
+5. Self-complete by piping your Ship-Readiness Packet to `mpcr reviewer complete-child --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --proof-note "ship-readiness summary"` where `<V>` is `APPROVE` for `SHIP`, `REQUEST_CHANGES` for `SHIP_WITH_FIXES`, and `BLOCK` for `DO_NOT_SHIP`.
 
 ## Output format
 You SHALL return EXACTLY one Ship-Readiness Packet:

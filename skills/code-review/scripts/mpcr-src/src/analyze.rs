@@ -521,29 +521,38 @@ fn check_long_lines(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
 /// Detect unreachable/panic/todo! markers in code.
 fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let markers = [
-        "unreachable!(",
-        "unreachable!()",
-        "todo!(",
-        "todo!()",
-        "unimplemented!(",
-        "unimplemented!()",
-        "panic!(",
-        "raise NotImplementedError",
-        "throw new Error(\"not implemented",
-        "throw new Error(\"unreachable",
+        ("unreachable!(", "unreachable!("),
+        ("unreachable!()", "unreachable!()"),
+        ("todo!(", "todo!("),
+        ("todo!()", "todo!()"),
+        ("unimplemented!(", "unimplemented!("),
+        ("unimplemented!()", "unimplemented!()"),
+        ("panic!(", "panic!("),
+        ("raise notimplementederror", "raise NotImplementedError"),
+        (
+            "throw new error(\"not implemented",
+            "throw new Error(\"not implemented",
+        ),
+        (
+            "throw new error(\"unreachable",
+            "throw new Error(\"unreachable",
+        ),
     ];
+    let mut lex_state = AnalysisLexState::default();
     for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
         if is_probable_string_literal_line(line) {
             continue;
         }
-        if trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("/*") {
+        let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
+        let sanitized_trimmed = sanitized_line.trim();
+        if sanitized_trimmed.is_empty() {
             continue;
         }
+        let sanitized_lower = sanitized_trimmed.to_ascii_lowercase();
         let lower_line = line.to_ascii_lowercase();
-        for marker in &markers {
-            if trimmed.contains(marker) {
-                if is_marker_inside_quotes(&lower_line, &marker.to_ascii_lowercase()) {
+        for (needle, display) in &markers {
+            if sanitized_lower.contains(needle) {
+                if is_marker_inside_quotes(&lower_line, needle) {
                     continue;
                 }
                 out.push(AnalysisFinding {
@@ -551,7 +560,7 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
                     file: path.to_string(),
                     line: idx + 1,
                     excerpt: truncate_line(line, 100),
-                    detail: format!("Matched unreachable pattern: {marker}"),
+                    detail: format!("Matched unreachable pattern: {display}"),
                 });
                 break;
             }
@@ -824,68 +833,15 @@ fn sanitize_analysis_line(line: &str, state: &mut AnalysisLexState) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut sanitized = String::with_capacity(chars.len());
     let mut i = 0usize;
-    let mut escaped = false;
 
     while i < chars.len() {
-        if state.in_block_comment {
-            push_spaces(&mut sanitized, 1);
-            if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-                push_spaces(&mut sanitized, 1);
-                state.in_block_comment = false;
-                i += 2;
-            } else {
-                i += 1;
-            }
+        if let Some(next_idx) = sanitize_block_comment_char(&chars, i, state, &mut sanitized) {
+            i = next_idx;
             continue;
         }
 
-        if let Some(quote) = state.quote_state {
-            match quote {
-                QuoteState::TripleSingle => {
-                    push_spaces(&mut sanitized, 1);
-                    if is_triple_quote_at(&chars, i, '\'') {
-                        push_spaces(&mut sanitized, 2);
-                        state.quote_state = None;
-                        i += 3;
-                    } else {
-                        i += 1;
-                    }
-                }
-                QuoteState::TripleDouble => {
-                    push_spaces(&mut sanitized, 1);
-                    if is_triple_quote_at(&chars, i, '"') {
-                        push_spaces(&mut sanitized, 2);
-                        state.quote_state = None;
-                        i += 3;
-                    } else {
-                        i += 1;
-                    }
-                }
-                QuoteState::Single | QuoteState::Double => {
-                    let quote_char = if quote == QuoteState::Single {
-                        '\''
-                    } else {
-                        '"'
-                    };
-                    if chars[i] == '\\' {
-                        push_spaces(&mut sanitized, 1);
-                        if i + 1 < chars.len() {
-                            push_spaces(&mut sanitized, 1);
-                            i += 2;
-                        } else {
-                            i += 1;
-                        }
-                        escaped = true;
-                        continue;
-                    }
-                    push_spaces(&mut sanitized, 1);
-                    if chars[i] == quote_char && !escaped {
-                        state.quote_state = None;
-                    }
-                    i += 1;
-                    escaped = false;
-                }
-            }
+        if let Some(next_idx) = sanitize_quoted_char(&chars, i, state, &mut sanitized) {
+            i = next_idx;
             continue;
         }
 
@@ -944,6 +900,73 @@ fn sanitize_analysis_line(line: &str, state: &mut AnalysisLexState) -> String {
     }
 
     sanitized
+}
+
+fn sanitize_block_comment_char(
+    chars: &[char],
+    idx: usize,
+    state: &mut AnalysisLexState,
+    sanitized: &mut String,
+) -> Option<usize> {
+    if !state.in_block_comment {
+        return None;
+    }
+
+    push_spaces(sanitized, 1);
+    if chars[idx] == '*' && chars.get(idx + 1) == Some(&'/') {
+        push_spaces(sanitized, 1);
+        state.in_block_comment = false;
+        Some(idx + 2)
+    } else {
+        Some(idx + 1)
+    }
+}
+
+fn sanitize_quoted_char(
+    chars: &[char],
+    idx: usize,
+    state: &mut AnalysisLexState,
+    sanitized: &mut String,
+) -> Option<usize> {
+    let quote = state.quote_state?;
+    match quote {
+        QuoteState::TripleSingle | QuoteState::TripleDouble => {
+            let quote_char = if quote == QuoteState::TripleSingle {
+                '\''
+            } else {
+                '"'
+            };
+            push_spaces(sanitized, 1);
+            if is_triple_quote_at(chars, idx, quote_char) {
+                push_spaces(sanitized, 2);
+                state.quote_state = None;
+                Some(idx + 3)
+            } else {
+                Some(idx + 1)
+            }
+        }
+        QuoteState::Single | QuoteState::Double => {
+            let quote_char = if quote == QuoteState::Single {
+                '\''
+            } else {
+                '"'
+            };
+            push_spaces(sanitized, 1);
+            if chars[idx] == '\\' {
+                if idx + 1 < chars.len() {
+                    push_spaces(sanitized, 1);
+                    Some(idx + 2)
+                } else {
+                    Some(idx + 1)
+                }
+            } else {
+                if chars[idx] == quote_char {
+                    state.quote_state = None;
+                }
+                Some(idx + 1)
+            }
+        }
+    }
 }
 
 fn should_skip_line_for_function_analysis(line: &str) -> bool {
@@ -1720,6 +1743,42 @@ mod tests {
                 .iter()
                 .any(|f| f.check == "unreachable-marker" && f.line == 2),
             "unquoted marker should still be detected when single-quoted marker appears elsewhere"
+        );
+    }
+
+    #[test]
+    fn marker_detection_ignores_inline_comment_markers() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "fn main() {\n    let x = 1; // todo!() for later\n    work();\n}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "unreachable-marker"),
+            "inline comment markers should not trigger unreachable-marker findings"
+        );
+    }
+
+    #[test]
+    fn marker_detection_ignores_block_comment_markers() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "fn main() {\n    /* panic!(\"boom\") */\n    work();\n}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "unreachable-marker"),
+            "block comment markers should not trigger unreachable-marker findings"
         );
     }
 
