@@ -132,6 +132,7 @@ trap cleanup_lists EXIT INT TERM
 
 set -f
 # Intentionally expand static exclusion flags.
+# shellcheck disable=SC2086 # CRLF_FIND_EXCLUDES is a static flag list by design.
 find "$SKILL_DIR" -type f $CRLF_FIND_EXCLUDES 2>/dev/null > "$crlf_list"
 set +f
 
@@ -141,9 +142,7 @@ while IFS= read -r file; do
         continue
     fi
 
-    if tr -d '\r' < "$file" | cmp -s - "$file"; then
-        :
-    else
+    if LC_ALL=C grep -q "$(printf '\r')" "$file"; then
         lines_with_cr=$(tr -cd '\r' < "$file" | wc -c)
         basename_f=$(basename "$file")
         relpath="${file#"$SKILL_DIR"/}"
@@ -187,8 +186,8 @@ else
     if [ "$binary_skipped_count" -gt 0 ]; then
         echo "  Skipped probable binary files: $binary_skipped_count"
     fi
-    echo "  Fix (GNU sed):    find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
-    echo "  Fix (BSD/macOS):  find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"\" \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
+    printf '%s\n' "  Fix (GNU sed):    find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
+    printf '%s\n' "  Fix (BSD/macOS):  find \"$SKILL_DIR\" -type f $CRLF_FIND_EXCLUDES -exec sh -c 'for f do LC_ALL=C grep -Iq . \"\$f\" 2>/dev/null || continue; sed -i \"\" \"s/\\r\\\$//\" \"\$f\"; done' sh {} +"
 fi
 
 echo ""
@@ -218,7 +217,7 @@ while IFS= read -r file; do
 
     # Check shebang
     shebang=$(head -1 "$file" 2>/dev/null || true)
-    if echo "$shebang" | grep -q '^#!/'; then
+    if printf '%s\n' "$shebang" | grep -q '^#!/'; then
         # Check for \r in shebang
         if printf '%s' "$shebang" | grep -q "$(printf '\r')"; then
             echo "  ✗ CRLF in shebang [BLOCKER]: $relpath"

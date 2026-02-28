@@ -243,7 +243,7 @@ if [ -n "$CLI_BIN" ]; then
                     fi
                     ;;
             esac
-            exit_word=$(echo "$output" | head -1)
+            exit_word=$(printf '%s\n' "$output" | head -1)
 
             # Skip commands that produce errors or empty output
             case "$exit_word" in
@@ -252,8 +252,8 @@ if [ -n "$CLI_BIN" ]; then
                     ;;
             esac
 
-            lines=$(echo "$output" | wc -l)
-            chars=$(echo "$output" | wc -c)
+            lines=$(printf '%s\n' "$output" | wc -l)
+            chars=$(printf '%s\n' "$output" | wc -c)
             # Skip trivially small outputs (likely error/usage messages)
             if [ "$chars" -lt 50 ]; then
                 continue
@@ -285,17 +285,17 @@ if [ -n "$CLI_BIN" ]; then
                         fi
                         ;;
                 esac
-                sub_first=$(echo "$sub_output" | head -1)
+                sub_first=$(printf '%s\n' "$sub_output" | head -1)
                 case "$sub_first" in
                     *error*|*Error*|*unknown*|*Unknown*|"")
                         continue
                         ;;
                 esac
-                sub_chars=$(echo "$sub_output" | wc -c)
+                sub_chars=$(printf '%s\n' "$sub_output" | wc -c)
                 if [ "$sub_chars" -lt 50 ]; then
                     continue
                 fi
-                sub_lines=$(echo "$sub_output" | wc -l)
+                sub_lines=$(printf '%s\n' "$sub_output" | wc -l)
                 sub_tokens=$(( sub_chars / 4 ))
                 printf "  %-50s %6d %8d %8d\n" "$subcmd $sub" "$sub_lines" "$sub_chars" "$sub_tokens"
                 cli_total_chars=$((cli_total_chars + sub_chars))
