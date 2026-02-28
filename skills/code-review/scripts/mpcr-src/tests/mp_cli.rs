@@ -4346,6 +4346,51 @@ fn worker_guard_allows_analyze_run() -> anyhow::Result<()> {
 }
 
 #[test]
+fn analyze_check_complexity_ignores_quoted_and_commented_control_tokens() -> anyhow::Result<()> {
+    let fixture_dir = tempfile::tempdir()?;
+    let sample = fixture_dir.path().join("sample.rs");
+    let mut src = String::from("fn helper() {\n");
+    for _ in 0..12 {
+        src.push_str("    let msg = \"if branch { switch }\"; // else if in comment\n");
+    }
+    src.push_str("}\n");
+    fs::write(&sample, src)?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "analyze",
+            "check",
+            "--name",
+            "complexity",
+            &sample.to_string_lossy(),
+            "--json",
+        ])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "analyze check complexity failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(
+        parsed
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "complexity-hotspots"),
+        "unexpected check output shape: {parsed}"
+    );
+    let hotspots = parsed
+        .get("complexity_hotspots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing complexity_hotspots array"))?;
+    ensure!(
+        hotspots.is_empty(),
+        "expected no complexity hotspots for quoted/comment-only branch markers, got: {hotspots:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn worker_guard_blocks_register() -> anyhow::Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
         .env("MPCR_DISPATCH_ROLE", "architecture-critic")

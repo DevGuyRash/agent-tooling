@@ -391,9 +391,12 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
     let mut indent_start: Option<usize> = None;
     let mut saw_open_brace = false;
     let mut await_open_brace = false;
+    let mut lex_state = AnalysisLexState::default();
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
+        let sanitized_trimmed = sanitized_line.trim();
 
         if let Some((start, ref name)) = func_start {
             let current_indent = line.len() - line.trim_start().len();
@@ -435,8 +438,8 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
             await_open_brace = !trimmed.ends_with(':');
         }
 
-        let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
-        let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
+        let open_braces = sanitized_trimmed.chars().filter(|&c| c == '{').count() as i32;
+        let close_braces = sanitized_trimmed.chars().filter(|&c| c == '}').count() as i32;
         if open_braces > 0 {
             saw_open_brace = true;
             await_open_brace = false;
@@ -635,6 +638,7 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
 }
 
 /// Identify functions/blocks with high nesting depth or high branch count.
+#[allow(clippy::too_many_lines)]
 pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHotspot> {
     let mut hotspots = Vec::new();
 
@@ -658,9 +662,12 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
         let mut indent_start: Option<usize> = None;
         let mut saw_open_brace = false;
         let mut await_open_brace = false;
+        let mut lex_state = AnalysisLexState::default();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
+            let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
+            let sanitized_trimmed = sanitized_line.trim();
             let current_indent = line.len() - line.trim_start().len();
 
             if let Some((start, ref name)) = func_start {
@@ -698,8 +705,8 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                 await_open_brace = !trimmed.ends_with(':');
             }
 
-            let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
-            let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
+            let open_braces = sanitized_trimmed.chars().filter(|&c| c == '{').count() as i32;
+            let close_braces = sanitized_trimmed.chars().filter(|&c| c == '}').count() as i32;
             if open_braces > 0 {
                 saw_open_brace = true;
                 await_open_brace = false;
@@ -714,7 +721,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                 }
                 if branch_patterns
                     .iter()
-                    .any(|p| trimmed.starts_with(p) || trimmed.contains(p))
+                    .any(|p| sanitized_trimmed.starts_with(p) || sanitized_trimmed.contains(p))
                 {
                     branch_count += 1;
                 }
@@ -788,12 +795,182 @@ fn truncate_line(line: &str, max: usize) -> String {
 const FUNCTION_START_PATTERNS: &[&str] = &["fn ", "def ", "func ", "function ", "sub ", "method "];
 const ASYNC_FUNCTION_START_PATTERNS: &[&str] = &["async fn ", "async def ", "async function "];
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum QuoteState {
+    Single,
+    Double,
+    TripleSingle,
+    TripleDouble,
+}
+
+#[derive(Debug, Default)]
+struct AnalysisLexState {
+    in_block_comment: bool,
+    quote_state: Option<QuoteState>,
+}
+
+fn push_spaces(out: &mut String, count: usize) {
+    out.extend(std::iter::repeat_n(' ', count));
+}
+
+fn is_triple_quote_at(chars: &[char], idx: usize, quote_char: char) -> bool {
+    chars.get(idx) == Some(&quote_char)
+        && chars.get(idx + 1) == Some(&quote_char)
+        && chars.get(idx + 2) == Some(&quote_char)
+}
+
+#[allow(clippy::too_many_lines)]
+fn sanitize_analysis_line(line: &str, state: &mut AnalysisLexState) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut sanitized = String::with_capacity(chars.len());
+    let mut i = 0usize;
+    let mut escaped = false;
+
+    while i < chars.len() {
+        if state.in_block_comment {
+            push_spaces(&mut sanitized, 1);
+            if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                push_spaces(&mut sanitized, 1);
+                state.in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if let Some(quote) = state.quote_state {
+            match quote {
+                QuoteState::TripleSingle => {
+                    push_spaces(&mut sanitized, 1);
+                    if is_triple_quote_at(&chars, i, '\'') {
+                        push_spaces(&mut sanitized, 2);
+                        state.quote_state = None;
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+                QuoteState::TripleDouble => {
+                    push_spaces(&mut sanitized, 1);
+                    if is_triple_quote_at(&chars, i, '"') {
+                        push_spaces(&mut sanitized, 2);
+                        state.quote_state = None;
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+                QuoteState::Single | QuoteState::Double => {
+                    let quote_char = if quote == QuoteState::Single {
+                        '\''
+                    } else {
+                        '"'
+                    };
+                    if chars[i] == '\\' {
+                        push_spaces(&mut sanitized, 1);
+                        if i + 1 < chars.len() {
+                            push_spaces(&mut sanitized, 1);
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                        escaped = true;
+                        continue;
+                    }
+                    push_spaces(&mut sanitized, 1);
+                    if chars[i] == quote_char && !escaped {
+                        state.quote_state = None;
+                    }
+                    i += 1;
+                    escaped = false;
+                }
+            }
+            continue;
+        }
+
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+            push_spaces(&mut sanitized, chars.len() - i);
+            break;
+        }
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+            push_spaces(&mut sanitized, 2);
+            state.in_block_comment = true;
+            i += 2;
+            continue;
+        }
+        if chars[i] == '#' && chars.get(i + 1) != Some(&'[') {
+            push_spaces(&mut sanitized, chars.len() - i);
+            break;
+        }
+        if chars[i] == '\'' {
+            push_spaces(&mut sanitized, 1);
+            if is_triple_quote_at(&chars, i, '\'') {
+                push_spaces(&mut sanitized, 2);
+                state.quote_state = Some(QuoteState::TripleSingle);
+                i += 3;
+            } else if is_probable_rust_lifetime(&chars, i) {
+                sanitized.pop();
+                sanitized.push(chars[i]);
+                i += 1;
+            } else {
+                state.quote_state = Some(QuoteState::Single);
+                i += 1;
+            }
+            continue;
+        }
+        if chars[i] == '"' {
+            push_spaces(&mut sanitized, 1);
+            if is_triple_quote_at(&chars, i, '"') {
+                push_spaces(&mut sanitized, 2);
+                state.quote_state = Some(QuoteState::TripleDouble);
+                i += 3;
+            } else {
+                state.quote_state = Some(QuoteState::Double);
+                i += 1;
+            }
+            continue;
+        }
+
+        sanitized.push(chars[i]);
+        i += 1;
+    }
+
+    if matches!(
+        state.quote_state,
+        Some(QuoteState::Single | QuoteState::Double)
+    ) {
+        state.quote_state = None;
+    }
+
+    sanitized
+}
+
 fn should_skip_line_for_function_analysis(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.is_empty()
         || trimmed.starts_with("//")
         || is_hash_comment_line(trimmed)
         || is_probable_string_literal_line(line)
+}
+
+fn is_probable_rust_lifetime(chars: &[char], idx: usize) -> bool {
+    let Some(next) = chars.get(idx + 1) else {
+        return false;
+    };
+    if *next != '_' && !next.is_ascii_alphabetic() {
+        return false;
+    }
+
+    let mut end = idx + 2;
+    while chars
+        .get(end)
+        .is_some_and(|ch| *ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        end += 1;
+    }
+
+    chars.get(end) != Some(&'\'')
 }
 
 fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
@@ -1417,6 +1594,96 @@ mod tests {
                 .iter()
                 .any(|f| f.file == "sample.rs" && f.check == "long-function" && f.line == 1),
             "Allman-style function should be measured across full brace body"
+        );
+    }
+
+    #[test]
+    fn long_function_ignores_braces_inside_strings_and_comments() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper() {\n");
+        src.push_str("    let braces = \"{ not a real block\";\n");
+        src.push_str("}\n");
+        for _ in 0..80 {
+            src.push_str("// } top-level comment\n");
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "quoted/comment braces should not keep the function open past its closing brace"
+        );
+    }
+
+    #[test]
+    fn complexity_ignores_branch_keywords_inside_strings_and_comments() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper() {\n");
+        for i in 0..12 {
+            src.push_str(&format!(
+                "    let msg_{i} = \"if cond_{i} {{ switch }}\"; // else if comment\n"
+            ));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "quoted/comment branch keywords should not count toward complexity"
+        );
+    }
+
+    #[test]
+    fn complexity_ignores_multiline_block_comments() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper() {\n    /*\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if comment_branch_{i} {{ switch }}\n"));
+        }
+        src.push_str("    */\n    work();\n}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "block-comment branch keywords should not count toward complexity"
+        );
+    }
+
+    #[test]
+    fn python_triple_quoted_strings_do_not_affect_function_analysis() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def helper():\n    \"\"\"\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if quoted_branch_{i}:\n"));
+        }
+        src.push_str("    \"\"\"\n    return 1\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "triple-quoted content should not count toward complexity"
+        );
+    }
+
+    #[test]
+    fn attribute_prefixed_rust_function_survives_sanitized_analysis() {
+        let mut files = HashMap::new();
+        let mut src = String::from("#[cfg(unix)] pub async fn helper() {\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if cond_{i} {{\n        work();\n    }}\n"));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.rs" && f.check == "complexity" && f.line == 1),
+            "attribute-prefixed Rust declarations should still open function analysis scopes"
         );
     }
 
