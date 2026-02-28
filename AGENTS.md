@@ -3,6 +3,11 @@
 This file contains cross-cutting constraints that apply regardless of language or skill.
 Language/toolchain-specific workflows live in the corresponding skill `SKILL.md` files under `skills/`.
 
+Skills in this repo follow the [Open Agent Skills standard](https://agentskills.io/specification).
+Skills authored to this standard are portable across Claude, Codex, GitHub Copilot,
+Cursor, OpenCode, and 20+ other platforms without modification — so following the
+conventions here isn't just local hygiene, it's cross-platform compatibility.
+
 ---
 
 ## ⚠️ Command Isolation: Environment Variables Do NOT Persist Across Commands
@@ -16,7 +21,6 @@ Language/toolchain-specific workflows live in the corresponding skill `SKILL.md`
 export MY_SESSION_ID=abc123
 cd /some/project
 ```
-
 ```bash
 # Command 2 — these are NOT set; directory is reset
 echo $MY_SESSION_ID   # empty
@@ -26,7 +30,6 @@ pwd                    # not /some/project
 ### What works instead
 
 **Option A (recommended): pass values as CLI flags**:
-
 ```bash
 tool update --session-id abc123 --status IN_PROGRESS
 ```
@@ -35,7 +38,6 @@ tool update --session-id abc123 --status IN_PROGRESS
 
 Some CLIs offer a `--print-env` flag that outputs the values you need for
 subsequent commands. Capture them in one command, then pass as flags:
-
 ```bash
 # mpcr example: register prints IDs you'll need later
 mpcr reviewer register --target-ref main --print-env
@@ -45,7 +47,6 @@ mpcr reviewer update --reviewer-id deadbeef --session-id sess0001 --status IN_PR
 ```
 
 **Option C: chain commands in a single shell invocation**:
-
 ```bash
 export MY_SESSION_ID=abc123 && cd /some/project && tool update --use-env
 ```
@@ -67,6 +68,56 @@ When writing or editing a skill, use `<skills-file-root>` as the path prefix for
 
 ---
 
+## Skill authoring: frontmatter and naming
+
+Every skill's `SKILL.md` starts with YAML frontmatter. The `name` and
+`description` fields are required by the spec and have strict constraints.
+
+### Name field
+
+The `name` must match the parent directory name and follow these rules:
+
+- Lowercase alphanumeric characters and hyphens only (`a-z`, `0-9`, `-`)
+- Max 64 characters
+- Must not start or end with `-`
+- Must not contain consecutive hyphens (`--`)
+
+Valid: `code-review`, `pdf-processing`, `rust-development`
+Invalid: `Code-Review` (uppercase), `-pdf` (leading hyphen), `pdf--tools` (consecutive hyphens)
+
+### Description field
+
+The description is the single most important line in a skill. It's the
+primary mechanism every platform uses to decide whether to activate the
+skill — agents see descriptions for all available skills at startup and
+match against the user's request.
+
+Rules from the spec:
+- Max 1024 characters
+- Must describe both *what* the skill does and *when* to use it
+- Should include specific keywords that users are likely to say
+
+A good description covers trigger conditions explicitly:
+
+```yaml
+description: >-
+  Extract text and tables from PDF files, fill PDF forms, and merge
+  multiple PDFs. Use when working with PDF documents or when the user
+  mentions PDFs, forms, or document extraction.
+```
+
+A poor description forces the agent to guess:
+
+```yaml
+description: Helps with PDFs.
+```
+
+Test your description by imagining 5-10 realistic user prompts that should
+trigger the skill and 5-10 that shouldn't. If the description doesn't
+clearly distinguish them, rewrite it.
+
+---
+
 ## Skill authoring: file hygiene
 
 All text files shipped in a skill — scripts, source, configs, protocol data,
@@ -84,12 +135,11 @@ Before committing any skill file:
 # Detect CRLF in the skill directory
 find <skill-dir> -type f \( -name '*.sh' -o -name '*.py' -o -name '*.rs' \
   -o -name '*.toml' -o -name '*.yml' -o -name '*.md' \) \
-  -exec sh -c 'tr -d "\r" < "$1" | cmp -s - "$1" || echo "$1"' _ {} \;
+  -exec grep -Plc '\r' {} + 2>/dev/null
 ```
 
-If any files match, fix them (e.g., `sed -i 's/\r$//' <file>` on Linux,
-`sed -i '' 's/\r$//' <file>` on macOS). Enforce this in CI or use
-`.gitattributes` with `* text=auto eol=lf`.
+If any files match, fix them: `sed -i 's/\r$//' <file>`. Enforce this in CI
+or use `.gitattributes` with `* text=auto eol=lf`.
 
 Shell scripts additionally SHALL have executable permission (`chmod +x`) and a
 valid shebang (e.g., `#!/usr/bin/env sh`).
@@ -153,7 +203,6 @@ Rules:
    error: unknown role "architecture"
    valid roles: architecture-critic, contract-guardian, ...
    ```
-
    This turns a dead-end error into a self-correcting one.
 
 3. **Keep errors to 1-3 lines.** An error message beyond 3 lines is noise.
@@ -301,7 +350,16 @@ Common duplication to watch for:
 When in doubt, ask: "If I change this fact, how many files do I need to
 edit?" If the answer is more than one, there's duplication.
 
-### Reference file sizing
+### Reference file sizing and depth
+
+SKILL.md can point to as many reference files as needed — that's the whole
+point of the reference index pattern. The constraint is on *nesting*: a
+reference file should not point to another reference file. If Reference A
+tells the agent to read Reference B, which tells it to read Reference C,
+the agent is in a context spiral — accumulating instructions without making
+progress. All references should be reachable directly from SKILL.md, not
+through other references. If a reference needs information from another
+file, inline it or restructure.
 
 For reference files over 300 lines, include a table of contents at the top
 so the agent can jump to the relevant section. In practice, the most
@@ -330,7 +388,6 @@ SKILL.md plus whichever reference file(s) the agent has loaded at the
 busiest point.
 
 Good targets:
-
 - SKILL.md alone: under ~4,000 tokens (~16,000 chars)
 - SKILL.md + one reference: under ~8,000 tokens
 - Peak context including all loaded references: under ~12,000 tokens
@@ -350,7 +407,6 @@ their entire instruction set.
 ### Self-containment
 
 The dispatch prompt SHALL contain everything the worker needs:
-
 - What to do (task description)
 - What to work on (file list, scope boundaries)
 - What NOT to do (forbidden actions, scope limits)
@@ -415,13 +471,11 @@ compile source code, or download large dependencies on first run. The first
 invocation should work in under 5 seconds.
 
 If a skill includes compiled tools (Rust binaries, Go binaries, etc.):
-
 - Ship a pre-built binary for the target platform alongside the source.
 - The wrapper script should prefer the pre-built binary and fall back to
   building from source only if the binary is missing or outdated.
 
 If a skill depends on runtime tools (Python packages, npm modules):
-
 - Document the dependencies in the SKILL.md `compatibility` field.
 - Prefer vendored or self-contained scripts over tools requiring `pip install`
   or `npm install`.
@@ -430,6 +484,18 @@ If a skill depends on runtime tools (Python packages, npm modules):
 
 An agent that spends 3 minutes installing Rust and building a binary is an
 agent that's not doing the user's task.
+
+### Script self-containment
+
+Scripts in `scripts/` SHALL be self-contained or clearly document their
+dependencies. When an agent runs a script, the script's source code never
+enters the context window — only its output does. This makes scripts
+significantly more token-efficient than having the agent write equivalent
+code inline. A 200-line Python script that produces 5 lines of output
+costs 5 lines of context, not 200. Lean into this: prefer bundled scripts
+over inline instructions whenever the task involves deterministic logic,
+data transformation, or validation that would otherwise consume agent
+context to reason through.
 
 ---
 
@@ -445,7 +511,6 @@ test files, so verification fails immediately after setup. Neither skill is
 broken in isolation — the failure only appears at the integration boundary.
 
 Before shipping interconnected skills:
-
 1. Run Skill A's setup.
 2. Run Skill B's verification on Skill A's output.
 3. Confirm zero failures without manual intervention.
@@ -474,7 +539,6 @@ not a patch author. Each entry records what you tried, what the skill told
 you to do, what actually happened, and how you interpreted the instructions.
 
 **Good entry:**
-
 > Tried to run `mpcr protocol dispatch --role architecture` as specified by
 > SKILL.md line 160: _"Use `mpcr protocol dispatch --role <ROLE>` to get the
 > domain-specific prompt."_ The domain table on line 123 lists "Architecture"
@@ -484,7 +548,6 @@ you to do, what actually happened, and how you interpreted the instructions.
 > `architecture-critic`, which is not documented anywhere in SKILL.md.
 
 **Bad entry:**
-
 > The dispatch role name is wrong. It should be `architecture-critic` instead
 > of `architecture`. Fix line 123 to show the correct slug.
 
@@ -502,7 +565,7 @@ span many agent turns and subagent invocations — not each individual command.
 
 File path:
 
-```bash
+```
 <tmp>/<yyyy-mm-dd>/<HH-MM-SS>_<skill-name>_errors.md
 ```
 
@@ -533,7 +596,6 @@ $errFile = "$errDir\$(Get-Date -Format 'HH-mm-ss')_<skill-name>_errors.md"
 
 ```markdown
 # Skill Error Log: <skill-name>
-
 **Date:** <yyyy-mm-dd HH:MM:SS>
 **Agent:** orchestrator | subagent (<role if applicable>)
 **Skill path:** <path/to/skill>
