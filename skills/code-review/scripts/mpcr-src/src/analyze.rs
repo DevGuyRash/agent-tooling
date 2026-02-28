@@ -316,7 +316,6 @@ pub fn available_checks() -> Vec<(&'static str, &'static str)> {
 /// Detect language-agnostic dead code markers.
 fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let markers = [
-        "#[allow(dead_code)]",
         "#[cfg(never)]",
         "// DEAD CODE",
         "/* DEAD CODE",
@@ -337,6 +336,16 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
             continue;
         }
         let lower_line = line.to_ascii_lowercase();
+        if has_rust_dead_code_allow_attribute(&trimmed) {
+            out.push(AnalysisFinding {
+                check: "dead-code-marker".to_string(),
+                file: path.to_string(),
+                line: idx + 1,
+                excerpt: truncate_line(line, 100),
+                detail: "Matched dead-code pattern: #[allow(...dead_code...)]".to_string(),
+            });
+            continue;
+        }
         for marker in &markers {
             let marker_lower = marker.to_ascii_lowercase();
             if trimmed.contains(&marker_lower) {
@@ -999,6 +1008,9 @@ fn is_probable_rust_lifetime(chars: &[char], idx: usize) -> bool {
 fn is_function_start(line: &str, fn_patterns: &[&str]) -> bool {
     let trimmed = strip_leading_rust_attributes(line.trim());
     let lower_line = trimmed.to_ascii_lowercase();
+    if is_rust_fn_declaration_without_body(trimmed, &lower_line) {
+        return false;
+    }
     let inline_fn_syntax = is_inline_rust_fn_declaration(trimmed, &lower_line);
     let callable_modifier_start = is_callable_modifier_declaration(&lower_line);
 
@@ -1053,6 +1065,32 @@ fn is_inline_rust_fn_declaration(trimmed: &str, lower_line: &str) -> bool {
         .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
 }
 
+fn is_rust_fn_declaration_without_body(trimmed: &str, lower_line: &str) -> bool {
+    if is_marker_inside_quotes(lower_line, "fn ") {
+        return false;
+    }
+    if trimmed.contains('{') || !trimmed.ends_with(';') {
+        return false;
+    }
+
+    let Some(fn_idx) = lower_line.find("fn ") else {
+        return false;
+    };
+    let prefix = lower_line[..fn_idx].trim();
+    if prefix.contains('=') {
+        return false;
+    }
+    if !prefix.is_empty() && !is_allowed_rust_fn_prefix(prefix) {
+        return false;
+    }
+
+    let remainder = trimmed[fn_idx + 3..].trim_start();
+    remainder
+        .chars()
+        .next()
+        .is_some_and(|ch| (ch == '_' || ch.is_ascii_alphabetic()) && remainder.contains('('))
+}
+
 fn is_allowed_rust_fn_prefix(prefix: &str) -> bool {
     const TOKENS: &[&str] = &[
         "pub",
@@ -1084,6 +1122,12 @@ fn is_hash_comment_line(trimmed: &str) -> bool {
     }
 
     true
+}
+
+fn has_rust_dead_code_allow_attribute(trimmed_lower: &str) -> bool {
+    trimmed_lower.starts_with("#[")
+        && trimmed_lower.contains("allow(")
+        && trimmed_lower.contains("dead_code")
 }
 
 fn extract_name_hint(line: &str) -> String {
@@ -1202,6 +1246,44 @@ mod tests {
     }
 
     #[test]
+    fn dead_code_marker_detection_handles_grouped_allow_attributes() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "#[allow(dead_code, unused_variables)]\n#[allow(unused_variables, dead_code)]\nfn unused() {}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        let finding_count = report
+            .findings
+            .iter()
+            .filter(|f| f.check == "dead-code-marker")
+            .count();
+        assert_eq!(
+            finding_count, 2,
+            "both grouped allow attributes should be detected"
+        );
+    }
+
+    #[test]
+    fn dead_code_marker_detection_handles_cfg_attr_allow_dead_code() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "#[cfg_attr(test, allow(dead_code))]\nfn unused() {}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "dead-code-marker"),
+            "cfg_attr allow(dead_code) should be reported"
+        );
+    }
+
+    #[test]
     fn todo_detection() {
         let mut files = HashMap::new();
         files.insert(
@@ -1309,6 +1391,24 @@ mod tests {
                 .iter()
                 .all(|f| f.check != "dead-code-marker"),
             "single-quoted literals should not be reported as dead-code markers"
+        );
+    }
+
+    #[test]
+    fn grouped_dead_code_marker_in_string_literal_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "\"#[allow(dead_code, unused_variables)]\";\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker"),
+            "grouped dead-code allow strings should not be reported"
         );
     }
 
@@ -1827,6 +1927,22 @@ mod tests {
     }
 
     #[test]
+    fn function_start_detection_ignores_semicolon_only_rust_declarations() {
+        assert!(!is_function_start(
+            "fn do_it(&self);",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "async fn run();",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "#[cfg(unix)] pub fn helper();",
+            FUNCTION_START_PATTERNS
+        ));
+    }
+
+    #[test]
     fn long_function_detection_ignores_function_pointer_alias_lines() {
         let mut files = HashMap::new();
         let mut src = String::from("type Handler = fn(Request) -> Response;\n");
@@ -1839,6 +1955,38 @@ mod tests {
         assert!(
             findings.is_empty(),
             "function pointer aliases should not open synthetic function spans"
+        );
+    }
+
+    #[test]
+    fn long_function_detection_ignores_semicolon_only_rust_declarations() {
+        let mut files = HashMap::new();
+        let mut src = String::from("trait T {\n    fn do_it(&self);\n}\n");
+        for _ in 0..80 {
+            src.push_str("let value = 1;\n");
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "semicolon-only Rust declarations should not open synthetic long-function spans"
+        );
+    }
+
+    #[test]
+    fn complexity_detection_ignores_semicolon_only_rust_declarations() {
+        let mut files = HashMap::new();
+        let mut src = String::from("trait T {\n    async fn do_it();\n}\n");
+        for i in 0..12 {
+            src.push_str(&format!("if top_level_{i} {{ work(); }}\n"));
+        }
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "semicolon-only Rust declarations should not create complexity hotspots"
         );
     }
 
