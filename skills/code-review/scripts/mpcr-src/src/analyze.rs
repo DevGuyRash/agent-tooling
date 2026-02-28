@@ -330,8 +330,29 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
         "/* @deprecated",
         "/// @deprecated",
     ];
+    let mut pending_attr_start: Option<usize> = None;
+    let mut attr_buffer = String::new();
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim().to_ascii_lowercase();
+        if let Some(attr_start) = pending_attr_start {
+            attr_buffer.push(' ');
+            attr_buffer.push_str(&trimmed);
+            if trimmed.contains(']') {
+                if attr_buffer.contains("dead_code") {
+                    out.push(AnalysisFinding {
+                        check: "dead-code-marker".to_string(),
+                        file: path.to_string(),
+                        line: attr_start + 1,
+                        excerpt: truncate_line(lines[attr_start], 100),
+                        detail: "Matched dead-code pattern: #[allow(...dead_code...)]".to_string(),
+                    });
+                }
+                pending_attr_start = None;
+                attr_buffer.clear();
+                continue;
+            }
+            continue;
+        }
         if is_probable_string_literal_line(line) {
             continue;
         }
@@ -344,6 +365,11 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
                 excerpt: truncate_line(line, 100),
                 detail: "Matched dead-code pattern: #[allow(...dead_code...)]".to_string(),
             });
+            continue;
+        }
+        if trimmed.starts_with("#[") && trimmed.contains("allow(") && !trimmed.contains(']') {
+            pending_attr_start = Some(idx);
+            attr_buffer.clone_from(&trimmed);
             continue;
         }
         for marker in &markers {
@@ -369,15 +395,27 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
 fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let tags = ["TODO", "FIXME", "HACK", "XXX", "SAFETY"];
     for (idx, line) in lines.iter().enumerate() {
+        if is_probable_string_literal_line(line) {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
         let upper = line.to_ascii_uppercase();
         for tag in &tags {
-            if upper.contains(tag) {
-                let is_comment = line.trim().starts_with("//")
-                    || line.trim().starts_with('#')
-                    || line.trim().starts_with("/*")
-                    || line.trim().starts_with('*')
-                    || line.trim().starts_with("<!--");
-                if is_comment {
+            if !upper.contains(tag) {
+                continue;
+            }
+            if is_marker_inside_quotes(&line.to_ascii_lowercase(), &tag.to_ascii_lowercase()) {
+                continue;
+            }
+            if !is_tag_word_boundary(&upper, tag) {
+                continue;
+            }
+            let comment_start = find_comment_start(line);
+            if let Some(cstart) = comment_start {
+                let comment_region = &line[cstart..].to_ascii_uppercase();
+                if comment_region.contains(tag) && is_tag_word_boundary(comment_region, tag) {
                     out.push(AnalysisFinding {
                         check: "todo-fixme".to_string(),
                         file: path.to_string(),
@@ -1043,7 +1081,8 @@ fn is_inline_rust_fn_declaration(trimmed: &str, lower_line: &str) -> bool {
     if !trimmed.contains('(') && !trimmed.contains('{') {
         return false;
     }
-    if trimmed.ends_with(';') {
+    let trimmed_no_comment = strip_trailing_line_comment(trimmed);
+    if trimmed_no_comment.ends_with(';') {
         return false;
     }
 
@@ -1069,7 +1108,8 @@ fn is_rust_fn_declaration_without_body(trimmed: &str, lower_line: &str) -> bool 
     if is_marker_inside_quotes(lower_line, "fn ") {
         return false;
     }
-    if trimmed.contains('{') || !trimmed.ends_with(';') {
+    let trimmed_no_comment = strip_trailing_line_comment(trimmed);
+    if trimmed_no_comment.contains('{') || !trimmed_no_comment.ends_with(';') {
         return false;
     }
 
@@ -1203,6 +1243,104 @@ fn is_marker_inside_quotes(line: &str, marker: &str) -> bool {
     }
 
     saw_quoted_marker
+}
+
+fn strip_trailing_line_comment(line: &str) -> &str {
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && in_quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = in_quote {
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            in_quote = Some(ch);
+            continue;
+        }
+        if ch == '/' && line[i..].starts_with("//") {
+            return line[..i].trim_end();
+        }
+    }
+    line
+}
+
+fn is_tag_word_boundary(haystack: &str, tag: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(tag) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0
+            || !haystack.as_bytes()[abs_pos - 1].is_ascii_alphanumeric()
+                && haystack.as_bytes()[abs_pos - 1] != b'_';
+        let after_pos = abs_pos + tag.len();
+        let after_ok = after_pos >= haystack.len()
+            || !haystack.as_bytes()[after_pos].is_ascii_alphanumeric()
+                && haystack.as_bytes()[after_pos] != b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+    }
+    false
+}
+
+fn find_comment_start(line: &str) -> Option<usize> {
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        let ch = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if ch == b'\\' && in_quote.is_some() {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = in_quote {
+            if ch == q as u8 {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            in_quote = Some(ch as char);
+            i += 1;
+            continue;
+        }
+        if ch == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            return Some(i);
+        }
+        if ch == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            return Some(i);
+        }
+        if ch == b'#' && !(i + 1 < len && bytes[i + 1] == b'[') {
+            return Some(i);
+        }
+        if ch == b'*' && i == line.len() - line.trim_start().len() {
+            return Some(i);
+        }
+        if i + 4 <= len && &line[i..i + 4] == "<!--" {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn is_callable_modifier_declaration(lower_line: &str) -> bool {
@@ -2037,5 +2175,111 @@ mod tests {
         let dead_ba =
             serde_json::to_string(&report_ba.dead_markers).expect("serialize dead markers");
         assert_eq!(dead_ab, dead_ba, "dead_markers ordering should be stable");
+    }
+    #[test]
+    fn todo_in_string_literal_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let msg = \"TODO: not a real todo\";\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().all(|f| f.check != "todo-fixme"),
+            "TODO inside string literal should not be reported"
+        );
+    }
+
+    #[test]
+    fn todo_in_inline_comment_is_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let x = 42; // TODO: fix this\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().any(|f| f.check == "todo-fixme"),
+            "TODO in inline comment should be detected"
+        );
+    }
+
+    #[test]
+    fn hack_substring_in_identifier_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "// HACKY_VAR is fine\nlet HACKY_VAR = 1;\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().all(|f| f.check != "todo-fixme"),
+            "HACK as substring of HACKY_VAR should not be reported"
+        );
+    }
+
+    #[test]
+    fn trait_signature_with_trailing_comment_not_function_start() {
+        assert!(!is_function_start(
+            "fn do_it(&self); // required",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "async fn run(); // trait method",
+            FUNCTION_START_PATTERNS
+        ));
+        assert!(!is_function_start(
+            "pub fn helper(); // declared",
+            FUNCTION_START_PATTERNS
+        ));
+    }
+
+    #[test]
+    fn long_function_ignores_trait_signature_with_trailing_comment() {
+        let mut files = HashMap::new();
+        let mut src = String::from("trait T {\n    fn do_it(&self); // required\n}\n");
+        for _ in 0..80 {
+            src.push_str("let value = 1;\n");
+        }
+        files.insert("sample.rs".to_string(), src);
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "trait signature with trailing comment should not open function span"
+        );
+    }
+
+    #[test]
+    fn multiline_allow_dead_code_attribute_is_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "#[allow(\n    dead_code,\n    unused_variables\n)]\nfn unused() {}\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "dead-code-marker"),
+            "multiline #[allow(dead_code)] should be detected"
+        );
+    }
+
+    #[test]
+    fn multiline_allow_without_dead_code_is_not_flagged() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "#[allow(\n    unused_variables,\n    unused_imports\n)]\nfn used() {}\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker" || !f.detail.contains("dead_code")),
+            "multiline allow without dead_code should not be flagged"
+        );
     }
 }
