@@ -390,6 +390,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
     let mut brace_depth: i32 = 0;
     let mut indent_start: Option<usize> = None;
     let mut saw_open_brace = false;
+    let mut await_open_brace = false;
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -397,6 +398,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
         if let Some((start, ref name)) = func_start {
             let current_indent = line.len() - line.trim_start().len();
             let at_dedent = !saw_open_brace
+                && !await_open_brace
                 && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
             if at_dedent {
                 // Dedent means the active indentation-based function ended on the previous line.
@@ -430,12 +432,14 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
             brace_depth = 0;
             indent_start = Some(line.len() - line.trim_start().len());
             saw_open_brace = false;
+            await_open_brace = !trimmed.ends_with(':');
         }
 
         let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
         let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
         if open_braces > 0 {
             saw_open_brace = true;
+            await_open_brace = false;
         }
         brace_depth += open_braces;
         brace_depth -= close_braces;
@@ -459,6 +463,7 @@ fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFindin
                 func_start = None;
                 indent_start = None;
                 saw_open_brace = false;
+                await_open_brace = false;
             }
         }
     }
@@ -652,6 +657,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
         let mut depth: i32 = 0;
         let mut indent_start: Option<usize> = None;
         let mut saw_open_brace = false;
+        let mut await_open_brace = false;
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -659,6 +665,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
 
             if let Some((start, ref name)) = func_start {
                 let at_dedent = !saw_open_brace
+                    && !await_open_brace
                     && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
                 if at_dedent {
                     // Dedent means the active indentation-based function ended on the previous line.
@@ -668,6 +675,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                     branch_count = 0;
                     indent_start = None;
                     saw_open_brace = false;
+                    await_open_brace = false;
                 }
             }
 
@@ -687,12 +695,14 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                 branch_count = 0;
                 indent_start = Some(current_indent);
                 saw_open_brace = false;
+                await_open_brace = !trimmed.ends_with(':');
             }
 
             let open_braces = trimmed.chars().filter(|&c| c == '{').count() as i32;
             let close_braces = trimmed.chars().filter(|&c| c == '}').count() as i32;
             if open_braces > 0 {
                 saw_open_brace = true;
+                await_open_brace = false;
             }
             depth += open_braces;
             depth -= close_braces;
@@ -719,6 +729,7 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
                     branch_count = 0;
                     indent_start = None;
                     saw_open_brace = false;
+                    await_open_brace = false;
                 }
             }
         }
@@ -1236,6 +1247,44 @@ mod tests {
         assert!(
             findings.is_empty(),
             "top-level branches after dedent should not be attributed to previous function"
+        );
+    }
+
+    #[test]
+    fn complexity_allman_style_function_tracks_brace_scoped_branches() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper()\n{\n");
+        for i in 0..12 {
+            src.push_str(&format!("    if cond_{i} {{\n        work();\n    }}\n"));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.rs" && f.check == "complexity" && f.line == 1),
+            "Allman-style brace function should keep complexity attribution"
+        );
+    }
+
+    #[test]
+    fn long_function_allman_style_signature_remains_open_until_brace_close() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper()\n{\n");
+        for _ in 0..61 {
+            src.push_str("    work();\n");
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.rs" && f.check == "long-function" && f.line == 1),
+            "Allman-style function should be measured across full brace body"
         );
     }
 
