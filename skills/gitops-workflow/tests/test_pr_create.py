@@ -39,6 +39,23 @@ def commit_file(repo: Path, name: str, content: str, msg: str) -> None:
 
 
 class PrCreateScriptTests(unittest.TestCase):
+    def test_help_outputs_stable_usage_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--help",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Usage:", proc.stdout)
+            self.assertIn("--title", proc.stdout)
+            self.assertIn("--template-id", proc.stdout)
+
     def test_prefills_sections_from_git_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
@@ -470,6 +487,93 @@ class PrCreateScriptTests(unittest.TestCase):
             body = Path(m.group(1)).read_text(encoding="utf-8")
             self.assertIn("feat(demo): branch-only change", body)
             self.assertNotIn("chore(main): base-only change", body)
+
+    def test_preview_command_escapes_malicious_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "feature.txt", "feat\n", "feat(demo): branch-only change")
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    'feat: ok"; echo PWNED; echo "',
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("gh pr create --title ", proc.stdout)
+            self.assertNotIn('gh pr create --title "feat: ok"; echo PWNED; echo ""', proc.stdout)
+            self.assertIn("\\;\\ echo\\ PWNED\\;", proc.stdout)
+
+    def test_template_discover_stderr_is_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "feature.txt", "feat\n", "feat(demo): branch-only change")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            fake_jq = fake_bin / "jq"
+            fake_jq.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "cat\n",
+                encoding="utf-8",
+            )
+            fake_jq.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): test stderr passthrough",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--repo",
+                    "../meta",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("invalid --repo", proc.stderr)
 
 
 if __name__ == "__main__":

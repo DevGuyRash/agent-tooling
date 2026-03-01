@@ -102,7 +102,17 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '1,24p' "$0"
+      cat <<'HELP'
+Usage:
+  bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--ready] [--draft] [--base main] [--head my-branch] [--repo owner/repo] [--label <name> ...] [--no-labels] [--template-id <path>]
+
+Behavior:
+  - Writes a deterministic PR body file from git metadata by default.
+  - Does not create a PR unless --create and --force-create are both provided.
+  - When creating, draft is default unless --ready is provided.
+  - If labels exist in the target repository, pass --label ... or --no-labels.
+  - If multiple remote PR templates exist, pass --template-id <path>.
+HELP
       exit 0
       ;;
     *)
@@ -240,7 +250,7 @@ if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
 fi
 
 if [[ -n "$EFFECTIVE_REPO" && -x "$PR_TEMPLATE_SCRIPT" ]] && command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json 2>/dev/null || true)"
+  TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json || true)"
   if [[ -n "$TEMPLATES_JSON" ]] && printf '%s' "$TEMPLATES_JSON" | jq -e '.templates' >/dev/null 2>&1; then
     TEMPLATE_COUNT="$(printf '%s' "$TEMPLATES_JSON" | jq '.templates | length')"
     if [[ "$TEMPLATE_COUNT" -eq 1 ]]; then
@@ -315,8 +325,10 @@ if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
 else
   echo "Template source: local deterministic defaults"
 fi
+printf -v title_quoted '%q' "$TITLE"
+printf -v out_file_quoted '%q' "$OUT_FILE"
 echo "Review/edit this file as needed, then create the PR with:"
-echo "  gh pr create --title \"$TITLE\" --body-file \"$OUT_FILE\""
+echo "  gh pr create --title $title_quoted --body-file $out_file_quoted"
 echo ""
 
 if [[ "$CREATE" != "true" ]]; then

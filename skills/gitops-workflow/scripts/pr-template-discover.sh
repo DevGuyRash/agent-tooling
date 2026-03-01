@@ -25,6 +25,26 @@ require_opt_value() {
   fi
 }
 
+parse_repo() {
+  local repo="$1"
+  local owner name
+  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+    die "invalid --repo '$repo' (expected owner/repo)"
+  fi
+  owner="${repo%%/*}"
+  name="${repo##*/}"
+  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
+  fi
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
+  fi
+  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
+    die "invalid --repo name '$name' (path-like segments are not allowed)"
+  fi
+  printf '%s\t%s\n' "$owner" "$name"
+}
+
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
     base64 --decode
@@ -97,8 +117,7 @@ if [[ -z "$REPO" ]]; then
 fi
 [[ -n "$REPO" ]] || die "could not infer repo; pass --repo owner/repo"
 
-OWNER="${REPO%%/*}"
-NAME="${REPO##*/}"
+IFS=$'\t' read -r OWNER NAME <<< "$(parse_repo "$REPO")"
 DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)"
 [[ -n "$DEFAULT_BRANCH" ]] || die "could not resolve default branch for $REPO"
 

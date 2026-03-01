@@ -92,6 +92,22 @@ class PrTemplateDiscoverDecodeTests(unittest.TestCase):
 
 
 class PrTemplateDiscoverCoverageTests(unittest.TestCase):
+    def test_invalid_repo_slug_is_rejected(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPT),
+                "--repo",
+                "../meta",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid --repo", proc.stderr)
+
     def test_discovers_uppercase_and_multi_directory_templates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
