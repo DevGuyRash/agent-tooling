@@ -56,7 +56,7 @@ At the start of each top-level invocation, create one log file for this skill.
 - Unix path:
   - `/tmp/skill-errors/<yyyy-mm-dd>/<HH-MM-SS>_code-review_errors.md`
 - Windows path:
-  - `%TEMP%\\skill-errors\\<yyyy-mm-dd>\\<HH-mm-ss>_code-review_errors.md`
+  - `%TEMP%\\skill-errors\\<yyyy-mm-dd>\\<HH-MM-SS>_code-review_errors.md`
 
 Log skill-caused friction only (documentation mismatches, bad role names, missing files, protocol contradictions, wrapper/CLI behavior mismatches). Do not log user-project build/test failures.
 

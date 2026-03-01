@@ -3141,6 +3141,99 @@ retry_count = 0
     }
 
     #[test]
+    fn finalize_review_revalidates_persisted_report_under_lock() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let report_source = dir.path().join("report.md");
+        fs::write(
+            &report_source,
+            valid_parent_report(
+                "deadbeef",
+                "sess0001",
+                "refs/heads/main",
+                &SeverityCounts::zero(),
+            ),
+        )?;
+
+        let held_guard = lock::acquire_lock(&session_dir, "cafebabe", LockConfig::default())?;
+        let session_for_finalize = SessionLocator::new(session_dir.clone());
+        let source_for_finalize = report_source.clone();
+
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = finalize_review(FinalizeReviewParams {
+                session: session_for_finalize,
+                reviewer_id: "deadbeef".to_string(),
+                session_id: "sess0001".to_string(),
+                verdict: ReviewVerdict::Approve,
+                counts: SeverityCounts::zero(),
+                report_input: FinalizeReportInput::File(source_for_finalize),
+                validation_kind: ReportValidationKind::ParentReviewReport,
+                copy_input_report: false,
+                auto_close_open_children: true,
+                auto_close_children_status: ReviewerStatus::Cancelled,
+                now: OffsetDateTime::now_utc(),
+            });
+            let _ = result_tx.send(result.map(|_| ()).map_err(|err| err.to_string()));
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        fs::write(&report_source, "# invalid\n")?;
+        drop(held_guard);
+
+        let finalize_result = result_rx
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .map_err(|err| anyhow::anyhow!("timed out waiting for finalize result: {err}"))?;
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("finalize worker thread panicked"))?;
+
+        let Err(err_text) = finalize_result else {
+            bail!("finalize should fail after source mutation under lock window");
+        };
+        ensure!(err_text.contains("validate report artifact under lock"));
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
+
+        Ok(())
+    }
+
+    #[test]
     fn append_note_rejects_bad_lock_owner() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
@@ -4221,6 +4314,15 @@ fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
     }
 }
 
+fn severity_contract(counts: &SeverityCounts) -> SeverityExpectation {
+    SeverityExpectation {
+        blocker: counts.blocker,
+        major: counts.major,
+        minor: counts.minor,
+        nit: counts.nit,
+    }
+}
+
 /// Finalize a review entry: write the report file and update the session artifact.
 ///
 /// The entire operation is performed under a single session lock to prevent
@@ -4238,12 +4340,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     validate_report_markdown(
         &report_markdown,
         params.validation_kind,
-        Some(SeverityExpectation {
-            blocker: params.counts.blocker,
-            major: params.counts.major,
-            minor: params.counts.minor,
-            nit: params.counts.nit,
-        }),
+        Some(severity_contract(&params.counts)),
     )
     .context("validate report artifact")?;
 
@@ -4334,6 +4431,15 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
             }
         }
     }
+
+    let persisted_report_markdown = fs::read_to_string(&report_path)
+        .with_context(|| format!("read persisted report file {}", report_path.display()))?;
+    validate_report_markdown(
+        &persisted_report_markdown,
+        params.validation_kind,
+        Some(severity_contract(&params.counts)),
+    )
+    .context("validate report artifact under lock")?;
 
     let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
         .map_or(filename, |rel| rel.to_string_lossy().to_string());
