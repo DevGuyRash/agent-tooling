@@ -254,7 +254,7 @@ See:
 
 Optional helper:
 
-- `scripts/pr-create.sh` (generates a prefilled PR body from git history; PR creation requires explicit `--create --force-create`, creates **draft** by default, and requires explicit labels when labels exist)
+- `scripts/pr-create.sh` (uses remote repository PR template content when available; otherwise generates a deterministic PR body from git history; PR creation requires explicit `--create --force-create`, creates **draft** by default, and requires explicit labels when labels exist)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 - `scripts/pr-labels-list.sh` (deterministically list available labels before create)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-labels-list.sh"`
@@ -396,6 +396,7 @@ See:
 
 Template resolution policy for PR creation:
 - Prefer remote repository PR templates when discoverable.
+- Discovery includes single-file templates in `.github/`, repo root, and `docs/` (both `pull_request_template.md` and `PULL_REQUEST_TEMPLATE.md`) and multi-template directories in `.github/PULL_REQUEST_TEMPLATE/`, `PULL_REQUEST_TEMPLATE/`, and `docs/PULL_REQUEST_TEMPLATE/`.
 - If multiple remote templates exist, `pr-create.sh --create` requires explicit `--template-id`.
 - If no remote templates exist, default deterministic skill PR body generation is used.
 

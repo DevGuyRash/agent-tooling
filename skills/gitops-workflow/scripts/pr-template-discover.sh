@@ -107,18 +107,26 @@ trap 'rm -f "$TMP_LIST"' EXIT
 
 for path in \
   ".github/pull_request_template.md" \
+  ".github/PULL_REQUEST_TEMPLATE.md" \
   "pull_request_template.md" \
-  "docs/pull_request_template.md"; do
+  "PULL_REQUEST_TEMPLATE.md" \
+  "docs/pull_request_template.md" \
+  "docs/PULL_REQUEST_TEMPLATE.md"; do
   FILE_JSON="$(fetch_file_json "$OWNER" "$NAME" "$DEFAULT_BRANCH" "$path")"
   if [[ -n "$FILE_JSON" ]] && [[ "$(printf '%s' "$FILE_JSON" | jq -r '.type // empty')" == "file" ]]; then
     printf '%s\n' "$path" >> "$TMP_LIST"
   fi
 done
 
-DIR_JSON="$(gh api "repos/$OWNER/$NAME/contents/.github/PULL_REQUEST_TEMPLATE?ref=$DEFAULT_BRANCH" 2>/dev/null || true)"
-if [[ -n "$DIR_JSON" ]] && [[ "$(printf '%s' "$DIR_JSON" | jq -r 'type')" == "array" ]]; then
-  printf '%s\n' "$DIR_JSON" | jq -r '.[] | select(.type == "file") | .path | select(ascii_downcase | endswith(".md"))' >> "$TMP_LIST"
-fi
+for dir_path in \
+  ".github/PULL_REQUEST_TEMPLATE" \
+  "PULL_REQUEST_TEMPLATE" \
+  "docs/PULL_REQUEST_TEMPLATE"; do
+  DIR_JSON="$(gh api "repos/$OWNER/$NAME/contents/$dir_path?ref=$DEFAULT_BRANCH" 2>/dev/null || true)"
+  if [[ -n "$DIR_JSON" ]] && [[ "$(printf '%s' "$DIR_JSON" | jq -r 'type')" == "array" ]]; then
+    printf '%s\n' "$DIR_JSON" | jq -r '.[] | select(.type == "file") | .path | select(ascii_downcase | endswith(".md"))' >> "$TMP_LIST"
+  fi
+done
 
 if [[ -s "$TMP_LIST" ]]; then
   TEMPLATES_JSON="$(sort -u "$TMP_LIST" | jq -R -s '

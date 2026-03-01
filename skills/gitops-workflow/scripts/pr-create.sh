@@ -121,11 +121,9 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-TEMPLATE="$SKILL_ROOT/assets/templates/pull-request-body.md"
 PR_LABELS_SCRIPT="$SCRIPT_DIR/pr-labels-list.sh"
 PR_TEMPLATE_SCRIPT="$SCRIPT_DIR/pr-template-discover.sh"
 
-[[ -f "$TEMPLATE" ]] || die "template not found at $TEMPLATE"
 require_cmd git
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -273,45 +271,42 @@ OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
     echo "<!-- Remote PR template source: $EFFECTIVE_REPO:$REMOTE_TEMPLATE_ID -->"
     echo
     printf '%s\n' "$REMOTE_TEMPLATE_CONTENT"
+  else
+    echo "# Summary"
     echo
-    echo "---"
+    echo "This PR introduces changes from \`$HEAD\` into \`$BASE\` for: $TITLE."
+    echo "It is prefilled from git history to avoid empty PR sections and improve reviewer context."
     echo
+    echo "# Changes"
+    echo
+    render_changes_section
+    echo
+    echo "# Testing"
+    echo
+    echo "- [x] Unit tests"
+    echo "- [ ] Integration tests"
+    echo "- [x] Manual testing"
+    echo
+    echo "Describe how you tested:"
+    echo
+    echo '```bash'
+    render_test_commands
+    echo '```'
+    echo
+    echo "# Risk"
+    echo
+    echo "- Breaking changes? **No**"
+    echo "- Rollback plan (if risky): Revert the PR merge commit."
+    echo
+    echo "# Refs"
+    echo
+    render_refs_section
+    echo
+    echo "# Reviewers / bots"
+    echo
+    echo "@codex review"
+    echo "/gemini review"
   fi
-
-  echo "# Summary"
-  echo
-  echo "This PR introduces changes from \`$HEAD\` into \`$BASE\` for: $TITLE."
-  echo "It is prefilled from git history to avoid empty PR sections and improve reviewer context."
-  echo
-  echo "# Changes"
-  echo
-  render_changes_section
-  echo
-  echo "# Testing"
-  echo
-  echo "- [x] Unit tests"
-  echo "- [ ] Integration tests"
-  echo "- [x] Manual testing"
-  echo
-  echo "Describe how you tested:"
-  echo
-  echo '```bash'
-  render_test_commands
-  echo '```'
-  echo
-  echo "# Risk"
-  echo
-  echo "- Breaking changes? **No**"
-  echo "- Rollback plan (if risky): Revert the PR merge commit."
-  echo
-  echo "# Refs"
-  echo
-  render_refs_section
-  echo
-  echo "# Reviewers / bots"
-  echo
-  echo "@codex review"
-  echo "/gemini review"
 } > "$OUT_FILE"
 
 echo "📝 PR body file created: $OUT_FILE"

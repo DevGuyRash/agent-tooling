@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -88,6 +89,136 @@ class PrTemplateDiscoverDecodeTests(unittest.TestCase):
             )
 
             self.assertEqual(proc.stdout, "# Hello from template\n- Step 1\n")
+
+
+class PrTemplateDiscoverCoverageTests(unittest.TestCase):
+    def test_discovers_uppercase_and_multi_directory_templates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"repo\" && \"$2\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    printf 'main\\n'\n"
+                "  else\n"
+                "    printf 'acme/widget\\n'\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1\" == \"api\" ]]; then\n"
+                "  case \"$2\" in\n"
+                "    repos/acme/widget/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=main|repos/acme/widget/contents/PULL_REQUEST_TEMPLATE.md?ref=main|repos/acme/widget/contents/docs/PULL_REQUEST_TEMPLATE.md?ref=main)\n"
+                "      printf '{\"type\":\"file\"}\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/.github/pull_request_template.md?ref=main|repos/acme/widget/contents/pull_request_template.md?ref=main|repos/acme/widget/contents/docs/pull_request_template.md?ref=main)\n"
+                "      printf '{}\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/.github/PULL_REQUEST_TEMPLATE?ref=main)\n"
+                "      printf '[{\"type\":\"file\",\"path\":\".github/PULL_REQUEST_TEMPLATE/a.md\"},{\"type\":\"file\",\"path\":\".github/PULL_REQUEST_TEMPLATE/B.MD\"},{\"type\":\"file\",\"path\":\".github/PULL_REQUEST_TEMPLATE/a.md\"},{\"type\":\"file\",\"path\":\".github/PULL_REQUEST_TEMPLATE/not.txt\"}]\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/PULL_REQUEST_TEMPLATE?ref=main)\n"
+                "      printf '[{\"type\":\"file\",\"path\":\"PULL_REQUEST_TEMPLATE/root.md\"}]\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/docs/PULL_REQUEST_TEMPLATE?ref=main)\n"
+                "      printf '[{\"type\":\"file\",\"path\":\"docs/PULL_REQUEST_TEMPLATE/doc.md\"}]\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "  esac\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPT),
+                    "--repo",
+                    "acme/widget",
+                    "--format",
+                    "json",
+                ],
+                cwd=ROOT,
+                env=env,
+            )
+
+            payload = json.loads(proc.stdout)
+            ids = [entry["id"] for entry in payload["templates"]]
+            self.assertEqual(ids, sorted(set(ids)))
+            self.assertIn(".github/PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn("PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn("docs/PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn(".github/PULL_REQUEST_TEMPLATE/a.md", ids)
+            self.assertIn(".github/PULL_REQUEST_TEMPLATE/B.MD", ids)
+            self.assertIn("PULL_REQUEST_TEMPLATE/root.md", ids)
+            self.assertIn("docs/PULL_REQUEST_TEMPLATE/doc.md", ids)
+            self.assertNotIn(".github/PULL_REQUEST_TEMPLATE/not.txt", ids)
+
+    def test_extracts_uppercase_template_by_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"repo\" && \"$2\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    printf 'main\\n'\n"
+                "  else\n"
+                "    printf 'acme/widget\\n'\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1\" == \"api\" ]]; then\n"
+                "  case \"$2\" in\n"
+                "    repos/acme/widget/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=main)\n"
+                "      printf '{\"type\":\"file\",\"encoding\":\"base64\",\"content\":\"IyBVUFBFUiBURU1QTEFURQo=\"}\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/*)\n"
+                "      printf '{}\\n'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "  esac\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPT),
+                    "--repo",
+                    "acme/widget",
+                    "--template-id",
+                    ".github/PULL_REQUEST_TEMPLATE.md",
+                ],
+                cwd=ROOT,
+                env=env,
+            )
+
+            self.assertEqual(proc.stdout, "# UPPER TEMPLATE\n")
 
 
 if __name__ == "__main__":
