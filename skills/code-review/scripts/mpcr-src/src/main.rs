@@ -469,8 +469,8 @@ enum ReviewerValidateKind {
 impl From<ReviewerValidateKind> for ReportValidationKind {
     fn from(value: ReviewerValidateKind) -> Self {
         match value {
-            ReviewerValidateKind::ChildProofPacket => ReportValidationKind::ChildProofPacket,
-            ReviewerValidateKind::ParentReviewReport => ReportValidationKind::ParentReviewReport,
+            ReviewerValidateKind::ChildProofPacket => Self::ChildProofPacket,
+            ReviewerValidateKind::ParentReviewReport => Self::ParentReviewReport,
         }
     }
 }

@@ -1,11 +1,16 @@
 //! End-to-end CLI tests for `mpcr`.
+#![allow(
+    clippy::bool_to_int_with_if,
+    clippy::format_push_string,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 
 use anyhow::ensure;
 use mpcr::paths;
 use mpcr::session::{
-    load_session, SessionLocator,
-    InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus,
-    SessionFile, SessionNote, SeverityCounts,
+    load_session, InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionFile, SessionLocator, SessionNote, SeverityCounts,
 };
 use serde_json::Value;
 use std::fs;
@@ -449,7 +454,11 @@ next_action = "Re-evaluate after the next API change."
 
 OUTPUT_COMPLETE
 "#,
-        first_result = if finding_count == 0 { "DEFENDED" } else { "FINDING" },
+        first_result = if finding_count == 0 {
+            "DEFENDED"
+        } else {
+            "FINDING"
+        },
         defended_theorem = if finding_count == 0 { "T1" } else { "T2" },
     )
 }

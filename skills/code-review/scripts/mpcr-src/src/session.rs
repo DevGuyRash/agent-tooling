@@ -1420,7 +1420,9 @@ fn build_disk_review_node_toml(
     Ok(node)
 }
 
-fn canonicalize_session_for_write_json(session: &SessionFile) -> anyhow::Result<SessionFileDiskJson> {
+fn canonicalize_session_for_write_json(
+    session: &SessionFile,
+) -> anyhow::Result<SessionFileDiskJson> {
     let reviews_by_key = dedupe_flat_reviews(&session.reviews);
 
     let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
@@ -1746,6 +1748,9 @@ pub struct ReportsResult {
 }
 
 /// Build a report listing for the given session data.
+///
+/// # Errors
+/// Returns an error if the active session artifact cannot be resolved.
 pub fn collect_reports(
     session: &SessionFile,
     locator: &SessionLocator,
@@ -1828,8 +1833,8 @@ fn json_fallback_session_file_path(session_dir: &Path) -> PathBuf {
 }
 
 fn read_json_fallback_header(path: &Path) -> anyhow::Result<SessionJsonFallbackHeader> {
-    let raw =
-        fs::read_to_string(path).with_context(|| format!("read session fallback {}", path.display()))?;
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read session fallback {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))
 }
 
@@ -1869,16 +1874,18 @@ fn resolve_active_session_artifact(
 fn resolved_or_default_session_artifact(
     session_dir: &Path,
 ) -> anyhow::Result<ResolvedSessionArtifact> {
-    match resolve_active_session_artifact(session_dir)? {
-        Some(artifact) => Ok(artifact),
-        None => Ok(ResolvedSessionArtifact {
-            path: session_file_path(session_dir),
-            format: SessionStorageFormat::TomlPrimary,
-        }),
-    }
+    resolve_active_session_artifact(session_dir)?.map_or_else(
+        || {
+            Ok(ResolvedSessionArtifact {
+                path: session_file_path(session_dir),
+                format: SessionStorageFormat::TomlPrimary,
+            })
+        },
+        Ok,
+    )
 }
 
-fn to_session_artifact_info(artifact: ResolvedSessionArtifact) -> SessionArtifactInfo {
+fn to_session_artifact_info(artifact: &ResolvedSessionArtifact) -> SessionArtifactInfo {
     SessionArtifactInfo {
         session_file: artifact.path.to_string_lossy().to_string(),
         session_format: artifact.format,
@@ -1890,8 +1897,12 @@ fn to_session_artifact_info(artifact: ResolvedSessionArtifact) -> SessionArtifac
 /// # Errors
 /// Returns an error if a fallback artifact exists but does not match the supported
 /// JSON fallback contract.
-pub fn active_session_artifact(session: &SessionLocator) -> anyhow::Result<Option<SessionArtifactInfo>> {
-    Ok(resolve_active_session_artifact(session.session_dir())?.map(to_session_artifact_info))
+pub fn active_session_artifact(
+    session: &SessionLocator,
+) -> anyhow::Result<Option<SessionArtifactInfo>> {
+    Ok(resolve_active_session_artifact(session.session_dir())?
+        .as_ref()
+        .map(to_session_artifact_info))
 }
 
 /// Resolve the active session artifact, or the canonical TOML path when the session is empty.
@@ -1899,10 +1910,11 @@ pub fn active_session_artifact(session: &SessionLocator) -> anyhow::Result<Optio
 /// # Errors
 /// Returns an error if a fallback artifact exists but does not match the supported
 /// JSON fallback contract.
-pub fn session_artifact_or_default(session: &SessionLocator) -> anyhow::Result<SessionArtifactInfo> {
-    Ok(to_session_artifact_info(resolved_or_default_session_artifact(
-        session.session_dir(),
-    )?))
+pub fn session_artifact_or_default(
+    session: &SessionLocator,
+) -> anyhow::Result<SessionArtifactInfo> {
+    let artifact = resolved_or_default_session_artifact(session.session_dir())?;
+    Ok(to_session_artifact_info(&artifact))
 }
 
 fn read_session_file(session_dir: &Path) -> anyhow::Result<SessionFile> {
@@ -1954,7 +1966,8 @@ fn write_session_file_atomic(
     let toml_write_result = (|| -> anyhow::Result<()> {
         let session_disk = canonicalize_session_for_write_toml(&session_to_write)?;
         let body = toml::to_string_pretty(&session_disk).context("serialize session TOML")? + "\n";
-        let _: SessionFileDiskToml = toml::from_str(&body).context("round-trip parse session TOML")?;
+        let _: SessionFileDiskToml =
+            toml::from_str(&body).context("round-trip parse session TOML")?;
         let tmp = session_dir.join(format!("{SESSION_FILE_TOML}.tmp.{owner}"));
         fs::write(&tmp, body)
             .with_context(|| format!("write temp session file {}", tmp.display()))?;
@@ -1985,9 +1998,9 @@ fn write_session_file_atomic(
 
     if toml_write_result.is_err() {
         let session_disk = canonicalize_session_for_write_json(&session_to_write)?;
-        let body =
-            serde_json::to_string_pretty(&session_disk).context("serialize session JSON fallback")?
-                + "\n";
+        let body = serde_json::to_string_pretty(&session_disk)
+            .context("serialize session JSON fallback")?
+            + "\n";
         let _: SessionFileDiskJson =
             serde_json::from_str(&body).context("round-trip parse session JSON fallback")?;
         let tmp = session_dir.join(format!("{SESSION_FILE_JSON}.tmp.{owner}"));
@@ -1998,7 +2011,10 @@ fn write_session_file_atomic(
         {
             if json_fallback.exists() {
                 fs::remove_file(&json_fallback).with_context(|| {
-                    format!("remove existing session fallback {}", json_fallback.display())
+                    format!(
+                        "remove existing session fallback {}",
+                        json_fallback.display()
+                    )
                 })?;
             }
         }
@@ -2012,7 +2028,10 @@ fn write_session_file_atomic(
         })?;
         if session_file.exists() {
             fs::remove_file(&session_file).with_context(|| {
-                format!("remove stale primary session file {}", session_file.display())
+                format!(
+                    "remove stale primary session file {}",
+                    session_file.display()
+                )
             })?;
         }
         return Ok(());
@@ -2490,7 +2509,7 @@ mod tests {
         reviewer_id: &str,
         session_id: &str,
         target_ref: &str,
-        counts: SeverityCounts,
+        counts: &SeverityCounts,
     ) -> String {
         format!(
             r#"# Code Review Report
@@ -3106,7 +3125,7 @@ retry_count = 0
                 "deadbeef",
                 "sess0001",
                 "refs/heads/main",
-                SeverityCounts::zero(),
+                &SeverityCounts::zero(),
             )),
             validation_kind: ReportValidationKind::ParentReviewReport,
             copy_input_report: false,
@@ -3328,9 +3347,8 @@ nit = 0
         let session = read_session_file(&session_dir)?;
         write_session_file_atomic(&session_dir, "deadbeef", &session)?;
 
-        let written: toml::Value = toml::from_str(&fs::read_to_string(
-            session_dir.join("_session.toml"),
-        )?)?;
+        let written: toml::Value =
+            toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
         let reviews = written
             .get("reviews")
             .and_then(toml::Value::as_array)
@@ -3339,18 +3357,13 @@ nit = 0
             .first()
             .and_then(|review| review.get("future_extension"))
             .ok_or_else(|| anyhow::anyhow!("missing review future_extension"))?;
-        ensure!(
-            future_extension
-                .get("token")
-                .and_then(toml::Value::as_str)
-                == Some("abc123")
-        );
+        ensure!(future_extension.get("token").and_then(toml::Value::as_str) == Some("abc123"));
         Ok(())
     }
 
     #[test]
-    fn write_session_file_atomic_round_trips_json_only_scalars_in_toml_primary()
-    -> anyhow::Result<()> {
+    fn write_session_file_atomic_round_trips_json_only_scalars_in_toml_primary(
+    ) -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
         let mut entry = make_entry();
@@ -3390,8 +3403,7 @@ nit = 0
         let parsed = read_session_file(&session_dir)?;
         ensure!(parsed.extra.get("top_null") == Some(&Value::Null));
         ensure!(
-            parsed.extra.get("top_u64")
-                == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
+            parsed.extra.get("top_u64") == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
         );
 
         let review = parsed
@@ -3887,6 +3899,7 @@ pub struct SpawnChildReviewersResult {
 /// # Errors
 /// Returns an error if the parent entry cannot be found, identifiers are invalid,
 /// the session cannot be read or written, or the lock cannot be acquired.
+#[allow(clippy::too_many_lines)]
 pub fn spawn_child_reviewers(
     params: SpawnChildReviewersParams,
 ) -> anyhow::Result<SpawnChildReviewersResult> {

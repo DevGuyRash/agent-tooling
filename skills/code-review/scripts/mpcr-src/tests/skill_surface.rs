@@ -1,4 +1,9 @@
 //! Surface-level compliance tests for the `code-review` skill package.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::iter_on_single_items,
+    clippy::manual_pattern_char_comparison
+)]
 
 use anyhow::{ensure, Context};
 use std::collections::BTreeSet;

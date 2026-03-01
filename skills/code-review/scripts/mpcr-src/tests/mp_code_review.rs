@@ -1,4 +1,9 @@
 //! Integration tests for `mpcr` session coordination primitives.
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 
 use anyhow::{bail, ensure};
 use mpcr::lock::{self, LockConfig};

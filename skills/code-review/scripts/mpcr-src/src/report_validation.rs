@@ -352,9 +352,17 @@ fn validate_anchor(issues: &mut Vec<ReportValidationIssue>, code: &str, label: &
         return;
     };
     if is_blank(path) {
-        issues.push(issue(code, format!("{label} has empty file path in `{anchor}`")));
+        issues.push(issue(
+            code,
+            format!("{label} has empty file path in `{anchor}`"),
+        ));
     }
-    if line.parse::<u64>().ok().filter(|value| *value > 0).is_none() {
+    if line
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .is_none()
+    {
         issues.push(issue(
             code,
             format!("{label} must reference a positive line number, got `{anchor}`"),
@@ -422,7 +430,10 @@ fn validate_code_excerpt_budget(markdown: &str, issues: &mut Vec<ReportValidatio
                 continue;
             }
             in_code_block = true;
-            let label = trimmed.trim_start_matches("```").trim().to_ascii_lowercase();
+            let label = trimmed
+                .trim_start_matches("```")
+                .trim()
+                .to_ascii_lowercase();
             current_block_is_machine = matches!(label.as_str(), "toml" | "json" | "yaml" | "yml");
             if !current_block_is_machine {
                 block_count += 1;
@@ -446,7 +457,10 @@ fn extract_machine_blocks(markdown: &str) -> anyhow::Result<Vec<MachineBlock>> {
     let lines: Vec<&str> = markdown.lines().collect();
     let mut idx = 0usize;
     while idx < lines.len() {
-        let trimmed = lines[idx].trim();
+        let Some(line) = lines.get(idx) else {
+            break;
+        };
+        let trimmed = line.trim();
         let Some(label) = trimmed.strip_prefix("```") else {
             idx += 1;
             continue;
@@ -468,7 +482,7 @@ fn extract_machine_blocks(markdown: &str) -> anyhow::Result<Vec<MachineBlock>> {
         };
         let start = idx + 1;
         idx += 1;
-        while idx < lines.len() && lines[idx].trim() != "```" {
+        while idx < lines.len() && lines.get(idx).is_some_and(|line| line.trim() != "```") {
             idx += 1;
         }
         if idx >= lines.len() {
@@ -476,7 +490,10 @@ fn extract_machine_blocks(markdown: &str) -> anyhow::Result<Vec<MachineBlock>> {
                 "report validation failed:\n- unterminated_machine_block: missing closing fence for machine-readable block"
             ));
         }
-        let content = lines[start..idx].join("\n");
+        let content = lines
+            .get(start..idx)
+            .ok_or_else(|| anyhow::anyhow!("invalid machine block bounds"))?
+            .join("\n");
         blocks.push(MachineBlock { format, content });
         idx += 1;
     }
@@ -531,7 +548,10 @@ fn validate_child_markdown_shape(markdown: &str, issues: &mut Vec<ReportValidati
         "### Residual Risk",
     ] {
         if heading.ends_with(':') {
-            if !markdown.lines().any(|line| line.trim_start().starts_with(heading)) {
+            if !markdown
+                .lines()
+                .any(|line| line.trim_start().starts_with(heading))
+            {
                 issues.push(issue(
                     "missing_heading",
                     format!("child report is missing heading prefix `{heading}`"),
@@ -605,6 +625,7 @@ fn security_adjacent_role(role_slug: &str) -> bool {
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_child_doc(
     markdown: &str,
     doc: &ChildProofPacketDoc,
@@ -638,7 +659,11 @@ fn validate_child_doc(
         ("reviewer_id", "reviewer_id", doc.reviewer_id.as_str()),
         ("session_id", "session_id", doc.session_id.as_str()),
         ("target_ref", "target_ref", doc.target_ref.as_str()),
-        ("overall_verdict", "overall_verdict", doc.overall_verdict.as_str()),
+        (
+            "overall_verdict",
+            "overall_verdict",
+            doc.overall_verdict.as_str(),
+        ),
     ] {
         validate_non_blank(&mut issues, code, label, value);
     }
@@ -710,7 +735,10 @@ fn validate_child_doc(
             "domain_ledger.rationale",
             &row.rationale,
         );
-        if ledger_domains.insert(row.domain.clone(), row.scope).is_some() {
+        if ledger_domains
+            .insert(row.domain.clone(), row.scope)
+            .is_some()
+        {
             issues.push(issue(
                 "duplicate_domain",
                 format!("duplicate domain ledger row for `{}`", row.domain),
@@ -722,7 +750,12 @@ fn validate_child_doc(
     let mut theorem_ids = BTreeSet::new();
     for theorem in &doc.theorems {
         validate_non_blank(&mut issues, "theorem_id", "theorems.id", &theorem.id);
-        validate_non_blank(&mut issues, "theorem_claim", "theorems.claim", &theorem.claim);
+        validate_non_blank(
+            &mut issues,
+            "theorem_claim",
+            "theorems.claim",
+            &theorem.claim,
+        );
         if theorem.anchors.is_empty() {
             issues.push(issue(
                 "theorem_anchor",
@@ -756,7 +789,12 @@ fn validate_child_doc(
     let mut disproof_findings = 0u64;
     let mut disproof_defended = 0u64;
     for disproof in &doc.disproof_attempts {
-        validate_non_blank(&mut issues, "disproof_id", "disproof_attempts.id", &disproof.id);
+        validate_non_blank(
+            &mut issues,
+            "disproof_id",
+            "disproof_attempts.id",
+            &disproof.id,
+        );
         validate_non_blank(
             &mut issues,
             "disproof_scenario",
@@ -794,7 +832,9 @@ fn validate_child_doc(
             ));
             continue;
         };
-        *disproof_counts_by_domain.entry(&theorem.domain).or_default() += 1;
+        *disproof_counts_by_domain
+            .entry(&theorem.domain)
+            .or_default() += 1;
         *disproof_counts_by_theorem
             .entry(disproof.theorem_id.as_str())
             .or_default() += 1;
@@ -812,8 +852,16 @@ fn validate_child_doc(
         for (code, label, value) in [
             ("finding_id", "findings.id", finding.id.as_str()),
             ("finding_claim", "findings.claim", finding.claim.as_str()),
-            ("finding_disproof", "findings.disproof", finding.disproof.as_str()),
-            ("finding_evidence", "findings.evidence", finding.evidence.as_str()),
+            (
+                "finding_disproof",
+                "findings.disproof",
+                finding.disproof.as_str(),
+            ),
+            (
+                "finding_evidence",
+                "findings.evidence",
+                finding.evidence.as_str(),
+            ),
             (
                 "finding_recommendation",
                 "findings.recommendation",
@@ -827,7 +875,12 @@ fn validate_child_doc(
         ] {
             validate_non_blank(&mut issues, code, label, value);
         }
-        validate_anchor(&mut issues, "finding_anchor", "findings.anchor", &finding.anchor);
+        validate_anchor(
+            &mut issues,
+            "finding_anchor",
+            "findings.anchor",
+            &finding.anchor,
+        );
         validate_confidence(
             &mut issues,
             "finding_confidence",
@@ -928,13 +981,20 @@ fn validate_child_doc(
                 ),
             ));
         }
-        *defended_counts_by_domain.entry(&theorem.domain).or_default() += 1;
+        *defended_counts_by_domain
+            .entry(&theorem.domain)
+            .or_default() += 1;
     }
 
     for risk in &doc.residual_risks {
         validate_non_blank(&mut issues, "risk_area", "residual_risks.area", &risk.area);
         validate_non_blank(&mut issues, "risk_gap", "residual_risks.gap", &risk.gap);
-        validate_non_blank(&mut issues, "risk_impact", "residual_risks.impact", &risk.impact);
+        validate_non_blank(
+            &mut issues,
+            "risk_impact",
+            "residual_risks.impact",
+            &risk.impact,
+        );
         validate_non_blank(
             &mut issues,
             "risk_next_action",
@@ -944,7 +1004,10 @@ fn validate_child_doc(
     }
 
     for row in &doc.domain_ledger {
-        let theorem_count = theorem_domains.get(row.domain.as_str()).copied().map_or(0, |v| v);
+        let theorem_count = theorem_domains
+            .get(row.domain.as_str())
+            .copied()
+            .map_or(0, |v| v);
         let disproof_count = disproof_counts_by_domain
             .get(row.domain.as_str())
             .copied()
@@ -1012,7 +1075,10 @@ fn validate_child_doc(
         if attempts == 0 {
             issues.push(issue(
                 "missing_disproof_attempts",
-                format!("theorem `{}` must have at least one disproof attempt", theorem.id),
+                format!(
+                    "theorem `{}` must have at least one disproof attempt",
+                    theorem.id
+                ),
             ));
         }
         if security_adjacent_role(doc.role_slug.as_str()) && attempts < 3 {
@@ -1089,6 +1155,7 @@ fn validate_child_doc(
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_parent_doc(
     markdown: &str,
     doc: &ParentReviewReportDoc,
@@ -1194,14 +1261,16 @@ fn validate_parent_doc(
     if actual_axes != expected_axes {
         issues.push(issue(
             "ship_axes",
-            format!(
-                "ship_readiness_axes must cover {:?}, got {:?}",
-                expected_axes, actual_axes
-            ),
+            format!("ship_readiness_axes must cover {expected_axes:?}, got {actual_axes:?}"),
         ));
     }
     for axis in &doc.ship_readiness_axes {
-        validate_non_blank(&mut issues, "ship_axis_notes", "ship_readiness_axes.notes", &axis.notes);
+        validate_non_blank(
+            &mut issues,
+            "ship_axis_notes",
+            "ship_readiness_axes.notes",
+            &axis.notes,
+        );
         if !matches!(axis.status.as_str(), "PASS" | "CONDITIONAL" | "FAIL") {
             issues.push(issue(
                 "ship_axis_status",
@@ -1221,7 +1290,12 @@ fn validate_parent_doc(
     };
     let mut finding_ids = BTreeSet::new();
     for finding in &doc.merged_findings {
-        validate_non_blank(&mut issues, "merged_finding_id", "merged_findings.id", &finding.id);
+        validate_non_blank(
+            &mut issues,
+            "merged_finding_id",
+            "merged_findings.id",
+            &finding.id,
+        );
         validate_anchor(
             &mut issues,
             "merged_finding_anchor",
@@ -1229,7 +1303,11 @@ fn validate_parent_doc(
             &finding.anchor,
         );
         for (code, label, value) in [
-            ("merged_finding_claim", "merged_findings.claim", finding.claim.as_str()),
+            (
+                "merged_finding_claim",
+                "merged_findings.claim",
+                finding.claim.as_str(),
+            ),
             (
                 "merged_finding_disproof",
                 "merged_findings.disproof",
@@ -1262,7 +1340,10 @@ fn validate_parent_doc(
         if finding.source_packets.is_empty() {
             issues.push(issue(
                 "merged_finding_sources",
-                format!("merged finding `{}` must reference at least one source packet", finding.id),
+                format!(
+                    "merged finding `{}` must reference at least one source packet",
+                    finding.id
+                ),
             ));
         }
         for source in &finding.source_packets {
@@ -1336,7 +1417,12 @@ fn validate_parent_doc(
     for risk in &doc.residual_risks {
         validate_non_blank(&mut issues, "risk_area", "residual_risks.area", &risk.area);
         validate_non_blank(&mut issues, "risk_gap", "residual_risks.gap", &risk.gap);
-        validate_non_blank(&mut issues, "risk_impact", "residual_risks.impact", &risk.impact);
+        validate_non_blank(
+            &mut issues,
+            "risk_impact",
+            "residual_risks.impact",
+            &risk.impact,
+        );
         validate_non_blank(
             &mut issues,
             "risk_next_action",
@@ -1762,7 +1848,7 @@ OUTPUT_COMPLETE
 OUTPUT_COMPLETE
 "#;
 
-const VALID_PARENT_TOML: &str = r#"# Code Review Report
+    const VALID_PARENT_TOML: &str = r#"# Code Review Report
 
 ```toml
 schema_version = "proof_packet.v2"
@@ -1997,13 +2083,10 @@ retry_count = 0
     #[test]
     fn yaml_machine_block_fails() -> anyhow::Result<()> {
         let markdown = VALID_CHILD_TOML.replacen("```toml", "```yaml", 1);
-        let err = match validate_report_markdown(
-            &markdown,
-            ReportValidationKind::ChildProofPacket,
-            None,
-        ) {
-            Ok(_) => return Err(anyhow::anyhow!("yaml should fail")),
-            Err(err) => err,
+        let Err(err) =
+            validate_report_markdown(&markdown, ReportValidationKind::ChildProofPacket, None)
+        else {
+            return Err(anyhow::anyhow!("yaml should fail"));
         };
         ensure!(err.to_string().contains("unsupported_format"));
         Ok(())
@@ -2012,13 +2095,10 @@ retry_count = 0
     #[test]
     fn missing_confidence_fails() -> anyhow::Result<()> {
         let markdown = VALID_CHILD_TOML.replace("confidence_score = 90\n", "");
-        let err = match validate_report_markdown(
-            &markdown,
-            ReportValidationKind::ChildProofPacket,
-            None,
-        ) {
-            Ok(_) => return Err(anyhow::anyhow!("missing confidence should fail")),
-            Err(err) => err,
+        let Err(err) =
+            validate_report_markdown(&markdown, ReportValidationKind::ChildProofPacket, None)
+        else {
+            return Err(anyhow::anyhow!("missing confidence should fail"));
         };
         ensure!(err.to_string().contains("parse child toml machine block"));
         Ok(())
@@ -2059,7 +2139,7 @@ retry_count = 0
 
     #[test]
     fn parent_count_mismatch_fails() -> anyhow::Result<()> {
-        let err = match validate_report_markdown(
+        let Err(err) = validate_report_markdown(
             VALID_PARENT_TOML,
             ReportValidationKind::ParentReviewReport,
             Some(SeverityExpectation {
@@ -2068,9 +2148,8 @@ retry_count = 0
                 minor: 0,
                 nit: 0,
             }),
-        ) {
-            Ok(_) => return Err(anyhow::anyhow!("count mismatch should fail")),
-            Err(err) => err,
+        ) else {
+            return Err(anyhow::anyhow!("count mismatch should fail"));
         };
         ensure!(err.to_string().contains("expected_parent_counts"));
         Ok(())
