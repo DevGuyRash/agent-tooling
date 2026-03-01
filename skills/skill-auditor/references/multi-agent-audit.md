@@ -18,7 +18,7 @@ most subtle bugs hide.
 
 ## Step 1: Inventory the dispatch system
 
-Map every role the skill can dispatch. For each role, collect:
+You SHALL map every role the skill can dispatch. For each role, collect:
 
 ```
 | Role | Dispatch mechanism | Prompt size | Domain-specific content |
@@ -35,7 +35,7 @@ counting unique lines.
 
 ## Step 2: Prompt inspection
 
-For each dispatch role, evaluate the prompt against these criteria:
+You SHALL evaluate each dispatch role prompt against these criteria:
 
 ### 2a: Self-containment
 
@@ -83,17 +83,17 @@ making synthesis impossible.
 
 ## Step 3: Cross-role consistency
 
-Compare all dispatch prompts against each other. This is where systematic
+You SHALL compare all dispatch prompts against each other. This is where systematic
 quality gaps surface.
 
 ### 3a: Depth consistency
 
-Measure the size (lines, chars) of every dispatch prompt. Calculate the median.
+You SHALL measure the size (lines, chars) of every dispatch prompt. Calculate the median.
 Flag any role where:
 - Size < 60% of median → likely **too shallow**
 - Size > 200% of median → possibly **over-specified** or **duplicating context**
 
-Plot or table the comparison:
+You SHALL plot or table the comparison:
 ```
 | Role | Lines | Chars | vs. Median |
 |------|-------|-------|-----------|
@@ -104,7 +104,7 @@ Plot or table the comparison:
 
 ### 3b: Structural consistency
 
-Define the "expected sections" from the most complete prompt. Then check which
+You SHALL define the "expected sections" from the most complete prompt. Then check which
 sections each role has:
 
 ```
@@ -122,7 +122,7 @@ Missing sections in some roles but not others = inconsistency finding.
 
 ### 3c: Domain tailoring
 
-For each prompt, identify content that's specific to its domain vs. shared
+You SHALL, for each prompt, identify content that's specific to its domain vs. shared
 boilerplate. A well-tailored prompt should have:
 - Domain-specific "defend that..." statement
 - Domain-specific seed challenges (not generic "look for issues")
@@ -134,7 +134,7 @@ insights. Flag as MAJOR.
 
 ### 3d: Shared boilerplate analysis
 
-Identify text that appears verbatim (or near-verbatim) across all prompts.
+You SHALL identify text that appears verbatim (or near-verbatim) across all prompts.
 This is context that's being paid for N times (once per worker) instead of
 once. Calculate the waste:
 
@@ -151,7 +151,7 @@ the domain-specific content?
 
 ## Step 4: Orchestrator-worker interface
 
-Test the handoff points between orchestrator and workers.
+You SHALL test the handoff points between orchestrator and workers.
 
 ### 4a: Dispatch → Worker
 
@@ -180,7 +180,7 @@ What happens when a worker fails?
 
 ## Step 5: Context amplification analysis
 
-Calculate the total context footprint across all agents:
+You SHALL calculate the total context footprint across all agents:
 
 ```
 Orchestrator context:
@@ -208,8 +208,8 @@ reviewed, findings produced) to assess efficiency.
 
 ## What to record
 
-1. Dispatch role inventory table
-2. Per-role prompt evaluation (self-containment, scope, output contract)
+1. You SHALL record the dispatch role inventory table
+2. You SHALL record per-role prompt evaluation (self-containment, scope, output contract)
 3. Cross-role consistency tables (depth, structure, tailoring)
 4. Shared boilerplate analysis with waste calculation
 5. Interface evaluation (dispatch → worker → orchestrator)
@@ -230,3 +230,26 @@ These patterns come up frequently. Check for them explicitly:
 | Excessive boilerplate | MINOR | >60% of each prompt is shared text |
 | No retry mechanism | MINOR | Failed workers are silently dropped |
 | No concurrency enforcement | MINOR | Cap is documented but not enforced by tooling |
+
+---
+
+## Domain integration
+
+WHEN auditing a multi-agent skill, the following domains SHALL be activated
+in addition to the universal set:
+
+- **D9 (dispatch-prompt-quality):** You SHALL evaluate every dispatch prompt
+  against the seed checks in `<skills-file-root>/references/domains.md`.
+- **D14 (ears-compliance):** Run `<skills-file-root>/scripts/ears_check.sh`
+  on the skill directory. Dispatch prompts with vague directives are
+  especially harmful because workers have no fallback context.
+- **D15 (prompt-complexity):** Run
+  `<skills-file-root>/scripts/prompt_complexity_check.sh` on the skill
+  directory. High complexity in dispatch prompts directly degrades worker
+  performance.
+
+WHEN assigning confidence to multi-agent findings, you SHALL follow the
+rules in `<skills-file-root>/references/confidence-scoring.md`. Cross-role
+consistency findings verified by measurement (size comparison, section
+inventory) SHALL be HIGH confidence. Dispatch quality assessments based on
+reading the prompt text SHALL be MEDIUM confidence.
