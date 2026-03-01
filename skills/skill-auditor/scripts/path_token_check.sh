@@ -108,17 +108,10 @@ while IFS= read -r mdfile; do
             issues=$((issues + 1))
         fi
 
-        case "$line" in
-            '['*) ref_scan=0 ;;
-            *) ref_scan=1 ;;
-        esac
-
-        if [ "$ref_scan" -eq 1 ]; then
-            bare_match=$(find_bare_match "$line" "references")
-            if [ -n "$bare_match" ]; then
-                echo "  ⚠ $relpath:$line_num — bare path \"$bare_match\" (missing <skills-file-root> prefix) [MINOR]"
-                issues=$((issues + 1))
-            fi
+        bare_match=$(find_bare_match "$line" "references")
+        if [ -n "$bare_match" ]; then
+            echo "  ⚠ $relpath:$line_num — bare path \"$bare_match\" (missing <skills-file-root> prefix) [MINOR]"
+            issues=$((issues + 1))
         fi
 
         # Check for hardcoded absolute paths

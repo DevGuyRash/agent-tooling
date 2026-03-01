@@ -94,6 +94,22 @@ class PathTokenCheckTests(unittest.TestCase):
         self.assertIn('bare path "references/guide.md"', output)
         self.assertIn("Issues found: 1", output)
 
+    def test_flags_bare_path_in_line_starting_markdown_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            references_dir = skill_dir / "references"
+            references_dir.mkdir(parents=True)
+            (references_dir / "guide.md").write_text("# Guide\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n[guide](references/guide.md)\n",
+                encoding="utf-8",
+            )
+
+            output = run_path_token_check(skill_dir)
+
+        self.assertIn('bare path "references/guide.md"', output)
+        self.assertIn("Issues found: 1", output)
+
     def test_ignores_markdown_under_tests_subtree(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
