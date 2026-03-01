@@ -79,7 +79,7 @@ For each script/binary/build step:
 ```
 | Item | Status | Error (if failed) | Fix |
 |------|--------|--------------------|-----|
-| scripts/mpcr (wrapper) | ❌ CRLF shebang | /usr/bin/env: 'sh\r': No such file | GNU sed: `sed -i 's/\r$//'` \| BSD/macOS sed: `sed -i '' 's/\r$//'` |
+| scripts/mpcr (wrapper) | ❌ CRLF shebang | /usr/bin/env: 'sh\r': No such file | GNU sed: `sed -i 's/\r$//'` or BSD/macOS sed: `sed -i '' 's/\r$//'` |
 | scripts/mpcr-src (build) | ✅ after 1m39s | — | Ship pre-built binary |
 | mpcr --help | ✅ | — | — |
 ```
@@ -185,16 +185,17 @@ mode. An agent reads "Architecture" in the docs, tries
 ### Domain scripts
 
 The auditor SHALL run the following domain scripts during this phase.
-CLI-dependent scripts require a CLI binary; D21 SHOULD still run without
-`--cli` to validate local script-path examples:
+CLI-dependent scripts require a CLI binary; D21 and D22 SHOULD still run
+without `--cli` to validate local script-path and discoverability examples:
 
 - D5 (`<skills-file-root>/scripts/name_consistency_check.sh`)
 - D7 (`<skills-file-root>/scripts/error_quality_check.sh`)
 - D10 (`<skills-file-root>/scripts/output_size_check.sh`)
 - D21 (`<skills-file-root>/scripts/staleness_check.sh`)
+- D22 (`<skills-file-root>/scripts/discoverability_check.sh`)
 
 WHEN no CLI binary is available, THEN the auditor SHALL skip CLI-dependent
-checks (D5, D7, D10) and note the reason.
+checks (D5, D7, D10, D22) and note the reason.
 
 ---
 

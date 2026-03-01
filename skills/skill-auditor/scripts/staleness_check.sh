@@ -324,30 +324,11 @@ is_unknown_option_error() {
 run_command() {
     run_cmd="$1"
 
-    # shellcheck disable=SC2086 # command is restricted by validation logic.
-    set -- $run_cmd
-    if [ $# -eq 0 ]; then
-        printf '1\t\n'
-        return
-    fi
-    run_exe="$1"
-    shift || true
-
     set +e
-    resolved_run_exe=$(command -v "$run_exe" 2>/dev/null || true)
-    if [ -n "$resolved_run_exe" ]; then
-        run_out=$("$resolved_run_exe" "$@" 2>&1)
-        run_status=$?
-    elif [ -x "$run_exe" ]; then
-        run_out=$("$run_exe" "$@" 2>&1)
-        run_status=$?
-    elif [ -f "$run_exe" ]; then
-        run_out=$(sh "$run_exe" "$@" 2>&1)
-        run_status=$?
-    else
-        run_out="command not found: $run_exe"
-        run_status=127
-    fi
+    # Command candidates already pass placeholder and unsafe syntax filters.
+    # Use eval to preserve quoted argument grouping for deterministic checks.
+    run_out=$(eval "$run_cmd" 2>&1)
+    run_status=$?
     set -e
 
     first_line=$(printf '%s\n' "$run_out" | head -1 | tr '\t' ' ')

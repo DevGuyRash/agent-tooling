@@ -187,6 +187,38 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["executed_subcommand_help"], 1)
         self.assertEqual(data["examples"][0]["verification_mode"], "subcommand-help")
 
+    def test_preserves_quoted_arguments_for_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "run.sh"
+            script.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env sh
+                    if [ "${1-}" = "--message" ] && [ "${2-}" = "hello world" ] && [ "${3-}" = "--help" ]; then
+                        echo "ok"
+                        exit 0
+                    fi
+                    echo "error: bad args"
+                    exit 2
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                '# Skill\n\n```bash\nscripts/run.sh --message "hello world" --help\n```\n',
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir)
+
+        self.assertEqual(data["summary"]["executed"], 1)
+        self.assertEqual(data["examples"][0]["status"], "executed")
+        self.assertEqual(data["examples"][0]["verification_mode"], "direct")
+
     def test_json_is_backward_compatible_with_new_detail_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)

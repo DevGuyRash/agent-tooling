@@ -96,14 +96,14 @@ those findings can gate a verdict.
 
 ## Per-Domain Confidence Rules
 
-Each domain (D1–D21) has a designated confidence tier that reflects its
+Each domain (D1–D22) has a designated confidence tier that reflects its
 primary verification method.
 
 | Tier | Domains | Default Confidence |
 |------|---------|-------------------|
 | Deterministic | D1, D2, D4, D11, D16, D17 | HIGH — script output is objective proof |
 | Heuristic+Script | D3, D14, D15 | HIGH for script metrics, MEDIUM for interpretation |
-| Agent+Script | D5, D7, D8, D10, D12, D21 | MEDIUM — agent verifies with CLI or inspection evidence |
+| Agent+Script | D5, D7, D8, D10, D12, D21, D22 | MEDIUM — agent verifies with CLI or inspection evidence |
 | Agent-only | D6, D9, D13, D18, D19, D20 | MEDIUM for traced evidence, LOW for pattern-matched |
 
 WHEN a domain's script produces output, THEN the finding confidence
@@ -183,6 +183,23 @@ claims and a captured execution transcript, THEN confidence SHALL be MEDIUM.
 WHEN a staleness finding is inferred without executing any documented example
 or collecting a transcript, THEN confidence SHALL be LOW.
 
+---
+
+## Discoverability Confidence (D22)
+
+Discoverability findings measure one-step recovery affordances for enum-like
+CLI parameters.
+
+WHEN a discoverability finding is backed by deterministic script evidence
+(`discoverability_check.sh` helper counts, option coverage misses, CLI help
+probe output), THEN confidence SHALL be HIGH.
+
+WHEN a discoverability finding is based on agent interpretation of helper
+wording clarity, THEN confidence SHALL be MEDIUM.
+
+WHEN a discoverability finding is inferred without CLI help evidence or
+documented helper extraction, THEN confidence SHALL be LOW.
+
 ## Aggregate Confidence Score
 
 The aggregate confidence score quantifies overall evidence quality:
@@ -191,8 +208,8 @@ The aggregate confidence score quantifies overall evidence quality:
 score = (HIGH_count × 3 + MEDIUM_count × 2 + LOW_count × 1) / (total_findings × 3)
 ```
 
-WHEN computing the aggregate score, D18/D19/D20/D21 findings SHALL be included
-in the calculation alongside D1–D17 findings. Their confidence levels follow
+WHEN computing the aggregate score, D18/D19/D20/D21/D22 findings SHALL be
+included in the calculation alongside D1–D17 findings. Their confidence levels follow
 the same HIGH=3, MEDIUM=2, LOW=1 weighting.
 
 ### Interpretation Bands

@@ -6,8 +6,9 @@ description: >-
   compliance, prompt complexity, multi-agent coordination, audit convergence
   (reproducibility across runs), finding divergence (specificity and
   tailoring), AGENTS.md adherence (rule absorption verification), and
-  documentation/runtime staleness drift detection. Covers 21 audit domains
-  (D1–D21) with confidence-scored findings at every level.
+  documentation/runtime staleness drift detection, and CLI discoverability
+  helper coverage. Covers 22 audit domains (D1–D22) with confidence-scored
+  findings at every level.
   Use when (1) auditing or health-checking a skill end-to-end, (2) verifying
   AGENTS.md adherence, audit convergence, or finding divergence, or (3)
   validating scripts, CLIs, context/token footprint, EARS requirement syntax,
@@ -46,7 +47,7 @@ patterns), THEN you SHALL add **Phase 3b: Multi-Agent Audit** between phases
 
 ## Audit domains
 
-Each audit activates a subset of 21 domains (D1–D21) based on the skill's
+Each audit activates a subset of 22 domains (D1–D22) based on the skill's
 characteristics. Domains map AGENTS.md rules to concrete checks with scripts
 and severity mappings.
 
@@ -57,17 +58,15 @@ domains activated for the current audit.
 
 | Skill characteristic            | Domains to activate           |
 |---------------------------------|-------------------------------|
-| Universal (always)              | D1, D2, D3, D4, D8           |
+| Universal (always)              | D1, D2, D3, D4, D6, D8, D18, D20, D21 |
 | Has `scripts/`                  | + D12                         |
 | Has `references/`               | + D16, D17                    |
 | Dispatches subagents            | + D9                          |
-| CLI-heavy                       | + D5, D7, D10, D11            |
+| CLI-heavy                       | + D5, D7, D10, D11, D22       |
 | Instruction-heavy               | + D14, D15                    |
 | Cross-skill deps                | + D13                         |
-| Has iterative/multi-pass        | + D18                         |
 | Produces variant outputs        | + D19                         |
-| References external rules       | + D20                         |
-| All audits (lightweight)        | + D6, D18, D20, D21           |
+| References external rules       | + D20 (already universal)     |
 
 ---
 
@@ -202,6 +201,7 @@ perform equivalent checks manually.
 | `<skills-file-root>/scripts/error_quality_check.sh <dir> --cli <bin>` | Error message quality (D7) | 2 |
 | `<skills-file-root>/scripts/output_size_check.sh <dir> --cli <bin>` | Output size discipline (D10) | 2 |
 | `<skills-file-root>/scripts/staleness_check.sh <dir> [--cli <bin>] [--format text|json]` | Documentation/runtime staleness drift (D21) | 2 |
+| `<skills-file-root>/scripts/discoverability_check.sh <dir> [--cli <bin>] [--format text|json]` | CLI discoverability helper coverage (D22) | 2 |
 | `<skills-file-root>/scripts/ears_check.sh <dir>` | EARS compliance (D14) | 5 |
 | `<skills-file-root>/scripts/prompt_complexity_check.sh <dir>` | Prompt complexity (D15) | 5 |
 | `<skills-file-root>/scripts/duplication_check.sh <dir> [--scope operative|advisory|all] [--format text|json] [--max-hops N]` | Deterministic duplication detection and gate (D16) | 4b |
@@ -235,6 +235,9 @@ WHEN all phases are complete THEN you SHALL compile the final report:
 10. You SHALL verify D21 (staleness drift): WHEN documented commands or
     examples no longer match current runtime behavior, THEN you SHALL flag
     the mismatch as a D21 finding with script evidence where available.
+11. You SHALL verify D22 (CLI discoverability): WHEN enum-like CLI parameters
+    are documented but no one-step discovery helper exists (`--help`, `--list`,
+    or equivalent), THEN you SHALL flag a D22 finding.
 
 ---
 

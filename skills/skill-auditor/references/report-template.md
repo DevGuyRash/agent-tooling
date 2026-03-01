@@ -19,6 +19,7 @@ all findings are compiled. Replace all `<placeholder>` text.
 - [Divergence (D19)](#9-divergence-analysis-d19)
 - [Adherence (D20)](#10-adherence-analysis-d20)
 - [Staleness (D21)](#11-staleness-analysis-d21)
+- [CLI Discoverability (D22)](#12-cli-discoverability-analysis-d22)
 - [Improvement Recommendations](#improvement-recommendations)
 - [Confidence Summary](#confidence-summary)
 
@@ -67,6 +68,7 @@ critical issues are, and the final verdict. Write this LAST.>
 | D19 divergence | ✅/❌/N/A | <count> |
 | D20 adherence | ✅/❌/N/A | <count> |
 | D21 staleness-drift | ✅/❌/N/A | <count> |
+| D22 cli-discoverability | ✅/❌/N/A | <count> |
 
 ---
 
@@ -252,13 +254,13 @@ critical issues are, and the final verdict. Write this LAST.>
 ### Variant Comparison
 
 | Variant | Lines | Chars | vs. Median | Tailoring |
-|---------|-------|-------|-----------|-----------  |
+|---------|-------|-------|-----------|-----------|
 | <variant> | <N> | <N> | <N%> | <low/medium/high> |
 
 ### Anti-Laziness Guardrails
 
 | Guardrail | Present? | Effective? |
-|-----------|----------|-----------  |
+|-----------|----------|-----------|
 | Minimum counts | ✅/❌ | <assessment> |
 | Specificity requirements | ✅/❌ | <assessment> |
 | Anti-pattern examples | ✅/❌ | <assessment> |
@@ -382,6 +384,7 @@ critical issues are, and the final verdict. Write this LAST.>
 | Divergence | D19 | ✅/❌ | MEDIUM [M] / HIGH [H] |
 | Adherence | D20 | ✅/❌ | MEDIUM [M] / HIGH [H] |
 | Staleness drift | D21 | ✅/❌ | HIGH [H] / MEDIUM [M] |
+| CLI discoverability helpers | D22 | ✅/❌ | HIGH [H] / MEDIUM [M] |
 
 ### Adherence Findings
 
@@ -404,6 +407,26 @@ critical issues are, and the final verdict. Write this LAST.>
 | Placeholder/underspecified examples tracked | <N> | MEDIUM [M] |
 
 ### Staleness Findings
+
+<Findings using the standard format with Confidence line>
+
+---
+
+## 12. CLI Discoverability Analysis (D22)
+
+**Discoverability Coverage:** <N>/<N> enum-like options expose one-step helper paths
+**CLI Helper Affordances:** <assessment — --help/--list or equivalent available?>
+
+### Discoverability Checks
+
+| Check | Result | Confidence |
+|-------|--------|------------|
+| Enum-like options have doc helper examples | <N>/<N> | HIGH [H] |
+| CLI help/list affordances are present | ✅/❌/N/A | HIGH [H] |
+| Documented options appear in help corpus | <N>/<N> | HIGH [H] |
+| Helper wording is actionable | <assessment> | MEDIUM [M] |
+
+### Discoverability Findings
 
 <Findings using the standard format with Confidence line>
 
@@ -445,6 +468,7 @@ critical issues are, and the final verdict. Write this LAST.>
 | D19 — Divergence           | <N>  | <N>    | <N> | <N>   |
 | D20 — Adherence            | <N>  | <N>    | <N> | <N>   |
 | D21 — Staleness Drift      | <N>  | <N>    | <N> | <N>   |
+| D22 — CLI Discoverability  | <N>  | <N>    | <N> | <N>   |
 | **Total** | **<N>** | **<N>** | **<N>** | **<N>** |
 
 **Aggregate Score:** <N>%

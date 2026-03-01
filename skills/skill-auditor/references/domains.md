@@ -1,6 +1,6 @@
 # Audit Domains Reference
 
-This file defines the 21 audit domains (D1–D21) used by the skill-auditor
+This file defines the 22 audit domains (D1–D22) used by the skill-auditor
 framework. Each domain specifies what to check, how findings map to severity
 levels, and which scripts accelerate the work.
 
@@ -35,6 +35,7 @@ levels, and which scripts accelerate the work.
 - [D19: divergence](#d19-divergence)
 - [D20: adherence](#d20-adherence)
 - [D21: staleness-drift](#d21-staleness-drift)
+- [D22: cli-discoverability](#d22-cli-discoverability)
 
 ---
 
@@ -45,17 +46,15 @@ based on the target skill's characteristics.
 
 | Skill characteristic                      | Activated domains   |
 |-------------------------------------------|---------------------|
-| **Universal** (always run)                | D1, D2, D3, D4, D8 |
+| **Universal** (always run)                | D1, D2, D3, D4, D6, D8, D18, D20, D21 |
 | Has `scripts/` directory                  | D12                 |
 | Has `references/` directory               | D16, D17            |
 | Dispatches subagents                      | D9                  |
-| CLI-heavy (binaries or CLIs)              | D5, D7, D10, D11   |
+| CLI-heavy (binaries or CLIs)              | D5, D7, D10, D11, D22 |
 | Has conditional / EARS-style instructions | D14, D15            |
 | Cross-skill dependencies                  | D13                 |
-| Has iterative/multi-pass workflow         | D18                 |
 | Produces creative/variant outputs         | D19                 |
-| References AGENTS.md or external rules    | D20                 |
-| **All audits** (lightweight)              | D6, D18, D20, D21   |
+| References AGENTS.md or external rules    | D20 (already universal) |
 
 When the skill exhibits multiple traits, the union of all activated domains
 applies. If a domain's script requires a CLI binary that is unavailable, the
@@ -137,6 +136,10 @@ binary in the report.
 - When a CLI exists, its `--help` output uses the same name.
 - SKILL.md body, README, and dispatch templates use a consistent name.
 - Subcommand help text names the parent skill correctly.
+- Name canonicalization does not drift between docs and CLI surfaces.
+
+**Boundary:** D5 checks *name identity and canonical forms*. Discovery-helper
+coverage for enum-like options belongs to D22.
 
 **Severity:** BLOCKER — CLI name differs from frontmatter. MAJOR — SKILL.md body name mismatch. MINOR — inconsistent capitalization. NIT — one-off abbreviation.
 
@@ -488,6 +491,7 @@ The following AGENTS.md sections SHALL have corresponding audit checks:
 | Divergence (finding specificity)           | D19                |
 | Adherence (rule absorption)               | D20                |
 | Example/runtime drift                     | D21                |
+| CLI discoverability helpers               | D22                |
 
 WHEN an AGENTS.md section has no corresponding domain, THEN the auditor SHALL
 flag this as a D20 MAJOR finding against itself.
@@ -532,6 +536,7 @@ claims have drifted away from what the toolchain or scripts actually do.
 - D13 owns cross-skill integration contracts and handoffs.
 - D20 owns AGENTS.md rule absorption and self-compliance.
 - D21 owns stale examples, stale behavior claims, and doc/runtime drift.
+- D22 owns one-step CLI discoverability helper coverage for enum-like options.
 
 **Severity:** BLOCKER — primary workflow command or guaranteed example cannot
 work as documented, or documented behavior is contradicted by current runtime
@@ -540,3 +545,26 @@ removed flag, stale subcommand, or materially incorrect behavior claim.
 MINOR — example is stale because required substitution/setup context is
 omitted, or the drift is recoverable with light agent inference. NIT —
 optional or illustrative example drift that does not affect the main path.
+
+---
+
+### D22: cli-discoverability
+
+**Source:** Phase 2 — API Surface · **Tier:** Agent+Script (needs CLI for full coverage)
+**Script:** `<skills-file-root>/scripts/discoverability_check.sh`
+
+**Seed checks:**
+- Enum-like options documented in SKILL/references SHALL have one-step
+  discoverability helpers (`--help`, `--list`, or equivalent).
+- Documentation SHALL include at least one concrete helper command that an
+  agent can run immediately after an invalid enum-like value error.
+- WHEN a CLI is available, aggregated help outputs SHALL expose either
+  list-like discoverability affordances or valid-value guidance patterns.
+- Documented enum-like options SHALL appear in CLI help corpus when CLI
+  coverage is enabled.
+
+**Severity:** BLOCKER — primary enum-like workflow cannot recover from invalid
+value because neither docs nor CLI expose a discoverability path. MAJOR —
+documented enum-like options have no discoverability helper command or are
+missing from CLI help corpus. MINOR — discoverability exists but is indirect
+or inconsistently documented. NIT — helper wording/presentation polish.

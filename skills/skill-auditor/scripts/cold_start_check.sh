@@ -8,6 +8,15 @@
 
 set -eu
 
+timestamp_now() {
+    ts_raw=$(date +%s%N 2>/dev/null || true)
+    if printf '%s' "$ts_raw" | grep -qE '^[0-9]+$'; then
+        printf '%s' "$ts_raw"
+        return
+    fi
+    date +%s
+}
+
 case "${1-}" in
     -h|--help)
         echo "Usage: cold_start_check.sh <skill-directory>"
@@ -83,12 +92,12 @@ while IFS= read -r script; do
     fi
 
     # Time --help execution
-    start_ms=$(date +%s%N 2>/dev/null || date +%s)
+    start_ms=$(timestamp_now)
     "$script" --help >/dev/null 2>&1 || true
-    end_ms=$(date +%s%N 2>/dev/null || date +%s)
+    end_ms=$(timestamp_now)
 
-    # Calculate duration (handle systems without %N)
-    if [ ${#start_ms} -gt 10 ]; then
+    # Calculate duration (handle systems without numeric %N support)
+    if [ ${#start_ms} -gt 10 ] && [ ${#end_ms} -gt 10 ]; then
         duration_ms=$(( (end_ms - start_ms) / 1000000 ))
         printf "  ✓ %-40s %dms\n" "$relpath" "$duration_ms"
         if [ "$duration_ms" -gt 5000 ]; then
