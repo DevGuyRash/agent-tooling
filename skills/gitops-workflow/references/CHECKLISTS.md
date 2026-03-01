@@ -52,6 +52,11 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry
 ## C) PR creation checklist
 
 - [ ] PR title matches Conventional Commits (important for squash merge)
+- [ ] Labels discovered and explicitly chosen before create:
+  - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>`
+- [ ] Remote PR templates discovered before create:
+  - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>`
+- [ ] If creating PR via script, draft is default unless `--ready` is explicitly passed.
 - [ ] PR body includes:
   - summary
   - what changed
@@ -81,6 +86,7 @@ Before pushing *any* updates to a PR:
   - implement it, or
   - reply in-thread explaining why you won't (with reasoning)
 - [ ] If you implemented a bot suggestion or want re-review, re-tag it in-thread.
+  - For Gemini full review use `/gemini review` in top-level PR Conversation comments.
 
 ---
 

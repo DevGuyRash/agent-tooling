@@ -31,8 +31,10 @@ When bypassing, record:
 - Sensitive-data full repo scan (CI/manual parity):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
 - PR creation:
-  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]`
-  - Recommended deterministic flow: run without `--create`, review/edit generated body, then run `gh pr create --body-file <file>`.
+  - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]`
+  - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]`
+  - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create --force-create] [--ready] [--base <branch>] [--head <branch>] [--repo owner/repo] [--label <name> ... | --no-labels] [--template-id <path>]`
+  - Recommended deterministic flow: (1) list labels/templates, (2) run `pr-create.sh` without `--create`, review/edit generated body, then (3) run `pr-create.sh --create --force-create ...` with explicit labels.
 - PR hygiene snapshot:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:
@@ -41,6 +43,8 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]`
 - Bot re-review request (deterministic ordering: Codex then Gemini):
   - `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
+- Mark draft PR ready after strict gates:
+  - `bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
 - Unresolved inline thread check:
   - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
 - Resolve unresolved inline threads:

@@ -33,8 +33,11 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "gh-scope-check.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-create.sh",
+            SCRIPTS_DIR / "pr-labels-list.sh",
+            SCRIPTS_DIR / "pr-template-discover.sh",
             SCRIPTS_DIR / "pr-comment.sh",
             SCRIPTS_DIR / "pr-request-review.sh",
+            SCRIPTS_DIR / "pr-mark-ready.sh",
             SCRIPTS_DIR / "pr-reply.sh",
             SCRIPTS_DIR / "pr-workflow.sh",
             SCRIPTS_DIR / "pr-merge-squash.sh",
@@ -53,6 +56,25 @@ class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
         self.assertIn('workdir="$(mktemp -d)"', workflow)
         self.assertIn('trap \'rm -rf "$workdir"\' EXIT', workflow)
         self.assertNotIn("README.md LICENSE", workflow)
+
+
+class ForcePushSafetyTests(unittest.TestCase):
+    FORCE_PUSH_PATTERN = re.compile(
+        r"(?m)^[ \t]*(?!#).*?\bgit\b[^\n#]*\bpush\b[^\n#]*[ \t]--force(?!-with-lease)(?:[ \t]|$)"
+    )
+
+    def test_scripts_do_not_use_git_push_force(self):
+        for script in SCRIPTS_DIR.glob("*.sh"):
+            text = script.read_text(encoding="utf-8")
+            self.assertNotRegex(text, self.FORCE_PUSH_PATTERN, f"forbidden force push in {script.name}")
+
+    def test_force_push_pattern_matches_forbidden_usage(self):
+        self.assertRegex("git push --force", self.FORCE_PUSH_PATTERN)
+        self.assertRegex("git push origin main --force", self.FORCE_PUSH_PATTERN)
+
+    def test_force_push_pattern_excludes_allowed_or_commented_usage(self):
+        self.assertNotRegex("git push --force-with-lease", self.FORCE_PUSH_PATTERN)
+        self.assertNotRegex("# git push --force", self.FORCE_PUSH_PATTERN)
 
 
 class GovernanceWrapperBehaviorTests(unittest.TestCase):
@@ -885,7 +907,7 @@ class PrCommentScriptTests(unittest.TestCase):
                     str(SCRIPTS_DIR / "pr-comment.sh"),
                     "7",
                     "--body",
-                    "@codex review\\n@gemini-code-assist review\\n\\nFinal pass.",
+                    "@codex review\\n/gemini review\\n\\nFinal pass.",
                 ],
                 cwd=ROOT,
                 env=env,
@@ -893,7 +915,7 @@ class PrCommentScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
-            self.assertIn("@codex review\n@gemini-code-assist review\n\nFinal pass.\n", body)
+            self.assertIn("@codex review\n/gemini review\n\nFinal pass.\n", body)
 
     def test_pr_comment_missing_body_value_fails_with_actionable_error(self):
         proc = run(
@@ -992,7 +1014,7 @@ class PrRequestReviewScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
-            self.assertTrue(body.startswith("@codex review\n@gemini-code-assist review\n"))
+            self.assertTrue(body.startswith("@codex review\n/gemini review\n"))
             self.assertIn("Final verification pass requested.\n", body)
 
     def test_pr_request_review_missing_repo_value_fails_with_actionable_error(self):
@@ -1078,6 +1100,73 @@ class PrReplyScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
             self.assertEqual(body, "line one\nline two")
+
+
+class PrMarkReadyScriptTests(unittest.TestCase):
+    def test_pr_mark_ready_runs_gates_then_marks_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            log_file = temp_path / "calls.log"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"true\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" && \"${2:-}\" == \"graphql\" ]]; then\n"
+                "  jq_expr=\"\"\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      jq_expr=\"${!next}\"\n"
+                "      break\n"
+                "    fi\n"
+                "  done\n"
+                "  if [[ \"$jq_expr\" == *\".data.repository.pullRequest.reviewThreads\"* ]]; then\n"
+                "    echo '{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}'\n"
+                "    exit 0\n"
+                "  fi\n"
+                "  echo ''\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"checks\" ]]; then\n"
+                "  echo \"checks ok\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"ready\" ]]; then\n"
+                "  echo \"$*\" >> \"${FAKE_LOG}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo \"$*\" >> \"${FAKE_LOG}\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(log_file)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-mark-ready.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            calls = log_file.read_text(encoding="utf-8")
+            self.assertIn("pr ready 7 --repo acme/widget", calls)
 
 if __name__ == "__main__":
     unittest.main()
