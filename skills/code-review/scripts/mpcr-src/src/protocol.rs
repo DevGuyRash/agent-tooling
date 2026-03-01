@@ -21,6 +21,21 @@ const TEMPLATES_TOML: &str = include_str!("../protocols/templates.toml");
 const DISPATCH_TOML: &str = include_str!("../protocols/dispatch.toml");
 const SESSION_TOML: &str = include_str!("../protocols/session.toml");
 
+const REVIEWER_PHASE_ORDER: &[&str] = &[
+    "INGESTION",
+    "DOMAIN_COVERAGE",
+    "THEOREM_GENERATION",
+    "ADVERSARIAL_PROOFS",
+    "SYNTHESIS",
+    "REPORT_WRITING",
+    "OVERENGINEERING_GUARD",
+    "COMPLEXITY_ANALYSIS",
+    "SHIP_READINESS",
+];
+
+const APPLICATOR_PHASE_ORDER: &[&str] =
+    &["INGESTION", "DISPOSITION", "APPLICATION", "FINALIZATION"];
+
 // ── Deserialization types ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +77,10 @@ struct OrchestratorFile {
     change_classification: Option<NamedSection>,
     #[serde(default)]
     analyze: Option<NamedSection>,
+    #[serde(default)]
+    scope_mapping: Option<NamedSection>,
+    #[serde(default)]
+    convergence_planning: Option<NamedSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,13 +105,14 @@ struct DispatchFile {
     roles: HashMap<String, DispatchRole>,
 }
 
-/// A single dispatch role entry. Supports factored (domain_focus only) or
-/// legacy (full content in `content`).
+/// A single dispatch role entry. Supports either:
+/// - fully inlined prompt templates (`prompt_template`)
+/// - factored templates (`domain_focus` + common sections)
 #[derive(Debug, Deserialize)]
 struct DispatchRole {
     title: String,
     #[serde(default)]
-    content: Option<String>,
+    prompt_template: Option<String>,
     #[serde(default)]
     domain_focus: Option<String>,
     #[serde(default)]
@@ -119,7 +139,7 @@ pub struct ProtocolOutput {
 pub struct ProtocolListEntry {
     /// Protocol category.
     pub category: String,
-    /// Entry key (phase name, scale, role, etc.).
+    /// Entry key (phase name, scale, role, or related identifier).
     pub key: String,
     /// Human-readable title.
     pub title: String,
@@ -248,6 +268,16 @@ pub fn analyze_guidance() -> anyhow::Result<ProtocolOutput> {
     orchestrator_section(|f| &f.analyze, "analyze")
 }
 
+/// Retrieve the scope mapping guidance.
+pub fn scope_mapping() -> anyhow::Result<ProtocolOutput> {
+    orchestrator_section(|f| &f.scope_mapping, "scope_mapping")
+}
+
+/// Retrieve the convergence planning guidance.
+pub fn convergence_planning() -> anyhow::Result<ProtocolOutput> {
+    orchestrator_section(|f| &f.convergence_planning, "convergence_planning")
+}
+
 /// Retrieve a report template at the given scale.
 ///
 /// # Errors
@@ -281,12 +311,12 @@ pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
             let mut valid: Vec<_> = file.roles.keys().map(|k| k.replace('_', "-")).collect();
             valid.sort();
             anyhow::anyhow!(
-                "unknown dispatch role: {role}\n\nValid roles:\n  {}\n\nHint: run `mpcr protocol dispatch-list` to list all roles.",
-                valid.join("\n  ")
+                "error: unknown dispatch role \"{role}\"\nhint: valid roles: {}\nhint: run `mpcr protocol dispatch-list`",
+                valid.join(", ")
             )
         })?;
 
-    let assembled = if let Some(ref full) = entry.content {
+    let assembled = if let Some(ref full) = entry.prompt_template {
         full.clone()
     } else if let (Some(ref common), Some(ref domain_focus)) = (&file.common, &entry.domain_focus) {
         let task = match entry.task_override.as_deref() {
@@ -310,7 +340,7 @@ pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
         assembled
     } else {
         return Err(anyhow::anyhow!(
-            "dispatch role {role}: missing both content and domain_focus+common"
+            "dispatch role {role}: missing both prompt_template and domain_focus+common"
         ));
     };
 
@@ -412,6 +442,16 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
             "mpcr protocol analyze-guidance",
             &orchestrator.analyze,
         ),
+        (
+            "scope-mapping",
+            "mpcr protocol scope-mapping",
+            &orchestrator.scope_mapping,
+        ),
+        (
+            "convergence-planning",
+            "mpcr protocol convergence-planning",
+            &orchestrator.convergence_planning,
+        ),
     ] {
         if let Some(ref s) = section {
             entries.push(ProtocolListEntry {
@@ -447,7 +487,7 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
             let cli_key = key.replace('_', "-");
             entries.push(ProtocolListEntry {
                 category: "dispatch".to_string(),
-                key: key.clone(),
+                key: cli_key.clone(),
                 title: role.title.clone(),
                 command: format!("mpcr protocol dispatch --role {cli_key}"),
             });
@@ -469,6 +509,82 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         }
     }
     Ok(entries)
+}
+
+fn render_doc_section(output: &ProtocolOutput, key: &str) -> String {
+    format!(
+        "## {} (`{key}`)\n\n{}\n",
+        output.title,
+        output.content.trim()
+    )
+}
+
+fn render_doc_header(title: &str, body: &str) -> String {
+    format!("# {title}\n\n{body}")
+}
+
+/// Render the checked-in fallback markdown for reviewer guidance.
+pub fn reviewer_fallback_doc() -> anyhow::Result<String> {
+    let mut body = String::from(
+        "Primary source: `mpcr protocol reviewer --phase <PHASE>`.\n\n\
+If the CLI is unavailable, use the sections below. They mirror the reviewer protocol phases and supplemental rubrics.\n\n",
+    );
+    for phase in REVIEWER_PHASE_ORDER {
+        let output = reviewer_phase(phase)?;
+        body.push_str(&render_doc_section(&output, phase));
+        body.push('\n');
+    }
+    Ok(render_doc_header("Reviewer Fallback", body.trim_end()))
+}
+
+/// Render the checked-in fallback markdown for applicator guidance.
+pub fn applicator_fallback_doc() -> anyhow::Result<String> {
+    let mut body = String::from(
+        "Primary source: `mpcr protocol applicator --phase <PHASE>`.\n\n\
+If the CLI is unavailable, use the sections below. They mirror the applicator protocol phases.\n\n",
+    );
+    for phase in APPLICATOR_PHASE_ORDER {
+        let output = applicator_phase(phase)?;
+        body.push_str(&render_doc_section(&output, phase));
+        body.push('\n');
+    }
+    Ok(render_doc_header("Applicator Fallback", body.trim_end()))
+}
+
+/// Render the checked-in fallback markdown for orchestrator guidance.
+pub fn orchestrator_fallback_doc() -> anyhow::Result<String> {
+    let sections = [
+        ("ORCHESTRATOR", orchestrator()?),
+        ("INVOCATION_ALIASES", invocation_aliases()?),
+        ("WORKFLOW_SELECTION", workflow_selection()?),
+        ("DOMAINS", domains()?),
+        ("QUALITY_GATE", quality_gate()?),
+        ("CHANGE_CLASSIFICATION", change_classification()?),
+        ("ANALYZE_GUIDANCE", analyze_guidance()?),
+        ("SCOPE_MAPPING", scope_mapping()?),
+        ("CONVERGENCE_PLANNING", convergence_planning()?),
+    ];
+    let mut body = String::from(
+        "Primary source: `mpcr protocol orchestrator` plus the related `mpcr protocol` subcommands listed below.\n\n\
+If the CLI is unavailable, use these sections as the orchestrator reference.\n\n",
+    );
+    for (key, output) in sections {
+        body.push_str(&render_doc_section(&output, key));
+        body.push('\n');
+    }
+    Ok(render_doc_header("Orchestrator Fallback", body.trim_end()))
+}
+
+/// Render the checked-in fallback markdown for full-cycle guidance.
+pub fn fullcycle_fallback_doc() -> anyhow::Result<String> {
+    let output = fullcycle()?;
+    Ok(render_doc_header(
+        "Full-Cycle Fallback",
+        &format!(
+            "Primary source: `mpcr protocol fullcycle`.\n\nIf the CLI is unavailable, use the section below.\n\n{}",
+            render_doc_section(&output, "FULLCYCLE").trim_end()
+        ),
+    ))
 }
 
 /// Retrieve phase guidance for a session management phase.
@@ -535,6 +651,7 @@ mod tests {
         let out = domains()?;
         ensure!(out.content.contains("Architecture"));
         ensure!(out.content.contains("Security"));
+        ensure!(out.content.contains("Staleness"));
         Ok(())
     }
 
@@ -575,6 +692,11 @@ mod tests {
             "complexity_analyst",
             "overengineering_guard",
             "ship_readiness_assessor",
+            "scope_creep_reviewer",
+            "scope_mapper_reviewer",
+            "scope_mapper_applicator",
+            "convergence_planner",
+            "staleness_auditor",
         ];
         for role in roles {
             let out = dispatch(role)?;
@@ -586,12 +708,19 @@ mod tests {
     #[test]
     fn list_entries_returns_all() -> anyhow::Result<()> {
         let entries = list_entries()?;
-        // 9 reviewer + 4 applicator + 3 orchestrator + 3 templates + 25 dispatch + 1 session = 45
+        // Includes reviewer/applicator/session phases plus orchestrator sections, templates, and dispatch roles.
         ensure!(
             entries.len() >= 40,
             "expected >= 37 entries, got {}",
             entries.len()
         );
+        for entry in entries.iter().filter(|e| e.category == "dispatch") {
+            ensure!(
+                !entry.key.contains('_'),
+                "dispatch key should be canonical hyphenated slug: {}",
+                entry.key
+            );
+        }
         Ok(())
     }
 
@@ -609,6 +738,15 @@ mod tests {
         ensure!(applicator_phase("NONEXISTENT").is_err());
         ensure!(report_template("NONEXISTENT").is_err());
         ensure!(dispatch("NONEXISTENT").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_docs_render() -> anyhow::Result<()> {
+        ensure!(!reviewer_fallback_doc()?.is_empty());
+        ensure!(!applicator_fallback_doc()?.is_empty());
+        ensure!(!orchestrator_fallback_doc()?.is_empty());
+        ensure!(!fullcycle_fallback_doc()?.is_empty());
         Ok(())
     }
 }

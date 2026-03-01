@@ -61,4 +61,9 @@ if [ ! -t 1 ]; then
   export NO_PAGER=1
 fi
 
+# Keep agent-facing errors concise by default.
+if [ -z "${RUST_BACKTRACE+x}" ]; then
+  export RUST_BACKTRACE=0
+fi
+
 exec "${bin}" "$@"

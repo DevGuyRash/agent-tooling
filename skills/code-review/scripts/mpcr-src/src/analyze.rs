@@ -288,7 +288,7 @@ pub fn available_checks() -> Vec<(&'static str, &'static str)> {
     vec![
         (
             "dead-code",
-            "Detect dead code markers (#[dead_code], #if 0, if False, etc.)",
+            "Detect dead code markers (#[dead_code], #if 0, and if False)",
         ),
         ("todos", "Surface TODO/FIXME/HACK/XXX/SAFETY annotations"),
         (
@@ -395,18 +395,16 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
 fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let tags = ["TODO", "FIXME", "HACK", "XXX", "SAFETY"];
     for (idx, line) in lines.iter().enumerate() {
-        if is_probable_string_literal_line(line) {
-            continue;
-        }
         if line.trim().is_empty() {
             continue;
         }
         let upper = line.to_ascii_uppercase();
+        let lower = line.to_ascii_lowercase();
         for tag in &tags {
             if !upper.contains(tag) {
                 continue;
             }
-            if is_marker_inside_quotes(&line.to_ascii_lowercase(), &tag.to_ascii_lowercase()) {
+            if is_marker_inside_quotes(&lower, &tag.to_ascii_lowercase()) {
                 continue;
             }
             if !is_tag_word_boundary(&upper, tag) {
@@ -433,100 +431,17 @@ fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
 /// Flag functions/methods/blocks exceeding 60 lines.
 fn check_long_functions(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
     let threshold = 60;
-    let mut func_start: Option<(usize, String)> = None;
-    let mut brace_depth: i32 = 0;
-    let mut indent_start: Option<usize> = None;
-    let mut saw_open_brace = false;
-    let mut await_open_brace = false;
-    let mut lex_state = AnalysisLexState::default();
-
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
-        let sanitized_trimmed = sanitized_line.trim();
-
-        if let Some((start, ref name)) = func_start {
-            let current_indent = line.len() - line.trim_start().len();
-            let at_dedent = !saw_open_brace
-                && !await_open_brace
-                && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
-            if at_dedent {
-                // Dedent means the active indentation-based function ended on the previous line.
-                let func_len = idx + 1 - start;
-                if func_len > threshold {
-                    out.push(AnalysisFinding {
-                        check: "long-function".to_string(),
-                        file: path.to_string(),
-                        line: start,
-                        excerpt: format!("{name} ({func_len} lines)"),
-                        detail: format!(
-                            "Function exceeds {threshold}-line threshold ({func_len} lines)"
-                        ),
-                    });
-                }
-                func_start = None;
-                indent_start = None;
-                saw_open_brace = false;
-            }
-        }
-
-        if should_skip_line_for_function_analysis(line) {
-            continue;
-        }
-
-        let is_fn_start = is_function_start(line, FUNCTION_START_PATTERNS);
-
-        if is_fn_start && func_start.is_none() {
-            let name = extract_name_hint(trimmed);
-            func_start = Some((idx + 1, name));
-            brace_depth = 0;
-            indent_start = Some(line.len() - line.trim_start().len());
-            saw_open_brace = false;
-            await_open_brace = !trimmed.ends_with(':');
-        }
-
-        let open_braces = sanitized_trimmed.chars().filter(|&c| c == '{').count() as i32;
-        let close_braces = sanitized_trimmed.chars().filter(|&c| c == '}').count() as i32;
-        if open_braces > 0 {
-            saw_open_brace = true;
-            await_open_brace = false;
-        }
-        brace_depth += open_braces;
-        brace_depth -= close_braces;
-
-        if let Some((start, ref name)) = func_start {
-            let func_len = idx + 1 - start;
-            let at_brace_end = saw_open_brace && brace_depth <= 0;
-
-            if at_brace_end {
-                if func_len > threshold {
-                    out.push(AnalysisFinding {
-                        check: "long-function".to_string(),
-                        file: path.to_string(),
-                        line: start,
-                        excerpt: format!("{name} ({func_len} lines)"),
-                        detail: format!(
-                            "Function exceeds {threshold}-line threshold ({func_len} lines)"
-                        ),
-                    });
-                }
-                func_start = None;
-                indent_start = None;
-                saw_open_brace = false;
-                await_open_brace = false;
-            }
-        }
-    }
-
-    if let Some((start, ref name)) = func_start {
-        let func_len = lines.len() + 1 - start;
-        if func_len > threshold {
+    for scope in collect_function_scope_metrics(lines) {
+        if scope.span_line_count > threshold {
             out.push(AnalysisFinding {
                 check: "long-function".to_string(),
                 file: path.to_string(),
-                line: start,
-                excerpt: format!("{name} ({func_len} lines)"),
-                detail: format!("Function exceeds {threshold}-line threshold ({func_len} lines)"),
+                line: scope.start_line,
+                excerpt: format!("{} ({} lines)", scope.name_hint, scope.span_line_count),
+                detail: format!(
+                    "Function exceeds {threshold}-line threshold ({} lines)",
+                    scope.span_line_count
+                ),
             });
         }
     }
@@ -706,98 +621,15 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
 
     for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
-        let branch_patterns = [
-            "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
-        ];
-
-        let mut func_start: Option<(usize, String)> = None;
-        let mut max_nesting: usize = 0;
-        let mut branch_count: usize = 0;
-        let mut base_depth: i32 = 0;
-        let mut depth: i32 = 0;
-        let mut indent_start: Option<usize> = None;
-        let mut saw_open_brace = false;
-        let mut await_open_brace = false;
-        let mut lex_state = AnalysisLexState::default();
-
-        for (idx, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
-            let sanitized_trimmed = sanitized_line.trim();
-            let current_indent = line.len() - line.trim_start().len();
-
-            if let Some((start, ref name)) = func_start {
-                let at_dedent = !saw_open_brace
-                    && !await_open_brace
-                    && indent_start.is_some_and(|is| current_indent <= is && !trimmed.is_empty());
-                if at_dedent {
-                    // Dedent means the active indentation-based function ended on the previous line.
-                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
-                    func_start = None;
-                    max_nesting = 0;
-                    branch_count = 0;
-                    indent_start = None;
-                    saw_open_brace = false;
-                    await_open_brace = false;
-                }
-            }
-
-            if should_skip_line_for_function_analysis(line) {
-                continue;
-            }
-
-            let is_fn = is_function_start(line, FUNCTION_START_PATTERNS);
-
-            if is_fn {
-                if let Some((start, ref name)) = func_start {
-                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
-                }
-                func_start = Some((idx + 1, extract_name_hint(trimmed)));
-                base_depth = depth;
-                max_nesting = 0;
-                branch_count = 0;
-                indent_start = Some(current_indent);
-                saw_open_brace = false;
-                await_open_brace = !trimmed.ends_with(':');
-            }
-
-            let open_braces = sanitized_trimmed.chars().filter(|&c| c == '{').count() as i32;
-            let close_braces = sanitized_trimmed.chars().filter(|&c| c == '}').count() as i32;
-            if open_braces > 0 {
-                saw_open_brace = true;
-                await_open_brace = false;
-            }
-            depth += open_braces;
-            depth -= close_braces;
-
-            if func_start.is_some() {
-                let relative = (depth - base_depth).max(0) as usize;
-                if relative > max_nesting {
-                    max_nesting = relative;
-                }
-                if branch_patterns
-                    .iter()
-                    .any(|p| sanitized_trimmed.starts_with(p) || sanitized_trimmed.contains(p))
-                {
-                    branch_count += 1;
-                }
-            }
-
-            if let Some((start, ref name)) = func_start {
-                let at_brace_end = saw_open_brace && depth <= base_depth;
-                if at_brace_end {
-                    maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
-                    func_start = None;
-                    max_nesting = 0;
-                    branch_count = 0;
-                    indent_start = None;
-                    saw_open_brace = false;
-                    await_open_brace = false;
-                }
-            }
-        }
-        if let Some((start, ref name)) = func_start {
-            maybe_push_hotspot(&mut hotspots, path, start, name, max_nesting, branch_count);
+        for scope in collect_function_scope_metrics(&lines) {
+            maybe_push_hotspot(
+                &mut hotspots,
+                path,
+                scope.start_line,
+                &scope.name_hint,
+                scope.max_nesting,
+                scope.branch_count,
+            );
         }
     }
 
@@ -811,6 +643,131 @@ pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<Complexi
     });
     hotspots.truncate(10);
     hotspots
+}
+
+#[derive(Debug)]
+struct FunctionScopeMetrics {
+    start_line: usize,
+    name_hint: String,
+    span_line_count: usize,
+    max_nesting: usize,
+    branch_count: usize,
+}
+
+#[derive(Debug)]
+struct ActiveFunctionScope {
+    start_line: usize,
+    name_hint: String,
+    base_depth: i32,
+    indent_start: usize,
+    saw_open_brace: bool,
+    await_open_brace: bool,
+    max_nesting: usize,
+    branch_count: usize,
+}
+
+impl ActiveFunctionScope {
+    fn into_metrics(self, end_line: usize) -> FunctionScopeMetrics {
+        FunctionScopeMetrics {
+            start_line: self.start_line,
+            name_hint: self.name_hint,
+            span_line_count: end_line - self.start_line + 1,
+            max_nesting: self.max_nesting,
+            branch_count: self.branch_count,
+        }
+    }
+}
+
+fn collect_function_scope_metrics(lines: &[&str]) -> Vec<FunctionScopeMetrics> {
+    let branch_patterns = [
+        "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
+    ];
+
+    let mut completed = Vec::new();
+    let mut stack: Vec<ActiveFunctionScope> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut lex_state = AnalysisLexState::default();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
+        let sanitized_trimmed = sanitized_line.trim();
+        let current_indent = line.len() - line.trim_start().len();
+
+        loop {
+            let should_close = stack.last().is_some_and(|frame| {
+                !frame.saw_open_brace
+                    && !frame.await_open_brace
+                    && current_indent <= frame.indent_start
+                    && !trimmed.is_empty()
+            });
+            if !should_close {
+                break;
+            }
+            if let Some(frame) = stack.pop() {
+                completed.push(frame.into_metrics(idx));
+            }
+        }
+
+        if should_skip_line_for_function_analysis(line) {
+            continue;
+        }
+
+        if is_function_start(line, FUNCTION_START_PATTERNS) {
+            stack.push(ActiveFunctionScope {
+                start_line: idx + 1,
+                name_hint: extract_name_hint(trimmed),
+                base_depth: depth,
+                indent_start: current_indent,
+                saw_open_brace: false,
+                await_open_brace: !trimmed.ends_with(':'),
+                max_nesting: 0,
+                branch_count: 0,
+            });
+        }
+
+        let open_braces = sanitized_trimmed.chars().filter(|&c| c == '{').count() as i32;
+        let close_braces = sanitized_trimmed.chars().filter(|&c| c == '}').count() as i32;
+        if open_braces > 0 {
+            if let Some(frame) = stack.last_mut() {
+                frame.saw_open_brace = true;
+                frame.await_open_brace = false;
+            }
+        }
+        depth += open_braces;
+        depth -= close_braces;
+
+        if let Some(frame) = stack.last_mut() {
+            let relative = (depth - frame.base_depth).max(0) as usize;
+            if relative > frame.max_nesting {
+                frame.max_nesting = relative;
+            }
+            if branch_patterns
+                .iter()
+                .any(|p| sanitized_trimmed.starts_with(p) || sanitized_trimmed.contains(p))
+            {
+                frame.branch_count += 1;
+            }
+        }
+
+        loop {
+            let should_close = stack
+                .last()
+                .is_some_and(|frame| frame.saw_open_brace && depth <= frame.base_depth);
+            if !should_close {
+                break;
+            }
+            if let Some(frame) = stack.pop() {
+                completed.push(frame.into_metrics(idx + 1));
+            }
+        }
+    }
+
+    while let Some(frame) = stack.pop() {
+        completed.push(frame.into_metrics(lines.len()));
+    }
+
+    completed
 }
 
 fn maybe_push_hotspot(
@@ -2280,6 +2237,198 @@ mod tests {
                 .iter()
                 .all(|f| f.check != "dead-code-marker" || !f.detail.contains("dead_code")),
             "multiline allow without dead_code should not be flagged"
+        );
+    }
+
+    #[test]
+    fn complexity_nested_function_attributes_hotspot_to_inner_scope() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def outer():\n");
+        for i in 0..3 {
+            src.push_str(&format!("    if outer_cond_{i}:\n        pass\n"));
+        }
+        src.push_str("    def inner():\n");
+        for i in 0..11 {
+            src.push_str(&format!("        if inner_cond_{i}:\n            pass\n"));
+        }
+        src.push_str("        return 1\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.check == "complexity" && f.line == 8),
+            "inner function should be flagged as the hotspot owner"
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| !(f.file == "sample.py" && f.check == "complexity" && f.line == 1)),
+            "outer function should not inherit nested helper branch complexity"
+        );
+    }
+
+    #[test]
+    fn complexity_nested_rust_fn_attributes_hotspot_to_inner_scope() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn outer() {\n");
+        for i in 0..3 {
+            src.push_str(&format!(
+                "    if outer_cond_{i} {{\n        work();\n    }}\n"
+            ));
+        }
+        src.push_str("    fn inner() {\n");
+        for i in 0..11 {
+            src.push_str(&format!(
+                "        if inner_cond_{i} {{\n            work();\n        }}\n"
+            ));
+        }
+        src.push_str("    }\n");
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.rs" && f.check == "complexity" && f.line == 11),
+            "inner Rust function should be flagged as the hotspot owner"
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| !(f.file == "sample.rs" && f.check == "complexity" && f.line == 1)),
+            "outer Rust function should not inherit nested function branch complexity"
+        );
+    }
+
+    #[test]
+    fn todo_in_trailing_comment_after_string_literal_is_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.py".to_string(),
+            "\"doc string\"  # TODO: fix this later\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "todo-fixme" && f.line == 1),
+            "TODO in trailing comment after string literal should be detected"
+        );
+    }
+
+    #[test]
+    fn todo_inside_string_literal_without_comment_is_still_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let msg = \"TODO: not a real todo\";\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().all(|f| f.check != "todo-fixme"),
+            "TODO inside string literal with no trailing comment should not be reported"
+        );
+    }
+
+    #[test]
+    fn todo_inside_rust_raw_string_literal_without_comment_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let msg = r#\"TODO: docs\"#;\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().all(|f| f.check != "todo-fixme"),
+            "TODO inside raw string literal with no comment should not be reported"
+        );
+    }
+
+    #[test]
+    fn todo_in_trailing_comment_after_raw_string_literal_is_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let msg = r#\"not todo\"#; // TODO: follow up\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "todo-fixme" && f.line == 1),
+            "TODO in trailing comment after raw string literal should be detected"
+        );
+    }
+
+    #[test]
+    fn long_function_nested_fn_flags_full_outer_span_and_inner_scope() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def outer():\n");
+        for _ in 0..20 {
+            src.push_str("    work()\n");
+        }
+        src.push_str("    def inner():\n");
+        for _ in 0..65 {
+            src.push_str("        helper_work()\n");
+        }
+        src.push_str("    return 1\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.check == "long-function" && f.line == 22),
+            "inner function should be flagged when its full span exceeds threshold"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.check == "long-function" && f.line == 1),
+            "outer function should also be flagged when its full span exceeds threshold"
+        );
+    }
+
+    #[test]
+    fn long_function_counts_docstrings_and_comments_in_span_length() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def documented():\n    \"\"\"\n    docs\n    \"\"\"\n");
+        for i in 0..58 {
+            src.push_str(&format!("    # comment {i}\n"));
+        }
+        src.push_str("    return 1\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.check == "long-function" && f.line == 1),
+            "long-function should count the full function span, including skipped lines"
+        );
+    }
+
+    #[test]
+    fn long_function_outer_is_still_flagged_when_its_own_lines_exceed_threshold() {
+        let mut files = HashMap::new();
+        let mut src = String::from("def outer():\n");
+        for _ in 0..62 {
+            src.push_str("    work()\n");
+        }
+        src.push_str("    def inner():\n        return 1\n");
+        files.insert("sample.py".to_string(), src);
+
+        let findings = run_check(&files, "long-functions").expect("analysis failed");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == "sample.py" && f.check == "long-function" && f.line == 1),
+            "outer function should still be flagged when its own lines exceed threshold"
         );
     }
 }

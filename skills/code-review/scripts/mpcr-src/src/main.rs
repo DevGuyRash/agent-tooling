@@ -8,14 +8,17 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
+use mpcr::report_validation::{
+    validate_report_markdown, ReportValidationKind, ReportValidationSummary, SeverityExpectation,
+};
 use mpcr::session::{
-    append_note, close_child_reviews, collect_reports, finalize_review, load_session,
-    purge_reviews, register_reviewer, set_initiator_status, spawn_child_reviewers, update_review,
-    AppendNoteParams, CloseChildReviewsParams, FinalizeReportInput, FinalizeReviewParams,
-    InitiatorStatus, NoteRole, NoteType, PurgeReviewsParams, RegisterReviewerParams,
-    ReportsFilters, ReportsOptions, ReportsResult, ReportsView, ReviewPhase, ReviewVerdict,
-    ReviewerStatus, SessionLocator, SetInitiatorStatusParams, SeverityCounts,
-    SpawnChildReviewersParams, UpdateReviewParams,
+    active_session_artifact, append_note, close_child_reviews, collect_reports, finalize_review,
+    load_session, purge_reviews, register_reviewer, session_artifact_or_default,
+    set_initiator_status, spawn_child_reviewers, update_review, AppendNoteParams,
+    CloseChildReviewsParams, FinalizeReportInput, FinalizeReviewParams, InitiatorStatus, NoteRole,
+    NoteType, PurgeReviewsParams, RegisterReviewerParams, ReportsFilters, ReportsOptions,
+    ReportsResult, ReportsView, ReviewPhase, ReviewVerdict, ReviewerStatus, SessionLocator,
+    SetInitiatorStatusParams, SeverityCounts, SpawnChildReviewersParams, UpdateReviewParams,
 };
 use mpcr::{analyze, protocol};
 use serde::Serialize;
@@ -30,25 +33,27 @@ use time::{Date, Month, OffsetDateTime};
     version,
     about = "UACRP code review coordination utilities",
     long_about = "UACRP code review coordination utilities.\n\n\
-`mpcr` manages a shared *session directory* containing `_session.json`, a lock file, and reviewer report markdown files.\n\
-All writers acquire `_session.json.lock` and update `_session.json` via an atomic temp-file replace to avoid races.\n\n\
+`mpcr` manages a shared *session directory* containing `_session.toml`, a lock file, and reviewer report markdown files.\n\
+All writers acquire `_session.toml.lock` and update `_session.toml` via an atomic temp-file replace to avoid races.\n\
+Writers MAY fall back to `_session.json` only when TOML serialization or commit fails.\n\n\
 Use `--json` for machine-readable output (compact).\n\
 Use `--json-pretty` for human-readable JSON.\n\
 Without `--json` or `--json-pretty`, most commands print compact one-line JSON; `id` commands print raw ids and successful mutations print `ok`.",
     after_long_help = r#"Session directory layout (relative to repo root):
   .local/reports/code_reviews/YYYY-MM-DD/
-    _session.json
-    _session.json.lock
+    _session.toml
+    _session.toml.lock
     {HH-MM-SS-mmm}_{ref}_{reviewer_id}.md
 
 Output path notes:
-  report_file  Repo-root-relative report path (stored in `_session.json`)
+  report_file  Repo-root-relative report path (stored in the session artifact)
   report_path  Full filesystem report path (best effort)
 
 Environment variables (optional; only read when `--use-env` is passed):
   MPCR_REPO_ROOT    Repo root used for default session dir (default: auto-detect git root; fallback: cwd)
   MPCR_DATE         Session date (YYYY-MM-DD) used for default session dir (default: today in UTC)
-  MPCR_SESSION_DIR  Explicit session directory containing `_session.json`
+  MPCR_SESSION_DIR  Explicit session directory containing `_session.toml`
+  MPCR_SESSION_FORMAT  Active artifact format (`toml_primary` or `json_fallback`)
   MPCR_REVIEWER_ID  Stable reviewer identity (id8) for this executor
   MPCR_SESSION_ID   Current session id (id8) for reviewer/applicator commands
   MPCR_TARGET_REF   Current target_ref (used by `applicator wait`)
@@ -99,12 +104,12 @@ enum Commands {
         #[command(subcommand)]
         command: IdCommands,
     },
-    /// Acquire/release the session lock file (`_session.json.lock`).
+    /// Acquire/release the session lock file (`_session.toml.lock`).
     Lock {
         #[command(subcommand)]
         command: LockCommands,
     },
-    /// Read session state (`_session.json`) without modifying it.
+    /// Read session state (TOML primary; JSON fallback) without modifying it.
     Session {
         #[command(subcommand)]
         command: SessionCommands,
@@ -154,7 +159,7 @@ enum IdCommands {
 
 #[derive(Subcommand)]
 enum LockCommands {
-    /// Acquire the session lock file (`_session.json.lock`).
+    /// Acquire the session lock file (`_session.toml.lock`).
     #[command(after_long_help = r#"Examples:
   # From repo root (or with --repo-root/--date):
   mpcr lock acquire --owner <owner_id8>
@@ -193,7 +198,7 @@ Notes:
         #[arg(
             long,
             value_name = "OWNER",
-            help = "Lock owner identifier (must match the contents of `_session.json.lock`)."
+            help = "Lock owner identifier (must match the contents of `_session.toml.lock`)."
         )]
         owner: String,
     },
@@ -201,7 +206,7 @@ Notes:
 
 #[derive(Subcommand)]
 enum SessionCommands {
-    /// Print the parsed `_session.json`.
+    /// Print the parsed active session artifact.
     #[command(after_long_help = r#"Examples:
   # From repo root (or with --repo-root/--date):
   mpcr session show
@@ -339,7 +344,7 @@ struct SessionDirArgs {
     #[arg(
         long,
         value_name = "DIR",
-        help = "Session directory containing `_session.json` (default: <repo_root>/.local/reports/code_reviews/<date>)."
+        help = "Session directory containing `_session.toml` (default: <repo_root>/.local/reports/code_reviews/<date>)."
     )]
     session_dir: Option<PathBuf>,
     #[arg(
@@ -453,9 +458,26 @@ enum ReportsCommands {
     InProgress(ReportsArgs),
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum ReviewerValidateKind {
+    /// Worker proof packet written by `reviewer complete-child`.
+    ChildProofPacket,
+    /// Parent synthesized review report written by `reviewer finalize`.
+    ParentReviewReport,
+}
+
+impl From<ReviewerValidateKind> for ReportValidationKind {
+    fn from(value: ReviewerValidateKind) -> Self {
+        match value {
+            ReviewerValidateKind::ChildProofPacket => ReportValidationKind::ChildProofPacket,
+            ReviewerValidateKind::ParentReviewReport => ReportValidationKind::ParentReviewReport,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ReviewerCommands {
-    /// Register yourself as a reviewer (creates/updates `_session.json`).
+    /// Register yourself as a reviewer (creates/updates `_session.toml`).
     #[command(after_long_help = r#"Examples:
   # Create or join today's session directory under the current repo root:
   mpcr reviewer register --target-ref main
@@ -670,6 +692,51 @@ Examples:
         clear_phase: bool,
     },
 
+    /// Validate a report artifact without mutating session state.
+    #[command(after_long_help = r#"Examples:
+  mpcr reviewer validate-report --kind child-proof-packet --report-file child.md
+  mpcr reviewer validate-report --kind parent-review-report --blocker 0 --major 1 --minor 0 --nit 0 < parent.md
+"#)]
+    ValidateReport {
+        #[arg(
+            long,
+            value_enum,
+            value_name = "KIND",
+            help = "Validation contract to apply to the report artifact."
+        )]
+        kind: ReviewerValidateKind,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Read report markdown from this file instead of stdin."
+        )]
+        report_file: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Expected BLOCKER count for reconciliation."
+        )]
+        blocker: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Expected MAJOR count for reconciliation."
+        )]
+        major: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Expected MINOR count for reconciliation."
+        )]
+        minor: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Expected NIT count for reconciliation."
+        )]
+        nit: u64,
+    },
+
     /// Finalize a review: write the report markdown and mark the review entry FINISHED.
     #[command(after_long_help = r#"Verdicts:
   APPROVE, REQUEST_CHANGES, BLOCK
@@ -686,8 +753,16 @@ Child lifecycle:
 
 Examples:
   mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --blocker 0 --major 0 --minor 0 --nit 0 <<'EOF'
-  ## Adversarial Code Review: <ref>
-  ...
+  # Code Review Report
+  
+  ```toml
+  schema_version = "proof_packet.v2"
+  artifact_kind = "parent_review_report"
+  reviewer_id = "<ID8>"
+  session_id = "<ID8>"
+  target_ref = "refs/heads/main"
+  verdict = "APPROVE"
+  ```
   EOF
 
   mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE --report-file review.md
@@ -925,7 +1000,7 @@ Example:
         #[arg(
             long,
             value_name = "ID8",
-            help = "Lock owner id8 used while updating `_session.json` (default: random)."
+            help = "Lock owner id8 used while updating the session artifact (default: random)."
         )]
         lock_owner: Option<String>,
     },
@@ -974,7 +1049,7 @@ Example:
         #[arg(
             long,
             value_name = "ID8",
-            help = "Lock owner id8 used while updating `_session.json` (default: random)."
+            help = "Lock owner id8 used while updating the session artifact (default: random)."
         )]
         lock_owner: Option<String>,
     },
@@ -1055,7 +1130,7 @@ enum ProtocolCommands {
         #[arg(
             long,
             value_name = "ROLE",
-            help = "Subagent role (e.g. architecture-critic, security-adversary, domain-specialist). Use `mpcr protocol list` for all roles."
+            help = "Subagent role (e.g. architecture-critic, security-adversary, domain-specialist). Use `mpcr protocol dispatch-list` for all roles."
         )]
         role: String,
     },
@@ -1074,6 +1149,10 @@ enum ProtocolCommands {
     ChangeClassification,
     /// Static analysis integration guidance.
     AnalyzeGuidance,
+    /// Scope mapping guidance (PR/issues/branch/commit context compression).
+    ScopeMapping,
+    /// Convergence planning guidance for recursive full-cycle execution.
+    ConvergencePlanning,
     /// List all available dispatch role slugs.
     DispatchList,
     /// List all available protocol entries.
@@ -1117,8 +1196,17 @@ struct OkResult {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("error: {err:#}");
+        eprintln!("{}", format_cli_error(&err));
         std::process::exit(1);
+    }
+}
+
+fn format_cli_error(err: &anyhow::Error) -> String {
+    let message = err.to_string();
+    if message.starts_with("error:") {
+        message
+    } else {
+        format!("error: {message}")
     }
 }
 
@@ -1290,6 +1378,13 @@ fn run() -> anyhow::Result<()> {
                     ("MPCR_SESSION_ID", res.session_id.as_str()),
                     ("MPCR_SESSION_DIR", res.session_dir.as_str()),
                     ("MPCR_SESSION_FILE", res.session_file.as_str()),
+                    (
+                        "MPCR_SESSION_FORMAT",
+                        match res.session_format {
+                            mpcr::session::SessionStorageFormat::TomlPrimary => "toml_primary",
+                            mpcr::session::SessionStorageFormat::JsonFallback => "json_fallback",
+                        },
+                    ),
                     ("MPCR_TARGET_REF", target_ref_for_env.as_str()),
                 ];
                 if let Some(parent_id) = res.parent_id.as_deref() {
@@ -1444,6 +1539,7 @@ fn run() -> anyhow::Result<()> {
                         nit,
                     },
                     report_input,
+                    validation_kind: ReportValidationKind::ParentReviewReport,
                     copy_input_report: copy_report_input,
                     auto_close_open_children: !no_auto_close_children,
                     auto_close_children_status,
@@ -1508,6 +1604,7 @@ fn run() -> anyhow::Result<()> {
                         nit,
                     },
                     report_input,
+                    validation_kind: ReportValidationKind::ChildProofPacket,
                     copy_input_report: copy_report_input,
                     auto_close_open_children: false,
                     auto_close_children_status: ReviewerStatus::Cancelled,
@@ -1528,6 +1625,32 @@ fn run() -> anyhow::Result<()> {
                 }
 
                 write_result(json, json_pretty, &res)?;
+            }
+
+            ReviewerCommands::ValidateReport {
+                kind,
+                report_file,
+                blocker,
+                major,
+                minor,
+                nit,
+            } => {
+                let markdown = match report_file {
+                    Some(path) => std::fs::read_to_string(&path)
+                        .with_context(|| format!("read report file {}", path.display()))?,
+                    None => read_stdin_to_string().context("read report markdown from stdin")?,
+                };
+                let summary: ReportValidationSummary = validate_report_markdown(
+                    &markdown,
+                    kind.into(),
+                    Some(SeverityExpectation {
+                        blocker,
+                        major,
+                        minor,
+                        nit,
+                    }),
+                )?;
+                write_result(json, json_pretty, &summary)?;
             }
 
             ReviewerCommands::Note {
@@ -1743,6 +1866,22 @@ fn run() -> anyhow::Result<()> {
                     println!("{}", out.content.trim());
                 }
             }
+            ProtocolCommands::ScopeMapping => {
+                let out = protocol::scope_mapping()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
+            ProtocolCommands::ConvergencePlanning => {
+                let out = protocol::convergence_planning()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", out.content.trim());
+                }
+            }
             ProtocolCommands::DispatchList => {
                 let roles = protocol::dispatch_list()?;
                 if json {
@@ -1927,6 +2066,7 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
                     command: ReviewerCommands::Update { .. }
                         | ReviewerCommands::Note { .. }
                         | ReviewerCommands::CompleteChild { .. }
+                        | ReviewerCommands::ValidateReport { .. }
                 }
         ),
         (None, Some(_)) => matches!(
@@ -1939,9 +2079,9 @@ fn enforce_worker_mode_restrictions(command: &Commands) -> anyhow::Result<()> {
     };
     if !allowed {
         let allowed_cmds = if dispatch_role.is_some() {
-            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, `mpcr analyze *`, `mpcr protocol *`, and `mpcr id *`"
+            "`mpcr reviewer update`, `mpcr reviewer note`, `mpcr reviewer complete-child`, `mpcr reviewer validate-report`, `mpcr analyze <subcommand>`, `mpcr protocol <subcommand>`, and `mpcr id <subcommand>`"
         } else {
-            "`mpcr applicator note`, `mpcr applicator set-status`, `mpcr protocol *`, and `mpcr id *`"
+            "`mpcr applicator note`, `mpcr applicator set-status`, `mpcr protocol <subcommand>`, and `mpcr id <subcommand>`"
         };
         return Err(anyhow::anyhow!(
             "{env}={role_name} restricts this executor to {allowed_cmds} only",
@@ -2063,7 +2203,8 @@ fn extract_identity_fields(command: &Commands) -> (Option<&str>, Option<&str>) {
             ReviewerCommands::Register { .. }
             | ReviewerCommands::SpawnChildren { .. }
             | ReviewerCommands::CloseChildren { .. }
-            | ReviewerCommands::Finalize { .. } => (None, None),
+            | ReviewerCommands::Finalize { .. }
+            | ReviewerCommands::ValidateReport { .. } => (None, None),
         },
         Commands::Applicator { command: sub } => match sub {
             ApplicatorCommands::Note {
@@ -2095,6 +2236,7 @@ fn extract_session_dir_field(command: &Commands) -> Option<&Path> {
             | ReviewerCommands::Update { session, .. }
             | ReviewerCommands::Finalize { session, .. }
             | ReviewerCommands::Note { session, .. } => Some(session),
+            ReviewerCommands::ValidateReport { .. } => None,
         },
         Commands::Applicator { command: sub } => match sub {
             ApplicatorCommands::SetStatus { session, .. }
@@ -2374,10 +2516,12 @@ fn handle_reports(
         include_leaf_children: args.include_leaf_children,
     };
 
-    if !session.session_file().exists() {
+    if active_session_artifact(&session)?.is_none() {
+        let artifact = session_artifact_or_default(&session)?;
         let result = ReportsResult {
             session_dir: session.session_dir().to_string_lossy().to_string(),
-            session_file: session.session_file().to_string_lossy().to_string(),
+            session_file: artifact.session_file,
+            session_format: artifact.session_format,
             view,
             filters,
             options,
@@ -2389,7 +2533,7 @@ fn handle_reports(
     }
 
     let session_data = load_session(&session)?;
-    let result = collect_reports(&session_data, &session, view, filters, options);
+    let result = collect_reports(&session_data, &session, view, filters, options)?;
     write_result(json, json_pretty, &result)
 }
 
@@ -2483,7 +2627,7 @@ fn wait_for_reviews(
                 "timed out after {timeout_secs}s waiting for reviews to reach terminal status"
             ));
         }
-        if !session.session_file().exists() {
+        if active_session_artifact(&session)?.is_none() {
             if !should_wait_for_session {
                 return Ok(());
             }
@@ -2587,14 +2731,22 @@ mod tests {
             extra: serde_json::Map::default(),
         };
         let session = SessionFile {
-            schema_version: "1.1.0".to_string(),
+            schema_version: "1.2.0".to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: dir.path().to_string_lossy().to_string(),
             reviewers: vec!["deadbeef".to_string()],
             reviews: vec![entry],
             extra: serde_json::Map::new(),
         };
-        let body = serde_json::to_string_pretty(&session)? + "\n";
+        let mut body = serde_json::to_value(&session)?;
+        let body_object = body
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("session fixture must serialize to object"))?;
+        body_object.insert(
+            "storage_format".to_string(),
+            serde_json::Value::String("json_fallback".to_string()),
+        );
+        let body = serde_json::to_string_pretty(&body)? + "\n";
         fs::write(session_dir.join("_session.json"), body)?;
 
         wait_for_reviews(&session_dir, None, None, 60)?;

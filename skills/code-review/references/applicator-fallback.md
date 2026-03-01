@@ -1,10 +1,11 @@
-# Applicator protocol: phase-appropriate guidance for applying review feedback.
-# Content is served by `mpcr protocol applicator --phase <PHASE>`.
-# Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
+# Applicator Fallback
 
-[phases.INGESTION]
-title = "Ingestion"
-content = """
+Primary source: `mpcr protocol applicator --phase <PHASE>`.
+
+If the CLI is unavailable, use the sections below. They mirror the applicator protocol phases.
+
+## Ingestion (`INGESTION`)
+
 You SHALL locate and read review reports:
 
 1. You SHALL run `mpcr session reports closed --session-dir <DIR> --include-report-contents --include-leaf-children` to get finished reviews.
@@ -15,11 +16,9 @@ You SHALL locate and read review reports:
 6. You SHALL dispatch `scope-mapper-applicator` and ingest its Scope Map packet before Disposition.
 
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status RECEIVED`
-"""
 
-[phases.DISPOSITION]
-title = "Disposition"
-content = """
+## Disposition (`DISPOSITION`)
+
 You SHALL decide a disposition for EVERY finding. You SHALL NOT skip any.
 
 ### Evidence challenge protocol
@@ -68,11 +67,9 @@ BEFORE accepting any finding at face value, you SHALL independently verify its l
 - You SHALL record a disposition note via `mpcr applicator note` for every finding.
 
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status REVIEWED`
-"""
 
-[phases.APPLICATION]
-title = "Application"
-content = """
+## Application (`APPLICATION`)
+
 You SHALL apply accepted feedback using parallel applicator subagents:
 
 ## Orchestrator mode (you are coordinating)
@@ -96,11 +93,9 @@ IF MPCR_APPLICATOR_ROLE is set, you are a worker:
 7. Return your Application Report.
 
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLYING`
-"""
 
-[phases.FINALIZATION]
-title = "Finalization"
-content = """
+## Finalization (`FINALIZATION`)
+
 You SHALL record final state:
 
 1. You SHALL verify all findings have dispositions.
@@ -128,4 +123,3 @@ IF this application is part of a full-cycle (review → apply → re-review):
 AFTER finalization completes:
 - You SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
 - You SHALL NOT leave dispatch prompts, report templates, packet files, or any other scratch artifacts in the worktree.
-"""

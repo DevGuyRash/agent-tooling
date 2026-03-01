@@ -1,6 +1,6 @@
-//! File-based lock implementation for coordinating `_session.json` updates.
+//! File-based lock implementation for coordinating `_session.toml` updates.
 //!
-//! The lock is represented by a file named `_session.json.lock` inside the session directory.
+//! The lock is represented by a file named `_session.toml.lock` inside the session directory.
 //! Lock acquisition uses `create_new(true)` for exclusivity and retries with exponential backoff.
 //!
 //! Stale lock recovery: when a lock file is older than [`STALE_LOCK_SECS`], recovery
@@ -139,10 +139,10 @@ impl Drop for LockGuard {
     }
 }
 
-/// Compute the path to the lock file (`_session.json.lock`) for `session_dir`.
+/// Compute the path to the lock file (`_session.toml.lock`) for `session_dir`.
 #[must_use]
 pub fn lock_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join("_session.json.lock")
+    session_dir.join("_session.toml.lock")
 }
 
 /// Release the session lock if `owner` matches the contents of the lock file.

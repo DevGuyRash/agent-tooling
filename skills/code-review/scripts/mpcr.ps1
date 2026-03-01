@@ -62,5 +62,10 @@ if ([System.Console]::IsOutputRedirected -or -not [Environment]::UserInteractive
     $env:NO_PAGER  = '1'
 }
 
+# Keep agent-facing errors concise by default.
+if (-not $env:RUST_BACKTRACE) {
+    $env:RUST_BACKTRACE = '0'
+}
+
 & $Bin @args
 exit $LASTEXITCODE
