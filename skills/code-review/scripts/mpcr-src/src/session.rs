@@ -4314,7 +4314,7 @@ fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
     }
 }
 
-fn severity_contract(counts: &SeverityCounts) -> SeverityExpectation {
+const fn severity_contract(counts: &SeverityCounts) -> SeverityExpectation {
     SeverityExpectation {
         blocker: counts.blocker,
         major: counts.major,
