@@ -120,7 +120,9 @@ Full-cycle runs Reviewer then Applicator with recursive Convergence control. You
 
 ## Artifact cleanup
 AFTER the workflow completes (finalize succeeds or full-cycle converges):
-- You SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- You SHALL delete `.local/tmp/` if it exists:
+  - POSIX: `rm -rf .local/tmp/`
+  - PowerShell: `Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue`
 - You SHALL NOT leave dispatch prompts, report templates, packet files, or any other scratch artifacts in the worktree.
 - You SHALL verify no files were written to the repo root (outside `.local/`) by the review process.
 

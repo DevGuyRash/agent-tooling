@@ -12,7 +12,7 @@ use crate::id;
 use crate::lock::{self, LockConfig};
 use crate::paths;
 use crate::report_validation::{
-    validate_report_markdown, ReportValidationKind, SeverityExpectation,
+    validate_report_markdown, ReportIdentityExpectation, ReportValidationKind, SeverityExpectation,
 };
 use anyhow::Context;
 use clap::builder::PossibleValue;
@@ -649,7 +649,8 @@ pub struct SessionFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionFileDiskJson {
     pub schema_version: String,
-    pub storage_format: SessionStorageFormat,
+    #[serde(default)]
+    pub storage_format: Option<SessionStorageFormat>,
     pub session_date: String,
     pub repo_root: String,
     #[serde(default)]
@@ -1482,7 +1483,7 @@ fn canonicalize_session_for_write_json(
 
     Ok(SessionFileDiskJson {
         schema_version: SESSION_SCHEMA_VERSION.to_string(),
-        storage_format: SessionStorageFormat::JsonFallback,
+        storage_format: Some(SessionStorageFormat::JsonFallback),
         session_date: session.session_date.clone(),
         repo_root: session.repo_root.clone(),
         reviewers: reviewers.into_iter().collect(),
@@ -1855,14 +1856,20 @@ fn resolve_active_session_artifact(
     }
 
     let header = read_json_fallback_header(&fallback)?;
-    if header.schema_version != SESSION_SCHEMA_VERSION
-        || header.storage_format != Some(SessionStorageFormat::JsonFallback)
-    {
-        return Err(anyhow::anyhow!(
-            "unsupported session fallback file {}: only {} JSON fallback files are supported; delete the session directory and re-register",
-            fallback.display(),
-            SESSION_SCHEMA_VERSION
-        ));
+    if let Some(storage_format) = header.storage_format {
+        if storage_format != SessionStorageFormat::JsonFallback {
+            return Err(anyhow::anyhow!(
+                "unsupported session fallback file {}: storage_format must be `json_fallback`",
+                fallback.display()
+            ));
+        }
+        if header.schema_version != SESSION_SCHEMA_VERSION {
+            return Err(anyhow::anyhow!(
+                "unsupported session fallback file {}: only {} JSON fallback files are supported when storage_format is present",
+                fallback.display(),
+                SESSION_SCHEMA_VERSION
+            ));
+        }
     }
 
     Ok(Some(ResolvedSessionArtifact {
@@ -2663,6 +2670,75 @@ retry_count = 0
     }
 
     #[test]
+    fn active_session_artifact_accepts_legacy_json_without_storage_format() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        let legacy_json = r#"{
+  "schema_version": "1.1.0",
+  "session_date": "2026-01-11",
+  "repo_root": "/tmp/repo",
+  "reviewers": ["deadbeef"],
+  "reviews": [
+    {
+      "reviewer_id": "deadbeef",
+      "session_id": "sess0001",
+      "target_ref": "refs/heads/main",
+      "initiator_status": "REQUESTING",
+      "status": "IN_PROGRESS",
+      "parent_id": null,
+      "started_at": "2026-01-11T00:00:00Z",
+      "updated_at": "2026-01-11T00:00:00Z",
+      "finished_at": null,
+      "current_phase": "INGESTION",
+      "verdict": null,
+      "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
+      "report_file": null,
+      "notes": []
+    }
+  ]
+}"#;
+        fs::write(session_dir.join("_session.json"), legacy_json)?;
+        let locator = SessionLocator::new(session_dir);
+
+        let info = active_session_artifact(&locator)?
+            .ok_or_else(|| anyhow::anyhow!("expected active session artifact"))?;
+        ensure!(info.session_format == SessionStorageFormat::JsonFallback);
+        let session = load_session(&locator)?;
+        let review = session
+            .reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("expected one review from legacy JSON fallback"))?;
+        ensure!(review.reviewer_id == "deadbeef");
+        Ok(())
+    }
+
+    #[test]
+    fn active_session_artifact_rejects_non_json_fallback_storage_format() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        let invalid_json = r#"{
+  "schema_version": "1.2.0",
+  "storage_format": "toml_primary",
+  "session_date": "2026-01-11",
+  "repo_root": "/tmp/repo",
+  "reviewers": [],
+  "reviews": []
+}"#;
+        fs::write(session_dir.join("_session.json"), invalid_json)?;
+        let locator = SessionLocator::new(session_dir);
+
+        let Err(err) = active_session_artifact(&locator) else {
+            bail!("expected non-json-fallback storage format to fail");
+        };
+        ensure!(err
+            .to_string()
+            .contains("storage_format must be `json_fallback`"));
+        Ok(())
+    }
+
+    #[test]
     fn close_child_reviews_updates_parent_embedded_state() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
@@ -3230,6 +3306,73 @@ retry_count = 0
         ensure!(persisted.status == ReviewerStatus::InProgress);
         ensure!(persisted.report_file.is_none());
 
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_review_rejects_identity_mismatch_under_lock() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let mismatched_report = valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/other",
+            &SeverityCounts::zero(),
+        );
+        let params = FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::Markdown(mismatched_report),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        };
+        let Err(err) = finalize_review(params) else {
+            bail!("finalize should fail on report identity mismatch");
+        };
+        ensure!(format!("{err:#}").contains("identity_mismatch"));
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
         Ok(())
     }
 
@@ -4341,6 +4484,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         &report_markdown,
         params.validation_kind,
         Some(severity_contract(&params.counts)),
+        None,
     )
     .context("validate report artifact")?;
 
@@ -4392,6 +4536,11 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
             .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
         (parse_ts(&entry.started_at)?, entry.target_ref.clone())
     };
+    let identity_expectation = ReportIdentityExpectation {
+        reviewer_id: params.reviewer_id.clone(),
+        session_id: params.session_id.clone(),
+        target_ref: target_ref.clone(),
+    };
 
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
@@ -4438,6 +4587,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         &persisted_report_markdown,
         params.validation_kind,
         Some(severity_contract(&params.counts)),
+        Some(&identity_expectation),
     )
     .context("validate report artifact under lock")?;
 

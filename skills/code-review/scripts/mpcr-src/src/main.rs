@@ -1649,6 +1649,7 @@ fn run() -> anyhow::Result<()> {
                         minor,
                         nit,
                     }),
+                    None,
                 )?;
                 write_result(json, json_pretty, &summary)?;
             }

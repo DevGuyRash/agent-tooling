@@ -47,6 +47,17 @@ pub struct SeverityExpectation {
     pub nit: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Identity values expected to match the machine block contents.
+pub struct ReportIdentityExpectation {
+    /// Expected reviewer identifier.
+    pub reviewer_id: String,
+    /// Expected session identifier.
+    pub session_id: String,
+    /// Expected target git ref.
+    pub target_ref: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 /// Structured validation issue for JSON output and aggregated errors.
 pub struct ReportValidationIssue {
@@ -630,6 +641,7 @@ fn validate_child_doc(
     markdown: &str,
     doc: &ChildProofPacketDoc,
     expected_counts: Option<SeverityExpectation>,
+    expected_identity: Option<&ReportIdentityExpectation>,
     format: MachineBlockFormat,
 ) -> anyhow::Result<ReportValidationSummary> {
     let mut issues = Vec::new();
@@ -1142,6 +1154,17 @@ fn validate_child_doc(
         }
     }
 
+    if let Some(expected) = expected_identity {
+        validate_identity_expectation(
+            &mut issues,
+            expected,
+            doc.reviewer_id.as_str(),
+            doc.session_id.as_str(),
+            doc.target_ref.as_str(),
+            "child packet",
+        );
+    }
+
     if !issues.is_empty() {
         return Err(format_issues(&issues));
     }
@@ -1160,6 +1183,7 @@ fn validate_parent_doc(
     markdown: &str,
     doc: &ParentReviewReportDoc,
     expected_counts: Option<SeverityExpectation>,
+    expected_identity: Option<&ReportIdentityExpectation>,
     format: MachineBlockFormat,
 ) -> anyhow::Result<ReportValidationSummary> {
     let mut issues = Vec::new();
@@ -1499,6 +1523,17 @@ fn validate_parent_doc(
         }
     }
 
+    if let Some(expected) = expected_identity {
+        validate_identity_expectation(
+            &mut issues,
+            expected,
+            doc.reviewer_id.as_str(),
+            doc.session_id.as_str(),
+            doc.target_ref.as_str(),
+            "parent report",
+        );
+    }
+
     if !issues.is_empty() {
         return Err(format_issues(&issues));
     }
@@ -1521,16 +1556,65 @@ pub fn validate_report_markdown(
     markdown: &str,
     kind: ReportValidationKind,
     expected_counts: Option<SeverityExpectation>,
+    expected_identity: Option<&ReportIdentityExpectation>,
 ) -> anyhow::Result<ReportValidationSummary> {
     let block = extract_machine_block(markdown)?;
     match kind {
         ReportValidationKind::ChildProofPacket => {
             let doc = parse_child_doc(&block)?;
-            validate_child_doc(markdown, &doc, expected_counts, block.format)
+            validate_child_doc(
+                markdown,
+                &doc,
+                expected_counts,
+                expected_identity,
+                block.format,
+            )
         }
         ReportValidationKind::ParentReviewReport => {
             let doc = parse_parent_doc(&block)?;
-            validate_parent_doc(markdown, &doc, expected_counts, block.format)
+            validate_parent_doc(
+                markdown,
+                &doc,
+                expected_counts,
+                expected_identity,
+                block.format,
+            )
+        }
+    }
+}
+
+fn validate_identity_expectation(
+    issues: &mut Vec<ReportValidationIssue>,
+    expected: &ReportIdentityExpectation,
+    actual_reviewer_id: &str,
+    actual_session_id: &str,
+    actual_target_ref: &str,
+    label: &str,
+) {
+    for (field, expected_value, actual_value) in [
+        (
+            "reviewer_id",
+            expected.reviewer_id.as_str(),
+            actual_reviewer_id,
+        ),
+        (
+            "session_id",
+            expected.session_id.as_str(),
+            actual_session_id,
+        ),
+        (
+            "target_ref",
+            expected.target_ref.as_str(),
+            actual_target_ref,
+        ),
+    ] {
+        if expected_value != actual_value {
+            issues.push(issue(
+                "identity_mismatch",
+                format!(
+                    "{label} {field} must match finalized review entry: expected `{expected_value}`, got `{actual_value}`"
+                ),
+            ));
         }
     }
 }
@@ -2063,6 +2147,7 @@ retry_count = 0
                 minor: 0,
                 nit: 0,
             }),
+            None,
         )?;
         ensure!(summary.format == MachineBlockFormat::Toml);
         ensure!(summary.findings == 1);
@@ -2075,6 +2160,7 @@ retry_count = 0
             VALID_CHILD_JSON,
             ReportValidationKind::ChildProofPacket,
             None,
+            None,
         )?;
         ensure!(summary.format == MachineBlockFormat::Json);
         Ok(())
@@ -2083,9 +2169,12 @@ retry_count = 0
     #[test]
     fn yaml_machine_block_fails() -> anyhow::Result<()> {
         let markdown = VALID_CHILD_TOML.replacen("```toml", "```yaml", 1);
-        let Err(err) =
-            validate_report_markdown(&markdown, ReportValidationKind::ChildProofPacket, None)
-        else {
+        let Err(err) = validate_report_markdown(
+            &markdown,
+            ReportValidationKind::ChildProofPacket,
+            None,
+            None,
+        ) else {
             return Err(anyhow::anyhow!("yaml should fail"));
         };
         ensure!(err.to_string().contains("unsupported_format"));
@@ -2095,9 +2184,12 @@ retry_count = 0
     #[test]
     fn missing_confidence_fails() -> anyhow::Result<()> {
         let markdown = VALID_CHILD_TOML.replace("confidence_score = 90\n", "");
-        let Err(err) =
-            validate_report_markdown(&markdown, ReportValidationKind::ChildProofPacket, None)
-        else {
+        let Err(err) = validate_report_markdown(
+            &markdown,
+            ReportValidationKind::ChildProofPacket,
+            None,
+            None,
+        ) else {
             return Err(anyhow::anyhow!("missing confidence should fail"));
         };
         ensure!(err.to_string().contains("parse child toml machine block"));
@@ -2115,6 +2207,7 @@ retry_count = 0
                 minor: 0,
                 nit: 0,
             }),
+            None,
         )?;
         ensure!(summary.findings == 1);
         Ok(())
@@ -2131,9 +2224,50 @@ retry_count = 0
                 minor: 0,
                 nit: 0,
             }),
+            None,
         )?;
         ensure!(summary.format == MachineBlockFormat::Json);
         ensure!(summary.findings == 1);
+        Ok(())
+    }
+
+    #[test]
+    fn child_identity_mismatch_fails() -> anyhow::Result<()> {
+        let expected_identity = ReportIdentityExpectation {
+            reviewer_id: "cafebabe".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+        };
+        let Err(err) = validate_report_markdown(
+            VALID_CHILD_TOML,
+            ReportValidationKind::ChildProofPacket,
+            None,
+            Some(&expected_identity),
+        ) else {
+            return Err(anyhow::anyhow!("identity mismatch should fail"));
+        };
+        ensure!(err.to_string().contains("identity_mismatch"));
+        ensure!(err.to_string().contains("child packet reviewer_id"));
+        Ok(())
+    }
+
+    #[test]
+    fn parent_identity_mismatch_fails() -> anyhow::Result<()> {
+        let expected_identity = ReportIdentityExpectation {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/feature".to_string(),
+        };
+        let Err(err) = validate_report_markdown(
+            VALID_PARENT_TOML,
+            ReportValidationKind::ParentReviewReport,
+            None,
+            Some(&expected_identity),
+        ) else {
+            return Err(anyhow::anyhow!("identity mismatch should fail"));
+        };
+        ensure!(err.to_string().contains("identity_mismatch"));
+        ensure!(err.to_string().contains("parent report target_ref"));
         Ok(())
     }
 
@@ -2148,6 +2282,7 @@ retry_count = 0
                 minor: 0,
                 nit: 0,
             }),
+            None,
         ) else {
             return Err(anyhow::anyhow!("count mismatch should fail"));
         };

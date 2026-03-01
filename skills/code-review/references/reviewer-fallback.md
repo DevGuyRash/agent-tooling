@@ -175,7 +175,9 @@ Finalize artifact rules:
 You SHALL NOT skip finalization. The review is incomplete until `mpcr reviewer finalize` succeeds.
 
 Artifact cleanup:
-- AFTER finalize succeeds, you SHALL delete `.local/tmp/` if it exists: `find .local/tmp -delete 2>/dev/null || true`
+- AFTER finalize succeeds, you SHALL delete `.local/tmp/` if it exists:
+  - POSIX: `rm -rf .local/tmp/`
+  - PowerShell: `Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue`
 - You SHALL NOT leave report drafts, dispatch prompts, or packet files in the worktree.
 
 ## Overengineering Guardrails (`OVERENGINEERING_GUARD`)
@@ -252,4 +254,3 @@ You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in th
 
 ## Placement
 Place the ship-readiness verdict as the FIRST section of the report, immediately after the metadata header.
-
