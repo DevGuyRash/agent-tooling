@@ -6,6 +6,17 @@ title = "Compact Report Template"
 content = """
 # Code Review Report
 
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "<reviewer_id>"
+session_id = "<session_id>"
+target_ref = "<branch/PR/commit ref>"
+verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+# Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
+# [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+```
+
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
 **Target:** <branch/PR/commit ref>
 **Reviewer:** <reviewer_id>
@@ -44,6 +55,17 @@ content = """
 title = "Standard Report Template"
 content = """
 # Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "<reviewer_id>"
+session_id = "<session_id>"
+target_ref = "<branch/PR/commit ref>"
+verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+# Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
+# [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+```
 
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
 **Target:** <branch/PR/commit ref>
@@ -101,6 +123,17 @@ For each In-scope domain where no issues found:
 title = "Full UACRP Report Template"
 content = """
 # Universal Adversarial Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "<reviewer_id>"
+session_id = "<session_id>"
+target_ref = "<branch/PR/commit ref>"
+verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+# Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
+# [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+```
 
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
 **Target:** <branch/PR/commit ref>

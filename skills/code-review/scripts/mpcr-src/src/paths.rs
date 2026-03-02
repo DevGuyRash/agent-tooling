@@ -11,9 +11,9 @@ const MAX_REF_LEN: usize = 64;
 #[derive(Debug, Clone)]
 /// Resolved paths for a single session date under a given repo root.
 pub struct SessionPaths {
-    /// The session directory (contains `_session.json`, lock file, and report markdown).
+    /// The session directory (contains `_session.toml`, lock file, and report markdown).
     pub session_dir: PathBuf,
-    /// The full path to `_session.json` within [`SessionPaths::session_dir`].
+    /// The full path to `_session.toml` within [`SessionPaths::session_dir`].
     pub session_file: PathBuf,
 }
 
@@ -26,7 +26,7 @@ pub fn session_paths(repo_root: &Path, session_date: Date) -> SessionPaths {
         .join("reports")
         .join("code_reviews")
         .join(date);
-    let session_file = session_dir.join("_session.json");
+    let session_file = session_dir.join("_session.toml");
     SessionPaths {
         session_dir,
         session_file,
@@ -73,7 +73,7 @@ mod tests {
         ensure!(paths
             .session_dir
             .ends_with(Path::new(".local/reports/code_reviews/2026-01-11")));
-        ensure!(paths.session_file == paths.session_dir.join("_session.json"));
+        ensure!(paths.session_file == paths.session_dir.join("_session.toml"));
 
         ensure!(sanitize_ref("refs/heads/main") == "refs_heads_main");
         ensure!(sanitize_ref("___") == "ref");

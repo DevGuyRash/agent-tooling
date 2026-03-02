@@ -1,10 +1,16 @@
 //! End-to-end CLI tests for `mpcr`.
+#![allow(
+    clippy::bool_to_int_with_if,
+    clippy::format_push_string,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 
 use anyhow::ensure;
 use mpcr::paths;
 use mpcr::session::{
-    InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict, ReviewerStatus,
-    SessionFile, SessionNote, SeverityCounts,
+    load_session, InitiatorStatus, NoteRole, NoteType, ReviewEntry, ReviewPhase, ReviewVerdict,
+    ReviewerStatus, SessionFile, SessionLocator, SessionNote, SeverityCounts,
 };
 use serde_json::Value;
 use std::fs;
@@ -50,7 +56,19 @@ fn json_is_null_or_missing(value: &Value, key: &str) -> bool {
 fn write_session_file(session_dir: &Path, session: &SessionFile) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(session_dir)?;
     let path = session_dir.join("_session.json");
-    let body = serde_json::to_string_pretty(session)? + "\n";
+    let mut body = serde_json::to_value(session)?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("session payload must be an object"))?;
+    object.insert(
+        "schema_version".to_string(),
+        Value::String("1.2.0".to_string()),
+    );
+    object.insert(
+        "storage_format".to_string(),
+        Value::String("json_fallback".to_string()),
+    );
+    let body = serde_json::to_string_pretty(&body)? + "\n";
     fs::write(&path, body)?;
     Ok(path)
 }
@@ -128,7 +146,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
     };
 
     SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: vec![
@@ -143,7 +161,7 @@ fn sample_session(session_dir: &Path) -> SessionFile {
 
 fn empty_session(session_dir: &Path) -> SessionFile {
     SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: Vec::new(),
@@ -152,9 +170,302 @@ fn empty_session(session_dir: &Path) -> SessionFile {
     }
 }
 
+fn findings_toml(
+    counts: SeverityCounts,
+    source_ref: &str,
+    prefix: &str,
+) -> (String, Vec<String>, usize) {
+    let mut body = String::new();
+    let mut ids = Vec::new();
+    let mut total = 0usize;
+    for (label, count) in [
+        ("BLOCKER", counts.blocker),
+        ("MAJOR", counts.major),
+        ("MINOR", counts.minor),
+        ("NIT", counts.nit),
+    ] {
+        for _ in 0..count {
+            total += 1;
+            let id = format!("{prefix}{total}");
+            ids.push(id.clone());
+            body.push_str(&format!(
+                r#"
+[[merged_findings]]
+id = "{id}"
+severity = "{label}"
+anchor = "src/lib.rs:{line}"
+claim = "Invariant {id} should hold."
+disproof = "Concrete scenario {id} breaks the invariant."
+evidence = "Trace for {id} reaches the failing branch."
+recommendation = "Apply fix for {id}."
+verification = "Add regression coverage for {id}."
+source_packets = ["{source_ref}"]
+confidence_label = "HIGH"
+confidence_score = 90
+"#,
+                line = 10 + total,
+            ));
+        }
+    }
+    (body, ids, total)
+}
+
+fn valid_parent_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    counts: SeverityCounts,
+) -> String {
+    let source_ref = format!("child:feedface:{session_id}");
+    let (merged_findings, ids, total) = findings_toml(counts.clone(), &source_ref, "MF");
+    let defended_summary = if total == 0 {
+        format!(
+            r#"
+[[defended_summary]]
+theorem_id = "T1"
+source_packets = ["{source_ref}"]
+summary = "Cross-cutting invariants held during synthesis."
+confidence_label = "MEDIUM"
+confidence_score = 68
+"#
+        )
+    } else {
+        String::new()
+    };
+    let findings_line = if ids.is_empty() {
+        "- None."
+    } else {
+        "- Synthesized findings remain open."
+    };
+    format!(
+        r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "REQUEST_CHANGES"
+
+[counts]
+blocker = {blocker}
+major = {major}
+minor = {minor}
+nit = {nit}
+
+[ship_readiness]
+verdict = "SHIP_WITH_FIXES"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "CONDITIONAL"
+notes = "Open findings still require action."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No direct safety regression was confirmed."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "The fix scope remains proportionate."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "CONDITIONAL"
+notes = "Coverage follow-up may still be required."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "CONDITIONAL"
+notes = "One acceptance criterion remains fix-dependent."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "{source_ref}"
+{merged_findings}
+{defended_summary}
+[[residual_risks]]
+area = "Runtime parity"
+gap = "Production traffic replay was not run."
+impact = "Some environment-specific behavior may still differ."
+next_action = "Run staging validation."
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** SHIP_WITH_FIXES
+
+## Findings
+{findings_line}
+
+## Defended Proofs
+- Cross-cutting invariants were synthesized with confidence.
+
+## Residual Risk
+- Runtime parity remains unverified.
+"#,
+        blocker = counts.blocker,
+        major = counts.major,
+        minor = counts.minor,
+        nit = counts.nit,
+    )
+}
+
+fn valid_child_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    counts: SeverityCounts,
+) -> String {
+    let findings = if counts.blocker + counts.major + counts.minor + counts.nit == 0 {
+        String::new()
+    } else {
+        r#"
+[[findings]]
+id = "F1"
+theorem_id = "T1"
+domain = "Architecture"
+severity = "MAJOR"
+anchor = "src/lib.rs:10"
+claim = "The abstraction should preserve invariant T1."
+disproof = "A concrete scenario violates the invariant."
+evidence = "Trace reaches the failing branch."
+recommendation = "Inline the extra layer."
+verification = "Add regression coverage."
+confidence_label = "HIGH"
+confidence_score = 88
+"#
+        .to_string()
+    };
+    let finding_count = if counts.blocker + counts.major + counts.minor + counts.nit == 0 {
+        0
+    } else {
+        1
+    };
+    let defended_count = 1;
+    let overall_verdict = if finding_count == 0 {
+        "APPROVE"
+    } else {
+        "REQUEST_CHANGES"
+    };
+    format!(
+        r#"# Proof Packet
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "child_proof_packet"
+role_slug = "architecture-critic"
+role_title = "Architecture Critic"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+overall_verdict = "{overall_verdict}"
+overall_confidence_label = "HIGH"
+overall_confidence_score = 90
+
+[coverage]
+files_reviewed = ["src/lib.rs"]
+domains_in_scope = ["Architecture"]
+domains_out_of_scope = []
+tests_run = []
+tests_not_run_reason = "No focused tests were available."
+limitations = ["No runtime benchmark was executed."]
+
+[[domain_ledger]]
+domain = "Architecture"
+scope = "IN_SCOPE"
+rationale = "The change introduces abstraction boundaries."
+theorems = 2
+disproofs = 2
+findings = {finding_count}
+defended = {defended_count}
+
+[[theorems]]
+id = "T1"
+domain = "Architecture"
+claim = "The new abstraction keeps control flow obvious."
+anchors = ["src/lib.rs:10"]
+
+[[theorems]]
+id = "T2"
+domain = "Architecture"
+claim = "The new abstraction is justified by present needs."
+anchors = ["src/lib.rs:22"]
+
+[[disproof_attempts]]
+id = "D1"
+theorem_id = "T1"
+scenario = "Trace the common-path call graph."
+result = "{first_result}"
+evidence = "Common path requires additional indirection."
+
+[[disproof_attempts]]
+id = "D2"
+theorem_id = "T2"
+scenario = "Check for a second concrete consumer."
+result = "DEFENDED"
+evidence = "The abstraction supports two call sites."
+{findings}
+[[defended_proofs]]
+theorem_id = "{defended_theorem}"
+anchor = "src/lib.rs:22"
+disproof_attempt = "Checked for a second concrete consumer."
+outcome = "Defended"
+confidence_label = "MEDIUM"
+confidence_score = 68
+rationale = "Current call sites justify the abstraction."
+
+[[residual_risks]]
+area = "Future simplification"
+gap = "The abstraction could become stale after follow-up refactors."
+impact = "Maintainability may degrade over time."
+next_action = "Re-evaluate after the next API change."
+```
+
+## Proof Packet: Architecture Critic
+
+### Domain Ledger
+| Domain | Scope | Theorems | Disproofs | Findings | Defended |
+|--------|-------|----------|-----------|----------|----------|
+| Architecture | In-scope | 2 | 2 | {finding_count} | {defended_count} |
+
+### Coverage
+- Files reviewed: `src/lib.rs`
+- Domains covered: Architecture
+
+### Findings
+- Structured findings are included in the machine block.
+
+### Defended Proofs
+- Structured defended proofs are included in the machine block.
+
+### Residual Risk
+- The abstraction should be re-evaluated after the next API change.
+
+OUTPUT_COMPLETE
+"#,
+        first_result = if finding_count == 0 {
+            "DEFENDED"
+        } else {
+            "FINDING"
+        },
+        defended_theorem = if finding_count == 0 { "T1" } else { "T2" },
+    )
+}
+
 fn session_without_notes(session_dir: &Path) -> SessionFile {
     SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: session_dir.to_string_lossy().to_string(),
         reviewers: vec!["deadbeef".to_string()],
@@ -234,8 +545,28 @@ fn run_cmd_failure(args: &[&str]) -> anyhow::Result<String> {
 }
 
 fn read_session_json(session_dir: &Path) -> anyhow::Result<Value> {
-    let raw = fs::read_to_string(session_dir.join("_session.json"))?;
-    Ok(serde_json::from_str(&raw)?)
+    let session = load_session(&SessionLocator::new(session_dir.to_path_buf()))?;
+    Ok(serde_json::to_value(session)?)
+}
+
+fn read_session_raw_json(session_dir: &Path) -> anyhow::Result<Value> {
+    let toml_path = session_dir.join("_session.toml");
+    if toml_path.exists() {
+        let raw = fs::read_to_string(toml_path)?;
+        let value: toml::Value = toml::from_str(&raw)?;
+        return Ok(serde_json::to_value(value)?);
+    }
+
+    let json_path = session_dir.join("_session.json");
+    if json_path.exists() {
+        let raw = fs::read_to_string(json_path)?;
+        return Ok(serde_json::from_str(&raw)?);
+    }
+
+    Err(anyhow::anyhow!(
+        "session artifact missing under {}",
+        session_dir.display()
+    ))
 }
 
 fn find_review<'a>(
@@ -258,6 +589,9 @@ fn find_review<'a>(
             if is_match {
                 return Some(review);
             }
+        }
+
+        for review in reviews {
             if let Some(children) = review.get("child_reviews").and_then(Value::as_array) {
                 if let Some(found) = find_review_recursive(children, reviewer_id, session_id) {
                     return Some(found);
@@ -477,7 +811,7 @@ fn reports_closed_include_leaf_children_for_applicator_ingestion() -> anyhow::Re
     write_session_file(
         &session_dir,
         &SessionFile {
-            schema_version: "1.1.0".to_string(),
+            schema_version: "1.2.0".to_string(),
             session_date: "2026-01-11".to_string(),
             repo_root: session_dir.to_string_lossy().to_string(),
             reviewers: vec![
@@ -557,7 +891,7 @@ fn lock_acquire_release_creates_and_removes_file() -> anyhow::Result<()> {
         "--max-retries",
         "0",
     ])?;
-    let lock_file = session_dir.join("_session.json.lock");
+    let lock_file = session_dir.join("_session.toml.lock");
     ensure!(lock_file.exists());
 
     run_cmd_json(&[
@@ -583,7 +917,7 @@ fn session_show_reads_session_file() -> anyhow::Result<()> {
 
     let value = run_cmd_json(&["session", "show", "--session-dir", &session_dir_str])?;
     ensure!(json_array(&value, "reviews")?.len() == 3);
-    ensure!(json_str(&value, "schema_version")? == "1.1.0");
+    ensure!(json_str(&value, "schema_version")? == "1.2.0");
     Ok(())
 }
 
@@ -604,7 +938,7 @@ fn session_show_resolves_session_dir_from_repo_root() -> anyhow::Result<()> {
         "--date",
         "2026-01-11",
     ])?;
-    ensure!(json_str(&value, "schema_version")? == "1.1.0");
+    ensure!(json_str(&value, "schema_version")? == "1.2.0");
     ensure!(json_array(&value, "reviews")?.len() == 3);
     Ok(())
 }
@@ -633,7 +967,7 @@ fn reviewer_register_creates_session() -> anyhow::Result<()> {
     let session_file = json_str(&out, "session_file")?;
 
     ensure!(session_dir.ends_with(".local/reports/code_reviews/2026-01-11"));
-    ensure!(session_file.ends_with("_session.json"));
+    ensure!(session_file.ends_with("_session.toml"));
 
     let session = read_session_json(Path::new(session_dir))?;
     let entry = find_review(&session, "deadbeef", "sess0001")?;
@@ -851,7 +1185,20 @@ fn reviewer_finalize_writes_report_and_updates_entry() -> anyhow::Result<()> {
     let session_dir = json_str(&out, "session_dir")?.to_string();
 
     let report_file = repo_root.path().join("report.md");
-    fs::write(&report_file, "looks good")?;
+    fs::write(
+        &report_file,
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 2,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
 
     let result = run_cmd_json(&[
         "reviewer",
@@ -875,7 +1222,7 @@ fn reviewer_finalize_writes_report_and_updates_entry() -> anyhow::Result<()> {
     ensure!(Path::new(report_path).exists());
     ensure!(report_path.ends_with(report_name));
     let contents = fs::read_to_string(report_path)?;
-    ensure!(contents.contains("looks good"));
+    ensure!(contents.contains("artifact_kind = \"parent_review_report\""));
     ensure!(
         !report_file.exists(),
         "source report should be moved by default"
@@ -914,7 +1261,15 @@ fn reviewer_finalize_copy_report_input_preserves_source() -> anyhow::Result<()> 
     let session_dir = json_str(&out, "session_dir")?.to_string();
 
     let source_report = repo_root.path().join("review.md");
-    fs::write(&source_report, "copy mode body")?;
+    fs::write(
+        &source_report,
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
 
     let result = run_cmd_json(&[
         "reviewer",
@@ -985,7 +1340,15 @@ fn reviewer_finalize_reads_report_from_stdin() -> anyhow::Result<()> {
         .stdin
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("stdin unavailable"))?;
-    stdin.write_all(b"stdin report body")?;
+    stdin.write_all(
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        )
+        .as_bytes(),
+    )?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(anyhow::anyhow!(
@@ -997,7 +1360,44 @@ fn reviewer_finalize_reads_report_from_stdin() -> anyhow::Result<()> {
 
     let report_path = json_str(&result, "report_path")?;
     let contents = fs::read_to_string(report_path)?;
-    ensure!(contents.contains("stdin report body"));
+    ensure!(contents.contains("artifact_kind = \"parent_review_report\""));
+    Ok(())
+}
+
+#[test]
+fn reviewer_validate_report_allows_omitting_expected_counts() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let report_path = tmp.path().join("child.md");
+    fs::write(
+        &report_path,
+        valid_child_report(
+            "facefeed",
+            "sess4321",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let report_path_str = report_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 report path"))?;
+
+    let summary = run_cmd_json(&[
+        "reviewer",
+        "validate-report",
+        "--kind",
+        "child-proof-packet",
+        "--report-file",
+        report_path_str,
+    ])?;
+    ensure!(
+        json_u64(&summary, "findings")? == 1,
+        "expected one finding in validation summary"
+    );
     Ok(())
 }
 
@@ -1047,12 +1447,13 @@ fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
         "export MPCR_SESSION_DIR='{expected_session_dir}'\n"
     )));
     let expected_session_file = Path::new(&expected_session_dir)
-        .join("_session.json")
+        .join("_session.toml")
         .to_string_lossy()
         .to_string();
     ensure!(stdout.contains(&format!(
         "export MPCR_SESSION_FILE='{expected_session_file}'\n"
     )));
+    ensure!(stdout.contains("export MPCR_SESSION_FORMAT='toml_primary'\n"));
     Ok(())
 }
 
@@ -1323,9 +1724,10 @@ fn reviewer_register_print_env_json_outputs_expected_vars() -> anyhow::Result<()
     ensure!(json_str(&out, "MPCR_TARGET_REF")? == "refs/heads/main");
     let session_dir = json_str(&out, "MPCR_SESSION_DIR")?.to_string();
     let session_file = json_str(&out, "MPCR_SESSION_FILE")?.to_string();
+    ensure!(json_str(&out, "MPCR_SESSION_FORMAT")? == "toml_primary");
     ensure!(
         Path::new(&session_dir)
-            .join("_session.json")
+            .join("_session.toml")
             .to_string_lossy()
             == session_file
     );
@@ -1795,7 +2197,7 @@ fn session_file_stores_children_nested_under_parent_only() -> anyhow::Result<()>
     ])?;
     let children = json_array(&spawned, "children")?;
 
-    let session = read_session_json(Path::new(&session_dir))?;
+    let session = read_session_raw_json(Path::new(&session_dir))?;
     let reviews = json_array(&session, "reviews")?;
     ensure!(reviews.len() == 1);
 
@@ -1880,7 +2282,15 @@ fn child_review_updates_are_embedded_under_parent() -> anyhow::Result<()> {
     ensure!(json_str(child_summary, "current_phase")? == "INGESTION");
 
     let source_report = repo_root.path().join("child.md");
-    fs::write(&source_report, "child report")?;
+    fs::write(
+        &source_report,
+        valid_parent_report(
+            child_id,
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     run_cmd_json(&[
         "reviewer",
         "finalize",
@@ -2041,7 +2451,20 @@ fn reviewer_finalize_auto_closes_open_children() -> anyhow::Result<()> {
     ])?;
 
     let report_file = repo_root.path().join("parent.md");
-    fs::write(&report_file, "parent body")?;
+    fs::write(
+        &report_file,
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
     run_cmd_json(&[
         "reviewer",
         "finalize",
@@ -2120,7 +2543,15 @@ fn reviewer_finalize_fails_with_no_auto_close_children() -> anyhow::Result<()> {
     ])?;
 
     let report_file = repo_root.path().join("parent.md");
-    fs::write(&report_file, "parent body")?;
+    fs::write(
+        &report_file,
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     let reports_before = fs::read_dir(&session_dir)?
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
@@ -2268,15 +2699,17 @@ fn applicator_note_rejects_reviewer_note_types() -> anyhow::Result<()> {
 }
 
 #[test]
-fn worker_dispatch_role_blocks_non_progress_commands() -> anyhow::Result<()> {
+fn worker_dispatch_role_allows_id_commands() -> anyhow::Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
         .arg("id")
         .arg("id8")
         .env("MPCR_DISPATCH_ROLE", "security-adversary")
         .output()?;
-    ensure!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    ensure!(stderr.contains("MPCR_DISPATCH_ROLE=security-adversary"));
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run id commands: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
@@ -2364,7 +2797,15 @@ fn reviewer_complete_child_finalizes_and_attaches_proof_note() -> anyhow::Result
     let child_id = json_str(child, "reviewer_id")?;
 
     let child_report = repo_root.path().join("child.md");
-    fs::write(&child_report, "child report body")?;
+    fs::write(
+        &child_report,
+        valid_child_report(
+            child_id,
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     run_cmd_json(&[
         "reviewer",
         "complete-child",
@@ -2426,7 +2867,15 @@ fn reviewer_complete_child_fails_for_non_child_entry() -> anyhow::Result<()> {
     let session_dir = json_str(&parent, "session_dir")?.to_string();
 
     let report_file = repo_root.path().join("parent.md");
-    fs::write(&report_file, "not a child")?;
+    fs::write(
+        &report_file,
+        valid_child_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     let stderr = run_cmd_failure(&[
         "reviewer",
         "complete-child",
@@ -2450,7 +2899,7 @@ fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let session_dir = repo_root.path().join("session");
     let session = SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: repo_root.path().to_string_lossy().to_string(),
         reviewers: vec!["cafebabe".to_string()],
@@ -2477,7 +2926,15 @@ fn reviewer_complete_child_fails_when_parent_missing() -> anyhow::Result<()> {
     write_session_file(&session_dir, &session)?;
 
     let report_file = repo_root.path().join("child.md");
-    fs::write(&report_file, "orphan child report")?;
+    fs::write(
+        &report_file,
+        valid_child_report(
+            "cafebabe",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     let session_dir_str = session_dir.to_string_lossy().to_string();
     let stderr = run_cmd_failure(&[
         "reviewer",
@@ -2727,8 +3184,8 @@ fn applicator_set_status_updates_grandchild_without_top_level_duplicates() -> an
         "RECEIVED",
     ])?;
 
-    let session = read_session_json(Path::new(&session_dir))?;
-    let top_reviews = json_array(&session, "reviews")?;
+    let raw_session = read_session_raw_json(Path::new(&session_dir))?;
+    let top_reviews = json_array(&raw_session, "reviews")?;
     ensure!(top_reviews.len() == 1);
     ensure!(!top_reviews
         .iter()
@@ -2737,6 +3194,7 @@ fn applicator_set_status_updates_grandchild_without_top_level_duplicates() -> an
         .iter()
         .any(|entry| json_str(entry, "reviewer_id").ok() == Some(grandchild_id)));
 
+    let session = read_session_json(Path::new(&session_dir))?;
     let grandchild_entry = find_review(&session, grandchild_id, "sess0001")?;
     ensure!(json_str(grandchild_entry, "initiator_status")? == "RECEIVED");
     let child_entry = find_review(&session, &child_id, "sess0001")?;
@@ -2819,8 +3277,8 @@ fn applicator_note_updates_grandchild_without_top_level_duplicates() -> anyhow::
         "child fix applied",
     ])?;
 
-    let session = read_session_json(Path::new(&session_dir))?;
-    let top_reviews = json_array(&session, "reviews")?;
+    let raw_session = read_session_raw_json(Path::new(&session_dir))?;
+    let top_reviews = json_array(&raw_session, "reviews")?;
     ensure!(top_reviews.len() == 1);
     ensure!(!top_reviews
         .iter()
@@ -2829,6 +3287,7 @@ fn applicator_note_updates_grandchild_without_top_level_duplicates() -> anyhow::
         .iter()
         .any(|entry| json_str(entry, "reviewer_id").ok() == Some(grandchild_id)));
 
+    let session = read_session_json(Path::new(&session_dir))?;
     let grandchild_entry = find_review(&session, grandchild_id, "sess0001")?;
     let notes = json_array(grandchild_entry, "notes")?;
     ensure!(notes.len() == 1);
@@ -2841,7 +3300,7 @@ fn applicator_note_updates_grandchild_without_top_level_duplicates() -> anyhow::
 
     let child_entry = find_review(&session, &child_id, "sess0001")?;
     let nested_grandchild = find_child_review(child_entry, grandchild_id, "sess0001")?;
-    ensure!(json_array(nested_grandchild, "notes")?.len() == 1);
+    ensure!(json_u64(nested_grandchild, "notes_count")? == 1);
     Ok(())
 }
 
@@ -2936,7 +3395,7 @@ fn reports_invalid_json() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let session_dir = dir.path().join("session");
     fs::create_dir_all(&session_dir)?;
-    fs::write(session_dir.join("_session.json"), "{not json")?;
+    fs::write(session_dir.join("_session.toml"), "schema_version = [")?;
     let stderr = run_reports_failure(&session_dir, &["session", "reports", "open"])?;
     ensure!(!stderr.trim().is_empty());
     Ok(())
@@ -3311,6 +3770,25 @@ fn protocol_orchestrator_json() -> anyhow::Result<()> {
 }
 
 #[test]
+fn protocol_orchestrator_output_fits_context_budget() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(["protocol", "orchestrator"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "protocol orchestrator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    ensure!(
+        stdout.len() <= 5000,
+        "protocol orchestrator output exceeded 5000-byte budget: {}",
+        stdout.len()
+    );
+    Ok(())
+}
+
+#[test]
 fn protocol_domains_json() -> anyhow::Result<()> {
     let out = run_protocol(&["protocol", "domains"])?;
     let content = json_str(&out, "content")?;
@@ -3358,7 +3836,7 @@ fn protocol_report_template_unknown_scale_fails() -> anyhow::Result<()> {
 
 #[test]
 fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
-    for role in [
+    let worker_roles = [
         "architecture-critic",
         "contract-guardian",
         "data-integrity-prover",
@@ -3384,7 +3862,13 @@ fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
         "complexity-analyst",
         "overengineering-guard",
         "ship-readiness-assessor",
-    ] {
+        "scope-creep-reviewer",
+        "scope-mapper-reviewer",
+        "scope-mapper-applicator",
+        "convergence-planner",
+        "staleness-auditor",
+    ];
+    for role in worker_roles {
         let out = run_protocol(&["protocol", "dispatch", "--role", role])?;
         let content = json_str(&out, "content")?;
         ensure!(!content.is_empty(), "empty dispatch content for {role}");
@@ -3409,13 +3893,33 @@ fn protocol_dispatch_all_roles() -> anyhow::Result<()> {
             "dispatch content for {role} missing MPCR_SESSION_DIR binding"
         );
     }
+    // Explorer is a context-only role — no identity bindings or Proof Packet required.
+    let explorer_out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
+    let explorer_content = json_str(&explorer_out, "content")?;
+    ensure!(!explorer_content.is_empty(), "empty dispatch for explorer");
     Ok(())
 }
 
 #[test]
 fn protocol_dispatch_unknown_role_fails() -> anyhow::Result<()> {
     let stderr = run_protocol_failure(&["protocol", "dispatch", "--role", "NONEXISTENT"])?;
-    ensure!(stderr.contains("unknown dispatch role"));
+    ensure!(stderr.contains("error: unknown dispatch role"));
+    ensure!(stderr.contains("hint: valid roles:"));
+    ensure!(stderr.contains("hint: run `mpcr protocol dispatch-list`"));
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_removed_stale_roles_fail() -> anyhow::Result<()> {
+    for role in [
+        "stale-docs-auditor",
+        "stale-examples-auditor",
+        "stale-references-auditor",
+    ] {
+        let stderr = run_protocol_failure(&["protocol", "dispatch", "--role", role])?;
+        ensure!(stderr.contains("error: unknown dispatch role"));
+        ensure!(stderr.contains("hint: run `mpcr protocol dispatch-list`"));
+    }
     Ok(())
 }
 
@@ -3427,6 +3931,18 @@ fn protocol_list_json() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("list output was not an array"))?;
     // Includes reviewer/applicator/session phases plus orchestrator, fullcycle, domains, templates, and dispatch roles.
     ensure!(entries.len() >= 40, "expected >= 40, got {}", entries.len());
+    let dispatch_entry = entries
+        .iter()
+        .find(|e| e.get("category") == Some(&Value::String("dispatch".to_string())))
+        .ok_or_else(|| anyhow::anyhow!("missing dispatch entry in protocol list"))?;
+    let key = dispatch_entry
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("dispatch entry key missing"))?;
+    ensure!(
+        !key.contains('_'),
+        "dispatch discovery key must use canonical hyphenated slug, got {key}"
+    );
     Ok(())
 }
 
@@ -4025,7 +4541,15 @@ fn spawn_children_rejects_terminal_parent() -> anyhow::Result<()> {
     let session_dir = json_str(&parent, "session_dir")?.to_string();
 
     let report_path = repo_root.path().join("report.md");
-    std::fs::write(&report_path, "# Test Report")?;
+    std::fs::write(
+        &report_path,
+        valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        ),
+    )?;
     let report_path_str = report_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("non-UTF-8 report path"))?;
@@ -4198,5 +4722,311 @@ fn cleanup_include_children_does_not_cross_session_boundary() -> anyhow::Result<
             .any(|id| id == "ch1ld002"),
         "child from sess9999 should survive as nested child"
     );
+    Ok(())
+}
+
+// ── Tests for audit-driven changes ──────────────────────────────────────────
+
+#[test]
+fn protocol_invocation_aliases() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "invocation-aliases"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("code-review reviewer"));
+    ensure!(content.contains("Full-cycle"));
+    Ok(())
+}
+
+#[test]
+fn protocol_workflow_selection() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "workflow-selection"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Applicator mode"));
+    ensure!(content.contains("Reviewer mode"));
+    Ok(())
+}
+
+#[test]
+fn protocol_quality_gate() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "quality-gate"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Domain Ledger"));
+    ensure!(content.contains("Residual Risk"));
+    Ok(())
+}
+
+#[test]
+fn protocol_change_classification() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "change-classification"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Trivial"));
+    ensure!(content.contains("Medium"));
+    ensure!(content.contains("Large"));
+    Ok(())
+}
+
+#[test]
+fn protocol_scope_mapping() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "scope-mapping"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Scope Map"));
+    ensure!(content.contains("scope-mapper-reviewer"));
+    Ok(())
+}
+
+#[test]
+fn protocol_convergence_planning() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "convergence-planning"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("fixed point"));
+    ensure!(content.contains("convergence-planner"));
+    Ok(())
+}
+
+#[test]
+fn protocol_domains_includes_staleness_domain() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "domains"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(content.contains("Staleness"));
+    ensure!(content.contains("stale docs"));
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_list() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "dispatch-list"])?;
+    let roles = out
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("dispatch-list output was not an array"))?;
+    let role_strs: Vec<&str> = roles.iter().filter_map(|v| v.as_str()).collect();
+    ensure!(role_strs.contains(&"architecture-critic"));
+    ensure!(role_strs.contains(&"explorer"));
+    ensure!(role_strs.contains(&"security-adversary"));
+    ensure!(role_strs.contains(&"applicator-worker"));
+    ensure!(role_strs.contains(&"scope-creep-reviewer"));
+    ensure!(role_strs.contains(&"convergence-planner"));
+    ensure!(role_strs.contains(&"staleness-auditor"));
+    ensure!(!role_strs.contains(&"stale-docs-auditor"));
+    ensure!(
+        roles.len() >= 30,
+        "expected >= 30 roles, got {}",
+        roles.len()
+    );
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_list_json_is_compact_by_default() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(["protocol", "dispatch-list", "--json"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "dispatch-list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    ensure!(
+        !stdout.trim_end().contains('\n'),
+        "expected compact single-line JSON, got multi-line output:\n{stdout}"
+    );
+    let parsed: Value = serde_json::from_str(stdout.trim_end())?;
+    ensure!(parsed.is_array(), "dispatch-list json should be an array");
+    Ok(())
+}
+
+#[test]
+fn protocol_dispatch_explorer_no_proof_packet() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "dispatch", "--role", "explorer"])?;
+    let content = json_str(&out, "content")?;
+    ensure!(
+        !content.contains("## Proof Packet:"),
+        "explorer should not use Proof Packet output format"
+    );
+    ensure!(
+        content.contains("context only"),
+        "explorer should mention context-only role"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_guard_allows_protocol_commands() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", "/tmp")
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .args(["protocol", "list"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run protocol list: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_guard_allows_analyze_run() -> anyhow::Result<()> {
+    let fixture_dir = tempfile::tempdir()?;
+    let sample = fixture_dir.path().join("sample.rs");
+    let session_dir = fixture_dir.path().to_string_lossy().to_string();
+    fs::write(
+        &sample,
+        "fn sample() {\n    let x = 1;\n    if x > 0 { println!(\"ok\"); }\n}\n",
+    )?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", &session_dir)
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .arg("analyze")
+        .arg("run")
+        .arg(sample.to_string_lossy().to_string())
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "worker should be allowed to run analyze run: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn analyze_check_complexity_ignores_quoted_and_commented_control_tokens() -> anyhow::Result<()> {
+    let fixture_dir = tempfile::tempdir()?;
+    let sample = fixture_dir.path().join("sample.rs");
+    let mut src = String::from("fn helper() {\n");
+    for _ in 0..12 {
+        src.push_str("    let msg = \"if branch { switch }\"; // else if in comment\n");
+    }
+    src.push_str("}\n");
+    fs::write(&sample, src)?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "analyze",
+            "check",
+            "--name",
+            "complexity",
+            &sample.to_string_lossy(),
+            "--json",
+        ])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "analyze check complexity failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(
+        parsed
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "complexity-hotspots"),
+        "unexpected check output shape: {parsed}"
+    );
+    let hotspots = parsed
+        .get("complexity_hotspots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing complexity_hotspots array"))?;
+    ensure!(
+        hotspots.is_empty(),
+        "expected no complexity hotspots for quoted/comment-only branch markers, got: {hotspots:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_guard_blocks_register() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .env("MPCR_DISPATCH_ROLE", "architecture-critic")
+        .env("MPCR_SESSION_DIR", "/tmp")
+        .env("MPCR_REVIEWER_ID", "test1234")
+        .env("MPCR_SESSION_ID", "sess1234")
+        .args(["reviewer", "register", "--target-ref", "main"])
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "worker should NOT be allowed to run reviewer register"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(stderr.contains("restricts this executor"));
+    Ok(())
+}
+
+#[test]
+fn supplemental_phases_accepted() -> anyhow::Result<()> {
+    for phase in [
+        "OVERENGINEERING_GUARD",
+        "COMPLEXITY_ANALYSIS",
+        "SHIP_READINESS",
+        "COMPLETED",
+    ] {
+        let result = phase.parse::<ReviewPhase>();
+        ensure!(
+            result.is_ok(),
+            "ReviewPhase should accept {phase} but got: {:?}",
+            result.err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn launcher_files_keep_expected_line_endings_and_ps_compat_markers() -> anyhow::Result<()> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let scripts_dir = manifest_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("missing scripts dir parent"))?;
+
+    let posix_launcher = fs::read_to_string(scripts_dir.join("mpcr"))?;
+    ensure!(
+        !posix_launcher.contains('\r'),
+        "posix launcher should use LF only"
+    );
+
+    let powershell_launcher = fs::read_to_string(scripts_dir.join("mpcr.ps1"))?;
+    ensure!(
+        !powershell_launcher.contains('\r'),
+        "powershell launcher should use LF only"
+    );
+    ensure!(
+        powershell_launcher.contains("$PSVersionTable.PSEdition"),
+        "powershell launcher should use 5.1-compatible edition check"
+    );
+    ensure!(
+        !powershell_launcher.contains("$IsWindows"),
+        "powershell launcher should avoid PowerShell Core-only $IsWindows variable"
+    );
+
+    let cmd_launcher = fs::read_to_string(scripts_dir.join("mpcr.cmd"))?;
+    ensure!(
+        !cmd_launcher.contains('\r'),
+        "cmd launcher should use LF only"
+    );
+    ensure!(
+        cmd_launcher.contains("set \"BASH_EXIT=%ERRORLEVEL%\""),
+        "cmd launcher should capture bash exit code before fallback"
+    );
+    ensure!(
+        cmd_launcher.contains("if \"%BASH_EXIT%\"==\"0\" exit /b 0"),
+        "cmd launcher should only exit early when bash succeeds"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn protocol_files_use_lf_line_endings() -> anyhow::Result<()> {
+    let protocols_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("protocols");
+    for name in ["dispatch.toml", "session.toml"] {
+        let content = fs::read_to_string(protocols_dir.join(name))?;
+        ensure!(
+            !content.contains('\r'),
+            "protocol file should use LF-only line endings: {name}"
+        );
+    }
     Ok(())
 }

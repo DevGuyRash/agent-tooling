@@ -41,7 +41,7 @@ missing_docs = "warn"
 # Broad non-idiomatic coverage (warn-by-default groups). With `-D warnings`, these become errors.
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }   # strict + opinionated; expect to allow some lints
-nursery = { level = "warn", priority = -1 }    # experimental; cherry-pick or allow as needed
+nursery = { level = "warn", priority = -1 }    # experimental; cherry-pick or allow selectively
 cargo = { level = "warn", priority = -1 }
 
 # Explicit non-idiomatic bans (restriction-style lints)

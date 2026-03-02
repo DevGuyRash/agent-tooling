@@ -64,7 +64,12 @@ mpcr session cleanup --after 2026-01-01T00:00:00Z --before 2026-02-01T00:00:00Z 
 Child review agents sometimes leave scratch files in `.local/tmp/` (dispatch prompts, report templates, working files).
 These are NOT managed by `mpcr session cleanup`. To remove them:
 ```
+# POSIX
 rm -rf .local/tmp/
+
+# PowerShell
+Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue
 ```
-You SHALL confirm with the user before deleting `.local/tmp/` contents.
+WHEN the orchestrator owns the session (no other agent is active), it SHALL delete `.local/tmp/` automatically after finalize completes.
+WHEN running under a restrictive sandbox that blocks file deletion, log the leftover path and continue; do NOT fail the workflow.
 """

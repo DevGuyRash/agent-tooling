@@ -1,19 +1,170 @@
 //! Integration tests for `mpcr` session coordination primitives.
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 
 use anyhow::{bail, ensure};
 use mpcr::lock::{self, LockConfig};
+use mpcr::report_validation::ReportValidationKind;
 use mpcr::session::{
-    collect_reports, finalize_review, register_reviewer, set_initiator_status, FinalizeReportInput,
-    FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType, RegisterReviewerParams,
-    ReportsFilters, ReportsOptions, ReportsView, ReviewEntry, ReviewPhase, ReviewVerdict,
-    ReviewerStatus, SessionFile, SessionLocator, SessionNote, SetInitiatorStatusParams,
-    SeverityCounts,
+    collect_reports, finalize_review, load_session, register_reviewer, set_initiator_status,
+    FinalizeReportInput, FinalizeReviewParams, InitiatorStatus, NoteRole, NoteType,
+    RegisterReviewerParams, ReportsFilters, ReportsOptions, ReportsView, ReviewEntry, ReviewPhase,
+    ReviewVerdict, ReviewerStatus, SessionFile, SessionLocator, SessionNote,
+    SetInitiatorStatusParams, SeverityCounts,
 };
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+
+fn valid_parent_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    counts: SeverityCounts,
+) -> String {
+    let source_ref = format!("child:feedface:{session_id}");
+    let mut merged_findings = String::new();
+    let mut finding_total = 0u64;
+    for (severity, count) in [
+        ("BLOCKER", counts.blocker),
+        ("MAJOR", counts.major),
+        ("MINOR", counts.minor),
+        ("NIT", counts.nit),
+    ] {
+        for _ in 0..count {
+            finding_total += 1;
+            let line = 10 + finding_total;
+            let id = format!("MF{finding_total}");
+            merged_findings.push_str(&format!(
+                r#"
+[[merged_findings]]
+id = "{id}"
+severity = "{severity}"
+anchor = "src/lib.rs:{line}"
+claim = "Invariant {id} should hold."
+disproof = "Concrete scenario {id} breaks the invariant."
+evidence = "Trace for {id} reaches the failing branch."
+recommendation = "Apply fix for {id}."
+verification = "Add regression coverage for {id}."
+source_packets = ["{source_ref}"]
+confidence_label = "HIGH"
+confidence_score = 90
+"#
+            ));
+        }
+    }
+    let defended_summary = if finding_total == 0 {
+        format!(
+            r#"
+[[defended_summary]]
+theorem_id = "T1"
+source_packets = ["{source_ref}"]
+summary = "Cross-cutting invariants held during synthesis."
+confidence_label = "MEDIUM"
+confidence_score = 68
+"#
+        )
+    } else {
+        String::new()
+    };
+    let findings_line = if finding_total == 0 {
+        "- None."
+    } else {
+        "- Synthesized findings remain open."
+    };
+
+    format!(
+        r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "REQUEST_CHANGES"
+
+[counts]
+blocker = {blocker}
+major = {major}
+minor = {minor}
+nit = {nit}
+
+[ship_readiness]
+verdict = "SHIP_WITH_FIXES"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "CONDITIONAL"
+notes = "One major finding remains open."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No direct safety regressions were confirmed."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "No material complexity increase is required."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "CONDITIONAL"
+notes = "A regression test is still needed."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "CONDITIONAL"
+notes = "One acceptance criterion still depends on the fix."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "child:feedface:{session_id}"
+{merged_findings}
+{defended_summary}
+
+[[residual_risks]]
+area = "Runtime parity"
+gap = "No production traffic replay."
+impact = "Integration behavior may still differ."
+next_action = "Run staging verification."
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** SHIP_WITH_FIXES
+
+## Findings
+{findings_line}
+
+## Defended Proofs
+- Token redaction held across tested paths.
+
+## Residual Risk
+- Runtime parity remains unverified.
+"#,
+        blocker = counts.blocker,
+        major = counts.major,
+        minor = counts.minor,
+        nit = counts.nit,
+        merged_findings = merged_findings.trim_end(),
+        defended_summary = defended_summary.trim_end(),
+        findings_line = findings_line
+    )
+}
 
 #[test]
 fn id8_is_8_lower_hex_chars() -> anyhow::Result<()> {
@@ -93,8 +244,7 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
 
     ensure!(Path::new(&res.session_file).exists());
 
-    let raw = fs::read_to_string(session.session_file())?;
-    let session_json: SessionFile = serde_json::from_str(&raw)?;
+    let session_json = load_session(&session)?;
     ensure!(session_json.reviewers == vec![reviewer_id.clone()]);
     ensure!(session_json.reviews.len() == 1);
     let entry = session_json
@@ -116,7 +266,18 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
             minor: 2,
             nit: 3,
         },
-        report_input: FinalizeReportInput::Markdown("hello\n".to_string()),
+        report_input: FinalizeReportInput::Markdown(valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 2,
+                nit: 3,
+            },
+        )),
+        validation_kind: ReportValidationKind::ParentReviewReport,
         copy_input_report: false,
         auto_close_open_children: true,
         auto_close_children_status: ReviewerStatus::Cancelled,
@@ -129,8 +290,7 @@ fn register_and_finalize_writes_report_and_updates_session() -> anyhow::Result<(
             == ".local/reports/code_reviews/2026-01-11/12-34-56-789_refs_heads_main_deadbeef.md"
     );
 
-    let raw2 = fs::read_to_string(session.session_file())?;
-    let session_json2: SessionFile = serde_json::from_str(&raw2)?;
+    let session_json2 = load_session(&session)?;
     let entry = session_json2
         .reviews
         .first()
@@ -178,7 +338,13 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         session_id: "sess0001".to_string(),
         verdict: ReviewVerdict::Approve,
         counts: SeverityCounts::zero(),
-        report_input: FinalizeReportInput::Markdown("hello\n".to_string()),
+        report_input: FinalizeReportInput::Markdown(valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/main",
+            SeverityCounts::zero(),
+        )),
+        validation_kind: ReportValidationKind::ParentReviewReport,
         copy_input_report: false,
         auto_close_open_children: true,
         auto_close_children_status: ReviewerStatus::Cancelled,
@@ -196,8 +362,7 @@ fn register_reviewer_does_not_inherit_initiator_status_from_old_session() -> any
         now,
     })?;
 
-    let raw = fs::read_to_string(session.session_file())?;
-    let session_json: SessionFile = serde_json::from_str(&raw)?;
+    let session_json = load_session(&session)?;
     let entry = session_json
         .reviews
         .iter()
@@ -275,8 +440,7 @@ fn register_reviewer_is_idempotent_for_same_reviewer_and_session() -> anyhow::Re
         now,
     })?;
 
-    let raw = fs::read_to_string(session.session_file())?;
-    let session_json: SessionFile = serde_json::from_str(&raw)?;
+    let session_json = load_session(&session)?;
     ensure!(session_json.reviews.len() == 1);
     Ok(())
 }
@@ -355,7 +519,7 @@ fn reports_fixture(dir: &tempfile::TempDir) -> (SessionLocator, SessionFile) {
     };
 
     let session = SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: dir.path().to_string_lossy().to_string(),
         reviewers: vec![
@@ -381,7 +545,7 @@ fn reports_view_counts() -> anyhow::Result<()> {
         ReportsView::Open,
         ReportsFilters::default(),
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(open.total_reviews == 3);
     ensure!(open.matching_reviews == 2);
 
@@ -391,7 +555,7 @@ fn reports_view_counts() -> anyhow::Result<()> {
         ReportsView::Closed,
         ReportsFilters::default(),
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(closed.matching_reviews == 1);
 
     let in_progress = collect_reports(
@@ -400,7 +564,7 @@ fn reports_view_counts() -> anyhow::Result<()> {
         ReportsView::InProgress,
         ReportsFilters::default(),
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(in_progress.matching_reviews == 1);
 
     Ok(())
@@ -427,7 +591,7 @@ fn reports_filters_basic_fields() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(target_filtered.matching_reviews == 1);
 
     let status_filtered = collect_reports(
@@ -446,7 +610,7 @@ fn reports_filters_basic_fields() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(status_filtered.matching_reviews == 1);
 
     let initiator_filtered = collect_reports(
@@ -465,7 +629,7 @@ fn reports_filters_basic_fields() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(initiator_filtered.matching_reviews == 1);
 
     let verdict_filtered = collect_reports(
@@ -484,7 +648,7 @@ fn reports_filters_basic_fields() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(verdict_filtered.matching_reviews == 1);
 
     let phase_filtered = collect_reports(
@@ -503,7 +667,7 @@ fn reports_filters_basic_fields() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(phase_filtered.matching_reviews == 1);
 
     Ok(())
@@ -534,7 +698,7 @@ fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
             include_report_contents: false,
             include_leaf_children: false,
         },
-    );
+    )?;
     ensure!(only_notes.matching_reviews == 1);
     let notes_entry = only_notes
         .reviews
@@ -561,7 +725,7 @@ fn reports_filters_only_notes_and_report() -> anyhow::Result<()> {
             only_with_notes: false,
         },
         ReportsOptions::default(),
-    );
+    )?;
     ensure!(only_report.matching_reviews == 1);
     let report_entry = only_report
         .reviews
@@ -602,7 +766,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
     };
 
     let session = SessionFile {
-        schema_version: "1.1.0".to_string(),
+        schema_version: "1.2.0".to_string(),
         session_date: "2026-01-11".to_string(),
         repo_root: dir.path().to_string_lossy().to_string(),
         reviewers: vec!["feedface".to_string()],
@@ -620,7 +784,7 @@ fn reports_include_report_contents() -> anyhow::Result<()> {
             include_report_contents: true,
             include_leaf_children: false,
         },
-    );
+    )?;
 
     ensure!(result.matching_reviews == 1);
     let entry = result

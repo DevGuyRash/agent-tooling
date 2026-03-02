@@ -1,16 +1,19 @@
-//! Session file (`_session.json`) schema and deterministic update operations.
+//! Session file (`_session.toml`) schema and deterministic update operations.
 //!
-//! This module defines the typed representation of `_session.json` and provides
+//! This module defines the typed representation of the shared session state and provides
 //! read/modify/write helpers that:
-//! - take a session lock (`_session.json.lock`)
+//! - take a session lock (`_session.toml.lock`)
 //! - apply a scoped mutation
-//! - write `_session.json` via an atomic temp-file replace
+//! - write `_session.toml` via an atomic temp-file replace
 //!
 //! The CLI (`mpcr`) is the intended interface for mutating session state.
 
 use crate::id;
 use crate::lock::{self, LockConfig};
 use crate::paths;
+use crate::report_validation::{
+    validate_report_markdown, ReportIdentityExpectation, ReportValidationKind, SeverityExpectation,
+};
 use anyhow::Context;
 use clap::builder::PossibleValue;
 use clap::ValueEnum;
@@ -22,8 +25,21 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
+use toml::map::Map as TomlMap;
 
-const SESSION_SCHEMA_VERSION: &str = "1.1.0";
+const SESSION_SCHEMA_VERSION: &str = "1.2.0";
+const SESSION_FILE_TOML: &str = "_session.toml";
+const SESSION_FILE_JSON: &str = "_session.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Storage format used for the on-disk session artifact.
+pub enum SessionStorageFormat {
+    /// Canonical persistent format.
+    TomlPrimary,
+    /// Safety fallback used only if TOML read/write cannot complete.
+    JsonFallback,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -174,6 +190,14 @@ pub enum ReviewPhase {
     Synthesis,
     /// Final report writing phase.
     ReportWriting,
+    /// Overengineering guard supplemental phase.
+    OverengineeringGuard,
+    /// Complexity analysis supplemental phase.
+    ComplexityAnalysis,
+    /// Ship-readiness assessment supplemental phase.
+    ShipReadiness,
+    /// Review completed (worker self-signaling).
+    Completed,
 }
 
 impl ValueEnum for ReviewPhase {
@@ -185,6 +209,10 @@ impl ValueEnum for ReviewPhase {
             Self::AdversarialProofs,
             Self::Synthesis,
             Self::ReportWriting,
+            Self::OverengineeringGuard,
+            Self::ComplexityAnalysis,
+            Self::ShipReadiness,
+            Self::Completed,
         ]
     }
 
@@ -205,6 +233,16 @@ impl ValueEnum for ReviewPhase {
             Self::ReportWriting => {
                 PossibleValue::new("REPORT_WRITING").help("Write the final report")
             }
+            Self::OverengineeringGuard => {
+                PossibleValue::new("OVERENGINEERING_GUARD").help("Overengineering guard analysis")
+            }
+            Self::ComplexityAnalysis => {
+                PossibleValue::new("COMPLEXITY_ANALYSIS").help("Complexity analysis phase")
+            }
+            Self::ShipReadiness => {
+                PossibleValue::new("SHIP_READINESS").help("Ship-readiness assessment")
+            }
+            Self::Completed => PossibleValue::new("COMPLETED").help("Review completed by worker"),
         };
         Some(pv)
     }
@@ -221,6 +259,10 @@ impl std::str::FromStr for ReviewPhase {
             s if s.eq_ignore_ascii_case("ADVERSARIAL_PROOFS") => Ok(Self::AdversarialProofs),
             s if s.eq_ignore_ascii_case("SYNTHESIS") => Ok(Self::Synthesis),
             s if s.eq_ignore_ascii_case("REPORT_WRITING") => Ok(Self::ReportWriting),
+            s if s.eq_ignore_ascii_case("OVERENGINEERING_GUARD") => Ok(Self::OverengineeringGuard),
+            s if s.eq_ignore_ascii_case("COMPLEXITY_ANALYSIS") => Ok(Self::ComplexityAnalysis),
+            s if s.eq_ignore_ascii_case("SHIP_READINESS") => Ok(Self::ShipReadiness),
+            s if s.eq_ignore_ascii_case("COMPLETED") => Ok(Self::Completed),
             _ => Err(anyhow::anyhow!("invalid ReviewPhase: {s}")),
         }
     }
@@ -587,9 +629,9 @@ pub struct ChildReviewEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Top-level session file stored as `_session.json` within a session directory.
+/// Top-level in-memory session model.
 pub struct SessionFile {
-    /// Schema version string for `_session.json`.
+    /// Schema version string for the shared session artifact.
     pub schema_version: String,
     /// Session date in `YYYY-MM-DD` form.
     pub session_date: String,
@@ -605,18 +647,22 @@ pub struct SessionFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SessionFileDisk {
+struct SessionFileDiskJson {
     pub schema_version: String,
+    #[serde(default)]
+    pub storage_format: Option<SessionStorageFormat>,
     pub session_date: String,
     pub repo_root: String,
+    #[serde(default)]
     pub reviewers: Vec<String>,
-    pub reviews: Vec<ReviewEntryDisk>,
+    #[serde(default)]
+    pub reviews: Vec<ReviewEntryDiskJson>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReviewEntryDisk {
+struct ReviewEntryDiskJson {
     pub reviewer_id: String,
     pub session_id: String,
     pub target_ref: String,
@@ -638,7 +684,7 @@ struct ReviewEntryDisk {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-impl ReviewEntryDisk {
+impl ReviewEntryDiskJson {
     fn from_review_entry(entry: &ReviewEntry) -> Self {
         Self {
             reviewer_id: entry.reviewer_id.clone(),
@@ -680,6 +726,268 @@ impl ReviewEntryDisk {
             extra: self.extra.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionNoteToml {
+    pub role: NoteRole,
+    pub timestamp: String,
+    #[serde(rename = "type")]
+    pub note_type: NoteType,
+    pub content: toml::Value,
+}
+
+impl SessionNoteToml {
+    fn from_session_note(note: &SessionNote) -> anyhow::Result<Self> {
+        Ok(Self {
+            role: note.role,
+            timestamp: note.timestamp.clone(),
+            note_type: note.note_type.clone(),
+            content: json_value_to_toml_value(&note.content)?,
+        })
+    }
+
+    fn to_session_note(&self) -> anyhow::Result<SessionNote> {
+        Ok(SessionNote {
+            role: self.role,
+            timestamp: self.timestamp.clone(),
+            note_type: self.note_type.clone(),
+            content: toml_value_to_json_value(&self.content)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionFileDiskToml {
+    pub schema_version: String,
+    pub storage_format: SessionStorageFormat,
+    pub session_date: String,
+    pub repo_root: String,
+    #[serde(default)]
+    pub reviewers: Vec<String>,
+    #[serde(default)]
+    pub reviews: Vec<ReviewEntryDiskToml>,
+    #[serde(flatten)]
+    pub extra: TomlMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReviewEntryDiskToml {
+    pub reviewer_id: String,
+    pub session_id: String,
+    pub target_ref: String,
+    pub initiator_status: InitiatorStatus,
+    pub status: ReviewerStatus,
+    pub parent_id: Option<String>,
+    pub started_at: String,
+    pub updated_at: String,
+    pub finished_at: Option<String>,
+    pub current_phase: Option<ReviewPhase>,
+    pub verdict: Option<ReviewVerdict>,
+    pub counts: SeverityCounts,
+    pub report_file: Option<String>,
+    #[serde(default)]
+    pub notes: Vec<SessionNoteToml>,
+    #[serde(default)]
+    pub child_reviews: Vec<Self>,
+    #[serde(flatten)]
+    pub extra: TomlMap<String, toml::Value>,
+}
+
+impl ReviewEntryDiskToml {
+    fn from_review_entry(entry: &ReviewEntry) -> anyhow::Result<Self> {
+        let notes = entry
+            .notes
+            .iter()
+            .map(SessionNoteToml::from_session_note)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Self {
+            reviewer_id: entry.reviewer_id.clone(),
+            session_id: entry.session_id.clone(),
+            target_ref: entry.target_ref.clone(),
+            initiator_status: entry.initiator_status,
+            status: entry.status,
+            parent_id: entry.parent_id.clone(),
+            started_at: entry.started_at.clone(),
+            updated_at: entry.updated_at.clone(),
+            finished_at: entry.finished_at.clone(),
+            current_phase: entry.current_phase,
+            verdict: entry.verdict,
+            counts: entry.counts.clone(),
+            report_file: entry.report_file.clone(),
+            notes,
+            child_reviews: Vec::new(),
+            extra: json_map_to_toml_map(&entry.extra)?,
+        })
+    }
+
+    fn to_review_entry(&self) -> anyhow::Result<ReviewEntry> {
+        let notes = self
+            .notes
+            .iter()
+            .map(SessionNoteToml::to_session_note)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(ReviewEntry {
+            reviewer_id: self.reviewer_id.clone(),
+            session_id: self.session_id.clone(),
+            target_ref: self.target_ref.clone(),
+            initiator_status: self.initiator_status,
+            status: self.status,
+            parent_id: self.parent_id.clone(),
+            started_at: self.started_at.clone(),
+            updated_at: self.updated_at.clone(),
+            finished_at: self.finished_at.clone(),
+            current_phase: self.current_phase,
+            verdict: self.verdict,
+            counts: self.counts.clone(),
+            report_file: self.report_file.clone(),
+            notes,
+            child_reviews: Vec::new(),
+            extra: toml_map_to_json_map(&self.extra)?,
+        })
+    }
+}
+
+fn tagged_scalar_toml(value: &str) -> toml::Value {
+    let mut table = TomlMap::new();
+    table.insert(
+        "__mpcr_json_type".to_string(),
+        toml::Value::String("scalar".to_string()),
+    );
+    table.insert(
+        "__mpcr_json_value".to_string(),
+        toml::Value::String(value.to_string()),
+    );
+    toml::Value::Table(table)
+}
+
+const TAGGED_SCALAR_TYPE_KEY: &str = "__mpcr_json_type";
+const TAGGED_SCALAR_VALUE_KEY: &str = "__mpcr_json_value";
+const TAGGED_SCALAR_ESCAPE_KEY: &str = "__mpcr_json_escape";
+const TAGGED_SCALAR_ESCAPE_VALUE: &str = "object";
+
+fn is_tagged_scalar_table(table: &TomlMap<String, toml::Value>) -> bool {
+    table
+        .get(TAGGED_SCALAR_TYPE_KEY)
+        .is_some_and(|v| matches!(v, toml::Value::String(kind) if kind == "scalar"))
+        && table.get(TAGGED_SCALAR_VALUE_KEY).is_some()
+}
+
+fn is_tagged_scalar_escaped_object(table: &TomlMap<String, toml::Value>) -> bool {
+    is_tagged_scalar_table(table)
+        && table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some_and(|marker| {
+            matches!(
+                marker,
+                toml::Value::String(value) if value == TAGGED_SCALAR_ESCAPE_VALUE
+            )
+        })
+}
+
+fn json_value_to_toml_value(value: &Value) -> anyhow::Result<toml::Value> {
+    match value {
+        Value::Null => Ok(tagged_scalar_toml("null")),
+        Value::Bool(flag) => Ok(toml::Value::Boolean(*flag)),
+        Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                return Ok(toml::Value::Integer(integer));
+            }
+            if let Some(unsigned) = number.as_u64() {
+                if let Ok(integer) = i64::try_from(unsigned) {
+                    return Ok(toml::Value::Integer(integer));
+                }
+                return Ok(tagged_scalar_toml(&format!("u64:{unsigned}")));
+            }
+            let float = number
+                .as_f64()
+                .ok_or_else(|| anyhow::anyhow!("unsupported JSON number representation"))?;
+            Ok(toml::Value::Float(float))
+        }
+        Value::String(text) => Ok(toml::Value::String(text.clone())),
+        Value::Array(items) => Ok(toml::Value::Array(
+            items
+                .iter()
+                .map(json_value_to_toml_value)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        )),
+        Value::Object(map) => {
+            let mut table = json_map_to_toml_map(map)?;
+            if is_tagged_scalar_table(&table) && table.len() == 2 {
+                table.insert(
+                    TAGGED_SCALAR_ESCAPE_KEY.to_string(),
+                    toml::Value::String(TAGGED_SCALAR_ESCAPE_VALUE.to_string()),
+                );
+            }
+            Ok(toml::Value::Table(table))
+        }
+    }
+}
+
+fn json_map_to_toml_map(
+    map: &serde_json::Map<String, Value>,
+) -> anyhow::Result<TomlMap<String, toml::Value>> {
+    let ordered = map.iter().collect::<BTreeMap<_, _>>();
+    let mut out = TomlMap::new();
+    for (key, value) in ordered {
+        out.insert(key.clone(), json_value_to_toml_value(value)?);
+    }
+    Ok(out)
+}
+
+fn toml_value_to_json_value(value: &toml::Value) -> anyhow::Result<Value> {
+    match value {
+        toml::Value::String(text) => Ok(Value::String(text.clone())),
+        toml::Value::Integer(integer) => Ok(Value::Number((*integer).into())),
+        toml::Value::Float(float) => {
+            let number = serde_json::Number::from_f64(*float)
+                .ok_or_else(|| anyhow::anyhow!("invalid TOML float in dynamic session value"))?;
+            Ok(Value::Number(number))
+        }
+        toml::Value::Boolean(flag) => Ok(Value::Bool(*flag)),
+        toml::Value::Array(items) => Ok(Value::Array(
+            items
+                .iter()
+                .map(toml_value_to_json_value)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        )),
+        toml::Value::Table(table) => {
+            let escaped_object = is_tagged_scalar_escaped_object(table);
+            if is_tagged_scalar_table(table) && !escaped_object {
+                if let Some(toml::Value::String(encoded)) = table.get(TAGGED_SCALAR_VALUE_KEY) {
+                    if encoded == "null" {
+                        return Ok(Value::Null);
+                    }
+                    if let Some(raw) = encoded.strip_prefix("u64:") {
+                        let parsed = raw
+                            .parse::<u64>()
+                            .context("parse tagged u64 TOML session value")?;
+                        return Ok(Value::Number(parsed.into()));
+                    }
+                }
+            }
+
+            if escaped_object {
+                let mut unescaped = table.clone();
+                unescaped.remove(TAGGED_SCALAR_ESCAPE_KEY);
+                return Ok(Value::Object(toml_map_to_json_map(&unescaped)?));
+            }
+
+            Ok(Value::Object(toml_map_to_json_map(table)?))
+        }
+        toml::Value::Datetime(value) => Err(anyhow::anyhow!(
+            "dynamic TOML datetime values are unsupported in session fields: {value}"
+        )),
+    }
+}
+
+fn toml_map_to_json_map(
+    map: &TomlMap<String, toml::Value>,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let ordered = map.iter().collect::<BTreeMap<_, _>>();
+    let mut out = serde_json::Map::new();
+    for (key, value) in ordered {
+        out.insert(key.clone(), toml_value_to_json_value(value)?);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -961,8 +1269,8 @@ fn choose_newer_entry(existing: &ReviewEntry, candidate: &ReviewEntry) -> bool {
     candidate.notes.len() > existing.notes.len()
 }
 
-fn flatten_reviews_disk(
-    entries: &[ReviewEntryDisk],
+fn flatten_reviews_disk_json(
+    entries: &[ReviewEntryDiskJson],
     flat_reviews: &mut BTreeMap<ReviewKey, ReviewEntry>,
 ) {
     for entry in entries {
@@ -974,13 +1282,31 @@ fn flatten_reviews_disk(
                 flat_reviews.insert(key, candidate);
             }
         }
-        flatten_reviews_disk(&entry.child_reviews, flat_reviews);
+        flatten_reviews_disk_json(&entry.child_reviews, flat_reviews);
     }
 }
 
-fn flatten_session_file_disk(session: SessionFileDisk) -> SessionFile {
+fn flatten_reviews_disk_toml(
+    entries: &[ReviewEntryDiskToml],
+    flat_reviews: &mut BTreeMap<ReviewKey, ReviewEntry>,
+) -> anyhow::Result<()> {
+    for entry in entries {
+        let candidate = entry.to_review_entry()?;
+        let key = review_key(&candidate);
+        match flat_reviews.get(&key) {
+            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
+            _ => {
+                flat_reviews.insert(key, candidate);
+            }
+        }
+        flatten_reviews_disk_toml(&entry.child_reviews, flat_reviews)?;
+    }
+    Ok(())
+}
+
+fn flatten_session_file_disk_json(session: SessionFileDiskJson) -> SessionFile {
     let mut flat_reviews: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
-    flatten_reviews_disk(&session.reviews, &mut flat_reviews);
+    flatten_reviews_disk_json(&session.reviews, &mut flat_reviews);
 
     let mut reviewers: BTreeSet<String> = session.reviewers.into_iter().collect();
     for entry in flat_reviews.values() {
@@ -997,6 +1323,27 @@ fn flatten_session_file_disk(session: SessionFileDisk) -> SessionFile {
     };
     reconcile_parent_child_reviews(&mut flattened);
     flattened
+}
+
+fn flatten_session_file_disk_toml(session: SessionFileDiskToml) -> anyhow::Result<SessionFile> {
+    let mut flat_reviews: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
+    flatten_reviews_disk_toml(&session.reviews, &mut flat_reviews)?;
+
+    let mut reviewers: BTreeSet<String> = session.reviewers.into_iter().collect();
+    for entry in flat_reviews.values() {
+        reviewers.insert(entry.reviewer_id.clone());
+    }
+
+    let mut flattened = SessionFile {
+        schema_version: session.schema_version,
+        session_date: session.session_date,
+        repo_root: session.repo_root,
+        reviewers: reviewers.into_iter().collect(),
+        reviews: flat_reviews.into_values().collect(),
+        extra: toml_map_to_json_map(&session.extra)?,
+    };
+    reconcile_parent_child_reviews(&mut flattened);
+    Ok(flattened)
 }
 
 fn dedupe_flat_reviews(reviews: &[ReviewEntry]) -> BTreeMap<ReviewKey, ReviewEntry> {
@@ -1020,7 +1367,7 @@ fn build_disk_review_node(
     reviews_by_key: &BTreeMap<ReviewKey, ReviewEntry>,
     children_by_parent: &BTreeMap<ParentReviewKey, Vec<ReviewKey>>,
     visiting: &mut BTreeSet<ReviewKey>,
-) -> anyhow::Result<ReviewEntryDisk> {
+) -> anyhow::Result<ReviewEntryDiskJson> {
     if !visiting.insert(key.clone()) {
         return Err(anyhow::anyhow!(
             "cycle detected while building child review tree"
@@ -1055,12 +1402,59 @@ fn build_disk_review_node(
 
     visiting.remove(key);
 
-    let mut node = ReviewEntryDisk::from_review_entry(entry);
+    let mut node = ReviewEntryDiskJson::from_review_entry(entry);
     node.child_reviews = child_reviews;
     Ok(node)
 }
 
-fn canonicalize_session_for_write(session: &SessionFile) -> anyhow::Result<SessionFileDisk> {
+fn build_disk_review_node_toml(
+    key: &ReviewKey,
+    reviews_by_key: &BTreeMap<ReviewKey, ReviewEntry>,
+    children_by_parent: &BTreeMap<ParentReviewKey, Vec<ReviewKey>>,
+    visiting: &mut BTreeSet<ReviewKey>,
+) -> anyhow::Result<ReviewEntryDiskToml> {
+    if !visiting.insert(key.clone()) {
+        return Err(anyhow::anyhow!(
+            "cycle detected while building child review tree"
+        ));
+    }
+
+    let entry = reviews_by_key
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("review entry missing while building child review tree"))?;
+    let parent_key = (
+        entry.reviewer_id.clone(),
+        entry.session_id.clone(),
+        entry.target_ref.clone(),
+    );
+
+    let mut child_keys = children_by_parent
+        .get(&parent_key)
+        .cloned()
+        .map_or_else(Vec::new, std::convert::identity);
+    child_keys.sort();
+    child_keys.dedup();
+
+    let mut child_reviews = Vec::with_capacity(child_keys.len());
+    for child_key in child_keys {
+        child_reviews.push(build_disk_review_node_toml(
+            &child_key,
+            reviews_by_key,
+            children_by_parent,
+            visiting,
+        )?);
+    }
+
+    visiting.remove(key);
+
+    let mut node = ReviewEntryDiskToml::from_review_entry(entry)?;
+    node.child_reviews = child_reviews;
+    Ok(node)
+}
+
+fn canonicalize_session_for_write_json(
+    session: &SessionFile,
+) -> anyhow::Result<SessionFileDiskJson> {
     let reviews_by_key = dedupe_flat_reviews(&session.reviews);
 
     let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
@@ -1118,13 +1512,85 @@ fn canonicalize_session_for_write(session: &SessionFile) -> anyhow::Result<Sessi
         reviewers.insert(entry.reviewer_id.clone());
     }
 
-    Ok(SessionFileDisk {
+    Ok(SessionFileDiskJson {
         schema_version: SESSION_SCHEMA_VERSION.to_string(),
+        storage_format: Some(SessionStorageFormat::JsonFallback),
         session_date: session.session_date.clone(),
         repo_root: session.repo_root.clone(),
         reviewers: reviewers.into_iter().collect(),
         reviews,
         extra: session.extra.clone(),
+    })
+}
+
+fn canonicalize_session_for_write_toml(
+    session: &SessionFile,
+) -> anyhow::Result<SessionFileDiskToml> {
+    let reviews_by_key = dedupe_flat_reviews(&session.reviews);
+
+    let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
+    for (child_key, entry) in &reviews_by_key {
+        let Some(parent_id) = entry.parent_id.as_deref() else {
+            continue;
+        };
+        let parent_exists = reviews_by_key.values().any(|candidate| {
+            candidate.reviewer_id == parent_id
+                && candidate.session_id == entry.session_id
+                && candidate.target_ref == entry.target_ref
+        });
+        if !parent_exists {
+            continue;
+        }
+        children_by_parent
+            .entry((
+                parent_id.to_string(),
+                entry.session_id.clone(),
+                entry.target_ref.clone(),
+            ))
+            .or_default()
+            .push(child_key.clone());
+    }
+
+    let mut root_keys = Vec::new();
+    for (key, entry) in &reviews_by_key {
+        let is_root = entry.parent_id.as_deref().is_none_or(|parent_id| {
+            !reviews_by_key.values().any(|candidate| {
+                candidate.reviewer_id == parent_id
+                    && candidate.session_id == entry.session_id
+                    && candidate.target_ref == entry.target_ref
+            })
+        });
+        if is_root {
+            root_keys.push(key.clone());
+        }
+    }
+    root_keys.sort();
+    root_keys.dedup();
+
+    let mut reviews = Vec::with_capacity(root_keys.len());
+    let mut visiting = BTreeSet::new();
+    for key in root_keys {
+        reviews.push(build_disk_review_node_toml(
+            &key,
+            &reviews_by_key,
+            &children_by_parent,
+            &mut visiting,
+        )?);
+    }
+
+    let mut reviewers: BTreeSet<String> = session.reviewers.iter().cloned().collect();
+    for entry in reviews_by_key.values() {
+        reviewers.insert(entry.reviewer_id.clone());
+    }
+
+    Ok(SessionFileDiskToml {
+        schema_version: SESSION_SCHEMA_VERSION.to_string(),
+        storage_format: SessionStorageFormat::TomlPrimary,
+        session_date: session.session_date.clone(),
+        repo_root: session.repo_root.clone(),
+        reviewers: reviewers.into_iter().collect(),
+        reviews,
+        extra: json_map_to_toml_map(&session.extra)?,
     })
 }
 
@@ -1293,10 +1759,12 @@ impl ChildReviewEntry {
 #[serde(deny_unknown_fields)]
 /// Result payload for report listings.
 pub struct ReportsResult {
-    /// Session directory containing `_session.json`.
+    /// Session directory containing the shared session artifact.
     pub session_dir: String,
-    /// Full path to `_session.json`.
+    /// Full path to the active session artifact.
     pub session_file: String,
+    /// Storage format of the active session artifact.
+    pub session_format: SessionStorageFormat,
     /// View selector used for this listing.
     pub view: ReportsView,
     /// Optional filters applied to the listing.
@@ -1312,14 +1780,16 @@ pub struct ReportsResult {
 }
 
 /// Build a report listing for the given session data.
-#[must_use]
+///
+/// # Errors
+/// Returns an error if the active session artifact cannot be resolved.
 pub fn collect_reports(
     session: &SessionFile,
     locator: &SessionLocator,
     view: ReportsView,
     filters: ReportsFilters,
     options: ReportsOptions,
-) -> ReportsResult {
+) -> anyhow::Result<ReportsResult> {
     let mut total_reviews = 0usize;
     let repo_root = Path::new(&session.repo_root);
     let mut reviews = Vec::new();
@@ -1342,16 +1812,18 @@ pub fn collect_reports(
         reviews.push(entry.summary(repo_root, locator.session_dir(), options));
     }
 
-    ReportsResult {
+    let resolved = resolved_or_default_session_artifact(locator.session_dir())?;
+    Ok(ReportsResult {
         session_dir: locator.session_dir().to_string_lossy().to_string(),
-        session_file: locator.session_file().to_string_lossy().to_string(),
+        session_file: resolved.path.to_string_lossy().to_string(),
+        session_format: resolved.format,
         view,
         filters,
         options,
         total_reviews,
         matching_reviews: reviews.len(),
         reviews,
-    }
+    })
 }
 
 fn format_ts(now: OffsetDateTime) -> anyhow::Result<String> {
@@ -1362,20 +1834,153 @@ fn parse_ts(s: &str) -> anyhow::Result<OffsetDateTime> {
     OffsetDateTime::parse(s, &Rfc3339).context("parse RFC3339 timestamp")
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedSessionArtifact {
+    path: PathBuf,
+    format: SessionStorageFormat,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Public view of the session artifact selected for a session directory.
+pub struct SessionArtifactInfo {
+    /// Full path to the session artifact that should be read or written.
+    pub session_file: String,
+    /// Storage format used by that artifact.
+    pub session_format: SessionStorageFormat,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionJsonFallbackHeader {
+    schema_version: String,
+    storage_format: Option<SessionStorageFormat>,
+}
+
 fn session_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join("_session.json")
+    session_dir.join(SESSION_FILE_TOML)
+}
+
+fn json_fallback_session_file_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(SESSION_FILE_JSON)
+}
+
+fn read_json_fallback_header(path: &Path) -> anyhow::Result<SessionJsonFallbackHeader> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read session fallback {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))
+}
+
+fn resolve_active_session_artifact(
+    session_dir: &Path,
+) -> anyhow::Result<Option<ResolvedSessionArtifact>> {
+    let primary = session_file_path(session_dir);
+    if primary.exists() {
+        return Ok(Some(ResolvedSessionArtifact {
+            path: primary,
+            format: SessionStorageFormat::TomlPrimary,
+        }));
+    }
+
+    let fallback = json_fallback_session_file_path(session_dir);
+    if !fallback.exists() {
+        return Ok(None);
+    }
+
+    let header = read_json_fallback_header(&fallback)?;
+    if let Some(storage_format) = header.storage_format {
+        if storage_format != SessionStorageFormat::JsonFallback {
+            return Err(anyhow::anyhow!(
+                "unsupported session fallback file {}: storage_format must be `json_fallback`",
+                fallback.display()
+            ));
+        }
+        if header.schema_version != SESSION_SCHEMA_VERSION {
+            return Err(anyhow::anyhow!(
+                "unsupported session fallback file {}: only {} JSON fallback files are supported when storage_format is present",
+                fallback.display(),
+                SESSION_SCHEMA_VERSION
+            ));
+        }
+    }
+
+    Ok(Some(ResolvedSessionArtifact {
+        path: fallback,
+        format: SessionStorageFormat::JsonFallback,
+    }))
+}
+
+fn resolved_or_default_session_artifact(
+    session_dir: &Path,
+) -> anyhow::Result<ResolvedSessionArtifact> {
+    resolve_active_session_artifact(session_dir)?.map_or_else(
+        || {
+            Ok(ResolvedSessionArtifact {
+                path: session_file_path(session_dir),
+                format: SessionStorageFormat::TomlPrimary,
+            })
+        },
+        Ok,
+    )
+}
+
+fn to_session_artifact_info(artifact: &ResolvedSessionArtifact) -> SessionArtifactInfo {
+    SessionArtifactInfo {
+        session_file: artifact.path.to_string_lossy().to_string(),
+        session_format: artifact.format,
+    }
+}
+
+/// Resolve the currently active session artifact, if one exists.
+///
+/// # Errors
+/// Returns an error if a fallback artifact exists but does not match the supported
+/// JSON fallback contract.
+pub fn active_session_artifact(
+    session: &SessionLocator,
+) -> anyhow::Result<Option<SessionArtifactInfo>> {
+    Ok(resolve_active_session_artifact(session.session_dir())?
+        .as_ref()
+        .map(to_session_artifact_info))
+}
+
+/// Resolve the active session artifact, or the canonical TOML path when the session is empty.
+///
+/// # Errors
+/// Returns an error if a fallback artifact exists but does not match the supported
+/// JSON fallback contract.
+pub fn session_artifact_or_default(
+    session: &SessionLocator,
+) -> anyhow::Result<SessionArtifactInfo> {
+    let artifact = resolved_or_default_session_artifact(session.session_dir())?;
+    Ok(to_session_artifact_info(&artifact))
 }
 
 fn read_session_file(session_dir: &Path) -> anyhow::Result<SessionFile> {
-    let path = session_file_path(session_dir);
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("read session file {}", path.display()))?;
-    let parsed: SessionFileDisk =
-        serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))?;
-    Ok(flatten_session_file_disk(parsed))
+    let Some(resolved) = resolve_active_session_artifact(session_dir)? else {
+        return Err(anyhow::anyhow!(
+            "session file not found in {} (expected {} or {})",
+            session_dir.display(),
+            SESSION_FILE_TOML,
+            SESSION_FILE_JSON
+        ));
+    };
+    let raw = fs::read_to_string(&resolved.path)
+        .with_context(|| format!("read session file {}", resolved.path.display()))?;
+    match resolved.format {
+        SessionStorageFormat::TomlPrimary => {
+            let parsed: SessionFileDiskToml = toml::from_str(&raw)
+                .with_context(|| format!("parse TOML {}", resolved.path.display()))?;
+            flatten_session_file_disk_toml(parsed)
+        }
+        SessionStorageFormat::JsonFallback => {
+            let parsed: SessionFileDiskJson = serde_json::from_str(&raw)
+                .with_context(|| format!("parse JSON {}", resolved.path.display()))?;
+            Ok(flatten_session_file_disk_json(parsed))
+        }
+    }
 }
 
-/// Load and parse `_session.json` for the given session locator.
+/// Load and parse the active session artifact for the given session locator.
 ///
 /// # Errors
 /// Returns an error if the session file cannot be read or parsed.
@@ -1391,34 +1996,85 @@ fn write_session_file_atomic(
     fs::create_dir_all(session_dir)
         .with_context(|| format!("create session dir {}", session_dir.display()))?;
     let session_file = session_file_path(session_dir);
-    let tmp = session_dir.join(format!("_session.json.tmp.{owner}"));
+    let json_fallback = json_fallback_session_file_path(session_dir);
     let mut session_to_write = session.clone();
     reconcile_parent_child_reviews(&mut session_to_write);
     validate_session_consistency(&session_to_write)?;
-    let session_disk = canonicalize_session_for_write(&session_to_write)?;
-    let body =
-        serde_json::to_string_pretty(&session_disk).context("serialize session JSON")? + "\n";
-    fs::write(&tmp, body).with_context(|| format!("write temp session file {}", tmp.display()))?;
 
-    // Best-effort cross-platform replacement:
-    // - Unix: rename() replaces destination atomically.
-    // - Windows: rename() fails if dest exists; remove then rename.
-    #[cfg(windows)]
-    {
-        if session_file.exists() {
-            fs::remove_file(&session_file).with_context(|| {
-                format!("remove existing session file {}", session_file.display())
+    let toml_write_result = (|| -> anyhow::Result<()> {
+        let session_disk = canonicalize_session_for_write_toml(&session_to_write)?;
+        let body = toml::to_string_pretty(&session_disk).context("serialize session TOML")? + "\n";
+        let _: SessionFileDiskToml =
+            toml::from_str(&body).context("round-trip parse session TOML")?;
+        let tmp = session_dir.join(format!("{SESSION_FILE_TOML}.tmp.{owner}"));
+        fs::write(&tmp, body)
+            .with_context(|| format!("write temp session file {}", tmp.display()))?;
+
+        #[cfg(windows)]
+        {
+            if session_file.exists() {
+                fs::remove_file(&session_file).with_context(|| {
+                    format!("remove existing session file {}", session_file.display())
+                })?;
+            }
+        }
+
+        fs::rename(&tmp, &session_file).with_context(|| {
+            format!(
+                "replace session file {} via {}",
+                session_file.display(),
+                tmp.display()
+            )
+        })?;
+        if json_fallback.exists() {
+            fs::remove_file(&json_fallback).with_context(|| {
+                format!("remove stale JSON fallback {}", json_fallback.display())
             })?;
         }
+        Ok(())
+    })();
+
+    if toml_write_result.is_err() {
+        let session_disk = canonicalize_session_for_write_json(&session_to_write)?;
+        let body = serde_json::to_string_pretty(&session_disk)
+            .context("serialize session JSON fallback")?
+            + "\n";
+        let _: SessionFileDiskJson =
+            serde_json::from_str(&body).context("round-trip parse session JSON fallback")?;
+        let tmp = session_dir.join(format!("{SESSION_FILE_JSON}.tmp.{owner}"));
+        fs::write(&tmp, body)
+            .with_context(|| format!("write temp session fallback {}", tmp.display()))?;
+
+        #[cfg(windows)]
+        {
+            if json_fallback.exists() {
+                fs::remove_file(&json_fallback).with_context(|| {
+                    format!(
+                        "remove existing session fallback {}",
+                        json_fallback.display()
+                    )
+                })?;
+            }
+        }
+
+        fs::rename(&tmp, &json_fallback).with_context(|| {
+            format!(
+                "replace session fallback {} via {}",
+                json_fallback.display(),
+                tmp.display()
+            )
+        })?;
+        if session_file.exists() {
+            fs::remove_file(&session_file).with_context(|| {
+                format!(
+                    "remove stale primary session file {}",
+                    session_file.display()
+                )
+            })?;
+        }
+        return Ok(());
     }
 
-    fs::rename(&tmp, &session_file).with_context(|| {
-        format!(
-            "replace session file {} via {}",
-            session_file.display(),
-            tmp.display()
-        )
-    })?;
     Ok(())
 }
 
@@ -1481,7 +2137,7 @@ fn validate_id8(id8: &str, label: &str) -> anyhow::Result<()> {
 /// A locator for a session directory on disk.
 ///
 /// This is primarily a convenience wrapper around a `PathBuf` that standardizes where to
-/// find `_session.json` and the lock file.
+/// find the canonical session artifact and the lock file.
 pub struct SessionLocator {
     /// Path to the session directory.
     pub session_dir: PathBuf,
@@ -1509,7 +2165,7 @@ impl SessionLocator {
         &self.session_dir
     }
 
-    /// Compute the full path to `_session.json` inside this session directory.
+    /// Compute the canonical TOML session path inside this session directory.
     #[must_use]
     pub fn session_file(&self) -> PathBuf {
         session_file_path(&self.session_dir)
@@ -1633,7 +2289,7 @@ fn infer_repo_root_from_session_dir(session_dir: &Path) -> Option<PathBuf> {
 
 /// Purge (permanently remove) review entries and optionally their report files.
 ///
-/// Matching entries are removed from `_session.json`. When `include_children` is true,
+/// Matching entries are removed from the session artifact. When `include_children` is true,
 /// child entries whose `parent_id` matches a purged parent are also removed. When
 /// `delete_report_files` is true, report markdown files referenced by purged entries
 /// are deleted from disk.
@@ -1852,8 +2508,8 @@ mod tests {
 
     fn write_session(session_dir: &Path, session: &SessionFile) -> anyhow::Result<()> {
         fs::create_dir_all(session_dir)?;
-        let path = session_dir.join("_session.json");
-        let body = serde_json::to_string_pretty(session)? + "\n";
+        let path = session_dir.join("_session.toml");
+        let body = toml::to_string_pretty(&canonicalize_session_for_write_toml(session)?)? + "\n";
         fs::write(path, body)?;
         Ok(())
     }
@@ -1885,6 +2541,95 @@ mod tests {
             child_reviews: vec![],
             extra: serde_json::Map::default(),
         }
+    }
+
+    fn valid_parent_report(
+        reviewer_id: &str,
+        session_id: &str,
+        target_ref: &str,
+        counts: &SeverityCounts,
+    ) -> String {
+        format!(
+            r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "APPROVE"
+
+[counts]
+blocker = {blocker}
+major = {major}
+minor = {minor}
+nit = {nit}
+
+[ship_readiness]
+verdict = "SHIP"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "PASS"
+notes = "Validated by reviewer synthesis."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No safety regression found."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "No complexity regression found."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "PASS"
+notes = "Coverage is acceptable."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "PASS"
+notes = "Acceptance criteria are satisfied."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "child:feedface:{session_id}"
+
+[[residual_risks]]
+area = "None"
+gap = "No unresolved risk was identified."
+impact = "Low"
+next_action = "Monitor runtime behavior."
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** SHIP
+
+## Findings
+- None.
+
+## Defended Proofs
+- All critical claims held during disproof attempts.
+
+## Residual Risk
+- None.
+"#,
+            blocker = counts.blocker,
+            major = counts.major,
+            minor = counts.minor,
+            nit = counts.nit
+        )
     }
 
     #[test]
@@ -1952,6 +2697,75 @@ mod tests {
             .first()
             .ok_or_else(|| anyhow::anyhow!("review missing"))?;
         ensure!(review.child_reviews.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn active_session_artifact_accepts_legacy_json_without_storage_format() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        let legacy_json = r#"{
+  "schema_version": "1.1.0",
+  "session_date": "2026-01-11",
+  "repo_root": "/tmp/repo",
+  "reviewers": ["deadbeef"],
+  "reviews": [
+    {
+      "reviewer_id": "deadbeef",
+      "session_id": "sess0001",
+      "target_ref": "refs/heads/main",
+      "initiator_status": "REQUESTING",
+      "status": "IN_PROGRESS",
+      "parent_id": null,
+      "started_at": "2026-01-11T00:00:00Z",
+      "updated_at": "2026-01-11T00:00:00Z",
+      "finished_at": null,
+      "current_phase": "INGESTION",
+      "verdict": null,
+      "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
+      "report_file": null,
+      "notes": []
+    }
+  ]
+}"#;
+        fs::write(session_dir.join("_session.json"), legacy_json)?;
+        let locator = SessionLocator::new(session_dir);
+
+        let info = active_session_artifact(&locator)?
+            .ok_or_else(|| anyhow::anyhow!("expected active session artifact"))?;
+        ensure!(info.session_format == SessionStorageFormat::JsonFallback);
+        let session = load_session(&locator)?;
+        let review = session
+            .reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("expected one review from legacy JSON fallback"))?;
+        ensure!(review.reviewer_id == "deadbeef");
+        Ok(())
+    }
+
+    #[test]
+    fn active_session_artifact_rejects_non_json_fallback_storage_format() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        fs::create_dir_all(&session_dir)?;
+        let invalid_json = r#"{
+  "schema_version": "1.2.0",
+  "storage_format": "toml_primary",
+  "session_date": "2026-01-11",
+  "repo_root": "/tmp/repo",
+  "reviewers": [],
+  "reviews": []
+}"#;
+        fs::write(session_dir.join("_session.json"), invalid_json)?;
+        let locator = SessionLocator::new(session_dir);
+
+        let Err(err) = active_session_artifact(&locator) else {
+            bail!("expected non-json-fallback storage format to fail");
+        };
+        ensure!(err
+            .to_string()
+            .contains("storage_format must be `json_fallback`"));
         Ok(())
     }
 
@@ -2414,7 +3228,13 @@ mod tests {
             session_id: "sess0001".to_string(),
             verdict: ReviewVerdict::Approve,
             counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::Markdown("report\n".to_string()),
+            report_input: FinalizeReportInput::Markdown(valid_parent_report(
+                "deadbeef",
+                "sess0001",
+                "refs/heads/main",
+                &SeverityCounts::zero(),
+            )),
+            validation_kind: ReportValidationKind::ParentReviewReport,
             copy_input_report: false,
             auto_close_open_children: true,
             auto_close_children_status: ReviewerStatus::Cancelled,
@@ -2424,6 +3244,274 @@ mod tests {
             bail!("should refuse overwrite");
         };
         ensure!(err.to_string().contains("report_file already set"));
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_review_revalidates_persisted_report_under_lock() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let report_source = dir.path().join("report.md");
+        fs::write(
+            &report_source,
+            valid_parent_report(
+                "deadbeef",
+                "sess0001",
+                "refs/heads/main",
+                &SeverityCounts::zero(),
+            ),
+        )?;
+
+        let held_guard = lock::acquire_lock(&session_dir, "cafebabe", LockConfig::default())?;
+        let session_for_finalize = SessionLocator::new(session_dir.clone());
+        let source_for_finalize = report_source.clone();
+
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = finalize_review(FinalizeReviewParams {
+                session: session_for_finalize,
+                reviewer_id: "deadbeef".to_string(),
+                session_id: "sess0001".to_string(),
+                verdict: ReviewVerdict::Approve,
+                counts: SeverityCounts::zero(),
+                report_input: FinalizeReportInput::File(source_for_finalize),
+                validation_kind: ReportValidationKind::ParentReviewReport,
+                copy_input_report: false,
+                auto_close_open_children: true,
+                auto_close_children_status: ReviewerStatus::Cancelled,
+                now: OffsetDateTime::now_utc(),
+            });
+            let _ = result_tx.send(result.map(|_| ()).map_err(|err| err.to_string()));
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        fs::write(&report_source, "# invalid\n")?;
+        drop(held_guard);
+
+        let finalize_result = result_rx
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .map_err(|err| anyhow::anyhow!("timed out waiting for finalize result: {err}"))?;
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("finalize worker thread panicked"))?;
+
+        let Err(err_text) = finalize_result else {
+            bail!("finalize should fail after source mutation under lock window");
+        };
+        ensure!(err_text.contains("validate report artifact under lock"));
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_review_rejects_identity_mismatch_under_lock() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let mismatched_report = valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/other",
+            &SeverityCounts::zero(),
+        );
+        let params = FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::Markdown(mismatched_report),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        };
+        let Err(err) = finalize_review(params) else {
+            bail!("finalize should fail on report identity mismatch");
+        };
+        ensure!(format!("{err:#}").contains("identity_mismatch"));
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_review_restores_moved_source_on_identity_mismatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let source_path = dir.path().join("incoming-report.md");
+        let source_report = valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/other",
+            &SeverityCounts::zero(),
+        );
+        fs::write(&source_path, &source_report)?;
+
+        let params = FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::File(source_path.clone()),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        };
+        let Err(err) = finalize_review(params) else {
+            bail!("finalize should fail on report identity mismatch");
+        };
+        let err_text = format!("{err:#}");
+        ensure!(err_text.contains("validate report artifact under lock"));
+        ensure!(err_text.contains("identity_mismatch"));
+
+        ensure!(
+            source_path.exists(),
+            "source report file should be restored after failed finalize"
+        );
+        ensure!(fs::read_to_string(&source_path)? == source_report);
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
         Ok(())
     }
 
@@ -2602,48 +3690,196 @@ mod tests {
         let session_dir = dir.path().join("session");
         fs::create_dir_all(&session_dir)?;
 
-        let raw_session = serde_json::json!({
-            "schema_version": SESSION_SCHEMA_VERSION,
-            "session_date": "2026-01-11",
-            "repo_root": dir.path().to_string_lossy(),
-            "reviewers": ["deadbeef"],
-            "reviews": [{
-                "reviewer_id": "deadbeef",
-                "session_id": "sess0001",
-                "target_ref": "refs/heads/main",
-                "initiator_status": "REQUESTING",
-                "status": "IN_PROGRESS",
-                "parent_id": null,
-                "started_at": "2026-01-11T00:00:00Z",
-                "updated_at": "2026-01-11T01:00:00Z",
-                "finished_at": null,
-                "current_phase": "INGESTION",
-                "verdict": null,
-                "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
-                "report_file": null,
-                "notes": [],
-                "future_extension": {"token": "abc123"}
-            }]
-        });
-        fs::write(
-            session_dir.join("_session.json"),
-            format!("{}\n", serde_json::to_string_pretty(&raw_session)?),
-        )?;
+        let raw_session_toml = format!(
+            r#"schema_version = "{SESSION_SCHEMA_VERSION}"
+storage_format = "toml_primary"
+session_date = "2026-01-11"
+repo_root = "{}"
+reviewers = ["deadbeef"]
+
+[[reviews]]
+reviewer_id = "deadbeef"
+session_id = "sess0001"
+target_ref = "refs/heads/main"
+initiator_status = "REQUESTING"
+status = "IN_PROGRESS"
+started_at = "2026-01-11T00:00:00Z"
+updated_at = "2026-01-11T01:00:00Z"
+current_phase = "INGESTION"
+notes = []
+future_extension = {{ token = "abc123" }}
+
+[reviews.counts]
+blocker = 0
+major = 0
+minor = 0
+nit = 0
+"#,
+            dir.path().to_string_lossy()
+        );
+        fs::write(session_dir.join("_session.toml"), raw_session_toml)?;
 
         let session = read_session_file(&session_dir)?;
         write_session_file_atomic(&session_dir, "deadbeef", &session)?;
 
-        let written: Value =
-            serde_json::from_str(&fs::read_to_string(session_dir.join("_session.json"))?)?;
+        let written: toml::Value =
+            toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
         let reviews = written
             .get("reviews")
-            .and_then(Value::as_array)
+            .and_then(toml::Value::as_array)
             .ok_or_else(|| anyhow::anyhow!("missing reviews"))?;
         let future_extension = reviews
             .first()
             .and_then(|review| review.get("future_extension"))
             .ok_or_else(|| anyhow::anyhow!("missing review future_extension"))?;
-        ensure!(future_extension["token"] == "abc123");
+        ensure!(future_extension.get("token").and_then(toml::Value::as_str) == Some("abc123"));
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Reason: validates full JSON/TOML scalar edge-case round-trip in one scenario.
+    fn write_session_file_atomic_round_trips_json_only_scalars_in_toml_primary(
+    ) -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let mut entry = make_entry();
+        entry.status = ReviewerStatus::InProgress;
+        entry.finished_at = None;
+        entry.current_phase = Some(ReviewPhase::Ingestion);
+        entry.verdict = None;
+        entry.report_file = None;
+        entry.extra.insert("json_null".to_string(), Value::Null);
+        entry.extra.insert(
+            "json_u64".to_string(),
+            Value::Number(serde_json::Number::from(u64::MAX)),
+        );
+        entry.extra.insert(
+            "json_nested".to_string(),
+            serde_json::json!({
+                "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
+            }),
+        );
+        entry.extra.insert(
+            "json_reserved_scalar_shape".to_string(),
+            serde_json::json!({
+                "__mpcr_json_type": "scalar",
+                "__mpcr_json_value": "foo"
+            }),
+        );
+        entry.extra.insert(
+            "json_reserved_scalar_shape_null".to_string(),
+            serde_json::json!({
+                "__mpcr_json_type": "scalar",
+                "__mpcr_json_value": "null"
+            }),
+        );
+        entry.extra.insert(
+            "json_user_escape_marker".to_string(),
+            serde_json::json!({
+                "__mpcr_json_escape": "object",
+                "keep": true
+            }),
+        );
+
+        let mut session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        session.extra.insert("top_null".to_string(), Value::Null);
+        session.extra.insert(
+            "top_u64".to_string(),
+            Value::Number(serde_json::Number::from(u64::MAX)),
+        );
+
+        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
+
+        let parsed = read_session_file(&session_dir)?;
+        ensure!(parsed.extra.get("top_null") == Some(&Value::Null));
+        ensure!(
+            parsed.extra.get("top_u64") == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
+        );
+
+        let review = parsed
+            .reviews
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing review"))?;
+        ensure!(review.extra.get("json_null") == Some(&Value::Null));
+        ensure!(
+            review.extra.get("json_u64")
+                == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
+        );
+        ensure!(
+            review.extra.get("json_nested")
+                == Some(&serde_json::json!({
+                    "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
+                }))
+        );
+        ensure!(
+            review.extra.get("json_reserved_scalar_shape")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_type": "scalar",
+                    "__mpcr_json_value": "foo"
+                }))
+        );
+        ensure!(
+            review.extra.get("json_reserved_scalar_shape_null")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_type": "scalar",
+                    "__mpcr_json_value": "null"
+                }))
+        );
+        ensure!(
+            review.extra.get("json_user_escape_marker")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_escape": "object",
+                    "keep": true
+                }))
+        );
+
+        let written: toml::Value =
+            toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
+        ensure!(
+            written
+                .get("top_null")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("__mpcr_json_value"))
+                .and_then(toml::Value::as_str)
+                == Some("null")
+        );
+        ensure!(
+            written
+                .get("top_u64")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("__mpcr_json_value"))
+                .and_then(toml::Value::as_str)
+                == Some("u64:18446744073709551615")
+        );
+        ensure!(
+            written
+                .get("reviews")
+                .and_then(toml::Value::as_array)
+                .and_then(|reviews| reviews.first())
+                .and_then(|review| review.get("json_reserved_scalar_shape"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
+                .and_then(toml::Value::as_str)
+                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
+        );
+        ensure!(
+            written
+                .get("reviews")
+                .and_then(toml::Value::as_array)
+                .and_then(|reviews| reviews.first())
+                .and_then(|review| review.get("json_user_escape_marker"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
+                .and_then(toml::Value::as_str)
+                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
+        );
         Ok(())
     }
 
@@ -2758,11 +3994,13 @@ pub struct RegisterReviewerResult {
     pub session_dir: String,
     /// Session file path as a string.
     pub session_file: String,
+    /// Storage format used for the session artifact.
+    pub session_format: SessionStorageFormat,
 }
 
 /// Register a reviewer in the session file.
 ///
-/// This creates the session directory and `_session.json` if needed, adds the reviewer to the
+/// This creates the session directory and `_session.toml` if needed, adds the reviewer to the
 /// `reviewers` list (if missing), and appends a new entry in `reviews` unless one already exists
 /// for the same `(reviewer_id, session_id)`.
 ///
@@ -2798,7 +4036,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         LockConfig::default(),
     )?;
 
-    let mut session = if params.session.session_file().exists() {
+    let mut session = if resolve_active_session_artifact(params.session.session_dir())?.is_some() {
         read_session_file(params.session.session_dir())?
     } else {
         let repo_root = params
@@ -2966,13 +4204,15 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
         if changed {
             write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
         }
+        let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
 
         return Ok(RegisterReviewerResult {
             reviewer_id,
             parent_id: parent_id_for_result,
             session_id,
             session_dir: params.session.session_dir().to_string_lossy().to_string(),
-            session_file: params.session.session_file().to_string_lossy().to_string(),
+            session_file: artifact.path.to_string_lossy().to_string(),
+            session_format: artifact.format,
         });
     }
 
@@ -3027,13 +4267,15 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
     }
 
     write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
+    let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
 
     Ok(RegisterReviewerResult {
         reviewer_id,
         parent_id: parent_id_for_result,
         session_id,
         session_dir: params.session.session_dir().to_string_lossy().to_string(),
-        session_file: params.session.session_file().to_string_lossy().to_string(),
+        session_file: artifact.path.to_string_lossy().to_string(),
+        session_format: artifact.format,
     })
 }
 
@@ -3080,6 +4322,8 @@ pub struct SpawnChildReviewersResult {
     pub session_dir: String,
     /// Session file path as a string.
     pub session_file: String,
+    /// Storage format used for the session artifact.
+    pub session_format: SessionStorageFormat,
     /// Spawned child reviewer identifiers.
     pub children: Vec<SpawnedChildReviewer>,
 }
@@ -3095,6 +4339,7 @@ pub struct SpawnChildReviewersResult {
 /// # Errors
 /// Returns an error if the parent entry cannot be found, identifiers are invalid,
 /// the session cannot be read or written, or the lock cannot be acquired.
+#[allow(clippy::too_many_lines)]
 pub fn spawn_child_reviewers(
     params: SpawnChildReviewersParams,
 ) -> anyhow::Result<SpawnChildReviewersResult> {
@@ -3107,11 +4352,10 @@ pub fn spawn_child_reviewers(
         return Err(anyhow::anyhow!("count must be <= {MAX_SPAWN_CHILDREN}"));
     }
 
-    let session_file = params.session.session_file();
-    if !session_file.exists() {
+    if resolve_active_session_artifact(params.session.session_dir())?.is_none() {
         return Err(anyhow::anyhow!(
             "session file not found: {} (run `mpcr reviewer register` first)",
-            session_file.display()
+            session_file_path(params.session.session_dir()).display()
         ));
     }
 
@@ -3203,13 +4447,15 @@ pub fn spawn_child_reviewers(
     }
 
     write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+    let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
 
     Ok(SpawnChildReviewersResult {
         parent_id: params.parent_reviewer_id,
         session_id: params.session_id,
         target_ref: params.target_ref,
         session_dir: params.session.session_dir().to_string_lossy().to_string(),
-        session_file: params.session.session_file().to_string_lossy().to_string(),
+        session_file: artifact.path.to_string_lossy().to_string(),
+        session_format: artifact.format,
         children,
     })
 }
@@ -3319,6 +4565,8 @@ pub struct FinalizeReviewParams {
     pub counts: SeverityCounts,
     /// Report input source for finalization.
     pub report_input: FinalizeReportInput,
+    /// Validation contract for report markdown.
+    pub validation_kind: ReportValidationKind,
     /// Preserve the input report file when `report_input` is [`FinalizeReportInput::File`].
     pub copy_input_report: bool,
     /// Auto-close unresolved child reviews under this reviewer before finalizing.
@@ -3355,6 +4603,14 @@ fn write_markdown_report_file(
     f.flush()
         .with_context(|| format!("flush report file {}", report_path.display()))?;
     Ok(())
+}
+
+fn load_report_markdown(report_input: &FinalizeReportInput) -> anyhow::Result<String> {
+    match report_input {
+        FinalizeReportInput::Markdown(markdown) => Ok(markdown.clone()),
+        FinalizeReportInput::File(path) => std::fs::read_to_string(path)
+            .with_context(|| format!("read report input file {}", path.display())),
+    }
 }
 
 fn same_file_path(a: &Path, b: &Path) -> bool {
@@ -3405,7 +4661,16 @@ fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
     }
 }
 
-/// Finalize a review entry: write the report file and update `_session.json`.
+const fn severity_contract(counts: &SeverityCounts) -> SeverityExpectation {
+    SeverityExpectation {
+        blocker: counts.blocker,
+        major: counts.major,
+        minor: counts.minor,
+        nit: counts.nit,
+    }
+}
+
+/// Finalize a review entry: write the report file and update the session artifact.
 ///
 /// The entire operation is performed under a single session lock to prevent
 /// concurrent mutations between read, report write, and session update.
@@ -3418,6 +4683,14 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_auto_close_status(params.auto_close_children_status)?;
+    let report_markdown = load_report_markdown(&params.report_input)?;
+    validate_report_markdown(
+        &report_markdown,
+        params.validation_kind,
+        Some(severity_contract(&params.counts)),
+        None,
+    )
+    .context("validate report artifact")?;
 
     // Hold a single lock across read, report write, and session update to
     // prevent concurrent mutations between steps.
@@ -3467,14 +4740,22 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
             .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
         (parse_ts(&entry.started_at)?, entry.target_ref.clone())
     };
+    let identity_expectation = ReportIdentityExpectation {
+        reviewer_id: params.reviewer_id.clone(),
+        session_id: params.session_id.clone(),
+        target_ref: target_ref.clone(),
+    };
 
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
+    let mut report_path_created = false;
+    let mut moved_source_path: Option<PathBuf> = None;
 
     // Step 2: write/move report file (still under the lock).
     match params.report_input {
         FinalizeReportInput::Markdown(report_markdown) => {
             write_markdown_report_file(&report_path, report_markdown)?;
+            report_path_created = true;
         }
         FinalizeReportInput::File(source_path) => {
             if !source_path.exists() {
@@ -3502,9 +4783,40 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                     copy_file(&source_path, &report_path)?;
                 } else {
                     move_file(&source_path, &report_path)?;
+                    moved_source_path = Some(source_path);
                 }
+                report_path_created = true;
             }
         }
+    }
+
+    let persisted_report_markdown = fs::read_to_string(&report_path)
+        .with_context(|| format!("read persisted report file {}", report_path.display()))?;
+    if let Err(validation_err) = validate_report_markdown(
+        &persisted_report_markdown,
+        params.validation_kind,
+        Some(severity_contract(&params.counts)),
+        Some(&identity_expectation),
+    ) {
+        if report_path_created {
+            if let Some(source_path) = moved_source_path {
+                move_file(&report_path, &source_path).with_context(|| {
+                    format!(
+                        "rollback moved report file after validation failure {} -> {}",
+                        report_path.display(),
+                        source_path.display()
+                    )
+                })?;
+            } else {
+                fs::remove_file(&report_path).with_context(|| {
+                    format!(
+                        "rollback report file after validation failure {}",
+                        report_path.display()
+                    )
+                })?;
+            }
+        }
+        return Err(validation_err).context("validate report artifact under lock");
     }
 
     let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
@@ -3585,7 +4897,7 @@ pub struct AppendNoteParams {
     pub content: Value,
     /// Timestamp written for the note and `updated_at`.
     pub now: OffsetDateTime,
-    /// Lock owner id8 used while updating `_session.json`.
+    /// Lock owner id8 used while updating the session artifact.
     pub lock_owner: String,
 }
 
@@ -3653,7 +4965,7 @@ pub struct SetInitiatorStatusParams {
     pub initiator_status: InitiatorStatus,
     /// Timestamp written to `updated_at`.
     pub now: OffsetDateTime,
-    /// Lock owner id8 used while updating `_session.json`.
+    /// Lock owner id8 used while updating the session artifact.
     pub lock_owner: String,
 }
 
