@@ -2,118 +2,157 @@
 name: skill-auditor
 description: >-
   Perform structured, reproducible audits of agent skills — testing mechanical
-  correctness, agent usability, output quality, context efficiency, and
-  multi-agent coordination. Use when auditing, evaluating, or health-checking
-  a skill end-to-end — testing scripts and CLIs, measuring context/token
-  footprint, checking name consistency, evaluating dispatch prompt quality,
-  simulating agent workflows, or producing structured audit reports with
-  severity-rated findings.
+  correctness, agent usability, output quality, context efficiency, EARS
+  compliance, prompt complexity, multi-agent coordination, audit convergence
+  (reproducibility across runs), finding divergence (specificity and
+  tailoring), AGENTS.md adherence (rule absorption verification), and
+  documentation/runtime staleness drift detection, and CLI discoverability
+  helper coverage. Covers 22 audit domains (D1–D22) with confidence-scored
+  findings at every level.
+  Use when (1) auditing or health-checking a skill end-to-end, (2) verifying
+  AGENTS.md adherence, audit convergence, or finding divergence, or (3)
+  validating scripts, CLIs, context/token footprint, EARS requirement syntax,
+  prompt complexity, name consistency, dispatch prompt quality, or structured
+  confidence-scored audit reports.
 ---
 
 # Skill Auditor
 
-A structured, phased audit framework for evaluating agent skills. The goal is
-to find every way a skill can fail, confuse, or waste tokens for an agent —
-then produce a clear, actionable report.
-
-## Why this matters
-
-Skills are force-multipliers: a well-built skill gets used thousands of times.
-A bug in a skill doesn't just fail once — it fails every time an agent triggers
-it. A name mismatch between docs and CLI wastes tokens on every invocation. A
-20KB document that could be 5KB burns context budget across every session. The
-audit catches these issues before they compound.
+A structured, phased audit framework for evaluating agent skills. The auditor
+checks every way a skill can fail, confuse, or waste tokens for an agent —
+then produces a clear, actionable report with confidence-scored findings.
 
 ---
 
 ## Workflow overview
 
-Every audit follows five phases, each with a clear scope and time budget. You
-work through them in order because later phases depend on earlier findings.
+Every audit follows five primary phases plus a deterministic duplication gate.
+You SHALL work through them in order WHEN later phases depend on earlier
+findings.
 
-| Phase | Name | Budget | Why it's first/here |
-|-------|------|--------|-------------------|
-| 1 | Environment & Build | ~15% | Dead scripts block everything else |
-| 2 | API Surface Exhaustion | ~25% | Name mismatches are the #1 agent failure mode |
-| 3 | Workflow Simulation | ~30% | The agent's actual experience is the ground truth |
-| 4 | Context & Token Analysis | ~15% | Quantifies what phases 1-3 found qualitatively |
-| 5 | Output Quality | ~15% | Checks depth, consistency, and tailoring |
+| Phase | Name                  | Budget | Focus                                     |
+|-------|-----------------------|--------|-------------------------------------------|
+| 1     | Environment & Build   | ~15%   | Dead scripts block everything else        |
+| 2     | API Surface           | ~25%   | Name mismatches are the #1 agent failure mode |
+| 3     | Workflow Simulation   | ~30%   | The agent's actual experience             |
+| 4     | Context & Token       | ~15%   | Quantifies what phases 1-3 found          |
+| 4b    | Duplication Gate      | ~5%    | Deterministic duplicate/contradiction gate |
+| 5     | Output Quality        | ~15%   | Depth, consistency, EARS, complexity      |
 
-If the skill orchestrates subagents (dispatches workers, uses multi-agent
-patterns), add **Phase 3b: Multi-Agent Audit** between phases 3 and 4.
+WHEN the skill orchestrates subagents (dispatches workers, uses multi-agent
+patterns), THEN you SHALL add **Phase 3b: Multi-Agent Audit** between phases
+3 and 4.
 
-Read `<skills-file-root>/references/audit-phases.md` for the detailed
-instructions for each phase. This document covers the overall approach,
-severity framework, and report structure.
+---
+
+## Audit domains
+
+Each audit activates a subset of 22 domains (D1–D22) based on the skill's
+characteristics. Domains map AGENTS.md rules to concrete checks with scripts
+and severity mappings.
+
+You SHALL read `<skills-file-root>/references/domains.md` and load only the
+domains activated for the current audit.
+
+### Domain activation (quick reference)
+
+| Skill characteristic            | Domains to activate           |
+|---------------------------------|-------------------------------|
+| Universal (always)              | D1, D2, D3, D4, D6, D8, D18, D20, D21 |
+| Has `scripts/`                  | + D12                         |
+| Has `references/`               | + D16, D17                    |
+| Dispatches subagents            | + D9                          |
+| CLI-heavy                       | + D5, D7, D10, D11, D22       |
+| Instruction-heavy               | + D14, D15                    |
+| Cross-skill deps                | + D13                         |
+| Produces variant outputs        | + D19                         |
+| References external rules       | + D20 (already universal)     |
 
 ---
 
 ## Getting started
 
-1. **Identify the skill to audit.** The user will point you to a skill
-   directory or describe which skill to evaluate. Locate its `SKILL.md` and
-   map the directory tree.
+You SHALL follow these steps in order:
 
-2. **Read the skill's SKILL.md end-to-end** to understand intent, triggers,
-   workflows, and claimed deliverables. Don't execute anything yet — just
-   build a mental model.
+1. You SHALL identify the target skill from the user's request or prompt
+   context. Locate its `SKILL.md` and map the directory tree.
 
-3. **Read the audit phase instructions:**
-   ```
-   <skills-file-root>/references/audit-phases.md
-   ```
+2. You SHALL read the target skill's SKILL.md end-to-end to build a mental
+   model. You SHALL NOT execute anything during this step.
 
-4. **Create a fresh workspace** (e.g., `/tmp/audit-workspace/` or any
-   writable directory) for all test artifacts. Keep the skill's own
-   directory untouched.
+3. You SHALL determine which domains to activate using the activation table
+   above and the full rules in `<skills-file-root>/references/domains.md`.
 
-5. **Start Phase 1.** Execute, observe, document. Move through each phase.
+4. You SHALL read the appropriate phase reference before starting:
+   - `<skills-file-root>/references/audit-phases-core.md` — Phases 1–3
+   - `<skills-file-root>/references/audit-phases-analysis.md` — Phases 4–5
 
-6. **Accumulate findings** in a running report file in your workspace as
-   you go. Don't wait until the end — write findings as you discover them.
+5. You SHALL create a fresh workspace in a writable directory (e.g.,
+   `/tmp/audit-workspace/`). You SHALL NOT modify the target skill's
+   directory.
 
-7. **Finalize the report** using the template in
+6. You SHALL start Phase 1 and proceed through each phase in order.
+
+7. You SHALL write findings to a running report file as you discover them.
+   You SHALL NOT defer finding documentation until report finalization.
+
+8. WHEN all phases are complete THEN you SHALL finalize the report using
    `<skills-file-root>/references/report-template.md`.
+
+---
+
+## Confidence scoring
+
+Every finding gets a confidence level alongside its severity. This separates
+script-verified facts from agent-inferred patterns.
+
+| Level  | Tag   | Source                          |
+|--------|-------|---------------------------------|
+| HIGH   | `[H]` | Deterministic script output     |
+| MEDIUM | `[M]` | Agent inspection with evidence  |
+| LOW    | `[L]` | Pattern matching without trace  |
+
+You SHALL read `<skills-file-root>/references/confidence-scoring.md` for the
+full assignment rules, gated verdicts, and aggregate scoring formula.
+
+You SHALL assign a confidence level to EVERY finding as you discover it.
+You SHALL NOT defer confidence assignment to report finalization. WHEN a
+finding originates from script output, THEN confidence SHALL be HIGH. WHEN
+a finding originates from agent inspection with traced evidence, THEN
+confidence SHALL be MEDIUM. WHEN a finding originates from pattern matching
+without a full trace, THEN confidence SHALL be LOW.
 
 ---
 
 ## Severity framework
 
-Use these consistently throughout the audit. The key distinction: severity is
-about agent impact, not code quality in the abstract.
+| Severity    | Definition                                         | Agent impact                          |
+|-------------|----------------------------------------------------|---------------------------------------|
+| **BLOCKER** | Workflow cannot proceed. No workaround.             | Agent fails or enters error loop.     |
+| **MAJOR**   | Workflow proceeds with wasted tokens or wrong output.| Degraded quality or efficiency.       |
+| **MINOR**   | Suboptimal but agent can work around it.            | Longer path to success.               |
+| **NIT**     | Style, naming, or documentation polish.             | No functional impact.                 |
 
-| Severity | Definition | Agent impact |
-|----------|-----------|--------------|
-| **BLOCKER** | Workflow cannot proceed. No workaround exists. | Agent fails, produces no output, or enters an error loop. |
-| **MAJOR** | Workflow proceeds but agent wastes significant tokens, produces wrong output, or misses critical steps. | Agent completes but with degraded quality or efficiency. |
-| **MINOR** | Suboptimal but agent can work around it without guidance. | Agent succeeds but takes a longer path. |
-| **NIT** | Style, naming, or documentation polish. | No functional impact; affects maintainability. |
-
-A finding's severity should reflect the *worst realistic outcome* for an agent
+A finding's severity SHALL reflect the worst realistic outcome for an agent
 encountering it, not the theoretical worst case.
 
 ---
 
 ## Deciding what to audit
 
-Not every phase applies equally to every skill. Use this to calibrate depth:
-
-| Skill type | Emphasize | De-emphasize |
-|-----------|-----------|-------------|
-| CLI-heavy (has scripts/binaries) | Phase 1, Phase 2 | Phase 5 (if no templates) |
-| Multi-agent orchestrator | Phase 3, Phase 3b | Phase 1 (if no build step) |
-| Document generator (docx, pptx) | Phase 3, Phase 5 | Phase 2 (if no CLI) |
-| Reference-heavy (guidelines, checklists) | Phase 4, Phase 5 | Phase 1, Phase 2 |
-| Workflow skill (gitops, CI/CD) | Phase 1, Phase 3 | Phase 5 |
-
-Spend your time where the skill's complexity lives.
+| Skill type                     | Emphasize          | De-emphasize              |
+|--------------------------------|--------------------|---------------------------|
+| CLI-heavy (scripts/binaries)   | Phase 1, Phase 2   | Phase 5 (if no templates) |
+| Multi-agent orchestrator       | Phase 3, Phase 3b  | Phase 1 (if no build)     |
+| Document generator             | Phase 3, Phase 5   | Phase 2 (if no CLI)       |
+| Reference-heavy (guidelines)   | Phase 4, Phase 5   | Phase 1, Phase 2          |
+| Workflow skill (gitops, CI/CD) | Phase 1, Phase 3   | Phase 5                   |
 
 ---
 
 ## Multi-agent detection
 
-A skill needs the multi-agent audit extension (Phase 3b) when any of these
-are true:
+A skill needs Phase 3b WHEN any of these are true:
 
 - It mentions "subagent", "worker", "dispatch", or "orchestrator"
 - It has dispatch templates, role definitions, or worker prompts
@@ -121,93 +160,96 @@ are true:
 - It has an "orchestrator" mode distinct from "worker" mode
 - Its SKILL.md describes a concurrency cap or agent count
 
-When detected, read `<skills-file-root>/references/multi-agent-audit.md`
-before starting Phase 3.
+WHEN detected, you SHALL read
+`<skills-file-root>/references/multi-agent-audit.md` before starting Phase 3.
 
 ---
 
 ## Test project creation
 
-Phase 3 (Workflow Simulation) requires a test project appropriate to the
-skill's domain. The test project should be:
+Phase 3 requires a test project appropriate to the skill's domain:
 
-- **Minimal but non-trivial.** Enough code/content to exercise the skill's
-  core functionality, but not so large it becomes the audit's bottleneck.
-- **Deliberately flawed.** Include 3-5 known issues the skill should find
-  (if the skill is a reviewer/linter/checker).
-- **Self-contained.** No external dependencies beyond what the skill expects.
-- **Version-controlled.** Initialize git so diff-based skills have something
-  to work with.
+- **Minimal but non-trivial** — enough to exercise core functionality.
+- **Deliberately flawed** — include 3–5 known issues the skill should find.
+- **Self-contained** — no external dependencies beyond what the skill expects.
+- **Version-controlled** — initialize git for diff-based skills.
 
-For common skill types:
-
-| Skill domain | Test project suggestion |
-|-------------|----------------------|
-| Code review | Small app (100-200 LOC) with security, performance, and design issues |
-| Document generation | 2-3 page outline with mixed content types |
-| CI/CD / DevOps | Minimal project needing build, test, deploy config |
-| Data processing | Small CSV/JSON with edge cases (missing fields, encoding issues) |
-| Frontend / design | Simple component with styling and interaction |
+| Skill domain       | Test project suggestion                              |
+|--------------------|------------------------------------------------------|
+| Code review        | Small app (100–200 LOC) with security/design issues  |
+| Document generation| 2–3 page outline with mixed content types            |
+| CI/CD / DevOps     | Minimal project needing build/test/deploy config     |
+| Data processing    | Small CSV/JSON with edge cases                       |
 
 ---
 
 ## Running scripts
 
-The skill includes helper scripts for common audit measurements. These are
-optional accelerators — you can do everything manually if needed.
+Helper scripts accelerate deterministic checks. These are optional — you can
+perform equivalent checks manually.
 
-| Script | Purpose | When to use |
-|--------|---------|-------------|
-| `scripts/surface_check.sh <skill-dir>` | Check CRLF, permissions, shebangs, file structure | Phase 1 |
-| `scripts/measure_context.sh <skill-dir> [--cli <binary>] [--cli-mode help|run]` | Measure chars/tokens of all docs and CLI outputs (default help-only probing for safety) | Phase 4 |
-
-Both scripts are self-contained and produce structured output you can paste
-directly into the audit report.
-
-**Recommended safe invocation (CLI probing):**
-```bash
-<skills-file-root>/scripts/measure_context.sh <skill-dir> --cli <binary> --cli-mode help
-```
+| Script | Purpose | Phase |
+|--------|---------|-------|
+| `<skills-file-root>/scripts/surface_check.sh <skill-directory>` | CRLF, permissions, shebangs, structure | 1 |
+| `<skills-file-root>/scripts/measure_context.sh <skill-directory> [--cli <bin>]` | Chars/tokens of docs and CLI outputs | 4 |
+| `<skills-file-root>/scripts/frontmatter_check.sh <skill-directory>` | Frontmatter validity (D2) | 1 |
+| `<skills-file-root>/scripts/description_check.sh <skill-directory>` | Description quality (D3) | 1 |
+| `<skills-file-root>/scripts/path_token_check.sh <skill-directory>` | Path token usage (D4) | 1 |
+| `<skills-file-root>/scripts/cold_start_check.sh <skill-directory>` | Cold-start timing (D11) | 1 |
+| `<skills-file-root>/scripts/dependency_check.sh <skill-directory>` | Script dependencies (D12) | 1 |
+| `<skills-file-root>/scripts/name_consistency_check.sh <skill-directory> --cli <bin>` | Name consistency (D5) | 2 |
+| `<skills-file-root>/scripts/error_quality_check.sh <skill-directory> --cli <bin>` | Error message quality (D7) | 2 |
+| `<skills-file-root>/scripts/output_size_check.sh <skill-directory> --cli <bin>` | Output size discipline (D10) | 2 |
+| `<skills-file-root>/scripts/staleness_check.sh <skill-directory> [--cli <bin>] [--format text|json]` | Documentation/runtime staleness drift (D21) | 2 |
+| `<skills-file-root>/scripts/discoverability_check.sh <skill-directory> [--cli <bin>] [--format text|json]` | CLI discoverability helper coverage (D22) | 2 |
+| `<skills-file-root>/scripts/ears_check.sh <skill-directory>` | EARS compliance (D14) | 5 |
+| `<skills-file-root>/scripts/prompt_complexity_check.sh <skill-directory>` | Prompt complexity (D15) | 5 |
+| `<skills-file-root>/scripts/duplication_check.sh <skill-directory> [--scope operative|advisory|all] [--format text|json] [--max-hops N]` | Deterministic duplication detection and gate (D16) | 4b |
+| `<skills-file-root>/scripts/reference_depth_check.sh <skill-directory>` | Reference depth (D17) | 4 |
 
 ---
 
 ## Report finalization
 
-After completing all phases, compile the final report:
+WHEN all phases are complete THEN you SHALL compile the final report:
 
-1. Read the report template:
-   `<skills-file-root>/references/report-template.md`
-
-2. Fill in each section from your accumulated findings.
-
-3. Write the executive summary LAST — it should synthesize, not introduce.
-
-4. Assign the final verdict:
-   - **SHIP**: Zero BLOCKERs, zero MAJORs. All NITs and MINORs are
-     documented.
-   - **SHIP WITH FIXES**: Zero BLOCKERs, 1-3 MAJORs with clear fixes.
-     List the required fixes.
+1. You SHALL read `<skills-file-root>/references/report-template.md`.
+2. You SHALL fill in each section from accumulated findings.
+3. You SHALL write the executive summary LAST — it synthesizes, not introduces.
+4. You SHALL assign the final verdict:
+   - **SHIP**: Zero BLOCKERs, zero MAJORs.
+   - **SHIP WITH FIXES**: Zero BLOCKERs, 1–3 MAJORs with clear fixes.
    - **DO NOT SHIP**: Any BLOCKERs, or MAJORs requiring design rethink.
-     List the blockers.
-
-5. Save the final report to the project directory or workspace and
-   present it to the user.
+5. You SHALL include the aggregate confidence score and distribution.
+6. You SHALL verify D18 (convergence): WHEN any script produces different
+   output on a second run against the same unchanged target, THEN you SHALL
+   flag the variance as a D18 finding.
+7. You SHALL treat D16 as a deterministic gate: operative duplication
+   findings MAY block shipment, advisory-only duplication findings SHALL NOT.
+8. You SHALL verify D19 (divergence): WHEN >40% of findings lack
+   skill-specific file:line anchors, THEN you SHALL flag insufficient
+   divergence as a D19 finding.
+9. You SHALL verify D20 (adherence): WHEN any AGENTS.md rule lacks a
+   corresponding audit domain or check, THEN you SHALL flag the gap as a
+   D20 finding.
+10. You SHALL verify D21 (staleness drift): WHEN documented commands or
+    examples no longer match current runtime behavior, THEN you SHALL flag
+    the mismatch as a D21 finding with script evidence where available.
+11. You SHALL verify D22 (CLI discoverability): WHEN enum-like CLI parameters
+    are documented but no one-step discovery helper exists (`--help`, `--list`,
+    or equivalent), THEN you SHALL flag a D22 finding.
 
 ---
 
 ## Reference index
 
-Load only what you need for the current phase.
+You SHALL load only the reference needed for the current phase.
 
 | File | When to read |
 |------|-------------|
-| `references/audit-phases.md` | Before starting Phase 1 — contains all phase details |
-| `references/multi-agent-audit.md` | Before Phase 3 when skill orchestrates subagents |
-| `references/report-template.md` | During report finalization |
-
-## Script index
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/surface_check.sh` | CRLF, permissions, shebang, structure checks |
-| `scripts/measure_context.sh` | Character/token measurement for context analysis (supports `--cli <binary>` and safe `--cli-mode help|run`) |
+| `<skills-file-root>/references/audit-phases-core.md` | Before Phase 1 — Phases 1–3 details |
+| `<skills-file-root>/references/audit-phases-analysis.md` | Before Phase 4 — Phases 4–5 details |
+| `<skills-file-root>/references/domains.md` | During domain activation — load activated domains only |
+| `<skills-file-root>/references/confidence-scoring.md` | During report finalization |
+| `<skills-file-root>/references/multi-agent-audit.md` | Before Phase 3 when skill orchestrates subagents |
+| `<skills-file-root>/references/report-template.md` | During report finalization |
