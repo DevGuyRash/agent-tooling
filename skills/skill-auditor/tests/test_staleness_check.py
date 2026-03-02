@@ -321,6 +321,54 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["runtime_failed"], 1)
         self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
 
+    def test_timeout_does_not_leave_descendant_zombie(self):
+        if not shutil.which("setsid"):
+            self.skipTest("setsid not available on this platform")
+        if not Path("/proc").exists():
+            self.skipTest("/proc is required for zombie state assertion")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            pid_file = skill_dir / "child.pid"
+            script = scripts_dir / "spawn-child.sh"
+            script.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env sh
+                    sleep 20 &
+                    child=$!
+                    echo "$child" > "{pid_file}"
+                    wait "$child"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\nscripts/spawn-child.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--timeout-seconds", "1")
+            child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+            stat_path = Path(f"/proc/{child_pid}/stat")
+            deadline = time.time() + 3.0
+            saw_zombie = False
+            while time.time() < deadline:
+                if not stat_path.exists():
+                    break
+                stat = stat_path.read_text(encoding="utf-8").strip().split()
+                if len(stat) > 2 and stat[2] == "Z":
+                    saw_zombie = True
+                    break
+                time.sleep(0.1)
+
+        self.assertFalse(saw_zombie)
+        self.assertEqual(data["summary"]["runtime_failed"], 1)
+        self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
+
     def test_json_is_backward_compatible_with_new_detail_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
