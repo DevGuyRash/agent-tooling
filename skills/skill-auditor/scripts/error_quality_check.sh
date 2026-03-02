@@ -103,13 +103,13 @@ if [ -d "$scripts_dir" ]; then
         fi
 
         # Check for backtrace patterns
-        if printf '%s' "$err_output" | grep -qiE 'traceback|backtrace|stack trace|at .*\.rs:|panic'; then
+        if printf '%s' "$err_output" | grep -iE 'traceback|backtrace|stack trace|at .*\.rs:|panic' >/dev/null; then
             echo "    ✗ Stack backtrace in error output [MAJOR]"
             script_issues=$((script_issues + 1))
         fi
 
         # Check for error:/hint: format
-        if printf '%s' "$err_output" | grep -q '^error:'; then
+        if printf '%s' "$err_output" | grep '^error:' >/dev/null; then
             echo "    ✓ Uses error: prefix format"
         fi
     done < "$tmplist"
@@ -148,11 +148,11 @@ if [ -n "$CLI_BIN" ]; then
                 echo "    ✓ Error length OK"
             fi
 
-            if printf '%s' "$err_output" | grep -qiE 'traceback|backtrace|stack trace|panic'; then
+            if printf '%s' "$err_output" | grep -iE 'traceback|backtrace|stack trace|panic' >/dev/null; then
                 echo "    ✗ Stack backtrace detected [MAJOR]"
             fi
 
-            if printf '%s' "$err_output" | grep -qiE 'valid|available|expected|try'; then
+            if printf '%s' "$err_output" | grep -iE 'valid|available|expected|try' >/dev/null; then
                 echo "    ✓ Error includes guidance/alternatives"
             else
                 echo "    ⚠ Error lacks valid alternatives [MINOR]"

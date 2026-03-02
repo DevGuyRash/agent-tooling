@@ -85,19 +85,19 @@ while IFS= read -r mdfile; do
         has_conditional=0
 
         # Check for directive keywords (case-sensitive for EARS)
-        if printf '%s' "$line" | grep -qE '\bSHALL\b|\bSHOULD\b|\bMUST\b|\bMAY\b'; then
+        if printf '%s' "$line" | grep -E '\bSHALL\b|\bSHOULD\b|\bMUST\b|\bMAY\b' >/dev/null; then
             has_directive=1
             file_directive=$((file_directive + 1))
         fi
 
         # Check for conditional keywords
-        if printf '%s' "$line" | grep -qE '\bWHEN\b|\bIF\b|\bWHILE\b|\bUNTIL\b|\bTHEN\b'; then
+        if printf '%s' "$line" | grep -E '\bWHEN\b|\bIF\b|\bWHILE\b|\bUNTIL\b|\bTHEN\b' >/dev/null; then
             has_conditional=1
             file_conditional=$((file_conditional + 1))
         fi
 
         # Vague directives
-        if printf '%s' "$line" | grep -qiE 'make sure|ensure that|try to|be careful|consider |remember to'; then
+        if printf '%s' "$line" | grep -iE 'make sure|ensure that|try to|be careful|consider |remember to' >/dev/null; then
             file_vague=$((file_vague + 1))
             printf '%s:%d: %s\n' "$relpath" "$line_num" "$line" >> "$tmpvague"
         fi

@@ -8,6 +8,18 @@
 
 set -eu
 
+extract_reference_links() {
+    awk '
+        {
+            line = $0
+            while (match(line, /references\/[a-z0-9_-]+\.md/)) {
+                print substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+    ' "$1" 2>/dev/null | sort -u || true
+}
+
 case "${1-}" in
     -h|--help)
         echo "Usage: reference_depth_check.sh <skill-directory>"
@@ -96,7 +108,7 @@ while IFS= read -r reffile; do
     lines=$(wc -l < "$reffile" | tr -d ' ')
     if [ "$lines" -gt 300 ]; then
         relpath="${reffile#"$SKILL_DIR"/}"
-        if head -30 "$reffile" | grep -qi 'table of contents\|## contents\|^- \['; then
+        if head -30 "$reffile" | grep -i 'table of contents\|## contents\|^- \[' >/dev/null; then
             echo "  ✓ $relpath ($lines lines) — has TOC"
         else
             echo "  ⚠ $relpath ($lines lines) — missing TOC [MINOR]"
@@ -117,14 +129,14 @@ reachable_refs=$(mktemp)
 trap 'rm -f "$tmplist" "$reachable_refs"' EXIT INT TERM
 
 {
-    grep -oE 'references/[a-z0-9_-]+\.md' "$SKILL_FILE" 2>/dev/null || true
+    extract_reference_links "$SKILL_FILE"
     while IFS= read -r direct_ref; do
         [ -z "$direct_ref" ] && continue
         direct_path="$SKILL_DIR/$direct_ref"
         [ -f "$direct_path" ] || continue
-        grep -oE 'references/[a-z0-9_-]+\.md' "$direct_path" 2>/dev/null || true
+        extract_reference_links "$direct_path"
     done <<EOF
-$(grep -oE 'references/[a-z0-9_-]+\.md' "$SKILL_FILE" 2>/dev/null || true)
+$(extract_reference_links "$SKILL_FILE")
 EOF
 } | sort -u > "$reachable_refs"
 
@@ -133,7 +145,7 @@ while IFS= read -r reffile; do
     relpath="${reffile#"$SKILL_DIR"/}"
     basename_f=$(basename "$reffile")
 
-    if grep -Fxq "$relpath" "$reachable_refs" || grep -Fxq "references/$basename_f" "$reachable_refs"; then
+    if grep -Fx "$relpath" "$reachable_refs" >/dev/null 2>&1 || grep -Fx "references/$basename_f" "$reachable_refs" >/dev/null 2>&1; then
         echo "  ✓ $relpath — reachable within 2 hops from SKILL.md"
     else
         echo "  ⚠ $relpath — ORPHANED (not reachable within 2 hops from SKILL.md) [MINOR]"
@@ -152,7 +164,7 @@ nesting_issues=0
 
 # Helper: resolve references linked from a given file
 get_ref_links() {
-    grep -oE 'references/[a-z0-9_-]+\.md' "$1" 2>/dev/null | sort -u || true
+    extract_reference_links "$1"
 }
 
 # Trace depth from SKILL.md (hop 0) through reference chains

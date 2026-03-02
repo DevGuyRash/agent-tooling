@@ -85,19 +85,44 @@ while IFS= read -r mdfile; do
         prev_blank=0
 
         # Conditional keywords
-        cond_hit=$(printf '%s' "$line" | grep -oE '\bWHEN\b|\bIF\b|\bWHILE\b|\bUNTIL\b|\bTHEN\b' | wc -l | tr -d ' ')
+        cond_hit=$(printf '%s\n' "$line" | awk '
+            {
+                c = 0
+                for (i = 1; i <= NF; i++) {
+                    token = $i
+                    gsub(/^[^A-Za-z]+|[^A-Za-z]+$/, "", token)
+                    if (token == "WHEN" || token == "IF" || token == "WHILE" || token == "UNTIL" || token == "THEN") {
+                        c++
+                    }
+                }
+                print c + 0
+            }
+        ')
         cond=$((cond + cond_hit))
 
         # Negation keywords
-        neg_hit=$(printf '%s' "$line" | grep -oiE 'SHALL NOT|MUST NOT|SHOULD NOT|do NOT|does NOT|will NOT|cannot' | wc -l | tr -d ' ')
+        neg_hit=$(printf '%s\n' "$line" | awk '
+            {
+                l = tolower($0)
+                c = 0
+                c += gsub(/shall not/, "&", l)
+                c += gsub(/must not/, "&", l)
+                c += gsub(/should not/, "&", l)
+                c += gsub(/do not/, "&", l)
+                c += gsub(/does not/, "&", l)
+                c += gsub(/will not/, "&", l)
+                c += gsub(/cannot/, "&", l)
+                print c + 0
+            }
+        ')
         neg=$((neg + neg_hit))
 
         # Cross-references
-        xref_hit=$(printf '%s' "$line" | grep -oE '<skills-file-root>' | wc -l | tr -d ' ')
+        xref_hit=$(printf '%s\n' "$line" | awk '{ c = gsub(/<skills-file-root>/, "&"); print c + 0 }')
         xref=$((xref + xref_hit))
 
         # Placeholder variables
-        vars_hit=$(printf '%s' "$line" | grep -oE '<[A-Z][A-Z_-]+>|\$[A-Z_]+|\{[A-Z_]+\}' | wc -l | tr -d ' ')
+        vars_hit=$(printf '%s\n' "$line" | awk '{ c = gsub(/<[A-Z][A-Z_-]+>|\$[A-Z_][A-Z0-9_]*|\{[A-Z_]+\}/, "&"); print c + 0 }')
         vars=$((vars + vars_hit))
 
     done < "$mdfile"

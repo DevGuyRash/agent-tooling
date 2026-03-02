@@ -299,7 +299,7 @@ while IFS= read -r script; do
                     fi
                 done
 
-                if printf '%s\n' "$func_names" | grep -Fxq "$cmd"; then
+                if printf '%s\n' "$func_names" | grep -Fx "$cmd" >/dev/null; then
                     continue
                 fi
 

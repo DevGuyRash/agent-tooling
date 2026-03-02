@@ -14,6 +14,27 @@ CLI_BIN=""
 FORMAT="text"
 TAB=$(printf '\t')
 
+extract_enum_options() {
+    awk '
+        {
+            line = $0
+            while (match(line, /--[a-z][a-z0-9-]*[[:space:]]+<[^>]+>/)) {
+                chunk = substr(line, RSTART, RLENGTH)
+                split(chunk, fields, /[[:space:]]+/)
+                print fields[1]
+                line = substr(line, RSTART + RLENGTH)
+            }
+            line = $0
+            while (match(line, /--(role|mode|phase|status|type)[[:space:]]+[a-z][a-z0-9_-]*/)) {
+                chunk = substr(line, RSTART, RLENGTH)
+                split(chunk, fields, /[[:space:]]+/)
+                print fields[1]
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+    ' "$1" 2>/dev/null || true
+}
+
 require_opt_value() {
     opt="$1"
     val="${2-}"
@@ -105,8 +126,7 @@ find "$SKILL_DIR" -type f -name '*.md' \
 : > "$tmp_opts"
 while IFS= read -r md; do
     [ -z "$md" ] && continue
-    grep -hoE -- '--[a-z][a-z0-9-]*[[:space:]]+<[^>]+>' "$md" 2>/dev/null | awk '{print $1}' >> "$tmp_opts" || true
-    grep -hoE -- '--(role|mode|phase|status|type)[[:space:]]+[a-z][a-z0-9_-]*' "$md" 2>/dev/null | awk '{print $1}' >> "$tmp_opts" || true
+    extract_enum_options "$md" >> "$tmp_opts"
 done < "$tmp_md"
 sort -u "$tmp_opts" -o "$tmp_opts"
 
@@ -200,7 +220,7 @@ while IFS= read -r opt; do
         status="cli-unavailable"
         evidence="CLI binary is not executable"
     elif [ "$cli_help_checked" -eq 1 ]; then
-        if grep -q -- "$opt" "$tmp_help"; then
+        if grep -- "$opt" "$tmp_help" >/dev/null; then
             status="found-in-help"
             evidence="option appears in CLI help corpus"
         else

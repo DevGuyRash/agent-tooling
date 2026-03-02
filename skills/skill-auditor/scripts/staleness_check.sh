@@ -269,29 +269,29 @@ strip_quotes() {
 
 is_assignment_token() {
     tok="$1"
-    printf '%s' "$tok" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*$'
+    printf '%s' "$tok" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*$' >/dev/null
 }
 
 has_safe_indicator() {
     input_cmd="$1"
-    printf '%s' "$input_cmd" | grep -qE '(^|[[:space:]])(--help|-h|--version|version|help|list)([[:space:]]|$)'
+    printf '%s' "$input_cmd" | grep -E '(^|[[:space:]])(--help|-h|--version|version|help|list)([[:space:]]|$)' >/dev/null
 }
 
 is_placeholder_command() {
     cmd="$1"
-    if printf '%s' "$cmd" | grep -qE '<[^>]+>'; then
+    if printf '%s' "$cmd" | grep -E '<[^>]+>' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$cmd" | grep -qE '\[[^]]+\]'; then
+    if printf '%s' "$cmd" | grep -E '\[[^]]+\]' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$cmd" | grep -qE '\{\{[^}]+\}\}'; then
+    if printf '%s' "$cmd" | grep -E '\{\{[^}]+\}\}' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$cmd" | grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*'; then
+    if printf '%s' "$cmd" | grep -E '\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$cmd" | grep -qE '(^|[[:space:]])(path/to/|owner/repo)([[:space:]]|$)'; then
+    if printf '%s' "$cmd" | grep -E '(^|[[:space:]])(path/to/|owner/repo)([[:space:]]|$)' >/dev/null; then
         return 0
     fi
     return 1
@@ -300,16 +300,16 @@ is_placeholder_command() {
 is_unsafe_syntax() {
     cmd="$1"
     scrubbed=$(printf '%s' "$cmd" | sed -E 's#<[^>]+>##g')
-    if printf '%s' "$scrubbed" | grep -qE '[|;&]'; then
+    if printf '%s' "$scrubbed" | grep -E '[|;&]' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$scrubbed" | grep -q '\$('; then
+    if printf '%s' "$scrubbed" | grep '\$(' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$scrubbed" | grep -q '`'; then
+    if printf '%s' "$scrubbed" | grep '`' >/dev/null; then
         return 0
     fi
-    if printf '%s' "$scrubbed" | grep -qE '[[:space:]]>[[:space:]]|[[:space:]]<[[:space:]]|>>|<<'; then
+    if printf '%s' "$scrubbed" | grep -E '[[:space:]]>[[:space:]]|[[:space:]]<[[:space:]]|>>|<<' >/dev/null; then
         return 0
     fi
     return 1
@@ -335,7 +335,7 @@ reason_text() {
 
 is_unknown_option_error() {
     input_line="$1"
-    printf '%s' "$input_line" | grep -qiE 'unknown option|unknown flag|unrecognized option|invalid option|unexpected argument|unknown subcommand|unknown command'
+    printf '%s' "$input_line" | grep -iE 'unknown option|unknown flag|unrecognized option|invalid option|unexpected argument|unknown subcommand|unknown command' >/dev/null
 }
 
 run_command() {
@@ -343,22 +343,42 @@ run_command() {
     run_out_file=$(mktemp)
     timeout_flag=$(mktemp)
     rm -f "$timeout_flag"
+    run_pgid=""
 
-    (
-        set +e
-        # Command candidates already pass placeholder and unsafe syntax filters.
-        # Use a nested shell to preserve quoted argument grouping for deterministic checks.
-        sh -c "$run_cmd"
-    ) >"$run_out_file" 2>&1 &
-    run_pid=$!
+    if command -v setsid >/dev/null 2>&1; then
+        (
+            set +e
+            # Run command in a dedicated session so timeout cleanup can terminate
+            # the whole process group, including descendants.
+            setsid sh -c "$run_cmd"
+        ) >"$run_out_file" 2>&1 &
+        run_pid=$!
+        run_pgid="$run_pid"
+    else
+        (
+            set +e
+            # Command candidates already pass placeholder and unsafe syntax filters.
+            # Use a nested shell to preserve quoted argument grouping for deterministic checks.
+            sh -c "$run_cmd"
+        ) >"$run_out_file" 2>&1 &
+        run_pid=$!
+    fi
 
     (
         sleep "$TIMEOUT_SECONDS"
         if kill -0 "$run_pid" 2>/dev/null; then
             echo "1" > "$timeout_flag"
-            kill "$run_pid" 2>/dev/null || true
+            if [ -n "$run_pgid" ]; then
+                kill -TERM "-$run_pgid" 2>/dev/null || true
+            else
+                kill "$run_pid" 2>/dev/null || true
+            fi
             sleep 1
-            kill -9 "$run_pid" 2>/dev/null || true
+            if [ -n "$run_pgid" ]; then
+                kill -KILL "-$run_pgid" 2>/dev/null || true
+            else
+                kill -9 "$run_pid" 2>/dev/null || true
+            fi
         fi
     ) &
     watchdog_pid=$!
@@ -583,7 +603,7 @@ while IFS= read -r candidate_row; do
             elif [ -n "$CLI_BIN" ]; then
                 fallback_cmd=""
                 subcmd=""
-                if [ -n "$arg1" ] && ! printf '%s' "$arg1" | grep -qE '^-' && ! is_placeholder_command "$arg1"; then
+                if [ -n "$arg1" ] && ! printf '%s' "$arg1" | grep -E '^-' >/dev/null && ! is_placeholder_command "$arg1"; then
                     subcmd="$arg1"
                 fi
 

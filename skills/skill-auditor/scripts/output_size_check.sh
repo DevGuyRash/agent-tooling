@@ -132,7 +132,7 @@ if [ -n "$CLI_BIN" ]; then
         # Check for filtering flags
         echo ""
         echo "── Filtering Flag Check ──"
-        if printf '%s' "$output" | grep -qiE '\-\-summary|\-\-quiet|\-\-json|\-\-compact|\-\-fields|\-\-max-items'; then
+        if printf '%s' "$output" | grep -iE '\-\-summary|\-\-quiet|\-\-json|\-\-compact|\-\-fields|\-\-max-items' >/dev/null; then
             echo "  ✓ Filtering flags available"
         else
             echo "  ⚠ No filtering flags detected (--summary, --json, --compact) [MINOR]"

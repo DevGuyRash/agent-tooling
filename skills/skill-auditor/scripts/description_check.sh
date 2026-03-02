@@ -104,8 +104,17 @@ echo ""
 echo "── Trigger Conditions ──"
 
 # Count trigger patterns like (1), (2), etc.
-trigger_count=$(printf '%s' "$desc_text" | grep -oE '\([0-9]+\)' | wc -l | tr -d ' ')
-if printf '%s' "$desc_text" | grep -qi 'use when\|use .* when'; then
+trigger_count=$(printf '%s\n' "$desc_text" | awk '
+{
+    line = $0
+    while (match(line, /\([0-9]+\)/)) {
+        c++
+        line = substr(line, RSTART + RLENGTH)
+    }
+}
+END { print c + 0 }
+')
+if printf '%s' "$desc_text" | grep -i 'use when\|use .* when' >/dev/null; then
     echo "  ✓ Contains 'Use when' trigger phrase"
 else
     echo "  ✗ Missing 'Use when' trigger phrase [MAJOR]"
@@ -122,7 +131,7 @@ echo "── Action Verbs ──"
 
 verb_count=0
 for verb in generate validate create build review test analyze audit check deploy configure scaffold measure evaluate produce extract install; do
-    if printf '%s' "$desc_text" | grep -qi "\b${verb}"; then
+    if printf '%s' "$desc_text" | grep -i "\b${verb}" >/dev/null; then
         verb_count=$((verb_count + 1))
     fi
 done
@@ -140,7 +149,7 @@ echo "── Vague Filler ──"
 
 vague_count=0
 for phrase in "helps with" "various tasks" "and more" "etc" "things" "stuff"; do
-    if printf '%s' "$desc_text" | grep -qi "$phrase"; then
+    if printf '%s' "$desc_text" | grep -i "$phrase" >/dev/null; then
         echo "  ⚠ Vague filler: \"$phrase\" [MINOR]"
         vague_count=$((vague_count + 1))
     fi

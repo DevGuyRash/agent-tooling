@@ -102,7 +102,7 @@ if [ -n "$CLI_BIN" ]; then
         help_output=$("$CLI_BIN" --help 2>&1 || true)
 
         # Check if CLI help mentions the skill name
-        if printf '%s' "$help_output" | grep -qi "$DIR_NAME"; then
+        if printf '%s' "$help_output" | grep -i "$DIR_NAME" >/dev/null; then
             echo "  ✓ CLI --help references skill name \"$DIR_NAME\""
         else
             echo "  ⚠ CLI --help does not mention \"$DIR_NAME\" [MINOR]"
@@ -118,13 +118,31 @@ if [ -n "$CLI_BIN" ]; then
 
         # Extract --role, --mode, --phase values from docs
         if [ -f "$SKILL_FILE" ]; then
-            grep -oE '\-\-(role|mode|phase|status|type)\s+[a-z][a-z0-9_-]*' "$SKILL_FILE" 2>/dev/null | \
-                awk '{print $2}' | sort -u > "$tmpnames" || true
+            awk '
+                {
+                    line = $0
+                    while (match(line, /--(role|mode|phase|status|type)[[:space:]]+[a-z][a-z0-9_-]*/)) {
+                        chunk = substr(line, RSTART, RLENGTH)
+                        sub(/^--(role|mode|phase|status|type)[[:space:]]+/, "", chunk)
+                        print chunk
+                        line = substr(line, RSTART + RLENGTH)
+                    }
+                }
+            ' "$SKILL_FILE" 2>/dev/null | sort -u > "$tmpnames" || true
 
             # Also check reference files
             find "$SKILL_DIR/references" -name '*.md' 2>/dev/null | while IFS= read -r ref; do
-                grep -oE '\-\-(role|mode|phase|status|type)\s+[a-z][a-z0-9_-]*' "$ref" 2>/dev/null | \
-                    awk '{print $2}' >> "$tmpnames" || true
+                awk '
+                    {
+                        line = $0
+                        while (match(line, /--(role|mode|phase|status|type)[[:space:]]+[a-z][a-z0-9_-]*/)) {
+                            chunk = substr(line, RSTART, RLENGTH)
+                            sub(/^--(role|mode|phase|status|type)[[:space:]]+/, "", chunk)
+                            print chunk
+                            line = substr(line, RSTART + RLENGTH)
+                        }
+                    }
+                ' "$ref" 2>/dev/null >> "$tmpnames" || true
             done
             sort -u "$tmpnames" -o "$tmpnames"
         fi
@@ -134,7 +152,7 @@ if [ -n "$CLI_BIN" ]; then
             while IFS= read -r dname; do
                 [ -z "$dname" ] && continue
                 # Try to verify against CLI
-                if printf '%s' "$help_output" | grep -qi "$dname"; then
+                if printf '%s' "$help_output" | grep -i "$dname" >/dev/null; then
                     echo "    ✓ $dname — found in CLI help"
                 else
                     echo "    ⚠ $dname — not found in CLI help [MINOR]"

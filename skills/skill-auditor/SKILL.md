@@ -190,22 +190,22 @@ perform equivalent checks manually.
 
 | Script | Purpose | Phase |
 |--------|---------|-------|
-| `<skills-file-root>/scripts/surface_check.sh <dir>` | CRLF, permissions, shebangs, structure | 1 |
-| `<skills-file-root>/scripts/measure_context.sh <dir> [--cli <bin>]` | Chars/tokens of docs and CLI outputs | 4 |
-| `<skills-file-root>/scripts/frontmatter_check.sh <dir>` | Frontmatter validity (D2) | 1 |
-| `<skills-file-root>/scripts/description_check.sh <dir>` | Description quality (D3) | 1 |
-| `<skills-file-root>/scripts/path_token_check.sh <dir>` | Path token usage (D4) | 1 |
-| `<skills-file-root>/scripts/cold_start_check.sh <dir>` | Cold-start timing (D11) | 1 |
-| `<skills-file-root>/scripts/dependency_check.sh <dir>` | Script dependencies (D12) | 1 |
-| `<skills-file-root>/scripts/name_consistency_check.sh <dir> --cli <bin>` | Name consistency (D5) | 2 |
-| `<skills-file-root>/scripts/error_quality_check.sh <dir> --cli <bin>` | Error message quality (D7) | 2 |
-| `<skills-file-root>/scripts/output_size_check.sh <dir> --cli <bin>` | Output size discipline (D10) | 2 |
-| `<skills-file-root>/scripts/staleness_check.sh <dir> [--cli <bin>] [--format text|json]` | Documentation/runtime staleness drift (D21) | 2 |
-| `<skills-file-root>/scripts/discoverability_check.sh <dir> [--cli <bin>] [--format text|json]` | CLI discoverability helper coverage (D22) | 2 |
-| `<skills-file-root>/scripts/ears_check.sh <dir>` | EARS compliance (D14) | 5 |
-| `<skills-file-root>/scripts/prompt_complexity_check.sh <dir>` | Prompt complexity (D15) | 5 |
-| `<skills-file-root>/scripts/duplication_check.sh <dir> [--scope operative|advisory|all] [--format text|json] [--max-hops N]` | Deterministic duplication detection and gate (D16) | 4b |
-| `<skills-file-root>/scripts/reference_depth_check.sh <dir>` | Reference depth (D17) | 4 |
+| `<skills-file-root>/scripts/surface_check.sh <skill-directory>` | CRLF, permissions, shebangs, structure | 1 |
+| `<skills-file-root>/scripts/measure_context.sh <skill-directory> [--cli <bin>]` | Chars/tokens of docs and CLI outputs | 4 |
+| `<skills-file-root>/scripts/frontmatter_check.sh <skill-directory>` | Frontmatter validity (D2) | 1 |
+| `<skills-file-root>/scripts/description_check.sh <skill-directory>` | Description quality (D3) | 1 |
+| `<skills-file-root>/scripts/path_token_check.sh <skill-directory>` | Path token usage (D4) | 1 |
+| `<skills-file-root>/scripts/cold_start_check.sh <skill-directory>` | Cold-start timing (D11) | 1 |
+| `<skills-file-root>/scripts/dependency_check.sh <skill-directory>` | Script dependencies (D12) | 1 |
+| `<skills-file-root>/scripts/name_consistency_check.sh <skill-directory> --cli <bin>` | Name consistency (D5) | 2 |
+| `<skills-file-root>/scripts/error_quality_check.sh <skill-directory> --cli <bin>` | Error message quality (D7) | 2 |
+| `<skills-file-root>/scripts/output_size_check.sh <skill-directory> --cli <bin>` | Output size discipline (D10) | 2 |
+| `<skills-file-root>/scripts/staleness_check.sh <skill-directory> [--cli <bin>] [--format text|json]` | Documentation/runtime staleness drift (D21) | 2 |
+| `<skills-file-root>/scripts/discoverability_check.sh <skill-directory> [--cli <bin>] [--format text|json]` | CLI discoverability helper coverage (D22) | 2 |
+| `<skills-file-root>/scripts/ears_check.sh <skill-directory>` | EARS compliance (D14) | 5 |
+| `<skills-file-root>/scripts/prompt_complexity_check.sh <skill-directory>` | Prompt complexity (D15) | 5 |
+| `<skills-file-root>/scripts/duplication_check.sh <skill-directory> [--scope operative|advisory|all] [--format text|json] [--max-hops N]` | Deterministic duplication detection and gate (D16) | 4b |
+| `<skills-file-root>/scripts/reference_depth_check.sh <skill-directory>` | Reference depth (D17) | 4 |
 
 ---
 

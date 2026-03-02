@@ -70,12 +70,12 @@ else
     else
         echo "  ✗ name \"$name_value\" does NOT match directory \"$DIR_NAME\" [MAJOR]"
     fi
-    if printf '%s' "$name_value" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+    if printf '%s' "$name_value" | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' >/dev/null; then
         echo "  ✓ name format valid (lowercase, hyphens)"
     else
         echo "  ✗ name format invalid — must be lowercase alphanumeric + hyphens [MAJOR]"
     fi
-    if printf '%s' "$name_value" | grep -q -- '--'; then
+    if printf '%s' "$name_value" | grep -- '--' >/dev/null; then
         echo "  ✗ name contains consecutive hyphens (--) [MAJOR]"
     fi
     if [ "$name_len" -gt 64 ]; then
@@ -122,7 +122,7 @@ else
         if [ "$desc_words" -lt 30 ]; then
             echo "  ⚠ description has fewer than 30 words ($desc_words) — may be too brief [MINOR]"
         fi
-        if printf '%s' "$desc_text" | grep -qi 'use when\|use .* when\|use for\|use .* to'; then
+        if printf '%s' "$desc_text" | grep -i 'use when\|use .* when\|use for\|use .* to' >/dev/null; then
             echo "  ✓ description contains trigger conditions"
         else
             echo "  ⚠ description lacks 'Use when' trigger conditions [MAJOR]"

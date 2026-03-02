@@ -42,16 +42,31 @@ trap 'rm -f "$tmpfile"' EXIT INT TERM
 extract_refs() {
     line="$1"
     root="$2"
-    simple_pat="(^|[[:space:]\"])(<skills-file-root>/)?${root}/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*"
-    link_pat="\\]\\((<skills-file-root>/)?${root}/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\\)"
-
-    simple_matches=$(printf '%s\n' "$line" | grep -oE "$simple_pat" | sed -E 's/^[[:space:]\"]//' || true)
-    link_matches=$(printf '%s\n' "$line" | grep -oE "$link_pat" | sed -E 's/^\]\(//' | sed -E 's/\)$//' || true)
-
-    {
-        printf '%s\n' "$simple_matches"
-        printf '%s\n' "$link_matches"
-    } | sed '/^$/d'
+    printf '%s\n' "$line" | awk -v root="$root" '
+        {
+            txt = $0
+            offset = 0
+            while (match(txt, /(<skills-file-root>\/)?[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*/)) {
+                tok = substr(txt, RSTART, RLENGTH)
+                start = offset + RSTART
+                prev = (start > 1 ? substr($0, start - 1, 1) : "")
+                prev2 = (start > 2 ? substr($0, start - 2, 1) : "")
+                allow = 0
+                if (start == 1 || prev ~ /[[:space:]"]/) {
+                    allow = 1
+                } else if (prev == "(" && prev2 == "]") {
+                    allow = 1
+                }
+                if (tok ~ ("^(<skills-file-root>/)?" root "/")) {
+                    if (allow == 1) {
+                        print tok
+                    }
+                }
+                offset += RSTART + RLENGTH - 1
+                txt = substr(txt, RSTART + RLENGTH)
+            }
+        }
+    ' | sed '/^$/d'
 }
 
 find_bare_match() {
@@ -115,16 +130,16 @@ while IFS= read -r mdfile; do
         fi
 
         # Check for hardcoded absolute paths
-        if printf '%s' "$line" | grep -qE '/(home|Users|opt|usr/local)/.*SKILL\.md'; then
-            abs_match=$(printf '%s' "$line" | grep -oE '/[^ ]*SKILL\.md' | head -1)
+        if printf '%s' "$line" | grep -E '/(home|Users|opt|usr/local)/.*SKILL\.md' >/dev/null; then
+            abs_match=$(printf '%s\n' "$line" | sed -n 's#.*\(/[^ ]*SKILL\.md\).*#\1#p' | head -1)
             echo "  ✗ $relpath:$line_num — hardcoded absolute path \"$abs_match\" [MAJOR]"
             issues=$((issues + 1))
         fi
 
         # Check for ../ escaping skill dir
-        if printf '%s' "$line" | grep -qE '\.\./[a-z]'; then
-            if ! printf '%s' "$line" | grep -q 'example\|e\.g\.\|such as'; then
-                dot_match=$(printf '%s' "$line" | grep -oE '\.\./[^ )`]*' | head -1)
+        if printf '%s' "$line" | grep -E '\.\./[a-z]' >/dev/null; then
+            if ! printf '%s' "$line" | grep 'example\|e\.g\.\|such as' >/dev/null; then
+                dot_match=$(printf '%s\n' "$line" | sed -n 's#.*\(\.\./[^ )`]*\).*#\1#p' | head -1)
                 echo "  ⚠ $relpath:$line_num — parent traversal \"$dot_match\" [MINOR]"
                 issues=$((issues + 1))
             fi

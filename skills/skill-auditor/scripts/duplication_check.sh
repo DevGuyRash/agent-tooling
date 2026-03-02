@@ -85,7 +85,15 @@ render_gate_status() {
 }
 
 extract_md_tokens() {
-    grep -oE '[A-Za-z0-9_./-]+\.md([?#][A-Za-z0-9_./#-]+)?' "$1" 2>/dev/null | sort -u || true
+    awk '
+        {
+            line = $0
+            while (match(line, /[A-Za-z0-9_./-]+\.md([?#][A-Za-z0-9_./#-]+)?/)) {
+                print substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+    ' "$1" 2>/dev/null | sort -u || true
 }
 
 resolve_markdown_ref() {
@@ -277,7 +285,7 @@ while [ "$hop" -le "$MAX_HOPS" ] && [ -s "$frontier_refs" ]; do
             [ -n "$token" ] || continue
             resolved=$(resolve_markdown_ref "$token" "$abs_path" || true)
             [ -n "$resolved" ] || continue
-            if ! grep -Fqx "$resolved" "$visited_refs"; then
+            if ! grep -Fx "$resolved" "$visited_refs" >/dev/null 2>&1; then
                 printf '%s\n' "$resolved" >> "$visited_refs"
                 printf '%s\n' "$resolved" >> "$next_frontier_refs"
             fi
@@ -307,7 +315,7 @@ while IFS= read -r mdfile; do
     total_docs=$((total_docs + 1))
 
     doc_scope="advisory"
-    if grep -Fqx "$relpath" "$operative_refs"; then
+    if grep -Fx "$relpath" "$operative_refs" >/dev/null 2>&1; then
         doc_scope="operative"
         operative_docs=$((operative_docs + 1))
     else

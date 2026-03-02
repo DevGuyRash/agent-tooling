@@ -10,7 +10,7 @@ set -eu
 
 timestamp_now() {
     ts_raw=$(date +%s%N 2>/dev/null || true)
-    if printf '%s' "$ts_raw" | grep -qE '^[0-9]+$'; then
+    if printf '%s' "$ts_raw" | grep -E '^[0-9]+$' >/dev/null; then
         printf '%s' "$ts_raw"
         return
     fi
@@ -59,7 +59,7 @@ if [ -d "$SKILL_DIR/src" ] && [ -f "$SKILL_DIR/Cargo.toml" ]; then
     echo "  ⚠ Rust source directory found — build step required"
     # Check for pre-built binary
     if find "$SKILL_DIR" -type f -executable -not -name '*.sh' -not -name '*.py' \
-        -not -path '*/target/*' -not -path '*/.git/*' 2>/dev/null | grep -q .; then
+        -not -path '*/target/*' -not -path '*/.git/*' 2>/dev/null | grep . >/dev/null; then
         echo "  ✓ Pre-built binary found alongside source"
     else
         echo "  ✗ No pre-built binary — agents must compile from source [MAJOR]"
@@ -124,7 +124,7 @@ echo "── Compatibility Field ──"
 SKILL_FILE="$SKILL_DIR/SKILL.md"
 if [ -f "$SKILL_FILE" ]; then
     fm_block=$(sed -n '2,/^---$/p' "$SKILL_FILE" | sed '$d')
-    if printf '%s\n' "$fm_block" | grep -q '^compatibility:'; then
+    if printf '%s\n' "$fm_block" | grep '^compatibility:' >/dev/null; then
         echo "  ✓ compatibility field present in frontmatter"
     else
         if [ "$has_build" -eq 1 ]; then
