@@ -45,7 +45,14 @@ DIR_NAME=$(basename "$SKILL_DIR")
 printf '═══ Frontmatter Validity: %s ═══\n\n' "$DIR_NAME"
 
 if ! fm_block=$(sa_load_frontmatter "$SKILL_FILE"); then
-    echo "  ✗ YAML frontmatter MISSING — first line is not '---' [BLOCKER]"
+    first_line=$(head -1 "$SKILL_FILE")
+    if [ "$first_line" != "---" ]; then
+        echo "  ✗ YAML frontmatter MISSING — first line is not '---' [BLOCKER]"
+    elif ! awk 'NR > 1 && $0 == "---" { found = 1; exit } END { exit(found ? 0 : 1) }' "$SKILL_FILE"; then
+        echo "  ✗ YAML frontmatter MALFORMED — missing closing '---' delimiter [BLOCKER]"
+    else
+        echo "  ✗ YAML frontmatter MALFORMED — unable to parse frontmatter block [BLOCKER]"
+    fi
     echo ""
     echo "Done."
     exit 0

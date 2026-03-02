@@ -71,6 +71,17 @@ escape_json() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+escape_ere() {
+    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\\-]/\\&/g'
+}
+
+option_present_in_help() {
+    opt="$1"
+    corpus="$2"
+    escaped_opt=$(escape_ere "$opt")
+    grep -E -- "(^|[^[:alnum:]_-])${escaped_opt}([[:space:][:punct:]]|$)" "$corpus" >/dev/null
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
@@ -231,7 +242,7 @@ while IFS= read -r opt; do
         status="cli-unavailable"
         evidence="CLI binary is not executable"
     elif [ "$cli_help_checked" -eq 1 ]; then
-        if grep -- "$opt" "$tmp_help" >/dev/null; then
+        if option_present_in_help "$opt" "$tmp_help"; then
             status="found-in-help"
             evidence="option appears in CLI help corpus"
         else

@@ -7,7 +7,10 @@ sa_load_frontmatter() {
     if [ "$first_line" != "---" ]; then
         return 1
     fi
-    fm_block=$(sed -n '2,/^---$/p' "$skill_file" | sed '$d')
+
+    closing_line=$(awk 'NR > 1 && $0 == "---" { print NR; exit }' "$skill_file")
+    [ -n "$closing_line" ] || return 1
+    fm_block=$(sed -n "2,$((closing_line - 1))p" "$skill_file")
     [ -n "$fm_block" ] || return 1
     printf '%s\n' "$fm_block"
 }
