@@ -2,7 +2,7 @@
 # skill-auditor — Documentation/runtime staleness drift check (D21).
 #
 # Usage:
-#   staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json]
+#   staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json] [--timeout-seconds <n>]
 #
 # Checks whether documented examples still match current runtime behavior.
 
@@ -11,9 +11,10 @@ set -eu
 CLI_BIN=""
 FORMAT="text"
 SKILL_DIR=""
+TIMEOUT_SECONDS=15
 
 usage() {
-    echo "Usage: staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json]"
+    echo "Usage: staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json] [--timeout-seconds <n>]"
     echo ""
     echo "Checks documentation/runtime staleness drift:"
     echo "  - Aggressively extract command-shaped examples from SKILL.md/references"
@@ -46,6 +47,20 @@ while [ $# -gt 0 ]; do
                 text|json) ;;
                 *)
                     echo "error: --format must be text or json"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        --timeout-seconds)
+            shift
+            TIMEOUT_SECONDS="${1-}"
+            case "$TIMEOUT_SECONDS" in
+                ''|*[!0-9]*)
+                    echo "error: --timeout-seconds must be a positive integer"
+                    exit 1
+                    ;;
+                0)
+                    echo "error: --timeout-seconds must be greater than 0"
                     exit 1
                     ;;
             esac
@@ -313,6 +328,7 @@ reason_text() {
         non_executable_target) echo "referenced local target is not executable" ;;
         no_command) echo "no executable command detected" ;;
         fallback_failed) echo "fallback verification failed" ;;
+        timeout_exceeded) echo "command exceeded execution timeout" ;;
         *) echo "" ;;
     esac
 }
@@ -324,13 +340,49 @@ is_unknown_option_error() {
 
 run_command() {
     run_cmd="$1"
+    run_out_file=$(mktemp)
+    timeout_flag=$(mktemp)
+    rm -f "$timeout_flag"
+
+    (
+        set +e
+        # Command candidates already pass placeholder and unsafe syntax filters.
+        # Use a nested shell to preserve quoted argument grouping for deterministic checks.
+        sh -c "$run_cmd"
+    ) >"$run_out_file" 2>&1 &
+    run_pid=$!
+
+    (
+        sleep "$TIMEOUT_SECONDS"
+        if kill -0 "$run_pid" 2>/dev/null; then
+            echo "1" > "$timeout_flag"
+            kill "$run_pid" 2>/dev/null || true
+            sleep 1
+            kill -9 "$run_pid" 2>/dev/null || true
+        fi
+    ) &
+    watchdog_pid=$!
 
     set +e
-    # Command candidates already pass placeholder and unsafe syntax filters.
-    # Use eval to preserve quoted argument grouping for deterministic checks.
-    run_out=$(eval "$run_cmd" 2>&1)
+    wait "$run_pid"
     run_status=$?
     set -e
+
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+
+    run_out=$(cat "$run_out_file")
+    if [ -s "$timeout_flag" ]; then
+        run_status=124
+        timeout_line="error: command timed out after ${TIMEOUT_SECONDS}s"
+        if [ -n "$run_out" ]; then
+            run_out=$(printf '%s\n%s' "$run_out" "$timeout_line")
+        else
+            run_out="$timeout_line"
+        fi
+    fi
+
+    rm -f "$run_out_file" "$timeout_flag"
 
     first_line=$(printf '%s\n' "$run_out" | head -1 | tr '\t' ' ')
     printf '%s\t%s\n' "$run_status" "$first_line"
@@ -475,6 +527,10 @@ while IFS= read -r candidate_row; do
 
                 if [ "$exit_code" -eq 0 ] 2>/dev/null; then
                     status="executed"
+                elif [ "$exit_code" -eq 124 ] 2>/dev/null; then
+                    status="runtime-failed"
+                    reason_code="timeout_exceeded"
+                    reason=$(reason_text "$reason_code")
                 elif is_unknown_option_error "$first_line"; then
                     status="flag-drift"
                     reason_code="unknown_option"
@@ -510,6 +566,10 @@ while IFS= read -r candidate_row; do
 
                     if [ "$exit_code" -eq 0 ] 2>/dev/null; then
                         status="executed"
+                    elif [ "$exit_code" -eq 124 ] 2>/dev/null; then
+                        status="runtime-failed"
+                        reason_code="timeout_exceeded"
+                        reason=$(reason_text "$reason_code")
                     elif is_unknown_option_error "$first_line"; then
                         status="flag-drift"
                         reason_code="unknown_option"
@@ -548,6 +608,10 @@ while IFS= read -r candidate_row; do
 
                 if [ "$exit_code" -eq 0 ] 2>/dev/null; then
                     status="executed"
+                elif [ "$exit_code" -eq 124 ] 2>/dev/null; then
+                    status="runtime-failed"
+                    reason_code="timeout_exceeded"
+                    reason=$(reason_text "$reason_code")
                 elif is_unknown_option_error "$first_line"; then
                     status="flag-drift"
                     reason_code="unknown_option"

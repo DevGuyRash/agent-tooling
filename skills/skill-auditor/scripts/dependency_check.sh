@@ -271,7 +271,15 @@ while IFS= read -r script; do
                     }
 
                     split(line, fields, /[[:space:]]+/)
-                    cmd = fields[1]
+                    idx = 1
+
+                    while (idx in fields && fields[idx] == "env") {
+                        idx++
+                        while (idx in fields && fields[idx] ~ /^-[A-Za-z-]+$/) idx++
+                        while (idx in fields && fields[idx] ~ /^[A-Za-z_][A-Za-z0-9_]*=.*$/) idx++
+                    }
+
+                    cmd = fields[idx]
                     if (cmd ~ /^[a-z][a-z0-9_-]*$/) {
                         print cmd
                     }

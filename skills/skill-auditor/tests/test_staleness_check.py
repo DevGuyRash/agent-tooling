@@ -219,6 +219,33 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["examples"][0]["status"], "executed")
         self.assertEqual(data["examples"][0]["verification_mode"], "direct")
 
+    def test_times_out_long_running_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "hang.sh"
+            script.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env sh
+                    sleep 2
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\nscripts/hang.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--timeout-seconds", "1")
+
+        self.assertEqual(data["summary"]["runtime_failed"], 1)
+        self.assertEqual(data["examples"][0]["status"], "runtime-failed")
+        self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
+
     def test_json_is_backward_compatible_with_new_detail_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
