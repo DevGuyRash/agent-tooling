@@ -68,6 +68,7 @@ echo "── Script Error Handling ──"
 
 scripts_dir="$SKILL_DIR/scripts"
 script_issues=0
+cli_issues=0
 
 if [ -d "$scripts_dir" ]; then
     tmplist=$(mktemp)
@@ -142,20 +143,24 @@ if [ -n "$CLI_BIN" ]; then
 
             if [ "$err_lines" -gt 10 ]; then
                 echo "    ✗ Error too long (>10 lines) [MAJOR]"
+                cli_issues=$((cli_issues + 1))
             elif [ "$err_lines" -gt 3 ]; then
                 echo "    ⚠ Error somewhat long [MINOR]"
+                cli_issues=$((cli_issues + 1))
             else
                 echo "    ✓ Error length OK"
             fi
 
             if printf '%s' "$err_output" | grep -iE 'traceback|backtrace|stack trace|panic' >/dev/null; then
                 echo "    ✗ Stack backtrace detected [MAJOR]"
+                cli_issues=$((cli_issues + 1))
             fi
 
             if printf '%s' "$err_output" | grep -iE 'valid|available|expected|try' >/dev/null; then
                 echo "    ✓ Error includes guidance/alternatives"
             else
                 echo "    ⚠ Error lacks valid alternatives [MINOR]"
+                cli_issues=$((cli_issues + 1))
             fi
         done
     else
@@ -166,6 +171,8 @@ fi
 echo ""
 echo "── Summary ──"
 echo "  Script error issues: $script_issues"
+echo "  CLI error issues: $cli_issues"
+echo "  Issues found: $((script_issues + cli_issues))"
 
 echo ""
 echo "Done."
