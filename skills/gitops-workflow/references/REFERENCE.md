@@ -45,6 +45,10 @@ You can adopt this skill in layers:
 
 1. **Instructions only**: agent follows the playbooks + checklists.
 2. **Templates**: copy PR template + squash/release templates into `.github/`.
+   - For repo-native PR template discovery during scripted PR creation, use:
+     - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>`
+   - For repo-native issue template discovery during scripted issue creation, use:
+     - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" --repo <owner/repo>`
 3. **CI enforcement**: add GitHub Actions from `assets/github/workflows/`.
 4. **Local hooks** (optional but recommended): install managed pre-commit sensitive scan hook with `bash "$SKILL_ROOT/scripts/install-hooks.sh"`.
 5. **Release automation** (optional): integrate `release-please` or your release process.

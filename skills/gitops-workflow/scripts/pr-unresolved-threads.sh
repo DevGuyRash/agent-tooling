@@ -31,6 +31,26 @@ require_opt_value() {
   fi
 }
 
+parse_repo() {
+  local repo="$1"
+  local owner name
+  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+    die "invalid --repo '$repo' (expected owner/repo)"
+  fi
+  owner="${repo%%/*}"
+  name="${repo##*/}"
+  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
+  fi
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
+  fi
+  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
+    die "invalid --repo name '$name' (path-like segments are not allowed)"
+  fi
+  printf '%s\t%s\n' "$owner" "$name"
+}
+
 require_cmd gh
 require_cmd jq
 
@@ -81,8 +101,7 @@ if [[ -z "$REPO" ]]; then
 fi
 [[ -n "$REPO" ]] || die "could not infer repo; pass --repo owner/repo"
 
-OWNER="${REPO%%/*}"
-NAME="${REPO##*/}"
+IFS=$'\t' read -r OWNER NAME <<< "$(parse_repo "$REPO")"
 
 QUERY='
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
@@ -94,9 +113,12 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
           endCursor
         }
         nodes {
+          id
           isResolved
           comments(first:10) {
             nodes {
+              id
+              databaseId
               author { login }
               body
               path
@@ -149,7 +171,17 @@ while :; do
       )
     | . as $thread
     | .comments.nodes[]
-    | {resolved: $thread.isResolved, author: .author.login, path: .path, line: .line, url: .url, body: .body}
+    | {
+        resolved: $thread.isResolved,
+        threadId: $thread.id,
+        commentNodeId: .id,
+        commentId: .databaseId,
+        author: .author.login,
+        path: .path,
+        line: .line,
+        url: .url,
+        body: .body
+      }
   ')"
   if [[ -n "$PAGE_RESULT" ]]; then
     if [[ -n "$RESULT" ]]; then

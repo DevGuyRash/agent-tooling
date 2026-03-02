@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Behavior:
 # - Posts a top-level PR comment via pr-comment.sh using --body-file.
-# - Reviewer trigger ordering is fixed: @codex review, then @gemini-code-assist review.
+# - Reviewer trigger ordering is fixed: @codex review, then /gemini review.
 
 die() {
   echo "Error: $*" >&2
@@ -76,7 +76,7 @@ trap 'rm -f "$BODY_FILE"' EXIT
 
 {
   echo "@codex review"
-  echo "@gemini-code-assist review"
+  echo "/gemini review"
   if [[ -n "$NOTE" ]]; then
     echo ""
     echo "$NOTE"

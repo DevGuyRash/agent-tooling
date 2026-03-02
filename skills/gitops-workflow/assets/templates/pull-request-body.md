@@ -50,5 +50,5 @@ Examples:
 @your-team
 Defaults:
 @codex review
-@gemini-code-assist review
+/gemini review
 -->

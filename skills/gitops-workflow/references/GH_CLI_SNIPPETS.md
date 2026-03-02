@@ -19,6 +19,16 @@ List bugs:
 gh issue list --label "bug"
 ```
 
+Discover remote issue templates:
+```bash
+bash "$SKILL_ROOT/scripts/issue-template-discover.sh" --repo <owner/repo>
+```
+
+Create issue deterministically (safe gate):
+```bash
+bash "$SKILL_ROOT/scripts/issue-create.sh" --title "feat: support xyz" --create --force-create --repo <owner/repo>
+```
+
 ## Pull requests
 
 Create PR with multi-line body:
@@ -33,12 +43,47 @@ gh pr view <number> --comments
 
 Add a multi-line PR comment deterministically (no literal `\n` escapes):
 ```bash
-bash "$SKILL_ROOT/scripts/pr-comment.sh" <number> --body "@codex review\n@gemini-code-assist review\n\nFinal verification pass requested."
+bash "$SKILL_ROOT/scripts/pr-comment.sh" <number> --body "@codex review\n/gemini review\n\nFinal verification pass requested."
 ```
 
 Request default AI re-review deterministically:
 ```bash
 bash "$SKILL_ROOT/scripts/pr-request-review.sh" <number> --note "Final verification pass requested."
+```
+
+List available PR labels before create (recommended step 1):
+```bash
+bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>
+```
+
+Discover remote PR templates before create (recommended step 1):
+```bash
+bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>
+```
+
+Create draft PR deterministically (recommended step 2):
+```bash
+bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add --json output" --create --force-create --repo <owner/repo> --label bug
+```
+
+Create non-draft PR explicitly:
+```bash
+bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add --json output" --create --force-create --ready --repo <owner/repo> --label bug
+```
+
+Update existing PR body deterministically:
+```bash
+bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> --repo <owner/repo> --body-file /tmp/pr-body.md
+```
+
+Convert draft PR to ready only after strict gates:
+```bash
+bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo> --watch-checks
+```
+
+If a history rewrite push is required:
+```bash
+git push --force-with-lease
 ```
 
 Watch checks:
@@ -61,6 +106,11 @@ bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> --fail-on-unreso
 Strict PR workflow wrapper:
 ```bash
 bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> --watch-checks
+```
+
+Strict PR workflow with full top-level comments:
+```bash
+bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> --watch-checks --full-comments
 ```
 
 Deterministic squash merge wrapper (auto-deletes source branch on success):

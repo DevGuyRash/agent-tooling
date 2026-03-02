@@ -7,7 +7,8 @@ set -euo pipefail
 #   bash scripts/pr-workflow.sh <pr_number> [--repo owner/repo] [--watch-checks]
 #
 # Behavior:
-# - Reads top-level comments.
+# - Prints concise PR metadata summary by default.
+# - Optionally prints full top-level comments with --full-comments.
 # - Fails on unresolved inline review threads.
 # - Runs CI checks (watch optional).
 
@@ -28,6 +29,7 @@ shift || true
 
 REPO=""
 WATCH_CHECKS="false"
+FULL_COMMENTS="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,24 +41,45 @@ while [[ $# -gt 0 ]]; do
       WATCH_CHECKS="true"
       shift
       ;;
+    --full-comments)
+      FULL_COMMENTS="true"
+      shift
+      ;;
     *)
       die "unknown argument: $1"
       ;;
   esac
 done
 
-VIEW_ARGS=("$PR_NUMBER" --comments)
 CHECK_ARGS=("$PR_NUMBER")
 THREAD_ARGS=("$PR_NUMBER" --fail-on-unresolved)
+META_ARGS=("$PR_NUMBER" --json number,title,state,isDraft,reviewDecision,mergeable,baseRefName,headRefName,url)
+COMMENT_COUNT_ARGS=("$PR_NUMBER" --json comments --jq '.comments | length')
+VIEW_ARGS=("$PR_NUMBER" --comments)
 
 if [[ -n "$REPO" ]]; then
-  VIEW_ARGS+=(--repo "$REPO")
   CHECK_ARGS+=(--repo "$REPO")
   THREAD_ARGS+=(--repo "$REPO")
+  META_ARGS+=(--repo "$REPO")
+  COMMENT_COUNT_ARGS+=(--repo "$REPO")
+  VIEW_ARGS+=(--repo "$REPO")
 fi
 
-echo "== Top-level PR comments =="
-gh pr view "${VIEW_ARGS[@]}"
+echo "== PR metadata =="
+gh pr view "${META_ARGS[@]}" \
+  --jq '{number, title, state, isDraft, mergeable, reviewDecision, baseRefName, headRefName, url}'
+echo ""
+
+echo "== Top-level comment summary =="
+COMMENT_COUNT="$(gh pr view "${COMMENT_COUNT_ARGS[@]}")"
+echo "comments: $COMMENT_COUNT"
+if [[ "$FULL_COMMENTS" == "true" ]]; then
+  echo ""
+  echo "== Top-level PR comments (full) =="
+  gh pr view "${VIEW_ARGS[@]}"
+else
+  echo "full comments: skipped (pass --full-comments to include full bodies)"
+fi
 echo ""
 
 echo "== Unresolved inline threads =="

@@ -15,7 +15,7 @@ license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.3.0"
+  version: "1.4.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -38,6 +38,8 @@ Use this skill when the user asks you to:
 - start a new piece of work (create a branch)
 - write commits or enforce **Conventional Commits**
 - open, update, review, or merge a pull request
+- update an existing PR body deterministically
+- create a GitHub issue with deterministic body/template handling
 - generate a squash-merge commit message or release notes
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
@@ -87,6 +89,7 @@ Unless the repo explicitly defines otherwise, follow these rules:
 12. **Before creating a commit**, run the deterministic sensitive-data gate and block on findings:
     - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
     - scanner attempts latest `gitleaks` update when network is available; pin with `SENSITIVE_SCAN_GITLEAKS_VERSION=vX.Y.Z` if needed
+13. **If history rewrite/push override is explicitly required**, use `git push --force-with-lease` (never `git push --force`).
 
 ---
 
@@ -108,15 +111,21 @@ Path resolution (mandatory):
 | Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
 | Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
-| Create PR body + PR | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--draft] [--base <branch>] [--head <branch>]` |
+| List available PR labels (names + descriptions) | `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]` |
+| Discover remote PR templates | `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]` |
+| Create PR body + PR (draft-first) | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--ready] [--base <branch>] [--head <branch>] [--repo owner/repo] [label args] [--template-id <path>]` |
+| Update existing PR body | `bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> [--repo owner/repo] (--body-file <path> | --body "<text>") [--dry-run]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
-| Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
+| Strict PR workflow (metadata + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks] [--full-comments]` |
 | Add top-level PR comment (newline-safe) | `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]` |
 | Request bot re-review deterministically | `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]` |
+| Mark draft PR ready (strict gates) | `bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
 | Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
+| Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
 | Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
@@ -156,8 +165,14 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/setup-security.sh"
 bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
 bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
+# Step 1 (required before --create): inspect labels and templates
+bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>
+bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>
 # edit generated body file if needed, then explicitly create PR
-# gh pr create --title "feat(cli): add json output" --body-file <generated-file>
+# draft by default; pass --ready for non-draft
+# bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create --force-create --repo <owner/repo> --label bug --label enhancement
+# after checks/threads are clean:
+# bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo>
 bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
 python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
 ```
@@ -229,15 +244,29 @@ See:
 1. Find/link relevant issues:
    - `gh issue list --search "keyword"`
    - Use `Fixes #123` / `Closes #123` in the PR body when appropriate
-2. Use the PR template structure:
+2. Discover labels and templates in repo context before `--create` (deterministic step 1):
+   - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>`
+   - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>`
+3. Use the PR template structure:
    - [assets/templates/pull-request-body.md](assets/templates/pull-request-body.md)
-3. Create PR using a **body file** (avoid literal `\n` rendering):
+4. Create PR using a **body file** (avoid literal `\n` rendering):
    - `gh pr create --title "<title>" --body-file <file>`
+5. Scripted deterministic create flow:
+   - Draft default: `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" --create --force-create --repo <owner/repo> --label <label>`
+   - Explicit non-draft: add `--ready`
+   - If repo has labels, pass labels explicitly via repeatable `--label` or explicit `--no-labels`.
+   - If repo has multiple remote PR templates, pass `--template-id <path>` before `--create`.
 
 Optional helper:
 
-- `scripts/pr-create.sh` (generates a prefilled PR body from git history; PR creation requires explicit `--create --force-create`)
+- `scripts/pr-create.sh` (uses remote repository PR template content when available; otherwise generates a deterministic PR body from git history; PR creation requires explicit `--create --force-create`, creates **draft** by default, and requires explicit labels when labels exist)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
+- `scripts/pr-labels-list.sh` (deterministically list available labels before create)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-labels-list.sh"`
+- `scripts/pr-template-discover.sh` (discover/extract remote PR templates; `--template-id` required for multi-template repos before `--create`)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-template-discover.sh"`
+- `scripts/pr-mark-ready.sh` (strict deterministic draft->ready transition after checks/threads pass)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-mark-ready.sh"`
 
 ---
 
@@ -253,9 +282,12 @@ Before pushing any new commits to a PR branch:
    - `gh pr checks <number> --watch`
 4. Address/respond to every unresolved item.
    - Reply in the original thread (do NOT create a new top-level comment).
+   - Classify each unresolved item as `valid/relevant` or `not applicable/invalid`.
+   - For `not applicable/invalid`, reply with rationale in-thread and resolve the thread when permissions allow.
    - `pr-reply.sh` normalizes literal `\n` in reply text into real newlines.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
-   - Optional trigger commands (if enabled in repo): `@codex review` then `@gemini-code-assist review`.
+   - Optional trigger commands (if enabled in repo): `@codex review` then `/gemini review` (post in top-level PR Conversation comments).
+   - For conversational follow-ups, use `@gemini-code-assist <question>`.
    - Preferred deterministic command: `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
    - For manual multi-line top-level PR comments, avoid literal `\n` escapes; use `--body-file`:
      - `gh pr comment <number> --body-file <file>`
@@ -265,6 +297,14 @@ Guidance for handling automated reviewer feedback:
 - [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
 - `scripts/pr-workflow.sh` (strict deterministic wrapper)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-workflow.sh"`
+- `scripts/pr-update-body.sh` (deterministic existing PR body update helper)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-update-body.sh"`
+- `scripts/pr-mark-ready.sh` (strict deterministic draft->ready transition wrapper)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-mark-ready.sh"`
+
+Draft-ready lifecycle:
+- `pr-create.sh --create` always creates draft PRs unless `--ready` is set.
+- Use `pr-mark-ready.sh` after unresolved threads and required checks are green.
 
 ---
 
@@ -344,6 +384,28 @@ Operational details:
 
 ---
 
+## Playbook H: Create an issue (deterministic)
+
+1. Discover remote issue templates before creation:
+   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" --repo <owner/repo>`
+2. Build or select issue body source:
+   - `--body-file <path>` if pre-authored
+   - `--body "<text>"` for inline deterministic content
+   - if omitted, helper resolves remote template content or falls back to skill template
+3. Create issue via explicit creation gate:
+   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" --create --force-create --repo <owner/repo>`
+4. Multi-template repositories:
+   - if multiple issue templates exist, pass `--template-id <path>` before `--create`
+
+Helper references:
+- `scripts/issue-template-discover.sh`
+  - Resolve as: `"$SKILL_ROOT/scripts/issue-template-discover.sh"`
+- `scripts/issue-create.sh`
+  - Resolve as: `"$SKILL_ROOT/scripts/issue-create.sh"`
+- `assets/templates/issue-body.md`
+
+---
+
 ## Optional enforcement (recommended)
 
 This skill includes ready-to-copy templates:
@@ -361,6 +423,13 @@ See:
 
 - [references/ENFORCEMENT.md](references/ENFORCEMENT.md)
 - [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
+- [references/GH_CLI_SNIPPETS.md](references/GH_CLI_SNIPPETS.md)
+
+Template resolution policy for PR creation:
+- Prefer remote repository PR templates when discoverable.
+- Discovery includes single-file templates in `.github/`, repo root, and `docs/` (both `pull_request_template.md` and `PULL_REQUEST_TEMPLATE.md`) and multi-template directories in `.github/PULL_REQUEST_TEMPLATE/`, `PULL_REQUEST_TEMPLATE/`, and `docs/PULL_REQUEST_TEMPLATE/`.
+- If multiple remote templates exist, `pr-create.sh --create` requires explicit `--template-id`.
+- If no remote templates exist, default deterministic skill PR body generation is used.
 
 ---
 
