@@ -310,6 +310,7 @@ reason_text() {
         missing_local_target) echo "referenced local target does not exist" ;;
         unknown_option) echo "runtime reported unknown option/subcommand" ;;
         fragment_only) echo "command fragment or assignment-only line" ;;
+        non_executable_target) echo "referenced local target is not executable" ;;
         no_command) echo "no executable command detected" ;;
         fallback_failed) echo "fallback verification failed" ;;
         *) echo "" ;;
@@ -358,7 +359,14 @@ resolve_local_path() {
 
 : > "$tmp_results"
 
-while IFS="$TAB" read -r file line kind cmd before after raw; do
+while IFS= read -r candidate_row; do
+    file=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $1}')
+    line=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $2}')
+    kind=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $3}')
+    cmd=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $4}')
+    before=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $5}')
+    after=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $6}')
+    raw=$(printf '%s' "$candidate_row" | awk -F '\t' '{print $7}')
     [ -z "$cmd" ] && continue
 
     status=""
@@ -439,10 +447,16 @@ while IFS="$TAB" read -r file line kind cmd before after raw; do
                         else
                             direct_cmd="$invoke_prefix $local_target"
                         fi
-                    elif [ -n "$cli_args" ]; then
-                        direct_cmd="$local_target $cli_args"
+                    elif [ -x "$local_target" ]; then
+                        if [ -n "$cli_args" ]; then
+                            direct_cmd="$local_target $cli_args"
+                        else
+                            direct_cmd="$local_target"
+                        fi
                     else
-                        direct_cmd="$local_target"
+                        status="unsafe-skipped"
+                        reason_code="non_executable_target"
+                        reason=$(reason_text "$reason_code")
                     fi
                 fi
             elif [ -n "$CLI_BIN" ]; then
@@ -477,6 +491,10 @@ while IFS="$TAB" read -r file line kind cmd before after raw; do
                 if [ ! -f "$local_target" ]; then
                     status="missing-target"
                     reason_code="missing_local_target"
+                    reason=$(reason_text "$reason_code")
+                elif [ -z "$invoke_prefix" ] && [ ! -x "$local_target" ]; then
+                    status="unsafe-skipped"
+                    reason_code="non_executable_target"
                     reason=$(reason_text "$reason_code")
                 else
                     if [ -n "$invoke_prefix" ]; then

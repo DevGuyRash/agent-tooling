@@ -255,6 +255,47 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertIn("verification_mode", data["examples"][0])
         self.assertIn("raw_command", data["examples"][0])
 
+    def test_skips_non_executable_local_file_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            references_dir = skill_dir / "references"
+            references_dir.mkdir(parents=True)
+            (references_dir / "guide.md").write_text("# Guide\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\n<skills-file-root>/references/guide.md --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir)
+
+        self.assertEqual(data["summary"]["unsafe_skipped"], 1)
+        self.assertEqual(data["examples"][0]["status"], "unsafe-skipped")
+        self.assertEqual(data["examples"][0]["reason_code"], "non_executable_target")
+
+    def test_preserves_empty_tsv_columns_for_example_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "run.sh"
+            script.write_text(
+                "#!/usr/bin/env sh\nif [ \"${1-}\" = \"--help\" ]; then echo usage; exit 0; fi\nexit 0\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "```bash\nscripts/run.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir)
+
+        self.assertEqual(data["summary"]["total_examples"], 1)
+        self.assertEqual(data["examples"][0]["command"], "scripts/run.sh --help")
+        self.assertEqual(data["examples"][0]["raw_command"], "scripts/run.sh --help")
+        self.assertEqual(data["examples"][0]["claim_context_before"], "")
+        self.assertEqual(data["examples"][0]["claim_context_after"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

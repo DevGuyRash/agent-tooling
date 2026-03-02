@@ -41,6 +41,23 @@ jq -r '.name' "$2"
         self.assertNotIn("- function", output)
         self.assertNotIn("- block_value", output)
 
+    def test_extracts_command_after_env_assignment_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "sample.sh").write_text(
+                """#!/usr/bin/env sh
+FOO=1 jq -r '.name' "$1"
+""",
+                encoding="utf-8",
+            )
+
+            output = run_dependency_check(skill_dir)
+
+        self.assertIn("External commands used (non-POSIX candidates):", output)
+        self.assertIn("- jq", output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -256,7 +256,10 @@ while IFS= read -r script; do
                     sub(/[[:space:]]*#.*/, "", line)
                     gsub(/^[[:space:]]+/, "", line)
 
-                    if (line ~ /^([A-Za-z_][A-Za-z0-9_]*=)/) next
+                    while (line ~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+/) {
+                        sub(/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+/, "", line)
+                    }
+                    if (line ~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*$/) next
                     if (line ~ /^[[:space:]]*$/) next
 
                     if (line ~ /^if[[:space:]]+/) {
