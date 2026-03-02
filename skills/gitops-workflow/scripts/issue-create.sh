@@ -155,6 +155,9 @@ EFFECTIVE_REPO="$(resolve_repo)"
 if [[ -n "$EFFECTIVE_REPO" ]]; then
   parse_repo "$EFFECTIVE_REPO"
 fi
+if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
+  die "--template-id requires --repo owner/repo (or an inferable gh repo context)"
+fi
 
 REMOTE_TEMPLATE_ID=""
 REMOTE_TEMPLATE_CONTENT=""
@@ -249,7 +252,7 @@ fi
 require_cmd gh
 
 if [[ "$DRY_RUN" == "true" ]]; then
-  echo "DRY-RUN: gh ${ARGS[*]}"
+  echo "DRY-RUN: $PREVIEW_CMD"
   exit 0
 fi
 

@@ -61,7 +61,55 @@ fetch_file_json() {
   local name="$2"
   local ref="$3"
   local path="$4"
-  gh api "repos/$owner/$name/contents/$path?ref=$ref" 2>/dev/null || true
+  local endpoint="repos/$owner/$name/contents/$path?ref=$ref"
+  local out=""
+  local err_file=""
+  err_file="$(mktemp)"
+  if out="$(gh api "$endpoint" 2>"$err_file")"; then
+    rm -f "$err_file"
+    printf '%s' "$out"
+    return 0
+  fi
+  if [[ ! -s "$err_file" ]]; then
+    rm -f "$err_file"
+    return 0
+  fi
+  if grep -qi 'HTTP 404' "$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+  local err_text=""
+  err_text="$(tr '\n' ' ' < "$err_file" | sed 's/[[:space:]]\\+/ /g; s/^ //; s/ $//')"
+  rm -f "$err_file"
+  die "gh api failed while fetching '$path' from $owner/$name@$ref: ${err_text:-unknown error}"
+}
+
+fetch_dir_json() {
+  local owner="$1"
+  local name="$2"
+  local ref="$3"
+  local path="$4"
+  local endpoint="repos/$owner/$name/contents/$path?ref=$ref"
+  local out=""
+  local err_file=""
+  err_file="$(mktemp)"
+  if out="$(gh api "$endpoint" 2>"$err_file")"; then
+    rm -f "$err_file"
+    printf '%s' "$out"
+    return 0
+  fi
+  if [[ ! -s "$err_file" ]]; then
+    rm -f "$err_file"
+    return 0
+  fi
+  if grep -qi 'HTTP 404' "$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+  local err_text=""
+  err_text="$(tr '\n' ' ' < "$err_file" | sed 's/[[:space:]]\\+/ /g; s/^ //; s/ $//')"
+  rm -f "$err_file"
+  die "gh api failed while listing '$path' from $owner/$name@$ref: ${err_text:-unknown error}"
 }
 
 REPO=""
@@ -135,7 +183,7 @@ for path in \
   fi
 done
 
-DIR_JSON="$(gh api "repos/$OWNER/$NAME/contents/.github/ISSUE_TEMPLATE?ref=$DEFAULT_BRANCH" 2>/dev/null || true)"
+DIR_JSON="$(fetch_dir_json "$OWNER" "$NAME" "$DEFAULT_BRANCH" ".github/ISSUE_TEMPLATE")"
 if [[ -n "$DIR_JSON" ]] && [[ "$(printf '%s' "$DIR_JSON" | jq -r 'type')" == "array" ]]; then
   printf '%s\n' "$DIR_JSON" | jq -r '.[] | select(.type == "file") | .path | select(ascii_downcase | endswith(".md"))' >> "$TMP_LIST"
 fi

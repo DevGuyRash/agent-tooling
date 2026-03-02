@@ -136,7 +136,12 @@ if [[ -n "$REPO" ]]; then
 fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
-  echo "DRY-RUN: gh ${ARGS[*]}"
+  PREVIEW_CMD="gh"
+  for arg in "${ARGS[@]}"; do
+    printf -v arg_quoted '%q' "$arg"
+    PREVIEW_CMD+=" $arg_quoted"
+  done
+  echo "DRY-RUN: $PREVIEW_CMD"
   exit 0
 fi
 
