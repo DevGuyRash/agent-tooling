@@ -15,7 +15,7 @@ license: MIT
 compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.3.0"
+  version: "1.4.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -38,6 +38,8 @@ Use this skill when the user asks you to:
 - start a new piece of work (create a branch)
 - write commits or enforce **Conventional Commits**
 - open, update, review, or merge a pull request
+- update an existing PR body deterministically
+- create a GitHub issue with deterministic body/template handling
 - generate a squash-merge commit message or release notes
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
@@ -112,8 +114,9 @@ Path resolution (mandatory):
 | List available PR labels (names + descriptions) | `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]` |
 | Discover remote PR templates | `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]` |
 | Create PR body + PR (draft-first) | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--ready] [--base <branch>] [--head <branch>] [--repo owner/repo] [label args] [--template-id <path>]` |
+| Update existing PR body | `bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> [--repo owner/repo] (--body-file <path> \| --body "<text>") [--dry-run]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
-| Strict PR workflow (comments + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
+| Strict PR workflow (metadata + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks] [--full-comments]` |
 | Add top-level PR comment (newline-safe) | `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]` |
 | Request bot re-review deterministically | `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]` |
 | Mark draft PR ready (strict gates) | `bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> [--repo owner/repo] [--watch-checks]` |
@@ -121,6 +124,8 @@ Path resolution (mandatory):
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
 | Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text\|json] [--template-id <path>]` |
+| Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> \| --body \"<text>\"] [--template-id <path>] [issue args]` |
 | Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
@@ -277,6 +282,8 @@ Before pushing any new commits to a PR branch:
    - `gh pr checks <number> --watch`
 4. Address/respond to every unresolved item.
    - Reply in the original thread (do NOT create a new top-level comment).
+   - Classify each unresolved item as `valid/relevant` or `not applicable/invalid`.
+   - For `not applicable/invalid`, reply with rationale in-thread and resolve the thread when permissions allow.
    - `pr-reply.sh` normalizes literal `\n` in reply text into real newlines.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
    - Optional trigger commands (if enabled in repo): `@codex review` then `/gemini review` (post in top-level PR Conversation comments).
@@ -290,6 +297,8 @@ Guidance for handling automated reviewer feedback:
 - [references/AUTOMATED_REVIEWERS.md](references/AUTOMATED_REVIEWERS.md)
 - `scripts/pr-workflow.sh` (strict deterministic wrapper)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-workflow.sh"`
+- `scripts/pr-update-body.sh` (deterministic existing PR body update helper)
+  - Resolve as: `"$SKILL_ROOT/scripts/pr-update-body.sh"`
 - `scripts/pr-mark-ready.sh` (strict deterministic draft->ready transition wrapper)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-mark-ready.sh"`
 
@@ -372,6 +381,28 @@ Wrapper helper:
 Operational details:
 - [references/ENFORCEMENT.md](references/ENFORCEMENT.md)
 - [references/GH_GOVERNANCE_RUNBOOK.md](references/GH_GOVERNANCE_RUNBOOK.md)
+
+---
+
+## Playbook H: Create an issue (deterministic)
+
+1. Discover remote issue templates before creation:
+   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" --repo <owner/repo>`
+2. Build or select issue body source:
+   - `--body-file <path>` if pre-authored
+   - `--body "<text>"` for inline deterministic content
+   - if omitted, helper resolves remote template content or falls back to skill template
+3. Create issue via explicit creation gate:
+   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" --create --force-create --repo <owner/repo>`
+4. Multi-template repositories:
+   - if multiple issue templates exist, pass `--template-id <path>` before `--create`
+
+Helper references:
+- `scripts/issue-template-discover.sh`
+  - Resolve as: `"$SKILL_ROOT/scripts/issue-template-discover.sh"`
+- `scripts/issue-create.sh`
+  - Resolve as: `"$SKILL_ROOT/scripts/issue-create.sh"`
+- `assets/templates/issue-body.md`
 
 ---
 

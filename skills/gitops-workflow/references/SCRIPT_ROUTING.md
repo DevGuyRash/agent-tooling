@@ -35,10 +35,12 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]`
   - `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" [--create --force-create] [--ready] [--base <branch>] [--head <branch>] [--repo owner/repo] [--label <name> ... | --no-labels] [--template-id <path>]`
   - Recommended deterministic flow: (1) list labels/templates, (2) run `pr-create.sh` without `--create`, review/edit generated body, then (3) run `pr-create.sh --create --force-create ...` with explicit labels.
+- Existing PR body updates:
+  - `bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> [--repo owner/repo] (--body-file <path> | --body "<text>") [--dry-run]`
 - PR hygiene snapshot:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
 - Strict PR update gate:
-  - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
+  - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks] [--full-comments]`
 - Top-level PR comment (deterministic; avoids literal `\n` rendering):
   - `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]`
 - Bot re-review request (deterministic ordering: Codex then Gemini):
@@ -53,6 +55,9 @@ When bypassing, record:
 - Inline review reply:
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
   - Literal `\n` in `<reply text>` is normalized to real newlines.
+- Issue templates and creation:
+  - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`
+  - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--dry-run]`
 - Squash merge (deterministic, required; auto-deletes source branch on success):
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
 - Receipt generation:

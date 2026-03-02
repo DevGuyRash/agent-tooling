@@ -10,6 +10,7 @@ Automated review bots are helpful but non-authoritative. Treat them like a well-
    - If a bot suggestion conflicts with conventions, security boundaries, or architecture, it’s wrong even if it sounds confident.
 3. **Respond in the original thread**
    - Keep context together. Do not create a new top-level comment for a specific inline suggestion.
+   - For non-applicable/invalid feedback, reply with rationale in-thread and resolve the thread when permissions allow.
 4. **Re-tag only when appropriate**
    - If you implemented the suggestion or you want re-checking, re-tag.
    - If you rejected the suggestion, do **not** re-tag; explain why.
