@@ -36,6 +36,25 @@ require_opt_value() {
   fi
 }
 
+parse_repo() {
+  local repo="$1"
+  local owner name
+  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+    die "invalid --repo '$repo' (expected owner/repo)"
+  fi
+  owner="${repo%%/*}"
+  name="${repo##*/}"
+  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
+  fi
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
+  fi
+  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
+    die "invalid --repo name '$name' (path-like segments are not allowed)"
+  fi
+}
+
 TITLE=""
 CREATE="false"
 FORCE_CREATE="false"
@@ -160,6 +179,7 @@ resolve_default_base() {
 
 resolve_repo() {
   if [[ -n "$REPO" ]]; then
+    parse_repo "$REPO"
     echo "$REPO"
     return 0
   fi
@@ -249,8 +269,14 @@ if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
   die "--template-id requires --repo or an inferable gh repo context"
 fi
 
-if [[ -n "$EFFECTIVE_REPO" && -x "$PR_TEMPLATE_SCRIPT" ]] && command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json || true)"
+if [[ -n "$EFFECTIVE_REPO" && -f "$PR_TEMPLATE_SCRIPT" ]]; then
+  TEMPLATES_JSON=""
+  if ! TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json)"; then
+    if [[ "$CREATE" == "true" ]]; then
+      die "template discovery failed for $EFFECTIVE_REPO; refusing --create"
+    fi
+    echo "Warning: template discovery failed for $EFFECTIVE_REPO; using deterministic fallback body." >&2
+  fi
   if [[ -n "$TEMPLATES_JSON" ]] && printf '%s' "$TEMPLATES_JSON" | jq -e '.templates' >/dev/null 2>&1; then
     TEMPLATE_COUNT="$(printf '%s' "$TEMPLATES_JSON" | jq '.templates | length')"
     if [[ "$TEMPLATE_COUNT" -eq 1 ]]; then

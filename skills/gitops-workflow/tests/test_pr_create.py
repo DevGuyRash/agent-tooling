@@ -289,6 +289,8 @@ class PrCreateScriptTests(unittest.TestCase):
                     "main",
                     "--head",
                     "feat/demo",
+                    "--repo",
+                    "acme/widget",
                     "--create",
                     "--force-create",
                     "--no-labels",
@@ -517,7 +519,7 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertNotIn('gh pr create --title "feat: ok"; echo PWNED; echo ""', proc.stdout)
             self.assertIn("\\;\\ echo\\ PWNED\\;", proc.stdout)
 
-    def test_template_discover_stderr_is_visible(self):
+    def test_invalid_explicit_repo_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             repo = tmp_path / "repo"
@@ -572,7 +574,7 @@ class PrCreateScriptTests(unittest.TestCase):
                 env=env,
                 check=False,
             )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             self.assertIn("invalid --repo", proc.stderr)
 
 

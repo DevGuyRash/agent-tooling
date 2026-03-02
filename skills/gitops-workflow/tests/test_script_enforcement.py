@@ -33,8 +33,11 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "gh-scope-check.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
             SCRIPTS_DIR / "pr-create.sh",
+            SCRIPTS_DIR / "pr-update-body.sh",
             SCRIPTS_DIR / "pr-labels-list.sh",
             SCRIPTS_DIR / "pr-template-discover.sh",
+            SCRIPTS_DIR / "issue-template-discover.sh",
+            SCRIPTS_DIR / "issue-create.sh",
             SCRIPTS_DIR / "pr-comment.sh",
             SCRIPTS_DIR / "pr-request-review.sh",
             SCRIPTS_DIR / "pr-mark-ready.sh",
@@ -252,6 +255,7 @@ class UnresolvedThreadsStrictModeTests(unittest.TestCase):
             self.assertIn("Unresolved inline review threads", proc.stdout)
             self.assertIn("http://example/1", proc.stdout)
             self.assertIn("http://example/2", proc.stdout)
+            self.assertIn('"threadId"', proc.stdout)
 
     def test_threads_script_can_show_resolved_threads(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -323,6 +327,86 @@ class UnresolvedThreadsStrictModeTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("invalid --state", proc.stderr)
+
+
+class PrWorkflowOutputTests(unittest.TestCase):
+    def _fake_gh_script(self) -> str:
+        return (
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "if [[ \"$1\" == \"pr\" && \"$2\" == \"view\" ]]; then\n"
+            "  if [[ \"$*\" == *\"--comments\"* ]]; then\n"
+            "    echo \"FULL COMMENTS\"; exit 0\n"
+            "  fi\n"
+            "  if [[ \"$*\" == *\"--json comments\"* ]]; then\n"
+            "    echo \"2\"; exit 0\n"
+            "  fi\n"
+            "  if [[ \"$*\" == *\"--json number,title,state,isDraft,reviewDecision,mergeable,baseRefName,headRefName,url\"* ]]; then\n"
+            "    echo '{\"number\":7,\"title\":\"t\",\"state\":\"OPEN\"}'; exit 0\n"
+            "  fi\n"
+            "fi\n"
+            "if [[ \"$1\" == \"pr\" && \"$2\" == \"checks\" ]]; then\n"
+            "  echo \"checks\"; exit 0\n"
+            "fi\n"
+            "if [[ \"$1\" == \"api\" && \"$2\" == \"graphql\" ]]; then\n"
+            "  jq_expr=\"\"\n"
+            "  for ((i=1; i<=$#; i++)); do\n"
+            "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
+            "      next=$((i+1)); jq_expr=\"${!next}\"; break\n"
+            "    fi\n"
+            "  done\n"
+            "  if [[ \"$jq_expr\" == *\".data.repository.pullRequest.reviewThreads\"* ]]; then\n"
+            "    echo '{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}'; exit 0\n"
+            "  fi\n"
+            "fi\n"
+            "echo ''\n"
+            "exit 0\n"
+        )
+
+    def test_pr_workflow_defaults_to_concise_comments(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(self._fake_gh_script(), encoding="utf-8")
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "pr-workflow.sh"), "7", "--repo", "acme/widget"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("full comments: skipped", proc.stdout)
+            self.assertNotIn("FULL COMMENTS", proc.stdout)
+
+    def test_pr_workflow_full_comments_flag_shows_verbose_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(self._fake_gh_script(), encoding="utf-8")
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "pr-workflow.sh"), "7", "--repo", "acme/widget", "--full-comments"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("FULL COMMENTS", proc.stdout)
 
 
 class LabelsExportPaginationTests(unittest.TestCase):
