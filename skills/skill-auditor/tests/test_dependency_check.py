@@ -113,6 +113,23 @@ env FOO="a b" jq -r '.name' "$1"
         self.assertIn("- jq", output)
         self.assertNotIn("- env", output)
 
+    def test_extracts_uppercase_command_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "sample.sh").write_text(
+                """#!/usr/bin/env sh
+MyTool --version
+""",
+                encoding="utf-8",
+            )
+
+            output = run_dependency_check(skill_dir)
+
+        self.assertIn("External commands used (non-POSIX candidates):", output)
+        self.assertIn("- MyTool", output)
+
 
 if __name__ == "__main__":
     unittest.main()

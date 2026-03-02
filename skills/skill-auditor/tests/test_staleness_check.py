@@ -373,6 +373,50 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["runtime_failed"], 1)
         self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
 
+    def test_timeout_watchdog_completes_kill_escalation(self):
+        if not shutil.which("setsid"):
+            self.skipTest("setsid not available on this platform")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            pid_file = skill_dir / "child.pid"
+            script = scripts_dir / "spawn-term-ignoring-child.sh"
+            script.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env sh
+                    sh -c 'trap "" TERM; sleep 20' &
+                    child=$!
+                    echo "$child" > "{pid_file}"
+                    wait "$child"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\nscripts/spawn-term-ignoring-child.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--timeout-seconds", "1")
+            child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("timeout watchdog should complete KILL escalation for TERM-ignoring descendants")
+
+        self.assertEqual(data["summary"]["runtime_failed"], 1)
+        self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
+
     def test_timeout_terminates_descendants_without_setsid(self):
         if not Path("/proc").exists():
             self.skipTest("/proc is required for descendant process assertion")

@@ -12,8 +12,9 @@ prompt complexity analysis, and detect documentation/runtime staleness drift.
 ## Implementation Delta
 
 This proposal was written before the current branch expanded the auditor past
-the original D1-D17 scope. The implemented branch now includes D18-D21,
-including `D21 staleness-drift` backed by `scripts/staleness_check.sh`. Where
+the original D1-D17 scope. The implemented branch now includes D18-D22,
+including `D21 staleness-drift` backed by `scripts/staleness_check.sh` and
+`D22 cli-discoverability` backed by `scripts/discoverability_check.sh`. Where
 this document refers to "all 17 domains" or a D1-D17 rollout, treat that as
 historical scope and prefer the current repo files (`SKILL.md`,
 `references/domains.md`, `references/confidence-scoring.md`,

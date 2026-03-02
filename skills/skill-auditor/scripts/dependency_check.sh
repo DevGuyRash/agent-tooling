@@ -329,7 +329,7 @@ while IFS= read -r script; do
                     }
 
                     cmd = fields[idx]
-                    if (cmd ~ /^[a-z][a-z0-9_-]*$/) {
+                    if (cmd ~ /^[A-Za-z][A-Za-z0-9_-]*$/) {
                         print cmd
                     }
                 }

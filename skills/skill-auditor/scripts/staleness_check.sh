@@ -477,6 +477,20 @@ run_command() {
         return 0
     }
 
+    signal_pid_set() {
+        sig="$1"
+        leader_pid="$2"
+        shift 2
+        pid_list="$*"
+        [ -z "$pid_list" ] && return 0
+
+        for pid in $pid_list; do
+            [ "$pid" = "$leader_pid" ] && continue
+            kill "-$sig" "$pid" 2>/dev/null || true
+        done
+        kill "-$sig" "$leader_pid" 2>/dev/null || true
+    }
+
     if [ "${SKILL_AUDITOR_FORCE_NO_SETSID:-0}" != "1" ] && command -v setsid >/dev/null 2>&1; then
         # Launch setsid directly in the background so run_pid tracks the
         # session/process-group leader and timeout cleanup can signal -run_pgid.
@@ -498,33 +512,26 @@ run_command() {
         if kill -0 "$run_pid" 2>/dev/null; then
             echo "1" > "$timeout_flag"
             if [ -n "$run_pgid" ]; then
-                # Kill the entire process group so forked grandchildren are not leaked.
                 pg_members=$(get_process_group_pids "$run_pgid")
                 if [ -n "$pg_members" ]; then
                     timeout_cleanup="$pg_members"
                 else
                     timeout_cleanup="$run_pid"
                 fi
-                kill -TERM "-$run_pgid" 2>/dev/null || true
+                signal_pid_set TERM "$run_pid" $timeout_cleanup
             else
                 timeout_cleanup="$run_pid"
                 descendants=$(get_descendant_pids "$run_pid")
                 if [ -n "$descendants" ]; then
                     timeout_cleanup="$timeout_cleanup $descendants"
                 fi
-                if [ -n "$descendants" ]; then
-                    kill -TERM $descendants 2>/dev/null || true
-                fi
-                kill "$run_pid" 2>/dev/null || true
+                signal_pid_set TERM "$run_pid" $timeout_cleanup
             fi
             sleep 1
             if [ -n "$run_pgid" ]; then
-                kill -KILL "-$run_pgid" 2>/dev/null || true
+                signal_pid_set KILL "$run_pid" $timeout_cleanup
             else
-                if [ -n "$descendants" ]; then
-                    kill -KILL $descendants 2>/dev/null || true
-                fi
-                kill -9 "$run_pid" 2>/dev/null || true
+                signal_pid_set KILL "$run_pid" $timeout_cleanup
             fi
             wait_for_pids_exit 2 $timeout_cleanup
         fi
@@ -536,8 +543,13 @@ run_command() {
     run_status=$?
     set -e
 
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
+    if [ -s "$timeout_flag" ]; then
+        # Timeout path: let watchdog finish TERM->KILL escalation and reap window.
+        wait "$watchdog_pid" 2>/dev/null || true
+    else
+        kill "$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+    fi
 
     run_out=$(cat "$run_out_file")
     if [ -s "$timeout_flag" ]; then
