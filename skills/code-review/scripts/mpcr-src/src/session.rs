@@ -873,6 +873,16 @@ fn is_tagged_scalar_table(table: &TomlMap<String, toml::Value>) -> bool {
         && table.get(TAGGED_SCALAR_VALUE_KEY).is_some()
 }
 
+fn is_tagged_scalar_escaped_object(table: &TomlMap<String, toml::Value>) -> bool {
+    is_tagged_scalar_table(table)
+        && table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some_and(|marker| {
+            matches!(
+                marker,
+                toml::Value::String(value) if value == TAGGED_SCALAR_ESCAPE_VALUE
+            )
+        })
+}
+
 fn json_value_to_toml_value(value: &Value) -> anyhow::Result<toml::Value> {
     match value {
         Value::Null => Ok(tagged_scalar_toml("null")),
@@ -940,30 +950,22 @@ fn toml_value_to_json_value(value: &toml::Value) -> anyhow::Result<Value> {
                 .collect::<anyhow::Result<Vec<_>>>()?,
         )),
         toml::Value::Table(table) => {
-            if is_tagged_scalar_table(table) {
-                let escaped_object = table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some_and(|marker| {
-                    matches!(
-                        marker,
-                        toml::Value::String(value) if value == TAGGED_SCALAR_ESCAPE_VALUE
-                    )
-                });
-
-                if !escaped_object {
-                    if let Some(toml::Value::String(encoded)) = table.get(TAGGED_SCALAR_VALUE_KEY) {
-                        if encoded == "null" {
-                            return Ok(Value::Null);
-                        }
-                        if let Some(raw) = encoded.strip_prefix("u64:") {
-                            let parsed = raw
-                                .parse::<u64>()
-                                .context("parse tagged u64 TOML session value")?;
-                            return Ok(Value::Number(parsed.into()));
-                        }
+            let escaped_object = is_tagged_scalar_escaped_object(table);
+            if is_tagged_scalar_table(table) && !escaped_object {
+                if let Some(toml::Value::String(encoded)) = table.get(TAGGED_SCALAR_VALUE_KEY) {
+                    if encoded == "null" {
+                        return Ok(Value::Null);
+                    }
+                    if let Some(raw) = encoded.strip_prefix("u64:") {
+                        let parsed = raw
+                            .parse::<u64>()
+                            .context("parse tagged u64 TOML session value")?;
+                        return Ok(Value::Number(parsed.into()));
                     }
                 }
             }
 
-            if table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some() {
+            if escaped_object {
                 let mut unescaped = table.clone();
                 unescaped.remove(TAGGED_SCALAR_ESCAPE_KEY);
                 return Ok(Value::Object(toml_map_to_json_map(&unescaped)?));
@@ -3771,6 +3773,13 @@ nit = 0
                 "__mpcr_json_value": "null"
             }),
         );
+        entry.extra.insert(
+            "json_user_escape_marker".to_string(),
+            serde_json::json!({
+                "__mpcr_json_escape": "object",
+                "keep": true
+            }),
+        );
 
         let mut session = SessionFile {
             schema_version: SESSION_SCHEMA_VERSION.to_string(),
@@ -3823,6 +3832,13 @@ nit = 0
                     "__mpcr_json_value": "null"
                 }))
         );
+        ensure!(
+            review.extra.get("json_user_escape_marker")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_escape": "object",
+                    "keep": true
+                }))
+        );
 
         let written: toml::Value =
             toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
@@ -3848,6 +3864,17 @@ nit = 0
                 .and_then(toml::Value::as_array)
                 .and_then(|reviews| reviews.first())
                 .and_then(|review| review.get("json_reserved_scalar_shape"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
+                .and_then(toml::Value::as_str)
+                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
+        );
+        ensure!(
+            written
+                .get("reviews")
+                .and_then(toml::Value::as_array)
+                .and_then(|reviews| reviews.first())
+                .and_then(|review| review.get("json_user_escape_marker"))
                 .and_then(toml::Value::as_table)
                 .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
                 .and_then(toml::Value::as_str)
