@@ -46,7 +46,7 @@ class IssueTemplateDiscoverTests(unittest.TestCase):
                 "if [[ \"$1\" == \"api\" ]]; then\n"
                 "  case \"$2\" in\n"
                 "    repos/acme/widget/contents/.github/ISSUE_TEMPLATE?ref=main)\n"
-                "      printf '[{\"type\":\"file\",\"path\":\".github/ISSUE_TEMPLATE/bug.md\"},{\"type\":\"file\",\"path\":\".github/ISSUE_TEMPLATE/feature.MD\"}]\\n'\n"
+                "      printf '[{\"type\":\"file\",\"path\":\".github/ISSUE_TEMPLATE/bug.md\"},{\"type\":\"file\",\"path\":\".github/ISSUE_TEMPLATE/feature.MD\"},{\"type\":\"file\",\"path\":\".github/ISSUE_TEMPLATE/config.yaml\"}]\\n'\n"
                 "      exit 0\n"
                 "      ;;\n"
                 "    repos/acme/widget/contents/*)\n"
@@ -68,6 +68,7 @@ class IssueTemplateDiscoverTests(unittest.TestCase):
             ids = [entry["id"] for entry in payload["templates"]]
             self.assertIn(".github/ISSUE_TEMPLATE/bug.md", ids)
             self.assertIn(".github/ISSUE_TEMPLATE/feature.MD", ids)
+            self.assertIn(".github/ISSUE_TEMPLATE/config.yaml", ids)
 
     def test_extracts_template_content(self):
         with tempfile.TemporaryDirectory() as temp_dir:

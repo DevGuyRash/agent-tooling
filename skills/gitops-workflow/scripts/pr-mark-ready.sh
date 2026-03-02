@@ -6,23 +6,9 @@ set -euo pipefail
 # Usage:
 #   bash scripts/pr-mark-ready.sh <pr_number> [--repo owner/repo] [--watch-checks]
 
-
-die() {
-  echo "Error: $*" >&2
-  exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
-require_opt_value() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" || "$val" == --* ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 print_help() {
   cat <<'USAGE'

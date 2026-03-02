@@ -38,6 +38,7 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "pr-template-discover.sh",
             SCRIPTS_DIR / "issue-template-discover.sh",
             SCRIPTS_DIR / "issue-create.sh",
+            SCRIPTS_DIR / "lib" / "common.sh",
             SCRIPTS_DIR / "pr-comment.sh",
             SCRIPTS_DIR / "pr-request-review.sh",
             SCRIPTS_DIR / "pr-mark-ready.sh",

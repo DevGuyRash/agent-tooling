@@ -7,42 +7,9 @@ set -euo pipefail
 #   bash scripts/issue-template-discover.sh [--repo owner/repo] [--format text|json]
 #   bash scripts/issue-template-discover.sh [--repo owner/repo] --template-id <path>
 
-die() {
-  echo "Error: $*" >&2
-  exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
-require_opt_value() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" || "$val" == --* ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
-
-parse_repo() {
-  local repo="$1"
-  local owner name
-  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
-    die "invalid --repo '$repo' (expected owner/repo)"
-  fi
-  owner="${repo%%/*}"
-  name="${repo##*/}"
-  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
-    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
-  fi
-  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
-  fi
-  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
-    die "invalid --repo name '$name' (path-like segments are not allowed)"
-  fi
-  printf '%s\t%s\n' "$owner" "$name"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
@@ -185,7 +152,7 @@ done
 
 DIR_JSON="$(fetch_dir_json "$OWNER" "$NAME" "$DEFAULT_BRANCH" ".github/ISSUE_TEMPLATE")"
 if [[ -n "$DIR_JSON" ]] && [[ "$(printf '%s' "$DIR_JSON" | jq -r 'type')" == "array" ]]; then
-  printf '%s\n' "$DIR_JSON" | jq -r '.[] | select(.type == "file") | .path | select(ascii_downcase | endswith(".md"))' >> "$TMP_LIST"
+  printf '%s\n' "$DIR_JSON" | jq -r '.[] | select(.type == "file") | .path | select(test("\\.(md|ya?ml)$"; "i"))' >> "$TMP_LIST"
 fi
 
 if [[ -s "$TMP_LIST" ]]; then

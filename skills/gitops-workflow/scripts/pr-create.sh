@@ -18,42 +18,9 @@ set -euo pipefail
 # - git
 # - gh/jq (required only with --create)
 
-
-die() {
-  echo "Error: $*" >&2
-  exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
-require_opt_value() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" || "$val" == --* ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
-
-parse_repo() {
-  local repo="$1"
-  local owner name
-  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
-    die "invalid --repo '$repo' (expected owner/repo)"
-  fi
-  owner="${repo%%/*}"
-  name="${repo##*/}"
-  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
-    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
-  fi
-  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
-  fi
-  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
-    die "invalid --repo name '$name' (path-like segments are not allowed)"
-  fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 TITLE=""
 CREATE="false"
@@ -148,7 +115,6 @@ if [[ "$NO_LABELS" == "true" && "${#LABELS[@]}" -gt 0 ]]; then
   die "--no-labels cannot be combined with --label"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PR_LABELS_SCRIPT="$SCRIPT_DIR/pr-labels-list.sh"
 PR_TEMPLATE_SCRIPT="$SCRIPT_DIR/pr-template-discover.sh"
@@ -179,7 +145,7 @@ resolve_default_base() {
 
 resolve_repo() {
   if [[ -n "$REPO" ]]; then
-    parse_repo "$REPO"
+    parse_repo "$REPO" >/dev/null
     echo "$REPO"
     return 0
   fi
@@ -263,7 +229,7 @@ render_refs_section() {
 
 EFFECTIVE_REPO="$(resolve_repo)"
 if [[ -n "$EFFECTIVE_REPO" ]]; then
-  parse_repo "$EFFECTIVE_REPO"
+  parse_repo "$EFFECTIVE_REPO" >/dev/null
 fi
 REMOTE_TEMPLATE_ID=""
 REMOTE_TEMPLATE_CONTENT=""

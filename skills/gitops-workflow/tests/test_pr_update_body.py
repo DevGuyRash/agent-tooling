@@ -135,6 +135,34 @@ class PrUpdateBodyTests(unittest.TestCase):
             self.assertTrue(retained_path.exists())
             self.assertEqual(retained_path.read_text(encoding="utf-8"), "line1\nline2\n")
 
+    def test_dry_run_does_not_require_gh_binary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            shim_bin = temp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            shim_bin.mkdir(parents=True, exist_ok=True)
+
+            body_file = repo / "body.md"
+            body_file.write_text("body\n", encoding="utf-8")
+
+            # Keep required shell utilities available while intentionally omitting gh.
+            os.symlink("/bin/bash", shim_bin / "bash")
+            os.symlink("/usr/bin/dirname", shim_bin / "dirname")
+
+            env = os.environ.copy()
+            env["PATH"] = str(shim_bin)
+
+            proc = run(
+                ["bash", str(SCRIPT), "20", "--body-file", str(body_file), "--dry-run"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("DRY-RUN: gh pr edit 20 --body-file", proc.stdout)
+            self.assertNotIn("missing required command: gh", proc.stderr)
+
     def test_invalid_repo_slug_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
