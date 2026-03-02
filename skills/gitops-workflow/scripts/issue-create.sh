@@ -128,6 +128,7 @@ fi
 
 REMOTE_TEMPLATE_ID=""
 REMOTE_TEMPLATE_CONTENT=""
+REMOTE_TEMPLATE_IS_YAML="false"
 if [[ -z "$BODY" && -z "$BODY_FILE" && -n "$EFFECTIVE_REPO" && -f "$ISSUE_TEMPLATE_SCRIPT" ]]; then
   TEMPLATE_DISCOVERY_JSON=""
   if ! TEMPLATE_DISCOVERY_JSON="$(bash "$ISSUE_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json)"; then
@@ -156,9 +157,20 @@ if [[ -z "$BODY" && -z "$BODY_FILE" && -n "$EFFECTIVE_REPO" && -f "$ISSUE_TEMPLA
     fi
 
     if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
+      if [[ "$REMOTE_TEMPLATE_ID" =~ \.ya?ml$ ]]; then
+        REMOTE_TEMPLATE_IS_YAML="true"
+      fi
       REMOTE_TEMPLATE_CONTENT="$(bash "$ISSUE_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --template-id "$REMOTE_TEMPLATE_ID")"
     fi
   fi
+fi
+
+if [[ "$REMOTE_TEMPLATE_IS_YAML" == "true" ]]; then
+  if [[ "$CREATE" == "true" ]]; then
+    die "selected issue template '$REMOTE_TEMPLATE_ID' is a GitHub Issue Form schema; pass --body or --body-file with filled issue content before --create"
+  fi
+  echo "Warning: selected issue template '$REMOTE_TEMPLATE_ID' is a GitHub Issue Form schema; using fallback template body." >&2
+  REMOTE_TEMPLATE_CONTENT=""
 fi
 
 if [[ -n "$BODY" ]]; then
