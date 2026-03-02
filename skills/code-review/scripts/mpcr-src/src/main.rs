@@ -711,30 +711,14 @@ Examples:
             help = "Read report markdown from this file instead of stdin."
         )]
         report_file: Option<PathBuf>,
-        #[arg(
-            long,
-            default_value_t = 0,
-            help = "Expected BLOCKER count for reconciliation."
-        )]
-        blocker: u64,
-        #[arg(
-            long,
-            default_value_t = 0,
-            help = "Expected MAJOR count for reconciliation."
-        )]
-        major: u64,
-        #[arg(
-            long,
-            default_value_t = 0,
-            help = "Expected MINOR count for reconciliation."
-        )]
-        minor: u64,
-        #[arg(
-            long,
-            default_value_t = 0,
-            help = "Expected NIT count for reconciliation."
-        )]
-        nit: u64,
+        #[arg(long, help = "Expected BLOCKER count for reconciliation.")]
+        blocker: Option<u64>,
+        #[arg(long, help = "Expected MAJOR count for reconciliation.")]
+        major: Option<u64>,
+        #[arg(long, help = "Expected MINOR count for reconciliation.")]
+        minor: Option<u64>,
+        #[arg(long, help = "Expected NIT count for reconciliation.")]
+        nit: Option<u64>,
     },
 
     /// Finalize a review: write the report markdown and mark the review entry FINISHED.
@@ -1640,17 +1624,19 @@ fn run() -> anyhow::Result<()> {
                         .with_context(|| format!("read report file {}", path.display()))?,
                     None => read_stdin_to_string().context("read report markdown from stdin")?,
                 };
-                let summary: ReportValidationSummary = validate_report_markdown(
-                    &markdown,
-                    kind.into(),
-                    Some(SeverityExpectation {
-                        blocker,
-                        major,
-                        minor,
-                        nit,
-                    }),
-                    None,
-                )?;
+                let expected_counts =
+                    if blocker.is_some() || major.is_some() || minor.is_some() || nit.is_some() {
+                        Some(SeverityExpectation {
+                            blocker: blocker.map_or(0, std::convert::identity),
+                            major: major.map_or(0, std::convert::identity),
+                            minor: minor.map_or(0, std::convert::identity),
+                            nit: nit.map_or(0, std::convert::identity),
+                        })
+                    } else {
+                        None
+                    };
+                let summary: ReportValidationSummary =
+                    validate_report_markdown(&markdown, kind.into(), expected_counts, None)?;
                 write_result(json, json_pretty, &summary)?;
             }
 

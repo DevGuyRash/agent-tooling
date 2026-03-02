@@ -1365,6 +1365,43 @@ fn reviewer_finalize_reads_report_from_stdin() -> anyhow::Result<()> {
 }
 
 #[test]
+fn reviewer_validate_report_allows_omitting_expected_counts() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let report_path = tmp.path().join("child.md");
+    fs::write(
+        &report_path,
+        valid_child_report(
+            "facefeed",
+            "sess4321",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let report_path_str = report_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 report path"))?;
+
+    let summary = run_cmd_json(&[
+        "reviewer",
+        "validate-report",
+        "--kind",
+        "child-proof-packet",
+        "--report-file",
+        report_path_str,
+    ])?;
+    ensure!(
+        json_u64(&summary, "findings")? == 1,
+        "expected one finding in validation summary"
+    );
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_emit_env_sh_exports_expected_vars() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
@@ -4962,6 +4999,20 @@ fn launcher_files_keep_expected_line_endings_and_ps_compat_markers() -> anyhow::
     ensure!(
         !powershell_launcher.contains("$IsWindows"),
         "powershell launcher should avoid PowerShell Core-only $IsWindows variable"
+    );
+
+    let cmd_launcher = fs::read_to_string(scripts_dir.join("mpcr.cmd"))?;
+    ensure!(
+        !cmd_launcher.contains('\r'),
+        "cmd launcher should use LF only"
+    );
+    ensure!(
+        cmd_launcher.contains("set \"BASH_EXIT=%ERRORLEVEL%\""),
+        "cmd launcher should capture bash exit code before fallback"
+    );
+    ensure!(
+        cmd_launcher.contains("if \"%BASH_EXIT%\"==\"0\" exit /b 0"),
+        "cmd launcher should only exit early when bash succeeds"
     );
 
     Ok(())

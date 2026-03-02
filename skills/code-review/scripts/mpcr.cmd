@@ -6,10 +6,11 @@ setlocal
 where bash >nul 2>nul
 if not errorlevel 1 (
     bash "%~dp0mpcr" %*
-    exit /b %ERRORLEVEL%
+    set "BASH_EXIT=%ERRORLEVEL%"
+    if "%BASH_EXIT%"=="0" exit /b 0
 )
 
-:: bash unavailable; delegate to the native PowerShell shim.
+:: bash unavailable or failed; delegate to the native PowerShell shim.
 where pwsh >nul 2>nul
 if not errorlevel 1 (
     pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0mpcr.ps1" %*
