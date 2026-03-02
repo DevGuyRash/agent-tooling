@@ -272,6 +272,65 @@ is_assignment_token() {
     printf '%s' "$tok" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*$' >/dev/null
 }
 
+tokenize_command() {
+    input_cmd="$1"
+    printf '%s\n' "$input_cmd" | awk '
+        function flush() {
+            if (token != "") {
+                print token
+                token = ""
+            }
+        }
+        BEGIN {
+            in_single = 0
+            in_double = 0
+            escaped = 0
+            token = ""
+        }
+        {
+            line = $0
+            for (i = 1; i <= length(line); i++) {
+                ch = substr(line, i, 1)
+                if (escaped) {
+                    token = token ch
+                    escaped = 0
+                    continue
+                }
+                if (ch == "\\") {
+                    if (in_single) {
+                        token = token ch
+                        continue
+                    }
+                    token = token ch
+                    escaped = 1
+                    continue
+                }
+                if (ch == "\"" && !in_single) {
+                    in_double = !in_double
+                    token = token ch
+                    continue
+                }
+                if (ch == sprintf("%c", 39) && !in_double) {
+                    in_single = !in_single
+                    token = token ch
+                    continue
+                }
+                if (ch ~ /[[:space:]]/ && !in_single && !in_double) {
+                    flush()
+                    continue
+                }
+                token = token ch
+            }
+        }
+        END {
+            if (escaped) {
+                token = token "\\"
+            }
+            flush()
+        }
+    '
+}
+
 has_safe_indicator() {
     input_cmd="$1"
     printf '%s' "$input_cmd" | grep -E '(^|[[:space:]])(--help|-h|--version|version|help|list)([[:space:]]|$)' >/dev/null
@@ -346,12 +405,9 @@ run_command() {
     run_pgid=""
 
     if command -v setsid >/dev/null 2>&1; then
-        (
-            set +e
-            # Run command in a dedicated session so timeout cleanup can terminate
-            # the whole process group, including descendants.
-            setsid sh -c "$run_cmd"
-        ) >"$run_out_file" 2>&1 &
+        # Launch setsid directly in the background so run_pid tracks the
+        # session/process-group leader and timeout cleanup can signal -run_pgid.
+        setsid sh -c "$run_cmd" >"$run_out_file" 2>&1 &
         run_pid=$!
         run_pgid="$run_pid"
     else
@@ -450,11 +506,23 @@ while IFS= read -r candidate_row; do
 
     normalized=$(normalize_command "$cmd")
 
-    # Parse command and strip assignment prefix.
-    # shellcheck disable=SC2086 # normalized parsing in POSIX sh.
-    set -- $normalized
+    # Parse command and strip assignment prefix while preserving quoted spacing.
+    set --
+    while IFS= read -r tok; do
+        [ -z "$tok" ] && continue
+        set -- "$@" "$tok"
+    done <<EOF
+$(tokenize_command "$normalized")
+EOF
+
     assign_count=0
+    assignment_prefix=""
     while [ $# -gt 0 ] && is_assignment_token "$1"; do
+        if [ -n "$assignment_prefix" ]; then
+            assignment_prefix="$assignment_prefix $1"
+        else
+            assignment_prefix="$1"
+        fi
         assign_count=$((assign_count + 1))
         shift
     done
@@ -464,9 +532,9 @@ while IFS= read -r candidate_row; do
         reason_code="fragment_only"
         reason=$(reason_text "$reason_code")
     else
-        exec_bin="$1"
+        exec_bin=$(strip_quotes "$1")
         shift || true
-        arg1="${1-}"
+        arg1=$(strip_quotes "${1-}")
         cli_args="$*"
 
         local_target=""
@@ -540,6 +608,9 @@ while IFS= read -r candidate_row; do
             fi
 
             if [ -n "$direct_cmd" ]; then
+                if [ -n "$assignment_prefix" ]; then
+                    direct_cmd="$assignment_prefix $direct_cmd"
+                fi
                 run_result=$(run_command "$direct_cmd")
                 exit_code=$(printf '%s' "$run_result" | awk -F '\t' '{print $1}')
                 first_line=$(printf '%s' "$run_result" | awk -F '\t' '{sub(/^[^\t]*\t/, ""); print}')
@@ -577,6 +648,9 @@ while IFS= read -r candidate_row; do
                         fallback_cmd="$invoke_prefix $local_target --help"
                     else
                         fallback_cmd="$local_target --help"
+                    fi
+                    if [ -n "$assignment_prefix" ]; then
+                        fallback_cmd="$assignment_prefix $fallback_cmd"
                     fi
 
                     run_result=$(run_command "$fallback_cmd")
@@ -620,6 +694,10 @@ while IFS= read -r candidate_row; do
                 else
                     fallback_cmd="$CLI_BIN --help"
                     verification_mode="help-fallback"
+                fi
+
+                if [ -n "$assignment_prefix" ]; then
+                    fallback_cmd="$assignment_prefix $fallback_cmd"
                 fi
 
                 run_result=$(run_command "$fallback_cmd")

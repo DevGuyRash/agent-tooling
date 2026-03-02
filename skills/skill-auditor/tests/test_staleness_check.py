@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import tempfile
+import time
 import textwrap
 import unittest
 from pathlib import Path
@@ -219,6 +222,38 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["examples"][0]["status"], "executed")
         self.assertEqual(data["examples"][0]["verification_mode"], "direct")
 
+    def test_executes_local_script_with_quoted_env_assignment_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "run.sh"
+            script.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env sh
+                    if [ "${FOO-}" = "hello world" ] && [ "${1-}" = "--help" ]; then
+                        echo "ok"
+                        exit 0
+                    fi
+                    echo "error: env prefix parsing failed"
+                    exit 2
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                '# Skill\n\n```bash\nFOO="hello world" scripts/run.sh --help\n```\n',
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir)
+
+        self.assertEqual(data["summary"]["executed"], 1)
+        self.assertEqual(data["examples"][0]["status"], "executed")
+        self.assertEqual(data["examples"][0]["verification_mode"], "direct")
+
     def test_times_out_long_running_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
@@ -244,6 +279,46 @@ class StalenessCheckTests(unittest.TestCase):
 
         self.assertEqual(data["summary"]["runtime_failed"], 1)
         self.assertEqual(data["examples"][0]["status"], "runtime-failed")
+        self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
+
+    def test_timeout_terminates_descendant_processes(self):
+        if not shutil.which("setsid"):
+            self.skipTest("setsid not available on this platform")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            pid_file = skill_dir / "child.pid"
+            script = scripts_dir / "spawn-child.sh"
+            script.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env sh
+                    sleep 20 &
+                    child=$!
+                    echo "$child" > "{pid_file}"
+                    wait "$child"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\nscripts/spawn-child.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--timeout-seconds", "1")
+            child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+
+            # Allow timeout cleanup to deliver TERM/KILL to the process group.
+            time.sleep(0.5)
+
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+
+        self.assertEqual(data["summary"]["runtime_failed"], 1)
         self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
 
     def test_json_is_backward_compatible_with_new_detail_fields(self):

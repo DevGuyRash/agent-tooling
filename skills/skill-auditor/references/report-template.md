@@ -363,28 +363,28 @@ critical issues are, and the final verdict. Write this LAST.>
 
 | AGENTS.md Section | Audit Domain(s) | Covered? | Confidence |
 |--------------------|-----------------|----------|------------|
-| Command isolation | D6 | ✅/❌ | HIGH [H] / MEDIUM [M] |
-| `<skills-file-root>` usage | D4 | ✅/❌ | HIGH [H] |
-| Frontmatter and naming | D2, D5 | ✅/❌ | HIGH [H] |
-| Description quality | D3 | ✅/❌ | HIGH [H] |
-| File hygiene | D1 | ✅/❌ | HIGH [H] |
+| Command isolation | D6 | ✅/❌ | MEDIUM [M] |
+| `<skills-file-root>` usage | D4 | ✅/❌ | MEDIUM [M] |
+| Frontmatter and naming | D2, D5 | ✅/❌ | MEDIUM [M] |
+| Description quality | D3 | ✅/❌ | MEDIUM [M] |
+| File hygiene | D1 | ✅/❌ | MEDIUM [M] |
 | Name consistency | D5 | ✅/❌ | MEDIUM [M] |
 | Error message design | D7 | ✅/❌ | MEDIUM [M] |
 | Progressive disclosure | D8 | ✅/❌ | MEDIUM [M] |
 | Dispatch prompt design | D9 | ✅/❌ | MEDIUM [M] |
 | Output size discipline | D10 | ✅/❌ | MEDIUM [M] |
-| Cold-start readiness | D11 | ✅/❌ | HIGH [H] |
+| Cold-start readiness | D11 | ✅/❌ | MEDIUM [M] |
 | Script self-containment | D12 | ✅/❌ | MEDIUM [M] |
 | Integration testing | D13 | ✅/❌ | MEDIUM [M] |
-| EARS compliance | D14 | ✅/❌ | HIGH [H] |
-| Prompt complexity | D15 | ✅/❌ | HIGH [H] |
-| Duplication detection | D16 | ✅/❌ | HIGH [H] |
-| Reference depth | D17 | ✅/❌ | HIGH [H] |
-| Convergence | D18 | ✅/❌ | MEDIUM [M] / HIGH [H] |
-| Divergence | D19 | ✅/❌ | MEDIUM [M] / HIGH [H] |
-| Adherence | D20 | ✅/❌ | MEDIUM [M] / HIGH [H] |
-| Staleness drift | D21 | ✅/❌ | HIGH [H] / MEDIUM [M] |
-| CLI discoverability helpers | D22 | ✅/❌ | HIGH [H] / MEDIUM [M] |
+| EARS compliance | D14 | ✅/❌ | MEDIUM [M] |
+| Prompt complexity | D15 | ✅/❌ | MEDIUM [M] |
+| Duplication detection | D16 | ✅/❌ | MEDIUM [M] |
+| Reference depth | D17 | ✅/❌ | MEDIUM [M] |
+| Convergence | D18 | ✅/❌ | MEDIUM [M] |
+| Divergence | D19 | ✅/❌ | MEDIUM [M] |
+| Adherence | D20 | ✅/❌ | MEDIUM [M] |
+| Staleness drift | D21 | ✅/❌ | MEDIUM [M] |
+| CLI discoverability helpers | D22 | ✅/❌ | MEDIUM [M] |
 
 ### Adherence Findings
 
