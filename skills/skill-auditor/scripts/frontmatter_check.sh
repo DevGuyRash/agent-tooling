@@ -37,25 +37,20 @@ if [ ! -f "$SKILL_FILE" ]; then
     exit 1
 fi
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/frontmatter.sh
+. "$SCRIPT_DIR/lib/frontmatter.sh"
+
 DIR_NAME=$(basename "$SKILL_DIR")
 printf '═══ Frontmatter Validity: %s ═══\n\n' "$DIR_NAME"
 
-first_line=$(head -1 "$SKILL_FILE")
-if [ "$first_line" != "---" ]; then
+if ! fm_block=$(sa_load_frontmatter "$SKILL_FILE"); then
     echo "  ✗ YAML frontmatter MISSING — first line is not '---' [BLOCKER]"
     echo ""
     echo "Done."
     exit 0
 fi
 echo "  ✓ YAML frontmatter delimiter found"
-
-fm_block=$(sed -n '2,/^---$/p' "$SKILL_FILE" | sed '$d')
-if [ -z "$fm_block" ]; then
-    echo "  ✗ Frontmatter block is empty or malformed [BLOCKER]"
-    echo ""
-    echo "Done."
-    exit 0
-fi
 
 echo ""
 echo "── Name Field ──"
@@ -87,27 +82,9 @@ fi
 
 echo ""
 echo "── Description Field ──"
-desc_line=$(printf '%s\n' "$fm_block" | grep -n '^description:' | head -1)
-if [ -z "$desc_line" ]; then
+if ! desc_text=$(sa_frontmatter_extract_description "$fm_block"); then
     echo "  ✗ description field MISSING in frontmatter [BLOCKER]"
 else
-    desc_start=$(printf '%s' "$desc_line" | cut -d: -f1)
-    desc_raw=$(printf '%s\n' "$fm_block" | sed -n "${desc_start}p" | sed 's/^description:[[:space:]]*//')
-    case "$desc_raw" in
-        ">-"|">"|"|"|"|-")
-            desc_text=$(printf '%s\n' "$fm_block" | tail -n +"$((desc_start + 1))" | \
-                while IFS= read -r cline; do
-                    case "$cline" in
-                        "  "*|"	"*) printf '%s ' "$(printf '%s' "$cline" | sed 's/^[[:space:]]*//')" ;;
-                        *) break ;;
-                    esac
-                done)
-            ;;
-        *)
-            desc_text="$desc_raw"
-            ;;
-    esac
-    desc_text=$(printf '%s' "$desc_text" | sed "s/^['\"]//;s/['\"]$//")
     desc_chars=$(printf '%s' "$desc_text" | wc -c | tr -d ' ')
     desc_words=$(printf '%s' "$desc_text" | wc -w | tr -d ' ')
     if [ "$desc_chars" -eq 0 ]; then

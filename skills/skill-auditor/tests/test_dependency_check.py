@@ -58,6 +58,23 @@ FOO=1 jq -r '.name' "$1"
         self.assertIn("External commands used (non-POSIX candidates):", output)
         self.assertIn("- jq", output)
 
+    def test_extracts_command_after_quoted_env_assignment_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "sample.sh").write_text(
+                """#!/usr/bin/env sh
+FOO="a b" jq -r '.name' "$1"
+""",
+                encoding="utf-8",
+            )
+
+            output = run_dependency_check(skill_dir)
+
+        self.assertIn("External commands used (non-POSIX candidates):", output)
+        self.assertIn("- jq", output)
+
     def test_extracts_command_after_env_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
@@ -76,6 +93,24 @@ env -i BAR=2 python3 -V
         self.assertIn("External commands used (non-POSIX candidates):", output)
         self.assertIn("- jq", output)
         self.assertIn("- python3", output)
+        self.assertNotIn("- env", output)
+
+    def test_extracts_command_after_quoted_env_wrapper_assignment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "sample.sh").write_text(
+                """#!/usr/bin/env sh
+env FOO="a b" jq -r '.name' "$1"
+""",
+                encoding="utf-8",
+            )
+
+            output = run_dependency_check(skill_dir)
+
+        self.assertIn("External commands used (non-POSIX candidates):", output)
+        self.assertIn("- jq", output)
         self.assertNotIn("- env", output)
 
 

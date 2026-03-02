@@ -35,6 +35,19 @@ class DiscoverabilityCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["doc_discovery_examples"], 0)
         self.assertEqual(data["summary"]["discovery_gaps"], 1)
 
+    def test_ignores_non_enum_placeholder_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\naudit run --cli <binary>\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir)
+
+        self.assertEqual(data["summary"]["total_enum_options"], 0)
+        self.assertEqual(data["summary"]["discovery_gaps"], 0)
+
     def test_passes_with_doc_helper_and_cli_help_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)

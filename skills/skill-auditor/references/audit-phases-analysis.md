@@ -30,8 +30,8 @@ skill's instructions is a token that can't be used for the actual task.
    ```
    Estimate tokens as `chars / 4` (rough approximation for English text).
 
-2. **Measure every protocol/template output.** You SHALL measure if the skill has a CLI that
-   serves instructions (like `mpcr protocol`):
+2. **Measure every protocol/template output.** You SHALL measure the output of any CLI that
+   serves instructions (like `mpcr protocol`), if the skill has one:
    ```bash
    tool protocol subcommand 2>&1 | wc -lc
    ```
@@ -171,7 +171,7 @@ thorough, consistent, and tailored to their purpose?
    - Are there fields an agent would struggle to fill?
    - Does the filled template meet the quality bar described in the docs?
 
-4. **Check for anti-laziness guardrails.** You SHALL check whether the skill include mechanisms
+4. **Check for anti-laziness guardrails.** You SHALL check whether the skill includes mechanisms
    to prevent shallow or generic output? Examples:
    - Minimum counts (e.g., "at least 2 theorems per domain")
    - Specificity requirements (e.g., "must reference file:line")

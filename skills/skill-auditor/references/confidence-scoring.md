@@ -208,9 +208,9 @@ The aggregate confidence score quantifies overall evidence quality:
 score = (HIGH_count × 3 + MEDIUM_count × 2 + LOW_count × 1) / (total_findings × 3)
 ```
 
-WHEN computing the aggregate score, D18/D19/D20/D21/D22 findings SHALL be
-included in the calculation alongside D1–D17 findings. Their confidence levels follow
-the same HIGH=3, MEDIUM=2, LOW=1 weighting.
+WHEN computing the aggregate score, all findings (D1–D22) SHALL be included
+in the calculation. Confidence levels follow the same HIGH=3, MEDIUM=2,
+LOW=1 weighting.
 
 ### Interpretation Bands
 

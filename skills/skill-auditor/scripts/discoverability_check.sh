@@ -16,12 +16,23 @@ TAB=$(printf '\t')
 
 extract_enum_options() {
     awk '
+        function is_enum_placeholder(raw, lower) {
+            lower = tolower(raw)
+            if (raw ~ /[|,\/]/) return 1
+            if (lower ~ /(role|mode|phase|status|type|format|level|profile|variant|provider|backend|engine|target|env|environment|strategy|policy|kind)/) return 1
+            return 0
+        }
         {
             line = $0
             while (match(line, /--[a-z][a-z0-9-]*[[:space:]]+<[^>]+>/)) {
                 chunk = substr(line, RSTART, RLENGTH)
                 split(chunk, fields, /[[:space:]]+/)
-                print fields[1]
+                ph = fields[2]
+                gsub(/^</, "", ph)
+                gsub(/>$/, "", ph)
+                if (is_enum_placeholder(ph)) {
+                    print fields[1]
+                }
                 line = substr(line, RSTART + RLENGTH)
             }
             line = $0

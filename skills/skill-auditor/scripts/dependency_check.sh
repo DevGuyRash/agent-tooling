@@ -198,6 +198,54 @@ while IFS= read -r script; do
             ' "$script" 2>/dev/null | sort -u)
 
             ext_cmds=$(awk '
+                function protect_quoted_spaces(src,    out, i, ch, nextch, in_squote, in_dquote) {
+                    out = ""
+                    in_squote = 0
+                    in_dquote = 0
+                    for (i = 1; i <= length(src); i++) {
+                        ch = substr(src, i, 1)
+                        nextch = (i < length(src) ? substr(src, i + 1, 1) : "")
+                        if (in_squote) {
+                            if (ch == sprintf("%c", 39)) {
+                                in_squote = 0
+                            }
+                            if (ch ~ /[[:space:]]/) {
+                                out = out "\034"
+                            } else {
+                                out = out ch
+                            }
+                            continue
+                        }
+                        if (in_dquote) {
+                            if (ch == "\\" && nextch != "") {
+                                out = out ch nextch
+                                i++
+                                continue
+                            }
+                            if (ch == "\"") {
+                                in_dquote = 0
+                            }
+                            if (ch ~ /[[:space:]]/) {
+                                out = out "\034"
+                            } else {
+                                out = out ch
+                            }
+                            continue
+                        }
+                        if (ch == sprintf("%c", 39)) {
+                            in_squote = 1
+                            out = out ch
+                            continue
+                        }
+                        if (ch == "\"") {
+                            in_dquote = 1
+                            out = out ch
+                            continue
+                        }
+                        out = out ch
+                    }
+                    return out
+                }
                 function awk_open_on_line(src, idx, tail) {
                     if (src !~ /(^|[^[:alnum:]_])awk([[:space:]]|$)/) return 0
                     if (src ~ /'\''[[:space:]]*$/) return 1
@@ -255,6 +303,7 @@ while IFS= read -r script; do
                     line = $0
                     sub(/[[:space:]]*#.*/, "", line)
                     gsub(/^[[:space:]]+/, "", line)
+                    line = protect_quoted_spaces(line)
 
                     while (line ~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+/) {
                         sub(/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+/, "", line)

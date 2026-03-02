@@ -33,7 +33,7 @@ findings.
 | Phase | Name                  | Budget | Focus                                     |
 |-------|-----------------------|--------|-------------------------------------------|
 | 1     | Environment & Build   | ~15%   | Dead scripts block everything else        |
-| 2     | API Surface           | ~25%   | Name mismatches are the #1 agent failure  |
+| 2     | API Surface           | ~25%   | Name mismatches are the #1 agent failure mode |
 | 3     | Workflow Simulation   | ~30%   | The agent's actual experience             |
 | 4     | Context & Token       | ~15%   | Quantifies what phases 1-3 found          |
 | 4b    | Duplication Gate      | ~5%    | Deterministic duplicate/contradiction gate |
