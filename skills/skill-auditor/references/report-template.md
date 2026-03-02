@@ -19,7 +19,7 @@ all findings are compiled. Replace all `<placeholder>` text.
 - [Divergence (D19)](#9-divergence-analysis-d19)
 - [Adherence (D20)](#10-adherence-analysis-d20)
 - [Staleness (D21)](#11-staleness-analysis-d21)
-- [CLI Discoverability (D22)](#12-cli-discoverability-analysis-d22)
+- [CLI Discoverability (D22)](#12-cli-discoverability-d22)
 - [Improvement Recommendations](#improvement-recommendations)
 - [Confidence Summary](#confidence-summary)
 
@@ -68,7 +68,7 @@ critical issues are, and the final verdict. Write this LAST.>
 | D19 divergence | ✅/❌/N/A | <count> |
 | D20 adherence | ✅/❌/N/A | <count> |
 | D21 staleness-drift | ✅/❌/N/A | <count> |
-| D22 cli-discoverability | ✅/❌/N/A | <count> |
+| D22 CLI Discoverability | ✅/❌/N/A | <count> |
 
 ---
 
@@ -412,7 +412,7 @@ critical issues are, and the final verdict. Write this LAST.>
 
 ---
 
-## 12. CLI Discoverability Analysis (D22)
+## 12. CLI Discoverability (D22)
 
 **Discoverability Coverage:** <N>/<N> enum-like options expose one-step helper paths
 **CLI Helper Affordances:** <assessment — --help/--list or equivalent available?>

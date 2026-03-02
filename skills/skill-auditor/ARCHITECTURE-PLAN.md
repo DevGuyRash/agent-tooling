@@ -1151,10 +1151,11 @@ All new scripts SHALL follow these conventions:
 
 **Bare imperative detection heuristic:**
 Lines that start with a verb (after optional list marker) and don't contain
-EARS keywords. This is inherently fuzzy — the script uses a curated verb list:
-`run, execute, check, verify, test, create, build, write, read, open, close,
-delete, remove, add, update, set, get, find, search, scan, measure, compare,
-evaluate, produce, generate, compile, install, configure, deploy, validate`.
+EARS keywords. This is inherently fuzzy. The script uses a curated verb list:
+`run`, `execute`, `check`, `verify`, `test`, `create`, `build`, `write`,
+`read`, `open`, `close`, `delete`, `remove`, `add`, `update`, `set`, `get`,
+`find`, `search`, `scan`, `measure`, `compare`, `evaluate`, `produce`,
+`generate`, `compile`, `install`, `configure`, `deploy`, `validate`.
 
 ### 11.3 Key Script: `prompt_complexity_check.sh`
 
@@ -1235,7 +1236,7 @@ The expansion is successful when:
 2. EARS coverage is reported for every audited skill
 3. Prompt complexity scores are reported for skills with dispatch prompts
 4. The auditor passes its own self-audit with zero BLOCKERs
-5. Peak context stays under 14,000 tokens for the most complex audit scenario
+5. Peak context stays under 12,000 tokens for the most complex audit scenario
 6. All new scripts run in < 5 seconds on a typical skill directory
 
 ---

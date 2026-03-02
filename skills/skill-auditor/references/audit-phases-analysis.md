@@ -56,8 +56,7 @@ skill's instructions is a token that can't be used for the actual task.
    SKILL.md + protocol outputs loaded so far + subagent results pending
    ```
 
-6. **Propose a reduction target.** Based on the context budget and candidate
-   reduction map, you
+6. **Propose a reduction target.** Based on the context budget and candidate reduction map, you
    SHALL estimate how much context could be cut. A good target is 40-50%
    reduction from peak.
    You SHALL list specific cuts:
@@ -93,7 +92,7 @@ gate the audit verdict.
 
 1. **Run the duplication script in full scope.** You SHALL execute:
    ```bash
-   <skills-file-root>/scripts/duplication_check.sh <dir> --scope all --format json
+   <skills-file-root>/scripts/duplication_check.sh <skill-dir> --scope all --format json
    ```
    This produces the complete duplication inventory, including advisory-only
    findings that do not gate the verdict.
@@ -131,7 +130,7 @@ gate the audit verdict.
 
 For this phase, the auditor SHALL execute:
 
-- D16 (`<skills-file-root>/scripts/duplication_check.sh <dir> --scope all --format json`)
+- D16 (`<skills-file-root>/scripts/duplication_check.sh <skill-dir> --scope all --format json`)
 
 WHEN the script cannot run, THEN the auditor SHALL perform a manual duplicate
 inventory and explicitly downgrade confidence below HIGH.
@@ -172,7 +171,7 @@ thorough, consistent, and tailored to their purpose?
    - Does the filled template meet the quality bar described in the docs?
 
 4. **Check for anti-laziness guardrails.** You SHALL check whether the skill includes mechanisms
-   to prevent shallow or generic output? Examples:
+   to prevent shallow or generic output. Examples:
    - Minimum counts (e.g., "at least 2 theorems per domain")
    - Specificity requirements (e.g., "must reference file:line")
    - Explicit anti-patterns (e.g., "'the code works' is NOT a valid proof")

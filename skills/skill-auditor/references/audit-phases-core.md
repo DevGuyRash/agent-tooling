@@ -146,7 +146,7 @@ mode. An agent reads "Architecture" in the docs, tries
 
 4. **Run staleness drift checks.** You SHALL execute:
    ```bash
-   <skills-file-root>/scripts/staleness_check.sh <dir> [--cli <bin>] [--format text|json]
+   <skills-file-root>/scripts/staleness_check.sh <skill-dir> [--cli <bin>] [--format text|json]
    ```
    Then inspect script results and surrounding prose claims to determine:
    - Which examples are still runnable as documented
