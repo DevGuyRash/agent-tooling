@@ -52,6 +52,11 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry
 ## C) PR creation checklist
 
 - [ ] PR title matches Conventional Commits (important for squash merge)
+- [ ] Labels discovered and explicitly chosen before create:
+  - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>`
+- [ ] Remote PR templates discovered before create:
+  - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>`
+- [ ] If creating PR via script, draft is default unless `--ready` is explicitly passed.
 - [ ] PR body includes:
   - summary
   - what changed
@@ -71,6 +76,7 @@ Before pushing *any* updates to a PR:
 
 - [ ] Run strict PR wrapper first:
   - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <number> --watch-checks`
+  - add `--full-comments` only when you explicitly need full comment bodies
 - [ ] Read top-level comments:
   - `gh pr view <number> --comments`
 - [ ] Read unresolved inline review threads:
@@ -80,7 +86,25 @@ Before pushing *any* updates to a PR:
 - [ ] Identify every unresolved request and either:
   - implement it, or
   - reply in-thread explaining why you won't (with reasoning)
+- [ ] For each unresolved item, classify:
+  - `valid/relevant`: implement or provide a concrete in-thread response
+  - `invalid/not applicable`: reply with rationale in-thread, then resolve thread when permissions allow
 - [ ] If you implemented a bot suggestion or want re-review, re-tag it in-thread.
+  - For Gemini full review use `/gemini review` in top-level PR Conversation comments.
+
+---
+
+## H) Issue creation checklist (deterministic)
+
+- [ ] discover remote issue templates first:
+  - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" --repo <owner/repo>`
+- [ ] if multiple templates are found and creating issue, pass `--template-id <path>`
+- [ ] body source is deterministic:
+  - `--body-file <path>`, or
+  - `--body "<text>"`, or
+  - helper-generated body (remote template or skill fallback)
+- [ ] create using explicit gate:
+  - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" --create --force-create --repo <owner/repo>`
 
 ---
 

@@ -21,6 +21,34 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_opt_value() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
+parse_repo() {
+  local repo="$1"
+  local owner name
+  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+    die "invalid --repo '$repo' (expected owner/repo)"
+  fi
+  owner="${repo%%/*}"
+  name="${repo##*/}"
+  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
+  fi
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
+  fi
+  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
+    die "invalid --repo name '$name' (path-like segments are not allowed)"
+  fi
+  printf '%s\t%s\n' "$owner" "$name"
+}
+
 require_cmd gh
 
 PR_NUMBER="${1:-}"
@@ -36,6 +64,7 @@ THREAD_IDS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
+      require_opt_value "--repo" "${2:-}"
       REPO="${2:-}"
       shift 2
       ;;
@@ -44,10 +73,12 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --thread-id)
+      require_opt_value "--thread-id" "${2:-}"
       THREAD_IDS+=("${2:-}")
       shift 2
       ;;
     --author)
+      require_opt_value "--author" "${2:-}"
       AUTHOR_FILTER="${2:-}"
       shift 2
       ;;
@@ -74,8 +105,7 @@ if [[ -z "$REPO" ]]; then
 fi
 [[ -n "$REPO" ]] || die "could not infer repo; pass --repo owner/repo"
 
-OWNER="${REPO%%/*}"
-NAME="${REPO##*/}"
+IFS=$'\t' read -r OWNER NAME <<< "$(parse_repo "$REPO")"
 
 QUERY='query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
