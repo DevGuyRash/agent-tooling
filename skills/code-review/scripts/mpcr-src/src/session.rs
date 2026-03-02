@@ -861,6 +861,18 @@ fn tagged_scalar_toml(value: &str) -> toml::Value {
     toml::Value::Table(table)
 }
 
+const TAGGED_SCALAR_TYPE_KEY: &str = "__mpcr_json_type";
+const TAGGED_SCALAR_VALUE_KEY: &str = "__mpcr_json_value";
+const TAGGED_SCALAR_ESCAPE_KEY: &str = "__mpcr_json_escape";
+const TAGGED_SCALAR_ESCAPE_VALUE: &str = "object";
+
+fn is_tagged_scalar_table(table: &TomlMap<String, toml::Value>) -> bool {
+    table
+        .get(TAGGED_SCALAR_TYPE_KEY)
+        .is_some_and(|v| matches!(v, toml::Value::String(kind) if kind == "scalar"))
+        && table.get(TAGGED_SCALAR_VALUE_KEY).is_some()
+}
+
 fn json_value_to_toml_value(value: &Value) -> anyhow::Result<toml::Value> {
     match value {
         Value::Null => Ok(tagged_scalar_toml("null")),
@@ -887,7 +899,16 @@ fn json_value_to_toml_value(value: &Value) -> anyhow::Result<toml::Value> {
                 .map(json_value_to_toml_value)
                 .collect::<anyhow::Result<Vec<_>>>()?,
         )),
-        Value::Object(map) => Ok(toml::Value::Table(json_map_to_toml_map(map)?)),
+        Value::Object(map) => {
+            let mut table = json_map_to_toml_map(map)?;
+            if is_tagged_scalar_table(&table) && table.len() == 2 {
+                table.insert(
+                    TAGGED_SCALAR_ESCAPE_KEY.to_string(),
+                    toml::Value::String(TAGGED_SCALAR_ESCAPE_VALUE.to_string()),
+                );
+            }
+            Ok(toml::Value::Table(table))
+        }
     }
 }
 
@@ -919,27 +940,35 @@ fn toml_value_to_json_value(value: &toml::Value) -> anyhow::Result<Value> {
                 .collect::<anyhow::Result<Vec<_>>>()?,
         )),
         toml::Value::Table(table) => {
-            if table.len() == 2
-                && table
-                    .get("__mpcr_json_type")
-                    .is_some_and(|v| matches!(v, toml::Value::String(s) if s == "scalar"))
-            {
-                let Some(toml::Value::String(encoded)) = table.get("__mpcr_json_value") else {
-                    return Err(anyhow::anyhow!("invalid tagged TOML scalar session value"));
-                };
-                if encoded == "null" {
-                    return Ok(Value::Null);
+            if is_tagged_scalar_table(table) {
+                let escaped_object = table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some_and(|marker| {
+                    matches!(
+                        marker,
+                        toml::Value::String(value) if value == TAGGED_SCALAR_ESCAPE_VALUE
+                    )
+                });
+
+                if !escaped_object {
+                    if let Some(toml::Value::String(encoded)) = table.get(TAGGED_SCALAR_VALUE_KEY) {
+                        if encoded == "null" {
+                            return Ok(Value::Null);
+                        }
+                        if let Some(raw) = encoded.strip_prefix("u64:") {
+                            let parsed = raw
+                                .parse::<u64>()
+                                .context("parse tagged u64 TOML session value")?;
+                            return Ok(Value::Number(parsed.into()));
+                        }
+                    }
                 }
-                if let Some(raw) = encoded.strip_prefix("u64:") {
-                    let parsed = raw
-                        .parse::<u64>()
-                        .context("parse tagged u64 TOML session value")?;
-                    return Ok(Value::Number(parsed.into()));
-                }
-                return Err(anyhow::anyhow!(
-                    "unsupported tagged TOML scalar session value `{encoded}`"
-                ));
             }
+
+            if table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some() {
+                let mut unescaped = table.clone();
+                unescaped.remove(TAGGED_SCALAR_ESCAPE_KEY);
+                return Ok(Value::Object(toml_map_to_json_map(&unescaped)?));
+            }
+
             Ok(Value::Object(toml_map_to_json_map(table)?))
         }
         toml::Value::Datetime(value) => Err(anyhow::anyhow!(
@@ -3305,6 +3334,16 @@ retry_count = 0
             .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
         ensure!(persisted.status == ReviewerStatus::InProgress);
         ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
 
         Ok(())
     }
@@ -3373,6 +3412,16 @@ retry_count = 0
             .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
         ensure!(persisted.status == ReviewerStatus::InProgress);
         ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
         Ok(())
     }
 
@@ -3598,6 +3647,7 @@ nit = 0
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Reason: validates full JSON/TOML scalar edge-case round-trip in one scenario.
     fn write_session_file_atomic_round_trips_json_only_scalars_in_toml_primary(
     ) -> anyhow::Result<()> {
         let dir = tempdir()?;
@@ -3617,6 +3667,20 @@ nit = 0
             "json_nested".to_string(),
             serde_json::json!({
                 "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
+            }),
+        );
+        entry.extra.insert(
+            "json_reserved_scalar_shape".to_string(),
+            serde_json::json!({
+                "__mpcr_json_type": "scalar",
+                "__mpcr_json_value": "foo"
+            }),
+        );
+        entry.extra.insert(
+            "json_reserved_scalar_shape_null".to_string(),
+            serde_json::json!({
+                "__mpcr_json_type": "scalar",
+                "__mpcr_json_value": "null"
             }),
         );
 
@@ -3657,6 +3721,20 @@ nit = 0
                     "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
                 }))
         );
+        ensure!(
+            review.extra.get("json_reserved_scalar_shape")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_type": "scalar",
+                    "__mpcr_json_value": "foo"
+                }))
+        );
+        ensure!(
+            review.extra.get("json_reserved_scalar_shape_null")
+                == Some(&serde_json::json!({
+                    "__mpcr_json_type": "scalar",
+                    "__mpcr_json_value": "null"
+                }))
+        );
 
         let written: toml::Value =
             toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
@@ -3675,6 +3753,17 @@ nit = 0
                 .and_then(|table| table.get("__mpcr_json_value"))
                 .and_then(toml::Value::as_str)
                 == Some("u64:18446744073709551615")
+        );
+        ensure!(
+            written
+                .get("reviews")
+                .and_then(toml::Value::as_array)
+                .and_then(|reviews| reviews.first())
+                .and_then(|review| review.get("json_reserved_scalar_shape"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
+                .and_then(toml::Value::as_str)
+                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
         );
         Ok(())
     }
@@ -4544,11 +4633,13 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
 
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
+    let mut report_path_created = false;
 
     // Step 2: write/move report file (still under the lock).
     match params.report_input {
         FinalizeReportInput::Markdown(report_markdown) => {
             write_markdown_report_file(&report_path, report_markdown)?;
+            report_path_created = true;
         }
         FinalizeReportInput::File(source_path) => {
             if !source_path.exists() {
@@ -4577,19 +4668,29 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                 } else {
                     move_file(&source_path, &report_path)?;
                 }
+                report_path_created = true;
             }
         }
     }
 
     let persisted_report_markdown = fs::read_to_string(&report_path)
         .with_context(|| format!("read persisted report file {}", report_path.display()))?;
-    validate_report_markdown(
+    if let Err(validation_err) = validate_report_markdown(
         &persisted_report_markdown,
         params.validation_kind,
         Some(severity_contract(&params.counts)),
         Some(&identity_expectation),
-    )
-    .context("validate report artifact under lock")?;
+    ) {
+        if report_path_created {
+            fs::remove_file(&report_path).with_context(|| {
+                format!(
+                    "rollback report file after validation failure {}",
+                    report_path.display()
+                )
+            })?;
+        }
+        return Err(validation_err).context("validate report artifact under lock");
+    }
 
     let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
         .map_or(filename, |rel| rel.to_string_lossy().to_string());
