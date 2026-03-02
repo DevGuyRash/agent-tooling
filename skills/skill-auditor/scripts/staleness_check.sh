@@ -403,8 +403,73 @@ run_command() {
     timeout_flag=$(mktemp)
     rm -f "$timeout_flag"
     run_pgid=""
+    timeout_cleanup=""
 
-    if command -v setsid >/dev/null 2>&1; then
+    has_ps_tool=0
+    if command -v ps >/dev/null 2>&1; then
+        has_ps_tool=1
+    fi
+
+    get_descendant_pids() {
+        root_pid="$1"
+        if [ "$has_ps_tool" -ne 1 ]; then
+            return 0
+        fi
+        queue="$root_pid"
+        seen=" $root_pid "
+        descendants=""
+
+        while [ -n "$queue" ]; do
+            current=${queue%% *}
+            if [ "$queue" = "$current" ]; then
+                queue=""
+            else
+                queue=${queue#"$current"}
+                queue=${queue# }
+            fi
+
+            children=$(ps -eo pid=,ppid= 2>/dev/null | awk -v p="$current" '$2 == p { print $1 }')
+            [ -z "$children" ] && continue
+            for child in $children; do
+                case " $seen " in
+                    *" $child "*) continue ;;
+                esac
+                seen="$seen$child "
+                descendants="$descendants $child"
+                if [ -n "$queue" ]; then
+                    queue="$queue $child"
+                else
+                    queue="$child"
+                fi
+            done
+        done
+        printf '%s\n' "$descendants" | awk '{$1=$1; print}'
+    }
+
+    wait_for_pids_exit() {
+        max_wait="$1"
+        shift
+        pid_list="$*"
+        [ -z "$pid_list" ] && return 0
+
+        elapsed=0
+        while [ "$elapsed" -lt "$max_wait" ]; do
+            still_running=""
+            for pid in $pid_list; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    still_running="$still_running $pid"
+                fi
+            done
+            if [ -z "$still_running" ]; then
+                return 0
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        return 0
+    }
+
+    if [ "${SKILL_AUDITOR_FORCE_NO_SETSID:-0}" != "1" ] && command -v setsid >/dev/null 2>&1; then
         # Launch setsid directly in the background so run_pid tracks the
         # session/process-group leader and timeout cleanup can signal -run_pgid.
         setsid sh -c "$run_cmd" >"$run_out_file" 2>&1 &
@@ -427,15 +492,28 @@ run_command() {
             if [ -n "$run_pgid" ]; then
                 # Kill the entire process group so forked grandchildren are not leaked.
                 kill -TERM "-$run_pgid" 2>/dev/null || true
+                timeout_cleanup="$run_pid"
             else
+                timeout_cleanup="$run_pid"
+                descendants=$(get_descendant_pids "$run_pid")
+                if [ -n "$descendants" ]; then
+                    timeout_cleanup="$timeout_cleanup $descendants"
+                fi
                 kill "$run_pid" 2>/dev/null || true
+                if [ -n "$descendants" ]; then
+                    kill -TERM $descendants 2>/dev/null || true
+                fi
             fi
             sleep 1
             if [ -n "$run_pgid" ]; then
                 kill -KILL "-$run_pgid" 2>/dev/null || true
             else
                 kill -9 "$run_pid" 2>/dev/null || true
+                if [ -n "$descendants" ]; then
+                    kill -KILL $descendants 2>/dev/null || true
+                fi
             fi
+            wait_for_pids_exit 2 $timeout_cleanup
         fi
     ) &
     watchdog_pid=$!

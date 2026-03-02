@@ -15,10 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "staleness_check.sh"
 
 
-def run_staleness_check(skill_dir: Path, *extra: str) -> dict:
+def run_staleness_check(skill_dir: Path, *extra: str, env: dict[str, str] | None = None) -> dict:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
     output = subprocess.check_output(
         ["sh", str(SCRIPT), str(skill_dir), "--format", "json", *extra],
         text=True,
+        env=merged_env,
     )
     return json.loads(output)
 
@@ -366,6 +370,55 @@ class StalenessCheckTests(unittest.TestCase):
                 time.sleep(0.1)
 
         self.assertFalse(saw_zombie)
+        self.assertEqual(data["summary"]["runtime_failed"], 1)
+        self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
+
+    def test_timeout_terminates_descendants_without_setsid(self):
+        if not Path("/proc").exists():
+            self.skipTest("/proc is required for descendant process assertion")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            pid_file = skill_dir / "child.pid"
+            script = scripts_dir / "spawn-child.sh"
+            script.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env sh
+                    sleep 20 &
+                    child=$!
+                    echo "$child" > "{pid_file}"
+                    wait "$child"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\nscripts/spawn-child.sh --help\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(
+                skill_dir,
+                "--timeout-seconds",
+                "1",
+                env={"SKILL_AUDITOR_FORCE_NO_SETSID": "1"},
+            )
+            child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("descendant process should be terminated on timeout without setsid")
+
         self.assertEqual(data["summary"]["runtime_failed"], 1)
         self.assertEqual(data["examples"][0]["reason_code"], "timeout_exceeded")
 
