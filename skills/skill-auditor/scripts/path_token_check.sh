@@ -104,7 +104,7 @@ while IFS= read -r mdfile; do
 
         # Track fenced code blocks
         case "$line" in
-            '```'*) 
+            '```'*)
                 if [ "$in_code_block" -eq 0 ]; then
                     in_code_block=1
                 else

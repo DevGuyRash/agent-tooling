@@ -46,7 +46,7 @@ are invisible in code but immediately fatal on execution.
       correct and the file is executable:
       ```bash
       find <skill-dir> -type f \( -name '*.sh' -o -name '*.py' \) \
-        -exec head -1 {} + 
+        -exec head -1 {} +
       ```
 
    c. **Permission check.** Scripts should have execute permission:
