@@ -1292,7 +1292,7 @@ fn find_comment_start(line: &str) -> Option<usize> {
         if ch == b'*' && i == line.len() - line.trim_start().len() {
             return Some(i);
         }
-        if i + 4 <= len && &line[i..i + 4] == "<!--" {
+        if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
             return Some(i);
         }
         i += 1;
@@ -2362,6 +2362,23 @@ mod tests {
                 .iter()
                 .any(|f| f.check == "todo-fixme" && f.line == 1),
             "TODO in trailing comment after raw string literal should be detected"
+        );
+    }
+
+    #[test]
+    fn todo_after_non_ascii_text_in_comment_region_is_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let msg = \"ok\"; é // TODO: follow up\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "todo-fixme" && f.line == 1),
+            "TODO after non-ASCII text should be detected without panicking"
         );
     }
 
