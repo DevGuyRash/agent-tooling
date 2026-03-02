@@ -3426,6 +3426,94 @@ retry_count = 0
     }
 
     #[test]
+    fn finalize_review_restores_moved_source_on_identity_mismatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let source_path = dir.path().join("incoming-report.md");
+        let source_report = valid_parent_report(
+            "deadbeef",
+            "sess0001",
+            "refs/heads/other",
+            &SeverityCounts::zero(),
+        );
+        fs::write(&source_path, &source_report)?;
+
+        let params = FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::File(source_path.clone()),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        };
+        let Err(err) = finalize_review(params) else {
+            bail!("finalize should fail on report identity mismatch");
+        };
+        let err_text = format!("{err:#}");
+        ensure!(err_text.contains("validate report artifact under lock"));
+        ensure!(err_text.contains("identity_mismatch"));
+
+        ensure!(
+            source_path.exists(),
+            "source report file should be restored after failed finalize"
+        );
+        ensure!(fs::read_to_string(&source_path)? == source_report);
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::InProgress);
+        ensure!(persisted.report_file.is_none());
+        let expected_report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        ensure!(
+            !expected_report_path.exists(),
+            "rolled-back report artifact should not remain at {}",
+            expected_report_path.display()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn append_note_rejects_bad_lock_owner() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
@@ -4634,6 +4722,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
     let mut report_path_created = false;
+    let mut moved_source_path: Option<PathBuf> = None;
 
     // Step 2: write/move report file (still under the lock).
     match params.report_input {
@@ -4667,6 +4756,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                     copy_file(&source_path, &report_path)?;
                 } else {
                     move_file(&source_path, &report_path)?;
+                    moved_source_path = Some(source_path);
                 }
                 report_path_created = true;
             }
@@ -4682,12 +4772,22 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         Some(&identity_expectation),
     ) {
         if report_path_created {
-            fs::remove_file(&report_path).with_context(|| {
-                format!(
-                    "rollback report file after validation failure {}",
-                    report_path.display()
-                )
-            })?;
+            if let Some(source_path) = moved_source_path {
+                move_file(&report_path, &source_path).with_context(|| {
+                    format!(
+                        "rollback moved report file after validation failure {} -> {}",
+                        report_path.display(),
+                        source_path.display()
+                    )
+                })?;
+            } else {
+                fs::remove_file(&report_path).with_context(|| {
+                    format!(
+                        "rollback report file after validation failure {}",
+                        report_path.display()
+                    )
+                })?;
+            }
         }
         return Err(validation_err).context("validate report artifact under lock");
     }
