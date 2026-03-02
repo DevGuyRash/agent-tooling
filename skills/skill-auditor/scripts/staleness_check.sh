@@ -446,6 +446,14 @@ run_command() {
         printf '%s\n' "$descendants" | awk '{$1=$1; print}'
     }
 
+    get_process_group_pids() {
+        pgid="$1"
+        if [ "$has_ps_tool" -ne 1 ]; then
+            return 0
+        fi
+        ps -eo pid=,pgid= 2>/dev/null | awk -v g="$pgid" '$2 == g { print $1 }' | awk '{$1=$1; print}'
+    }
+
     wait_for_pids_exit() {
         max_wait="$1"
         shift
@@ -491,27 +499,32 @@ run_command() {
             echo "1" > "$timeout_flag"
             if [ -n "$run_pgid" ]; then
                 # Kill the entire process group so forked grandchildren are not leaked.
+                pg_members=$(get_process_group_pids "$run_pgid")
+                if [ -n "$pg_members" ]; then
+                    timeout_cleanup="$pg_members"
+                else
+                    timeout_cleanup="$run_pid"
+                fi
                 kill -TERM "-$run_pgid" 2>/dev/null || true
-                timeout_cleanup="$run_pid"
             else
                 timeout_cleanup="$run_pid"
                 descendants=$(get_descendant_pids "$run_pid")
                 if [ -n "$descendants" ]; then
                     timeout_cleanup="$timeout_cleanup $descendants"
                 fi
-                kill "$run_pid" 2>/dev/null || true
                 if [ -n "$descendants" ]; then
                     kill -TERM $descendants 2>/dev/null || true
                 fi
+                kill "$run_pid" 2>/dev/null || true
             fi
             sleep 1
             if [ -n "$run_pgid" ]; then
                 kill -KILL "-$run_pgid" 2>/dev/null || true
             else
-                kill -9 "$run_pid" 2>/dev/null || true
                 if [ -n "$descendants" ]; then
                     kill -KILL $descendants 2>/dev/null || true
                 fi
+                kill -9 "$run_pid" 2>/dev/null || true
             fi
             wait_for_pids_exit 2 $timeout_cleanup
         fi
