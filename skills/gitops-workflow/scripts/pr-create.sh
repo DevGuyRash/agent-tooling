@@ -262,6 +262,9 @@ render_refs_section() {
 }
 
 EFFECTIVE_REPO="$(resolve_repo)"
+if [[ -n "$EFFECTIVE_REPO" ]]; then
+  parse_repo "$EFFECTIVE_REPO"
+fi
 REMOTE_TEMPLATE_ID=""
 REMOTE_TEMPLATE_CONTENT=""
 
@@ -351,10 +354,30 @@ if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
 else
   echo "Template source: local deterministic defaults"
 fi
-printf -v title_quoted '%q' "$TITLE"
-printf -v out_file_quoted '%q' "$OUT_FILE"
 echo "Review/edit this file as needed, then create the PR with:"
-echo "  gh pr create --title $title_quoted --body-file $out_file_quoted"
+PREVIEW_ARGS=(pr create --title "$TITLE" --body-file "$OUT_FILE")
+if [[ -n "$BASE" ]]; then
+  PREVIEW_ARGS+=(--base "$BASE")
+fi
+if [[ -n "$HEAD" ]]; then
+  PREVIEW_ARGS+=(--head "$HEAD")
+fi
+if [[ -n "$EFFECTIVE_REPO" ]]; then
+  PREVIEW_ARGS+=(--repo "$EFFECTIVE_REPO")
+fi
+if [[ "$READY" != "true" ]]; then
+  PREVIEW_ARGS+=(--draft)
+fi
+for label in "${LABELS[@]}"; do
+  PREVIEW_ARGS+=(--label "$label")
+done
+
+PREVIEW_CMD="gh"
+for arg in "${PREVIEW_ARGS[@]}"; do
+  printf -v arg_quoted '%q' "$arg"
+  PREVIEW_CMD+=" $arg_quoted"
+done
+echo "  $PREVIEW_CMD"
 echo ""
 
 if [[ "$CREATE" != "true" ]]; then

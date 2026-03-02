@@ -97,6 +97,44 @@ class PrUpdateBodyTests(unittest.TestCase):
             self.assertIn("DRY-RUN: gh pr edit 20 --body-file", proc.stdout)
             self.assertFalse(called_file.exists())
 
+    def test_dry_run_with_inline_body_keeps_generated_body_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            fake_bin = temp_path / "bin"
+            called_file = temp_path / "called.txt"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "echo called > \"${CALLED_FILE}\"\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["CALLED_FILE"] = str(called_file)
+
+            proc = run(
+                ["bash", str(SCRIPT), "20", "--body", "line1\\nline2", "--dry-run"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertFalse(called_file.exists())
+
+            marker = "retained generated body file for reuse:"
+            self.assertIn(marker, proc.stdout)
+            retained_path = Path(proc.stdout.split(marker, 1)[1].strip().splitlines()[0])
+            self.assertTrue(retained_path.exists())
+            self.assertEqual(retained_path.read_text(encoding="utf-8"), "line1\nline2\n")
+
     def test_invalid_repo_slug_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)

@@ -112,7 +112,11 @@ if [[ -n "$REPO" ]]; then
 fi
 
 TMP_BODY_FILE=""
+KEEP_TMP_BODY_FILE="false"
 cleanup() {
+  if [[ "$KEEP_TMP_BODY_FILE" == "true" ]]; then
+    return 0
+  fi
   if [[ -n "$TMP_BODY_FILE" && -f "$TMP_BODY_FILE" ]]; then
     rm -f "$TMP_BODY_FILE"
   fi
@@ -136,12 +140,18 @@ if [[ -n "$REPO" ]]; then
 fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
+  if [[ -n "$TMP_BODY_FILE" ]]; then
+    KEEP_TMP_BODY_FILE="true"
+  fi
   PREVIEW_CMD="gh"
   for arg in "${ARGS[@]}"; do
     printf -v arg_quoted '%q' "$arg"
     PREVIEW_CMD+=" $arg_quoted"
   done
   echo "DRY-RUN: $PREVIEW_CMD"
+  if [[ "$KEEP_TMP_BODY_FILE" == "true" ]]; then
+    echo "DRY-RUN: retained generated body file for reuse: $TMP_BODY_FILE"
+  fi
   exit 0
 fi
 

@@ -518,6 +518,68 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("gh pr create --title ", proc.stdout)
             self.assertNotIn('gh pr create --title "feat: ok"; echo PWNED; echo ""', proc.stdout)
             self.assertIn("\\;\\ echo\\ PWNED\\;", proc.stdout)
+            self.assertIn("--base main", proc.stdout)
+            self.assertIn("--head feat/demo", proc.stdout)
+            self.assertIn("--draft", proc.stdout)
+
+    def test_preview_command_includes_selected_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "feature.txt", "feat\n", "feat(demo): branch-only change")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  echo '{}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): branch-only change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--repo",
+                    "acme/widget",
+                    "--label",
+                    "bug",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("--base main", proc.stdout)
+            self.assertIn("--head feat/demo", proc.stdout)
+            self.assertIn("--repo acme/widget", proc.stdout)
+            self.assertIn("--draft", proc.stdout)
+            self.assertIn("--label bug", proc.stdout)
 
     def test_invalid_explicit_repo_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
