@@ -2,7 +2,7 @@
 //!
 //! Identifiers are intended for:
 //! - `reviewer_id` / `session_id` (8 characters)
-//! - lock owners for `_session.json.lock` (8 characters)
+//! - lock owners for `_session.toml.lock` (8 characters)
 
 use anyhow::Context;
 use rand::RngCore;

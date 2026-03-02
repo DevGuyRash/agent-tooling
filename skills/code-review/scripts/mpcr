@@ -27,7 +27,7 @@ if command -v readlink >/dev/null 2>&1; then
   done
 fi
 
-script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
 src_dir="${script_dir}/mpcr-src"
 bin="${src_dir}/target/release/mpcr"
 
@@ -52,6 +52,18 @@ if [ "${needs_build}" -eq 1 ]; then
     exit 127
   fi
   cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release
+fi
+
+# Suppress pagers in non-interactive (agent) sessions.
+if [ ! -t 1 ]; then
+  export PAGER=cat
+  export GIT_PAGER=cat
+  export NO_PAGER=1
+fi
+
+# Keep agent-facing errors concise by default.
+if [ -z "${RUST_BACKTRACE+x}" ]; then
+  export RUST_BACKTRACE=0
 fi
 
 exec "${bin}" "$@"

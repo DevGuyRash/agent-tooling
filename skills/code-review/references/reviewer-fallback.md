@@ -1,10 +1,11 @@
-# Reviewer protocol: phase-appropriate guidance for adversarial code review.
-# Content is served by `mpcr protocol reviewer --phase <PHASE>`.
-# Written in EARS format (SHALL/WHEN/IF/NOT) addressing the executor ("you").
+# Reviewer Fallback
 
-[phases.INGESTION]
-title = "Ingestion"
-content = """
+Primary source: `mpcr protocol reviewer --phase <PHASE>`.
+
+If the CLI is unavailable, use the sections below. They mirror the reviewer protocol phases and supplemental rubrics.
+
+## Ingestion (`INGESTION`)
+
 You SHALL read the diff and surrounding context. You SHALL produce a change inventory:
 - Files touched, approximate churn, change intent (why).
 - Contract surfaces affected: APIs, schemas, CLI args, config, DB migrations.
@@ -19,11 +20,9 @@ You SHALL resolve context autonomously:
 - You SHALL dispatch `scope-mapper-reviewer` early and ingest its Scope Map packet before domain scoping.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
-"""
 
-[phases.DOMAIN_COVERAGE]
-title = "Domain Coverage"
-content = """
+## Domain Coverage (`DOMAIN_COVERAGE`)
+
 You SHALL classify your assigned domain for the change.
 
 IF you are a specialist with ONE assigned domain:
@@ -46,11 +45,9 @@ You SHALL produce a Domain Ledger in your output — a machine-parseable table:
 The Ledger starts with Scope filled in; counts are updated as you progress.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase DOMAIN_COVERAGE`
-"""
 
-[phases.THEOREM_GENERATION]
-title = "Theorem Generation"
-content = """
+## Theorem Generation (`THEOREM_GENERATION`)
+
 For each In-scope domain, you SHALL generate must-prove theorems:
 - Concrete, falsifiable claims referencing specific code locations (file:line).
 - You SHALL prioritize depth targets. At least 2 theorems per In-scope domain.
@@ -63,11 +60,9 @@ Anti-laziness rules:
 - Theorems SHALL make claims about BEHAVIOR under specific conditions.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase THEOREM_GENERATION`
-"""
 
-[phases.ADVERSARIAL_PROOFS]
-title = "Adversarial Proofs"
-content = """
+## Adversarial Proofs (`ADVERSARIAL_PROOFS`)
+
 For each theorem, you SHALL attempt concrete disproof:
 1. Construct a SPECIFIC scenario/input that would violate the theorem.
 2. Trace the code path with that input. Record outcome:
@@ -118,11 +113,9 @@ EXCEPTION: for security-adjacent domains, saturation requires 5 consecutive fail
 WHEN tests exist that are relevant to your findings, you SHALL run them to validate your proofs.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase ADVERSARIAL_PROOFS`
-"""
 
-[phases.SYNTHESIS]
-title = "Synthesis"
-content = """
+## Synthesis (`SYNTHESIS`)
+
 You SHALL compile findings into your Proof Packet.
 
 You SHALL build the machine-readable packet first:
@@ -145,11 +138,9 @@ You SHALL identify residual risk: areas where coverage was insufficient or Unkno
 - You SHALL include scope rationale for any deferred-by-scope recommendations.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase SYNTHESIS`
-"""
 
-[phases.REPORT_WRITING]
-title = "Report Writing"
-content = """
+## Report Writing (`REPORT_WRITING`)
+
 You SHALL produce the final review report.
 
 Before writing the report, you SHALL pull supplemental rubrics using explicit pulls:
@@ -171,12 +162,7 @@ You SHALL validate the finished markdown artifact before submit:
 
 You SHALL finalize via mpcr:
 ```
-mpcr reviewer finalize \
-  --session-dir <DIR> \
-  --reviewer-id <ID8> --session-id <ID8> \
-  --verdict APPROVE|REQUEST_CHANGES|BLOCK \
-  --blocker N --major N --minor N --nit N \
-  --report-file /path/to/report.md
+mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE|REQUEST_CHANGES|BLOCK --blocker N --major N --minor N --nit N --report-file /path/to/report.md
 ```
 
 Finalize artifact rules:
@@ -193,16 +179,9 @@ Artifact cleanup:
   - POSIX: `rm -rf .local/tmp/`
   - PowerShell: `Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue`
 - You SHALL NOT leave report drafts, dispatch prompts, or packet files in the worktree.
-"""
 
-# -- Supplemental rubrics (progressive disclosure) --------------------------------
-# Agents pull these JIT via `mpcr protocol reviewer --phase <PHASE>`.
-# Hooks in REPORT_WRITING above trigger the pull; content stays out of context
-# until actually needed.
+## Overengineering Guardrails (`OVERENGINEERING_GUARD`)
 
-[phases.OVERENGINEERING_GUARD]
-title = "Overengineering Guardrails"
-content = """
 You SHALL apply these overengineering smell tests when reviewing DOMAIN_COVERAGE and THEOREM_GENERATION artifacts.
 
 ## Smell tests (any YES -> flag as FINDING)
@@ -218,11 +197,9 @@ You SHALL apply these overengineering smell tests when reviewing DOMAIN_COVERAGE
 - The recommendation SHALL always include a concrete simplification (inline the function, remove the trait, collapse the layers).
 - You SHALL NOT flag established patterns the codebase already relies on -- only NEW abstractions introduced by this change.
 - You SHALL cross-check extraction proposals from `COMPLEXITY_ANALYSIS`; accept only proposals with concrete cohesion/testability gains.
-"""
 
-[phases.COMPLEXITY_ANALYSIS]
-title = "Big-O Complexity Rubric"
-content = """
+## Big-O Complexity Rubric (`COMPLEXITY_ANALYSIS`)
+
 You SHALL evaluate algorithmic complexity during ADVERSARIAL_PROOFS for code paths that process collections, loops, or recursive structures.
 
 ## Evaluation dimensions
@@ -255,11 +232,9 @@ You SHALL evaluate algorithmic complexity during ADVERSARIAL_PROOFS for code pat
 - MAJOR: O(n^2)+ on bounded but realistically large input (> 1000 elements), or unbounded allocation without cap.
 - MINOR: suboptimal structure/algorithm with measurable but non-critical impact.
 - NIT: micro-optimization opportunity with negligible real-world effect.
-"""
 
-[phases.SHIP_READINESS]
-title = "Ship-Readiness Rubric"
-content = """
+## Ship-Readiness Rubric (`SHIP_READINESS`)
+
 You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in the report.
 
 ## Verdict (pick ONE)
@@ -279,4 +254,3 @@ You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in th
 
 ## Placement
 Place the ship-readiness verdict as the FIRST section of the report, immediately after the metadata header.
-"""

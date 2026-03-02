@@ -1,0 +1,248 @@
+# Orchestrator Fallback
+
+Primary source: `mpcr protocol orchestrator` plus the related `mpcr protocol` subcommands listed below.
+
+If the CLI is unavailable, use these sections as the orchestrator reference.
+
+## Multi-Agent Orchestration (`ORCHESTRATOR`)
+
+You are the orchestrator. You decompose, dispatch, validate, and synthesize. You do not review code directly.
+
+## Iron rules
+- You SHALL NOT read patch hunks or full file contents. Use only `git diff --stat|--numstat|--name-only`.
+- You SHALL NOT generate theorems, disproofs, findings, or patches yourself.
+- You SHALL dispatch explorer/reviewer/applicator workers and enforce scope boundaries.
+- You SHALL keep max parallel workers at 8.
+
+## Decomposition
+1. Run diff summary commands only.
+2. Build 2-5 file clusters and launch explorer subagents for context summaries (<= 200 lines each).
+3. Run `mpcr protocol scope-mapping`, dispatch `scope-mapper-reviewer`, and ingest a compact Scope Map packet.
+4. Run `mpcr protocol domains` and select seed + discovered domains (discover >= 2 extra domains on Medium or Large changes).
+5. Map each in-scope domain to relevant files. Domains may overlap by file.
+6. For mode routing, run `mpcr protocol invocation-aliases` and `mpcr protocol workflow-selection`.
+
+## Dispatch
+1. Register orchestrator identity:
+   `mpcr reviewer register --target-ref <REF>`
+2. Use explicit session bindings for all follow-up commands:
+   `mpcr reviewer spawn-children --session-dir <DIR> --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --target-ref <REF> --count N`
+3. Resolve prompts with canonical role slugs:
+   `mpcr protocol dispatch --role <ROLE>`
+   IF role lookup fails, run `mpcr protocol dispatch-list`.
+4. Dispatch one worker per domain (or one worker total in single-agent mode).
+   `staleness-auditor` SHALL be included in every review and re-review, even when it ultimately marks itself Out-of-scope.
+5. After domain workers, dispatch `scope-creep-reviewer`, then `complexity-analyst` and `overengineering-guard`.
+6. Dispatch `ship-readiness-assessor` last with all Proof Packets.
+
+## Quality validation
+Validate each Proof Packet against `mpcr protocol quality-gate`.
+You SHALL run:
+`mpcr reviewer validate-report --kind child-proof-packet --blocker N --major N --minor N --nit N --report-file <CHILD_PACKET_PATH>`
+WHEN a packet fails, re-dispatch once with concrete feedback; if retry fails, record residual risk.
+
+## Synthesis
+1. Complete each successful child:
+   `mpcr reviewer complete-child --session-dir <DIR> --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+2. Close unused/failed children:
+   `mpcr reviewer close-children --session-dir <DIR> --parent-id <PARENT_ID8> --session-id <SESSION_ID8> --set-status CANCELLED`
+3. Merge findings, keeping higher severity on duplicate anchors.
+4. Build report with `mpcr protocol report-template --scale <SCALE>`.
+5. Validate the parent report artifact before finalize:
+   `mpcr reviewer validate-report --kind parent-review-report --blocker N --major N --minor N --nit N --report-file <PARENT_REPORT_PATH>`
+6. Finalize parent review:
+   `mpcr reviewer finalize --session-dir <DIR> --reviewer-id <PARENT_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --report-file <PATH>`
+7. Cleanup scratch artifacts under `.local/tmp/`.
+
+## Related protocol pulls
+- `mpcr protocol change-classification`
+- `mpcr protocol analyze-guidance`
+- `mpcr protocol fullcycle`
+- `mpcr protocol scope-mapping`
+- `mpcr protocol convergence-planning`
+
+## Invocation Alias Mapping (`INVOCATION_ALIASES`)
+
+You SHALL recognize these user prompts as skill triggers (case-insensitive):
+
+| User says | Mode |
+|-----------|------|
+| `code-review reviewer [ctx]` | Reviewer only |
+| `code-review review [ctx]` | Reviewer only |
+| `code-review applicator [ctx]` | Applicator only |
+| `code-review apply [ctx]` | Applicator only |
+| `code-review full-cycle [ctx]` | Full-cycle |
+| `code-review full [ctx]` | Full-cycle |
+| `code-review auto [ctx]` | Full-cycle |
+| `code-review [ctx]` (no keyword) | Infer (see workflow_selection) |
+
+`[ctx]` is optional scope context (file paths, PR links, focus areas). Pass through to workflow.
+
+## Workflow Selection (`WORKFLOW_SELECTION`)
+
+WHEN the user provides no explicit mode keyword, infer from context:
+
+- IF existing review report -> Applicator mode (apply outstanding findings)
+- IF user mentions "fix", "apply", "address" -> Applicator mode
+- IF no prior review exists -> Reviewer mode
+- IF user mentions "full", "end-to-end", "auto" -> Full-cycle mode
+
+## Autonomous context resolution
+You SHALL resolve these WITHOUT asking the user:
+- Target ref: infer from current branch. WHEN a git hosting CLI is available (`gh`, `glab`), check for associated PRs/MRs.
+- Acceptance criteria: derive from PR/MR description, commit messages, or diff content. Mark [Assumed] if inferred.
+- PR/MR/issue context: check silently. IF found, use it. IF not, proceed with the diff.
+- Parallelism: single-agent for <= 500 line diffs (still spawns 1 worker), multi-agent otherwise.
+
+You SHALL only ask the user IF you are genuinely blocked (e.g., cannot determine what code to review).
+
+## Universal Domains (Seeds) (`DOMAINS`)
+
+These are SEED domains. You SHALL also discover additional domains specific to the codebase.
+
+| # | Domain | Defend that... | Seed challenges |
+|---|--------|---------------|-----------------|
+| 1 | Architecture | design is justified, simple, consistent | over-abstraction, separation of concerns, simpler alternatives, idiomatic patterns |
+| 2 | Contracts | consumers unbroken across upgrades/rollbacks | API surfaces, mixed-version compat, unknown fields, error format stability |
+| 3 | Data integrity | data is never silently lost, corrupted, or reordered | write ordering, partial failure, migration reversibility, encoding round-trips |
+| 4 | Error handling | every error path is reachable, tested, and safe | missing catches, swallowed errors, misleading messages, resource leaks on error |
+| 5 | Security | no untrusted input reaches a privileged operation unvalidated | injection, auth bypass, SSRF, path traversal, timing leaks, secret exposure |
+| 6 | Concurrency | shared state is correctly synchronized under all interleavings | data races, deadlock, starvation, atomicity violations, ordering assumptions |
+| 7 | Performance | no regression under realistic and adversarial workloads | O(n^2) paths, unbounded allocations, missing pagination, cache invalidation |
+| 8 | Observability | failures are diagnosable from logs/metrics/traces alone | silent failures, missing context in errors, log noise, metric cardinality |
+| 9 | Testing | tests defend the contract, not the implementation | missing edge cases, brittle mocks, test-only code paths, coverage gaps |
+| 10 | Documentation | docs match the code and cover all public surfaces | stale docs, missing examples, undocumented error codes, misleading comments |
+| 11 | Dependencies | third-party risk is bounded and auditable | version pinning, license compliance, supply chain, transitive vulnerabilities |
+| 12 | Supply chain security | build pipeline, artifact provenance, and dependency resolution are tamper-proof | dependency confusion, typosquatting, compromised build scripts, unsigned artifacts, phantom dependency injection |
+| 13 | Authentication & authorization | identity verification and access control are correct under all code paths | privilege escalation, broken access control, token/session mismanagement, insecure defaults, missing re-auth on sensitive ops |
+| 14 | Cryptography & secrets | all cryptographic usage is correct, current, and secrets are never exposed | weak algorithms, hardcoded secrets, insufficient entropy, improper key management, nonce reuse, timing side-channels |
+| 15 | Input validation & injection | every external input boundary enforces strict validation before processing | SQL/NoSQL/command/LDAP injection, XSS, SSRF, template injection, header injection, deserialization attacks |
+| 16 | Infrastructure & runtime security | deployment configuration and runtime environment enforce least privilege | container escapes, misconfigured network policies, overly permissive IAM/RBAC, exposed debug endpoints, insecure defaults |
+| 17 | Data protection & privacy | sensitive data is classified, encrypted at rest/in-transit, and access-logged | PII leakage, missing encryption, excessive data collection, broken anonymization, missing audit trails, regulatory violations |
+| 18 | Staleness | behavior-facing artifacts and guidance remain synchronized with current code and runtime behavior | stale docs, stale examples, stale links/comments, stale operator or config guidance |
+| 19 | Scope creep | the change remains within justified scope or explicitly tracked follow-up scope | opportunistic rewrites, unrelated refactors, requirement drift, TODO expansion detached from acceptance criteria |
+
+## Dynamic domain discovery
+You SHALL identify additional domains beyond these seeds. Consider:
+- i18n / localization
+- Accessibility (a11y)
+- Regulatory compliance (GDPR, HIPAA, PCI, SOC2)
+- ML / AI safety (bias, drift, explainability)
+- Platform-specific (OS, browser, device)
+- Database-specific (query plans, migrations, indexing)
+- UX consistency
+- Backwards compatibility
+- Deployment safety (rollback, canary, feature flags)
+- Configuration management
+- Backfill/migration operational readiness
+
+For each discovered domain, define: name, "defend that..." statement, 2-3 seed challenges.
+You SHALL discover at least 2 additional domains for changes classified as Medium or Large by `mpcr protocol change-classification`.
+
+## Proof Packet Quality Gate (`QUALITY_GATE`)
+
+BEFORE accepting a worker's Proof Packet, the orchestrator SHALL verify:
+
+| Criterion | Minimum |
+|-----------|---------|
+| Machine block format | Exactly one fenced `toml` block preferred; one `json` fallback allowed; `yaml`/`yml` forbidden |
+| Child schema contract | `schema_version=proof_packet.v2` and `artifact_kind=child_proof_packet` |
+| Domain Ledger present | Required - reject if missing |
+| >= 2 theorems with file:line anchors | Required |
+| Each theorem has disproof attempt | Required |
+| Findings have all 7 fields (Severity, Anchor, Claim, Disproof, Evidence, Recommendation, Verification) | Required |
+| Confidence consistency | Every confidence label/score pair is present and score range matches HIGH/MEDIUM/LOW |
+| Ledger consistency | Ledger counts match machine arrays for theorems/disproofs/findings/defended |
+| Defended proofs reference specific scenarios | Required |
+| Residual Risk section present | Required |
+| Code excerpt budget | Non-machine code excerpts <= 10 lines each and <= 3 total |
+
+IF a Proof Packet fails the quality gate:
+1. Re-dispatch the worker with feedback on what was insufficient.
+2. IF the retry also fails, record the gap as Residual Risk.
+3. You SHALL NOT fabricate findings to fill the gap.
+
+## Change Size Classification (`CHANGE_CLASSIFICATION`)
+
+WHEN classifying change size, use the largest matching class from `git diff --stat`:
+
+| Class | Diff lines | Files changed | Expected agents | Domains |
+|-------|-----------|---------------|-----------------|---------|
+| Trivial | <= 50 | <= 3 | 1 (single-agent) | 1-2 |
+| Small | 51-500 | <= 10 | 1 (single-agent) | 2-4 |
+| Medium | 501-2000 | <= 30 | 3-6 (multi-agent) | 4-8 |
+| Large | > 2000 | > 30 | 6-8 (multi-agent) | 6+ |
+
+This replaces any ambiguous use of "Medium or Large changes" - apply the table.
+
+## Static Analysis Integration (`ANALYZE_GUIDANCE`)
+
+BEFORE dispatching domain reviewers, the orchestrator or workers MAY run `mpcr analyze` on assigned files for mechanical pre-screening.
+
+## Available commands
+```
+mpcr analyze list-checks                     # List all checks
+mpcr analyze run <file1> <file2> ...         # Run all checks
+mpcr analyze check --name <CHECK> <files>    # Run a single check
+```
+
+## Checks
+| Check | Detects |
+|-------|---------|
+| dead-code | `#[allow(dead_code)]`, `if False`, `#if 0`, deprecated markers |
+| todos | TODO, FIXME, HACK, XXX, SAFETY annotations |
+| long-functions | Functions exceeding 60 lines |
+| long-lines | Lines exceeding 120 characters |
+| unreachable | `unreachable!()`, `todo!()`, `panic!()`, `raise NotImplementedError` |
+| duplicates | Duplicate text blocks (>=4 lines) across files |
+| complexity | High-nesting (>4) or high-branching (>10) functions |
+
+## Worker integration
+WHEN a worker runs `mpcr analyze run` on its assigned files:
+- Findings from `dead-code` and `unreachable` checks SHALL seed theorem candidates.
+- Findings from `duplicates` MAY indicate dedup or refactoring opportunities.
+- Findings from `complexity` MAY indicate overengineering or testability concerns.
+- Workers SHALL NOT treat analysis findings as review findings directly - they are inputs to the adversarial proof process.
+
+## Scope Mapping (`SCOPE_MAPPING`)
+
+You SHALL produce a compact Scope Map before reviewer or applicator specialization.
+
+## Source order (high to low authority)
+1. Open PR for current branch (title, body, labels, linked refs).
+2. Explicitly linked issues from PR body/closing references.
+3. Open issues matched by branch/PR keywords and phrases.
+4. Branch name and recent commit headlines + short bodies.
+
+## Required behavior
+- You SHALL dispatch `scope-mapper-reviewer` at reviewer start and `scope-mapper-applicator` at applicator start.
+- You SHALL keep scope mapping outputs compact (no raw diffs, no file hunks).
+- You SHALL include accepted in-scope goals, suspected scope creep candidates, and deferred candidates.
+- You SHALL NOT ask the user for context that can be inferred from git/gh.
+- IF no PR and no related issues are found, you SHALL derive scope from branch naming plus commit summaries only.
+
+## Scope Map packet minimum fields
+- source_ref (PR/branch)
+- accepted_scope_items (list)
+- possible_scope_creep_items (list with rationale)
+- confidence (HIGH/MEDIUM/LOW + score)
+
+## Convergence Planning (`CONVERGENCE_PLANNING`)
+
+You SHALL run convergence planning before cycle 1 and at each cycle boundary.
+
+## Planner inputs
+- Scope Map packet
+- Prior cycle findings and dispositions
+- Commit history summaries relevant to touched files
+- Delta file set from latest application cycle
+
+## Planner outputs
+- next_cycle_focus (files, domains, acceptance checks)
+- stop_condition (what must be true to converge this cycle)
+- recursion_risks (loop/duplication hazards)
+
+## Rules
+- You SHALL dispatch `convergence-planner` as one of the first workers in each cycle.
+- Planner guidance SHALL constrain reviewer/applicator divergence without suppressing valid net-new findings.
+- You SHALL stop only at fixed point (no net-new actionable findings after dedup).

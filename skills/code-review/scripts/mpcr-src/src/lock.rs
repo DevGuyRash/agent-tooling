@@ -1,6 +1,6 @@
-//! File-based lock implementation for coordinating `_session.json` updates.
+//! File-based lock implementation for coordinating `_session.toml` updates.
 //!
-//! The lock is represented by a file named `_session.json.lock` inside the session directory.
+//! The lock is represented by a file named `_session.toml.lock` inside the session directory.
 //! Lock acquisition uses `create_new(true)` for exclusivity and retries with exponential backoff.
 //!
 //! Stale lock recovery: when a lock file is older than [`STALE_LOCK_SECS`], recovery
@@ -61,12 +61,22 @@ fn read_lock_owner_and_pid(lock_file: &Path) -> std::io::Result<(String, Option<
     Ok(parse_lock_owner_and_pid(&raw))
 }
 
+#[allow(clippy::missing_const_for_fn)]
 fn is_pid_alive(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
         Path::new("/proc").join(pid.to_string()).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        // Use direct argv (no shell) to probe process existence on Unix-like hosts.
+        let status = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status();
+        matches!(status, Ok(exit) if exit.success())
+    }
+    #[cfg(not(unix))]
     {
         let _ = pid;
         true
@@ -129,10 +139,10 @@ impl Drop for LockGuard {
     }
 }
 
-/// Compute the path to the lock file (`_session.json.lock`) for `session_dir`.
+/// Compute the path to the lock file (`_session.toml.lock`) for `session_dir`.
 #[must_use]
 pub fn lock_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join("_session.json.lock")
+    session_dir.join("_session.toml.lock")
 }
 
 /// Release the session lock if `owner` matches the contents of the lock file.
@@ -338,5 +348,18 @@ mod tests {
             "lock should still belong to active-owner"
         );
         Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    #[test]
+    fn unix_non_linux_pid_probe_reflects_live_and_missing_pids() {
+        assert!(
+            is_pid_alive(std::process::id()),
+            "current process should report as alive"
+        );
+        assert!(
+            !is_pid_alive(u32::MAX),
+            "unlikely pid should report as not alive"
+        );
     }
 }
