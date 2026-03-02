@@ -157,7 +157,7 @@ if [[ -z "$BODY" && -z "$BODY_FILE" && -n "$EFFECTIVE_REPO" && -f "$ISSUE_TEMPLA
     fi
 
     if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
-      if [[ "$REMOTE_TEMPLATE_ID" =~ \.ya?ml$ ]]; then
+      if [[ "${REMOTE_TEMPLATE_ID,,}" =~ \.ya?ml$ ]]; then
         REMOTE_TEMPLATE_IS_YAML="true"
       fi
       REMOTE_TEMPLATE_CONTENT="$(bash "$ISSUE_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --template-id "$REMOTE_TEMPLATE_ID")"
