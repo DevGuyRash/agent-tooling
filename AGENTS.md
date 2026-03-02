@@ -539,6 +539,7 @@ not a patch author. Each entry records what you tried, what the skill told
 you to do, what actually happened, and how you interpreted the instructions.
 
 **Good entry:**
+
 > Tried to run `mpcr protocol dispatch --role architecture` as specified by
 > SKILL.md line 160: _"Use `mpcr protocol dispatch --role <ROLE>` to get the
 > domain-specific prompt."_ The domain table on line 123 lists "Architecture"
@@ -548,6 +549,7 @@ you to do, what actually happened, and how you interpreted the instructions.
 > `architecture-critic`, which is not documented anywhere in SKILL.md.
 
 **Bad entry:**
+
 > The dispatch role name is wrong. It should be `architecture-critic` instead
 > of `architecture`. Fix line 123 to show the correct slug.
 
@@ -565,8 +567,8 @@ span many agent turns and subagent invocations — not each individual command.
 
 File path:
 
-```
-<tmp>/<yyyy-mm-dd>/<HH-MM-SS>_<skill-name>_errors.md
+```bash
+<tmp>/<skill-name>/<yyyy-mm-dd>/<HH-MM-SS>_errors.md
 ```
 
 Where `<tmp>` resolves per platform:
@@ -580,22 +582,23 @@ Detect the platform and use the appropriate base path:
 
 ```bash
 # Unix (Linux / macOS)
-err_dir="/tmp/skill-errors/$(date +%Y-%m-%d)"
+err_dir="/tmp/skill-errors/<skill-name>/$(date +%Y-%m-%d)"
 mkdir -p "$err_dir"
-err_file="$err_dir/$(date +%H-%M-%S)_<skill-name>_errors.md"
+err_file="$err_dir/$(date +%H-%M-%S)_errors.md"
 ```
 
 ```powershell
 # Windows (PowerShell)
-$errDir = "$env:TEMP\skill-errors\$(Get-Date -Format 'yyyy-MM-dd')"
+$errDir = "$env:TEMP\skill-errors\<skill-name>\$(Get-Date -Format 'yyyy-MM-dd')"
 New-Item -ItemType Directory -Force -Path $errDir | Out-Null
-$errFile = "$errDir\$(Get-Date -Format 'HH-mm-ss')_<skill-name>_errors.md"
+$errFile = "$errDir\$(Get-Date -Format 'HH-mm-ss')_errors.md"
 ```
 
 ### Log file format
 
 ```markdown
 # Skill Error Log: <skill-name>
+
 **Date:** <yyyy-mm-dd HH:MM:SS>
 **Agent:** orchestrator | subagent (<role if applicable>)
 **Skill path:** <path/to/skill>
@@ -619,9 +622,9 @@ took the action it did>
 
 ### Subagent responsibility
 
-Subagents SHALL write to the same date directory using their own timestamped
-file. The orchestrator does not need to collect or merge subagent logs — the
-date directory structure naturally groups them.
+Subagents SHALL write to the same skill/date directory using their own
+timestamped file. The orchestrator does not need to collect or merge
+subagent logs — the skill/date directory structure naturally groups them.
 
 ### When NOT to log
 
