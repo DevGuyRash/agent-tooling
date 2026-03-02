@@ -420,38 +420,19 @@ run_command() {
         run_pid=$!
     fi
 
-    list_direct_children() {
-        parent_pid="$1"
-        ps -eo pid=,ppid= 2>/dev/null | awk -v p="$parent_pid" '$2==p {print $1}'
-    }
-
-    signal_direct_children() {
-        parent_pid="$1"
-        sig="$2"
-        child_pids=$(list_direct_children "$parent_pid")
-        [ -z "$child_pids" ] && return 0
-        for child_pid in $child_pids; do
-            kill "-$sig" "$child_pid" 2>/dev/null || true
-        done
-    }
-
     (
         sleep "$TIMEOUT_SECONDS"
         if kill -0 "$run_pid" 2>/dev/null; then
             echo "1" > "$timeout_flag"
             if [ -n "$run_pgid" ]; then
-                # Timeout cleanup should avoid killing the wrapper shell before it
-                # reaps direct children. Terminate descendants first, then the leader.
-                signal_direct_children "$run_pid" TERM
-                sleep 1
-                signal_direct_children "$run_pid" KILL
-                kill -TERM "$run_pid" 2>/dev/null || true
+                # Kill the entire process group so forked grandchildren are not leaked.
+                kill -TERM "-$run_pgid" 2>/dev/null || true
             else
                 kill "$run_pid" 2>/dev/null || true
             fi
             sleep 1
             if [ -n "$run_pgid" ]; then
-                kill -KILL "$run_pid" 2>/dev/null || true
+                kill -KILL "-$run_pgid" 2>/dev/null || true
             else
                 kill -9 "$run_pid" 2>/dev/null || true
             fi
