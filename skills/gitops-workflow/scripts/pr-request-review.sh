@@ -23,6 +23,14 @@ require_opt_value() {
   fi
 }
 
+require_opt_value_present() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -57,7 +65,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --note)
-      require_opt_value "--note" "${2:-}"
+      require_opt_value_present "--note" "${2:-}"
       NOTE="${2:-}"
       shift 2
       ;;

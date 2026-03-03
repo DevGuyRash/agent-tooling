@@ -25,7 +25,7 @@ MILESTONE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --title)
-      require_opt_value "--title" "${2:-}"
+      require_opt_value_present "--title" "${2:-}"
       TITLE="${2:-}"
       shift 2
       ;;
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --body)
-      require_opt_value "--body" "${2:-}"
+      require_opt_value_present "--body" "${2:-}"
       BODY="${2:-}"
       shift 2
       ;;

@@ -53,8 +53,12 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]`
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
-  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
-  - Literal `\n` in `<reply text>` is normalized to real newlines.
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body-file <path> [--repo owner/repo]` (preferred)
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "<text>" [--repo owner/repo]`
+  - Backward-compatible: `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
+  - Literal `\n` in text-mode inputs is normalized to real newlines.
+  - Compat-first parsing after required IDs preserves positional literals such as `--help`, `--body`, and `--body-file`.
+  - When explicit mode text starts with option-like tokens and additional flags are present, prefer `--body=<text>` for unambiguous parsing.
 - Issue templates and creation:
   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`
   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--dry-run]`
