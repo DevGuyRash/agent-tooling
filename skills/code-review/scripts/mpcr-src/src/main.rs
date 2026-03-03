@@ -5,7 +5,8 @@
 //! The actual coordination logic lives in the `mpcr` library crate (`src/session.rs`, `src/lock.rs`, etc).
 
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use mpcr::fullcycle_plan::{self, BuildParams, DetailLevel};
 use mpcr::id;
 use mpcr::lock::{self, LockConfig};
 use mpcr::report_validation::{
@@ -23,6 +24,7 @@ use mpcr::session::{
 use mpcr::{analyze, protocol};
 use serde::Serialize;
 use serde_json::Value;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{Date, Month, OffsetDateTime};
@@ -133,6 +135,11 @@ enum Commands {
     Analyze {
         #[command(subcommand)]
         command: AnalyzeCommands,
+    },
+    /// Deterministic full-cycle planning and telemetry.
+    Fullcycle {
+        #[command(subcommand)]
+        command: FullcycleCommands,
     },
 }
 
@@ -496,6 +503,12 @@ enum ReviewerCommands {
 
   # Override the session directory location:
   mpcr reviewer register --target-ref main --session-dir .local/reports/code_reviews/YYYY-MM-DD
+
+  # Start fresh for just this session day before registering:
+  mpcr reviewer register --target-ref main --date 2026-01-11 --clear-session-day
+
+  # Start fresh across all prior days before registering:
+  mpcr reviewer register --target-ref main --clear-all-session-days
 "#)]
     Register {
         #[arg(
@@ -541,6 +554,18 @@ enum ReviewerCommands {
             help = "Print MPCR_* key/value lines for manual reuse (does not emit `export`)."
         )]
         print_env: bool,
+        #[arg(
+            long,
+            conflicts_with = "clear_all_session_days",
+            help = "Remove the resolved <repo_root>/.local/reports/code_reviews/<date> directory before registering."
+        )]
+        clear_session_day: bool,
+        #[arg(
+            long,
+            conflicts_with = "clear_session_day",
+            help = "Remove all YYYY-MM-DD session directories under <repo_root>/.local/reports/code_reviews before registering."
+        )]
+        clear_all_session_days: bool,
     },
 
     /// Spawn child reviewer entries under a single parent reviewer id.
@@ -1139,6 +1164,8 @@ enum ProtocolCommands {
     ConvergencePlanning,
     /// List all available dispatch role slugs.
     DispatchList,
+    /// List protocol capabilities exposed by this binary.
+    Capabilities,
     /// List all available protocol entries.
     List,
 }
@@ -1173,6 +1200,102 @@ enum AnalyzeCommands {
     ListChecks,
 }
 
+#[derive(Subcommand)]
+enum FullcycleCommands {
+    /// Compute deterministic next-step full-cycle plan (read-only).
+    Plan {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Target reference being orchestrated."
+        )]
+        target_ref: String,
+        #[arg(long, value_name = "ID8", help = "Optional session id filter.")]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "auto",
+            value_name = "DETAIL",
+            help = "Progressive disclosure level (auto, compact, standard, full)."
+        )]
+        detail: DetailLevel,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Optional worker budget override (4, 6, or 8)."
+        )]
+        worker_budget: Option<u8>,
+    },
+    /// Compute recursive convergence plan (read-only).
+    LoopPlan {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Target reference being orchestrated."
+        )]
+        target_ref: String,
+        #[arg(long, value_name = "ID8", help = "Optional session id filter.")]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "auto",
+            value_name = "DETAIL",
+            help = "Progressive disclosure level (auto, compact, standard, full)."
+        )]
+        detail: DetailLevel,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Optional worker budget override (4, 6, or 8)."
+        )]
+        worker_budget: Option<u8>,
+    },
+    /// Show persisted `fullcycle_state` telemetry from session extra fields.
+    State {
+        #[command(flatten)]
+        session: SessionDirArgs,
+    },
+    /// Persist a deterministic full-cycle telemetry checkpoint.
+    Checkpoint {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(
+            long,
+            value_name = "REF",
+            help = "Target reference being orchestrated."
+        )]
+        target_ref: String,
+        #[arg(long, value_name = "ID8", help = "Optional session id filter.")]
+        session_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "auto",
+            value_name = "DETAIL",
+            help = "Progressive disclosure level (auto, compact, standard, full)."
+        )]
+        detail: DetailLevel,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Optional worker budget override (4, 6, or 8)."
+        )]
+        worker_budget: Option<u8>,
+        #[arg(
+            long,
+            value_name = "ID8",
+            help = "Optional lock owner id8 for session write (default: random)."
+        )]
+        lock_owner: Option<String>,
+    },
+}
+
 #[derive(Debug, Serialize)]
 struct OkResult {
     ok: bool,
@@ -1196,7 +1319,11 @@ fn format_cli_error(err: &anyhow::Error) -> String {
 
 #[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let (argv, compat_hint) = normalize_argv_for_compat()?;
+    if let Some(hint) = compat_hint {
+        eprintln!("{hint}");
+    }
+    let cli = Cli::parse_from(argv);
     enforce_worker_mode_restrictions(&cli.command)?;
     enforce_worker_session_dir_binding(&cli.command)?;
     let json = cli.json || cli.json_pretty;
@@ -1249,7 +1376,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Session { command } => match command {
             SessionCommands::Show { session } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let session = load_session(&SessionLocator::new(resolved.session_dir))?;
+                let session = load_session(&SessionLocator::new(resolved.session_dir.clone()))?;
                 write_result(json, json_pretty, &session)?;
             }
             SessionCommands::Reports { command } => match command {
@@ -1299,7 +1426,7 @@ fn run() -> anyhow::Result<()> {
                 dry_run,
             } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let session_locator = SessionLocator::new(resolved.session_dir);
+                let session_locator = SessionLocator::new(resolved.session_dir.clone());
                 let result = purge_reviews(&PurgeReviewsParams {
                     session: session_locator,
                     repo_root: resolved.repo_root,
@@ -1328,12 +1455,19 @@ fn run() -> anyhow::Result<()> {
                 parent_id,
                 emit_env,
                 print_env,
+                clear_session_day,
+                clear_all_session_days,
             } => {
                 let target_ref_for_env = target_ref.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
+                if clear_session_day {
+                    clear_session_day_dir(&resolved.session_dir)?;
+                } else if clear_all_session_days {
+                    clear_all_session_days_under_repo_root(&resolved.repo_root)?;
+                }
                 let repo_root_for_env = resolved.repo_root.to_string_lossy().to_string();
                 let date_for_env = resolved.session_date.to_string();
-                let session = SessionLocator::new(resolved.session_dir);
+                let session = SessionLocator::new(resolved.session_dir.clone());
 
                 // When --parent-id is set (child registration), ignore MPCR_REVIEWER_ID from env
                 // to prevent accidentally reusing the parent's identity. A child should either
@@ -1407,7 +1541,7 @@ fn run() -> anyhow::Result<()> {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
 
                 let res = spawn_child_reviewers(SpawnChildReviewersParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     target_ref,
                     session_id,
                     parent_reviewer_id,
@@ -1443,7 +1577,7 @@ fn run() -> anyhow::Result<()> {
                 };
 
                 let result = close_child_reviews(CloseChildReviewsParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     parent_reviewer_id,
                     session_id,
                     target_ref,
@@ -1474,7 +1608,7 @@ fn run() -> anyhow::Result<()> {
                     phase.map(Some)
                 };
                 let params = UpdateReviewParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     reviewer_id,
                     session_id,
                     status,
@@ -1510,9 +1644,11 @@ fn run() -> anyhow::Result<()> {
                     require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
                 let session_id =
                     require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let reviewer_id_for_state = reviewer_id.clone();
+                let session_id_for_state = session_id.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let res = finalize_review(FinalizeReviewParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     reviewer_id,
                     session_id,
                     verdict,
@@ -1529,6 +1665,14 @@ fn run() -> anyhow::Result<()> {
                     auto_close_children_status,
                     now,
                 })?;
+                if let Err(err) = best_effort_refresh_fullcycle_state(
+                    &resolved.session_dir,
+                    &reviewer_id_for_state,
+                    &session_id_for_state,
+                    now,
+                ) {
+                    eprintln!("warning: fullcycle telemetry refresh failed: {err}");
+                }
                 write_result(json, json_pretty, &res)?;
             }
 
@@ -1557,8 +1701,10 @@ fn run() -> anyhow::Result<()> {
                     require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
                 let session_id =
                     require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let reviewer_id_for_state = reviewer_id.clone();
+                let session_id_for_state = session_id.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let session_locator = SessionLocator::new(resolved.session_dir);
+                let session_locator = SessionLocator::new(resolved.session_dir.clone());
 
                 ensure_complete_child_has_parent(&session_locator, &reviewer_id, &session_id)?;
 
@@ -1594,6 +1740,14 @@ fn run() -> anyhow::Result<()> {
                     auto_close_children_status: ReviewerStatus::Cancelled,
                     now,
                 })?;
+                if let Err(err) = best_effort_refresh_fullcycle_state(
+                    &resolved.session_dir,
+                    &reviewer_id_for_state,
+                    &session_id_for_state,
+                    now,
+                ) {
+                    eprintln!("warning: fullcycle telemetry refresh failed: {err}");
+                }
 
                 if let Some(note) = proof_note {
                     append_note(AppendNoteParams {
@@ -1655,7 +1809,7 @@ fn run() -> anyhow::Result<()> {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     reviewer_id: reviewer_id.clone(),
                     session_id,
                     role: NoteRole::Reviewer,
@@ -1680,13 +1834,15 @@ fn run() -> anyhow::Result<()> {
                     require_arg_or_env(reviewer_id, use_env, "MPCR_REVIEWER_ID", "--reviewer-id")?;
                 let session_id =
                     require_arg_or_env(session_id, use_env, "MPCR_SESSION_ID", "--session-id")?;
+                let reviewer_id_for_state = reviewer_id.clone();
+                let session_id_for_state = session_id.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let lock_owner = match lock_owner {
                     Some(lock_owner) => lock_owner,
                     None => id::random_id8()?,
                 };
                 let params = SetInitiatorStatusParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     reviewer_id,
                     session_id,
                     initiator_status,
@@ -1694,6 +1850,14 @@ fn run() -> anyhow::Result<()> {
                     lock_owner,
                 };
                 set_initiator_status(&params)?;
+                if let Err(err) = best_effort_refresh_fullcycle_state(
+                    &resolved.session_dir,
+                    &reviewer_id_for_state,
+                    &session_id_for_state,
+                    now,
+                ) {
+                    eprintln!("warning: fullcycle telemetry refresh failed: {err}");
+                }
                 write_ok(json, json_pretty)?;
             }
 
@@ -1717,7 +1881,7 @@ fn run() -> anyhow::Result<()> {
                     None => id::random_id8()?,
                 };
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(resolved.session_dir),
+                    session: SessionLocator::new(resolved.session_dir.clone()),
                     reviewer_id,
                     session_id,
                     role: NoteRole::Applicator,
@@ -1879,6 +2043,14 @@ fn run() -> anyhow::Result<()> {
                     }
                 }
             }
+            ProtocolCommands::Capabilities => {
+                let out = protocol::capabilities()?;
+                if json {
+                    write_json(json_pretty, &out)?;
+                } else {
+                    println!("{}", serde_json::to_string(&out).context("serialize")?);
+                }
+            }
             ProtocolCommands::List => {
                 let entries = protocol::list_entries()?;
                 if json {
@@ -1888,6 +2060,85 @@ fn run() -> anyhow::Result<()> {
                         println!("{:<16} {:<24} {}", entry.category, entry.key, entry.command);
                     }
                 }
+            }
+        },
+        Commands::Fullcycle { command } => match command {
+            FullcycleCommands::Plan {
+                session,
+                target_ref,
+                session_id,
+                detail,
+                worker_budget,
+            } => {
+                validate_worker_budget(worker_budget)?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let (plan, _) = fullcycle_plan::build_plan(&BuildParams {
+                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    target_ref,
+                    requested_session_id: session_id,
+                    worker_budget_override: worker_budget,
+                    detail,
+                    now,
+                    loop_mode: false,
+                })?;
+                write_result(json, json_pretty, &plan)?;
+            }
+            FullcycleCommands::LoopPlan {
+                session,
+                target_ref,
+                session_id,
+                detail,
+                worker_budget,
+            } => {
+                validate_worker_budget(worker_budget)?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let (plan, _) = fullcycle_plan::build_plan(&BuildParams {
+                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    target_ref,
+                    requested_session_id: session_id,
+                    worker_budget_override: worker_budget,
+                    detail,
+                    now,
+                    loop_mode: true,
+                })?;
+                write_result(json, json_pretty, &plan)?;
+            }
+            FullcycleCommands::State { session } => {
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let out =
+                    fullcycle_plan::load_state(&SessionLocator::new(resolved.session_dir.clone()))?;
+                write_result(json, json_pretty, &out)?;
+            }
+            FullcycleCommands::Checkpoint {
+                session,
+                target_ref,
+                session_id,
+                detail,
+                worker_budget,
+                lock_owner,
+            } => {
+                validate_worker_budget(worker_budget)?;
+                let resolved = resolve_session_input(use_env, &session, now.date())?;
+                let session_locator = SessionLocator::new(resolved.session_dir.clone());
+                let lock_owner = match lock_owner {
+                    Some(owner) => owner,
+                    None => id::random_id8()?,
+                };
+                let (_plan, state) = fullcycle_plan::build_plan(&BuildParams {
+                    session: session_locator.clone(),
+                    target_ref,
+                    requested_session_id: session_id,
+                    worker_budget_override: worker_budget,
+                    detail,
+                    now,
+                    loop_mode: true,
+                })?;
+                fullcycle_plan::persist_state(session_locator, lock_owner, &state)?;
+                write_result(
+                    json,
+                    json_pretty,
+                    &fullcycle_plan::default_checkpoint_payload(&state),
+                )?;
             }
         },
         Commands::Analyze { command } => match command {
@@ -2378,12 +2629,132 @@ fn parse_date_ymd(s: &str) -> anyhow::Result<Date> {
     Date::from_calendar_date(year, month, day).context("invalid calendar date")
 }
 
+fn clear_session_day_dir(session_dir: &Path) -> anyhow::Result<()> {
+    if !session_dir.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(session_dir)
+        .with_context(|| format!("remove session day dir {}", session_dir.display()))
+}
+
+fn clear_all_session_days_under_repo_root(repo_root: &Path) -> anyhow::Result<()> {
+    let code_reviews_root = repo_root
+        .join(".local")
+        .join("reports")
+        .join("code_reviews");
+    if !code_reviews_root.exists() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(&code_reviews_root)
+        .with_context(|| format!("read_dir {}", code_reviews_root.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if !is_yyyy_mm_dd(name) {
+            continue;
+        }
+        fs::remove_dir_all(&path)
+            .with_context(|| format!("remove session day dir {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn is_yyyy_mm_dd(name: &str) -> bool {
+    if name.len() != 10 {
+        return false;
+    }
+    let bytes = name.as_bytes();
+    for (idx, byte) in bytes.iter().enumerate() {
+        let is_hyphen = idx == 4 || idx == 7;
+        if is_hyphen {
+            if *byte != b'-' {
+                return false;
+            }
+        } else if !byte.is_ascii_digit() {
+            return false;
+        }
+    }
+    true
+}
+
 fn parse_content(as_json: bool, raw: &str) -> anyhow::Result<Value> {
     if as_json {
         serde_json::from_str(raw).context("parse --content as JSON")
     } else {
         Ok(Value::String(raw.to_string()))
     }
+}
+
+fn is_known_protocol_subcommand(candidate: &str) -> bool {
+    Cli::command()
+        .find_subcommand("protocol")
+        .and_then(|protocol_cmd| protocol_cmd.find_subcommand(candidate))
+        .is_some()
+}
+
+fn is_known_global_flag(candidate: &str) -> bool {
+    matches!(
+        candidate,
+        "--json" | "--json-pretty" | "--use-env" | "--help" | "-h" | "--version" | "-V"
+    )
+}
+
+fn normalize_argv_for_compat() -> anyhow::Result<(Vec<String>, Option<String>)> {
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        return Ok((args, None));
+    }
+    let mut command_index: Option<usize> = None;
+    for (index, arg) in args.iter().enumerate().skip(1) {
+        if arg == "--" {
+            break;
+        }
+        if is_known_global_flag(arg) {
+            continue;
+        }
+        if arg.starts_with('-') {
+            return Ok((args, None));
+        }
+        command_index = Some(index);
+        break;
+    }
+    let Some(first_index) = command_index else {
+        return Ok((args, None));
+    };
+    let Some(first) = args.get(first_index).cloned() else {
+        return Ok((args, None));
+    };
+    if first.split_whitespace().count() == 2 && first.starts_with("protocol ") {
+        let parts = first.split_whitespace().collect::<Vec<_>>();
+        if parts.len() == 2 && is_known_protocol_subcommand(parts[1]) {
+            args.remove(first_index);
+            args.insert(first_index, "protocol".to_string());
+            args.insert(first_index + 1, parts[1].to_string());
+            return Ok((
+                args,
+                Some(format!(
+                    "compat: interpreted single-token subcommand as `mpcr protocol {}`",
+                    parts[1]
+                )),
+            ));
+        }
+    }
+    Ok((args, None))
+}
+
+fn validate_worker_budget(worker_budget: Option<u8>) -> anyhow::Result<()> {
+    if let Some(value) = worker_budget {
+        if !matches!(value, 4 | 6 | 8) {
+            return Err(anyhow::anyhow!("--worker-budget must be one of 4, 6, or 8"));
+        }
+    }
+    Ok(())
 }
 
 fn read_stdin_to_string() -> anyhow::Result<String> {
@@ -2477,7 +2848,7 @@ fn handle_reports(
     args: ReportsArgs,
 ) -> anyhow::Result<()> {
     let resolved = resolve_session_input(use_env, &args.session, default_date)?;
-    let session = SessionLocator::new(resolved.session_dir);
+    let session = SessionLocator::new(resolved.session_dir.clone());
 
     if session.session_dir().exists() && !session.session_dir().is_dir() {
         return Err(anyhow::anyhow!(
@@ -2659,6 +3030,36 @@ fn wait_for_reviews(
         std::thread::sleep(delay);
         delay = std::cmp::min(delay.saturating_mul(2), max_delay);
     }
+}
+
+fn best_effort_refresh_fullcycle_state(
+    session_dir: &Path,
+    reviewer_id: &str,
+    session_id: &str,
+    now: OffsetDateTime,
+) -> anyhow::Result<()> {
+    let locator = SessionLocator::new(session_dir.to_path_buf());
+    let session = load_session(&locator)?;
+    let Some(target_ref) = session
+        .reviews
+        .iter()
+        .find(|entry| entry.reviewer_id == reviewer_id && entry.session_id == session_id)
+        .map(|entry| entry.target_ref.clone())
+    else {
+        return Ok(());
+    };
+
+    let (_plan, state) = fullcycle_plan::build_plan(&BuildParams {
+        session: locator.clone(),
+        target_ref,
+        requested_session_id: Some(session_id.to_string()),
+        worker_budget_override: None,
+        detail: DetailLevel::Auto,
+        now,
+        loop_mode: true,
+    })?;
+    fullcycle_plan::persist_state(locator, id::random_id8()?, &state)?;
+    Ok(())
 }
 
 #[cfg(test)]

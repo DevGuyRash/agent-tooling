@@ -72,4 +72,10 @@ Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue
 ```
 WHEN the orchestrator owns the session (no other agent is active), it SHALL delete `.local/tmp/` automatically after finalize completes.
 WHEN running under a restrictive sandbox that blocks file deletion, log the leftover path and continue; do NOT fail the workflow.
+
+## Pre-start reset (fresh start requests)
+WHEN the user asks to start fresh BEFORE opening a new review session, you SHALL use `mpcr reviewer register` cleanup flags instead of post-hoc session cleanup:
+- `--clear-session-day`: reset only the selected `<date>` session directory.
+- `--clear-all-session-days`: reset all `YYYY-MM-DD` directories under `.local/reports/code_reviews/`.
+IF the user does not request a fresh start, you SHALL NOT pass these flags.
 """

@@ -976,6 +976,148 @@ fn reviewer_register_creates_session() -> anyhow::Result<()> {
 }
 
 #[test]
+fn reviewer_register_clear_session_day_removes_existing_day_dir() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+    ensure!(stale_file.exists());
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+    let session_dir_out = json_str(&out, "session_dir")?;
+    let session_file_out = json_str(&out, "session_file")?;
+    ensure!(Path::new(session_dir_out).exists());
+    ensure!(Path::new(session_file_out).exists());
+    ensure!(
+        !stale_file.exists(),
+        "day cleanup should remove stale files first"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_all_session_days_removes_day_dirs_only() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let code_reviews_root = repo_root
+        .path()
+        .join(".local")
+        .join("reports")
+        .join("code_reviews");
+    let day_a = code_reviews_root.join("2026-01-09");
+    let day_b = code_reviews_root.join("2026-01-10");
+    let non_date_dir = code_reviews_root.join("keep-me");
+    fs::create_dir_all(&day_a)?;
+    fs::create_dir_all(&day_b)?;
+    fs::create_dir_all(&non_date_dir)?;
+    fs::write(day_a.join("a.txt"), "a")?;
+    fs::write(day_b.join("b.txt"), "b")?;
+    fs::write(non_date_dir.join("note.txt"), "keep")?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-all-session-days",
+    ])?;
+    let session_dir_out = json_str(&out, "session_dir")?;
+    ensure!(
+        Path::new(session_dir_out).exists(),
+        "register should recreate today's directory after cleanup"
+    );
+    ensure!(!day_a.exists(), "dated dir should be removed");
+    ensure!(!day_b.exists(), "dated dir should be removed");
+    ensure!(
+        non_date_dir.exists(),
+        "non-date directories under code_reviews should remain"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_cleanup_flags_are_mutually_exclusive() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let err = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--clear-session-day",
+        "--clear-all-session-days",
+    ])?;
+    ensure!(
+        err.contains("cannot be used with"),
+        "expected clap conflict error, got: {err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_default_does_not_clear_existing_day_dir() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+    ensure!(stale_file.exists());
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    ensure!(
+        stale_file.exists(),
+        "without cleanup flags, existing day artifacts should remain"
+    );
+    Ok(())
+}
+
+#[test]
 fn reviewer_update_changes_status_and_phase() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
@@ -3766,6 +3908,8 @@ fn protocol_orchestrator_json() -> anyhow::Result<()> {
     ensure!(content.contains("Decomposition"));
     ensure!(content.contains("Dispatch"));
     ensure!(content.contains("Synthesis"));
+    ensure!(content.contains("You SHALL NOT emit direct file:line findings yourself."));
+    ensure!(content.contains("Single-agent mode still requires a dispatched worker"));
     Ok(())
 }
 
@@ -3965,6 +4109,460 @@ fn protocol_reviewer_text_output() -> anyhow::Result<()> {
     // Text mode should output content directly (no JSON envelope)
     ensure!(out.contains("change inventory"));
     ensure!(!out.contains("\"title\""));
+    Ok(())
+}
+
+#[test]
+fn protocol_capabilities_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "capabilities"])?;
+    ensure!(json_str(&out, "schema_version")? == "protocol_capabilities.v1");
+    let commands = out
+        .get("protocol_commands")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("protocol_commands missing"))?;
+    let as_strs = commands
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    ensure!(as_strs.contains(&"mpcr protocol orchestrator"));
+    ensure!(as_strs.contains(&"mpcr protocol capabilities"));
+    ensure!(json_u64(&out, "protocol_entry_count")? >= 40);
+    Ok(())
+}
+
+#[test]
+fn protocol_fullcycle_text_includes_execution_bridge() -> anyhow::Result<()> {
+    let out = run_protocol_text(&["protocol", "fullcycle"])?;
+    ensure!(out.contains("mpcr fullcycle plan"));
+    ensure!(out.contains("mpcr fullcycle loop-plan"));
+    ensure!(out.contains("mpcr fullcycle checkpoint"));
+    ensure!(out.contains("mpcr fullcycle state"));
+    Ok(())
+}
+
+#[test]
+fn quoted_single_token_protocol_is_compat_split() -> anyhow::Result<()> {
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["protocol orchestrator"],
+        vec!["protocol capabilities"],
+        vec!["--json", "protocol capabilities"],
+        vec!["--json-pretty", "protocol orchestrator"],
+        vec!["--use-env", "protocol capabilities"],
+    ];
+    for argv in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+            .args(&argv)
+            .output()?;
+        let shown = argv.join(" ");
+        ensure!(
+            output.status.success(),
+            "expected compat split to succeed for `{shown}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8(output.stderr)?;
+        ensure!(
+            stderr.contains("compat: interpreted single-token subcommand"),
+            "compat hint missing for `{shown}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn quoted_single_token_protocol_dispatch_is_split_then_validated() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .arg("protocol dispatch")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "expected command to fail without --role"
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    ensure!(
+        stderr.contains("compat: interpreted single-token subcommand"),
+        "compat hint missing for `protocol dispatch`"
+    );
+    ensure!(
+        !stderr.contains("unrecognized subcommand 'protocol dispatch'"),
+        "command should be compat split before clap validation"
+    );
+    ensure!(
+        stderr.contains("--role"),
+        "expected clap missing-argument guidance, got: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_loop_state_checkpoint_flow() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = sample_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+    ensure!(json_str(&plan, "mode")? == "read_only_planner");
+    ensure!(json_u64(&plan, "baseline_workers")? == 4);
+
+    let loop_plan = run_cmd_json(&[
+        "fullcycle",
+        "loop-plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&loop_plan, "mode")? == "read_only_loop_planner");
+
+    let checkpoint = run_cmd_json(&[
+        "fullcycle",
+        "checkpoint",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "auto",
+    ])?;
+    ensure!(checkpoint.get("schema_version").and_then(Value::as_str) == Some("fullcycle_state.v1"));
+
+    let state = run_cmd_json(&["fullcycle", "state", "--session-dir", session_dir_str])?;
+    ensure!(state.get("schema_version").and_then(Value::as_str) == Some("fullcycle_state.v1"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_bootstrap_preserves_requested_session_scope() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = empty_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0007",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_str(&plan, "session_id")? == "sess0007");
+    ensure!(json_str(&plan, "state")? == "bootstrap_review");
+    ensure!(json_bool(&plan, "continue_required")?);
+    let next = json_array(&plan, "next_commands")?;
+    let register_cmd = next
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing bootstrap reviewer register command"))?;
+    ensure!(register_cmd.contains("--session-id sess0007"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_net_new_actionable_ignores_minor_nit_churn() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let previous_report_path = session_dir.join("11-00-00-000_refs_heads_main_cafed00d.md");
+    fs::write(
+        &previous_report_path,
+        valid_parent_report(
+            "cafed00d",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 1,
+            },
+        ),
+    )?;
+
+    let previous_parent = ReviewEntry {
+        reviewer_id: "cafed00d".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T00:45:00Z".to_string(),
+        finished_at: Some("2026-01-11T00:45:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("11-00-00-000_refs_heads_main_cafed00d.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+    session.reviewers.push("cafed00d".to_string());
+    session.reviews.push(previous_parent);
+
+    if let Some(latest_parent) = session
+        .reviews
+        .iter_mut()
+        .find(|entry| entry.reviewer_id == "feedface" && entry.session_id == "sess0003")
+    {
+        latest_parent.initiator_status = InitiatorStatus::Applied;
+        latest_parent.started_at = "2026-01-11T01:00:00Z".to_string();
+        latest_parent.updated_at = "2026-01-11T01:30:00Z".to_string();
+        latest_parent.finished_at = Some("2026-01-11T01:30:00Z".to_string());
+        latest_parent.verdict = Some(ReviewVerdict::RequestChanges);
+        latest_parent.counts = SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 1,
+        };
+        latest_parent.report_file = Some("12-00-00-000_refs_heads_main_feedface.md".to_string());
+    }
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_u64(&plan, "net_new_actionable")? == 0);
+    ensure!(json_u64(&plan, "dedup_fingerprint_count")? == 2);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_ignores_mismatched_previous_state_scope() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let previous_report_path = session_dir.join("11-00-00-000_refs_heads_main_cafed00d.md");
+    fs::write(
+        &previous_report_path,
+        valid_parent_report(
+            "cafed00d",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+
+    let previous_parent = ReviewEntry {
+        reviewer_id: "cafed00d".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T00:45:00Z".to_string(),
+        finished_at: Some("2026-01-11T00:45:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("11-00-00-000_refs_heads_main_cafed00d.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+    session.reviewers.push("cafed00d".to_string());
+    session.reviews.push(previous_parent);
+
+    if let Some(latest_parent) = session
+        .reviews
+        .iter_mut()
+        .find(|entry| entry.reviewer_id == "feedface" && entry.session_id == "sess0003")
+    {
+        latest_parent.initiator_status = InitiatorStatus::Applied;
+        latest_parent.started_at = "2026-01-11T01:00:00Z".to_string();
+        latest_parent.updated_at = "2026-01-11T01:30:00Z".to_string();
+        latest_parent.finished_at = Some("2026-01-11T01:30:00Z".to_string());
+        latest_parent.verdict = Some(ReviewVerdict::RequestChanges);
+        latest_parent.counts = SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        };
+        latest_parent.report_file = Some("12-00-00-000_refs_heads_main_feedface.md".to_string());
+    }
+
+    session.extra.insert(
+        "fullcycle_state".to_string(),
+        serde_json::json!({
+            "schema_version": "fullcycle_state.v1",
+            "target_ref": "refs/heads/other",
+            "session_id": "sess9999",
+            "cycle_index": 9,
+            "cycle_phase": "scoped_rereview",
+            "continue_required": true,
+            "stop_reason": Value::Null,
+            "no_progress_streak": 9,
+            "baseline_workers": 4,
+            "worker_ceiling": 8,
+            "recommended_workers": 8,
+            "probe_stage": "probe_8",
+            "net_new_actionable": 0,
+            "net_new_staleness_actionable": 0,
+            "dedup_fingerprint_count": 1,
+            "malformed_packets": 0,
+            "retry_count": 0,
+            "child_error_count": 0,
+            "artifact_format_policy": "proof_toml_first_cli_json_ok",
+            "updated_at": "2026-01-11T09:00:00Z"
+        }),
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_u64(&plan, "net_new_actionable")? == 0);
+    ensure!(
+        json_u64(&plan, "no_progress_streak")? == 1,
+        "no_progress_streak should not inherit mismatched target/session state"
+    );
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_respects_mpcr_max_workers_upper_bound() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = sample_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let run_with_cap = |cap: &str| -> anyhow::Result<Value> {
+        let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+            .env("MPCR_MAX_WORKERS", cap)
+            .args([
+                "fullcycle",
+                "plan",
+                "--session-dir",
+                session_dir_str,
+                "--target-ref",
+                "refs/heads/main",
+                "--session-id",
+                "sess0003",
+                "--detail",
+                "compact",
+            ])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "fullcycle plan failed for cap `{cap}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+
+    let cap5 = run_with_cap("5")?;
+    ensure!(json_u64(&cap5, "worker_ceiling")? == 4);
+    ensure!(json_u64(&cap5, "recommended_workers")? == 4);
+
+    let cap7 = run_with_cap("7")?;
+    ensure!(json_u64(&cap7, "worker_ceiling")? == 6);
+    ensure!(json_u64(&cap7, "recommended_workers")? <= 6);
     Ok(())
 }
 

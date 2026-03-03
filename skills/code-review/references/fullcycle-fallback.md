@@ -12,6 +12,8 @@ Full-cycle runs Reviewer then Applicator with recursive Convergence control. You
 - You are the orchestrator. You do NOT read code, write patches, or produce findings.
 - All work is done by subagents. You coordinate, validate, and loop.
 - You SHALL run `mpcr protocol scope-mapping` and `mpcr protocol convergence-planning` before launching cycle 1 workers.
+- For deterministic orchestration state, you SHALL treat `mpcr fullcycle plan`, `mpcr fullcycle loop-plan`, `mpcr fullcycle checkpoint`, and `mpcr fullcycle state` as the execution bridge between protocol guidance and session state.
+- WHEN user intent explicitly requests a fresh start, you SHALL run `mpcr reviewer register` with `--clear-session-day` (single date) or `--clear-all-session-days` (all date directories) before cycle 1 registration. IF user intent does not request cleanup, you SHALL NOT pass either cleanup flag.
 
 ## Phase 1: Initial Review
 1. Run the complete Reviewer workflow (see main orchestrator protocol above).
@@ -23,7 +25,7 @@ Full-cycle runs Reviewer then Applicator with recursive Convergence control. You
 1. Run the Applicator workflow on the findings from Phase 1.
 2. BEFORE dispatching applicator workers, dispatch `scope-mapper-applicator` and pass the Scope Map packet from cycle start.
 3. Dispatch `convergence-planner` with prior-cycle summaries to propose focus boundaries for this cycle.
-4. You SHALL dispatch applicator-worker subagents for APPLIED findings (subject to concurrency cap of 8).
+4. You SHALL dispatch applicator-worker subagents for APPLIED findings (with dynamic worker budget (baseline 4; probe 6 and 8 cautiously when cycle health is stable)).
 5. Each applicator-worker SHALL spawn its own explorer subagents for evidence challenge verification.
 6. Collect all Application Reports. Record dispositions via `mpcr applicator note --session-dir <DIR> ...`.
 7. Set status: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED`.

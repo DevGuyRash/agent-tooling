@@ -5,7 +5,9 @@
 //! a fallback. YAML is intentionally unsupported.
 
 #![allow(clippy::module_name_repetitions)]
+#![allow(missing_docs)]
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -80,6 +82,23 @@ pub struct ReportValidationSummary {
     pub defended_proofs: usize,
     /// Number of residual-risk entries in the machine block.
     pub residual_risks: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParentFindingTelemetry {
+    pub severity: String,
+    pub anchor: String,
+    pub claim: String,
+    pub is_actionable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParentReportTelemetry {
+    pub retry_count: u64,
+    pub packets_validated: u64,
+    pub packets_rejected: u64,
+    pub merged_findings: Vec<ParentFindingTelemetry>,
+    pub residual_risks: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -1581,6 +1600,121 @@ pub fn validate_report_markdown(
             )
         }
     }
+}
+
+/// Extract machine-readable telemetry from a parent review report.
+///
+/// # Errors
+/// Returns an error when the report lacks a valid machine block or cannot be parsed.
+pub fn extract_parent_report_telemetry(markdown: &str) -> anyhow::Result<ParentReportTelemetry> {
+    let block = extract_machine_block(markdown)?;
+    let doc = parse_parent_doc(&block)?;
+    let merged_findings = doc
+        .merged_findings
+        .into_iter()
+        .map(|finding| {
+            let severity = match finding.severity {
+                SeverityLabel::Blocker => "BLOCKER",
+                SeverityLabel::Major => "MAJOR",
+                SeverityLabel::Minor => "MINOR",
+                SeverityLabel::Nit => "NIT",
+            }
+            .to_string();
+            ParentFindingTelemetry {
+                severity,
+                anchor: finding.anchor,
+                claim: finding.claim,
+                is_actionable: matches!(
+                    finding.severity,
+                    SeverityLabel::Blocker | SeverityLabel::Major
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+    let residual_risks = doc
+        .residual_risks
+        .into_iter()
+        .map(|risk| risk.area)
+        .collect::<Vec<_>>();
+    Ok(ParentReportTelemetry {
+        retry_count: doc.validation_summary.retry_count,
+        packets_validated: doc.validation_summary.packets_validated,
+        packets_rejected: doc.validation_summary.packets_rejected,
+        merged_findings,
+        residual_risks,
+    })
+}
+
+/// Canonicalize a markdown report to TOML-first machine block format.
+///
+/// If the report already contains a TOML machine block, the input is returned unchanged.
+/// If the report contains only a JSON machine block, it is converted to a TOML block.
+///
+/// # Errors
+/// Returns an error when machine block extraction/parsing fails.
+pub fn canonicalize_report_markdown(markdown: &str) -> anyhow::Result<String> {
+    let blocks = extract_machine_blocks(markdown)?;
+    if blocks
+        .iter()
+        .any(|block| block.format == MachineBlockFormat::Toml)
+    {
+        return Ok(markdown.to_string());
+    }
+    if !blocks
+        .iter()
+        .any(|block| block.format == MachineBlockFormat::Json)
+    {
+        return Ok(markdown.to_string());
+    }
+
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut idx = 0usize;
+    while idx < lines.len() {
+        let Some(line) = lines.get(idx) else {
+            break;
+        };
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("```json") {
+            let start_content = idx + 1;
+            idx += 1;
+            while idx < lines.len() && lines.get(idx).is_some_and(|line| line.trim() != "```") {
+                idx += 1;
+            }
+            if idx >= lines.len() {
+                return Err(anyhow::anyhow!(
+                    "report validation failed:\n- unterminated_machine_block: missing closing fence for machine-readable block"
+                ));
+            }
+            let end_fence = idx;
+            let json_body = lines
+                .get(start_content..end_fence)
+                .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block bounds"))?
+                .join("\n");
+            let parsed_json: serde_json::Value =
+                serde_json::from_str(&json_body).context("parse json machine block")?;
+            let toml_body = toml::to_string_pretty(&parsed_json)
+                .context("serialize machine block to canonical toml")?;
+
+            let mut rebuilt = String::new();
+            if start_content >= 2 {
+                rebuilt.push_str(&lines[..(start_content - 1)].join("\n"));
+                rebuilt.push('\n');
+            }
+            rebuilt.push_str("```toml\n");
+            rebuilt.push_str(toml_body.trim_end());
+            rebuilt.push_str("\n```");
+            if end_fence + 1 < lines.len() {
+                rebuilt.push('\n');
+                rebuilt.push_str(&lines[(end_fence + 1)..].join("\n"));
+            }
+            if markdown.ends_with('\n') && !rebuilt.ends_with('\n') {
+                rebuilt.push('\n');
+            }
+            return Ok(rebuilt);
+        }
+        idx += 1;
+    }
+    Ok(markdown.to_string())
 }
 
 fn validate_identity_expectation(

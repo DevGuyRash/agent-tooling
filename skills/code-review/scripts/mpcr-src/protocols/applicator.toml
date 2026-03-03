@@ -79,7 +79,7 @@ You SHALL apply accepted feedback using parallel applicator subagents:
 1. Group APPLIED findings by file cluster.
 2. For each cluster, get dispatch prompt: `mpcr protocol dispatch --role applicator-worker`
 3. Customize with: assigned findings (full detail including disproof scenarios), file list, acceptance criteria.
-4. Launch applicator-worker subagents in parallel (subject to concurrency cap of 8).
+4. Launch applicator-worker subagents in parallel (with dynamic worker budget (baseline 4; probe 6 and 8 cautiously when cycle health is stable)).
 5. Each worker SHALL spawn explorer subagents for context gathering rather than reading unassigned files directly.
 6. Each worker applies fixes and returns an Application Report.
 7. Collect results. Verify all APPLIED findings were addressed.
