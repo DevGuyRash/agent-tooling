@@ -1095,7 +1095,8 @@ fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow:
 }
 
 #[test]
-fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() -> anyhow::Result<()> {
+fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() -> anyhow::Result<()>
+{
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
     let date = Date::from_calendar_date(2026, Month::January, 11)?;
@@ -1120,7 +1121,10 @@ fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() ->
         .env("MPCR_REVIEWER_ID", "nothex")
         .env("MPCR_SESSION_ID", "sess0001")
         .output()?;
-    ensure!(!output.status.success(), "register should fail for invalid env reviewer id");
+    ensure!(
+        !output.status.success(),
+        "register should fail for invalid env reviewer id"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
