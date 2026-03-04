@@ -1331,11 +1331,11 @@ fn format_cli_error(err: &anyhow::Error) -> String {
 
 #[allow(clippy::too_many_lines)]
 fn run() -> anyhow::Result<()> {
-    let (argv, compat_hint) = normalize_argv_for_compat()?;
+    let (cli_argv, compat_hint) = normalize_argv_for_compat();
     if let Some(hint) = compat_hint {
         eprintln!("{hint}");
     }
-    let cli = Cli::parse_from(argv);
+    let cli = Cli::parse_from(cli_argv);
     enforce_worker_mode_restrictions(&cli.command)?;
     enforce_worker_session_dir_binding(&cli.command)?;
     let json = cli.json || cli.json_pretty;
@@ -1388,38 +1388,38 @@ fn run() -> anyhow::Result<()> {
         Commands::Session { command } => match command {
             SessionCommands::Show { session } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let session = load_session(&SessionLocator::new(resolved.session_dir.clone()))?;
+                let session = load_session(&SessionLocator::new(resolved.session_dir))?;
                 write_result(json, json_pretty, &session)?;
             }
             SessionCommands::Reports { command } => match command {
-                ReportsCommands::Open(args) => {
+                ReportsCommands::Open(report_args) => {
                     handle_reports(
                         use_env,
                         json,
                         json_pretty,
                         now.date(),
                         ReportsView::Open,
-                        args,
+                        report_args,
                     )?;
                 }
-                ReportsCommands::Closed(args) => {
+                ReportsCommands::Closed(report_args) => {
                     handle_reports(
                         use_env,
                         json,
                         json_pretty,
                         now.date(),
                         ReportsView::Closed,
-                        args,
+                        report_args,
                     )?;
                 }
-                ReportsCommands::InProgress(args) => {
+                ReportsCommands::InProgress(report_args) => {
                     handle_reports(
                         use_env,
                         json,
                         json_pretty,
                         now.date(),
                         ReportsView::InProgress,
-                        args,
+                        report_args,
                     )?;
                 }
             },
@@ -1567,7 +1567,7 @@ fn run() -> anyhow::Result<()> {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
 
                 let res = spawn_child_reviewers(SpawnChildReviewersParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     target_ref,
                     session_id,
                     parent_reviewer_id,
@@ -1603,7 +1603,7 @@ fn run() -> anyhow::Result<()> {
                 };
 
                 let result = close_child_reviews(CloseChildReviewsParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     parent_reviewer_id,
                     session_id,
                     target_ref,
@@ -1634,7 +1634,7 @@ fn run() -> anyhow::Result<()> {
                     phase.map(Some)
                 };
                 let params = UpdateReviewParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     status,
@@ -1835,7 +1835,7 @@ fn run() -> anyhow::Result<()> {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let content = parse_content(content_json, &content)?;
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id: reviewer_id.clone(),
                     session_id,
                     role: NoteRole::Reviewer,
@@ -1907,7 +1907,7 @@ fn run() -> anyhow::Result<()> {
                     None => id::random_id8()?,
                 };
                 append_note(AppendNoteParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     reviewer_id,
                     session_id,
                     role: NoteRole::Applicator,
@@ -2099,7 +2099,7 @@ fn run() -> anyhow::Result<()> {
                 validate_worker_budget(worker_budget)?;
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let (plan, _) = fullcycle_plan::build_plan(&BuildParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     target_ref,
                     requested_session_id: session_id,
                     worker_budget_override: worker_budget,
@@ -2119,7 +2119,7 @@ fn run() -> anyhow::Result<()> {
                 validate_worker_budget(worker_budget)?;
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
                 let (plan, _) = fullcycle_plan::build_plan(&BuildParams {
-                    session: SessionLocator::new(resolved.session_dir.clone()),
+                    session: SessionLocator::new(resolved.session_dir),
                     target_ref,
                     requested_session_id: session_id,
                     worker_budget_override: worker_budget,
@@ -2131,8 +2131,7 @@ fn run() -> anyhow::Result<()> {
             }
             FullcycleCommands::State { session } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let out =
-                    fullcycle_plan::load_state(&SessionLocator::new(resolved.session_dir.clone()))?;
+                let out = fullcycle_plan::load_state(&SessionLocator::new(resolved.session_dir))?;
                 write_result(json, json_pretty, &out)?;
             }
             FullcycleCommands::Checkpoint {
@@ -2145,7 +2144,7 @@ fn run() -> anyhow::Result<()> {
             } => {
                 validate_worker_budget(worker_budget)?;
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let session_locator = SessionLocator::new(resolved.session_dir.clone());
+                let session_locator = SessionLocator::new(resolved.session_dir);
                 let lock_owner = match lock_owner {
                     Some(owner) => owner,
                     None => id::random_id8()?,
@@ -2731,10 +2730,10 @@ fn is_known_global_flag(candidate: &str) -> bool {
     )
 }
 
-fn normalize_argv_for_compat() -> anyhow::Result<(Vec<String>, Option<String>)> {
+fn normalize_argv_for_compat() -> (Vec<String>, Option<String>) {
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        return Ok((args, None));
+        return (args, None);
     }
     let mut command_index: Option<usize> = None;
     for (index, arg) in args.iter().enumerate().skip(1) {
@@ -2745,33 +2744,36 @@ fn normalize_argv_for_compat() -> anyhow::Result<(Vec<String>, Option<String>)> 
             continue;
         }
         if arg.starts_with('-') {
-            return Ok((args, None));
+            return (args, None);
         }
         command_index = Some(index);
         break;
     }
     let Some(first_index) = command_index else {
-        return Ok((args, None));
+        return (args, None);
     };
     let Some(first) = args.get(first_index).cloned() else {
-        return Ok((args, None));
+        return (args, None);
     };
     if first.split_whitespace().count() == 2 && first.starts_with("protocol ") {
         let parts = first.split_whitespace().collect::<Vec<_>>();
-        if parts.len() == 2 && is_known_protocol_subcommand(parts[1]) {
+        if let Some(subcommand) = parts
+            .get(1)
+            .copied()
+            .filter(|name| is_known_protocol_subcommand(name))
+        {
             args.remove(first_index);
             args.insert(first_index, "protocol".to_string());
-            args.insert(first_index + 1, parts[1].to_string());
-            return Ok((
+            args.insert(first_index + 1, subcommand.to_string());
+            return (
                 args,
                 Some(format!(
-                    "compat: interpreted single-token subcommand as `mpcr protocol {}`",
-                    parts[1]
+                    "compat: interpreted single-token subcommand as `mpcr protocol {subcommand}`"
                 )),
-            ));
+            );
         }
     }
-    Ok((args, None))
+    (args, None)
 }
 
 fn validate_worker_budget(worker_budget: Option<u8>) -> anyhow::Result<()> {
@@ -2874,7 +2876,7 @@ fn handle_reports(
     args: ReportsArgs,
 ) -> anyhow::Result<()> {
     let resolved = resolve_session_input(use_env, &args.session, default_date)?;
-    let session = SessionLocator::new(resolved.session_dir.clone());
+    let session = SessionLocator::new(resolved.session_dir);
 
     if session.session_dir().exists() && !session.session_dir().is_dir() {
         return Err(anyhow::anyhow!(

@@ -1697,15 +1697,21 @@ pub fn canonicalize_report_markdown(markdown: &str) -> anyhow::Result<String> {
 
             let mut rebuilt = String::new();
             if start_content >= 2 {
-                rebuilt.push_str(&lines[..(start_content - 1)].join("\n"));
+                let prefix = lines
+                    .get(..(start_content - 1))
+                    .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block prefix bounds"))?;
+                rebuilt.push_str(&prefix.join("\n"));
                 rebuilt.push('\n');
             }
             rebuilt.push_str("```toml\n");
             rebuilt.push_str(toml_body.trim_end());
             rebuilt.push_str("\n```");
             if end_fence + 1 < lines.len() {
+                let suffix = lines
+                    .get((end_fence + 1)..)
+                    .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block suffix bounds"))?;
                 rebuilt.push('\n');
-                rebuilt.push_str(&lines[(end_fence + 1)..].join("\n"));
+                rebuilt.push_str(&suffix.join("\n"));
             }
             if markdown.ends_with('\n') && !rebuilt.ends_with('\n') {
                 rebuilt.push('\n');

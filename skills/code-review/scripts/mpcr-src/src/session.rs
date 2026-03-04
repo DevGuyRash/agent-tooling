@@ -4885,7 +4885,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     // Step 2: write/move report file (still under the lock).
     match &params.report_input {
         FinalizeReportInput::Markdown(_) => {
-            write_markdown_report_file(&report_path, report_markdown.clone())?;
+            write_markdown_report_file(&report_path, report_markdown)?;
             report_path_created = true;
         }
         FinalizeReportInput::File(source_path) => {
@@ -5137,7 +5137,7 @@ pub struct UpsertSessionExtraJsonParams {
 /// Upsert a top-level `SessionFile.extra` JSON field in a lock-protected write.
 ///
 /// # Errors
-/// Returns an error if lock_owner is invalid, session cannot be read/written, or lock fails.
+/// Returns an error if `lock_owner` is invalid, session cannot be read/written, or lock fails.
 pub fn upsert_session_extra_json(params: &UpsertSessionExtraJsonParams) -> anyhow::Result<()> {
     validate_id8(&params.lock_owner, "lock_owner")?;
     if params.key.trim().is_empty() {

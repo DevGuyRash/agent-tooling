@@ -252,22 +252,23 @@ fn telemetry_from_report(
     session_locator: &SessionLocator,
     session: &crate::session::SessionFile,
     entry: &ReviewEntry,
-) -> anyhow::Result<Option<ParentReportTelemetry>> {
-    let Some(report_file) = entry.report_file.as_deref() else {
-        return Ok(None);
-    };
+) -> Option<ParentReportTelemetry> {
+    let report_file = entry.report_file.as_deref()?;
     let report = std::fs::read_to_string(report_path(
         session_locator,
         &session.repo_root,
         report_file,
     ))
     .ok();
-    let Some(report) = report else {
-        return Ok(None);
-    };
-    Ok(extract_parent_report_telemetry(&report).ok())
+    let report = report?;
+    extract_parent_report_telemetry(&report).ok()
 }
 
+/// Build the next deterministic full-cycle plan and persisted state snapshot.
+///
+/// # Errors
+/// Returns an error if the session cannot be loaded or parent lineage cannot be resolved.
+#[allow(clippy::too_many_lines)]
 pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, FullcycleState)> {
     let session = load_session(&params.session)?;
     let parents = find_latest_parent(
@@ -295,17 +296,12 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
         None
     };
 
-    let latest_telemetry = latest_finished
-        .map(|entry| telemetry_from_report(&params.session, &session, entry))
-        .transpose()?
-        .flatten();
-    let prev_telemetry = prev_finished
-        .map(|entry| telemetry_from_report(&params.session, &session, entry))
-        .transpose()?
-        .flatten();
+    let latest_telemetry =
+        latest_finished.and_then(|entry| telemetry_from_report(&params.session, &session, entry));
+    let prev_telemetry =
+        prev_finished.and_then(|entry| telemetry_from_report(&params.session, &session, entry));
 
     let mut latest_fingerprints = BTreeSet::new();
-    let mut previous_fingerprints = BTreeSet::new();
     let mut latest_actionable_fingerprints = BTreeSet::new();
     let mut previous_actionable_fingerprints = BTreeSet::new();
     let mut stale_actionable = 0usize;
@@ -332,7 +328,6 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
     if let Some(ref telemetry) = prev_telemetry {
         for finding in &telemetry.merged_findings {
             let fp = normalized_fingerprint(&finding.severity, &finding.anchor, &finding.claim);
-            previous_fingerprints.insert(fp.clone());
             if finding.is_actionable {
                 previous_actionable_fingerprints.insert(fp);
             }
@@ -381,25 +376,26 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
     };
 
     let ceiling = worker_ceiling();
-    let recommended_workers = if let Some(override_budget) = params.worker_budget_override {
-        override_budget.min(ceiling).max(4)
-    } else if child_error_count == 0
-        && retry_count == 0
-        && continue_required
-        && cycle_index >= 2
-        && ceiling >= 8
-    {
-        8
-    } else if child_error_count == 0
-        && retry_count == 0
-        && continue_required
-        && cycle_index >= 1
-        && ceiling >= 6
-    {
-        6
-    } else {
-        4
-    };
+    let recommended_workers = params.worker_budget_override.map_or(
+        if child_error_count == 0
+            && retry_count == 0
+            && continue_required
+            && cycle_index >= 2
+            && ceiling >= 8
+        {
+            8
+        } else if child_error_count == 0
+            && retry_count == 0
+            && continue_required
+            && cycle_index >= 1
+            && ceiling >= 6
+        {
+            6
+        } else {
+            4
+        },
+        |override_budget| override_budget.min(ceiling).max(4),
+    );
     let probe_stage = if recommended_workers >= 8 {
         "probe_8"
     } else if recommended_workers >= 6 {
@@ -521,10 +517,18 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
     Ok((plan, state))
 }
 
+/// Serialize a [`FullcycleState`] into JSON.
+///
+/// # Errors
+/// Returns an error if the state cannot be serialized into JSON.
 pub fn state_to_json(state: &FullcycleState) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(state)?)
 }
 
+/// Persist full-cycle state into session `extra` metadata.
+///
+/// # Errors
+/// Returns an error if session metadata cannot be updated or serialized.
 pub fn persist_state(
     session: SessionLocator,
     lock_owner: String,
@@ -538,11 +542,16 @@ pub fn persist_state(
     })
 }
 
+/// Load full-cycle state payload from session `extra` metadata.
+///
+/// # Errors
+/// Returns an error if the session artifact cannot be loaded.
 pub fn load_state(session: &SessionLocator) -> anyhow::Result<Option<Value>> {
     let session_data = load_session(session)?;
     Ok(session_data.extra.get(FULLCYCLE_STATE_KEY).cloned())
 }
 
+#[must_use]
 pub fn default_checkpoint_payload(state: &FullcycleState) -> Value {
     json!(state)
 }
