@@ -1095,6 +1095,43 @@ fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow:
 }
 
 #[test]
+fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--clear-session-day",
+        ])
+        .env("MPCR_REVIEWER_ID", "nothex")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .output()?;
+    ensure!(!output.status.success(), "register should fail for invalid env reviewer id");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run before env-backed id validation"
+    );
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_rejects_cleanup_flags_for_child_registration() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();

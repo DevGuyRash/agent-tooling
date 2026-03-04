@@ -1472,6 +1472,17 @@ fn run() -> anyhow::Result<()> {
             } => {
                 let target_ref_for_env = target_ref.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
+
+                // When --parent-id is set (child registration), ignore MPCR_REVIEWER_ID from env
+                // to prevent accidentally reusing the parent's identity. A child should either
+                // provide an explicit --reviewer-id or let mpcr generate a new one.
+                let reviewer_id = if parent_id.is_some() {
+                    reviewer_id // Ignore env fallback for children
+                } else {
+                    reviewer_id.or_else(|| opt_env_string(use_env, "MPCR_REVIEWER_ID"))
+                };
+                let session_id = session_id.or_else(|| opt_env_string(use_env, "MPCR_SESSION_ID"));
+
                 if clear_session_day || clear_all_session_days {
                     if let Some(reviewer_id) = reviewer_id.as_deref() {
                         validate_id8_arg(reviewer_id, "reviewer_id")?;
@@ -1494,15 +1505,6 @@ fn run() -> anyhow::Result<()> {
                 let repo_root_for_env = resolved.repo_root.to_string_lossy().to_string();
                 let date_for_env = resolved.session_date.to_string();
                 let session = SessionLocator::new(resolved.session_dir.clone());
-
-                // When --parent-id is set (child registration), ignore MPCR_REVIEWER_ID from env
-                // to prevent accidentally reusing the parent's identity. A child should either
-                // provide an explicit --reviewer-id or let mpcr generate a new one.
-                let reviewer_id = if parent_id.is_some() {
-                    reviewer_id // Ignore env fallback for children
-                } else {
-                    reviewer_id.or_else(|| opt_env_string(use_env, "MPCR_REVIEWER_ID"))
-                };
 
                 let res = register_reviewer(RegisterReviewerParams {
                     repo_root: resolved.repo_root,
