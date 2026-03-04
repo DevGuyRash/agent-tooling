@@ -146,6 +146,7 @@ When you are asked to “do Git work” in a repo, do this first:
 1. **Detect repo context**
    - default branch name (prefer `origin/HEAD`)
    - current branch, dirty working tree, remote URL
+   - current-branch PR context via `gh pr view --json number,title,state,baseRefName,headRefName,url` when `gh` is available and the branch already has a PR; do not infer unsupported `gh pr status --json` fields
    - existing workflow enforcement (PR template, CI, branch protections)
 2. **Choose the correct playbook**
    - start work → Branching playbook
@@ -157,6 +158,20 @@ When you are asked to “do Git work” in a repo, do this first:
 Detailed checklists live in:
 
 - [references/CHECKLISTS.md](references/CHECKLISTS.md)
+
+Recommended repo-context probe order:
+
+```bash
+git symbolic-ref --short refs/remotes/origin/HEAD
+git rev-parse --abbrev-ref HEAD
+git status --short
+git remote get-url origin
+# If GitHub CLI is available and the current branch already has a PR:
+gh pr view --json number,title,state,baseRefName,headRefName,url
+```
+
+If `gh pr view` reports that no pull request exists for the current branch,
+continue without PR metadata and move to the relevant playbook.
 
 Minimal deterministic command path (progressive-disclosure entrypoint):
 
