@@ -98,7 +98,7 @@ BODY_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --body)
-      require_opt_value_present "--body" "${2:-}"
+      require_opt_value "--body" "${2:-}"
       BODY="${2:-}"
       shift 2
       ;;

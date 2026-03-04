@@ -1224,6 +1224,22 @@ class PrReplyScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("missing reply text; pass --body or --body-file", proc.stderr)
 
+    def test_pr_reply_rejects_option_token_as_body_value(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--body",
+                "--repo=acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' requires a value", proc.stderr)
+
     def test_pr_reply_normalizes_literal_newline_sequences_in_body(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
