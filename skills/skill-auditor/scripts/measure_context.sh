@@ -91,6 +91,15 @@ if [ ! -d "$SKILL_DIR" ]; then
     exit 1
 fi
 
+case "$CLI_MODE" in
+    help|run)
+        ;;
+    *)
+        echo "error: invalid --cli-mode: $CLI_MODE (expected: help|run)"
+        exit 1
+        ;;
+esac
+
 echo "═══ Context Measurement: $(basename "$SKILL_DIR") ═══"
 echo ""
 
@@ -148,15 +157,6 @@ if [ -n "$CLI_BIN" ]; then
         echo "  ⚠ CLI binary not executable: $CLI_BIN"
         echo ""
     else
-        case "$CLI_MODE" in
-            help|run)
-                ;;
-            *)
-                echo "error: invalid --cli-mode: $CLI_MODE (expected: help|run)"
-                exit 1
-                ;;
-        esac
-
         echo "── 2. CLI Protocol Outputs ──"
         echo ""
         printf "  %-50s %6s %8s %8s\n" "Command" "Lines" "Chars" "~Tokens"
