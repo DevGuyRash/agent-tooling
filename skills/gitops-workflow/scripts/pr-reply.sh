@@ -43,7 +43,7 @@ require_opt_value_present() {
 
 is_control_token() {
   case "${1:-}" in
-    -h|--help|--body|--body-file|--repo|--body=*|--body-file=*|--repo=*)
+    -h|--help|--body|--body-file|--repo|--repo=*)
       return 0
       ;;
     *)
@@ -73,7 +73,7 @@ Options:
 Notes:
   - Text-mode inputs normalize literal '\n' into real newlines.
   - Use --body-file when text contains shell metacharacters.
-  - To disambiguate option-like reply text with explicit mode, use --body=<text>.
+  - Legacy positional input takes precedence for first-token option-like text.
 USAGE
 }
 
@@ -110,12 +110,16 @@ fi
 shift 2 || true
 
 [[ -n "$PR_NUMBER" ]] || die "missing <pr_number>"
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || die "invalid <pr_number>: must be numeric"
 [[ -n "$COMMENT_ID" ]] || die "missing <comment_id>"
+[[ "$COMMENT_ID" =~ ^[0-9]+$ ]] || die "invalid <comment_id>: must be numeric"
 
 REPO=""
 BODY=""
 BODY_FILE=""
 POSITIONAL_BODY=""
+BODY_VALUE_SEEN=0
+BODY_FILE_VALUE_SEEN=0
 
 if [[ $# -gt 0 ]]; then
   case "${1:-}" in
@@ -123,22 +127,20 @@ if [[ $# -gt 0 ]]; then
       POSITIONAL_BODY="${1:-}"
       shift
       ;;
-    --body=*)
-      BODY="${1#--body=}"
-      require_opt_value_present "--body" "$BODY"
-      shift
+    --body=)
+      die "option '--body' requires a value"
       ;;
-    --body-file=*)
-      BODY_FILE="${1#--body-file=}"
-      require_opt_value "--body-file" "$BODY_FILE"
-      shift
+    --body-file=)
+      die "option '--body-file' requires a value"
       ;;
     --body|--body-file)
       if [[ -n "${2:-}" ]] && ! is_control_token "${2:-}"; then
         if [[ "${1:-}" == "--body" ]]; then
           BODY="${2:-}"
+          BODY_VALUE_SEEN=1
         else
           BODY_FILE="${2:-}"
+          BODY_FILE_VALUE_SEEN=1
         fi
         shift 2
       else
@@ -170,27 +172,43 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --body=*)
+      if [[ "$BODY_VALUE_SEEN" -eq 1 ]]; then
+        die "option '--body' can only be provided once"
+      fi
       BODY="${1#--body=}"
       require_opt_value_present "--body" "$BODY"
+      BODY_VALUE_SEEN=1
       shift
       ;;
     --body)
+      if [[ "$BODY_VALUE_SEEN" -eq 1 ]]; then
+        die "option '--body' can only be provided once"
+      fi
       if [[ -z "${2:-}" ]] || is_control_token "${2:-}"; then
         die "option '--body' requires a value"
       fi
       BODY="${2:-}"
+      BODY_VALUE_SEEN=1
       shift 2
       ;;
     --body-file=*)
+      if [[ "$BODY_FILE_VALUE_SEEN" -eq 1 ]]; then
+        die "option '--body-file' can only be provided once"
+      fi
       BODY_FILE="${1#--body-file=}"
       require_opt_value "--body-file" "$BODY_FILE"
+      BODY_FILE_VALUE_SEEN=1
       shift
       ;;
     --body-file)
+      if [[ "$BODY_FILE_VALUE_SEEN" -eq 1 ]]; then
+        die "option '--body-file' can only be provided once"
+      fi
       if [[ -z "${2:-}" ]] || is_control_token "${2:-}"; then
         die "option '--body-file' requires a value"
       fi
       BODY_FILE="${2:-}"
+      BODY_FILE_VALUE_SEEN=1
       shift 2
       ;;
     --repo=*)
@@ -243,7 +261,7 @@ ENDPOINT="/repos/${OWNER}/${NAME}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/repl
 if [[ -n "$BODY_FILE" ]]; then
   gh api -X POST "$ENDPOINT" -F "body=@$BODY_FILE" >/dev/null
 else
-  gh api -X POST "$ENDPOINT" -f body="$REPLY_TEXT" >/dev/null
+  gh api -X POST "$ENDPOINT" --raw-field "body=$REPLY_TEXT" >/dev/null
 fi
 
 echo "✅ Replied to comment $COMMENT_ID on PR #$PR_NUMBER in $REPO"

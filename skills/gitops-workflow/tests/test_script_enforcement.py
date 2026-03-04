@@ -1339,6 +1339,42 @@ class PrReplyScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("missing <comment_id>", proc.stderr)
 
+    def test_pr_reply_non_numeric_pr_number_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "eight",
+                "12345",
+                "--body",
+                "ok",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid <pr_number>: must be numeric", proc.stderr)
+
+    def test_pr_reply_non_numeric_comment_id_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "abc",
+                "--body",
+                "ok",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid <comment_id>: must be numeric", proc.stderr)
+
     def test_pr_reply_help_flag_exits_zero(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1421,7 +1457,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "fi\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1473,7 +1509,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "fi\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1523,7 +1559,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1578,7 +1614,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1633,7 +1669,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1687,7 +1723,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1728,6 +1764,60 @@ class PrReplyScriptTests(unittest.TestCase):
             body = body_capture.read_text(encoding="utf-8")
             self.assertEqual(body, "--body")
 
+    def test_pr_reply_positional_body_preserves_body_equals_literal_with_trailing_repo_flag(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=* ]]; then\n"
+                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "--body=literal",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "--body=literal")
+
     def test_pr_reply_positional_body_accepts_double_dash_prefix_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1741,7 +1831,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1795,7 +1885,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1849,7 +1939,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1903,7 +1993,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1942,7 +2032,7 @@ class PrReplyScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--help")
+            self.assertEqual(body, "--body=--help")
 
     def test_pr_reply_body_flag_accepts_body_file_literal_value(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1957,7 +2047,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1996,7 +2086,7 @@ class PrReplyScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--body-file")
+            self.assertEqual(body, "--body=--body-file")
 
     def test_pr_reply_body_file_preserves_markdown_with_backticks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2147,6 +2237,24 @@ class PrReplyScriptTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("option '--body' requires a value", proc.stderr)
+
+    def test_pr_reply_duplicate_body_option_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--body",
+                "one",
+                "--body",
+                "two",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' can only be provided once", proc.stderr)
 
 
 class PrMarkReadyScriptTests(unittest.TestCase):
