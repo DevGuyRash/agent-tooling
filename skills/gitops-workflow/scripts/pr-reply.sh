@@ -94,6 +94,7 @@ shift 2 || true
 REPO=""
 BODY=""
 BODY_FILE=""
+TMP_BODY_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -134,12 +135,20 @@ if [[ -z "$BODY" && -z "$BODY_FILE" ]]; then
   die "missing reply text; pass --body or --body-file"
 fi
 
-REPLY_TEXT=""
-if [[ -n "$BODY_FILE" ]]; then
-  [[ -f "$BODY_FILE" ]] || die "body file not found: $BODY_FILE"
-else
-  REPLY_TEXT="${BODY//\\n/$'\n'}"
+cleanup() {
+  if [[ -n "$TMP_BODY_FILE" && -f "$TMP_BODY_FILE" ]]; then
+    rm -f "$TMP_BODY_FILE"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -n "$BODY" ]]; then
+  TMP_BODY_FILE="$(mktemp -t pr-reply.XXXXXX.md)"
+  BODY_NORMALIZED="${BODY//\\n/$'\n'}"
+  printf '%s' "$BODY_NORMALIZED" > "$TMP_BODY_FILE"
+  BODY_FILE="$TMP_BODY_FILE"
 fi
+[[ -f "$BODY_FILE" ]] || die "body file not found: $BODY_FILE"
 
 require_cmd gh
 
@@ -152,10 +161,6 @@ IFS=$'\t' read -r OWNER NAME <<< "$(parse_repo "$REPO")"
 
 ENDPOINT="/repos/${OWNER}/${NAME}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies"
 
-if [[ -n "$BODY_FILE" ]]; then
-  gh api -X POST "$ENDPOINT" -F "body=@$BODY_FILE" >/dev/null
-else
-  gh api -X POST "$ENDPOINT" --raw-field "body=$REPLY_TEXT" >/dev/null
-fi
+gh api -X POST "$ENDPOINT" -F "body=@$BODY_FILE" >/dev/null
 
 echo "✅ Replied to comment $COMMENT_ID on PR #$PR_NUMBER in $REPO"
