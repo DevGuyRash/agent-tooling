@@ -29,6 +29,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{Date, Month, OffsetDateTime};
 
+fn validate_id8_arg(id8: &str, label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(id8.len() == 8, "{label} must be 8 ASCII alphanumeric characters");
+    anyhow::ensure!(
+        id8.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{label} must be 8 ASCII alphanumeric characters"
+    );
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(
     name = "mpcr",
@@ -1460,6 +1469,20 @@ fn run() -> anyhow::Result<()> {
             } => {
                 let target_ref_for_env = target_ref.clone();
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
+                if clear_session_day || clear_all_session_days {
+                    if let Some(reviewer_id) = reviewer_id.as_deref() {
+                        validate_id8_arg(reviewer_id, "reviewer_id")?;
+                    }
+                    if let Some(session_id) = session_id.as_deref() {
+                        validate_id8_arg(session_id, "session_id")?;
+                    }
+                    if let Some(parent_id) = parent_id.as_deref() {
+                        validate_id8_arg(parent_id, "parent_id")?;
+                        anyhow::bail!(
+                            "cleanup flags are not allowed with --parent-id; register the child without cleanup"
+                        );
+                    }
+                }
                 if clear_session_day {
                     clear_session_day_dir(&resolved.session_dir)?;
                 } else if clear_all_session_days {

@@ -1061,6 +1061,70 @@ fn reviewer_register_clear_all_session_days_removes_day_dirs_only() -> anyhow::R
 }
 
 #[test]
+fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "nothex",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
+    ensure!(stale_file.exists(), "cleanup should not run before id validation");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_rejects_cleanup_flags_for_child_registration() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(stderr.contains("cleanup flags are not allowed with --parent-id"));
+    ensure!(stale_file.exists(), "cleanup should not run for child registration");
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_cleanup_flags_are_mutually_exclusive() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();

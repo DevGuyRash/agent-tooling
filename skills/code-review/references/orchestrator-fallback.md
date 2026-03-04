@@ -172,7 +172,7 @@ WHEN classifying change size, use the largest matching class from `git diff --st
 |-------|-----------|---------------|-----------------|---------|
 | Trivial | <= 50 | <= 3 | 1 (single-agent) | 1-2 |
 | Small | 51-500 | <= 10 | 1 (single-agent) | 2-4 |
-| Medium | 501-2000 | <= 30 | 3-6 (multi-agent) | 4-8 |
+| Medium | 501-2000 | <= 30 | 4 baseline; probe 6 (multi-agent) | 4-8 |
 | Large | > 2000 | > 30 | 4 baseline; probe 6/8 (multi-agent) | 6+ |
 
 This replaces any ambiguous use of "Medium or Large changes" - apply the table.
