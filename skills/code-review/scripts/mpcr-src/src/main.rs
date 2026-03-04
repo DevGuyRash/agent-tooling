@@ -30,7 +30,10 @@ use std::path::{Path, PathBuf};
 use time::{Date, Month, OffsetDateTime};
 
 fn validate_id8_arg(id8: &str, label: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(id8.len() == 8, "{label} must be 8 ASCII alphanumeric characters");
+    anyhow::ensure!(
+        id8.len() == 8,
+        "{label} must be 8 ASCII alphanumeric characters"
+    );
     anyhow::ensure!(
         id8.chars().all(|c| c.is_ascii_alphanumeric()),
         "{label} must be 8 ASCII alphanumeric characters"

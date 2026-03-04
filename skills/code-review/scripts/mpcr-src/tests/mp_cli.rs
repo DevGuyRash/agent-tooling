@@ -1087,7 +1087,10 @@ fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow:
     ])?;
 
     ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
-    ensure!(stale_file.exists(), "cleanup should not run before id validation");
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run before id validation"
+    );
     Ok(())
 }
 
@@ -1120,7 +1123,10 @@ fn reviewer_register_rejects_cleanup_flags_for_child_registration() -> anyhow::R
     ])?;
 
     ensure!(stderr.contains("cleanup flags are not allowed with --parent-id"));
-    ensure!(stale_file.exists(), "cleanup should not run for child registration");
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run for child registration"
+    );
     Ok(())
 }
 
