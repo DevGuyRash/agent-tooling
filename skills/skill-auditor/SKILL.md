@@ -188,6 +188,10 @@ Phase 3 requires a test project appropriate to the skill's domain:
 Helper scripts accelerate deterministic checks. These are optional — you can
 perform equivalent checks manually.
 
+Path placeholders used below:
+- `<skills-file-root>`: The directory containing this `SKILL.md`.
+- `<skill-directory>`: The target skill directory being audited.
+
 | Script | Purpose | Phase |
 |--------|---------|-------|
 | `<skills-file-root>/scripts/surface_check.sh <skill-directory>` | CRLF, permissions, shebangs, structure | 1 |

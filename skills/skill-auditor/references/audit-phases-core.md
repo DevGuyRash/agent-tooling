@@ -130,7 +130,8 @@ mode. An agent reads "Architecture" in the docs, tries
    This is the highest-value step in the entire audit. Do it exhaustively.
 
    ```bash
-   # Pattern: try documented name, then try plausible alternatives
+   # Example pattern (pseudocode): substitute your real tool/subcommand names.
+   # Do not run this block literally as `tool ...`.
    for name in documented-name1 documented-name2 variant1 variant2; do
        result=$(tool subcommand --param "$name" 2>&1 | head -1)
        echo "$name → $result"
@@ -138,15 +139,18 @@ mode. An agent reads "Architecture" in the docs, tries
    ```
 
 3. **Test every documented command.** You SHALL go through SKILL.md and all reference
-   docs. For every command shown (including examples, quick-reference blocks,
-   and inline code), execute it (substituting real IDs where needed). Record:
+   docs. For every *runnable* command shown (including quick-reference blocks
+   and inline code), execute it (substituting real IDs where needed).
+   IF a command uses generic placeholders (for example `tool ...`),
+   THEN treat it as a pattern unless it is concretized for the skill under
+   audit. Record:
    - Does it work?
    - Does the output match what the docs describe?
    - How large is the output (lines, chars)?
 
 4. **Run staleness drift checks.** You SHALL execute:
    ```bash
-   <skills-file-root>/scripts/staleness_check.sh <skill-dir> [--cli <bin>] [--format text|json]
+   <skills-file-root>/scripts/staleness_check.sh <skill-directory> [--cli <bin>] [--format text|json]
    ```
    Then inspect script results and surrounding prose claims to determine:
    - Which examples are still runnable as documented
@@ -241,7 +245,9 @@ them as findings.
 ## Finding accumulation
 
 Throughout all phases, write findings to a running report file in your
-audit workspace as you discover them. Use this format:
+audit workspace as you discover them. You SHALL use the canonical field schema
+from `<skills-file-root>/references/report-template.md` ("Phase 1 Findings" example). You MAY use
+this shorthand format while collecting findings:
 
 ```markdown
 ### [ID]: [Title]

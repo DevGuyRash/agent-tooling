@@ -89,6 +89,9 @@ critical issues are, and the final verdict. Write this LAST.>
 
 ### Phase 1 Findings
 
+<List any findings from this phase using the standard format:>
+
+This section defines the canonical finding field schema for the entire report.
 #### <ID>: <Title>
 
 - **Severity:** BLOCKER | MAJOR | MINOR | NIT
