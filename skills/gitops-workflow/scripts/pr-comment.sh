@@ -28,14 +28,6 @@ require_opt_value() {
   fi
 }
 
-require_opt_value_present() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
-
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -67,7 +59,7 @@ BODY_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --body)
-      require_opt_value_present "--body" "${2:-}"
+      require_opt_value "--body" "${2:-}"
       BODY="${2:-}"
       shift 2
       ;;

@@ -140,21 +140,6 @@ Literal `\n` is normalized automatically in `pr-reply.sh`, so this is safe:
 bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "Line 1\nLine 2"
 ```
 
-Option-like literals are valid text too:
-```bash
-bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "--help"
-```
-
-If you need explicit `--body` mode and the text starts with an option token, use `=`:
-```bash
-bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body=--help --repo <owner/repo>
-```
-
-Backward-compatible positional form remains available:
-```bash
-bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Reply text"
-```
-
 ## Deterministic governance
 
 Validate policy:

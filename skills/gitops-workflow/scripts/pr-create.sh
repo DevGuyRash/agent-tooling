@@ -37,7 +37,7 @@ LABELS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --title)
-      require_opt_value_present "--title" "${2:-}"
+      require_opt_value "--title" "${2:-}"
       TITLE="${2:-}"
       shift 2
       ;;

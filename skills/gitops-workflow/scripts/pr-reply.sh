@@ -4,7 +4,6 @@ set -euo pipefail
 # pr-reply.sh - Reply to a GitHub PR review comment (inline) by comment ID.
 #
 # Usage:
-#   bash scripts/pr-reply.sh <pr_number> <comment_id> "<reply text>" [--repo owner/repo]
 #   bash scripts/pr-reply.sh <pr_number> <comment_id> --body "<text>" [--repo owner/repo]
 #   bash scripts/pr-reply.sh <pr_number> <comment_id> --body-file <path> [--repo owner/repo]
 #
@@ -14,7 +13,7 @@ set -euo pipefail
 # Notes:
 # - This replies to a *review comment* (inline diff comment), not a general issue comment.
 # - If you don't know the comment id, reply in the GitHub UI instead.
-# - Literal '\n' sequences in text-mode inputs are normalized to real newlines.
+# - Literal '\n' sequences in --body text are normalized to real newlines.
 
 die() {
   echo "Error: $*" >&2
@@ -41,39 +40,21 @@ require_opt_value_present() {
   fi
 }
 
-is_control_token() {
-  case "${1:-}" in
-    -h|--help|--body|--body-file|--repo|--repo=*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/pr-reply.sh <pr_number> <comment_id> "<reply text>" [--repo owner/repo]
   bash scripts/pr-reply.sh <pr_number> <comment_id> --body "<text>" [--repo owner/repo]
   bash scripts/pr-reply.sh <pr_number> <comment_id> --body-file <path> [--repo owner/repo]
 
 Arguments:
   <pr_number>          Pull request number.
   <comment_id>         Pull request review comment ID.
-  <reply text>         Legacy positional reply text (kept for compatibility).
 
 Options:
-  --body <text>        Reply text (preferred for explicitness).
-  --body-file <path>   Path to reply body file (safest for complex markdown text).
+  --body <text>        Reply text.
+  --body-file <path>   Path to reply body file.
   --repo <owner/repo>  Optional repository override.
   -h, --help           Show help.
-
-Notes:
-  - Text-mode inputs normalize literal '\n' into real newlines.
-  - Use --body-file when text contains shell metacharacters.
-  - Legacy positional input takes precedence for first-token option-like text.
 USAGE
 }
 
@@ -98,15 +79,11 @@ parse_repo() {
 }
 
 PR_NUMBER="${1:-}"
-COMMENT_ID="${2:-}"
 if [[ "$PR_NUMBER" == "-h" || "$PR_NUMBER" == "--help" ]]; then
   print_help
   exit 0
 fi
-if [[ "$COMMENT_ID" == "-h" || "$COMMENT_ID" == "--help" ]]; then
-  print_help
-  exit 0
-fi
+COMMENT_ID="${2:-}"
 shift 2 || true
 
 [[ -n "$PR_NUMBER" ]] || die "missing <pr_number>"
@@ -117,109 +94,32 @@ shift 2 || true
 REPO=""
 BODY=""
 BODY_FILE=""
-POSITIONAL_BODY=""
-BODY_VALUE_SEEN=0
-BODY_FILE_VALUE_SEEN=0
-
-if [[ $# -gt 0 ]]; then
-  case "${1:-}" in
-    -h|--help)
-      POSITIONAL_BODY="${1:-}"
-      shift
-      ;;
-    --body=)
-      die "option '--body' requires a value"
-      ;;
-    --body-file=)
-      die "option '--body-file' requires a value"
-      ;;
-    --body|--body-file)
-      if [[ -n "${2:-}" ]] && ! is_control_token "${2:-}"; then
-        if [[ "${1:-}" == "--body" ]]; then
-          BODY="${2:-}"
-          BODY_VALUE_SEEN=1
-        else
-          BODY_FILE="${2:-}"
-          BODY_FILE_VALUE_SEEN=1
-        fi
-        shift 2
-      else
-        POSITIONAL_BODY="${1:-}"
-        shift
-      fi
-      ;;
-    --repo=*)
-      REPO="${1#--repo=}"
-      require_opt_value "--repo" "$REPO"
-      shift
-      ;;
-    --repo)
-      if [[ -n "${2:-}" && "${2:-}" != --* ]]; then
-        REPO="${2:-}"
-        shift 2
-      else
-        POSITIONAL_BODY="${1:-}"
-        shift
-      fi
-      ;;
-    *)
-      POSITIONAL_BODY="${1:-}"
-      shift
-      ;;
-  esac
-fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --body=*)
-      if [[ "$BODY_VALUE_SEEN" -eq 1 ]]; then
-        die "option '--body' can only be provided once"
-      fi
-      BODY="${1#--body=}"
-      require_opt_value_present "--body" "$BODY"
-      BODY_VALUE_SEEN=1
-      shift
-      ;;
     --body)
-      if [[ "$BODY_VALUE_SEEN" -eq 1 ]]; then
-        die "option '--body' can only be provided once"
-      fi
-      if [[ -z "${2:-}" ]] || is_control_token "${2:-}"; then
-        die "option '--body' requires a value"
-      fi
+      require_opt_value_present "--body" "${2:-}"
       BODY="${2:-}"
-      BODY_VALUE_SEEN=1
       shift 2
-      ;;
-    --body-file=*)
-      if [[ "$BODY_FILE_VALUE_SEEN" -eq 1 ]]; then
-        die "option '--body-file' can only be provided once"
-      fi
-      BODY_FILE="${1#--body-file=}"
-      require_opt_value "--body-file" "$BODY_FILE"
-      BODY_FILE_VALUE_SEEN=1
-      shift
       ;;
     --body-file)
-      if [[ "$BODY_FILE_VALUE_SEEN" -eq 1 ]]; then
-        die "option '--body-file' can only be provided once"
-      fi
-      if [[ -z "${2:-}" ]] || is_control_token "${2:-}"; then
-        die "option '--body-file' requires a value"
-      fi
+      require_opt_value "--body-file" "${2:-}"
       BODY_FILE="${2:-}"
-      BODY_FILE_VALUE_SEEN=1
       shift 2
-      ;;
-    --repo=*)
-      REPO="${1#--repo=}"
-      require_opt_value "--repo" "$REPO"
-      shift
       ;;
     --repo)
       require_opt_value "--repo" "${2:-}"
       REPO="${2:-}"
       shift 2
+      ;;
+    --repo=*)
+      REPO="${1#--repo=}"
+      require_opt_value "--repo" "$REPO"
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
       ;;
     *)
       die "unknown argument: $1"
@@ -227,24 +127,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BODY_SOURCE_COUNT=0
-[[ -n "$POSITIONAL_BODY" ]] && BODY_SOURCE_COUNT=$((BODY_SOURCE_COUNT + 1))
-[[ -n "$BODY" ]] && BODY_SOURCE_COUNT=$((BODY_SOURCE_COUNT + 1))
-[[ -n "$BODY_FILE" ]] && BODY_SOURCE_COUNT=$((BODY_SOURCE_COUNT + 1))
-if [[ "$BODY_SOURCE_COUNT" -gt 1 ]]; then
-  die "provide exactly one body source: positional <reply text>, --body, or --body-file"
+if [[ -n "$BODY" && -n "$BODY_FILE" ]]; then
+  die "use either --body or --body-file, not both"
 fi
-if [[ "$BODY_SOURCE_COUNT" -eq 0 ]]; then
-  die "missing reply text; provide positional <reply text>, --body, or --body-file"
+if [[ -z "$BODY" && -z "$BODY_FILE" ]]; then
+  die "missing reply text; pass --body or --body-file"
 fi
 
 REPLY_TEXT=""
 if [[ -n "$BODY_FILE" ]]; then
   [[ -f "$BODY_FILE" ]] || die "body file not found: $BODY_FILE"
-elif [[ -n "$BODY" ]]; then
-  REPLY_TEXT="${BODY//\\n/$'\n'}"
 else
-  REPLY_TEXT="${POSITIONAL_BODY//\\n/$'\n'}"
+  REPLY_TEXT="${BODY//\\n/$'\n'}"
 fi
 
 require_cmd gh

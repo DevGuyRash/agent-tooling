@@ -955,97 +955,6 @@ class DeterministicGeneratorScriptTests(unittest.TestCase):
             self.assertIn("- (none provided)", body)
             self.assertNotIn("#<issue-if-applicable>", body)
 
-    def test_pr_create_title_accepts_option_like_literal(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            repo = Path(temp_dir)
-            self._init_repo(repo)
-            run(["git", "checkout", "-b", "feat/title-literal"], cwd=repo)
-            (repo / "feature.txt").write_text("hello\n", encoding="utf-8")
-            run(["git", "add", "feature.txt"], cwd=repo)
-            run(["git", "commit", "-m", "feat: add literal title test"], cwd=repo)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-create.sh"),
-                    "--title",
-                    "--help",
-                    "--base",
-                    "main",
-                    "--head",
-                    "feat/title-literal",
-                ],
-                cwd=repo,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("PR body file created:", proc.stdout)
-
-
-class TextOptionValueBehaviorTests(unittest.TestCase):
-    def test_pr_update_body_body_accepts_option_like_literal(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-update-body.sh"),
-                "8",
-                "--body",
-                "--help",
-                "--repo",
-                "acme/widget",
-                "--dry-run",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        match = re.search(r"retained generated body file for reuse: (.+)", proc.stdout)
-        self.assertIsNotNone(match, proc.stdout)
-        body_path = Path(match.group(1).strip())
-        body = body_path.read_text(encoding="utf-8")
-        self.assertEqual(body, "--help\n")
-
-    def test_issue_create_body_accepts_option_like_literal(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "issue-create.sh"),
-                "--title",
-                "feat: option literal body",
-                "--body",
-                "--help",
-                "--repo",
-                "acme/widget",
-                "--dry-run",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        match = re.search(r"Issue body file prepared: (.+)", proc.stdout)
-        self.assertIsNotNone(match, proc.stdout)
-        body_path = Path(match.group(1).strip())
-        body = body_path.read_text(encoding="utf-8")
-        self.assertEqual(body, "--help\n")
-
-    def test_issue_create_title_accepts_option_like_literal(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "issue-create.sh"),
-                "--title",
-                "--help",
-                "--body",
-                "test body",
-                "--repo",
-                "acme/widget",
-                "--dry-run",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-
 
 class PrCommentScriptTests(unittest.TestCase):
     def test_pr_comment_normalizes_literal_newline_sequences(self):
@@ -1092,51 +1001,6 @@ class PrCommentScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
             self.assertIn("@codex review\n/gemini review\n\nFinal pass.\n", body)
-
-    def test_pr_comment_body_accepts_option_like_literal(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "body_file=''\n"
-                "for ((i=1; i<=$#; i++)); do\n"
-                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
-                "    next=$((i+1))\n"
-                "    body_file=\"${!next}\"\n"
-                "  fi\n"
-                "done\n"
-                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
-                "echo \"ok\"\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-comment.sh"),
-                    "7",
-                    "--body",
-                    "--help",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--help\n")
 
     def test_pr_comment_missing_body_value_fails_with_actionable_error(self):
         proc = run(
@@ -1238,52 +1102,6 @@ class PrRequestReviewScriptTests(unittest.TestCase):
             self.assertTrue(body.startswith("@codex review\n/gemini review\n"))
             self.assertIn("Final verification pass requested.\n", body)
 
-    def test_pr_request_review_note_accepts_option_like_literal(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "body_file=''\n"
-                "for ((i=1; i<=$#; i++)); do\n"
-                "  if [[ \"${!i}\" == \"--body-file\" ]]; then\n"
-                "    next=$((i+1))\n"
-                "    body_file=\"${!next}\"\n"
-                "  fi\n"
-                "done\n"
-                "cat \"$body_file\" > \"${BODY_CAPTURE}\"\n"
-                "echo \"ok\"\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-request-review.sh"),
-                    "8",
-                    "--note",
-                    "--help",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertTrue(body.startswith("@codex review\n/gemini review\n\n"))
-            self.assertTrue(body.endswith("--help\n"))
-
     def test_pr_request_review_missing_repo_value_fails_with_actionable_error(self):
         proc = run(
             [
@@ -1344,7 +1162,7 @@ class PrReplyScriptTests(unittest.TestCase):
             [
                 "bash",
                 str(SCRIPTS_DIR / "pr-reply.sh"),
-                "eight",
+                "x",
                 "12345",
                 "--body",
                 "ok",
@@ -1375,72 +1193,38 @@ class PrReplyScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("invalid <comment_id>: must be numeric", proc.stderr)
 
-    def test_pr_reply_help_flag_exits_zero(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
+    def test_pr_reply_rejects_positional_body(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "legacy body",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("unknown argument: legacy body", proc.stderr)
 
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "echo \"gh should not be invoked for --help\" >&2\n"
-                "exit 99\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+    def test_pr_reply_requires_body_source(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("missing reply text; pass --body or --body-file", proc.stderr)
 
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "--help",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("Usage:", proc.stdout)
-
-    def test_pr_reply_comment_id_help_flag_exits_zero(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "echo \"gh should not be invoked for --help\" >&2\n"
-                "exit 99\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "--help",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("Usage:", proc.stdout)
-
-    def test_pr_reply_trailing_help_literal_posts_reply(self):
+    def test_pr_reply_normalizes_literal_newline_sequences_in_body(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             fake_bin = temp_path / "bin"
@@ -1457,7 +1241,7 @@ class PrReplyScriptTests(unittest.TestCase):
                 "fi\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"--raw-field\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
                 "      if [[ \"$value\" == body=* ]]; then\n"
@@ -1465,112 +1249,6 @@ class PrReplyScriptTests(unittest.TestCase):
                 "      fi\n"
                 "    fi\n"
                 "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--help",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--help")
-
-    def test_pr_reply_normalizes_literal_newline_sequences(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "line one\\nline two",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "line one\nline two")
-
-    def test_pr_reply_supports_body_flag(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 0\n",
@@ -1601,527 +1279,35 @@ class PrReplyScriptTests(unittest.TestCase):
             body = body_capture.read_text(encoding="utf-8")
             self.assertEqual(body, "line one\nline two")
 
-    def test_pr_reply_body_flag_accepts_option_like_text(self):
+    def test_pr_reply_body_file_uses_file_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             fake_bin = temp_path / "bin"
             fake_bin.mkdir(parents=True, exist_ok=True)
             body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--body",
-                    "---",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "---")
-
-    def test_pr_reply_positional_body_accepts_option_like_text(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "---",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "---")
-
-    def test_pr_reply_positional_body_preserves_body_token_with_trailing_repo_flag(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--body",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--body")
-
-    def test_pr_reply_positional_body_preserves_body_equals_literal_with_trailing_repo_flag(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--body=literal",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--body=literal")
-
-    def test_pr_reply_positional_body_accepts_double_dash_prefix_text(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--note example",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--note example")
-
-    def test_pr_reply_positional_body_preserves_help_with_trailing_repo_flag(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--help",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--help")
-
-    def test_pr_reply_positional_body_preserves_repo_token_with_trailing_repo_flag(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--repo",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--repo")
-
-    def test_pr_reply_body_flag_accepts_help_literal_value(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--body=--help",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--body=--help")
-
-    def test_pr_reply_body_flag_accepts_body_file_literal_value(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-
-            fake_gh = fake_bin / "gh"
-            fake_gh.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"--raw-field\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 0\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
-
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["BODY_CAPTURE"] = str(body_capture)
-
-            proc = run(
-                [
-                    "bash",
-                    str(SCRIPTS_DIR / "pr-reply.sh"),
-                    "8",
-                    "12345",
-                    "--body=--body-file",
-                    "--repo",
-                    "acme/widget",
-                ],
-                cwd=ROOT,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            body = body_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "--body=--body-file")
-
-    def test_pr_reply_body_file_preserves_markdown_with_backticks(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_bin = temp_path / "bin"
-            fake_bin.mkdir(parents=True, exist_ok=True)
-            body_capture = temp_path / "reply_body.txt"
-            mode_capture = temp_path / "transport_mode.txt"
+            mode_capture = temp_path / "mode.txt"
             body_file = temp_path / "reply.md"
-            body_file.write_text("Changes are in `79dc0ea` (`subject`).\n\n", encoding="utf-8")
+            body_file.write_text("hello from file\n", encoding="utf-8")
 
             fake_gh = fake_bin / "gh"
             fake_gh.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" || \"${!i}\" == \"-F\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
                 "      printf '%s' \"${!i}\" > \"${MODE_CAPTURE}\"\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        body=\"${value#body=}\"\n"
-                "        if [[ \"$body\" == @* ]]; then\n"
-                "          cat \"${body#@}\" > \"${BODY_CAPTURE}\"\n"
-                "        else\n"
-                "          printf '%s' \"$body\" > \"${BODY_CAPTURE}\"\n"
-                "        fi\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
                 "      fi\n"
                 "    fi\n"
                 "  done\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"acme/widget\"\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 0\n",
@@ -2152,109 +1338,8 @@ class PrReplyScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
             mode = mode_capture.read_text(encoding="utf-8")
-            self.assertEqual(body, "Changes are in `79dc0ea` (`subject`).\n\n")
+            self.assertEqual(body, "hello from file\n")
             self.assertEqual(mode, "-F")
-
-    def test_pr_reply_rejects_conflicting_body_inputs(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "legacy body",
-                "--body",
-                "flag body",
-                "--repo",
-                "acme/widget",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("provide exactly one body source", proc.stderr)
-
-    def test_pr_reply_requires_body_input(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "--repo",
-                "acme/widget",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("missing reply text", proc.stderr)
-
-    def test_pr_reply_missing_body_file_reports_actionable_error(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "--body-file",
-                "/tmp/does-not-exist.md",
-                "--repo",
-                "acme/widget",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("body file not found", proc.stderr)
-
-    def test_pr_reply_missing_body_file_value_reports_actionable_error(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "--body-file=",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("option '--body-file' requires a value", proc.stderr)
-
-    def test_pr_reply_missing_body_value_reports_actionable_error(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "--body=",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("option '--body' requires a value", proc.stderr)
-
-    def test_pr_reply_duplicate_body_option_fails(self):
-        proc = run(
-            [
-                "bash",
-                str(SCRIPTS_DIR / "pr-reply.sh"),
-                "8",
-                "12345",
-                "--body",
-                "one",
-                "--body",
-                "two",
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("option '--body' can only be provided once", proc.stderr)
 
 
 class PrMarkReadyScriptTests(unittest.TestCase):

@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --body)
-      require_opt_value_present "--body" "${2:-}"
+      require_opt_value "--body" "${2:-}"
       BODY="${2:-}"
       shift 2
       ;;
