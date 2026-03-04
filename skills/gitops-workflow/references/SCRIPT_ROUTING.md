@@ -55,6 +55,7 @@ When bypassing, record:
 - Inline review reply:
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body-file <path> [--repo owner/repo]` (preferred)
   - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "<text>" [--repo owner/repo]`
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body=<text> [--repo owner/repo]` for literals that begin with `--`
   - Literal `\n` in `--body` text is normalized to real newlines.
 - Issue templates and creation:
   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`

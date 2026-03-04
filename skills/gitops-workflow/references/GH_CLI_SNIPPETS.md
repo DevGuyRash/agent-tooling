@@ -140,6 +140,11 @@ Literal `\n` is normalized automatically in `pr-reply.sh`, so this is safe:
 bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "Line 1\nLine 2"
 ```
 
+If reply text must start with an option-like token, use the equals form:
+```bash
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body=--help --repo <owner/repo>
+```
+
 ## Deterministic governance
 
 Validate policy:

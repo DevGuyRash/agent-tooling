@@ -5,6 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   bash scripts/pr-reply.sh <pr_number> <comment_id> --body "<text>" [--repo owner/repo]
+#   bash scripts/pr-reply.sh <pr_number> <comment_id> --body=<text> [--repo owner/repo]
 #   bash scripts/pr-reply.sh <pr_number> <comment_id> --body-file <path> [--repo owner/repo]
 #
 # Requirements:
@@ -44,6 +45,7 @@ print_help() {
   cat <<'USAGE'
 Usage:
   bash scripts/pr-reply.sh <pr_number> <comment_id> --body "<text>" [--repo owner/repo]
+  bash scripts/pr-reply.sh <pr_number> <comment_id> --body=<text> [--repo owner/repo]
   bash scripts/pr-reply.sh <pr_number> <comment_id> --body-file <path> [--repo owner/repo]
 
 Arguments:
@@ -51,7 +53,8 @@ Arguments:
   <comment_id>         Pull request review comment ID.
 
 Options:
-  --body <text>        Reply text.
+  --body <text>        Reply text (strict; next token must not be another option).
+  --body=<text>        Reply text, including literals that start with '--'.
   --body-file <path>   Path to reply body file.
   --repo <owner/repo>  Optional repository override.
   -h, --help           Show help.
@@ -98,6 +101,11 @@ TMP_BODY_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --body=*)
+      BODY="${1#--body=}"
+      require_opt_value_present "--body" "$BODY"
+      shift
+      ;;
     --body)
       require_opt_value "--body" "${2:-}"
       BODY="${2:-}"

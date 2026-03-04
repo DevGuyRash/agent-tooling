@@ -123,7 +123,7 @@ Path resolution (mandatory):
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
-| Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> (--body-file <path> | --body "<text>") [--repo owner/repo]` |
+| Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> (--body-file <path> | --body "<text>" | --body=<text>) [--repo owner/repo]` |
 | Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
 | Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
 | Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
@@ -286,6 +286,7 @@ Before pushing any new commits to a PR branch:
    - For `not applicable/invalid`, reply with rationale in-thread and resolve the thread when permissions allow.
    - `pr-reply.sh` normalizes literal `\n` in `--body` text into real newlines.
    - Prefer `--body-file` for replies containing complex markdown or shell metacharacters.
+   - If reply text must start with `--`, use `--body=<text>` or `--body-file`.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
    - Optional trigger commands (if enabled in repo): `@codex review` then `/gemini review` (post in top-level PR Conversation comments).
    - For conversational follow-ups, use `@gemini-code-assist <question>`.
