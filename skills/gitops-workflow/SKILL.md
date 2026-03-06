@@ -100,6 +100,7 @@ Direct ad hoc `gh`/`git` command sequences are fallback-only.
 
 Path resolution (mandatory):
 - Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to this skill folder (the folder containing this `SKILL.md`), not relative to the target repository where git work is being performed.
+- If the target repository is itself a checkout/worktree of the skill repository and the task is modifying `gitops-workflow`, prefer the copies under the active worktree/repository being edited so script behavior matches the branch under review. Use the canonical skill-source path only when it matches the active checkout or when the active repository is not modifying this skill.
 - Before dispatching, resolve and keep a local variable:
   - `SKILL_ROOT=<absolute-path-to-this-skill-folder>`
   - Example placeholder: `<absolute-path>/gitops-workflow`
