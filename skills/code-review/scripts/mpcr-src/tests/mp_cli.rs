@@ -202,6 +202,7 @@ verification = "Add regression coverage for {id}."
 source_packets = ["{source_ref}"]
 confidence_label = "HIGH"
 confidence_score = 90
+reopen_eligible = false
 "#,
                 line = 10 + total,
             ));
@@ -247,6 +248,7 @@ reviewer_id = "{reviewer_id}"
 session_id = "{session_id}"
 target_ref = "{target_ref}"
 verdict = "REQUEST_CHANGES"
+reopen_eligibility_contract_version = 1
 
 [counts]
 blocker = {blocker}
@@ -295,6 +297,7 @@ area = "Runtime parity"
 gap = "Production traffic replay was not run."
 impact = "Some environment-specific behavior may still differ."
 next_action = "Run staging validation."
+reopen_eligible = false
 
 [validation_summary]
 packets_validated = 1
@@ -305,8 +308,11 @@ retry_count = 0
 ## Ship-Readiness
 **Verdict:** SHIP_WITH_FIXES
 
-## Findings
+## Required Now
 {findings_line}
+
+## Follow-Up Opportunities
+- None.
 
 ## Defended Proofs
 - Cross-cutting invariants were synthesized with confidence.
@@ -319,6 +325,482 @@ retry_count = 0
         minor = counts.minor,
         nit = counts.nit,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_finished_parent(
+    session: &mut SessionFile,
+    reviewer_id: &str,
+    session_id: &str,
+    counts: SeverityCounts,
+    initiator_status: InitiatorStatus,
+    report_file: &str,
+    started_at: &str,
+    finished_at: &str,
+) {
+    if let Some(parent) = session
+        .reviews
+        .iter_mut()
+        .find(|entry| entry.reviewer_id == reviewer_id && entry.session_id == session_id)
+    {
+        parent.initiator_status = initiator_status;
+        parent.status = ReviewerStatus::Finished;
+        parent.started_at = started_at.to_string();
+        parent.updated_at = finished_at.to_string();
+        parent.finished_at = Some(finished_at.to_string());
+        parent.current_phase = Some(ReviewPhase::ReportWriting);
+        parent.verdict = Some(ReviewVerdict::RequestChanges);
+        parent.counts = counts;
+        parent.report_file = Some(report_file.to_string());
+    }
+}
+
+#[allow(clippy::panic, clippy::uninlined_format_args)]
+fn staleness_parent_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    severity: &str,
+    reopen_eligible: bool,
+) -> String {
+    let source_ref = format!("child:feedface:{session_id}");
+    let (blocker, major, minor, nit) = match severity {
+        "BLOCKER" => (1, 0, 0, 0),
+        "MAJOR" => (0, 1, 0, 0),
+        "MINOR" => (0, 0, 1, 0),
+        "NIT" => (0, 0, 0, 1),
+        other => panic!("unsupported severity: {other}"),
+    };
+    let verdict = if blocker > 0 || major > 0 || reopen_eligible {
+        "REQUEST_CHANGES"
+    } else {
+        "APPROVE"
+    };
+    let ship_verdict = if blocker > 0 || major > 0 || reopen_eligible {
+        "SHIP_WITH_FIXES"
+    } else {
+        "SHIP"
+    };
+    let required_now = if reopen_eligible {
+        "Refresh the behavior-facing guidance before shipping."
+    } else {
+        "None."
+    };
+    let follow_up = if reopen_eligible {
+        "None."
+    } else {
+        "Refresh the follow-up-only guidance copy later."
+    };
+    format!(
+        r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "{verdict}"
+reopen_eligibility_contract_version = 1
+
+[counts]
+blocker = {blocker}
+major = {major}
+minor = {minor}
+nit = {nit}
+
+[ship_readiness]
+verdict = "{ship_verdict}"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "CONDITIONAL"
+notes = "Staleness triage is under review."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No direct safety regression was confirmed."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "No extra architecture work is required."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "CONDITIONAL"
+notes = "A focused regression should cover the reopen decision."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "CONDITIONAL"
+notes = "Behavior-facing staleness should reopen; follow-up-only stale polish should not."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "{source_ref}"
+
+[[merged_findings]]
+id = "MF1"
+severity = "{severity}"
+anchor = "docs/runbook.md:12"
+claim = "Stale operator guidance should be refreshed."
+disproof = "The written guidance no longer matches the shipped workflow wording."
+evidence = "The report identifies guidance drift only in prose."
+recommendation = "Refresh the guidance text or defer it as follow-up."
+verification = "Re-run the doc check after update."
+source_packets = ["{source_ref}"]
+confidence_label = "HIGH"
+confidence_score = 90
+reopen_eligible = {reopen_eligible}
+
+[[residual_risks]]
+area = "Stale operator guidance"
+gap = "No follow-up doc pass has been run yet."
+impact = "Readers may see outdated wording."
+next_action = "Do a targeted documentation pass."
+reopen_eligible = {reopen_eligible}
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** {ship_verdict}
+
+## Required Now
+- {required_now}
+
+## Follow-Up Opportunities
+- {follow_up}
+
+## Defended Proofs
+- The report explicitly marks whether the staleness item should reopen the loop.
+
+## Residual Risk
+- Staleness categorization depends on the explicit `reopen_eligible` marker.
+"#,
+        required_now = required_now,
+        follow_up = follow_up
+    )
+}
+
+fn legacy_staleness_parent_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    severity: &str,
+) -> String {
+    legacy_parent_report_missing_reopen_eligibility(
+        reviewer_id,
+        session_id,
+        target_ref,
+        severity,
+        "Stale operator guidance should be refreshed.",
+        "Stale operator guidance",
+    )
+}
+
+#[allow(clippy::panic, clippy::uninlined_format_args)]
+fn legacy_parent_report_missing_reopen_eligibility(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    severity: &str,
+    claim: &str,
+    area: &str,
+) -> String {
+    let source_ref = format!("child:feedface:{session_id}");
+    let (blocker, major, minor, nit) = match severity {
+        "BLOCKER" => (1, 0, 0, 0),
+        "MAJOR" => (0, 1, 0, 0),
+        "MINOR" => (0, 0, 1, 0),
+        "NIT" => (0, 0, 0, 1),
+        other => panic!("unsupported severity: {other}"),
+    };
+    format!(
+        r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "REQUEST_CHANGES"
+
+[counts]
+blocker = {blocker}
+major = {major}
+minor = {minor}
+nit = {nit}
+
+[ship_readiness]
+verdict = "SHIP_WITH_FIXES"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "CONDITIONAL"
+notes = "Legacy staleness replay."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No direct safety regression was confirmed."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "No extra architecture work is required."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "CONDITIONAL"
+notes = "Legacy compatibility path needs explicit guidance."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "CONDITIONAL"
+notes = "Behavior-facing staleness should not be silently downgraded during upgrade."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "{source_ref}"
+
+[[merged_findings]]
+id = "MF1"
+severity = "{severity}"
+anchor = "docs/runbook.md:12"
+claim = "{claim}"
+disproof = "The written guidance no longer matches the shipped workflow wording."
+evidence = "The report identifies guidance drift only in prose."
+recommendation = "Refresh the guidance text or require a fresh-start migration."
+verification = "Re-run the doc check after update."
+source_packets = ["{source_ref}"]
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[residual_risks]]
+area = "{area}"
+gap = "No follow-up doc pass has been run yet."
+impact = "Readers may see outdated wording."
+next_action = "Do a targeted documentation pass."
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** SHIP_WITH_FIXES
+
+## Required Now
+- Refresh the behavior-facing guidance before shipping.
+
+## Follow-Up Opportunities
+- None.
+
+## Defended Proofs
+- The legacy report intentionally omits `reopen_eligible` to exercise upgrade handling.
+
+## Residual Risk
+- Legacy sessions need an explicit migration signal.
+"#,
+        claim = claim,
+        area = area,
+    )
+}
+
+fn clean_parent_report(
+    reviewer_id: &str,
+    session_id: &str,
+    target_ref: &str,
+    include_reopen_contract: bool,
+) -> String {
+    let maybe_contract = if include_reopen_contract {
+        "reopen_eligibility_contract_version = 1\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"# Code Review Report
+
+```toml
+schema_version = "proof_packet.v2"
+artifact_kind = "parent_review_report"
+reviewer_id = "{reviewer_id}"
+session_id = "{session_id}"
+target_ref = "{target_ref}"
+verdict = "APPROVE"
+{maybe_contract}
+[counts]
+blocker = 0
+major = 0
+minor = 0
+nit = 0
+
+[ship_readiness]
+verdict = "SHIP"
+confidence_label = "HIGH"
+confidence_score = 90
+
+[[ship_readiness_axes]]
+axis = "Correctness"
+status = "PASS"
+notes = "No open findings remain."
+
+[[ship_readiness_axes]]
+axis = "Safety"
+status = "PASS"
+notes = "No direct safety regression was confirmed."
+
+[[ship_readiness_axes]]
+axis = "Complexity budget"
+status = "PASS"
+notes = "No extra architecture work is required."
+
+[[ship_readiness_axes]]
+axis = "Test coverage"
+status = "PASS"
+notes = "No extra coverage is required for this clean report."
+
+[[ship_readiness_axes]]
+axis = "Acceptance criteria"
+status = "PASS"
+notes = "The prior review converged cleanly."
+
+[[source_packets]]
+reviewer_id = "feedface"
+session_id = "{session_id}"
+artifact_ref = "child:feedface:{session_id}"
+
+[[defended_summary]]
+theorem_id = "T1"
+source_packets = ["child:feedface:{session_id}"]
+summary = "The prior clean report had no open items."
+confidence_label = "HIGH"
+confidence_score = 90
+
+[validation_summary]
+packets_validated = 1
+packets_rejected = 0
+retry_count = 0
+```
+
+## Ship-Readiness
+**Verdict:** SHIP
+
+## Required Now
+- None.
+
+## Follow-Up Opportunities
+- None.
+
+## Defended Proofs
+- The prior review converged cleanly.
+
+## Residual Risk
+- None.
+"#
+    )
+}
+
+fn insert_fullcycle_state(
+    session: &mut SessionFile,
+    target_ref: &str,
+    session_id: &str,
+    cycle_phase: &str,
+) {
+    session.extra.insert(
+        "fullcycle_state".to_string(),
+        serde_json::json!({
+            "schema_version": "fullcycle_state.v1",
+            "target_ref": target_ref,
+            "session_id": session_id,
+            "cycle_index": 1,
+            "cycle_phase": cycle_phase,
+            "continue_required": true,
+            "stop_reason": Value::Null,
+            "no_progress_streak": 0,
+            "baseline_workers": 4,
+            "worker_ceiling": 8,
+            "recommended_workers": 4,
+            "probe_stage": "baseline",
+            "net_new_actionable": 0,
+            "net_new_staleness_actionable": 0,
+            "remaining_minor_nit": 0,
+            "reopen_severity_floor": "major",
+            "dedup_fingerprint_count": 0,
+            "malformed_packets": 0,
+            "retry_count": 0,
+            "child_error_count": 0,
+            "artifact_format_policy": "proof_toml_first_cli_json_ok",
+            "updated_at": "2026-01-11T09:00:00Z"
+        }),
+    );
+}
+
+fn insert_scoped_fullcycle_state(
+    session: &mut SessionFile,
+    target_ref: &str,
+    session_id: &str,
+    cycle_phase: &str,
+) {
+    fn escape_component(value: &str) -> String {
+        let mut out = String::with_capacity(value.len());
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric() {
+                out.push(char::from(byte));
+            } else {
+                out.push('_');
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
+    }
+
+    let key = format!(
+        "fullcycle_state_{}__{}",
+        escape_component(target_ref),
+        escape_component(session_id)
+    );
+    session.extra.insert(
+        key,
+        serde_json::json!({
+            "schema_version": "fullcycle_state.v1",
+            "target_ref": target_ref,
+            "session_id": session_id,
+            "cycle_index": 1,
+            "cycle_phase": cycle_phase,
+            "continue_required": true,
+            "stop_reason": Value::Null,
+            "no_progress_streak": 0,
+            "baseline_workers": 4,
+            "worker_ceiling": 8,
+            "recommended_workers": 4,
+            "probe_stage": "baseline",
+            "net_new_actionable": 0,
+            "net_new_staleness_actionable": 0,
+            "remaining_minor_nit": 0,
+            "reopen_severity_floor": "major",
+            "dedup_fingerprint_count": 0,
+            "malformed_packets": 0,
+            "retry_count": 0,
+            "child_error_count": 0,
+            "artifact_format_policy": "proof_toml_first_cli_json_ok",
+            "updated_at": "2026-01-11T09:00:00Z"
+        }),
+    );
 }
 
 fn valid_child_report(
@@ -972,6 +1454,409 @@ fn reviewer_register_creates_session() -> anyhow::Result<()> {
     let session = read_session_json(Path::new(session_dir))?;
     let entry = find_review(&session, "deadbeef", "sess0001")?;
     ensure!(json_str(entry, "status")? == "INITIALIZING");
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_removes_existing_day_dir() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+    ensure!(stale_file.exists());
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+    let session_dir_out = json_str(&out, "session_dir")?;
+    let session_file_out = json_str(&out, "session_file")?;
+    ensure!(Path::new(session_dir_out).exists());
+    ensure!(Path::new(session_file_out).exists());
+    ensure!(
+        !stale_file.exists(),
+        "day cleanup should remove stale files first"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_all_session_days_removes_day_dirs_only() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let code_reviews_root = repo_root
+        .path()
+        .join(".local")
+        .join("reports")
+        .join("code_reviews");
+    let day_a = code_reviews_root.join("2026-01-09");
+    let day_b = code_reviews_root.join("2026-01-10");
+    let non_date_dir = code_reviews_root.join("keep-me");
+    fs::create_dir_all(&day_a)?;
+    fs::create_dir_all(&day_b)?;
+    fs::create_dir_all(&non_date_dir)?;
+    fs::write(day_a.join("a.txt"), "a")?;
+    fs::write(day_b.join("b.txt"), "b")?;
+    fs::write(non_date_dir.join("note.txt"), "keep")?;
+
+    let out = run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-all-session-days",
+    ])?;
+    let session_dir_out = json_str(&out, "session_dir")?;
+    ensure!(
+        Path::new(session_dir_out).exists(),
+        "register should recreate today's directory after cleanup"
+    );
+    ensure!(!day_a.exists(), "dated dir should be removed");
+    ensure!(!day_b.exists(), "dated dir should be removed");
+    ensure!(
+        non_date_dir.exists(),
+        "non-date directories under code_reviews should remain"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_register_clear_all_session_days_rejects_symlinked_cleanup_root() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let external_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let external_code_reviews_root = external_root.path().join("code_reviews");
+    let external_day = external_code_reviews_root.join("2026-01-09");
+    fs::create_dir_all(&external_day)?;
+    fs::write(external_day.join("stale.txt"), "stale")?;
+
+    let reports_root = repo_root.path().join(".local").join("reports");
+    fs::create_dir_all(&reports_root)?;
+    std::os::unix::fs::symlink(
+        &external_code_reviews_root,
+        reports_root.join("code_reviews"),
+    )?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-all-session-days",
+    ])?;
+
+    ensure!(stderr.contains("symlinked cleanup roots are not allowed"));
+    ensure!(
+        external_day.exists(),
+        "cleanup should not delete directories through a symlinked root"
+    );
+    ensure!(
+        !paths::session_paths(
+            repo_root.path(),
+            Date::from_calendar_date(2026, Month::January, 11)?
+        )
+        .session_dir
+        .exists(),
+        "register should fail before creating today's session dir"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "nothex",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run before id validation"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() -> anyhow::Result<()>
+{
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--clear-session-day",
+        ])
+        .env("MPCR_REVIEWER_ID", "nothex")
+        .env("MPCR_SESSION_ID", "sess0001")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "register should fail for invalid env reviewer id"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    ensure!(stderr.contains("reviewer_id must be 8 ASCII alphanumeric characters"));
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run before env-backed id validation"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_rejects_custom_session_dir_override() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let canonical_session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    let custom_session_dir = repo_root.path().join("custom-session");
+    fs::create_dir_all(&canonical_session_dir)?;
+    fs::create_dir_all(&custom_session_dir)?;
+    let canonical_stale = canonical_session_dir.join("canonical-stale.txt");
+    let custom_stale = custom_session_dir.join("custom-stale.txt");
+    fs::write(&canonical_stale, "canonical")?;
+    fs::write(&custom_stale, "custom")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--session-dir",
+        &custom_session_dir.to_string_lossy(),
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(
+        stderr.contains("--clear-session-day only supports the canonical session day directory")
+    );
+    ensure!(
+        canonical_stale.exists(),
+        "canonical session day should remain when cleanup is rejected"
+    );
+    ensure!(
+        custom_stale.exists(),
+        "custom session-dir should never be deleted by --clear-session-day"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_rejects_env_session_dir_override() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let canonical_session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    let env_session_dir = repo_root.path().join("env-session");
+    fs::create_dir_all(&canonical_session_dir)?;
+    fs::create_dir_all(&env_session_dir)?;
+    let canonical_stale = canonical_session_dir.join("canonical-stale.txt");
+    let env_stale = env_session_dir.join("env-stale.txt");
+    fs::write(&canonical_stale, "canonical")?;
+    fs::write(&env_stale, "env")?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--clear-session-day",
+        ])
+        .env("MPCR_SESSION_DIR", &env_session_dir)
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "register should reject env-backed custom session dir for clear-session-day"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    ensure!(
+        stderr.contains("--clear-session-day only supports the canonical session day directory")
+    );
+    ensure!(
+        canonical_stale.exists(),
+        "canonical session day should remain when env override is rejected"
+    );
+    ensure!(
+        env_stale.exists(),
+        "env session-dir should never be deleted by --clear-session-day"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_rejects_cleanup_flags_for_child_registration() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--parent-id",
+        "cafebabe",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(stderr.contains("cleanup flags are not allowed with --parent-id"));
+    ensure!(
+        stale_file.exists(),
+        "cleanup should not run for child registration"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_cleanup_flags_are_mutually_exclusive() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+
+    let err = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--clear-session-day",
+        "--clear-all-session-days",
+    ])?;
+    ensure!(
+        err.contains("cannot be used with"),
+        "expected clap conflict error, got: {err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_default_does_not_clear_existing_day_dir() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    fs::create_dir_all(&session_dir)?;
+    let stale_file = session_dir.join("stale.txt");
+    fs::write(&stale_file, "stale")?;
+    ensure!(stale_file.exists());
+
+    run_cmd_json(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+    ])?;
+
+    ensure!(
+        stale_file.exists(),
+        "without cleanup flags, existing day artifacts should remain"
+    );
     Ok(())
 }
 
@@ -3766,6 +4651,8 @@ fn protocol_orchestrator_json() -> anyhow::Result<()> {
     ensure!(content.contains("Decomposition"));
     ensure!(content.contains("Dispatch"));
     ensure!(content.contains("Synthesis"));
+    ensure!(content.contains("You SHALL NOT emit direct file:line findings yourself."));
+    ensure!(content.contains("Single-agent mode still requires a dispatched worker"));
     Ok(())
 }
 
@@ -3805,7 +4692,14 @@ fn protocol_report_template_all_scales() -> anyhow::Result<()> {
         let out = run_protocol(&["protocol", "report-template", "--scale", scale])?;
         let content = json_str(&out, "content")?;
         ensure!(content.contains("Verdict"), "missing Verdict for {scale}");
-        ensure!(content.contains("Findings"), "missing Findings for {scale}");
+        ensure!(
+            content.contains("Required Now"),
+            "missing required-now section for {scale}"
+        );
+        ensure!(
+            content.contains("Follow-Up Opportunities"),
+            "missing follow-up section for {scale}"
+        );
         ensure!(
             content.contains("Defended"),
             "missing defended proofs section for {scale}"
@@ -3965,6 +4859,1267 @@ fn protocol_reviewer_text_output() -> anyhow::Result<()> {
     // Text mode should output content directly (no JSON envelope)
     ensure!(out.contains("change inventory"));
     ensure!(!out.contains("\"title\""));
+    Ok(())
+}
+
+#[test]
+fn protocol_capabilities_json() -> anyhow::Result<()> {
+    let out = run_protocol(&["protocol", "capabilities"])?;
+    ensure!(json_str(&out, "schema_version")? == "protocol_capabilities.v1");
+    let commands = out
+        .get("protocol_commands")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("protocol_commands missing"))?;
+    let as_strs = commands
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    ensure!(as_strs.contains(&"mpcr protocol orchestrator"));
+    ensure!(as_strs.contains(&"mpcr protocol capabilities"));
+    ensure!(json_u64(&out, "protocol_entry_count")? >= 40);
+    Ok(())
+}
+
+#[test]
+fn protocol_fullcycle_text_includes_execution_bridge() -> anyhow::Result<()> {
+    let out = run_protocol_text(&["protocol", "fullcycle"])?;
+    ensure!(out.contains("mpcr fullcycle plan"));
+    ensure!(out.contains("mpcr fullcycle loop-plan"));
+    ensure!(out.contains("mpcr fullcycle checkpoint"));
+    ensure!(out.contains("mpcr fullcycle state"));
+    ensure!(out.contains("Terminal Minor Cleanup"));
+    ensure!(out.contains("final delta-only reviewer workflow"));
+    Ok(())
+}
+
+#[test]
+fn quoted_single_token_protocol_is_compat_split() -> anyhow::Result<()> {
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["protocol orchestrator"],
+        vec!["protocol capabilities"],
+        vec!["--json", "protocol capabilities"],
+        vec!["--json-pretty", "protocol orchestrator"],
+        vec!["--use-env", "protocol capabilities"],
+    ];
+    for argv in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+            .args(&argv)
+            .output()?;
+        let shown = argv.join(" ");
+        ensure!(
+            output.status.success(),
+            "expected compat split to succeed for `{shown}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8(output.stderr)?;
+        ensure!(
+            stderr.contains("compat: interpreted single-token subcommand"),
+            "compat hint missing for `{shown}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn quoted_single_token_protocol_dispatch_is_split_then_validated() -> anyhow::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .arg("protocol dispatch")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "expected command to fail without --role"
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    ensure!(
+        stderr.contains("compat: interpreted single-token subcommand"),
+        "compat hint missing for `protocol dispatch`"
+    );
+    ensure!(
+        !stderr.contains("unrecognized subcommand 'protocol dispatch'"),
+        "command should be compat split before clap validation"
+    );
+    ensure!(
+        stderr.contains("--role"),
+        "expected clap missing-argument guidance, got: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_loop_state_checkpoint_flow() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = sample_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+    ensure!(json_str(&plan, "mode")? == "read_only_planner");
+    ensure!(json_u64(&plan, "baseline_workers")? == 4);
+    ensure!(json_str(&plan, "reopen_severity_floor")? == "major");
+
+    let loop_plan = run_cmd_json(&[
+        "fullcycle",
+        "loop-plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&loop_plan, "mode")? == "read_only_loop_planner");
+    ensure!(json_str(&loop_plan, "reopen_severity_floor")? == "major");
+
+    let checkpoint = run_cmd_json(&[
+        "fullcycle",
+        "checkpoint",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "auto",
+    ])?;
+    ensure!(checkpoint.get("schema_version").and_then(Value::as_str) == Some("fullcycle_state.v1"));
+    ensure!(
+        checkpoint
+            .get("reopen_severity_floor")
+            .and_then(Value::as_str)
+            == Some("major")
+    );
+
+    let state = run_cmd_json(&["fullcycle", "state", "--session-dir", session_dir_str])?;
+    ensure!(state.get("schema_version").and_then(Value::as_str) == Some("fullcycle_state.v1"));
+    ensure!(state.get("reopen_severity_floor").and_then(Value::as_str) == Some("major"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_bootstrap_preserves_requested_session_scope() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = empty_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0007",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_str(&plan, "session_id")? == "sess0007");
+    ensure!(json_str(&plan, "state")? == "bootstrap_review");
+    ensure!(json_bool(&plan, "continue_required")?);
+    let next = json_array(&plan, "next_commands")?;
+    let register_cmd = next
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing bootstrap reviewer register command"))?;
+    ensure!(register_cmd.contains("--session-id sess0007"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_quotes_target_ref_in_next_commands() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = empty_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let target_ref = "worktree:feature/foo (uncommitted)";
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        target_ref,
+        "--session-id",
+        "sess0007",
+        "--detail",
+        "compact",
+    ])?;
+
+    let next = json_array(&plan, "next_commands")?;
+    let register_cmd = next
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing bootstrap reviewer register command"))?;
+    ensure!(register_cmd.contains("--target-ref 'worktree:feature/foo (uncommitted)'"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_net_new_actionable_ignores_minor_nit_churn() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let previous_report_path = session_dir.join("11-00-00-000_refs_heads_main_cafed00d.md");
+    fs::write(
+        &previous_report_path,
+        valid_parent_report(
+            "cafed00d",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 1,
+            },
+        ),
+    )?;
+
+    let previous_parent = ReviewEntry {
+        reviewer_id: "cafed00d".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T00:45:00Z".to_string(),
+        finished_at: Some("2026-01-11T00:45:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("11-00-00-000_refs_heads_main_cafed00d.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+    session.reviewers.push("cafed00d".to_string());
+    session.reviews.push(previous_parent);
+
+    if let Some(latest_parent) = session
+        .reviews
+        .iter_mut()
+        .find(|entry| entry.reviewer_id == "feedface" && entry.session_id == "sess0003")
+    {
+        latest_parent.initiator_status = InitiatorStatus::Applied;
+        latest_parent.started_at = "2026-01-11T01:00:00Z".to_string();
+        latest_parent.updated_at = "2026-01-11T01:30:00Z".to_string();
+        latest_parent.finished_at = Some("2026-01-11T01:30:00Z".to_string());
+        latest_parent.verdict = Some(ReviewVerdict::RequestChanges);
+        latest_parent.counts = SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 1,
+        };
+        latest_parent.report_file = Some("12-00-00-000_refs_heads_main_feedface.md".to_string());
+    }
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_u64(&plan, "net_new_actionable")? == 0);
+    ensure!(json_u64(&plan, "dedup_fingerprint_count")? == 2);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_enters_terminal_minor_cleanup_when_only_minor_nit_remain() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 0,
+                minor: 1,
+                nit: 1,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 1,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "terminal_minor_cleanup");
+    ensure!(json_bool(&plan, "continue_required")?);
+    ensure!(json_u64(&plan, "remaining_minor_nit")? == 2);
+    ensure!(json_str(&plan, "reopen_severity_floor")? == "major");
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_keeps_follow_up_only_staleness_out_of_reopen_bar() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        staleness_parent_report("feedface", "sess0003", "refs/heads/main", "MINOR", false),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "terminal_minor_cleanup");
+    ensure!(json_bool(&plan, "continue_required")?);
+    ensure!(json_u64(&plan, "net_new_staleness_actionable")? == 0);
+    ensure!(json_u64(&plan, "remaining_minor_nit")? == 1);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_reopens_for_behavior_facing_staleness_even_at_minor() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        staleness_parent_report("feedface", "sess0003", "refs/heads/main", "MINOR", true),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "application");
+    ensure!(json_bool(&plan, "continue_required")?);
+    ensure!(json_u64(&plan, "net_new_staleness_actionable")? == 2);
+    ensure!(json_u64(&plan, "remaining_minor_nit")? == 1);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_requires_fresh_start_when_legacy_staleness_reports_lack_reopen_eligibility(
+) -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        legacy_staleness_parent_report("feedface", "sess0003", "refs/heads/main", "MINOR"),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "fresh_start_required");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
+    let warnings = json_array(&plan, "capability_warnings")?;
+    ensure!(warnings.iter().any(|value| {
+        value
+            .as_str()
+            .is_some_and(|text| text.contains("fresh reviewer session after upgrade"))
+    }));
+    let notes = json_array(&plan, "notes")?;
+    ensure!(notes.iter().any(|value| {
+        value
+            .as_str()
+            .is_some_and(|text| text.contains("fresh-start-required"))
+    }));
+    let next = json_array(&plan, "next_commands")?;
+    ensure!(next.iter().any(|value| {
+        value.as_str().is_some_and(|text| {
+            text == "mpcr reviewer register --target-ref 'refs/heads/main' --print-env"
+        })
+    }));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_requires_fresh_start_for_legacy_reports_with_alternate_wording(
+) -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        legacy_parent_report_missing_reopen_eligibility(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            "MINOR",
+            "Outdated help text should be refreshed.",
+            "Outdated quickstart copy",
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "fresh_start_required");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_requires_fresh_start_for_any_legacy_parent_report_without_reopen_eligibility(
+) -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        legacy_parent_report_missing_reopen_eligibility(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            "MINOR",
+            "Contributor guidance wording could be simplified in a later cleanup pass.",
+            "Contributor guidance phrasing",
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "fresh_start_required");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_requires_fresh_start_for_clean_legacy_parent_without_contract_marker(
+) -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        clean_parent_report("feedface", "sess0003", "refs/heads/main", false),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts::zero(),
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "fresh_start_required");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_allows_clean_current_parent_with_reopen_contract_marker() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        clean_parent_report("feedface", "sess0003", "refs/heads/main", true),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts::zero(),
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "converged");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "converged_high_severity");
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_enters_final_minor_check_after_terminal_cleanup() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 0,
+                minor: 1,
+                nit: 0,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Applied,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+    insert_fullcycle_state(
+        &mut session,
+        "refs/heads/main",
+        "sess0003",
+        "terminal_minor_cleanup",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "final_minor_check");
+    ensure!(json_bool(&plan, "continue_required")?);
+    ensure!(json_u64(&plan, "remaining_minor_nit")? == 1);
+    let next = json_array(&plan, "next_commands")?;
+    ensure!(next
+        .iter()
+        .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase INGESTION")));
+    ensure!(!next
+        .iter()
+        .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase REPORT_WRITING")));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_stops_after_final_minor_check_when_only_minor_nit_remain() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 0,
+                minor: 1,
+                nit: 1,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 1,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T02:00:00Z",
+        "2026-01-11T02:30:00Z",
+    );
+    insert_fullcycle_state(
+        &mut session,
+        "refs/heads/main",
+        "sess0003",
+        "final_minor_check",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "converged");
+    ensure!(!json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "stopped_after_final_minor_check");
+    ensure!(json_u64(&plan, "remaining_minor_nit")? == 2);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_reopens_when_major_returns_after_final_minor_check() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 1,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 1,
+        },
+        InitiatorStatus::Received,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T02:00:00Z",
+        "2026-01-11T02:30:00Z",
+    );
+    insert_fullcycle_state(
+        &mut session,
+        "refs/heads/main",
+        "sess0003",
+        "final_minor_check",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+
+    ensure!(json_str(&plan, "state")? == "application");
+    ensure!(json_bool(&plan, "continue_required")?);
+    ensure!(json_str(&plan, "stop_reason")? == "reopened_by_high_severity");
+    ensure!(json_u64(&plan, "net_new_actionable")? == 1);
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_ignores_mismatched_previous_state_scope() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let previous_report_path = session_dir.join("11-00-00-000_refs_heads_main_cafed00d.md");
+    fs::write(
+        &previous_report_path,
+        valid_parent_report(
+            "cafed00d",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    let latest_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &latest_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+
+    let previous_parent = ReviewEntry {
+        reviewer_id: "cafed00d".to_string(),
+        session_id: "sess0003".to_string(),
+        target_ref: "refs/heads/main".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T00:30:00Z".to_string(),
+        updated_at: "2026-01-11T00:45:00Z".to_string(),
+        finished_at: Some("2026-01-11T00:45:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("11-00-00-000_refs_heads_main_cafed00d.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    };
+    session.reviewers.push("cafed00d".to_string());
+    session.reviews.push(previous_parent);
+
+    if let Some(latest_parent) = session
+        .reviews
+        .iter_mut()
+        .find(|entry| entry.reviewer_id == "feedface" && entry.session_id == "sess0003")
+    {
+        latest_parent.initiator_status = InitiatorStatus::Applied;
+        latest_parent.started_at = "2026-01-11T01:00:00Z".to_string();
+        latest_parent.updated_at = "2026-01-11T01:30:00Z".to_string();
+        latest_parent.finished_at = Some("2026-01-11T01:30:00Z".to_string());
+        latest_parent.verdict = Some(ReviewVerdict::RequestChanges);
+        latest_parent.counts = SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        };
+        latest_parent.report_file = Some("12-00-00-000_refs_heads_main_feedface.md".to_string());
+    }
+
+    session.extra.insert(
+        "fullcycle_state".to_string(),
+        serde_json::json!({
+            "schema_version": "fullcycle_state.v1",
+            "target_ref": "refs/heads/other",
+            "session_id": "sess9999",
+            "cycle_index": 9,
+            "cycle_phase": "scoped_rereview",
+            "continue_required": true,
+            "stop_reason": Value::Null,
+            "no_progress_streak": 9,
+            "baseline_workers": 4,
+            "worker_ceiling": 8,
+            "recommended_workers": 8,
+            "probe_stage": "probe_8",
+            "net_new_actionable": 0,
+            "net_new_staleness_actionable": 0,
+            "dedup_fingerprint_count": 1,
+            "malformed_packets": 0,
+            "retry_count": 0,
+            "child_error_count": 0,
+            "artifact_format_policy": "proof_toml_first_cli_json_ok",
+            "updated_at": "2026-01-11T09:00:00Z"
+        }),
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+        "--detail",
+        "compact",
+    ])?;
+
+    ensure!(json_u64(&plan, "net_new_actionable")? == 0);
+    ensure!(
+        json_u64(&plan, "no_progress_streak")? == 1,
+        "no_progress_streak should not inherit mismatched target/session state"
+    );
+    Ok(())
+}
+
+#[test]
+fn fullcycle_state_is_scoped_per_target_and_requires_filter_when_ambiguous() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let main_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &main_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 0,
+                minor: 1,
+                nit: 0,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Applied,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    let feature_report_path = session_dir.join("12-30-00-000_refs_heads_feature_alpha_deadbeef.md");
+    fs::write(
+        &feature_report_path,
+        valid_parent_report(
+            "deadbeef",
+            "sess0009",
+            "refs/heads/feature-alpha",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    session.reviewers.push("deadbeef".to_string());
+    session.reviews.push(ReviewEntry {
+        reviewer_id: "deadbeef".to_string(),
+        session_id: "sess0009".to_string(),
+        target_ref: "refs/heads/feature-alpha".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T02:00:00Z".to_string(),
+        updated_at: "2026-01-11T02:30:00Z".to_string(),
+        finished_at: Some("2026-01-11T02:30:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("12-30-00-000_refs_heads_feature_alpha_deadbeef.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    });
+
+    insert_scoped_fullcycle_state(
+        &mut session,
+        "refs/heads/main",
+        "sess0003",
+        "terminal_minor_cleanup",
+    );
+    insert_scoped_fullcycle_state(
+        &mut session,
+        "refs/heads/feature-alpha",
+        "sess0009",
+        "final_minor_check",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&plan, "state")? == "final_minor_check");
+
+    let state = run_cmd_json(&[
+        "fullcycle",
+        "state",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&state, "target_ref")? == "refs/heads/main");
+    ensure!(json_str(&state, "cycle_phase")? == "terminal_minor_cleanup");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(["fullcycle", "state", "--session-dir", session_dir_str])
+        .output()?;
+    ensure!(!output.status.success());
+    ensure!(String::from_utf8_lossy(&output.stderr).contains("multiple fullcycle states found"));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_respects_mpcr_max_workers_upper_bound() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = sample_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let run_with_cap = |cap: &str| -> anyhow::Result<Value> {
+        let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+            .env("MPCR_MAX_WORKERS", cap)
+            .args([
+                "fullcycle",
+                "plan",
+                "--session-dir",
+                session_dir_str,
+                "--target-ref",
+                "refs/heads/main",
+                "--session-id",
+                "sess0003",
+                "--detail",
+                "compact",
+            ])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "fullcycle plan failed for cap `{cap}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+
+    let cap5 = run_with_cap("5")?;
+    ensure!(json_u64(&cap5, "worker_ceiling")? == 4);
+    ensure!(json_u64(&cap5, "recommended_workers")? == 4);
+
+    let cap7 = run_with_cap("7")?;
+    ensure!(json_u64(&cap7, "worker_ceiling")? == 6);
+    ensure!(json_u64(&cap7, "recommended_workers")? <= 6);
     Ok(())
 }
 
@@ -4779,6 +6934,7 @@ fn protocol_convergence_planning() -> anyhow::Result<()> {
     let content = json_str(&out, "content")?;
     ensure!(content.contains("fixed point"));
     ensure!(content.contains("convergence-planner"));
+    ensure!(content.contains("BLOCKER/MAJOR"));
     Ok(())
 }
 

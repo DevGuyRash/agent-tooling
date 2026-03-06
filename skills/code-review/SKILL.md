@@ -34,29 +34,38 @@ IF the prompt includes `## Proof Packet:`, `MPCR_DISPATCH_ROLE=`, or `MPCR_APPLI
 
 ## Orchestrator bootstrap
 When not in worker mode:
-1. Run `mpcr protocol orchestrator`
-2. Run `mpcr protocol domains`
-3. Run `mpcr protocol invocation-aliases`
-4. Run `mpcr protocol workflow-selection`
-5. Run `mpcr protocol scope-mapping`
-6. Run `mpcr protocol convergence-planning`
-7. WHEN full-cycle applies, run `mpcr protocol fullcycle`
+1. Run `mpcr protocol capabilities`
+2. Run `mpcr protocol orchestrator`
+3. Run `mpcr protocol domains`
+4. IF capabilities include `mpcr protocol invocation-aliases`, run it.
+5. IF capabilities include `mpcr protocol workflow-selection`, run it.
+6. IF capabilities include `mpcr protocol scope-mapping`, run it.
+7. IF capabilities include `mpcr protocol convergence-planning`, run it.
+8. WHEN full-cycle applies, run `mpcr protocol fullcycle`
 
 ## Universal rules
+- The orchestrator is coordinator-only. It SHALL NOT emit direct file:line findings; line-level findings come from dispatched reviewer/applicator workers.
+- "Single-agent" review still means one dispatched worker, not direct orchestrator diff inspection.
 - Do not paste raw diffs unless requested.
 - Keep code excerpts <= 12 lines each and <= 3 excerpts total.
 - Proof/report artifacts SHALL be TOML-first (`proof_packet.v2`) with JSON fallback only; YAML is forbidden.
+- TOML-first applies to proof/report artifacts. CLI operational output may remain JSON (`--json`, `--json-pretty`).
+- Use `mpcr fullcycle plan`, `mpcr fullcycle loop-plan`, `mpcr fullcycle checkpoint`, and `mpcr fullcycle state` as the deterministic execution bridge for full-cycle orchestration.
+- Full-cycle recursion is severity-bounded: only BLOCKER/MAJOR or behavior-facing staleness reopen the loop. Remaining MINOR/NIT items route through one terminal cleanup pass plus one final delta-only check.
+- WHEN resuming a full-cycle session whose parent reports predate the `reopen_eligible` field, you SHALL stop and treat that session as fresh-start-required unless an explicit migration path is documented; pre-flag reports cannot encode behavior-facing staleness reopen intent precisely.
+- WHEN user intent requests a fresh start (for example "start fresh", "clear it out", "wipe prior reviews"), you SHALL run `mpcr reviewer register` with `--clear-session-day` (single day) or `--clear-all-session-days` (all date directories). IF no fresh-start intent is present, you SHALL NOT pass cleanup flags.
 - Write scratch artifacts only under `.local/tmp/`; delete `.local/tmp/` after workflow completion.
 - Refresh guidance at phase transitions via `mpcr protocol ...`.
 - Prefer explicit CLI flags (`--session-dir`, `--reviewer-id`, `--session-id`) over environment variables.
+- In source-only installs, first-run wrapper commands MAY build `mpcr` and emit cargo compile or package-lock wait output before protocol text.
 
 ## Skills debugging: error accumulation log
 At the start of each top-level invocation, create one log file for this skill.
 
 - Unix path:
-  - `/tmp/skill-errors/<yyyy-mm-dd>/<HH-MM-SS>_code-review_errors.md`
+  - `/tmp/skill-errors/code-review/<yyyy-mm-dd>/<HH-MM-SS>_errors.md`
 - Windows path:
-  - `%TEMP%\\skill-errors\\<yyyy-mm-dd>\\<HH-MM-SS>_code-review_errors.md`
+  - `%TEMP%\\skill-errors\\code-review\\<yyyy-mm-dd>\\<HH-MM-SS>_errors.md`
 
 Log skill-caused friction only (documentation mismatches, bad role names, missing files, protocol contradictions, wrapper/CLI behavior mismatches). Do not log user-project build/test failures.
 

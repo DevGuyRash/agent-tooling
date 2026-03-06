@@ -110,6 +110,12 @@ WHEN a finding fails ANY of these criteria, it is NOT a valid finding. Do NOT in
 - "This function could be vulnerable to X" is NOT a finding — show the concrete path or do not report it.
 - Generic findings (e.g., "consider adding input validation") WITHOUT a concrete exploit scenario SHALL be NIT at most.
 
+### Scope containment rules
+
+- Findings SHALL be anchored in changed files or the direct blast radius needed to validate the change contract.
+- Pre-existing cleanup, speculative architecture polish, and repo-wide improvement ideas that are not required to ship this change SHALL be reported only as follow-up opportunities (MINOR/NIT).
+- You SHALL NOT escalate a follow-up-only observation above MINOR unless the current change introduced or materially worsened it.
+
 ### Saturation rules
 
 Saturation rule: you SHALL stop when 3 consecutive disproof attempts fail to find new issues.
@@ -143,6 +149,9 @@ For each DEFENDED theorem:
 You SHALL update your Domain Ledger with final counts.
 You SHALL identify residual risk: areas where coverage was insufficient or Unknown.
 - You SHALL include scope rationale for any deferred-by-scope recommendations.
+- In the human-readable report, you SHALL separate findings into:
+  - Required now: BLOCKER, MAJOR, and behavior-facing staleness that must be addressed in this patch.
+  - Follow-up opportunities: MINOR/NIT improvements, scope-contained polish, and pre-existing cleanup that do not reopen the workflow by themselves.
 
 You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase SYNTHESIS`
 """
@@ -163,6 +172,8 @@ Choose template scale based on change size:
 - Run `mpcr protocol report-template --scale full` for large/high-risk changes.
 
 You SHALL fill in the template with findings from Synthesis.
+You SHALL keep Required-now items ahead of Follow-up Opportunities in the human-readable report.
+WHEN only MINOR/NIT items remain, you MAY still return `SHIP`; those items belong under Follow-up Opportunities unless the user explicitly requested polish-now.
 You SHALL include the Domain Ledger in your report.
 You SHALL NOT invent findings that were not produced during Adversarial Proofs.
 You SHALL validate the finished markdown artifact before submit:
@@ -263,19 +274,19 @@ content = """
 You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in the report.
 
 ## Verdict (pick ONE)
-- **SHIP**: all findings are NIT-only or no findings. No changes required before merge.
-- **SHIP_WITH_FIXES**: findings exist (MINOR+) but are all fixable in this PR cycle. List the required fixes.
-- **DO_NOT_SHIP**: BLOCKER or MAJOR findings that require design rethinking, or cumulative MINOR risk is too high. List blocking items.
+- **SHIP**: no BLOCKER, no MAJOR, and no behavior-facing staleness that blocks shipped behavior or operator guidance. MINOR/NIT follow-up opportunities MAY remain.
+- **SHIP_WITH_FIXES**: bounded must-fix-now items remain in this patch (typically MAJOR findings or behavior-facing staleness with a concrete fix path). List only required-now fixes.
+- **DO_NOT_SHIP**: BLOCKER findings or unbounded release risk remain. List blocking items.
 
 ## Evaluation matrix
 
 | Axis | PASS | CONDITIONAL | FAIL |
 |------|------|-------------|------|
-| Correctness | No BLOCKER findings | BLOCKERs have clear, bounded fixes | Unfixable correctness flaw |
-| Safety | No security/data-integrity BLOCKERs | Security BLOCKERs with mitigations proposed | Unmitigated security flaw |
-| Complexity budget | No MAJOR overengineering or O(n^2+) on hot paths | MAJORs with agreed refactor plan | Architectural overengineering blocking comprehension |
-| Test coverage | New code has tests; existing tests pass | Missing tests for edge cases (MINOR) | No tests for new behavior |
-| Acceptance criteria | All criteria met | Partial; gaps are MINOR and tracked | Critical criteria unmet |
+| Correctness | No BLOCKER/MAJOR findings affecting shipped behavior | Required-now fixes are bounded and clear | Unbounded correctness risk remains |
+| Safety | No security/data-integrity BLOCKER/MAJOR findings | Safety issues are bounded and fixable now | Unmitigated safety flaw |
+| Complexity budget | No required-now overengineering or hot-path regressions | Follow-up cleanup remains but is non-blocking | Architectural complexity blocks safe shipment |
+| Test coverage | New code has tests; existing tests pass | Missing edge coverage is tracked as follow-up | Required-now behavior lacks credible verification |
+| Acceptance criteria | All required-now criteria are met | Only follow-up polish remains | Critical acceptance criteria are unmet |
 
 ## Placement
 Place the ship-readiness verdict as the FIRST section of the report, immediately after the metadata header.

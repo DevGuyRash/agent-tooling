@@ -400,7 +400,10 @@ Acceptance criteria: [ORCHESTRATOR FILLS IN]
 1. Ingest all provided Proof Packets.
 2. `mpcr reviewer update --session-dir <SESSION_DIR_PATH> --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --status IN_PROGRESS --phase SHIP_READINESS`
 3. Evaluate: correctness, safety, complexity budget, test coverage, acceptance criteria.
-4. Derive verdict: SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP.
+4. Derive verdict:
+   - `SHIP` when no BLOCKER/MAJOR or behavior-facing staleness blocks release, even if follow-up MINOR/NIT opportunities remain.
+   - `SHIP_WITH_FIXES` when bounded required-now fixes remain in the current patch.
+   - `DO_NOT_SHIP` when BLOCKER or unbounded release risk remains.
 5. Self-complete by piping your Ship-Readiness Packet to `mpcr reviewer complete-child --session-dir <SESSION_DIR_PATH> --reviewer-id <CHILD_ID8> --session-id <SESSION_ID8> --verdict <V> --blocker N --major N --minor N --nit N --proof-note "ship-readiness summary"` where `<V>` is `APPROVE` for `SHIP`, `REQUEST_CHANGES` for `SHIP_WITH_FIXES`, and `BLOCK` for `DO_NOT_SHIP`.
 
 ## Output format
@@ -422,6 +425,9 @@ You SHALL return EXACTLY one Ship-Readiness Packet:
 
 ### Required fixes (if SHIP_WITH_FIXES)
 - <items>
+
+### Follow-up opportunities
+- <non-blocking MINOR/NIT items or "None">
 
 ### Blocking items (if DO_NOT_SHIP)
 - <items>
@@ -515,7 +521,8 @@ MPCR_SESSION_DIR=<SESSION_DIR_PATH>
 1. Read prior cycle summaries, dispositions, and scope map packets.
 2. Build a deduplicated fingerprint set (`severity + anchor + normalized claim`).
 3. Propose next-cycle focus boundaries and explicit stopping condition for this cycle.
-4. Emit one Convergence Plan packet and self-complete.
+4. Treat only BLOCKER/MAJOR or behavior-facing staleness as reopeners. If only MINOR/NIT findings remain, route them to one terminal cleanup pass plus one final delta-only check.
+5. Emit one Convergence Plan packet and self-complete.
 
 ## Output format
 ```toml
@@ -524,7 +531,8 @@ artifact_kind = "convergence_plan"
 role_slug = "convergence-planner"
 
 next_cycle_focus = ["file-or-domain"]
-stop_condition = "no-net-new-actionable-findings"
+stop_condition = "no-net-new-blocker-major-or-behavior-staleness"
+reopen_severity_floor = "major"
 dedup_fingerprint_count = 0
 recursion_risks = ["risk"]
 ```

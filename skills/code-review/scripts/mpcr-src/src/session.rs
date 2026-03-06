@@ -12,7 +12,8 @@ use crate::id;
 use crate::lock::{self, LockConfig};
 use crate::paths;
 use crate::report_validation::{
-    validate_report_markdown, ReportIdentityExpectation, ReportValidationKind, SeverityExpectation,
+    canonicalize_report_markdown, validate_report_markdown, ReportIdentityExpectation,
+    ReportValidationKind, SeverityExpectation,
 };
 use anyhow::Context;
 use clap::builder::PossibleValue;
@@ -21,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
@@ -3248,6 +3249,81 @@ retry_count = 0
     }
 
     #[test]
+    fn finalize_review_allows_same_file_retry_path() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let report_path = session_dir.join(report_file_name(
+            parse_ts("2026-01-11T00:00:00Z")?,
+            "refs/heads/main",
+            "deadbeef",
+        )?);
+        fs::write(
+            &report_path,
+            valid_parent_report(
+                "deadbeef",
+                "sess0001",
+                "refs/heads/main",
+                &SeverityCounts::zero(),
+            ),
+        )?;
+
+        let result = finalize_review(FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::File(report_path.clone()),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        })?;
+
+        ensure!(Path::new(&result.report_path) == report_path);
+        ensure!(report_path.exists(), "same-file report should remain");
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::Finished);
+        ensure!(persisted.report_file.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn finalize_review_revalidates_persisted_report_under_lock() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let session_dir = dir.path().join("session");
@@ -3512,6 +3588,89 @@ retry_count = 0
             "rolled-back report artifact should not remain at {}",
             expected_report_path.display()
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finalize_review_succeeds_when_source_cleanup_fails() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir()?;
+        let session_dir = dir.path().join("session");
+        let entry = ReviewEntry {
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            target_ref: "refs/heads/main".to_string(),
+            initiator_status: InitiatorStatus::Requesting,
+            status: ReviewerStatus::InProgress,
+            parent_id: None,
+            started_at: "2026-01-11T00:00:00Z".to_string(),
+            updated_at: "2026-01-11T01:00:00Z".to_string(),
+            finished_at: None,
+            current_phase: Some(ReviewPhase::ReportWriting),
+            verdict: None,
+            counts: SeverityCounts::zero(),
+            report_file: None,
+            notes: Vec::new(),
+            child_reviews: Vec::new(),
+            extra: serde_json::Map::default(),
+        };
+        let session = SessionFile {
+            schema_version: SESSION_SCHEMA_VERSION.to_string(),
+            session_date: "2026-01-11".to_string(),
+            repo_root: dir.path().to_string_lossy().to_string(),
+            reviewers: vec!["deadbeef".to_string()],
+            reviews: vec![entry],
+            extra: serde_json::Map::new(),
+        };
+        write_session(&session_dir, &session)?;
+
+        let source_dir = dir.path().join("locked-source");
+        fs::create_dir_all(&source_dir)?;
+        let source_path = source_dir.join("incoming-report.md");
+        fs::write(
+            &source_path,
+            valid_parent_report(
+                "deadbeef",
+                "sess0001",
+                "refs/heads/main",
+                &SeverityCounts::zero(),
+            ),
+        )?;
+
+        fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o555))?;
+
+        let result = finalize_review(FinalizeReviewParams {
+            session: SessionLocator::new(session_dir.clone()),
+            reviewer_id: "deadbeef".to_string(),
+            session_id: "sess0001".to_string(),
+            verdict: ReviewVerdict::Approve,
+            counts: SeverityCounts::zero(),
+            report_input: FinalizeReportInput::File(source_path.clone()),
+            validation_kind: ReportValidationKind::ParentReviewReport,
+            copy_input_report: false,
+            auto_close_open_children: true,
+            auto_close_children_status: ReviewerStatus::Cancelled,
+            now: OffsetDateTime::now_utc(),
+        })?;
+
+        fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o755))?;
+
+        ensure!(Path::new(&result.report_path).exists());
+        ensure!(
+            source_path.exists(),
+            "source should remain when cleanup fails"
+        );
+
+        let parsed = read_session_file(&session_dir)?;
+        let persisted = parsed
+            .reviews
+            .iter()
+            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
+            .ok_or_else(|| anyhow::anyhow!("review entry missing after finalize"))?;
+        ensure!(persisted.status == ReviewerStatus::Finished);
+        ensure!(persisted.report_file.is_some());
         Ok(())
     }
 
@@ -4622,36 +4781,6 @@ fn same_file_path(a: &Path, b: &Path) -> bool {
     matches!((a_can, b_can), (Some(a_can), Some(b_can)) if a_can == b_can)
 }
 
-fn copy_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    fs::copy(src, dst).with_context(|| {
-        format!(
-            "copy report input from {} to {}",
-            src.display(),
-            dst.display()
-        )
-    })?;
-    Ok(())
-}
-
-fn move_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    match fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == ErrorKind::CrossesDevices => {
-            copy_file(src, dst)?;
-            fs::remove_file(src)
-                .with_context(|| format!("remove moved report input {}", src.display()))?;
-            Ok(())
-        }
-        Err(err) => Err(err).with_context(|| {
-            format!(
-                "move report input from {} to {}",
-                src.display(),
-                dst.display()
-            )
-        }),
-    }
-}
-
 fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
     match status {
         ReviewerStatus::Cancelled | ReviewerStatus::Error => Ok(()),
@@ -4683,7 +4812,11 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_auto_close_status(params.auto_close_children_status)?;
-    let report_markdown = load_report_markdown(&params.report_input)?;
+    let report_markdown = canonicalize_report_markdown(
+        &load_report_markdown(&params.report_input)?,
+        params.validation_kind,
+    )
+    .context("canonicalize report artifact to TOML-first format")?;
     validate_report_markdown(
         &report_markdown,
         params.validation_kind,
@@ -4748,12 +4881,12 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
 
     let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
     let report_path = params.session.session_dir().join(&filename);
+    let mut source_path_to_remove: Option<PathBuf> = None;
     let mut report_path_created = false;
-    let mut moved_source_path: Option<PathBuf> = None;
 
     // Step 2: write/move report file (still under the lock).
-    match params.report_input {
-        FinalizeReportInput::Markdown(report_markdown) => {
+    match &params.report_input {
+        FinalizeReportInput::Markdown(_) => {
             write_markdown_report_file(&report_path, report_markdown)?;
             report_path_created = true;
         }
@@ -4764,28 +4897,23 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                     source_path.display()
                 ));
             }
-
-            if same_file_path(&source_path, &report_path) {
-                if !report_path.exists() {
-                    return Err(anyhow::anyhow!(
-                        "report input file does not exist: {}",
-                        source_path.display()
-                    ));
-                }
-            } else {
+            if !same_file_path(source_path, &report_path) {
                 if report_path.exists() {
                     return Err(anyhow::anyhow!(
                         "report file already exists at destination: {}",
                         report_path.display()
                     ));
                 }
-                if params.copy_input_report {
-                    copy_file(&source_path, &report_path)?;
-                } else {
-                    move_file(&source_path, &report_path)?;
-                    moved_source_path = Some(source_path);
-                }
+                let latest_source_markdown = std::fs::read_to_string(source_path)
+                    .with_context(|| format!("read report input file {}", source_path.display()))?;
+                let canonical_source_markdown =
+                    canonicalize_report_markdown(&latest_source_markdown, params.validation_kind)
+                        .context("canonicalize report input file to TOML-first format")?;
+                write_markdown_report_file(&report_path, canonical_source_markdown)?;
                 report_path_created = true;
+                if !params.copy_input_report {
+                    source_path_to_remove = Some(source_path.clone());
+                }
             }
         }
     }
@@ -4799,22 +4927,12 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
         Some(&identity_expectation),
     ) {
         if report_path_created {
-            if let Some(source_path) = moved_source_path {
-                move_file(&report_path, &source_path).with_context(|| {
-                    format!(
-                        "rollback moved report file after validation failure {} -> {}",
-                        report_path.display(),
-                        source_path.display()
-                    )
-                })?;
-            } else {
-                fs::remove_file(&report_path).with_context(|| {
-                    format!(
-                        "rollback report file after validation failure {}",
-                        report_path.display()
-                    )
-                })?;
-            }
+            fs::remove_file(&report_path).with_context(|| {
+                format!(
+                    "rollback report file after validation failure {}",
+                    report_path.display()
+                )
+            })?;
         }
         return Err(validation_err).context("validate report artifact under lock");
     }
@@ -4873,6 +4991,10 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
 
     write_session_file_atomic(params.session.session_dir(), &params.reviewer_id, &session)?;
+
+    if let Some(source_path) = source_path_to_remove {
+        let _ = fs::remove_file(&source_path);
+    }
 
     Ok(FinalizeReviewResult {
         report_file,
@@ -4997,6 +5119,43 @@ pub fn set_initiator_status(params: &SetInitiatorStatusParams) -> anyhow::Result
 
     sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
 
+    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+/// Parameters for [`upsert_session_extra_json`].
+pub struct UpsertSessionExtraJsonParams {
+    /// Session directory locator.
+    pub session: SessionLocator,
+    /// Extra-field key to upsert at the session top-level.
+    pub key: String,
+    /// JSON value to write under `key`.
+    pub value: Value,
+    /// Lock owner id8 used while updating the session artifact.
+    pub lock_owner: String,
+}
+
+/// Upsert a top-level `SessionFile.extra` JSON field in a lock-protected write.
+///
+/// # Errors
+/// Returns an error if `lock_owner` is invalid, session cannot be read/written, or lock fails.
+pub fn upsert_session_extra_json(params: &UpsertSessionExtraJsonParams) -> anyhow::Result<()> {
+    validate_id8(&params.lock_owner, "lock_owner")?;
+    if params.key.trim().is_empty() {
+        return Err(anyhow::anyhow!("extra key must be non-empty"));
+    }
+
+    let lock_owner = params.lock_owner.clone();
+    let _guard = lock::acquire_lock(
+        params.session.session_dir(),
+        lock_owner.clone(),
+        LockConfig::default(),
+    )?;
+    let mut session = read_session_file(params.session.session_dir())?;
+    session
+        .extra
+        .insert(params.key.clone(), params.value.clone());
     write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
     Ok(())
 }

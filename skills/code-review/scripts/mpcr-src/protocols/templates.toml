@@ -13,8 +13,12 @@ reviewer_id = "<reviewer_id>"
 session_id = "<session_id>"
 target_ref = "<branch/PR/commit ref>"
 verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+reopen_eligibility_contract_version = 1
 # Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
 # [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+# Current-format parent reports SHALL include `reopen_eligibility_contract_version = 1`.
+# Set `reopen_eligible = true|false` on every merged finding and residual risk; use `true` only
+# for behavior-facing staleness items that should reopen full-cycle recursion.
 ```
 
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
@@ -23,12 +27,12 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 
 ## Ship-Readiness
 **Verdict:** SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP
-<1-2 sentences justifying the verdict. IF SHIP_WITH_FIXES, list required fixes.>
+<1-2 sentences justifying the verdict. SHIP MAY still include follow-up MINOR/NIT opportunities; SHIP_WITH_FIXES lists required-now fixes only.>
 
 ## Summary
 <2-3 sentences: what changed, overall assessment, key risk areas>
 
-## Findings
+## Required Now
 
 ### BLOCKER (if any)
 #### B1: <Title>
@@ -41,8 +45,9 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 ### MAJOR (if any)
 <same format as BLOCKER>
 
+## Follow-Up Opportunities
 ### MINOR / NIT (if any)
-<abbreviated: title, anchor, recommendation>
+<abbreviated: title, anchor, recommendation, or "None">
 
 ## Defended Proofs
 <1-2 sentences per defended theorem, or "No adversarial proofs attempted" for trivial changes>
@@ -63,8 +68,12 @@ reviewer_id = "<reviewer_id>"
 session_id = "<session_id>"
 target_ref = "<branch/PR/commit ref>"
 verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+reopen_eligibility_contract_version = 1
 # Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
 # [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+# Current-format parent reports SHALL include `reopen_eligibility_contract_version = 1`.
+# Set `reopen_eligible = true|false` on every merged finding and residual risk; use `true` only
+# for behavior-facing staleness items that should reopen full-cycle recursion.
 ```
 
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
@@ -74,7 +83,7 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 
 ## Ship-Readiness
 **Verdict:** SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP
-<1-3 sentences justifying verdict with reference to evaluation matrix axes.>
+<1-3 sentences justifying verdict with reference to evaluation matrix axes. SHIP MAY still carry non-blocking MINOR/NIT follow-up opportunities.>
 
 ## Summary
 <3-5 sentences: what changed, why, overall risk assessment>
@@ -87,7 +96,7 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 | Contracts | ... | ... |
 | ... | ... | ... |
 
-## Findings
+## Required Now
 
 ### BLOCKER
 #### B1: <Title>
@@ -101,6 +110,7 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 ### MAJOR
 <same format>
 
+## Follow-Up Opportunities
 ### MINOR
 <abbreviated: anchor, issue, recommendation>
 
@@ -131,8 +141,12 @@ reviewer_id = "<reviewer_id>"
 session_id = "<session_id>"
 target_ref = "<branch/PR/commit ref>"
 verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
+reopen_eligibility_contract_version = 1
 # Expand: [counts], [ship_readiness], [[ship_readiness_axes]], [[source_packets]],
 # [[merged_findings]], [[defended_summary]], [[residual_risks]], [validation_summary]
+# Current-format parent reports SHALL include `reopen_eligibility_contract_version = 1`.
+# Set `reopen_eligible = true|false` on every merged finding and residual risk; use `true` only
+# for behavior-facing staleness items that should reopen full-cycle recursion.
 ```
 
 **Verdict:** APPROVE | REQUEST_CHANGES | BLOCK
@@ -143,6 +157,7 @@ verdict = "APPROVE|REQUEST_CHANGES|BLOCK"
 
 ## 1. Ship-Readiness
 **Verdict:** SHIP | SHIP_WITH_FIXES | DO_NOT_SHIP
+`SHIP` MAY still include non-blocking MINOR/NIT follow-up opportunities. `SHIP_WITH_FIXES` lists required-now fixes only.
 
 | Axis | Status | Notes |
 |------|--------|-------|
@@ -182,7 +197,7 @@ For each In-scope domain, list must-prove theorems:
 1. <domain>: "<concrete falsifiable claim>" (file:line)
 2. ...
 
-## 6. Findings
+## 6. Required Now
 
 ### BLOCKER
 #### B1: <Title>
@@ -196,23 +211,24 @@ For each In-scope domain, list must-prove theorems:
 ### MAJOR
 <same structure>
 
+## 7. Follow-Up Opportunities
 ### MINOR
 - **M1:** `file:line` - <issue> -> <recommendation>
 
 ### NIT
 - **N1:** `file:line` - <suggestion>
 
-## 7. Defended Proofs
+## 8. Defended Proofs
 | Theorem | Disproof Attempt | Outcome | Confidence |
 |---------|-----------------|---------|------------|
 | <claim> | <scenario tried> | Defended | HIGH |
 | ... | ... | ... | ... |
 
-## 8. Residual Risk
+## 9. Residual Risk
 - <Area>: <what wasn't verified>, suggested follow-up: <action>
 
-## 9. Verification Plan
-For each BLOCKER/MAJOR finding:
+## 10. Verification Plan
+For each required-now BLOCKER/MAJOR finding:
 1. <What to verify after fix>
 2. <Test to add or run>
 """
