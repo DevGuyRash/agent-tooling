@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# start-branch.sh - Create a new work branch from the default branch using repo policy.
+# start-branch.sh - Create a new work branch or linked worktree from the default branch using repo policy.
 #
 # Usage:
-#   bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>]
+#   bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree]
 #
 # Examples:
 #   bash scripts/start-branch.sh feat add-json-output
 #   bash scripts/start-branch.sh fix handle-empty-payload --issue 123
 #   bash scripts/start-branch.sh chore --issue 456 --stash-name "carry local wip"
 #   bash scripts/start-branch.sh docs update-readme --base main
+#   bash scripts/start-branch.sh feat add-json-output --worktree
 #
 # Notes:
 # - Detects default branch from origin/HEAD when possible.
 # - Validates branch type and slug format.
 # - Uses kebab-case for slug; spaces become hyphens.
-# - If working tree is dirty, stashes tracked+untracked changes before switching branches
-#   and restores them after branch creation.
+# - Branch mode stashes tracked+untracked changes before switching branches and restores
+#   them after branch creation.
+# - Worktree mode creates a clean linked worktree and does not move local uncommitted changes.
 # - Auto-installs managed pre-commit hook by default to enforce sensitive-data scans.
 
 ALLOWED_TYPES=("feat" "fix" "docs" "refactor" "test" "chore" "perf" "ci" "build" "style" "deps" "security" "revert" "hotfix")
@@ -42,7 +44,7 @@ require_opt_value() {
 print_help() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]
+  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]
 
 Arguments:
   <type>             Branch type prefix (feat, fix, docs, refactor, ...).
@@ -52,6 +54,7 @@ Options:
   --issue <id>       Optional issue token inserted before slug.
   --base <branch>    Optional base branch; default auto-detect from origin/HEAD, fallback main.
   --stash-name <n>   Optional stash note when auto-stashing dirty worktree.
+  --worktree         Create a linked worktree instead of switching the current checkout.
   --no-install-hooks Skip automatic managed pre-commit hook installation.
   -h, --help         Show this help text.
 
@@ -85,6 +88,7 @@ BASE=""
 STASH_NOTE=""
 AUTO_SLUG_FROM_ISSUE="false"
 INSTALL_HOOKS="true"
+USE_WORKTREE="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -109,6 +113,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-install-hooks)
       INSTALL_HOOKS="false"
+      shift
+      ;;
+    --worktree)
+      USE_WORKTREE="true"
       shift
       ;;
     *)
@@ -175,9 +183,16 @@ BRANCH+="$SLUG"
 
 ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 STASHED="false"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+MAIN_CHECKOUT_ROOT="$REPO_ROOT"
+if [[ -n "$COMMON_DIR" ]]; then
+  MAIN_CHECKOUT_ROOT="$(cd "$COMMON_DIR/.." && pwd -P)"
+fi
+WORKTREE_PATH="${MAIN_CHECKOUT_ROOT}.worktrees/$BRANCH"
 
-# Auto-stash tracked + untracked changes when dirty.
-if [[ -n "$(git status --porcelain)" ]]; then
+# Auto-stash tracked + untracked changes when dirty in branch mode.
+if [[ "$USE_WORKTREE" != "true" && -n "$(git status --porcelain)" ]]; then
   LOCAL_TS="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || true)"
   [[ -n "$LOCAL_TS" ]] || LOCAL_TS="unknown-local-time"
   NOTE="${STASH_NOTE:-auto}"
@@ -189,25 +204,42 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 echo "Base branch: $BASE"
-echo "Creating branch: $BRANCH"
+if [[ "$USE_WORKTREE" == "true" ]]; then
+  echo "Creating linked worktree branch: $BRANCH"
+else
+  echo "Creating branch: $BRANCH"
+fi
 
 if ! FETCH_OUTPUT="$(git fetch origin --prune 2>&1)"; then
   echo "Warning: git fetch origin --prune failed; continuing with local refs." >&2
   echo "Warning: git fetch details: $FETCH_OUTPUT" >&2
 fi
 
-git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout base branch '$BASE' (does it exist locally?)"
-if git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
-  git pull --ff-only || die "failed to pull base branch '$BASE' (resolve and retry)"
-else
-  echo "No upstream configured for '$BASE'; skipping pull."
-fi
-
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   die "branch '$BRANCH' already exists locally"
 fi
 
-git checkout -b "$BRANCH"
+if [[ "$USE_WORKTREE" == "true" ]]; then
+  BASE_REF="$BASE"
+  if git show-ref --verify --quiet "refs/remotes/origin/$BASE"; then
+    BASE_REF="origin/$BASE"
+  elif ! git show-ref --verify --quiet "refs/heads/$BASE"; then
+    die "failed to resolve base branch '$BASE' locally or on origin"
+  fi
+  if [[ -e "$WORKTREE_PATH" ]]; then
+    die "worktree path already exists: $WORKTREE_PATH"
+  fi
+  mkdir -p "$(dirname "$WORKTREE_PATH")"
+  git worktree add -b "$BRANCH" "$WORKTREE_PATH" "$BASE_REF" >/dev/null 2>&1 || die "failed to create linked worktree at '$WORKTREE_PATH'"
+else
+  git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout base branch '$BASE' (does it exist locally?)"
+  if git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
+    git pull --ff-only || die "failed to pull base branch '$BASE' (resolve and retry)"
+  else
+    echo "No upstream configured for '$BASE'; skipping pull."
+  fi
+  git checkout -b "$BRANCH"
+fi
 
 if [[ "$STASHED" == "true" ]]; then
   echo "Restoring stashed changes onto new branch."
@@ -224,12 +256,15 @@ fi
 if [[ "$INSTALL_HOOKS" == "true" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
   HOOK_INSTALLER="$SCRIPT_DIR/install-hooks.sh"
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+  HOOK_REPO_ROOT="$REPO_ROOT"
+  if [[ "$USE_WORKTREE" == "true" ]]; then
+    HOOK_REPO_ROOT="$WORKTREE_PATH"
+  fi
   if [[ -x "$HOOK_INSTALLER" ]]; then
-    if bash "$HOOK_INSTALLER" --repo "$REPO_ROOT" >/dev/null 2>&1; then
-      echo "Managed pre-commit hook ensured for: $REPO_ROOT"
+    if bash "$HOOK_INSTALLER" --repo "$HOOK_REPO_ROOT" >/dev/null 2>&1; then
+      echo "Managed pre-commit hook ensured for: $HOOK_REPO_ROOT"
     else
-      echo "Warning: failed to auto-install managed pre-commit hook; run '$HOOK_INSTALLER --repo \"$REPO_ROOT\"' manually." >&2
+      echo "Warning: failed to auto-install managed pre-commit hook; run '$HOOK_INSTALLER --repo \"$HOOK_REPO_ROOT\"' manually." >&2
     fi
   else
     echo "Warning: hook installer script not found/executable at $HOOK_INSTALLER" >&2
@@ -237,7 +272,14 @@ if [[ "$INSTALL_HOOKS" == "true" ]]; then
 fi
 
 echo ""
-echo "✅ Created and checked out: $BRANCH"
+if [[ "$USE_WORKTREE" == "true" ]]; then
+  echo "✅ Created linked worktree: $BRANCH"
+  echo "Worktree path: $WORKTREE_PATH"
+  echo "Next workdir: $WORKTREE_PATH"
+  echo "Next command: cd $(printf '%q' "$WORKTREE_PATH")"
+else
+  echo "✅ Created and checked out: $BRANCH"
+fi
 echo "Next:"
 echo "  - make changes"
 echo "  - commit with Conventional Commits"

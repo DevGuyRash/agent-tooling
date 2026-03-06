@@ -28,6 +28,7 @@ class ScriptSyntaxTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         targets = [
             SCRIPTS_DIR / "start-branch.sh",
+            SCRIPTS_DIR / "finish-work.sh",
             SCRIPTS_DIR / "install-hooks.sh",
             SCRIPTS_DIR / "setup-security.sh",
             SCRIPTS_DIR / "gh-scope-check.sh",
@@ -604,6 +605,71 @@ class StartBranchScriptTests(unittest.TestCase):
             branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip()
             self.assertEqual(branch, "fix/issue-123")
 
+    def test_start_branch_worktree_mode_creates_linked_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "linked-mode",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+
+            expected_path = Path(f"{repo}.worktrees") / "feat" / "linked-mode"
+            self.assertTrue(expected_path.exists())
+            self.assertIn(f"Next workdir: {expected_path}", proc.stdout)
+            self.assertEqual(
+                run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=expected_path).stdout.strip(),
+                "feat/linked-mode",
+            )
+
+    def test_start_branch_worktree_mode_rejects_existing_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+            existing_path = Path(f"{repo}.worktrees") / "feat" / "linked-mode"
+            existing_path.mkdir(parents=True, exist_ok=True)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "linked-mode",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("worktree path already exists", proc.stderr)
+
     def test_start_branch_stash_pop_failure_keeps_stash(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -657,6 +723,109 @@ class StartBranchScriptTests(unittest.TestCase):
             )
             self.assertNotEqual(proc_base.returncode, 0)
             self.assertIn("option '--base' requires a value", proc_base.stderr)
+
+
+class FinishWorkScriptTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "checkout", "-b", "main"], cwd=repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        run(["git", "add", "README.md"], cwd=repo)
+        run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+    def test_finish_work_switches_to_base_and_deletes_merged_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/cleanup-branch"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add cleanup flow"], cwd=repo)
+
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/cleanup-branch", "-m", "merge feat/cleanup-branch"], cwd=repo)
+            run(["git", "checkout", "feat/cleanup-branch"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+
+            branch_check = run(
+                ["git", "show-ref", "--verify", "refs/heads/feat/cleanup-branch"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(branch_check.returncode, 0)
+
+    def test_finish_work_removes_linked_worktree_and_returns_main_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            create_proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "cleanup-worktree",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            worktree_path = Path(f"{repo}.worktrees") / "feat" / "cleanup-worktree"
+
+            (worktree_path / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=worktree_path)
+            run(["git", "commit", "-m", "feat: add worktree cleanup"], cwd=worktree_path)
+
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/cleanup-worktree", "-m", "merge feat/cleanup-worktree"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=worktree_path,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertFalse(worktree_path.exists())
+            self.assertIn(f"Next workdir: {repo}", proc.stdout)
+
+            branch_check = run(
+                ["git", "show-ref", "--verify", "refs/heads/feat/cleanup-worktree"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(branch_check.returncode, 0)
+
+    def test_finish_work_refuses_cleanup_when_branch_not_confirmed_on_base(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/not-merged"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: pending merge"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("is not confirmed on 'main'", proc.stderr)
 
 
 class MergeSquashScriptTests(unittest.TestCase):
@@ -848,6 +1017,75 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertIn("--delete-branch", merge_call)
             self.assertIn(" --admin", merge_call)
 
+    def test_merge_squash_body_out_writes_editable_draft(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            fake_gh = fake_bin / "gh"
+            self._write_fake_gh(fake_gh)
+
+            draft_file = temp_path / "squash.md"
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(temp_path / "calls.log")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-merge-squash.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                    "--body-out",
+                    str(draft_file),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(draft_file.exists())
+            body = draft_file.read_text(encoding="utf-8")
+            self.assertIn("## Commits", body)
+            self.assertIn("- cli: add deterministic merge", body)
+
+    def test_merge_squash_body_file_uses_explicit_body(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            log_file = temp_path / "calls.log"
+            fake_gh = fake_bin / "gh"
+            self._write_fake_gh(fake_gh)
+
+            custom_body = temp_path / "custom.md"
+            custom_body.write_text("## Overview\n\nEdited body.\n", encoding="utf-8")
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(log_file)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-merge-squash.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                    "--body-file",
+                    str(custom_body),
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Edited body.", proc.stdout)
+            merge_call = log_file.read_text(encoding="utf-8")
+            self.assertIn(f"--body-file {custom_body}", merge_call)
+
 
 class DeterministicGeneratorScriptTests(unittest.TestCase):
     def _init_repo(self, repo: Path):
@@ -890,6 +1128,35 @@ class DeterministicGeneratorScriptTests(unittest.TestCase):
             self.assertIn("## Refs", proc.stdout)
             self.assertIn("- #77", proc.stdout)
             self.assertNotIn("- #123", proc.stdout)
+
+    def test_generate_squash_message_deduplicates_summary_bullets_but_keeps_commits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "feat/dedupe"], cwd=repo)
+
+            for idx in range(2):
+                (repo / f"feature-{idx}.txt").write_text(f"{idx}\n", encoding="utf-8")
+                run(["git", "add", f"feature-{idx}.txt"], cwd=repo)
+                run(["git", "commit", "-m", "feat(cli): add json output"], cwd=repo)
+
+            proc = run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "generate-squash-message.py"),
+                    "--summary",
+                    "add json output",
+                    "--base",
+                    "main",
+                    "--pr",
+                    "77",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(proc.stdout.count("- cli: add json output"), 1)
+            self.assertEqual(proc.stdout.count("`"), 4)
 
     def test_generate_release_notes_omits_empty_sections_and_keeps_refs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

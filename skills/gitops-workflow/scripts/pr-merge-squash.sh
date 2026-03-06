@@ -4,13 +4,15 @@ set -euo pipefail
 # pr-merge-squash.sh - Deterministic Squash & Merge runner for GitHub PRs.
 #
 # Usage:
-#   bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]
+#   bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]
 #
 # Behavior:
 # - Enforces unresolved-thread gate.
 # - Enforces CI required checks and approval gate by default.
 # - Generates deterministic squash message body (omits empty optional sections).
 # - Always keeps Overview + Commits + Refs sections.
+# - Optional --body-file uses an explicitly edited squash body for the merge.
+# - Optional --body-out writes the deterministic draft body to a stable path for review/editing.
 # - Merges with: gh pr merge --squash --subject --body-file --match-head-commit --delete-branch
 # - Deletes the source branch after successful merge.
 # - Optional --admin override relaxes approval/check gating and adds --admin to merge command.
@@ -27,7 +29,7 @@ require_cmd() {
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]
+  bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]
 
 Arguments:
   <pr_number>          Pull request number.
@@ -35,6 +37,8 @@ Arguments:
 Options:
   --repo <owner/repo>  Optional repository override.
   --summary <text>     Optional replacement for Conventional Commit description segment.
+  --body-file <path>   Use an explicitly prepared squash body file instead of the generated draft.
+  --body-out <path>    Write the deterministic generated draft body to this path before merge/dry-run.
   --admin              Admin override: pass --admin to gh merge and relax pre-merge approval/check gates.
   --dry-run            Print subject/body and merge command without executing merge.
   -h, --help           Show help.
@@ -58,6 +62,8 @@ REPO=""
 SUMMARY_OVERRIDE=""
 DRY_RUN="false"
 ADMIN_OVERRIDE="false"
+BODY_FILE_INPUT=""
+BODY_OUT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,6 +73,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --summary)
       SUMMARY_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --body-file)
+      BODY_FILE_INPUT="${2:-}"
+      shift 2
+      ;;
+    --body-out)
+      BODY_OUT="${2:-}"
       shift 2
       ;;
     --admin)
@@ -86,6 +100,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$BODY_FILE_INPUT" && -n "$BODY_OUT" ]]; then
+  die "--body-file and --body-out cannot be combined"
+fi
 
 VIEW_ARGS=("$PR_NUMBER")
 CHECK_ARGS=("$PR_NUMBER" --required)
@@ -111,130 +129,29 @@ fi
 
 PR_JSON="$(gh pr view "${VIEW_ARGS[@]}" --json number,title,isDraft,url,reviewDecision,mergeStateStatus,headRefOid,commits)"
 
-BODY_FILE="$(mktemp -t squash-body.XXXXXX.md)"
+BODY_FILE=""
+GENERATED_BODY_FILE=""
 META_FILE="$(mktemp -t squash-meta.XXXXXX.json)"
-trap 'rm -f "$BODY_FILE" "$META_FILE"' EXIT
+trap 'rm -f "$GENERATED_BODY_FILE" "$META_FILE"' EXIT
 
-python3 - "$SUMMARY_OVERRIDE" "$BODY_FILE" "$META_FILE" "$PR_JSON" <<'PY'
+if [[ -n "$BODY_FILE_INPUT" ]]; then
+  [[ -f "$BODY_FILE_INPUT" ]] || die "body file not found: $BODY_FILE_INPUT"
+  BODY_FILE="$BODY_FILE_INPUT"
+  python3 - "$SUMMARY_OVERRIDE" "$META_FILE" "$PR_JSON" "$SCRIPT_DIR" <<'PY'
 import json
-import re
 import sys
+from pathlib import Path
 
 summary_override = (sys.argv[1] or "").strip()
-body_file = sys.argv[2]
-meta_file = sys.argv[3]
-data = json.loads(sys.argv[4])
+meta_file = sys.argv[2]
+data = json.loads(sys.argv[3])
+script_dir = Path(sys.argv[4])
+sys.path.insert(0, str(script_dir / "lib"))
+
+from squash_renderer import build_subject  # noqa: E402
+
 title = (data.get("title") or "").strip()
-
-cc = re.compile(r"^(?P<prefix>[a-z]+(?:\([^)]+\))?(?:!)?:\s)(?P<desc>.+)$")
-m = cc.match(title)
-if not m:
-    sys.stderr.write("Error: PR title must follow Conventional Commits format for squash subject\n")
-    raise SystemExit(2)
-
-subject = title
-if summary_override:
-    subject = f"{m.group('prefix')}{summary_override}"
-
-commits_raw = data.get("commits") or []
-if isinstance(commits_raw, dict):
-    commits = commits_raw.get("nodes") or []
-elif isinstance(commits_raw, list):
-    commits = commits_raw
-else:
-    commits = []
-
-feat = []
-fixes = []
-changes = []
-breaking = []
-commit_lines = []
-
-cc_subject = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?:\s(?P<desc>.+)$")
-
-for c in commits:
-    if isinstance(c, dict) and "commit" in c and isinstance(c["commit"], dict):
-        node = c["commit"]
-    else:
-        node = c if isinstance(c, dict) else {}
-
-    oid = str(node.get("oid") or "")
-    headline = (node.get("messageHeadline") or node.get("message") or "").splitlines()[0].strip()
-    body = str(node.get("messageBody") or node.get("body") or "")
-
-    short = oid[:7] if oid else "unknown"
-    if headline:
-        commit_lines.append(f"- `{short}` {headline}")
-    else:
-        commit_lines.append(f"- `{short}` <no headline>")
-
-    parsed = cc_subject.match(headline)
-    if not parsed:
-        if headline:
-            changes.append(f"- {headline}")
-        continue
-
-    typ = parsed.group("type")
-    scope = parsed.group("scope")
-    desc = parsed.group("desc")
-    is_breaking = bool(parsed.group("bang")) or ("BREAKING CHANGE" in body)
-
-    scope_prefix = f"{scope}: " if scope else ""
-    bullet = f"- {scope_prefix}{desc}"
-
-    if typ == "feat":
-        feat.append(bullet)
-    elif typ in {"fix", "hotfix"}:
-        fixes.append(bullet)
-    else:
-        changes.append(bullet)
-
-    if is_breaking:
-        breaking.append(f"- {scope_prefix}{desc}; migration: <add steps>")
-
-number = data.get("number")
-pr_ref = f"#{number}" if number is not None else "<pr>"
-
-def append_section(lines, title, bullets, always=False, empty_bullet="- (none)"):
-    if not bullets and not always:
-        return
-    lines.extend([f"## {title}", ""])
-    if bullets:
-        lines.extend(bullets)
-    else:
-        lines.append(empty_bullet)
-    lines.append("")
-
-lines = [
-    "## Overview",
-    "",
-    f"Squash merge for PR {pr_ref}.",
-    "",
-]
-
-append_section(lines, "New Features", feat)
-append_section(lines, "What's Changed", changes)
-append_section(lines, "Bug Fixes", fixes)
-append_section(lines, "Breaking Changes", breaking)
-append_section(
-    lines,
-    "Commits",
-    commit_lines,
-    always=True,
-    empty_bullet="- (none reported by API)",
-)
-
-ref_lines = []
-if number is not None:
-    ref_lines.append(f"- #{number}")
-append_section(lines, "Refs", ref_lines, always=True, empty_bullet="- (none provided)")
-
-if lines and lines[-1] == "":
-    lines.pop()
-
-with open(body_file, "w", encoding="utf-8") as f:
-    f.write("\n".join(lines) + "\n")
-
+subject = build_subject(title, summary_override=summary_override)
 meta = {
     "subject": subject,
     "headRefOid": data.get("headRefOid") or "",
@@ -246,6 +163,74 @@ meta = {
 with open(meta_file, "w", encoding="utf-8") as f:
     json.dump(meta, f)
 PY
+else
+  if [[ -n "$BODY_OUT" ]]; then
+    BODY_FILE="$BODY_OUT"
+  else
+    GENERATED_BODY_FILE="$(mktemp -t squash-body.XXXXXX.md)"
+    BODY_FILE="$GENERATED_BODY_FILE"
+  fi
+
+  python3 - "$SUMMARY_OVERRIDE" "$BODY_FILE" "$META_FILE" "$PR_JSON" "$SCRIPT_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary_override = (sys.argv[1] or "").strip()
+body_file = sys.argv[2]
+meta_file = sys.argv[3]
+data = json.loads(sys.argv[4])
+script_dir = Path(sys.argv[5])
+sys.path.insert(0, str(script_dir / "lib"))
+
+from squash_renderer import CommitEntry, render_squash_message  # noqa: E402
+
+title = (data.get("title") or "").strip()
+commits_raw = data.get("commits") or []
+if isinstance(commits_raw, dict):
+    commits_raw = commits_raw.get("nodes") or []
+elif not isinstance(commits_raw, list):
+    commits_raw = []
+
+commits = []
+for item in commits_raw:
+    if isinstance(item, dict) and "commit" in item and isinstance(item["commit"], dict):
+        node = item["commit"]
+    else:
+        node = item if isinstance(item, dict) else {}
+    commits.append(
+        CommitEntry(
+            sha=str(node.get("oid") or ""),
+            headline=(node.get("messageHeadline") or node.get("message") or "").splitlines()[0].strip(),
+            body=str(node.get("messageBody") or node.get("body") or ""),
+        )
+    )
+
+number = data.get("number")
+refs = [f"#{number}"] if number is not None else []
+rendered = render_squash_message(
+    title=title,
+    commits=commits,
+    pr_ref=f"PR #{number}" if number is not None else None,
+    refs=refs,
+    summary_override=summary_override,
+)
+
+with open(body_file, "w", encoding="utf-8") as f:
+    f.write(rendered.body)
+
+meta = {
+    "subject": rendered.subject,
+    "headRefOid": data.get("headRefOid") or "",
+    "reviewDecision": data.get("reviewDecision") or "",
+    "isDraft": bool(data.get("isDraft", False)),
+    "mergeStateStatus": data.get("mergeStateStatus") or "",
+    "url": data.get("url") or "",
+}
+with open(meta_file, "w", encoding="utf-8") as f:
+    json.dump(meta, f)
+PY
+fi
 
 SUBJECT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["subject"])' "$META_FILE")"
 HEAD_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])' "$META_FILE")"
