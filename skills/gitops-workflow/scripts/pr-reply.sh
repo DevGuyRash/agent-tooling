@@ -108,7 +108,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -n "$BODY" ]]; then
-  TMP_BODY_FILE="$(mktemp -t pr-reply.XXXXXX.md)"
+  TMP_BODY_FILE="$(mktemp)"
   BODY_NORMALIZED="${BODY//\\n/$'\n'}"
   printf '%s' "$BODY_NORMALIZED" > "$TMP_BODY_FILE"
   BODY_FILE="$TMP_BODY_FILE"
