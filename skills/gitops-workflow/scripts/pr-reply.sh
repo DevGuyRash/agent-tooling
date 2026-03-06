@@ -16,30 +16,9 @@ set -euo pipefail
 # - If you don't know the comment id, reply in the GitHub UI instead.
 # - Literal '\n' sequences in --body text are normalized to real newlines.
 
-die() {
-  echo "Error: $*" >&2
-  exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
-require_opt_value() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" || "$val" == --* ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
-
-require_opt_value_present() {
-  local opt="$1"
-  local val="${2:-}"
-  if [[ -z "$val" ]]; then
-    die "option '$opt' requires a value"
-  fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=skills/gitops-workflow/scripts/lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 print_help() {
   cat <<'USAGE'
@@ -61,26 +40,6 @@ Options:
 USAGE
 }
 
-parse_repo() {
-  local repo="$1"
-  local owner name
-  if [[ ! "$repo" =~ ^[^/]+/[^/]+$ ]]; then
-    die "invalid --repo '$repo' (expected owner/repo)"
-  fi
-  owner="${repo%%/*}"
-  name="${repo##*/}"
-  if [[ ! "$owner" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
-    die "invalid --repo owner '$owner' (expected GitHub owner slug)"
-  fi
-  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    die "invalid --repo name '$name' (allowed: letters, digits, ., _, -)"
-  fi
-  if [[ "$name" == "." || "$name" == ".." || "$name" == *".."* ]]; then
-    die "invalid --repo name '$name' (path-like segments are not allowed)"
-  fi
-  printf '%s\t%s\n' "$owner" "$name"
-}
-
 PR_NUMBER="${1:-}"
 if [[ "$PR_NUMBER" == "-h" || "$PR_NUMBER" == "--help" ]]; then
   print_help
@@ -89,10 +48,8 @@ fi
 COMMENT_ID="${2:-}"
 shift 2 || true
 
-[[ -n "$PR_NUMBER" ]] || die "missing <pr_number>"
-[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || die "invalid <pr_number>: must be numeric"
-[[ -n "$COMMENT_ID" ]] || die "missing <comment_id>"
-[[ "$COMMENT_ID" =~ ^[0-9]+$ ]] || die "invalid <comment_id>: must be numeric"
+require_numeric_id "pr_number" "$PR_NUMBER"
+require_numeric_id "comment_id" "$COMMENT_ID"
 
 REPO=""
 BODY=""
