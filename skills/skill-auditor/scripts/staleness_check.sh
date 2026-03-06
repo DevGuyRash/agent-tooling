@@ -12,9 +12,10 @@ CLI_BIN=""
 FORMAT="text"
 SKILL_DIR=""
 TIMEOUT_SECONDS=15
+MAX_EXAMPLES=80
 
 usage() {
-    echo "Usage: staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json] [--timeout-seconds <n>]"
+    echo "Usage: staleness_check.sh <skill-directory> [--cli <binary>] [--format text|json] [--timeout-seconds <n>] [--max-examples <n>]"
     echo ""
     echo "Checks documentation/runtime staleness drift:"
     echo "  - Aggressively extract command-shaped examples from SKILL.md/references"
@@ -65,6 +66,20 @@ while [ $# -gt 0 ]; do
                     ;;
             esac
             ;;
+        --max-examples)
+            shift
+            MAX_EXAMPLES="${1-}"
+            case "$MAX_EXAMPLES" in
+                ''|*[!0-9]*)
+                    echo "error: --max-examples must be a positive integer"
+                    exit 1
+                    ;;
+                0)
+                    echo "error: --max-examples must be greater than 0"
+                    exit 1
+                    ;;
+            esac
+            ;;
         --*)
             echo "error: unknown option: $1"
             exit 1
@@ -102,13 +117,29 @@ if [ -n "$CLI_BIN" ]; then
     fi
 fi
 
+KNOWN_SUBCOMMANDS=""
+if [ -n "$CLI_BIN" ] && [ -x "$CLI_BIN" ]; then
+    cli_help_text=$("$CLI_BIN" --help 2>/dev/null || true)
+    KNOWN_SUBCOMMANDS=$(printf '%s\n' "$cli_help_text" \
+        | awk '
+            /^[[:space:]][[:space:]][A-Za-z0-9][A-Za-z0-9-]*/ {
+                cmd = $1
+                if (cmd !~ /^-/) print cmd
+            }
+        ' \
+        | sort -u \
+        | tr '\n' '|')
+    KNOWN_SUBCOMMANDS=${KNOWN_SUBCOMMANDS%|}
+fi
+
 DIR_NAME=$(basename "$SKILL_DIR")
 TAB=$(printf '\t')
 
 tmp_md=$(mktemp)
 tmp_candidates=$(mktemp)
 tmp_results=$(mktemp)
-trap 'rm -f "$tmp_md" "$tmp_candidates" "$tmp_results"' EXIT INT TERM
+tmp_candidates_limited=$(mktemp)
+trap 'rm -f "$tmp_md" "$tmp_candidates" "$tmp_candidates_limited" "$tmp_results"' EXIT INT TERM
 
 find "$SKILL_DIR" -name '*.md' -not -path '*/.git/*' -not -path '*/target/*' \
     -not -path "$SKILL_DIR/tests/*" -not -name 'ARCHITECTURE-PLAN.md' \
@@ -118,7 +149,7 @@ find "$SKILL_DIR" -name '*.md' -not -path '*/.git/*' -not -path '*/target/*' \
 
 while IFS= read -r file; do
     [ -z "$file" ] && continue
-    awk -v file="$file" '
+    awk -v file="$file" -v known_cmds="$KNOWN_SUBCOMMANDS" '
         function trim(s) {
             gsub(/^[[:space:]]+/, "", s)
             gsub(/[[:space:]]+$/, "", s)
@@ -172,9 +203,23 @@ while IFS= read -r file; do
         function looks_command_shaped(cmd) {
             c = clean(cmd)
             if (c == "") return 0
+            if (c == "...") return 0
             if (c ~ /^-/) return 0
             if (c ~ /^[A-Z0-9_]+$/) return 0
             if (c ~ /^<[^>]+>$/) return 0
+            if (c ~ /^\[[^][]+\]$/) return 0
+            if (c ~ /^\/[^[:space:]]*\/$/) return 0
+            if (c ~ /<[^>]+>/ && c !~ /[[:space:]]/) return 0
+            if (c ~ /^[[:punct:]]+$/) return 0
+            if (c !~ /[[:space:]]/ && c ~ /^[A-Za-z][A-Za-z0-9-]*$/) {
+                if (known_cmds == "") return 0
+                return (known_cmds ~ "(^|\\|)" c "(\\||$)")
+            }
+            if (c !~ /[[:space:]]/ && c ~ /^[A-Za-z0-9_.\/-]+$/) {
+                if (c ~ /^\./) return 0
+                if (c ~ /\/$/) return 0
+                if (c ~ /\.(md|txt|rst|json|toml|ya?ml|csv|tsv|png|jpg|jpeg|gif|svg|pdf|sh|py|rb|pl|js|ts|rs)$/) return 0
+            }
             if (c ~ /^[A-Za-z0-9_./"$<][A-Za-z0-9_./:"$<>{}\[\]@ -]*$/) return 1
             return 0
         }
@@ -246,6 +291,58 @@ while IFS= read -r file; do
         }
     ' "$file" >> "$tmp_candidates"
 done < "$tmp_md"
+
+tmp_candidates_filtered=$(mktemp)
+trap 'rm -f "$tmp_md" "$tmp_candidates" "$tmp_candidates_filtered" "$tmp_candidates_limited" "$tmp_results"' EXIT INT TERM
+
+printf '%s\n' "$KNOWN_SUBCOMMANDS" | awk '1' >/dev/null 2>&1
+awk -v known_cmds="$KNOWN_SUBCOMMANDS" '
+    BEGIN { FS = "\t" }
+    function is_known(word) {
+        if (known_cmds == "") return 0
+        return (known_cmds ~ "(^|\\|)" word "(\\||$)")
+    }
+    function keep(cmd, first) {
+        if (cmd == "" || cmd == "..." || cmd == "$@") return 0
+        if (cmd ~ /^<[^>]+>$/) return 0
+        if (cmd ~ /^\[[^][]+\]$/) return 0
+        if (cmd ~ /^[A-Z][A-Za-z0-9.:-]*$/ && !is_known(cmd)) return 0
+        if (cmd ~ /^[A-Za-z][A-Za-z0-9.-]*$/ && !is_known(cmd)) return 0
+        if (cmd ~ /^[A-Za-z][A-Za-z0-9._/-]*<[^>]+>[A-Za-z0-9._/-]*$/) return 0
+        split(cmd, parts, /[[:space:]]+/)
+        first = parts[1]
+        if (first ~ /^(sed|awk|grep|readlink)$/) return 0
+        if (first == "tool" && cmd ~ /\.\.\./) return 0
+        return 1
+    }
+    {
+        if (keep($4)) print
+    }
+' "$tmp_candidates" > "$tmp_candidates_filtered"
+mv "$tmp_candidates_filtered" "$tmp_candidates"
+
+total_candidates=$(grep -c '.' "$tmp_candidates" 2>/dev/null || true)
+examples_capped=0
+if [ "$total_candidates" -gt "$MAX_EXAMPLES" ]; then
+    examples_capped=1
+    awk -F '\t' -v limit="$MAX_EXAMPLES" '
+        $3 == "fenced" { fenced[++nf] = $0; next }
+        { inline[++ni] = $0 }
+        END {
+            count = 0
+            for (i = 1; i <= nf && count < limit; i++) {
+                print fenced[i]
+                count++
+            }
+            for (i = 1; i <= ni && count < limit; i++) {
+                print inline[i]
+                count++
+            }
+        }
+    ' "$tmp_candidates" > "$tmp_candidates_limited"
+else
+    cp "$tmp_candidates" "$tmp_candidates_limited"
+fi
 
 normalize_command() {
     cmd="$1"
@@ -508,7 +605,10 @@ run_command() {
     fi
 
     (
-        sleep "$TIMEOUT_SECONDS"
+        trap 'kill "$sleep_pid" 2>/dev/null || true; exit 0' TERM INT
+        sleep "$TIMEOUT_SECONDS" &
+        sleep_pid=$!
+        wait "$sleep_pid" 2>/dev/null || exit 0
         if kill -0 "$run_pid" 2>/dev/null; then
             echo "1" > "$timeout_flag"
             if [ -n "$run_pgid" ]; then
@@ -843,7 +943,7 @@ EOF
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$file" "$line" "$kind" "$status" "$exit_code" "$cmd" "$first_line" "$before" "$after" "$reason" "$reason_code" "$normalized" "$verification_mode" "$raw" >> "$tmp_results"
-done < "$tmp_candidates"
+done < "$tmp_candidates_limited"
 
 count_status() {
     s="$1"
@@ -879,6 +979,7 @@ if [ "$FORMAT" = "text" ]; then
     printf '═══ Staleness Drift: %s ═══\n\n' "$DIR_NAME"
     echo "── Summary ──"
     echo "  Total extracted examples: $total_examples"
+    echo "  Candidate cap applied: $examples_capped"
     echo "  Extracted fenced: $extracted_fenced"
     echo "  Extracted inline: $extracted_inline"
     echo "  Executed successfully: $executed"
@@ -940,6 +1041,7 @@ awk -F '\t' \
         printf "{"
         printf "\"summary\":{"
         printf "\"total_examples\":%d,", total_examples
+        printf "\"examples_capped\":%d,", examples_capped
         printf "\"executed\":%d,", executed
         printf "\"runtime_failed\":%d,", runtime_failed
         printf "\"missing_target\":%d,", missing_target

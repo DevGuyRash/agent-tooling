@@ -4,6 +4,11 @@ This document contains the step-by-step procedure for the core audit phases
 (1–3). Read it before starting Phase 1 so you have the full picture, then
 refer back to each section as you enter that phase.
 
+The agent is the auditor. Helper scripts accelerate deterministic evidence
+collection, but they do not replace the running report, the workflow
+simulation, or the final judgment. Start writing findings before Phase 1 and
+keep the report open while you work.
+
 ## Table of contents
 
 - [Phase 1: Environment & Build](#phase-1-environment--build)
@@ -22,6 +27,12 @@ missing dependencies, build failures, permission problems. The principle is
 simple — **execute first, read second.** Many issues (like CRLF line endings)
 are invisible in code but immediately fatal on execution.
 
+Before moving on, ask:
+
+- Which failures actually block a first-run agent?
+- Which results came from scripts, and which needed manual inspection?
+- What should enter the report immediately as BLOCKER, MAJOR, MINOR, or NIT?
+
 ### Steps
 
 1. **Map the skill directory tree.** You SHALL list all files with sizes. Note:
@@ -31,7 +42,8 @@ are invisible in code but immediately fatal on execution.
    - Reference docs (`.md` files in `references/`)
    - Assets (templates, fonts, images)
 
-2. **Run `surface_check.sh`** if available, or perform these checks manually:
+2. **Run `surface_check.sh`** if available, or perform these checks manually.
+   Treat script output as evidence, not as the whole conclusion:
 
    a. **CRLF detection.** Check every text file for `\r`:
       ```bash
@@ -86,7 +98,8 @@ For each script/binary/build step:
 
 ### Domain scripts
 
-The auditor SHALL run the following domain scripts during this phase:
+The auditor SHOULD run the following domain scripts during this phase when they
+save time or increase confidence:
 
 - D1 (`<skills-file-root>/scripts/surface_check.sh`)
 - D2 (`<skills-file-root>/scripts/frontmatter_check.sh`)
@@ -95,8 +108,9 @@ The auditor SHALL run the following domain scripts during this phase:
 - D11 (`<skills-file-root>/scripts/cold_start_check.sh`)
 - D12 (`<skills-file-root>/scripts/dependency_check.sh`)
 
-WHEN a script is not present, THEN the auditor SHALL perform equivalent
-checks manually and record the missing script as a finding.
+WHEN a script is not present or does not cover the observed issue, THEN the
+auditor SHALL perform equivalent checks manually and record the gap as part of
+the finding.
 
 ---
 
@@ -108,6 +122,12 @@ command must be reachable from the documentation.
 Name mismatches between docs and CLI are the single most common agent failure
 mode. An agent reads "Architecture" in the docs, tries
 `--role architecture`, and gets an error. This phase catches every instance.
+
+Before moving on, ask:
+
+- Can a fresh agent discover the right names without guessing?
+- Do the docs and runtime agree on what exists?
+- Which mismatches are merely noisy versus workflow-breaking?
 
 ### Steps
 
@@ -188,9 +208,10 @@ mode. An agent reads "Architecture" in the docs, tries
 
 ### Domain scripts
 
-The auditor SHALL run the following domain scripts during this phase.
-CLI-dependent scripts require a CLI binary; D21 and D22 SHOULD still run
-without `--cli` to validate local script-path and discoverability examples:
+The auditor SHOULD run the following domain scripts during this phase when they
+accelerate evidence gathering. CLI-dependent scripts require a CLI binary; D21
+and D22 SHOULD still run without `--cli` to validate local script-path and
+discoverability examples:
 
 - D5 (`<skills-file-root>/scripts/name_consistency_check.sh`)
 - D7 (`<skills-file-root>/scripts/error_quality_check.sh`)
@@ -199,7 +220,8 @@ without `--cli` to validate local script-path and discoverability examples:
 - D22 (`<skills-file-root>/scripts/discoverability_check.sh`)
 
 WHEN no CLI binary is available, THEN the auditor SHALL skip CLI-dependent
-checks (D5, D7, D10, D22) and note the reason.
+checks (D5, D7, D10, D22), continue the agent audit with manual evidence, and
+note the reason in the report.
 
 ---
 
@@ -211,6 +233,12 @@ end, recording every friction point.
 This is where you stop testing individual commands and start testing the
 *experience*. You're simulating what an agent goes through when it triggers
 this skill.
+
+Before moving on, ask:
+
+- Where did the workflow become ambiguous or brittle?
+- Which parts required hidden prior knowledge?
+- Which friction points deserve immediate findings instead of end-of-phase notes?
 
 ### Steps
 
@@ -233,6 +261,10 @@ this skill.
 
    Count your 3s. More than 2 in a workflow is a MAJOR finding.
 
+4. **Write findings immediately.** After each simulated step, update the
+   running report while the transcript, outputs, and confusion points are
+   still fresh. Do not defer workflow findings to final synthesis.
+
 ### Domain scripts
 
 The auditor SHALL evaluate D6 (command isolation) during workflow simulation.
@@ -245,7 +277,8 @@ them as findings.
 ## Finding accumulation
 
 Throughout all phases, write findings to a running report file in your
-audit workspace as you discover them. You SHALL use the canonical field schema
+audit workspace as you discover them. The report is the audit product; helper
+script output is supporting evidence. You SHALL use the canonical field schema
 from `<skills-file-root>/references/report-template.md` ("Phase 1 Findings" example). You MAY use
 this shorthand format while collecting findings:
 
@@ -264,3 +297,5 @@ Number findings sequentially: C1, C2 for BLOCKERs; M1, M2 for MAJORs; m1, m2
 for MINORs; n1, n2 for NITs.
 
 After all phases, reorganize and deduplicate before writing the final report.
+Do not mistake a clean helper-script run for a clean audit; the report still
+needs agent synthesis, prioritization, and verdict reasoning.

@@ -239,7 +239,7 @@ WHEN auditing a multi-agent skill, the following domains SHALL be activated
 in addition to the universal set:
 
 - **D9 (dispatch-prompt-quality):** You SHALL evaluate every dispatch prompt
-  against the seed checks in `<skills-file-root>/references/domains.md`.
+  against the seed checks in `<skills-file-root>/references/domains-core.md`.
 - **D14 (ears-compliance):** Run `<skills-file-root>/scripts/ears_check.sh`
   on the skill directory. Dispatch prompts with vague directives are
   especially harmful because workers have no fallback context.

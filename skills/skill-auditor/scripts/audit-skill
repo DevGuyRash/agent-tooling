@@ -1,0 +1,785 @@
+#!/usr/bin/env sh
+# audit-skill — Progressive disclosure CLI for the skill-auditor framework.
+# Provides just-in-time guidance, domain lookup, step routing, and
+# deterministic check pass-through. Default output stays under 4KB.
+
+set -eu
+
+VERSION="1.0.0"
+FORMAT="text"
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SKILL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+TOML="$SCRIPT_DIR/audit-skill.toml"
+REFS="$SKILL_ROOT/references"
+
+toml_get_value() {
+    _file="$1"
+    _section="$2"
+    _key="$3"
+    awk -v section="[$_section]" -v key="$_key" '
+        $0 == section { in_section = 1; next }
+        /^\[/ && in_section { exit }
+        in_section && index($0, key " = ") == 1 {
+            value = substr($0, length(key) + 4)
+            sub(/^"/, "", value)
+            sub(/"[[:space:]]*$/, "", value)
+            print value
+            exit
+        }
+    ' "$_file"
+}
+
+toml_list_sections_ordered() {
+    _file="$1"
+    _prefix="$2"
+    awk -v prefix="[$_prefix." '
+        index($0, prefix) == 1 {
+            name = substr($0, length(prefix) + 1)
+            sub(/\]$/, "", name)
+            print name
+        }
+    ' "$_file"
+}
+
+toml_list_keys() {
+    _file="$1"
+    _section="$2"
+    awk -v section="[$_section]" '
+        $0 == section { in_section = 1; next }
+        /^\[/ && in_section { exit }
+        in_section && /^[A-Za-z0-9_.-]+ = "/ {
+            split($0, parts, "=")
+            key = parts[1]
+            gsub(/[[:space:]]+$/, "", key)
+            print key
+        }
+    ' "$_file"
+}
+
+escape_json_val() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+}
+
+truncate_output() {
+    _text="$1"
+    _ref="$2"
+    _bytes=$(printf '%s' "$_text" | wc -c | tr -d ' ')
+    if [ "$_bytes" -gt 3900 ]; then
+        printf '%s' "$_text" | head -c 3800
+        printf '\n...\n(Truncated to <4KB. Full content: %s)\n' "$_ref"
+    else
+        printf '%s\n' "$_text"
+    fi
+}
+
+md_extract_section() {
+    _md_file="$1"
+    _heading="$2"
+    if [ ! -f "$_md_file" ]; then
+        echo "error: reference file not found: $_md_file"
+        echo "hint: read the corresponding reference manually"
+        return 1
+    fi
+    awk -v heading="$_heading" '
+        BEGIN { found = 0; level = 0 }
+        {
+            if (found == 0) {
+                if ($0 ~ /^#+/ && index($0, heading) > 0) {
+                    found = 1
+                    line = $0
+                    level = 0
+                    while (substr(line, 1, 1) == "#") {
+                        level++
+                        line = substr(line, 2)
+                    }
+                    print
+                    next
+                }
+            } else {
+                line = $0
+                current = 0
+                while (substr(line, 1, 1) == "#") {
+                    current++
+                    line = substr(line, 2)
+                }
+                if (current > 0 && current <= level) {
+                    exit
+                }
+                print
+            }
+        }
+    ' "$_md_file"
+}
+
+normalize_domain_id() {
+    _domain="${1-}"
+    case "$_domain" in
+        [dD][0-9]*) printf '%s' "$_domain" | tr 'a-z' 'A-Z' ;;
+        [0-9]*) printf 'D%s' "$_domain" ;;
+        *) printf '%s' "$_domain" ;;
+    esac
+}
+
+normalize_phase_id() {
+    printf '%s' "${1-}" | tr 'A-Z' 'a-z'
+}
+
+usage_text() {
+    cat <<'USAGE'
+Usage: audit-skill <command> [args...]
+
+Commands:
+  phases                     List all audit phases with brief descriptions
+  phase <N>                  Detailed instructions for phase N (1,2,3,3b,4,4b,5)
+  domains                    List all 25 domains with IDs, names, tiers
+  domain <ID>                Full domain spec (checks, severity, scripts)
+  activate <traits...>       Show which domains activate for given skill traits
+  hints <target>             Actionable hints for a domain, phase, or step
+  next-steps                 Ordered steps for running a full audit
+  step <N>                   Detailed guidance for one audit step
+  report-workflow            Show how to turn evidence into the final audit report
+  confidence                 Confidence scoring rules summary
+  report-template            Output the report template structure
+  check <name> <skill-dir>   Run a specific deterministic check script
+  check-all <skill-dir>      Run all deterministic check scripts against a target
+  self-check                 Validate the auditor's helper-script layer
+  version                    Version info
+
+Flags:
+  --format json              Machine-readable output for listing/detail commands
+  -h, --help                 Show this help
+
+Examples:
+  audit-skill next-steps
+  audit-skill step 6
+  audit-skill phase 4
+  audit-skill domain D22
+  audit-skill report-workflow
+  audit-skill activate has-scripts cli-heavy
+USAGE
+}
+
+cmd_usage() {
+    usage_text
+}
+
+cmd_version() {
+    echo "audit-skill $VERSION"
+    echo "skill-auditor framework — 25 domains (D1-D25), 5+2 phases, 14 workflow steps"
+    echo "POSIX shell, TOML manifest, markdown references, JSON listing support"
+}
+
+cmd_phases() {
+    if [ "$FORMAT" = "json" ]; then
+        printf '{"phases":['
+        first=1
+        for pid in $(toml_list_sections_ordered "$TOML" "phases"); do
+            name=$(toml_get_value "$TOML" "phases.$pid" "name")
+            budget=$(toml_get_value "$TOML" "phases.$pid" "budget")
+            brief=$(toml_get_value "$TOML" "phases.$pid" "brief")
+            domains=$(toml_get_value "$TOML" "phases.$pid" "domains")
+            if [ "$first" -eq 0 ]; then printf ','; fi
+            first=0
+            printf '{"id":"%s","name":"%s","budget":"%s","brief":"%s","domains":"%s"}' \
+                "$(escape_json_val "$pid")" "$(escape_json_val "$name")" \
+                "$(escape_json_val "$budget")" "$(escape_json_val "$brief")" \
+                "$(escape_json_val "$domains")"
+        done
+        printf ']}\n'
+        return
+    fi
+
+    echo "Audit Phases"
+    echo "============"
+    echo ""
+    printf '  %-4s  %-26s  %-12s  %s\n' "ID" "Name" "Budget" "Brief"
+    printf '  %-4s  %-26s  %-12s  %s\n' "----" "--------------------------" "------------" "-----"
+    for pid in $(toml_list_sections_ordered "$TOML" "phases"); do
+        name=$(toml_get_value "$TOML" "phases.$pid" "name")
+        budget=$(toml_get_value "$TOML" "phases.$pid" "budget")
+        brief=$(toml_get_value "$TOML" "phases.$pid" "brief")
+        printf '  %-4s  %-26s  %-12s  %s\n' "$pid" "$name" "$budget" "$brief"
+    done
+}
+
+cmd_phase() {
+    phase_id=$(normalize_phase_id "${1-}")
+    case "$phase_id" in
+        -h|--help|"")
+            echo "Usage: audit-skill phase <N>"
+            echo ""
+            echo "Show detailed instructions for one audit phase."
+            echo "Valid phases: 1, 2, 3, 3b, 4, 4b, 5"
+            [ -n "$phase_id" ] && return 0
+            ;;
+    esac
+    if [ -z "$phase_id" ]; then
+        echo "error: phase ID required (e.g., 1, 3b, 4)"
+        echo "hint: run 'audit-skill phases' to list all phases"
+        return 1
+    fi
+    ref=$(toml_get_value "$TOML" "phases.$phase_id" "reference")
+    heading=$(toml_get_value "$TOML" "phases.$phase_id" "heading")
+    if [ -z "$ref" ] || [ -z "$heading" ]; then
+        echo "error: unknown phase: $phase_id"
+        echo "hint: valid phases: 1, 2, 3, 3b, 4, 4b, 5"
+        return 1
+    fi
+    if [ "$FORMAT" = "json" ]; then
+        name=$(toml_get_value "$TOML" "phases.$phase_id" "name")
+        budget=$(toml_get_value "$TOML" "phases.$phase_id" "budget")
+        brief=$(toml_get_value "$TOML" "phases.$phase_id" "brief")
+        domains=$(toml_get_value "$TOML" "phases.$phase_id" "domains")
+        printf '{"id":"%s","name":"%s","budget":"%s","brief":"%s","domains":"%s","reference":"%s"}\n' \
+            "$(escape_json_val "$phase_id")" "$(escape_json_val "$name")" \
+            "$(escape_json_val "$budget")" "$(escape_json_val "$brief")" \
+            "$(escape_json_val "$domains")" "$(escape_json_val "$ref")"
+        return
+    fi
+    output=$(md_extract_section "$SKILL_ROOT/$ref" "$heading")
+    truncate_output "$output" "$ref"
+}
+
+cmd_domains() {
+    if [ "$FORMAT" = "json" ]; then
+        printf '{"domains":['
+        first=1
+        for did in $(toml_list_sections_ordered "$TOML" "domains"); do
+            name=$(toml_get_value "$TOML" "domains.$did" "name")
+            tier=$(toml_get_value "$TOML" "domains.$did" "tier")
+            brief=$(toml_get_value "$TOML" "domains.$did" "brief")
+            activation=$(toml_get_value "$TOML" "domains.$did" "activation")
+            if [ "$first" -eq 0 ]; then printf ','; fi
+            first=0
+            printf '{"id":"%s","name":"%s","tier":"%s","brief":"%s","activation":"%s"}' \
+                "$(escape_json_val "$did")" "$(escape_json_val "$name")" \
+                "$(escape_json_val "$tier")" "$(escape_json_val "$brief")" \
+                "$(escape_json_val "$activation")"
+        done
+        printf ']}\n'
+        return
+    fi
+
+    echo "Audit Domains (D1-D25)"
+    echo "======================"
+    echo ""
+    printf '  %-5s  %-28s  %-16s  %s\n' "ID" "Name" "Tier" "Brief"
+    printf '  %-5s  %-28s  %-16s  %s\n' "-----" "----------------------------" "----------------" "-----"
+    for did in $(toml_list_sections_ordered "$TOML" "domains"); do
+        name=$(toml_get_value "$TOML" "domains.$did" "name")
+        tier=$(toml_get_value "$TOML" "domains.$did" "tier")
+        brief=$(toml_get_value "$TOML" "domains.$did" "brief")
+        printf '  %-5s  %-28s  %-16s  %s\n' "$did" "$name" "$tier" "$brief"
+    done
+}
+
+cmd_domain() {
+    domain_id=$(normalize_domain_id "${1-}")
+    case "$domain_id" in
+        -h|--help|"")
+            echo "Usage: audit-skill domain <ID>"
+            echo ""
+            echo "Show the full spec for one domain (e.g., D8, D20, D22)."
+            [ -n "$domain_id" ] && return 0
+            ;;
+    esac
+    if [ -z "$domain_id" ]; then
+        echo "error: domain ID required (e.g., D8, D23)"
+        echo "hint: run 'audit-skill domains' to list all domains"
+        return 1
+    fi
+    ref=$(toml_get_value "$TOML" "domains.$domain_id" "reference")
+    heading=$(toml_get_value "$TOML" "domains.$domain_id" "heading")
+    if [ -z "$ref" ] || [ -z "$heading" ]; then
+        echo "error: unknown domain: $domain_id"
+        echo "hint: valid domains: D1-D25. Run 'audit-skill domains' to list all."
+        return 1
+    fi
+    if [ "$FORMAT" = "json" ]; then
+        name=$(toml_get_value "$TOML" "domains.$domain_id" "name")
+        tier=$(toml_get_value "$TOML" "domains.$domain_id" "tier")
+        brief=$(toml_get_value "$TOML" "domains.$domain_id" "brief")
+        script=$(toml_get_value "$TOML" "domains.$domain_id" "script")
+        activation=$(toml_get_value "$TOML" "domains.$domain_id" "activation")
+        hint=$(toml_get_value "$TOML" "domains.$domain_id" "hint")
+        printf '{"id":"%s","name":"%s","tier":"%s","brief":"%s","script":"%s","activation":"%s","hint":"%s","reference":"%s"}\n' \
+            "$(escape_json_val "$domain_id")" "$(escape_json_val "$name")" \
+            "$(escape_json_val "$tier")" "$(escape_json_val "$brief")" \
+            "$(escape_json_val "$script")" "$(escape_json_val "$activation")" \
+            "$(escape_json_val "$hint")" "$(escape_json_val "$ref")"
+        return
+    fi
+    output=$(md_extract_section "$SKILL_ROOT/$ref" "$heading")
+    truncate_output "$output" "$ref"
+}
+
+cmd_activate() {
+    case "${1-}" in
+        -h|--help)
+            echo "Usage: audit-skill activate <traits...>"
+            echo ""
+            echo "List the domains activated by one or more skill traits."
+            return 0
+            ;;
+    esac
+    if [ $# -eq 0 ]; then
+        echo "error: at least one trait required"
+        echo "hint: valid traits: universal, has-scripts, has-references, dispatches-subagents,"
+        echo "       cli-heavy, instruction-heavy, cross-skill-deps, produces-variant-outputs,"
+        echo "       has-temp-files, multi-step-workflows, handles-credentials"
+        return 1
+    fi
+
+    activated=$(toml_get_value "$TOML" "activation" "universal")
+    trait_json=""
+    for trait in "$@"; do
+        domains=$(toml_get_value "$TOML" "activation" "$trait")
+        if [ -z "$domains" ]; then
+            echo "warning: unknown trait '$trait' (skipped)" >&2
+            continue
+        fi
+        activated="$activated, $domains"
+        if [ -n "$trait_json" ]; then
+            trait_json="$trait_json,"
+        fi
+        trait_json="$trait_json\"$(escape_json_val "$trait")\""
+    done
+
+    deduped=$(printf '%s' "$activated" \
+        | tr ',' '\n' \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -v '^$' \
+        | sort -u \
+        | awk -F'D' '{print $2, $0}' \
+        | sort -n \
+        | awk '{print $2}')
+
+    if [ "$FORMAT" = "json" ]; then
+        printf '{"traits":[%s],"activated_domains":[' "$trait_json"
+        first=1
+        for domain in $deduped; do
+            if [ "$first" -eq 0 ]; then printf ','; fi
+            first=0
+            printf '"%s"' "$(escape_json_val "$domain")"
+        done
+        printf ']}\n'
+        return
+    fi
+
+    echo "Activated domains for traits: $*"
+    echo ""
+    count=0
+    for domain in $deduped; do
+        name=$(toml_get_value "$TOML" "domains.$domain" "name")
+        brief=$(toml_get_value "$TOML" "domains.$domain" "brief")
+        printf '  %-5s  %-28s  %s\n' "$domain" "$name" "$brief"
+        count=$((count + 1))
+    done
+    echo ""
+    echo "Total: $count domains activated"
+}
+
+cmd_next_steps() {
+    if [ "$FORMAT" = "json" ]; then
+        printf '{"steps":['
+        first=1
+        for sid in $(toml_list_sections_ordered "$TOML" "steps"); do
+            title=$(toml_get_value "$TOML" "steps.$sid" "title")
+            brief=$(toml_get_value "$TOML" "steps.$sid" "brief")
+            command=$(toml_get_value "$TOML" "steps.$sid" "command")
+            phase=$(toml_get_value "$TOML" "steps.$sid" "phase")
+            next_command=$(toml_get_value "$TOML" "steps.$sid" "next_command")
+            if [ "$first" -eq 0 ]; then printf ','; fi
+            first=0
+            printf '{"step":"%s","title":"%s","brief":"%s","command":"%s","phase":"%s","next_command":"%s"}' \
+                "$(escape_json_val "$sid")" "$(escape_json_val "$title")" \
+                "$(escape_json_val "$brief")" "$(escape_json_val "$command")" \
+                "$(escape_json_val "$phase")" "$(escape_json_val "$next_command")"
+        done
+        printf ']}\n'
+        return
+    fi
+
+    echo "Audit Next Steps"
+    echo "================"
+    echo ""
+    for sid in $(toml_list_sections_ordered "$TOML" "steps"); do
+        title=$(toml_get_value "$TOML" "steps.$sid" "title")
+        brief=$(toml_get_value "$TOML" "steps.$sid" "brief")
+        command=$(toml_get_value "$TOML" "steps.$sid" "command")
+        printf '  %2s. %s\n' "$sid" "$title"
+        printf '      %s\n' "$brief"
+        printf '      Command: %s\n' "$command"
+    done
+}
+
+cmd_step() {
+    step_id="${1-}"
+    case "$step_id" in
+        -h|--help|"")
+            echo "Usage: audit-skill step <N>"
+            echo ""
+            echo "Show detailed guidance for one audit workflow step."
+            [ -n "$step_id" ] && return 0
+            ;;
+    esac
+    if [ -z "$step_id" ]; then
+        echo "error: step ID required (e.g., 1, 6, 14)"
+        echo "hint: run 'audit-skill next-steps' to list all steps"
+        return 1
+    fi
+    title=$(toml_get_value "$TOML" "steps.$step_id" "title")
+    if [ -z "$title" ]; then
+        echo "error: unknown step: $step_id"
+        echo "hint: run 'audit-skill next-steps' to list all steps"
+        return 1
+    fi
+    brief=$(toml_get_value "$TOML" "steps.$step_id" "brief")
+    command=$(toml_get_value "$TOML" "steps.$step_id" "command")
+    phase=$(toml_get_value "$TOML" "steps.$step_id" "phase")
+    domains=$(toml_get_value "$TOML" "steps.$step_id" "domains")
+    reference=$(toml_get_value "$TOML" "steps.$step_id" "reference")
+    next_command=$(toml_get_value "$TOML" "steps.$step_id" "next_command")
+
+    if [ "$FORMAT" = "json" ]; then
+        printf '{"step":"%s","title":"%s","brief":"%s","command":"%s","phase":"%s","domains":"%s","reference":"%s","next_command":"%s"}\n' \
+            "$(escape_json_val "$step_id")" "$(escape_json_val "$title")" \
+            "$(escape_json_val "$brief")" "$(escape_json_val "$command")" \
+            "$(escape_json_val "$phase")" "$(escape_json_val "$domains")" \
+            "$(escape_json_val "$reference")" "$(escape_json_val "$next_command")"
+        return
+    fi
+
+    echo "Step $step_id — $title"
+    echo ""
+    echo "  Goal: $brief"
+    echo "  Command: $command"
+    [ -n "$phase" ] && echo "  Phase: $phase"
+    [ -n "$domains" ] && echo "  Domains: $domains"
+    [ -n "$reference" ] && echo "  Reference: $reference"
+    [ -n "$next_command" ] && echo "  Next: $next_command"
+}
+
+cmd_hints() {
+    target="${1-}"
+    case "$target" in
+        -h|--help|"")
+            echo "Usage: audit-skill hints <domain-id|phase-id|step-id>"
+            echo ""
+            echo "Show actionable hints for one domain, phase, or step."
+            [ -n "$target" ] && return 0
+            ;;
+    esac
+    if [ -z "$target" ]; then
+        echo "error: domain ID, phase ID, or step ID required"
+        echo "hint: e.g., 'audit-skill hints D8', 'audit-skill hints 4', or 'audit-skill hints step-6'"
+        return 1
+    fi
+
+    normalized_domain=$(normalize_domain_id "$target")
+    hint=$(toml_get_value "$TOML" "domains.$normalized_domain" "hint")
+    if [ -n "$hint" ]; then
+        name=$(toml_get_value "$TOML" "domains.$normalized_domain" "name")
+        script=$(toml_get_value "$TOML" "domains.$normalized_domain" "script")
+        echo "Hints for $normalized_domain ($name)"
+        echo ""
+        echo "  $hint"
+        [ -n "$script" ] && echo "  Script: $script"
+        return
+    fi
+
+    phase_id=$(normalize_phase_id "$target")
+    brief=$(toml_get_value "$TOML" "phases.$phase_id" "brief")
+    if [ -n "$brief" ]; then
+        name=$(toml_get_value "$TOML" "phases.$phase_id" "name")
+        domains=$(toml_get_value "$TOML" "phases.$phase_id" "domains")
+        echo "Hints for Phase $phase_id ($name)"
+        echo ""
+        echo "  $brief"
+        echo "  Domains: $domains"
+        return
+    fi
+
+    case "$target" in
+        step-*|Step-*|STEP-*)
+            step_id=$(printf '%s' "$target" | sed 's/^[^0-9]*//')
+            ;;
+        *)
+            step_id="$target"
+            ;;
+    esac
+    title=$(toml_get_value "$TOML" "steps.$step_id" "title")
+    if [ -n "$title" ]; then
+        brief=$(toml_get_value "$TOML" "steps.$step_id" "brief")
+        command=$(toml_get_value "$TOML" "steps.$step_id" "command")
+        next_command=$(toml_get_value "$TOML" "steps.$step_id" "next_command")
+        echo "Hints for Step $step_id ($title)"
+        echo ""
+        echo "  $brief"
+        echo "  Command: $command"
+        echo "  Next: $next_command"
+        return
+    fi
+
+    echo "error: unknown domain, phase, or step: $target"
+    echo "hint: valid domains: D1-D25. Valid phases: 1, 2, 3, 3b, 4, 4b, 5. Steps: 1-14."
+    return 1
+}
+
+cmd_confidence() {
+    conf_file="$REFS/confidence-scoring.md"
+    if [ ! -f "$conf_file" ]; then
+        echo "error: confidence-scoring.md not found"
+        return 1
+    fi
+    head -80 "$conf_file"
+    echo ""
+    echo "(Read references/confidence-scoring.md for aggregate scoring and gated verdicts.)"
+}
+
+cmd_report_template() {
+    tmpl_file="$REFS/report-template.md"
+    if [ ! -f "$tmpl_file" ]; then
+        echo "error: report-template.md not found"
+        return 1
+    fi
+    echo "Report Template Structure"
+    echo "========================="
+    echo ""
+    grep -E '^#{1,3} ' "$tmpl_file" | sed 's/^/  /'
+    echo ""
+    echo "Full template: $tmpl_file"
+}
+
+cmd_report_workflow() {
+    workflow_file="$SKILL_ROOT/SKILL.md"
+    if [ ! -f "$workflow_file" ]; then
+        echo "error: SKILL.md not found"
+        return 1
+    fi
+    if [ "$FORMAT" = "json" ]; then
+        printf '%s\n' \
+            '{"command":"report-workflow","summary":"The report is the audit product. Helper-script output is supporting evidence; the agent synthesizes findings, assigns severity/confidence, and writes the verdict.","reference":"SKILL.md","next":["audit-skill report-template","audit-skill self-check"]}'
+        return
+    fi
+    output=$(md_extract_section "$workflow_file" "Report finalization")
+    truncate_output "$output" "SKILL.md"
+}
+
+cmd_check() {
+    check_name="${1-}"
+    skill_dir="${2-}"
+    case "$check_name" in
+        -h|--help)
+            echo "Usage: audit-skill check <name> <skill-dir>"
+            echo ""
+            echo "Run one helper script against the target skill."
+            echo "Use 'audit-skill self-check' only to validate the auditor itself."
+            return 0
+            ;;
+    esac
+    if [ -z "$check_name" ] || [ -z "$skill_dir" ]; then
+        echo "error: usage: audit-skill check <name> <skill-dir>"
+        echo ""
+        echo "Available checks:"
+        for key in $(toml_list_keys "$TOML" "scripts"); do
+            path=$(toml_get_value "$TOML" "scripts" "$key")
+            case "$path" in
+                *"_check.sh") printf '  %-18s %s\n' "$key" "$path" ;;
+            esac
+        done
+        return 1
+    fi
+    script_path=$(toml_get_value "$TOML" "scripts" "$check_name")
+    if [ -z "$script_path" ]; then
+        script_path="$SCRIPT_DIR/${check_name}_check.sh"
+    else
+        script_path="$SKILL_ROOT/${script_path#scripts/}"
+        case "$script_path" in
+            "$SKILL_ROOT"/*) : ;;
+            *) script_path="$SKILL_ROOT/$script_path" ;;
+        esac
+        script_path="$SCRIPT_DIR/$(basename "$script_path")"
+    fi
+    if [ ! -f "$script_path" ]; then
+        echo "error: unknown check script: $check_name"
+        return 1
+    fi
+    if [ ! -d "$skill_dir" ]; then
+        echo "error: not a directory: $skill_dir"
+        return 1
+    fi
+    sh "$script_path" "$skill_dir"
+}
+
+cmd_check_all() {
+    skill_dir="${1-}"
+    case "$skill_dir" in
+        -h|--help)
+            echo "Usage: audit-skill check-all <skill-dir>"
+            echo ""
+            echo "Run all helper scripts against the target skill and summarize pass/fail."
+            echo "This gathers deterministic evidence; it does not replace the audit report."
+            return 0
+            ;;
+    esac
+    if [ -z "$skill_dir" ]; then
+        echo "error: usage: audit-skill check-all <skill-dir>"
+        return 1
+    fi
+    if [ ! -d "$skill_dir" ]; then
+        echo "error: not a directory: $skill_dir"
+        return 1
+    fi
+
+    echo "Running helper-script checks against: $skill_dir"
+    echo "================================================================"
+    echo ""
+
+    total=0
+    passed=0
+    failed=0
+    failed_names=""
+
+    for key in $(toml_list_keys "$TOML" "scripts"); do
+        path=$(toml_get_value "$TOML" "scripts" "$key")
+        case "$path" in
+            *"_check.sh") ;;
+            *) continue ;;
+        esac
+        script="$SKILL_ROOT/$path"
+        [ -f "$script" ] || continue
+        total=$((total + 1))
+        printf '  Running %-40s ' "$(basename "$script")"
+        if sh "$script" "$skill_dir" > /dev/null 2>&1; then
+            echo "[PASS]"
+            passed=$((passed + 1))
+        else
+            echo "[FAIL]"
+            failed=$((failed + 1))
+            if [ -n "$failed_names" ]; then
+                failed_names="$failed_names, $(basename "$script")"
+            else
+                failed_names="$(basename "$script")"
+            fi
+        fi
+    done
+
+    echo ""
+    echo "================================================================"
+    echo "Summary: $passed/$total passed, $failed failed"
+    if [ "$failed" -gt 0 ]; then
+        echo "Failed: $failed_names"
+        echo "Next: re-run a failed script with 'audit-skill check <name> <dir>' for details"
+        echo "Reminder: helper-script failures are evidence for the report, not the whole audit."
+        return 1
+    fi
+    echo "All helper checks passed. Next: proceed with agent-led analysis phases."
+}
+
+cmd_self_check() {
+    case "${1-}" in
+        -h|--help)
+            echo "Usage: audit-skill self-check"
+            echo ""
+            echo "Validate the auditor's helper-script layer on itself."
+            echo "This is not a substitute for a full self-audit report."
+            return 0
+            ;;
+    esac
+    echo "Self-check: validating the auditor's helper-script layer on itself"
+    echo ""
+    cmd_check_all "$SKILL_ROOT"
+}
+
+args=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --format)
+            if [ $# -lt 2 ]; then
+                echo "error: --format requires a value (text|json)"
+                exit 1
+            fi
+            FORMAT="$2"
+            shift 2
+            continue
+            ;;
+    esac
+    if [ -n "$args" ]; then
+        args="$args $1"
+    else
+        args="$1"
+    fi
+    shift
+done
+
+case "$FORMAT" in
+    text|json) ;;
+    *)
+        echo "error: invalid --format: $FORMAT (expected text|json)"
+        exit 1
+        ;;
+esac
+
+# shellcheck disable=SC2086
+set -- $args 2>/dev/null || true
+
+command="${1-}"
+shift 2>/dev/null || true
+
+case "$command" in
+    ""|help|-h|--help)
+        cmd_usage
+        ;;
+    version|--version|-v)
+        cmd_version
+        ;;
+    phases)
+        cmd_phases
+        ;;
+    phase)
+        cmd_phase "$@"
+        ;;
+    domains)
+        cmd_domains
+        ;;
+    domain)
+        cmd_domain "$@"
+        ;;
+    activate)
+        cmd_activate "$@"
+        ;;
+    hints)
+        cmd_hints "$@"
+        ;;
+    next-steps)
+        cmd_next_steps
+        ;;
+    step)
+        cmd_step "$@"
+        ;;
+    report-workflow)
+        cmd_report_workflow
+        ;;
+    confidence)
+        cmd_confidence
+        ;;
+    report-template)
+        cmd_report_template
+        ;;
+    check)
+        cmd_check "$@"
+        ;;
+    check-all)
+        cmd_check_all "$@"
+        ;;
+    self-check)
+        cmd_self_check "$@"
+        ;;
+    *)
+        echo "error: unknown command: $command"
+        echo "hint: run 'audit-skill' with no arguments for usage help"
+        exit 1
+        ;;
+esac

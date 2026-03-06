@@ -395,6 +395,29 @@ Good targets:
 These leave the majority of the agent's context window for the actual task:
 code, diffs, user instructions, and tool output.
 
+### CLI-served self-documentation
+
+Skills with CLIs SHOULD implement progressive disclosure via CLI commands.
+The CLI serves as a just-in-time guidance router: the agent runs a command
+to get exactly the instructions needed for its current step, rather than
+loading entire reference files.
+
+The recommended pattern:
+
+1. **TOML manifest for routing metadata.** Phase names, domain IDs,
+   activation triggers, hints — structured data the CLI can query.
+2. **Markdown for detailed content.** Full domain specs, phase procedures,
+   scoring rules stay in `references/*.md`. The CLI extracts sections by
+   heading on demand using `sed`/`awk`.
+3. **SKILL.md as fallback router.** "Run `<cli> <command>` for guidance.
+   IF the CLI is unavailable, read `references/X.md` instead."
+
+This pattern is demonstrated by the skill-auditor's `audit-skill` CLI and
+the code-review skill's `mpcr` protocol CLI. Use it when a skill has:
+- Multiple phases or modes with distinct guidance per phase
+- Enumerable configuration (domains, roles, traits)
+- Deterministic check scripts that benefit from a unified runner
+
 ---
 
 ## Skill authoring: subagent dispatch prompt design
@@ -514,6 +537,82 @@ Before shipping interconnected skills:
 1. Run Skill A's setup.
 2. Run Skill B's verification on Skill A's output.
 3. Confirm zero failures without manual intervention.
+
+---
+
+## Skill authoring: idempotency and state isolation
+
+Scripts SHALL leave no residual state after completion. An agent that re-runs
+a script and gets different results (because temp files, caches, or lock
+files were left behind) silently corrupts its workflow.
+
+Rules:
+
+1. **Identical re-runs.** WHEN a script runs twice on the same unchanged
+   input, THEN output SHALL be byte-identical. Non-deterministic output
+   (timestamps, random IDs) SHALL be avoided in default output or
+   deterministically seeded.
+
+2. **Temp file cleanup.** Scripts that create temporary files SHALL clean
+   them up via a `trap` handler on EXIT, INT, and TERM. After normal or
+   abnormal termination, zero artifacts SHALL remain in `/tmp/` or the
+   skill directory.
+
+3. **Safe re-creation.** WHEN a skill documents "create X," THEN re-running
+   when X already exists SHALL be safe — either a no-op or an overwrite
+   with identical content.
+
+---
+
+## Skill authoring: error recovery
+
+Multi-step workflows SHALL document recovery paths for mid-workflow failures.
+An agent that encounters a failure at step 3 of 7 needs to know: retry this
+step? restart from step 1? abort entirely?
+
+Rules:
+
+1. **Per-step detectability.** WHEN a workflow has 3+ steps, THEN each
+   step's success or failure SHALL be independently detectable (non-zero
+   exit code, output marker, or state file).
+
+2. **Recovery documentation.** WHEN a step fails, the skill SHALL document
+   whether to retry that step, restart from the beginning, or abort.
+
+3. **No silent success.** Scripts SHALL NOT exit 0 when a significant
+   sub-task failed silently. Exit code 0 means "everything worked."
+
+4. **Partial output safety.** WHEN partial output exists from a failed run,
+   THEN re-running SHALL NOT corrupt the partial output or produce mixed
+   old/new results.
+
+---
+
+## Skill authoring: credential safety
+
+Skills SHALL NOT commit, log, or leak credentials. A script that prints an
+API key in error output (e.g., the full `curl` command with
+`Authorization: Bearer <key>`) is a security incident.
+
+Rules:
+
+1. **No committed secrets.** Files matching secret patterns (`.env`,
+   `credentials.*`, `*secret*`, `*token*`) SHALL be in `.gitignore` or
+   SHALL NOT contain actual credentials.
+
+2. **No credential leakage.** Scripts SHALL NOT echo, log, or print
+   credentials in normal or error output. Error messages SHALL NOT include
+   full command lines that contain credential flags or headers.
+
+3. **No debug tracing around credentials.** WHEN a script uses `set -x`,
+   THEN it SHALL disable tracing around credential-handling sections.
+
+4. **Prefer CLI flags.** WHEN a skill accepts credentials, THEN it SHALL
+   prefer CLI flags over environment variables, and SHALL document the
+   credential flow.
+
+5. **No eval on user input.** Scripts SHALL NOT use `eval` on user-provided
+   input (command injection risk).
 
 ---
 

@@ -137,6 +137,30 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["examples"][0]["status"], "unsafe-skipped")
         self.assertEqual(data["examples"][0]["reason_code"], "nonlocal_without_cli")
 
+    def test_ignores_plain_file_reference_inline_literals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\nSee `SKILL.md`, `references/guide.md`, `.sh`, and `/tmp/workspace/`.\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir)
+
+        self.assertEqual(data["summary"]["total_examples"], 0)
+
+    def test_ignores_template_and_placeholder_inline_literals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\nUse `...`, `scripts/<cli-name>`, `<N>`, `[H]`, and `NOT` as syntax examples.\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--cli", str(ROOT / "scripts" / "audit-skill"))
+
+        self.assertEqual(data["summary"]["total_examples"], 0)
+
     def test_placeholder_local_command_uses_help_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
@@ -225,6 +249,27 @@ class StalenessCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["executed"], 1)
         self.assertEqual(data["examples"][0]["status"], "executed")
         self.assertEqual(data["examples"][0]["verification_mode"], "direct")
+
+    def test_max_examples_caps_large_candidate_sets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "run.sh"
+            script.write_text(
+                "#!/usr/bin/env sh\nif [ \"${1-}\" = \"--help\" ]; then echo ok; exit 0; fi\nexit 0\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\nRun `scripts/run.sh --help`.\nRun `scripts/run.sh --help`.\nRun `scripts/run.sh --help`.\nRun `scripts/run.sh --help`.\nRun `scripts/run.sh --help`.\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--max-examples", "2")
+
+        self.assertEqual(data["summary"]["total_examples"], 2)
+        self.assertIn("examples_capped", data["summary"])
 
     def test_executes_local_script_with_quoted_env_assignment_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
