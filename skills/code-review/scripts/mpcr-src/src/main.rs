@@ -2679,6 +2679,7 @@ fn clear_all_session_days_under_repo_root(repo_root: &Path) -> anyhow::Result<()
     if !code_reviews_root.exists() {
         return Ok(());
     }
+    ensure_repo_scoped_cleanup_root(repo_root, &code_reviews_root)?;
     let entries = fs::read_dir(&code_reviews_root)
         .with_context(|| format!("read_dir {}", code_reviews_root.display()))?;
     for entry in entries {
@@ -2695,6 +2696,28 @@ fn clear_all_session_days_under_repo_root(repo_root: &Path) -> anyhow::Result<()
         }
         fs::remove_dir_all(&path)
             .with_context(|| format!("remove session day dir {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn ensure_repo_scoped_cleanup_root(repo_root: &Path, cleanup_root: &Path) -> anyhow::Result<()> {
+    let metadata = fs::symlink_metadata(cleanup_root)
+        .with_context(|| format!("symlink_metadata {}", cleanup_root.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow::anyhow!(
+            "--clear-all-session-days requires a real directory at {}; symlinked cleanup roots are not allowed",
+            display_absoluteish_path(cleanup_root)?,
+        ));
+    }
+
+    let resolved_repo_root = resolve_absoluteish_path(repo_root)?;
+    let resolved_cleanup_root = resolve_absoluteish_path(cleanup_root)?;
+    if !resolved_cleanup_root.starts_with(&resolved_repo_root) {
+        return Err(anyhow::anyhow!(
+            "--clear-all-session-days cleanup root must stay under repo root {}; got {}",
+            resolved_repo_root.display(),
+            resolved_cleanup_root.display(),
+        ));
     }
     Ok(())
 }

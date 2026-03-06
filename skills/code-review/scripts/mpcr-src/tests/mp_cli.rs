@@ -1060,6 +1060,57 @@ fn reviewer_register_clear_all_session_days_removes_day_dirs_only() -> anyhow::R
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn reviewer_register_clear_all_session_days_rejects_symlinked_cleanup_root() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let external_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let external_code_reviews_root = external_root.path().join("code_reviews");
+    let external_day = external_code_reviews_root.join("2026-01-09");
+    fs::create_dir_all(&external_day)?;
+    fs::write(external_day.join("stale.txt"), "stale")?;
+
+    let reports_root = repo_root.path().join(".local").join("reports");
+    fs::create_dir_all(&reports_root)?;
+    std::os::unix::fs::symlink(
+        &external_code_reviews_root,
+        reports_root.join("code_reviews"),
+    )?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-all-session-days",
+    ])?;
+
+    ensure!(stderr.contains("symlinked cleanup roots are not allowed"));
+    ensure!(
+        external_day.exists(),
+        "cleanup should not delete directories through a symlinked root"
+    );
+    ensure!(
+        !paths::session_paths(
+            repo_root.path(),
+            Date::from_calendar_date(2026, Month::January, 11)?
+        )
+        .session_dir
+        .exists(),
+        "register should fail before creating today's session dir"
+    );
+    Ok(())
+}
+
 #[test]
 fn reviewer_register_clear_session_day_validates_ids_before_cleanup() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
