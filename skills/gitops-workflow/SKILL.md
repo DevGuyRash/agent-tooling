@@ -100,6 +100,7 @@ Direct ad hoc `gh`/`git` command sequences are fallback-only.
 
 Path resolution (mandatory):
 - Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to this skill folder (the folder containing this `SKILL.md`), not relative to the target repository where git work is being performed.
+- If the target repository is itself a checkout/worktree of the skill repository and the task is modifying `gitops-workflow`, prefer the copies under the active worktree/repository being edited so script behavior matches the branch under review. Use the canonical skill-source path only when it matches the active checkout or when the active repository is not modifying this skill.
 - Before dispatching, resolve and keep a local variable:
   - `SKILL_ROOT=<absolute-path-to-this-skill-folder>`
   - Example placeholder: `<absolute-path>/gitops-workflow`
@@ -123,7 +124,7 @@ Path resolution (mandatory):
 | List unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]` |
 | Resolve unresolved inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]` |
 | Resolve specific inline threads | `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]` |
-| Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> \"<reply text>\" [--repo owner/repo]` |
+| Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> (--body-file <path> | --body "<text>" | --body=<text>) [--repo owner/repo]` |
 | Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
 | Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
 | Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
@@ -146,6 +147,7 @@ When you are asked to “do Git work” in a repo, do this first:
 1. **Detect repo context**
    - default branch name (prefer `origin/HEAD`)
    - current branch, dirty working tree, remote URL
+   - current-branch PR context via `gh pr view --json number,title,state,baseRefName,headRefName,url` when `gh` is available and the branch already has a PR; do not infer unsupported `gh pr status --json` fields
    - existing workflow enforcement (PR template, CI, branch protections)
 2. **Choose the correct playbook**
    - start work → Branching playbook
@@ -157,6 +159,20 @@ When you are asked to “do Git work” in a repo, do this first:
 Detailed checklists live in:
 
 - [references/CHECKLISTS.md](references/CHECKLISTS.md)
+
+Recommended repo-context probe order:
+
+```bash
+git symbolic-ref --short refs/remotes/origin/HEAD
+git rev-parse --abbrev-ref HEAD
+git status --short
+git remote get-url origin
+# If GitHub CLI is available and the current branch already has a PR:
+gh pr view --json number,title,state,baseRefName,headRefName,url
+```
+
+If `gh pr view` reports that no pull request exists for the current branch,
+continue without PR metadata and move to the relevant playbook.
 
 Minimal deterministic command path (progressive-disclosure entrypoint):
 
@@ -284,7 +300,9 @@ Before pushing any new commits to a PR branch:
    - Reply in the original thread (do NOT create a new top-level comment).
    - Classify each unresolved item as `valid/relevant` or `not applicable/invalid`.
    - For `not applicable/invalid`, reply with rationale in-thread and resolve the thread when permissions allow.
-   - `pr-reply.sh` normalizes literal `\n` in reply text into real newlines.
+   - `pr-reply.sh` normalizes literal `\n` in `--body` text into real newlines.
+   - Prefer `--body-file` for replies containing complex markdown or shell metacharacters.
+   - If reply text must start with `--`, use `--body=<text>` or `--body-file`.
 5. If you implemented a bot suggestion or need re-review, re-tag the bot in-thread.
    - Optional trigger commands (if enabled in repo): `@codex review` then `/gemini review` (post in top-level PR Conversation comments).
    - For conversational follow-ups, use `@gemini-code-assist <question>`.
