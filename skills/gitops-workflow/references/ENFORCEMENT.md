@@ -9,7 +9,7 @@ This skill supports advisory templates, but governance controls should be applie
 Command context:
 
 ```bash
-SKILL_ROOT=<absolute-path-to-gitops-workflow>
+SKILL_ROOT=<skills-file-root>
 ```
 
 Reference docs:

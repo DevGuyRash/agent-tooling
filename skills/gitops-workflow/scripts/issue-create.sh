@@ -6,7 +6,13 @@ set -euo pipefail
 # Usage:
 #   bash scripts/issue-create.sh --title "<title>" [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--create --force-create] [--dry-run]
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+case "${BASH_SOURCE[0]}" in
+  */*) SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" ;;
+  *) SCRIPT_DIR="$(pwd -P)" ;;
+esac
+# shellcheck source=skills/gitops-workflow/scripts/lib/bootstrap.sh
+source "$SCRIPT_DIR/lib/bootstrap.sh"
+gitops_workflow_maybe_reexec_repo_local_copy "$SCRIPT_DIR" "issue-create.sh" "$@"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 

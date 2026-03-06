@@ -21,9 +21,9 @@ This checker runs read-only capability probes for repo metadata, rulesets, and l
 
 ## Standard command sequence
 
-Set `SKILL_ROOT` to the installed `gitops-workflow` skill directory:
+Use `<skills-file-root>` as the directory containing this skill's `SKILL.md`:
 ```bash
-export SKILL_ROOT="/absolute/path/to/gitops-workflow"
+export SKILL_ROOT="<skills-file-root>"
 ```
 
 1. Validate policy:
