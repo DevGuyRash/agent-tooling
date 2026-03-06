@@ -276,8 +276,9 @@ them as findings.
 
 ## Finding accumulation
 
-Throughout all phases, write findings to a running report file in your
-audit workspace as you discover them. The report is the audit product; helper
+Throughout all phases, write findings to a running report file under
+`~/.local/reports/skill-auditor/<skill-name>/<YYYY-MM-DD>/` as you discover
+them. The report is the audit product; helper
 script output is supporting evidence. You SHALL use the canonical field schema
 from `<skills-file-root>/references/report-template.md` ("Phase 1 Findings" example). You MAY use
 this shorthand format while collecting findings:

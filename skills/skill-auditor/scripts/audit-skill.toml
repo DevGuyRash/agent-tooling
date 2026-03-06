@@ -376,8 +376,8 @@ next_command = "audit-skill step 5"
 
 [steps.5]
 title = "Start the running report"
-brief = "Create the audit workspace and open a running report before gathering more evidence."
-command = "mkdir -p /tmp/audit-workspace && audit-skill report-workflow"
+brief = "Create a durable report directory under ~/.local/reports and open a running report before gathering more evidence."
+command = "mkdir -p ~/.local/reports/skill-auditor/<skill-name>/$(date +%F) && audit-skill report-workflow"
 phase = "1"
 domains = "D18, D19, D20"
 reference = "SKILL.md"

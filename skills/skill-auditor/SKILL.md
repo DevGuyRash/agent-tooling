@@ -79,7 +79,7 @@ Audit** between phases 3 and 4. Read
 5. List the workflow: run `<skills-file-root>/scripts/audit-skill next-steps`.
 6. Drill into the current step: run `<skills-file-root>/scripts/audit-skill step <N>`.
 7. Read phase instructions: run `<skills-file-root>/scripts/audit-skill phase 1`.
-8. Create a fresh workspace in `/tmp/audit-workspace/`.
+8. Create a report directory under `~/.local/reports/skill-auditor/<skill-name>/<YYYY-MM-DD>/`.
 9. Run helper scripts when they add evidence quickly; when a script is missing or weak, perform the equivalent manual inspection and record that gap.
 10. Proceed through each phase in order. Run `audit-skill phase <N>` for guidance.
 11. Finalize the actual audit output using `<skills-file-root>/scripts/audit-skill report-workflow` and `<skills-file-root>/scripts/audit-skill report-template`.
@@ -124,14 +124,15 @@ WHEN all phases are complete:
 
 1. Read the report workflow: `<skills-file-root>/scripts/audit-skill report-workflow`.
 2. Read the report template: `<skills-file-root>/scripts/audit-skill report-template`.
-3. Fill in each phase section from accumulated findings as an agent judgment, not as a raw script dump.
-4. Use helper-script output as evidence and confidence support, but do not treat `check-all` or `self-check` as the audit itself.
-5. Write the executive summary LAST.
-6. Assign the final verdict: **SHIP** | **SHIP WITH FIXES** | **DO NOT SHIP**.
-7. Include aggregate confidence score and distribution.
-8. Verify D18 convergence, D19 divergence, D20 adherence, D21 staleness,
+3. Write the report to `~/.local/reports/skill-auditor/<skill-name>/<YYYY-MM-DD>/<HH-MM-SS>_audit.md`.
+4. Fill in each phase section from accumulated findings as an agent judgment, not as a raw script dump.
+5. Use helper-script output as evidence and confidence support, but do not treat `check-all` or `self-check` as the audit itself.
+6. Write the executive summary LAST.
+7. Assign the final verdict: **SHIP** | **SHIP WITH FIXES** | **DO NOT SHIP**.
+8. Include aggregate confidence score and distribution.
+9. Verify D18 convergence, D19 divergence, D20 adherence, D21 staleness,
    and D22 discoverability per the domain specs.
-9. Use the severity framework consistently: **BLOCKER** | **MAJOR** | **MINOR** | **NIT**.
+10. Use the severity framework consistently: **BLOCKER** | **MAJOR** | **MINOR** | **NIT**.
 
 ### What `self-check` means
 
