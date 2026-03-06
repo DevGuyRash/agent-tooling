@@ -1,32 +1,17 @@
-# Audit Domains Reference
+# Audit Domains — Analysis (D14–D22)
 
-This file defines the 22 audit domains (D1–D22) used by the skill-auditor
-framework. Each domain specifies what to check, how findings map to severity
-levels, and which scripts accelerate the work.
+This file defines analysis audit domains D14–D22. These cover EARS compliance,
+prompt complexity, duplication detection, reference depth, convergence,
+divergence, adherence, staleness drift, and CLI discoverability.
 
-> **Partial-loading rule.** You SHALL load only the domains activated for the
-> current audit. Scan the table of contents and the activation table below,
-> then jump to the relevant `### Dnn` sections. Do not read this entire file
-> up front.
+> **Selective loading.** Read only the domain sections activated for your
+> current audit. Run `audit-skill domain <ID>` for individual domains, or
+> use the table of contents below to jump to the relevant section.
 
 ---
 
 ## Table of contents
 
-- [Domain Activation Rules](#domain-activation-rules)
-- [D1: file-hygiene](#d1-file-hygiene)
-- [D2: frontmatter-validity](#d2-frontmatter-validity)
-- [D3: description-quality](#d3-description-quality)
-- [D4: path-token-usage](#d4-path-token-usage)
-- [D5: name-consistency](#d5-name-consistency)
-- [D6: command-isolation](#d6-command-isolation)
-- [D7: error-message-quality](#d7-error-message-quality)
-- [D8: progressive-disclosure](#d8-progressive-disclosure)
-- [D9: dispatch-prompt-quality](#d9-dispatch-prompt-quality)
-- [D10: output-size-discipline](#d10-output-size-discipline)
-- [D11: cold-start-readiness](#d11-cold-start-readiness)
-- [D12: script-self-containment](#d12-script-self-containment)
-- [D13: cross-skill-integration](#d13-cross-skill-integration)
 - [D14: ears-compliance](#d14-ears-compliance)
 - [D15: prompt-complexity](#d15-prompt-complexity)
 - [D16: duplication-detection](#d16-duplication-detection)
@@ -36,237 +21,6 @@ levels, and which scripts accelerate the work.
 - [D20: adherence](#d20-adherence)
 - [D21: staleness-drift](#d21-staleness-drift)
 - [D22: cli-discoverability](#d22-cli-discoverability)
-
----
-
-## Domain Activation Rules
-
-When the audit begins, the auditor SHALL determine which domains to activate
-based on the target skill's characteristics.
-
-| Skill characteristic                      | Activated domains   |
-|-------------------------------------------|---------------------|
-| **Universal** (always run)                | D1, D2, D3, D4, D6, D8, D18, D20, D21 |
-| Has `scripts/` directory                  | D12                 |
-| Has `references/` directory               | D16, D17            |
-| Dispatches subagents                      | D9                  |
-| CLI-heavy (binaries or CLIs)              | D5, D7, D10, D11, D22 |
-| Has conditional / EARS-style instructions | D14, D15            |
-| Cross-skill dependencies                  | D13                 |
-| Produces creative/variant outputs         | D19                 |
-| References AGENTS.md or external rules    | D20 (already universal) |
-
-When the skill exhibits multiple traits, the union of all activated domains
-applies. If a domain's script requires a CLI binary that is unavailable, the
-auditor SHALL still perform the agent-based checks and note the missing
-binary in the report.
-
----
-
-## Domain Specifications
-
-### D1: file-hygiene
-
-**Source:** Phase 1 — Environment & Build · **Tier:** Deterministic
-**Script:** `<skills-file-root>/scripts/surface_check.sh`
-
-**Seed checks:**
-- Detect CRLF line endings in all text files.
-- Verify `+x` permission and correct shebangs on every script.
-- Flag hidden files (`.DS_Store`, `Thumbs.db`) that SHOULD NOT be committed.
-- When `.gitattributes` exists, validate its line-ending rules.
-
-**Severity:** BLOCKER — no permission *and* no shebang on script. MAJOR — CRLF in scripts. MINOR — CRLF in non-script text. NIT — stale hidden files.
-
----
-
-### D2: frontmatter-validity
-
-**Source:** Phase 2 — API Surface · **Tier:** Deterministic
-**Script:** `<skills-file-root>/scripts/frontmatter_check.sh`
-
-**Seed checks:**
-- SKILL.md begins with valid YAML frontmatter delimited by `---`.
-- `name` field matches the skill directory name exactly.
-- `description` field is present and non-empty.
-- No unquoted YAML special characters; no keys outside the allowed set.
-
-**Severity:** BLOCKER — missing or unparseable frontmatter. MAJOR — `name`/directory mismatch. MINOR — empty description. NIT — extra undocumented keys.
-
----
-
-### D3: description-quality
-
-**Source:** Phase 2 — API Surface · **Tier:** Heuristic+Agent
-**Script:** `<skills-file-root>/scripts/description_check.sh`
-
-**Seed checks:**
-- Contains at least one trigger condition ("Use when …").
-- At least two action verbs (e.g., "generate", "validate").
-- Word count between 30 and 120.
-- Avoids vague filler ("helps with things", "various tasks").
-- When the skill has a CLI, the description SHALL mention the primary command.
-
-**Severity:** BLOCKER — description missing. MAJOR — no trigger conditions. MINOR — word count outside range. NIT — minor filler phrases.
-
----
-
-### D4: path-token-usage
-
-**Source:** Phase 1 — Environment & Build · **Tier:** Deterministic
-**Script:** `<skills-file-root>/scripts/path_token_check.sh`
-
-**Seed checks:**
-- All path references use `<skills-file-root>`, not hardcoded paths.
-- No bare `./scripts/` or `../` patterns in SKILL.md or references.
-- Paths in fenced code blocks retain the `<skills-file-root>` prefix.
-- Referenced paths resolve to files that actually exist.
-
-**Severity:** BLOCKER — hardcoded absolute path. MAJOR — `../` escaping the skill dir. MINOR — missing prefix. NIT — trailing slashes or casing.
-
----
-
-### D5: name-consistency
-
-**Source:** Phase 2 — API Surface · **Tier:** Agent+Script (needs CLI)
-**Script:** `<skills-file-root>/scripts/name_consistency_check.sh`
-
-**Seed checks:**
-- Frontmatter name matches directory name.
-- When a CLI exists, its `--help` output uses the same name.
-- SKILL.md body, README, and dispatch templates use a consistent name.
-- Subcommand help text names the parent skill correctly.
-- Name canonicalization does not drift between docs and CLI surfaces.
-
-**Boundary:** D5 checks *name identity and canonical forms*. Discovery-helper
-coverage for enum-like options belongs to D22.
-
-**Severity:** BLOCKER — CLI name differs from frontmatter. MAJOR — SKILL.md body name mismatch. MINOR — inconsistent capitalization. NIT — one-off abbreviation.
-
----
-
-### D6: command-isolation
-
-**Source:** Phase 3 — Workflow Simulation · **Tier:** Agent (grep heuristic)
-**Script:** —
-
-**Seed checks:**
-- No env var set in one block and relied upon in a later block without re-export.
-- `cd`, `pushd`, `export` do not leak across fenced code blocks.
-- When commands share state, the dependency is documented explicitly.
-- No `source`/`.` commands with side-effects crossing block boundaries.
-
-**Severity:** BLOCKER — critical step depends on variable set blocks earlier. MAJOR — `cd` assumed across blocks. MINOR — benign export leaks. NIT — style preference.
-
----
-
-### D7: error-message-quality
-
-**Source:** Phase 2 — API Surface · **Tier:** Agent+Script (needs CLI)
-**Script:** `<skills-file-root>/scripts/error_quality_check.sh`
-
-**Seed checks:**
-- Errors are short (<3 lines) and state what went wrong.
-- Each error suggests a corrective action or points to docs.
-- No raw stack traces leak into user-facing output.
-- Exit codes are non-zero on failure; invalid args reference `--help`.
-
-**Severity:** BLOCKER — empty error or bare stack trace. MAJOR — no corrective action. MINOR — verbose but correct. NIT — wording polish.
-
----
-
-### D8: progressive-disclosure
-
-**Source:** Phase 4 — Context & Token Analysis · **Tier:** Agent+Script
-**Script:** `<skills-file-root>/scripts/measure_context.sh`
-
-**Seed checks:**
-- SKILL.md uses the 3-layer model: summary → workflow → deep references.
-- Layer 1 (frontmatter + first 50 lines) suffices to decide skill usage.
-- Layer 2 (SKILL.md body) stays under 8 KB.
-- Layer 3 (references/) is loaded on demand via explicit paths.
-- No single reference file exceeds 15 KB.
-
-**Severity:** BLOCKER — SKILL.md >20 KB with no extraction. MAJOR — reference loaded unconditionally. MINOR — Layer 2 slightly >8 KB. NIT — ordering improvements.
-
----
-
-### D9: dispatch-prompt-quality
-
-**Source:** Phase 3b — Multi-Agent Audit · **Tier:** Agent
-**Script:** —
-
-**Seed checks:**
-- Each dispatch prompt is self-contained (no parent SKILL.md required).
-- Prompt specifies exact scope: files, directories, domains.
-- Output contract defined: format, location, naming convention.
-- No implicit knowledge assumed; all context inlined or path-referenced.
-- When multiple subagents dispatch, their scopes SHALL NOT overlap.
-
-**Severity:** BLOCKER — prompt references inaccessible context. MAJOR — no output contract. MINOR — slightly ambiguous scope. NIT — wording tightening.
-
----
-
-### D10: output-size-discipline
-
-**Source:** Phase 5 — Output Quality · **Tier:** Agent+Script (needs CLI)
-**Script:** `<skills-file-root>/scripts/output_size_check.sh`
-
-**Seed checks:**
-- Default CLI output fits within 4 KB.
-- Filtering flags exist (`--quiet`, `--json`, `--summary`).
-- When output exceeds 4 KB, the tool warns or paginates.
-- Structured output (JSON/YAML) available for machine consumption.
-- No banners, ASCII art, or color codes in non-TTY output.
-
-**Severity:** BLOCKER — default output >20 KB, no filter. MAJOR — no structured-output flag. MINOR — slightly >4 KB. NIT — decorative TTY elements.
-
----
-
-### D11: cold-start-readiness
-
-**Source:** Phase 1 — Environment & Build · **Tier:** Deterministic
-**Script:** `<skills-file-root>/scripts/cold_start_check.sh`
-
-**Seed checks:**
-- Runs in <5 s on first invocation (no compile step).
-- No `cargo build`, `npm install`, or equivalent on first use.
-- When a build step is required, SKILL.md documents it with expected duration.
-- Pre-built binaries or interpreted scripts preferred.
-- Network access SHALL NOT be required for initial execution.
-
-**Severity:** BLOCKER — multi-minute build with no warning. MAJOR — cold start 5–30 s. MINOR — build noise on stderr. NIT — caching opportunities.
-
----
-
-### D12: script-self-containment
-
-**Source:** Phase 1 — Environment & Build · **Tier:** Agent+Script
-**Script:** `<skills-file-root>/scripts/dependency_check.sh`
-
-**Seed checks:**
-- External deps documented at each script's top or in SKILL.md.
-- Scripts use POSIX constructs unless shebang declares a specific shell.
-- No undeclared dependency on `jq`, `yq`, `python3`, etc.
-- When a dep is missing at runtime, script prints a clear error and exits 1.
-
-**Severity:** BLOCKER — silent failure on missing dep. MAJOR — dep undocumented. MINOR — bashism without bash shebang. NIT — shared preamble opportunity.
-
----
-
-### D13: cross-skill-integration
-
-**Source:** Phase 3 — Workflow Simulation · **Tier:** Agent
-**Script:** —
-
-**Seed checks:**
-- Integration points with other skills documented in SKILL.md.
-- Cross-skill name references match the target's frontmatter `name`.
-- Shared data contracts (formats, directory conventions) are explicit.
-- No circular dependencies, or resolution strategy is documented.
-- Handoff context is sufficient for the receiving skill to proceed.
-
-**Severity:** BLOCKER — circular dep causes infinite loop. MAJOR — stale/wrong skill name. MINOR — implied data format. NIT — add "Related skills" section.
 
 ---
 
@@ -281,7 +35,7 @@ coverage for enum-like options belongs to D22.
 - Vague phrasing (for example, weak modal wording) SHALL be replaced
   with `SHALL`/`SHOULD` where the intent is a directive.
 - Conditionals follow `WHEN <cond>, the system SHALL …` pattern.
-- Negative requirements use `SHALL NOT`, not ambiguous phrasing.
+- Negative requirements use SHALL NOT, not ambiguous phrasing.
 
 **Severity:** BLOCKER — safety rule uses `SHOULD` instead of `SHALL`. MAJOR — vague directive on core step. MINOR — inconsistent keyword usage. NIT — style preference.
 
@@ -373,6 +127,9 @@ reproducible — the same inputs produce the same assessments.
   THEN each pass SHALL narrow findings, not introduce new contradictions.
 - Script outputs SHALL be idempotent: running `surface_check.sh` twice on an
   unchanged directory SHALL produce byte-identical output.
+- WHEN a skill's scripts produce list/collection output, THEN items SHALL be sorted deterministically (alphabetical, by severity, or by file path — not by insertion order or random).
+- WHEN a skill parallelizes work and merges results, THEN the merge SHALL produce deterministic ordering.
+- WHEN a script produces JSON output, THEN keys SHALL be in stable order (alphabetical or schema-defined).
 
 **Confidence integration:**
 - A finding backed by deterministic script output has HIGH convergence
@@ -382,7 +139,7 @@ reproducible — the same inputs produce the same assessments.
 - A finding from pattern matching has LOW convergence confidence — it may not
   reproduce across agents or runs.
 
-**Severity:** BLOCKER — auditor produces contradictory findings across runs on unchanged input. MAJOR — >20% variance in findings between runs. MINOR — cosmetic differences in finding descriptions. NIT — ordering differences in report output.
+**Severity:** BLOCKER — auditor produces contradictory findings across runs on unchanged input. MAJOR — >20% variance in findings between runs; non-deterministic list ordering in script output. MINOR — cosmetic differences in finding descriptions. NIT — ordering differences in report output.
 
 ---
 
@@ -444,6 +201,9 @@ external rules as concrete, checkable properties within its own workflow.
 - WHEN AGENTS.md defines a progressive disclosure model, THEN the skill's
   file structure SHALL implement that model (SKILL.md as router, references
   as just-in-time detail).
+- WHEN AGENTS.md defines CLI-served self-documentation, THEN a skill with a
+  router CLI SHALL document both the CLI command path and the fallback
+  reference path in SKILL.md.
 - The skill SHALL NOT contradict AGENTS.md. WHEN a skill instruction conflicts
   with AGENTS.md, THEN the conflict SHALL be flagged as a BLOCKER.
 - WHEN the skill audits other skills for AGENTS.md compliance, THEN the
@@ -491,7 +251,11 @@ The following AGENTS.md sections SHALL have corresponding audit checks:
 | Divergence (finding specificity)           | D19                |
 | Adherence (rule absorption)               | D20                |
 | Example/runtime drift                     | D21                |
+| CLI-served self-documentation            | D8, D20, D22       |
 | CLI discoverability helpers               | D22                |
+| Idempotency and state isolation           | D23                |
+| Error recovery                            | D24                |
+| Credential safety                         | D25                |
 
 WHEN an AGENTS.md section has no corresponding domain, THEN the auditor SHALL
 flag this as a D20 MAJOR finding against itself.
@@ -562,9 +326,17 @@ optional or illustrative example drift that does not affect the main path.
   list-like discoverability affordances or valid-value guidance patterns.
 - Documented enum-like options SHALL appear in CLI help corpus when CLI
   coverage is enabled.
+- WHEN a skill has a CLI, THEN `<cli>` with no arguments SHALL print usage showing available commands.
+- WHEN a skill has phased workflows, THEN the CLI SHOULD offer a command to list phases and get phase-specific guidance on demand.
+- WHEN a skill has phased workflows, THEN the CLI SHOULD offer `next-steps`
+  and step-level guidance (`step <N>` or equivalent) so the agent can pull
+  only the current instruction slice.
+- WHEN a skill has enumerable configuration (domains, roles, modes), THEN the CLI SHALL offer listing commands for each enumerable set.
+- WHEN a skill's CLI accepts input, THEN it SHOULD offer a `--dry-run` or `--validate` mode that checks input without side effects.
+- WHEN a skill's CLI produces structured output, THEN it SHOULD offer `--check` or `--verify` to validate output completeness.
 
 **Severity:** BLOCKER — primary enum-like workflow cannot recover from invalid
 value because neither docs nor CLI expose a discoverability path. MAJOR —
 documented enum-like options have no discoverability helper command or are
-missing from CLI help corpus. MINOR — discoverability exists but is indirect
-or inconsistently documented. NIT — helper wording/presentation polish.
+missing from CLI help corpus; CLI has no usage output with no args. MINOR — discoverability exists but is indirect
+or inconsistently documented; missing listing command for an enumerable set or missing step-level guidance for a phased workflow. NIT — helper wording/presentation polish.

@@ -5,6 +5,10 @@ phases (4–5). These phases focus on context efficiency and output quality —
 areas that directly affect how much value an agent extracts from its limited
 context window.
 
+These phases still culminate in report writing. Deterministic checks can
+quantify duplication, staleness, or token cost, but the auditor must interpret
+what matters, connect it to agent impact, and fold it into the running report.
+
 ## Table of contents
 
 - [Phase 4: Context & Token Analysis](#phase-4-context--token-analysis)
@@ -22,16 +26,22 @@ instruction budget is spent.
 Agent context windows are finite and expensive. Every unnecessary token in a
 skill's instructions is a token that can't be used for the actual task.
 
+Before moving on, ask:
+
+- Which tokens actually help an agent succeed?
+- Which disclosure layers are conditionally loaded versus always dumped up front?
+- Which reductions preserve clarity and which would create ambiguity elsewhere?
+
 ### Steps
 
 1. **Measure every document.** You SHALL measure each file in the skill directory:
    ```bash
    wc -lc <file>  # lines and characters
    ```
-   Estimate tokens as `chars / 4` (rough approximation for English text).
+   Estimate tokens at roughly one token per four characters.
 
 2. **Measure every protocol/template output.** You SHALL measure the output of any CLI that
-   serves instructions (like `mpcr protocol`), if the skill has one:
+   serves instructions through a protocol or routing subcommand, if the skill has one:
    ```bash
    tool protocol subcommand 2>&1 | wc -lc
    ```
@@ -72,13 +82,15 @@ skill's instructions is a token that can't be used for the actual task.
 
 ### Domain scripts
 
-For this phase, the auditor SHALL execute these domain scripts:
+For this phase, the auditor SHOULD execute these domain scripts when they
+accelerate measurement or raise confidence:
 
 - D8 (`<skills-file-root>/scripts/measure_context.sh`)
 - D17 (`<skills-file-root>/scripts/reference_depth_check.sh`)
 
-IF a script is unavailable, THEN the auditor SHALL run an equivalent manual
-check and document the missing script as a finding.
+IF a script is unavailable or too weak for the observed issue, THEN the
+auditor SHALL run an equivalent manual check and document that limitation in
+the report.
 
 ---
 
@@ -87,6 +99,9 @@ check and document the missing script as a finding.
 **Goal:** Run a deterministic duplication pass that separates operative
 duplication from advisory duplication and uses only operative findings to
 gate the audit verdict.
+
+This gate is intentionally narrow. It provides reliable duplicate and
+contradiction evidence, but it does not replace the rest of the audit report.
 
 ### Steps
 
@@ -118,6 +133,11 @@ gate the audit verdict.
    this phase SHALL be marked `HIGH [H]`, because it is produced by exact,
    repeatable script logic.
 
+6. **Synthesize before verdicting.** After the script runs, the auditor SHALL
+   translate gate output into report findings using the skill's real workflow
+   impact. Operative duplicates can gate shipment; advisory duplicates still
+   need narrative explanation when they waste context or mislead agents.
+
 ### What to record
 
 - Gate status and highest operative severity
@@ -128,12 +148,13 @@ gate the audit verdict.
 
 ### Domain scripts
 
-For this phase, the auditor SHALL execute:
+For this phase, the auditor SHOULD execute:
 
 - D16 (`<skills-file-root>/scripts/duplication_check.sh <skill-dir> --scope all --format json`)
 
 WHEN the script cannot run, THEN the auditor SHALL perform a manual duplicate
-inventory and explicitly downgrade confidence below HIGH.
+inventory, explicitly downgrade confidence below HIGH, and note that the gate
+itself was not fully exercised.
 
 ---
 
@@ -141,6 +162,12 @@ inventory and explicitly downgrade confidence below HIGH.
 
 **Goal:** Are the skill's templates, dispatch prompts, and generated outputs
 thorough, consistent, and tailored to their purpose?
+
+Before moving on, ask:
+
+- Could an agent produce a strong result from these templates without guessing?
+- Do the outputs reinforce the skill's claims, or expose hypocrisy and drift?
+- Which quality gaps belong in the final verdict versus as follow-up polish?
 
 ### Steps
 
@@ -179,6 +206,11 @@ thorough, consistent, and tailored to their purpose?
    If these are missing, note it — agents tend toward shallow output without
    explicit depth requirements.
 
+5. **Pressure-test reportability.** You SHALL confirm that your accumulated
+   evidence can actually be expressed cleanly in the provided report template.
+   If a phase or domain consistently produces evidence that the template cannot
+   capture, that is itself a finding.
+
 ### What to record
 
 - Size comparison table across variants
@@ -189,13 +221,14 @@ thorough, consistent, and tailored to their purpose?
 
 ### Domain scripts
 
-For this phase, the auditor SHALL execute the following domain scripts:
+For this phase, the auditor SHOULD execute the following domain scripts when
+they sharpen evidence:
 
 - D14 (`<skills-file-root>/scripts/ears_check.sh`)
 - D15 (`<skills-file-root>/scripts/prompt_complexity_check.sh`)
 
 WHEN a script is not present, THEN the auditor SHALL perform the equivalent
-checks manually and note the missing script as a finding.
+checks manually and note the missing helper coverage as a finding.
 
 ---
 

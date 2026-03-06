@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
 # skill-auditor — Cold-start readiness check (D11).
+# idempotency: timing-dependent
 #
 # Usage:
 #   cold_start_check.sh <skill-directory>

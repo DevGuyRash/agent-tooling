@@ -1,24 +1,18 @@
 #!/usr/bin/env sh
-# skill-auditor — Context measurement script.
+# skill-auditor — Context measurement script (D8).
 #
 # Usage:
-#   measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run]
+#   measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run] [--format text|json]
 #
-# Measures the character/token cost of every document in a skill directory.
-# If --cli is provided, also measures CLI outputs.
-#
-# Safety:
-#   - Default `--cli-mode help` only calls `--help` on discovered commands.
-#   - `--cli-mode run` executes discovered subcommands without `--help` and may
-#     have side effects for some CLIs. Use only when auditing a known-safe CLI.
-#
-# Output is a structured table for direct inclusion in audit reports.
+# Measures the character/token cost of skill documents and reports whether the
+# skill follows a bounded, conditional progressive-disclosure pattern.
 
 set -eu
 
 SKILL_DIR=""
 CLI_BIN=""
 CLI_MODE="help"
+FORMAT="text"
 
 require_opt_value() {
     opt="$1"
@@ -40,19 +34,10 @@ run_probe() {
     [ "$probe_status" -eq 0 ]
 }
 
-# Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
-            echo "Usage: measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run]"
-            echo ""
-            echo "Measures the character/token cost of every document in a skill directory."
-            echo "If --cli is provided, also measures CLI outputs."
-            echo ""
-            echo "Options:"
-            echo "  --cli <path>           CLI binary to probe"
-            echo "  --cli-mode help|run    help (default): only run '--help' for safety"
-            echo "                         run: execute discovered subcommands (may have side effects)"
+            echo "Usage: measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run] [--format text|json]"
             exit 0
             ;;
         --cli)
@@ -64,6 +49,11 @@ while [ $# -gt 0 ]; do
             require_opt_value "--cli-mode" "${2-}"
             shift
             CLI_MODE="$1"
+            ;;
+        --format)
+            require_opt_value "--format" "${2-}"
+            shift
+            FORMAT="$1"
             ;;
         --*)
             echo "error: unknown option: $1"
@@ -82,7 +72,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$SKILL_DIR" ]; then
-    echo "Usage: measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run]"
+    echo "Usage: measure_context.sh <skill-directory> [--cli <binary-path>] [--cli-mode help|run] [--format text|json]"
     exit 1
 fi
 
@@ -92,228 +82,176 @@ if [ ! -d "$SKILL_DIR" ]; then
 fi
 
 case "$CLI_MODE" in
-    help|run)
-        ;;
+    help|run) ;;
     *)
         echo "error: invalid --cli-mode: $CLI_MODE (expected: help|run)"
         exit 1
         ;;
 esac
 
-echo "═══ Context Measurement: $(basename "$SKILL_DIR") ═══"
-echo ""
-
-# ---------------------------------------------------------------------------
-# 1. Document measurements
-# ---------------------------------------------------------------------------
-echo "── 1. Document Sizes ──"
-echo ""
-printf "  %-45s %6s %8s %8s\n" "File" "Lines" "Chars" "~Tokens"
-printf "  %-45s %6s %8s %8s\n" "----" "-----" "-----" "-------"
-
-total_chars=0
-total_lines=0
+case "$FORMAT" in
+    text|json) ;;
+    *)
+        echo "error: invalid --format: $FORMAT (expected: text|json)"
+        exit 1
+        ;;
+esac
 
 doc_list=$(mktemp)
-cleanup_lists() {
+cleanup() {
     rm -f "$doc_list"
 }
-trap cleanup_lists EXIT INT TERM
+trap cleanup EXIT INT TERM
 
 find "$SKILL_DIR" -type f \
     \( -name '*.md' -o -name '*.toml' -o -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) \
     -not -path '*/target/*' -not -path '*/.git/*' \
     -not -name 'Cargo.*' 2>/dev/null | sort > "$doc_list"
 
+skill_md="$SKILL_DIR/SKILL.md"
+skill_lines=0
+skill_chars=0
+skill_tokens=0
+if [ -f "$skill_md" ]; then
+    skill_lines=$(wc -l < "$skill_md" | tr -d ' ')
+    skill_chars=$(wc -c < "$skill_md" | tr -d ' ')
+    skill_tokens=$((skill_chars / 4))
+fi
+
+total_chars=0
+total_lines=0
+reference_count=0
+largest_reference=""
+largest_reference_chars=0
+oversized_references=0
+
 while IFS= read -r file; do
     [ -z "$file" ] && continue
     relpath="${file#"$SKILL_DIR"/}"
-
-    lines=$(wc -l < "$file" 2>/dev/null || echo 0)
-    chars=$(wc -c < "$file" 2>/dev/null || echo 0)
-    tokens=$(( chars / 4 ))
-
-    printf "  %-45s %6d %8d %8d\n" "$relpath" "$lines" "$chars" "$tokens"
-    total_chars=$((total_chars + chars))
+    lines=$(wc -l < "$file" | tr -d ' ')
+    chars=$(wc -c < "$file" | tr -d ' ')
     total_lines=$((total_lines + lines))
+    total_chars=$((total_chars + chars))
+    case "$relpath" in
+        references/*)
+            reference_count=$((reference_count + 1))
+            if [ "$chars" -gt "$largest_reference_chars" ]; then
+                largest_reference_chars=$chars
+                largest_reference="$relpath"
+            fi
+            if [ "$chars" -gt 15000 ]; then
+                oversized_references=$((oversized_references + 1))
+            fi
+            ;;
+    esac
 done < "$doc_list"
 
-printf "  %-45s %6s %8s %8s\n" "" "-----" "-----" "-------"
-printf "  %-45s %6d %8d %8d\n" "TOTAL (documents/config)" "$total_lines" "$total_chars" "$(( total_chars / 4 ))"
+has_reference_index=0
+has_cli_router_guidance=0
+has_cli_fallback=0
 
-echo ""
+if [ -f "$skill_md" ]; then
+    if grep -Eq '^## Reference index|^## Reference Index' "$skill_md"; then
+        has_reference_index=1
+    fi
+    if grep -Eq 'run `[^`]+` for guidance|run `<skills-file-root>/scripts/[^`]+` for guidance|primary source: `[^`]+`' "$skill_md"; then
+        has_cli_router_guidance=1
+    fi
+    if grep -Eqi 'IF the CLI is unavailable|fallback' "$skill_md"; then
+        has_cli_fallback=1
+    fi
+fi
 
-# ---------------------------------------------------------------------------
-# 2. CLI protocol output measurements (if CLI provided)
-# ---------------------------------------------------------------------------
+cli_help_chars=0
+cli_help_lines=0
+cli_help_tokens=0
+cli_probed=0
 if [ -n "$CLI_BIN" ]; then
     resolved_cli=$(command -v "$CLI_BIN" 2>/dev/null || true)
     if [ -n "$resolved_cli" ]; then
         CLI_BIN="$resolved_cli"
     fi
-
-    if [ ! -x "$CLI_BIN" ]; then
-        echo "── 2. CLI Protocol Outputs ──"
-        echo "  ⚠ CLI binary not executable: $CLI_BIN"
-        echo ""
-    else
-        echo "── 2. CLI Protocol Outputs ──"
-        echo ""
-        printf "  %-50s %6s %8s %8s\n" "Command" "Lines" "Chars" "~Tokens"
-        printf "  %-50s %6s %8s %8s\n" "-------" "-----" "-----" "-------"
-
-        cli_total_chars=0
-
-        # Discover available subcommands from --help output.
-        # This is generic — works with any CLI, not just mpcr.
-        help_output=""
-        run_probe "$CLI_BIN" --help || true
-        help_output=$probe_output
-
-        extract_subcommands() {
-            awk '
-                function emit(token) {
-                    if (token == "" || token ~ /^-/) {
-                        return
-                    }
-                    if (token ~ /^[A-Za-z0-9_][A-Za-z0-9_-]*$/) {
-                        print token
-                    }
-                }
-                {
-                    raw = $0
-
-                    # Parse table-style command rows seen in many help formats:
-                    #   "  add      Add file contents..."
-                    #   "    status   Show status"
-                    if (raw ~ /^[[:space:]]+[A-Za-z0-9_][A-Za-z0-9_-]*([[:space:]][[:space:]]+|\t)/) {
-                        sub(/^[[:space:]]+/, "", raw)
-                        split(raw, fields, /[[:space:]]+/)
-                        emit(fields[1])
-                    }
-
-                    # Parse brace lists such as "{build,test,lint}".
-                    while (match(raw, /\{[^{}]+\}/)) {
-                        block = substr(raw, RSTART + 1, RLENGTH - 2)
-                        count = split(block, values, /,/)
-                        for (i = 1; i <= count; i++) {
-                            gsub(/^[[:space:]]+|[[:space:]]+$/, "", values[i])
-                            emit(values[i])
-                        }
-                        raw = substr(raw, RSTART + RLENGTH)
-                    }
-                }
-            ' | sort -u
-        }
-
-        subcmds=$(printf '%s\n' "$help_output" | extract_subcommands || true)
-
-        if [ -z "$subcmds" ]; then
-            # In run mode, fallback to no-arg invocation (may have side effects).
-            # Help mode must stay side-effect-safe and never invoke default command.
-            if [ "$CLI_MODE" = "run" ]; then
-                run_probe "$CLI_BIN" || true
-                noarg_output=$probe_output
-                subcmds=$(printf '%s\n' "$noarg_output" | \
-                    sed -n 's/.*{\([^}]*\)}.*/\1/p' | tr ',' '\n' | \
-                    sed 's/^[[:space:]]*//' | grep -v '^$' | sort -u || true)
-            fi
-
+    if [ -x "$CLI_BIN" ]; then
+        cli_probed=1
+        if run_probe "$CLI_BIN" --help; then
+            cli_help_chars=$(printf '%s\n' "$probe_output" | wc -c | tr -d ' ')
+            cli_help_lines=$(printf '%s\n' "$probe_output" | wc -l | tr -d ' ')
+            cli_help_tokens=$((cli_help_chars / 4))
         fi
-
-        if [ -z "$subcmds" ]; then
-            echo "  ℹ No subcommands discovered; skipping CLI subcommand probing."
-        fi
-
-        # Measure each discovered subcommand
-        for subcmd in $subcmds; do
-            case "$CLI_MODE" in
-                help)
-                    if run_probe "$CLI_BIN" "$subcmd" --help; then
-                        output=$probe_output
-                    else
-                        continue
-                    fi
-                    ;;
-                run)
-                    if run_probe "$CLI_BIN" "$subcmd"; then
-                        output=$probe_output
-                    else
-                        continue
-                    fi
-                    ;;
-            esac
-            exit_word=$(printf '%s\n' "$output" | head -1)
-
-            # Skip commands that produce errors or empty output
-            case "$exit_word" in
-                *error*|*Error*|*unknown*|*Unknown*|"")
-                    continue
-                    ;;
-            esac
-
-            lines=$(printf '%s\n' "$output" | wc -l)
-            chars=$(printf '%s\n' "$output" | wc -c)
-            # Skip trivially small outputs (likely error/usage messages)
-            if [ "$chars" -lt 50 ]; then
-                continue
-            fi
-            tokens=$(( chars / 4 ))
-            printf "  %-50s %6d %8d %8d\n" "$subcmd" "$lines" "$chars" "$tokens"
-            cli_total_chars=$((cli_total_chars + chars))
-
-            # Probe one level deeper: try subcommand --help for sub-subcommands
-            sub_help=""
-            run_probe "$CLI_BIN" "$subcmd" --help || true
-            sub_help=$probe_output
-            sub_subcmds=$(printf '%s\n' "$sub_help" | extract_subcommands || true)
-
-            for sub in $sub_subcmds; do
-                case "$CLI_MODE" in
-                    help)
-                        if run_probe "$CLI_BIN" "$subcmd" "$sub" --help; then
-                            sub_output=$probe_output
-                        else
-                            continue
-                        fi
-                        ;;
-                    run)
-                        if run_probe "$CLI_BIN" "$subcmd" "$sub"; then
-                            sub_output=$probe_output
-                        else
-                            continue
-                        fi
-                        ;;
-                esac
-                sub_first=$(printf '%s\n' "$sub_output" | head -1)
-                case "$sub_first" in
-                    *error*|*Error*|*unknown*|*Unknown*|"")
-                        continue
-                        ;;
-                esac
-                sub_chars=$(printf '%s\n' "$sub_output" | wc -c)
-                if [ "$sub_chars" -lt 50 ]; then
-                    continue
-                fi
-                sub_lines=$(printf '%s\n' "$sub_output" | wc -l)
-                sub_tokens=$(( sub_chars / 4 ))
-                printf "  %-50s %6d %8d %8d\n" "$subcmd $sub" "$sub_lines" "$sub_chars" "$sub_tokens"
-                cli_total_chars=$((cli_total_chars + sub_chars))
-            done
-        done
-
-        echo ""
-        printf "  %-50s %20s\n" "CLI TOTAL:" "$cli_total_chars chars (~$(( cli_total_chars / 4 )) tokens)"
-        echo ""
-
-        # Grand total
-        grand_total=$((total_chars + cli_total_chars))
-        echo "── Grand Total ──"
-        printf "  %-50s %20s\n" "Documents:" "$total_chars chars (~$(( total_chars / 4 )) tokens)"
-        printf "  %-50s %20s\n" "CLI outputs:" "$cli_total_chars chars (~$(( cli_total_chars / 4 )) tokens)"
-        printf "  %-50s %20s\n" "GRAND TOTAL:" "$grand_total chars (~$(( grand_total / 4 )) tokens)"
     fi
 fi
 
+peak_chars=$skill_chars
+peak_reference="$largest_reference"
+if [ "$largest_reference_chars" -gt 0 ]; then
+    peak_chars=$((skill_chars + largest_reference_chars))
+fi
+peak_tokens=$((peak_chars / 4))
+
+violations=0
+skill_body_exceeds_budget=0
+peak_context_exceeds_budget=0
+if [ "$skill_chars" -gt 8192 ]; then
+    skill_body_exceeds_budget=1
+    violations=$((violations + 1))
+fi
+if [ "$peak_tokens" -gt 12000 ]; then
+    peak_context_exceeds_budget=1
+    violations=$((violations + 1))
+fi
+if [ "$oversized_references" -gt 0 ]; then
+    violations=$((violations + oversized_references))
+fi
+if [ "$reference_count" -gt 0 ] && [ "$has_reference_index" -eq 0 ] && [ "$has_cli_router_guidance" -eq 0 ]; then
+    violations=$((violations + 1))
+fi
+if [ "$has_cli_router_guidance" -eq 1 ] && [ "$has_cli_fallback" -eq 0 ]; then
+    violations=$((violations + 1))
+fi
+
+if [ "$FORMAT" = "json" ]; then
+    printf '{'
+    printf '"summary":{'
+    printf '"skill_lines":%d,' "$skill_lines"
+    printf '"skill_chars":%d,' "$skill_chars"
+    printf '"skill_tokens":%d,' "$skill_tokens"
+    printf '"reference_count":%d,' "$reference_count"
+    printf '"largest_reference_chars":%d,' "$largest_reference_chars"
+    printf '"oversized_references":%d,' "$oversized_references"
+    printf '"peak_context_chars":%d,' "$peak_chars"
+    printf '"peak_context_tokens":%d,' "$peak_tokens"
+    printf '"skill_body_exceeds_budget":%d,' "$skill_body_exceeds_budget"
+    printf '"peak_context_exceeds_budget":%d,' "$peak_context_exceeds_budget"
+    printf '"has_reference_index":%d,' "$has_reference_index"
+    printf '"has_cli_router_guidance":%d,' "$has_cli_router_guidance"
+    printf '"has_cli_fallback":%d,' "$has_cli_fallback"
+    printf ',"cli_probed":%d,"cli_help_chars":%d,"cli_help_lines":%d,"cli_help_tokens":%d' \
+        "$cli_probed" "$cli_help_chars" "$cli_help_lines" "$cli_help_tokens"
+    printf ',"violations":%d' "$violations"
+    printf '},'
+    printf '"largest_reference":"%s"' "$(printf '%s' "$largest_reference" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '}\n'
+    exit 0
+fi
+
+echo "═══ Context Measurement: $(basename "$SKILL_DIR") ═══"
+echo ""
+echo "── D8 Budget Summary ──"
+printf "  %-30s %s\n" "SKILL.md:" "$skill_chars chars (~$skill_tokens tokens, $skill_lines lines)"
+printf "  %-30s %s\n" "Largest reference:" "${largest_reference:-none} (${largest_reference_chars} chars)"
+printf "  %-30s %s\n" "Peak context:" "$peak_chars chars (~$peak_tokens tokens)"
+printf "  %-30s %s\n" "Reference count:" "$reference_count"
+printf "  %-30s %s\n" "Oversized references (>15KB):" "$oversized_references"
+echo ""
+echo "── Routing Signals ──"
+printf "  %-30s %s\n" "Reference index present:" "$has_reference_index"
+printf "  %-30s %s\n" "CLI router guidance present:" "$has_cli_router_guidance"
+printf "  %-30s %s\n" "CLI fallback present:" "$has_cli_fallback"
+if [ "$cli_probed" -eq 1 ]; then
+    printf "  %-30s %s\n" "CLI --help output:" "$cli_help_chars chars (~$cli_help_tokens tokens, $cli_help_lines lines)"
+fi
+echo ""
+echo "── Summary ──"
+echo "  Violations found: $violations"
 echo ""
 echo "Done."

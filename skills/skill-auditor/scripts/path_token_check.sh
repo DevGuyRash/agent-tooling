@@ -23,7 +23,7 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-SKILL_DIR="$1"
+SKILL_DIR="${1%/}"
 if [ ! -d "$SKILL_DIR" ]; then
     echo "error: not a directory: $SKILL_DIR"
     exit 1
