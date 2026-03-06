@@ -400,6 +400,41 @@ while IFS= read -r script; do
 done < "$tmplist"
 
 echo ""
+echo "── GNU-Specific Flag Detection ──"
+
+while IFS= read -r script; do
+    [ -z "$script" ] && continue
+    case "$script" in *.sh) ;; *) continue ;; esac
+    # Skip self — this script references GNU patterns in its check logic
+    case "$script" in *dependency_check.sh) continue ;; esac
+    relpath="${script#"$SKILL_DIR"/}"
+
+    # Check for GNU-specific sed -i (without backup suffix on BSD)
+    sed_i_hits=$(grep -nE '(^|[[:space:]])sed[[:space:]]+-i[[:space:]]+(--|-e|s[/|])' "$script" 2>/dev/null | grep -v '^[[:space:]]*#' | head -3 || true)
+    if [ -n "$sed_i_hits" ]; then
+        echo "  ⚠ $relpath — GNU-specific 'sed -i' without backup suffix [MINOR]:"
+        printf '%s\n' "$sed_i_hits" | while IFS= read -r line; do echo "      $line"; done
+        total_issues=$((total_issues + 1))
+    fi
+
+    # Check for grep -P (Perl regex, not POSIX)
+    grep_p_hits=$(grep -nE '(^|[[:space:]])grep[[:space:]]+-[a-zA-Z]*P' "$script" 2>/dev/null | grep -v '^[[:space:]]*#' | head -3 || true)
+    if [ -n "$grep_p_hits" ]; then
+        echo "  ⚠ $relpath — GNU-specific 'grep -P' (use grep -E) [MINOR]:"
+        printf '%s\n' "$grep_p_hits" | while IFS= read -r line; do echo "      $line"; done
+        total_issues=$((total_issues + 1))
+    fi
+
+    # Check for readlink -f (GNU-only)
+    readlink_hits=$(grep -nE '(^|[[:space:]])readlink[[:space:]]+-f' "$script" 2>/dev/null | grep -v '^[[:space:]]*#' | head -3 || true)
+    if [ -n "$readlink_hits" ]; then
+        echo "  ⚠ $relpath — GNU-specific 'readlink -f' [MINOR]:"
+        printf '%s\n' "$readlink_hits" | while IFS= read -r line; do echo "      $line"; done
+        total_issues=$((total_issues + 1))
+    fi
+done < "$tmplist"
+
+echo ""
 echo "── Summary ──"
 echo "  Issues found: $total_issues"
 

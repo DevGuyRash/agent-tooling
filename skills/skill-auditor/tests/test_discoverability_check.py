@@ -21,6 +21,23 @@ def run_discoverability_check(skill_dir: Path, *extra: str) -> dict:
 
 
 class DiscoverabilityCheckTests(unittest.TestCase):
+    def test_run_is_stderr_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\ntool dispatch --role <ROLE>\ntool dispatch --help\n```\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                ["sh", str(SCRIPT), str(skill_dir), "--format", "json"],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+        self.assertEqual(completed.stderr, "")
+
     def test_flags_missing_doc_helper_for_enum_option(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)
@@ -47,6 +64,33 @@ class DiscoverabilityCheckTests(unittest.TestCase):
 
         self.assertEqual(data["summary"]["total_enum_options"], 0)
         self.assertEqual(data["summary"]["discovery_gaps"], 0)
+
+    def test_detects_concrete_enum_values_in_docs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\ntool dispatch --role applicator-worker\ntool build --mode compose\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir)
+
+        self.assertEqual(data["summary"]["total_enum_options"], 2)
+        self.assertEqual([row["option"] for row in data["options"]], ["--mode", "--role"])
+
+    def test_detects_phased_workflow_from_markdown_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n## Workflow\n\nPhase 1 starts here.\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir)
+
+        self.assertGreaterEqual(data["summary"]["phased_workflow_detected"], 1)
+        self.assertEqual(data["summary"]["doc_next_step_examples"], 0)
+        self.assertEqual(data["summary"]["discovery_gaps"], 1)
 
     def test_passes_with_doc_helper_and_cli_help_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,6 +163,10 @@ class DiscoverabilityCheckTests(unittest.TestCase):
 
         self.assertGreaterEqual(data["summary"]["discovery_gaps"], 1)
         self.assertEqual(data["summary"]["option_help_coverage_failures"], 1)
+        self.assertGreaterEqual(
+            data["summary"]["discovery_gaps"],
+            data["summary"]["option_help_coverage_failures"],
+        )
         self.assertEqual(data["options"][0]["status"], "missing-in-help")
 
     def test_json_contains_expected_keys(self):
@@ -134,13 +182,63 @@ class DiscoverabilityCheckTests(unittest.TestCase):
         for key in (
             "total_enum_options",
             "doc_discovery_examples",
+            "doc_next_step_examples",
+            "phased_workflow_detected",
             "cli_help_checked",
+            "cli_no_arg_usage",
             "cli_list_like_helpers",
+            "cli_step_guidance",
             "option_help_coverage_failures",
             "discovery_gaps",
         ):
             self.assertIn(key, data["summary"])
         self.assertIsInstance(data["options"], list)
+
+    def test_detects_step_guidance_for_phased_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            cli = skill_dir / "fake-cli"
+            cli.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env sh
+                    if [ $# -eq 0 ]; then
+                        echo "Usage: fake-cli <command>"
+                        echo "Commands:"
+                        echo "  next-steps"
+                        echo "  step"
+                        exit 0
+                    fi
+                    if [ "${1-}" = "--help" ]; then
+                        echo "Usage: fake-cli"
+                        echo "  next-steps"
+                        echo "  step"
+                        exit 0
+                    fi
+                    if [ "${1-}" = "step" ] && [ "${2-}" = "--help" ]; then
+                        echo "Usage: fake-cli step <N>"
+                        exit 0
+                    fi
+                    if [ "${1-}" = "next-steps" ] && [ "${2-}" = "--help" ]; then
+                        echo "Usage: fake-cli next-steps"
+                        exit 0
+                    fi
+                    exit 0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            cli.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n## Workflow\n\nPhase 1 starts here.\n\n```bash\nfake-cli next-steps\nfake-cli step <N>\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir, "--cli", str(cli))
+
+        self.assertGreaterEqual(data["summary"]["doc_next_step_examples"], 1)
+        self.assertGreaterEqual(data["summary"]["cli_step_guidance"], 1)
+        self.assertEqual(data["summary"]["cli_no_arg_usage"], 1)
 
 
 if __name__ == "__main__":

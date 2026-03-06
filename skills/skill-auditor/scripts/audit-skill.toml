@@ -1,0 +1,489 @@
+# audit-skill.toml — Structured manifest for the skill-auditor CLI.
+# This file provides routing metadata for the audit-skill progressive
+# disclosure CLI. Detailed content lives in references/*.md files;
+# this manifest stores only index/routing data.
+
+[meta]
+version = "1.0.0"
+name = "skill-auditor"
+description = "Structured, phased audit framework for evaluating agent skills across 25 domains (D1-D25)"
+total_domains = "25"
+total_phases = "7"
+workflow_steps = "14"
+
+# ─── Phases ───────────────────────────────────────────────────────────
+
+[phases.1]
+name = "Environment & Build"
+budget = "15%"
+brief = "Dead scripts block everything else. Execute first, read second."
+reference = "references/audit-phases-core.md"
+heading = "Phase 1: Environment & Build"
+domains = "D1, D2, D3, D4, D11, D12"
+
+[phases.2]
+name = "API Surface"
+budget = "25%"
+brief = "Name mismatches are the #1 agent failure mode. Map every CLI name to every doc name."
+reference = "references/audit-phases-core.md"
+heading = "Phase 2: API Surface"
+domains = "D5, D7, D10, D21, D22"
+
+[phases.3]
+name = "Workflow Simulation"
+budget = "30%"
+brief = "Walk the primary workflow as an agent would, recording every friction point."
+reference = "references/audit-phases-core.md"
+heading = "Phase 3: Workflow Simulation"
+domains = "D6, D9, D13"
+
+[phases.3b]
+name = "Multi-Agent Audit"
+budget = "included in Phase 3"
+brief = "Inspect dispatch prompts, worker boundaries, and orchestrator patterns."
+reference = "references/multi-agent-audit.md"
+heading = "Multi-Agent Audit"
+domains = "D9"
+
+[phases.4]
+name = "Context & Token Analysis"
+budget = "15%"
+brief = "Quantify every document's token cost. Identify where the instruction budget is spent."
+reference = "references/audit-phases-analysis.md"
+heading = "Phase 4: Context & Token Analysis"
+domains = "D8, D14, D15, D17"
+
+[phases.4b]
+name = "Deterministic Duplication Gate"
+budget = "5%"
+brief = "Run deterministic duplication pass. Only operative findings gate the verdict."
+reference = "references/audit-phases-analysis.md"
+heading = "Phase 4b: Deterministic Duplication Gate"
+domains = "D16"
+
+[phases.5]
+name = "Output Quality"
+budget = "15%"
+brief = "Are templates, dispatch prompts, and generated outputs thorough and tailored?"
+reference = "references/audit-phases-analysis.md"
+heading = "Phase 5: Output Quality"
+domains = "D10, D14, D15, D18, D19, D20"
+
+# ─── Domains ──────────────────────────────────────────────────────────
+
+[domains.D1]
+name = "file-hygiene"
+tier = "Deterministic"
+brief = "CRLF detection, permissions, shebangs, hidden files."
+reference = "references/domains-core.md"
+heading = "D1: file-hygiene"
+script = "scripts/surface_check.sh"
+activation = "universal"
+hint = "Run surface_check.sh first. CRLF in shell scripts is always a BLOCKER."
+
+[domains.D2]
+name = "frontmatter-validity"
+tier = "Deterministic"
+brief = "YAML frontmatter presence, name/directory match, required fields."
+reference = "references/domains-core.md"
+heading = "D2: frontmatter-validity"
+script = "scripts/frontmatter_check.sh"
+activation = "universal"
+hint = "The name field must exactly match the parent directory name."
+
+[domains.D3]
+name = "description-quality"
+tier = "Heuristic+Agent"
+brief = "Trigger conditions, action verbs, word count, filler phrases."
+reference = "references/domains-core.md"
+heading = "D3: description-quality"
+script = "scripts/description_check.sh"
+activation = "universal"
+hint = "Test description against 5-10 realistic prompts that should and shouldn't trigger the skill."
+
+[domains.D4]
+name = "path-token-usage"
+tier = "Deterministic"
+brief = "All paths use <skills-file-root>, no hardcoded or ../ patterns."
+reference = "references/domains-core.md"
+heading = "D4: path-token-usage"
+script = "scripts/path_token_check.sh"
+activation = "universal"
+hint = "Check fenced code blocks especially — paths inside backticks often lose the prefix."
+
+[domains.D5]
+name = "name-consistency"
+tier = "Agent+Script"
+brief = "Frontmatter, CLI, docs, and dispatch templates all use the same name."
+reference = "references/domains-core.md"
+heading = "D5: name-consistency"
+script = "scripts/name_consistency_check.sh"
+activation = "cli-heavy"
+hint = "Run with --cli <binary> to cross-check CLI help output against documented names."
+
+[domains.D6]
+name = "command-isolation"
+tier = "Agent"
+brief = "No env var leaks across fenced code blocks. No cd/export side-effects."
+reference = "references/domains-core.md"
+heading = "D6: command-isolation"
+script = ""
+activation = "universal"
+hint = "Grep for export/cd/source in fenced blocks. Check if later blocks depend on earlier state."
+
+[domains.D7]
+name = "error-message-quality"
+tier = "Agent+Script"
+brief = "Errors are short, actionable, include valid alternatives. No stack traces."
+reference = "references/domains-core.md"
+heading = "D7: error-message-quality"
+script = "scripts/error_quality_check.sh"
+activation = "cli-heavy"
+hint = "Deliberately provide bad input to every command. A good error is 1-3 lines with a hint."
+
+[domains.D8]
+name = "progressive-disclosure"
+tier = "Agent+Script"
+brief = "3-layer model: summary, workflow, deep references. Layer 2 stays bounded and CLI routing is conditional."
+reference = "references/domains-core.md"
+heading = "D8: progressive-disclosure"
+script = "scripts/measure_context.sh"
+activation = "universal"
+hint = "Measure SKILL.md size, reference fan-out, and whether the skill routes deeper guidance conditionally via references or CLI."
+
+[domains.D9]
+name = "dispatch-prompt-quality"
+tier = "Agent"
+brief = "Dispatch prompts are self-contained, scoped, with output contracts and blast radius controls."
+reference = "references/domains-core.md"
+heading = "D9: dispatch-prompt-quality"
+script = ""
+activation = "dispatches-subagents"
+hint = "Each dispatch prompt must include: task, scope, forbidden actions, resource limits, output format."
+
+[domains.D10]
+name = "output-size-discipline"
+tier = "Agent+Script"
+brief = "Default output under 4KB, filtering flags, structured output available. Clear feedback on completion."
+reference = "references/domains-core.md"
+heading = "D10: output-size-discipline"
+script = "scripts/output_size_check.sh"
+activation = "cli-heavy"
+hint = "Measure every CLI command's output. If >4KB, add --summary or --quiet flags."
+
+[domains.D11]
+name = "cold-start-readiness"
+tier = "Deterministic"
+brief = "Runs in <5s on first invocation. No compile step. No network required."
+reference = "references/domains-core.md"
+heading = "D11: cold-start-readiness"
+script = "scripts/cold_start_check.sh"
+activation = "cli-heavy"
+hint = "Time the first run. If >5s, ship pre-built binaries or switch to interpreted scripts."
+
+[domains.D12]
+name = "script-self-containment"
+tier = "Agent+Script"
+brief = "External deps documented, POSIX constructs, no GNU-specific flags without fallbacks."
+reference = "references/domains-core.md"
+heading = "D12: script-self-containment"
+script = "scripts/dependency_check.sh"
+activation = "has-scripts"
+hint = "Check for: sed -i without backup, grep -P, readlink -f, bash arrays, [[ ]]."
+
+[domains.D13]
+name = "cross-skill-integration"
+tier = "Agent"
+brief = "Integration points documented, cross-skill names match, no circular deps."
+reference = "references/domains-core.md"
+heading = "D13: cross-skill-integration"
+script = ""
+activation = "cross-skill-deps"
+hint = "Run Skill A's setup, then Skill B's verification on its output. Zero manual fixes needed."
+
+[domains.D14]
+name = "ears-compliance"
+tier = "Agent+Script"
+brief = "SHALL/SHOULD/MAY/WHEN keywords used consistently and correctly."
+reference = "references/domains-analysis.md"
+heading = "D14: ears-compliance"
+script = "scripts/ears_check.sh"
+activation = "instruction-heavy"
+hint = "Safety rules must use SHALL, not SHOULD. Conditionals follow WHEN <cond>, ... SHALL pattern."
+
+[domains.D15]
+name = "prompt-complexity"
+tier = "Agent+Script"
+brief = "No instruction exceeds 2 levels of nesting. Conditional density under 5 per 100 words."
+reference = "references/domains-analysis.md"
+heading = "D15: prompt-complexity"
+script = "scripts/prompt_complexity_check.sh"
+activation = "instruction-heavy"
+hint = "Complex decision trees should be tables or flowcharts, not nested prose."
+
+[domains.D16]
+name = "duplication-detection"
+tier = "Deterministic"
+brief = "Deterministic gate: operative duplicates may block; advisory duplicates reported but don't gate."
+reference = "references/domains-analysis.md"
+heading = "D16: duplication-detection"
+script = "scripts/duplication_check.sh"
+activation = "has-references"
+hint = "Run with --scope all --format json. Only operative findings affect the verdict."
+
+[domains.D17]
+name = "reference-depth"
+tier = "Deterministic"
+brief = "No chain exceeds 3 hops. Files >500 lines flagged for split. Orphans detected."
+reference = "references/domains-analysis.md"
+heading = "D17: reference-depth"
+script = "scripts/reference_depth_check.sh"
+activation = "has-references"
+hint = "Every reference should be reachable from SKILL.md within 2 hops."
+
+[domains.D18]
+name = "convergence"
+tier = "Agent"
+brief = "Repeated runs produce consistent findings. Deterministic output is idempotent and sorted."
+reference = "references/domains-analysis.md"
+heading = "D18: convergence"
+script = ""
+activation = "universal"
+hint = "Run every deterministic script twice on unchanged input. Output must be byte-identical."
+
+[domains.D19]
+name = "divergence"
+tier = "Agent"
+brief = "Findings reference specific file:line locations, not generic advice."
+reference = "references/domains-analysis.md"
+heading = "D19: divergence"
+script = ""
+activation = "produces-variant-outputs"
+hint = "If >40% of findings lack skill-specific anchors, divergence is insufficient."
+
+[domains.D20]
+name = "adherence"
+tier = "Agent+Script"
+brief = "Every AGENTS.md rule cluster has corresponding audit coverage. Self-compliance verified."
+reference = "references/domains-analysis.md"
+heading = "D20: adherence"
+script = "scripts/adherence_check.sh"
+activation = "universal"
+hint = "Map each relevant AGENTS.md section to an explicit auditor check. Skills with router CLIs must document CLI guidance plus fallback references."
+
+[domains.D21]
+name = "staleness-drift"
+tier = "Agent+Script"
+brief = "Documented commands still work. Examples match current runtime behavior."
+reference = "references/domains-analysis.md"
+heading = "D21: staleness-drift"
+script = "scripts/staleness_check.sh"
+activation = "universal"
+hint = "Execute every documented command. Compare output to what the docs describe."
+
+[domains.D22]
+name = "cli-discoverability"
+tier = "Agent+Script"
+brief = "Enum-like options have discovery helpers. CLI with no args prints usage. Listing and next-step guidance exist for enumerables and phases."
+reference = "references/domains-analysis.md"
+heading = "D22: cli-discoverability"
+script = "scripts/discoverability_check.sh"
+activation = "cli-heavy"
+hint = "Every CLI should print usage with no args. Every enumerable set needs a listing command, and phased workflows need next-step guidance."
+
+[domains.D23]
+name = "idempotency"
+tier = "Agent+Script"
+brief = "Scripts leave no residual state. Re-runs produce identical output. Trap handlers clean temp files."
+reference = "references/domains-new.md"
+heading = "D23: idempotency"
+script = "scripts/idempotency_check.sh"
+activation = "has-scripts, has-temp-files"
+hint = "Run each script twice on unchanged input. Diff output. Check /tmp/ for leftover files."
+
+[domains.D24]
+name = "error-recovery"
+tier = "Agent+Script"
+brief = "Multi-step workflows document recovery paths. Partial-success is detectable. No silent exit 0."
+reference = "references/domains-new.md"
+heading = "D24: error-recovery"
+script = "scripts/error_recovery_check.sh"
+activation = "multi-step-workflows"
+hint = "Check for trap handlers, exit code discipline, recovery documentation for each workflow step."
+
+[domains.D25]
+name = "credential-safety"
+tier = "Agent+Script"
+brief = "No secrets in committed files. No credential leakage in error output. No eval on user input."
+reference = "references/domains-new.md"
+heading = "D25: credential-safety"
+script = "scripts/credential_check.sh"
+activation = "handles-credentials"
+hint = "Scan for .env files, set -x near credentials, eval on variables, credential patterns in errors."
+
+# ─── Activation Rules ─────────────────────────────────────────────────
+
+[activation]
+universal = "D1, D2, D3, D4, D6, D8, D18, D20, D21"
+has-scripts = "D12, D23"
+has-references = "D16, D17"
+dispatches-subagents = "D9"
+cli-heavy = "D5, D7, D10, D11, D22"
+instruction-heavy = "D14, D15"
+cross-skill-deps = "D13"
+produces-variant-outputs = "D19"
+has-temp-files = "D23"
+multi-step-workflows = "D24"
+handles-credentials = "D25"
+
+# ─── Guided Steps (ordered) ───────────────────────────────────────────
+
+[steps.1]
+title = "Read the target skill"
+brief = "Identify the target skill directory and read its SKILL.md end-to-end before running checks."
+command = "read <skill-dir>/SKILL.md"
+phase = ""
+domains = "D3, D8, D20, D21"
+reference = "SKILL.md"
+next_command = "audit-skill step 2"
+
+[steps.2]
+title = "Map the skill surface"
+brief = "Inventory scripts, references, binaries, configs, and any router CLI or other entrypoints."
+command = "find <skill-dir> -maxdepth 2 -type f"
+phase = "1"
+domains = "D1, D4, D11, D12, D17"
+reference = "references/audit-phases-core.md"
+next_command = "audit-skill step 3"
+
+[steps.3]
+title = "Activate domains"
+brief = "Determine which domains apply based on the skill's traits before deeper auditing."
+command = "audit-skill activate <traits...>"
+phase = ""
+domains = "D1-D25"
+reference = "references/domains-core.md"
+next_command = "audit-skill step 4"
+
+[steps.4]
+title = "Load Phase 1 guidance"
+brief = "Read the environment and build instructions before executing deterministic checks."
+command = "audit-skill phase 1"
+phase = "1"
+domains = "D1, D2, D3, D4, D11, D12"
+reference = "references/audit-phases-core.md"
+next_command = "audit-skill step 5"
+
+[steps.5]
+title = "Start the running report"
+brief = "Create a durable report directory under ~/.local/reports and open a running report before gathering more evidence."
+command = "mkdir -p ~/.local/reports/skill-auditor/<skill-name>/$(date +%F) && audit-skill report-workflow"
+phase = "1"
+domains = "D18, D19, D20"
+reference = "SKILL.md"
+next_command = "audit-skill step 6"
+
+[steps.6]
+title = "Gather helper evidence"
+brief = "Run targeted deterministic checks or check-all when it saves time, then fold the results into the report."
+command = "audit-skill check-all <skill-dir>"
+phase = "1"
+domains = "D1, D2, D4, D7, D10, D11, D12, D16, D17, D20, D21, D22, D23, D24, D25"
+reference = "references/audit-phases-core.md"
+next_command = "audit-skill step 7"
+
+[steps.7]
+title = "Audit API surface"
+brief = "Compare documented names, commands, flags, and error paths against the runtime surfaces."
+command = "audit-skill phase 2"
+phase = "2"
+domains = "D5, D7, D10, D21, D22"
+reference = "references/audit-phases-core.md"
+next_command = "audit-skill step 8"
+
+[steps.8]
+title = "Simulate the workflow"
+brief = "Walk the primary workflow as an agent would and record every friction point."
+command = "audit-skill phase 3"
+phase = "3"
+domains = "D6, D9, D13"
+reference = "references/audit-phases-core.md"
+next_command = "audit-skill step 9"
+
+[steps.9]
+title = "Run multi-agent audit when needed"
+brief = "If the skill dispatches workers or subagents, inspect prompts, boundaries, and forbidden actions."
+command = "audit-skill phase 3b"
+phase = "3b"
+domains = "D9"
+reference = "references/multi-agent-audit.md"
+next_command = "audit-skill step 10"
+
+[steps.10]
+title = "Measure disclosure and context"
+brief = "Quantify how much context the skill loads and whether deeper guidance is conditionally routed."
+command = "audit-skill phase 4"
+phase = "4"
+domains = "D8, D14, D15, D17"
+reference = "references/audit-phases-analysis.md"
+next_command = "audit-skill step 11"
+
+[steps.11]
+title = "Run duplication gate"
+brief = "Use the deterministic duplication pass to separate operative contradictions from advisory overlap."
+command = "audit-skill phase 4b"
+phase = "4b"
+domains = "D16"
+reference = "references/audit-phases-analysis.md"
+next_command = "audit-skill step 12"
+
+[steps.12]
+title = "Review output quality"
+brief = "Evaluate report depth, specificity, EARS quality, adherence, and CLI guidance quality."
+command = "audit-skill phase 5"
+phase = "5"
+domains = "D10, D14, D15, D18, D19, D20, D22"
+reference = "references/audit-phases-analysis.md"
+next_command = "audit-skill step 13"
+
+[steps.13]
+title = "Synthesize the report"
+brief = "Use the report workflow to turn accumulated evidence into findings, verdict reasoning, and confidence."
+command = "audit-skill report-workflow"
+phase = "5"
+domains = "D18, D19, D20"
+reference = "SKILL.md"
+next_command = "audit-skill step 14"
+
+[steps.14]
+title = "Finalize and validate"
+brief = "Fill the template, then optionally run self-check to validate the helper-script layer remains stable."
+command = "audit-skill report-template"
+phase = "5"
+domains = "D18, D19, D20, D23"
+reference = "references/report-template.md"
+next_command = "audit-skill self-check"
+
+# ─── Scripts Inventory ─────────────────────────────────────────────────
+
+[scripts]
+surface = "scripts/surface_check.sh"
+frontmatter = "scripts/frontmatter_check.sh"
+description = "scripts/description_check.sh"
+path_token = "scripts/path_token_check.sh"
+cold_start = "scripts/cold_start_check.sh"
+dependency = "scripts/dependency_check.sh"
+name_consistency = "scripts/name_consistency_check.sh"
+error_quality = "scripts/error_quality_check.sh"
+output_size = "scripts/output_size_check.sh"
+staleness = "scripts/staleness_check.sh"
+discoverability = "scripts/discoverability_check.sh"
+adherence = "scripts/adherence_check.sh"
+ears = "scripts/ears_check.sh"
+prompt_complexity = "scripts/prompt_complexity_check.sh"
+duplication = "scripts/duplication_check.sh"
+reference_depth = "scripts/reference_depth_check.sh"
+measure_context = "scripts/measure_context.sh"
+idempotency = "scripts/idempotency_check.sh"
+error_recovery = "scripts/error_recovery_check.sh"
+credential = "scripts/credential_check.sh"

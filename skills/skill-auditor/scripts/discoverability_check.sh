@@ -4,8 +4,8 @@
 # Usage:
 #   discoverability_check.sh <skill-directory> [--cli <binary>] [--format text|json]
 #
-# Evaluates whether skills provide deterministic CLI discoverability helpers for
-# enum-like options (for example --role, --mode, --phase values).
+# Evaluates whether skills provide deterministic discoverability helpers for
+# enum-like options and phased workflows.
 
 set -eu
 
@@ -16,11 +16,33 @@ TAB=$(printf '\t')
 
 extract_enum_options() {
     awk '
+        function is_enum_flag(flag, lower) {
+            lower = tolower(flag)
+            if (lower ~ /(role|mode|phase|status|type|format|level|profile|variant|provider|backend|engine|target|env|environment|strategy|policy|kind)/) return 1
+            return 0
+        }
         function is_enum_placeholder(raw, lower) {
             lower = tolower(raw)
             if (raw ~ /[|,\/]/) return 1
             if (lower ~ /(role|mode|phase|status|type|format|level|profile|variant|provider|backend|engine|target|env|environment|strategy|policy|kind)/) return 1
             return 0
+        }
+        function is_literal_enum_value(raw, lower) {
+            lower = tolower(raw)
+            if (raw == "" || raw ~ /^--/) return 0
+            if (raw ~ /^<[^>]+>$/) return 0
+            if (raw ~ /^\[[^][]+\]$/) return 0
+            if (raw ~ /^[\"'\''`]/) return 0
+            if (raw ~ /[\"'\''`]$/) return 0
+            if (raw ~ /^(\/|\.\/|\.\.\/)/) return 0
+            if (raw ~ /[\/]/) return 0
+            if (raw ~ /^\$/) return 0
+            if (raw ~ /^</ || raw ~ />$/) return 0
+            if (raw ~ /^[][(){}.,;:]+$/) return 0
+            if (lower ~ /^(true|false|yes|no|on|off|none|null|auto)$/) return 0
+            if (lower ~ /^(file|path|dir|directory|output|input|binary|command|script|skill-directory|skill-dir)$/) return 0
+            if (raw ~ /\.(md|txt|rst|json|toml|ya?ml|csv|tsv|png|jpg|jpeg|gif|svg|pdf|sh|py|rb|pl|js|ts|rs)$/) return 0
+            return (raw ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/)
         }
         {
             line = $0
@@ -36,10 +58,14 @@ extract_enum_options() {
                 line = substr(line, RSTART + RLENGTH)
             }
             line = $0
-            while (match(line, /--(role|mode|phase|status|type)[[:space:]]+[a-z][a-z0-9_-]*/)) {
+            while (match(line, /--[a-z][a-z0-9-]*[[:space:]]+[A-Za-z0-9._-]+/)) {
                 chunk = substr(line, RSTART, RLENGTH)
                 split(chunk, fields, /[[:space:]]+/)
-                print fields[1]
+                flag = fields[1]
+                value = fields[2]
+                if (is_enum_flag(flag) && is_literal_enum_value(value)) {
+                    print flag
+                }
                 line = substr(line, RSTART + RLENGTH)
             }
         }
@@ -62,8 +88,8 @@ usage() {
     echo ""
     echo "Checks CLI discoverability helper coverage:"
     echo "  - enum-like option presence in docs"
-    echo "  - discovery helper examples in docs (--help/--list)"
-    echo "  - CLI help/list affordances when --cli is provided"
+    echo "  - helper examples in docs (--help, --list, next-steps, step/phase helpers)"
+    echo "  - CLI usage/help affordances when --cli is provided"
     echo "  - option coverage in aggregated CLI help corpus"
 }
 
@@ -72,7 +98,7 @@ escape_json() {
 }
 
 escape_ere() {
-    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\\-]/\\&/g'
+    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\\]/\\&/g'
 }
 
 option_present_in_help() {
@@ -125,8 +151,7 @@ if [ ! -d "$SKILL_DIR" ]; then
 fi
 
 case "$FORMAT" in
-    text|json)
-        ;;
+    text|json) ;;
     *)
         echo "error: invalid --format: $FORMAT (expected text|json)"
         exit 1
@@ -153,26 +178,41 @@ done < "$tmp_md"
 sort -u "$tmp_opts" -o "$tmp_opts"
 
 total_enum_options=$(grep -c '.' "$tmp_opts" 2>/dev/null || true)
-
-doc_discovery_examples=0
+phased_workflow_detected=0
 while IFS= read -r md; do
     [ -z "$md" ] && continue
-    hits=$(grep -Ec -- '(^|[[:space:]])(--help|-h|--list)([[:space:]]|$)|`[^`]*(--help|--list| help| list)[^`]*`' "$md" 2>/dev/null || true)
+    hits=$(grep -Eic -- '(^|[^[:alnum:]])phase[[:space:]]+[0-9]|phase <|phase-specific|workflow step|next-steps|step <' "$md" 2>/dev/null || true)
+    phased_workflow_detected=$((phased_workflow_detected + hits))
+done < "$tmp_md"
+
+doc_discovery_examples=0
+doc_next_step_examples=0
+while IFS= read -r md; do
+    [ -z "$md" ] && continue
+    hits=$(grep -Eic -- '(^|[[:space:]])(--help|-h|--list)([[:space:]]|$)|`[^`]*(--help|--list| help| list)[^`]*`' "$md" 2>/dev/null || true)
     doc_discovery_examples=$((doc_discovery_examples + hits))
+    step_hits=$(grep -Eic -- 'next-steps|step <|phase <|phase-specific' "$md" 2>/dev/null || true)
+    doc_next_step_examples=$((doc_next_step_examples + step_hits))
 done < "$tmp_md"
 
 cli_help_checked=0
+cli_no_arg_usage=0
 cli_list_like_helpers=0
+cli_step_guidance=0
 option_help_coverage_failures=0
 missing_doc_helper=0
 missing_cli_helper=0
+missing_step_helper=0
 cli_unavailable=0
 
 if [ "$total_enum_options" -gt 0 ] && [ "$doc_discovery_examples" -eq 0 ]; then
     missing_doc_helper=1
 fi
 
-resolved_cli=""
+if [ "$phased_workflow_detected" -gt 0 ] && [ "$doc_next_step_examples" -eq 0 ]; then
+    missing_step_helper=1
+fi
+
 if [ -n "$CLI_BIN" ]; then
     resolved_cli=$(command -v "$CLI_BIN" 2>/dev/null || true)
     if [ -n "$resolved_cli" ]; then
@@ -184,9 +224,18 @@ if [ -n "$CLI_BIN" ]; then
         : > "$tmp_help"
 
         set +e
+        no_arg_output=$("$CLI_BIN" 2>&1)
         top_help=$("$CLI_BIN" --help 2>&1)
         set -e
+
+        case "$no_arg_output" in
+            *Usage:*|*usage:*|*Commands:*|*commands:*)
+                cli_no_arg_usage=1
+                ;;
+        esac
+
         printf '%s\n' "$top_help" >> "$tmp_help"
+        printf '%s\n' "$no_arg_output" >> "$tmp_help"
 
         subcmds=$(printf '%s\n' "$top_help" | awk '
             function emit(token) {
@@ -223,9 +272,14 @@ if [ -n "$CLI_BIN" ]; then
             [ -n "$sub_help" ] && printf '%s\n' "$sub_help" >> "$tmp_help"
         done
 
-        cli_list_like_helpers=$(grep -Eic -- '(^|[[:space:]])(--list|list)([[:space:]]|$)|available values|valid values|choices|supported values' "$tmp_help" || true)
+        cli_list_like_helpers=$(grep -Eic -- '(^|[[:space:][:punct:]])(--list|list)([[:space:][:punct:]]|$)|available values|valid values|choices|supported values' "$tmp_help" || true)
+        cli_step_guidance=$(grep -Eic -- 'next-steps|step <|phase <|phase-specific|step guidance' "$tmp_help" || true)
+
         if [ "$total_enum_options" -gt 0 ] && [ "$cli_list_like_helpers" -eq 0 ]; then
             missing_cli_helper=1
+        fi
+        if [ "$phased_workflow_detected" -gt 0 ] && [ "$cli_step_guidance" -eq 0 ] && [ "$doc_next_step_examples" -eq 0 ]; then
+            missing_step_helper=1
         fi
     else
         cli_unavailable=1
@@ -255,15 +309,19 @@ while IFS= read -r opt; do
     printf '%s\t%s\t%s\n' "$opt" "$status" "$evidence" >> "$tmp_opt_rows"
 done < "$tmp_opts"
 
-discovery_gaps=$((missing_doc_helper + missing_cli_helper + cli_unavailable))
+discovery_gaps=$((missing_doc_helper + missing_cli_helper + cli_unavailable + missing_step_helper + option_help_coverage_failures))
 
 if [ "$FORMAT" = "json" ]; then
     printf '{'
     printf '"summary":{'
     printf '"total_enum_options":%d,' "$total_enum_options"
     printf '"doc_discovery_examples":%d,' "$doc_discovery_examples"
+    printf '"doc_next_step_examples":%d,' "$doc_next_step_examples"
+    printf '"phased_workflow_detected":%d,' "$phased_workflow_detected"
     printf '"cli_help_checked":%d,' "$cli_help_checked"
+    printf '"cli_no_arg_usage":%d,' "$cli_no_arg_usage"
     printf '"cli_list_like_helpers":%d,' "$cli_list_like_helpers"
+    printf '"cli_step_guidance":%d,' "$cli_step_guidance"
     printf '"option_help_coverage_failures":%d,' "$option_help_coverage_failures"
     printf '"discovery_gaps":%d' "$discovery_gaps"
     printf '},'
@@ -289,10 +347,14 @@ printf '═══ CLI Discoverability: %s ═══\n\n' "$DIR_NAME"
 echo "── Documentation Signals ──"
 echo "  Enum-like options documented: $total_enum_options"
 echo "  Discovery helper examples in docs: $doc_discovery_examples"
+echo "  Next-step/phase helper examples in docs: $doc_next_step_examples"
 if [ "$missing_doc_helper" -eq 1 ]; then
     echo "  ✗ Enum-like options exist but docs lack --help/--list helper examples [MAJOR]"
 else
     echo "  ✓ Documentation includes discoverability helper examples"
+fi
+if [ "$phased_workflow_detected" -gt 0 ] && [ "$missing_step_helper" -eq 1 ] && [ -z "$CLI_BIN" ]; then
+    echo "  ✗ Phased workflow detected but docs lack next-step guidance examples [MINOR]"
 fi
 
 echo ""
@@ -303,11 +365,16 @@ elif [ "$cli_unavailable" -eq 1 ]; then
     echo "  ✗ CLI binary not executable: $CLI_BIN [MAJOR]"
 else
     echo "  CLI help checked: $cli_help_checked"
+    echo "  No-arg usage output detected: $cli_no_arg_usage"
     echo "  List-like discoverability hints found: $cli_list_like_helpers"
+    echo "  Step/phase guidance hints found: $cli_step_guidance"
     if [ "$missing_cli_helper" -eq 1 ]; then
         echo "  ✗ CLI help corpus lacks list-like discoverability helper hints [MAJOR]"
     else
         echo "  ✓ CLI help corpus exposes discoverability helper hints"
+    fi
+    if [ "$phased_workflow_detected" -gt 0 ] && [ "$cli_step_guidance" -eq 0 ] && [ "$doc_next_step_examples" -eq 0 ]; then
+        echo "  ✗ CLI/docs lack step or phase guidance for a phased workflow [MINOR]"
     fi
 fi
 
@@ -319,24 +386,12 @@ else
     echo "  Coverage failures: $option_help_coverage_failures"
     while IFS="$TAB" read -r opt status evidence; do
         [ -z "$opt" ] && continue
-        case "$status" in
-            missing-in-help)
-                echo "  ✗ $opt — $evidence [MAJOR]"
-                ;;
-            found-in-help)
-                echo "  ✓ $opt — $evidence"
-                ;;
-            *)
-                echo "  ⚠ $opt — $evidence"
-                ;;
-        esac
+        printf '  %-18s %-18s %s\n' "$opt" "$status" "$evidence"
     done < "$tmp_opt_rows"
 fi
 
 echo ""
 echo "── Summary ──"
 echo "  Discovery gaps: $discovery_gaps"
-echo "  Option help coverage failures: $option_help_coverage_failures"
-
 echo ""
 echo "Done."

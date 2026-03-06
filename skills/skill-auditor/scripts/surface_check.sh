@@ -202,6 +202,7 @@ perm_issues=0
 
 find "$SKILL_DIR" -type f \( -name '*.sh' -o -name '*.py' \) \
     -not -path '*/target/*' -not -path '*/.git/*' \
+    -not -path '*/tests/*' \
     2>/dev/null > "$script_list"
 
 while IFS= read -r file; do
