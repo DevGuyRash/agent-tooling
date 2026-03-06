@@ -26,6 +26,23 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+run_required_checks_gate() {
+  local output=""
+  if output="$(gh pr checks "${CHECK_ARGS[@]}" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  if printf '%s' "$output" | grep -Eqi 'no required checks|no checks reported|no status checks'; then
+    printf '%s\n' "$output"
+    echo "No required checks are configured for this PR; continuing."
+    return 0
+  fi
+
+  printf '%s\n' "$output" >&2
+  return 1
+}
+
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -120,11 +137,11 @@ bash "$(dirname "$0")/pr-unresolved-threads.sh" "${THREAD_ARGS[@]}"
 echo ""
 echo "== Required CI checks gate =="
 if [[ "$ADMIN_OVERRIDE" == "true" ]]; then
-  if ! gh pr checks "${CHECK_ARGS[@]}"; then
+  if ! run_required_checks_gate; then
     echo "Admin override enabled; continuing despite required-check failures."
   fi
 else
-  gh pr checks "${CHECK_ARGS[@]}"
+  run_required_checks_gate
 fi
 
 PR_JSON="$(gh pr view "${VIEW_ARGS[@]}" --json number,title,isDraft,url,reviewDecision,mergeStateStatus,headRefOid,commits)"

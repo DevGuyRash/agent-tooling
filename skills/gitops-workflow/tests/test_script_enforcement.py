@@ -864,6 +864,10 @@ class MergeSquashScriptTests(unittest.TestCase):
             "    echo 'required check failed' >&2\n"
             "    exit 1\n"
             "  fi\n"
+            "  if [[ \"${NO_REQUIRED_CHECKS:-0}\" == \"1\" ]]; then\n"
+            "    echo 'no required checks reported on the branch' >&2\n"
+            "    exit 1\n"
+            "  fi\n"
             "  echo 'required checks passed'\n"
             "  exit 0\n"
             "fi\n"
@@ -1016,6 +1020,38 @@ class MergeSquashScriptTests(unittest.TestCase):
             merge_call = log_file.read_text(encoding="utf-8")
             self.assertIn("--delete-branch", merge_call)
             self.assertIn(" --admin", merge_call)
+
+    def test_merge_squash_allows_missing_required_checks_configuration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            log_file = temp_path / "calls.log"
+
+            fake_gh = fake_bin / "gh"
+            self._write_fake_gh(fake_gh)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["FAKE_LOG"] = str(log_file)
+            env["NO_REQUIRED_CHECKS"] = "1"
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-merge-squash.sh"),
+                    "7",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("No required checks are configured for this PR; continuing.", proc.stdout)
+            merge_call = log_file.read_text(encoding="utf-8")
+            self.assertIn("pr merge 7 --squash", merge_call)
 
     def test_merge_squash_body_out_writes_editable_draft(self):
         with tempfile.TemporaryDirectory() as temp_dir:
