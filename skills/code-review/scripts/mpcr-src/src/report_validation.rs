@@ -90,6 +90,15 @@ pub struct ParentFindingTelemetry {
     pub anchor: String,
     pub claim: String,
     pub is_actionable: bool,
+    pub reopen_eligible: bool,
+    pub reopen_eligible_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParentResidualRiskTelemetry {
+    pub area: String,
+    pub reopen_eligible: bool,
+    pub reopen_eligible_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,8 +106,9 @@ pub struct ParentReportTelemetry {
     pub retry_count: u64,
     pub packets_validated: u64,
     pub packets_rejected: u64,
+    pub reopen_eligibility_contract_present: bool,
     pub merged_findings: Vec<ParentFindingTelemetry>,
-    pub residual_risks: Vec<String>,
+    pub residual_risks: Vec<ParentResidualRiskTelemetry>,
 }
 
 #[derive(Debug)]
@@ -218,6 +228,7 @@ struct ResidualRiskRecord {
     gap: String,
     impact: String,
     next_action: String,
+    reopen_eligible: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,6 +306,7 @@ struct ParentFindingRecord {
     source_packets: Vec<String>,
     confidence_label: ConfidenceLabel,
     confidence_score: u8,
+    reopen_eligible: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,6 +336,7 @@ struct ParentReviewReportDoc {
     session_id: String,
     target_ref: String,
     verdict: String,
+    reopen_eligibility_contract_version: Option<u64>,
     counts: ParentCounts,
     ship_readiness: ShipReadinessSection,
     #[serde(default)]
@@ -617,15 +630,18 @@ fn validate_parent_markdown_shape(markdown: &str, issues: &mut Vec<ReportValidat
         ));
     }
     let has_findings = markdown_has_heading(markdown, "## Findings")
-        || markdown_has_heading(markdown, "## 6. Findings");
+        || markdown_has_heading(markdown, "## 6. Findings")
+        || markdown_has_heading(markdown, "## Required Now")
+        || markdown_has_heading(markdown, "## 6. Required Now");
     if !has_findings {
         issues.push(issue(
             "missing_heading",
-            "parent report is missing Findings section",
+            "parent report is missing Required Now/Findings section",
         ));
     }
     let has_defended = markdown_has_heading(markdown, "## Defended Proofs")
-        || markdown_has_heading(markdown, "## 7. Defended Proofs");
+        || markdown_has_heading(markdown, "## 7. Defended Proofs")
+        || markdown_has_heading(markdown, "## 8. Defended Proofs");
     if !has_defended {
         issues.push(issue(
             "missing_heading",
@@ -633,7 +649,8 @@ fn validate_parent_markdown_shape(markdown: &str, issues: &mut Vec<ReportValidat
         ));
     }
     let has_risk = markdown_has_heading(markdown, "## Residual Risk")
-        || markdown_has_heading(markdown, "## 8. Residual Risk");
+        || markdown_has_heading(markdown, "## 8. Residual Risk")
+        || markdown_has_heading(markdown, "## 9. Residual Risk");
     if !has_risk {
         issues.push(issue(
             "missing_heading",
@@ -1259,6 +1276,16 @@ fn validate_parent_doc(
         ));
     }
 
+    if doc
+        .reopen_eligibility_contract_version
+        .is_some_and(|version| version == 0)
+    {
+        issues.push(issue(
+            "reopen_contract_version",
+            "reopen_eligibility_contract_version must be >= 1 when present",
+        ));
+    }
+
     if doc.source_packets.is_empty() {
         issues.push(issue(
             "source_packets",
@@ -1628,18 +1655,25 @@ pub fn extract_parent_report_telemetry(markdown: &str) -> anyhow::Result<ParentR
                     finding.severity,
                     SeverityLabel::Blocker | SeverityLabel::Major
                 ),
+                reopen_eligible: finding.reopen_eligible.is_some_and(|value| value),
+                reopen_eligible_present: finding.reopen_eligible.is_some(),
             }
         })
         .collect::<Vec<_>>();
     let residual_risks = doc
         .residual_risks
         .into_iter()
-        .map(|risk| risk.area)
+        .map(|risk| ParentResidualRiskTelemetry {
+            area: risk.area,
+            reopen_eligible: risk.reopen_eligible.is_some_and(|value| value),
+            reopen_eligible_present: risk.reopen_eligible.is_some(),
+        })
         .collect::<Vec<_>>();
     Ok(ParentReportTelemetry {
         retry_count: doc.validation_summary.retry_count,
         packets_validated: doc.validation_summary.packets_validated,
         packets_rejected: doc.validation_summary.packets_rejected,
+        reopen_eligibility_contract_present: doc.reopen_eligibility_contract_version.is_some(),
         merged_findings,
         residual_risks,
     })
@@ -2158,8 +2192,11 @@ retry_count = 0
 ## Ship-Readiness
 **Verdict:** DO_NOT_SHIP
 
-## Findings
+## Required Now
 - Major traversal issue remains.
+
+## Follow-Up Opportunities
+- None.
 
 ## Defended Proofs
 - Token redaction held across tested paths.
@@ -2266,8 +2303,11 @@ retry_count = 0
 ## Ship-Readiness
 **Verdict:** DO_NOT_SHIP
 
-## Findings
+## Required Now
 - Major traversal issue remains.
+
+## Follow-Up Opportunities
+- None.
 
 ## Defended Proofs
 - Token redaction held across tested paths.

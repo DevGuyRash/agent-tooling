@@ -51,6 +51,8 @@ When not in worker mode:
 - Proof/report artifacts SHALL be TOML-first (`proof_packet.v2`) with JSON fallback only; YAML is forbidden.
 - TOML-first applies to proof/report artifacts. CLI operational output may remain JSON (`--json`, `--json-pretty`).
 - Use `mpcr fullcycle plan`, `mpcr fullcycle loop-plan`, `mpcr fullcycle checkpoint`, and `mpcr fullcycle state` as the deterministic execution bridge for full-cycle orchestration.
+- Full-cycle recursion is severity-bounded: only BLOCKER/MAJOR or behavior-facing staleness reopen the loop. Remaining MINOR/NIT items route through one terminal cleanup pass plus one final delta-only check.
+- WHEN resuming a full-cycle session whose parent reports predate the `reopen_eligible` field, you SHALL stop and treat that session as fresh-start-required unless an explicit migration path is documented; pre-flag reports cannot encode behavior-facing staleness reopen intent precisely.
 - WHEN user intent requests a fresh start (for example "start fresh", "clear it out", "wipe prior reviews"), you SHALL run `mpcr reviewer register` with `--clear-session-day` (single day) or `--clear-all-session-days` (all date directories). IF no fresh-start intent is present, you SHALL NOT pass cleanup flags.
 - Write scratch artifacts only under `.local/tmp/`; delete `.local/tmp/` after workflow completion.
 - Refresh guidance at phase transitions via `mpcr protocol ...`.

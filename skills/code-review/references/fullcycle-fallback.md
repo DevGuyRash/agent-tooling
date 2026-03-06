@@ -18,14 +18,15 @@ Full-cycle runs Reviewer then Applicator with recursive Convergence control. You
 ## Phase 1: Initial Review
 1. Run the complete Reviewer workflow (see main orchestrator protocol above).
 2. Collect the merged report and ship-readiness verdict.
-3. IF ship-readiness verdict is **SHIP** (zero BLOCKER/MAJOR findings) -> STOP. Present report to user. You are done.
-4. OTHERWISE -> proceed to Phase 2.
+3. IF the merged report has zero BLOCKER, zero MAJOR, zero behavior-facing staleness findings, and zero remaining MINOR/NIT findings -> STOP. Present report to user. You are done.
+4. IF only MINOR/NIT findings remain -> proceed to Phase 5.
+5. OTHERWISE -> proceed to Phase 2.
 
-## Phase 2: Application
+## Phase 2: High-Severity Application
 1. Run the Applicator workflow on the findings from Phase 1.
 2. BEFORE dispatching applicator workers, dispatch `scope-mapper-applicator` and pass the Scope Map packet from cycle start.
 3. Dispatch `convergence-planner` with prior-cycle summaries to propose focus boundaries for this cycle.
-4. You SHALL dispatch applicator-worker subagents for APPLIED findings (with dynamic worker budget (baseline 4; probe 6 and 8 cautiously when cycle health is stable)).
+4. You SHALL dispatch applicator-worker subagents only for APPLIED findings that are required now (BLOCKER/MAJOR or behavior-facing staleness that affects shipped behavior or operator guidance) (with dynamic worker budget (baseline 4; probe 6 and 8 cautiously when cycle health is stable)).
 5. Each applicator-worker SHALL spawn its own explorer subagents for evidence challenge verification.
 6. Collect all Application Reports. Record dispositions via `mpcr applicator note --session-dir <DIR> ...`.
 7. Set status: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED`.
@@ -41,25 +42,40 @@ Full-cycle runs Reviewer then Applicator with recursive Convergence control. You
 3. Collect the re-review report and ship-readiness verdict.
 
 ## Phase 4: Convergence Check
-1. Compute net-new actionable findings:
-   - BLOCKER and MAJOR findings from re-review
+1. Compute the reopen bar:
+   - net-new BLOCKER and MAJOR findings from re-review
    - Staleness-domain findings that indicate mismatched shipped behavior or operator guidance drift
-2. IF net-new actionable findings == 0 -> STOP. Present final report to user.
-3. IF net-new actionable findings > 0:
-   - Run Phase 2 again on net-new findings only.
-   - Run Phase 3 and Phase 4 again on resulting delta.
+   - Parent-report machine blocks SHALL encode `reopen_eligible = true` only for those behavior-facing staleness findings/residual risks; follow-up-only stale polish SHALL remain `false`
+   - IF resuming parent reports that predate `reopen_eligible`, the planner SHALL stop and mark the session fresh-start-required unless an explicit migration path is documented
+2. IF the reopen bar is non-zero:
+   - Run Phase 2 again on those required-now findings only.
+   - Run Phase 3 and Phase 4 again on the resulting delta.
    - Proceed to Phase 4 again.
+3. IF the reopen bar is zero and remaining findings are only MINOR/NIT -> proceed to Phase 5.
+4. IF the reopen bar is zero and no remaining findings exist -> STOP. Present final report to user.
+
+## Phase 5: Terminal Minor Cleanup
+1. Batch the remaining verified MINOR/NIT findings into one terminal cleanup pass.
+2. Applicator workers SHALL NOT self-expand that pass into adjacent cleanup beyond assigned findings.
+3. After application, record which MINOR/NIT findings were applied, deferred, declined, or already addressed.
+4. Proceed to Phase 6.
+
+## Phase 6: Final Minor Check
+1. Run exactly one final delta-only reviewer workflow against the files modified during Phase 5.
+2. IF the final check finds any BLOCKER, MAJOR, or behavior-facing staleness -> reopen Phase 2 on those findings only.
+3. IF the final check finds only MINOR/NIT (or no findings) -> STOP. Present the report and carry any remaining MINOR/NIT as follow-up or residual polish.
 
 ## Recursive constraints
-- No hard numeric cycle cap is imposed by protocol.
-- You SHALL recurse until a fixed point is reached (zero net-new actionable findings).
+- No hard numeric cycle cap is imposed while BLOCKER/MAJOR or behavior-facing staleness findings continue to appear.
+- You SHALL recurse until the high-severity reopen bar reaches a fixed point.
+- Terminal MINOR/NIT cleanup is single-shot: one cleanup pass plus one final delta-only check.
 - Each cycle SHALL use fresh subagents to prevent convergent laziness.
 - The orchestrator SHALL keep a cycle ledger with unique finding fingerprints (`severity + anchor + normalized claim`).
-- You SHALL deduplicate by fingerprint across cycles before deciding net-new counts.
+- You SHALL deduplicate by fingerprint across cycles before deciding whether the reopen bar is non-zero.
 - You SHALL present the user a cycle summary at each stop point:
   - Cycle N complete. Applied: N findings. Declined: N. Deferred: N. Net-new from re-review: N. Net-new staleness: N.
   - Ship-readiness verdict: SHIP / SHIP_WITH_FIXES / DO_NOT_SHIP.
-- WHEN recursion does not converge due to repeated malformed worker outputs, you SHALL mark unresolved items as Residual Risk and stop only when no new valid findings are produced.
+- WHEN recursion does not converge due to repeated malformed worker outputs, you SHALL mark unresolved items as Residual Risk and stop once the reopen bar is clear and no new valid high-severity findings are produced.
 
 ## Artifact cleanup
 AFTER the workflow completes (finalize succeeds or full-cycle converges):

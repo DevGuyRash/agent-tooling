@@ -14,14 +14,6 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 
 const FULLCYCLE_STATE_KEY: &str = "fullcycle_state";
-const STALE_TOKENS: &[&str] = &[
-    "stale",
-    "drift",
-    "operator guidance",
-    "docs mismatch",
-    "documentation mismatch",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum DetailLevel {
@@ -48,6 +40,10 @@ pub struct FullcycleState {
     pub probe_stage: String,
     pub net_new_actionable: usize,
     pub net_new_staleness_actionable: usize,
+    #[serde(default)]
+    pub remaining_minor_nit: usize,
+    #[serde(default = "default_reopen_severity_floor")]
+    pub reopen_severity_floor: String,
     pub dedup_fingerprint_count: usize,
     pub malformed_packets: u64,
     pub retry_count: u64,
@@ -74,6 +70,8 @@ pub struct FullcyclePlanOutput {
     pub stale_checks_required: Vec<String>,
     pub net_new_actionable: usize,
     pub net_new_staleness_actionable: usize,
+    pub remaining_minor_nit: usize,
+    pub reopen_severity_floor: &'static str,
     pub dedup_fingerprint_count: usize,
     pub retry_count: u64,
     pub child_error_count: usize,
@@ -93,6 +91,10 @@ pub struct BuildParams {
     pub detail: DetailLevel,
     pub now: OffsetDateTime,
     pub loop_mode: bool,
+}
+
+fn default_reopen_severity_floor() -> String {
+    "major".to_string()
 }
 
 fn report_path(session_dir: &SessionLocator, repo_root: &str, report_file: &str) -> PathBuf {
@@ -116,9 +118,8 @@ fn normalized_fingerprint(severity: &str, anchor: &str, claim: &str) -> String {
     format!("{severity}|{anchor}|{normalized_claim}")
 }
 
-fn stale_like(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    STALE_TOKENS.iter().any(|token| lower.contains(token))
+fn is_minor_or_nit(severity: &str) -> bool {
+    matches!(severity, "MINOR" | "NIT")
 }
 
 fn find_latest_parent<'a>(
@@ -157,10 +158,10 @@ fn find_latest_parent<'a>(
 }
 
 fn worker_ceiling() -> u8 {
-    let parsed = std::env::var("MPCR_MAX_WORKERS")
-        .ok()
-        .and_then(|raw| raw.parse::<u8>().ok())
-        .unwrap_or(8);
+    let parsed = match std::env::var("MPCR_MAX_WORKERS") {
+        Ok(raw) => raw.parse::<u8>().ok().map_or(8, |value| value),
+        Err(_) => 8,
+    };
     if parsed >= 8 {
         8
     } else if parsed >= 6 {
@@ -218,7 +219,16 @@ fn build_next_commands(
 ) -> Vec<String> {
     let sid_flag = session_id
         .map(|sid| format!(" --session-id {sid}"))
-        .unwrap_or_default();
+        .map_or(String::new(), |value| value);
+    if phase == "fresh_start_required" {
+        return vec![
+            format!(
+                "mpcr session reports closed --target-ref {target_ref}{sid_flag} --include-report-contents --json"
+            ),
+            "mpcr protocol fullcycle".to_string(),
+            format!("mpcr reviewer register --target-ref {target_ref} --print-env"),
+        ];
+    }
     if !continue_required {
         return vec![format!(
             "mpcr session reports closed --target-ref {target_ref}{sid_flag} --include-report-contents --json"
@@ -239,7 +249,19 @@ fn build_next_commands(
                 "mpcr applicator set-status --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED"
             ),
         ],
+        "terminal_minor_cleanup" => vec![
+            "mpcr protocol applicator --phase DISPOSITION".to_string(),
+            "mpcr protocol applicator --phase APPLICATION".to_string(),
+            format!(
+                "mpcr applicator set-status --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED"
+            ),
+        ],
         "scoped_rereview" => vec![
+            "mpcr protocol convergence-planning".to_string(),
+            format!("mpcr reviewer register --target-ref {target_ref}{sid_flag} --print-env"),
+            "mpcr protocol reviewer --phase INGESTION".to_string(),
+        ],
+        "final_minor_check" => vec![
             "mpcr protocol convergence-planning".to_string(),
             format!("mpcr reviewer register --target-ref {target_ref}{sid_flag} --print-env"),
             "mpcr protocol reviewer --phase INGESTION".to_string(),
@@ -305,6 +327,8 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
     let mut latest_actionable_fingerprints = BTreeSet::new();
     let mut previous_actionable_fingerprints = BTreeSet::new();
     let mut stale_actionable = 0usize;
+    let mut legacy_reopen_field_missing = 0usize;
+    let mut remaining_minor_nit = 0usize;
     let retry_count = latest_telemetry.as_ref().map_or(0, |t| t.retry_count);
     let malformed_packets = latest_telemetry.as_ref().map_or(0, |t| t.packets_rejected);
 
@@ -315,15 +339,24 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
             if finding.is_actionable {
                 latest_actionable_fingerprints.insert(fp);
             }
-            if finding.is_actionable && stale_like(&finding.claim) {
+            if finding.reopen_eligible {
                 stale_actionable += 1;
             }
+            if !finding.reopen_eligible_present {
+                legacy_reopen_field_missing += 1;
+            }
+            if is_minor_or_nit(&finding.severity) {
+                remaining_minor_nit += 1;
+            }
         }
-        stale_actionable += telemetry
-            .residual_risks
-            .iter()
-            .filter(|area| stale_like(area))
-            .count();
+        for risk in &telemetry.residual_risks {
+            if risk.reopen_eligible {
+                stale_actionable += 1;
+            }
+            if !risk.reopen_eligible_present {
+                legacy_reopen_field_missing += 1;
+            }
+        }
     }
     if let Some(ref telemetry) = prev_telemetry {
         for finding in &telemetry.merged_findings {
@@ -351,6 +384,20 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
             .count()
     });
 
+    let remaining_high_severity =
+        latest_finished.map_or(0, |latest| latest.counts.blocker + latest.counts.major);
+    if remaining_minor_nit == 0 {
+        remaining_minor_nit = latest_finished
+            .map(|latest| (latest.counts.minor + latest.counts.nit) as usize)
+            .map_or(0, |count| count);
+    }
+    let previous_phase = previous.as_ref().map(|state| state.cycle_phase.as_str());
+    let finalized_minor_check = matches!(previous_phase, Some("final_minor_check"));
+
+    let legacy_resume_requires_fresh_start = latest_telemetry.as_ref().is_some_and(|telemetry| {
+        !telemetry.reopen_eligibility_contract_present || legacy_reopen_field_missing > 0
+    });
+
     let (continue_required, phase, stop_reason) = if parents.is_empty() {
         (true, "bootstrap_review".to_string(), None)
     } else if parents
@@ -358,18 +405,48 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
         .is_some_and(|entry| !entry.status.is_terminal())
     {
         (true, "wait_review_completion".to_string(), None)
+    } else if legacy_resume_requires_fresh_start {
+        (
+            false,
+            "fresh_start_required".to_string(),
+            Some("legacy_parent_requires_fresh_start".to_string()),
+        )
     } else if let Some(latest) = latest_finished {
-        let actionable = latest.counts.blocker + latest.counts.major;
-        if actionable == 0 && stale_actionable == 0 {
+        if remaining_high_severity > 0 || stale_actionable > 0 {
+            if finalized_minor_check {
+                (
+                    true,
+                    "application".to_string(),
+                    Some("reopened_by_high_severity".to_string()),
+                )
+            } else if latest.initiator_status != InitiatorStatus::Applied {
+                (true, "application".to_string(), None)
+            } else {
+                (true, "scoped_rereview".to_string(), None)
+            }
+        } else if remaining_minor_nit > 0 {
+            if finalized_minor_check {
+                (
+                    false,
+                    "converged".to_string(),
+                    Some("stopped_after_final_minor_check".to_string()),
+                )
+            } else if latest.initiator_status == InitiatorStatus::Applied {
+                (true, "final_minor_check".to_string(), None)
+            } else {
+                (true, "terminal_minor_cleanup".to_string(), None)
+            }
+        } else {
+            let stop_reason = if finalized_minor_check {
+                "stopped_after_final_minor_check"
+            } else {
+                "converged_high_severity"
+            };
             (
                 false,
                 "converged".to_string(),
-                Some("converged".to_string()),
+                Some(stop_reason.to_string()),
             )
-        } else if latest.initiator_status != InitiatorStatus::Applied {
-            (true, "application".to_string(), None)
-        } else {
-            (true, "scoped_rereview".to_string(), None)
         }
     } else {
         (true, "bootstrap_review".to_string(), None)
@@ -415,7 +492,11 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
         let prev = previous
             .as_ref()
             .map_or(0, |state| state.no_progress_streak);
-        if continue_required && net_new_actionable == 0 && stale_actionable == 0 {
+        if continue_required
+            && remaining_minor_nit == 0
+            && net_new_actionable == 0
+            && stale_actionable == 0
+        {
             prev.saturating_add(1)
         } else {
             0
@@ -440,11 +521,40 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
     let mut notes = vec![];
     let mut capability_warnings = vec![];
     if params.loop_mode {
-        notes.push("loop-plan enforces recursive convergence; no hard cycle cap.".to_string());
+        notes.push(
+            "loop-plan reopens only for BLOCKER/MAJOR or behavior-facing staleness; terminal MINOR/NIT cleanup gets one final delta check."
+                .to_string(),
+        );
     }
-    if continue_required && net_new_actionable == 0 && stale_actionable == 0 {
+    if continue_required
+        && net_new_actionable == 0
+        && stale_actionable == 0
+        && remaining_minor_nit == 0
+    {
         capability_warnings.push(
             "no net-new actionable findings detected this cycle; monitor no-progress streak"
+                .to_string(),
+        );
+    }
+    if phase == "terminal_minor_cleanup" {
+        notes.push(
+            "high-severity convergence is satisfied; apply remaining verified MINOR/NIT findings in one terminal cleanup pass."
+                .to_string(),
+        );
+    }
+    if phase == "final_minor_check" {
+        notes.push(
+            "run exactly one final delta-only re-review after terminal MINOR/NIT cleanup; reopen only on BLOCKER/MAJOR or behavior-facing staleness."
+                .to_string(),
+        );
+    }
+    if legacy_resume_requires_fresh_start {
+        capability_warnings.push(
+            "latest parent report lacks `reopen_eligibility_contract_version` or omits `reopen_eligible` on one or more findings or residual risks; restart the full-cycle from a fresh reviewer session after upgrade, or add an explicit migration path."
+                .to_string(),
+        );
+        notes.push(
+            "legacy parent reports created before the record-level `reopen_eligible` contract existed do not encode behavior-facing staleness reopen intent precisely; treat resumed sessions as fresh-start-required."
                 .to_string(),
         );
     }
@@ -475,6 +585,8 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
         stale_checks_required,
         net_new_actionable,
         net_new_staleness_actionable: stale_actionable,
+        remaining_minor_nit,
+        reopen_severity_floor: "major",
         dedup_fingerprint_count,
         retry_count,
         child_error_count,
@@ -505,6 +617,8 @@ pub fn build_plan(params: &BuildParams) -> anyhow::Result<(FullcyclePlanOutput, 
         probe_stage: probe_stage.to_string(),
         net_new_actionable,
         net_new_staleness_actionable: stale_actionable,
+        remaining_minor_nit,
+        reopen_severity_floor: default_reopen_severity_floor(),
         dedup_fingerprint_count,
         malformed_packets,
         retry_count,

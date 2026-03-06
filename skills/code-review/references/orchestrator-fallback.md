@@ -246,5 +246,5 @@ You SHALL run convergence planning before cycle 1 and at each cycle boundary.
 
 ## Rules
 - You SHALL dispatch `convergence-planner` as one of the first workers in each cycle.
-- Planner guidance SHALL constrain reviewer/applicator divergence without suppressing valid net-new findings.
-- You SHALL stop only at fixed point (no net-new actionable findings after dedup).
+- Planner guidance SHALL constrain reviewer/applicator divergence without suppressing valid net-new BLOCKER/MAJOR or behavior-facing staleness findings.
+- You SHALL stop high-severity recursion only at fixed point (no net-new BLOCKER/MAJOR or behavior-facing staleness after dedup), then route remaining MINOR/NIT through one terminal cleanup pass and one final delta-only check.
