@@ -327,6 +327,7 @@ retry_count = 0
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_finished_parent(
     session: &mut SessionFile,
     reviewer_id: &str,
@@ -354,6 +355,7 @@ fn update_finished_parent(
     }
 }
 
+#[allow(clippy::panic, clippy::uninlined_format_args)]
 fn staleness_parent_report(
     reviewer_id: &str,
     session_id: &str,
@@ -505,6 +507,7 @@ fn legacy_staleness_parent_report(
     )
 }
 
+#[allow(clippy::panic, clippy::uninlined_format_args)]
 fn legacy_parent_report_missing_reopen_eligibility(
     reviewer_id: &str,
     session_id: &str,
@@ -720,6 +723,59 @@ fn insert_fullcycle_state(
 ) {
     session.extra.insert(
         "fullcycle_state".to_string(),
+        serde_json::json!({
+            "schema_version": "fullcycle_state.v1",
+            "target_ref": target_ref,
+            "session_id": session_id,
+            "cycle_index": 1,
+            "cycle_phase": cycle_phase,
+            "continue_required": true,
+            "stop_reason": Value::Null,
+            "no_progress_streak": 0,
+            "baseline_workers": 4,
+            "worker_ceiling": 8,
+            "recommended_workers": 4,
+            "probe_stage": "baseline",
+            "net_new_actionable": 0,
+            "net_new_staleness_actionable": 0,
+            "remaining_minor_nit": 0,
+            "reopen_severity_floor": "major",
+            "dedup_fingerprint_count": 0,
+            "malformed_packets": 0,
+            "retry_count": 0,
+            "child_error_count": 0,
+            "artifact_format_policy": "proof_toml_first_cli_json_ok",
+            "updated_at": "2026-01-11T09:00:00Z"
+        }),
+    );
+}
+
+fn insert_scoped_fullcycle_state(
+    session: &mut SessionFile,
+    target_ref: &str,
+    session_id: &str,
+    cycle_phase: &str,
+) {
+    fn escape_component(value: &str) -> String {
+        let mut out = String::with_capacity(value.len());
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric() {
+                out.push(char::from(byte));
+            } else {
+                out.push('_');
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
+    }
+
+    let key = format!(
+        "fullcycle_state_{}__{}",
+        escape_component(target_ref),
+        escape_component(session_id)
+    );
+    session.extra.insert(
+        key,
         serde_json::json!({
             "schema_version": "fullcycle_state.v1",
             "target_ref": target_ref,
@@ -4989,6 +5045,38 @@ fn fullcycle_plan_bootstrap_preserves_requested_session_scope() -> anyhow::Resul
 }
 
 #[test]
+fn fullcycle_plan_quotes_target_ref_in_next_commands() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    let session = empty_session(&session_dir);
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+    let target_ref = "worktree:feature/foo (uncommitted)";
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        target_ref,
+        "--session-id",
+        "sess0007",
+        "--detail",
+        "compact",
+    ])?;
+
+    let next = json_array(&plan, "next_commands")?;
+    let register_cmd = next
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing bootstrap reviewer register command"))?;
+    ensure!(register_cmd.contains("--target-ref 'worktree:feature/foo (uncommitted)'"));
+    Ok(())
+}
+
+#[test]
 fn fullcycle_plan_net_new_actionable_ignores_minor_nit_churn() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     let session_dir = tmp.path().join("session");
@@ -5299,12 +5387,12 @@ fn fullcycle_plan_requires_fresh_start_when_legacy_staleness_reports_lack_reopen
 
     ensure!(json_str(&plan, "state")? == "fresh_start_required");
     ensure!(!json_bool(&plan, "continue_required")?);
-    ensure!(
-        json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start"
-    );
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
     let warnings = json_array(&plan, "capability_warnings")?;
     ensure!(warnings.iter().any(|value| {
-        value.as_str().is_some_and(|text| text.contains("fresh reviewer session after upgrade"))
+        value
+            .as_str()
+            .is_some_and(|text| text.contains("fresh reviewer session after upgrade"))
     }));
     let notes = json_array(&plan, "notes")?;
     ensure!(notes.iter().any(|value| {
@@ -5315,7 +5403,7 @@ fn fullcycle_plan_requires_fresh_start_when_legacy_staleness_reports_lack_reopen
     let next = json_array(&plan, "next_commands")?;
     ensure!(next.iter().any(|value| {
         value.as_str().is_some_and(|text| {
-            text == "mpcr reviewer register --target-ref refs/heads/main --print-env"
+            text == "mpcr reviewer register --target-ref 'refs/heads/main' --print-env"
         })
     }));
     Ok(())
@@ -5374,9 +5462,7 @@ fn fullcycle_plan_requires_fresh_start_for_legacy_reports_with_alternate_wording
 
     ensure!(json_str(&plan, "state")? == "fresh_start_required");
     ensure!(!json_bool(&plan, "continue_required")?);
-    ensure!(
-        json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start"
-    );
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
     Ok(())
 }
 
@@ -5433,9 +5519,7 @@ fn fullcycle_plan_requires_fresh_start_for_any_legacy_parent_report_without_reop
 
     ensure!(json_str(&plan, "state")? == "fresh_start_required");
     ensure!(!json_bool(&plan, "continue_required")?);
-    ensure!(
-        json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start"
-    );
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
     Ok(())
 }
 
@@ -5480,15 +5564,12 @@ fn fullcycle_plan_requires_fresh_start_for_clean_legacy_parent_without_contract_
 
     ensure!(json_str(&plan, "state")? == "fresh_start_required");
     ensure!(!json_bool(&plan, "continue_required")?);
-    ensure!(
-        json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start"
-    );
+    ensure!(json_str(&plan, "stop_reason")? == "legacy_parent_requires_fresh_start");
     Ok(())
 }
 
 #[test]
-fn fullcycle_plan_allows_clean_current_parent_with_reopen_contract_marker(
-) -> anyhow::Result<()> {
+fn fullcycle_plan_allows_clean_current_parent_with_reopen_contract_marker() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     let session_dir = tmp.path().join("session");
     fs::create_dir_all(&session_dir)?;
@@ -5594,14 +5675,12 @@ fn fullcycle_plan_enters_final_minor_check_after_terminal_cleanup() -> anyhow::R
     ensure!(json_bool(&plan, "continue_required")?);
     ensure!(json_u64(&plan, "remaining_minor_nit")? == 1);
     let next = json_array(&plan, "next_commands")?;
-    ensure!(
-        next.iter()
-            .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase INGESTION"))
-    );
-    ensure!(
-        !next.iter()
-            .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase REPORT_WRITING"))
-    );
+    ensure!(next
+        .iter()
+        .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase INGESTION")));
+    ensure!(!next
+        .iter()
+        .any(|value| value.as_str() == Some("mpcr protocol reviewer --phase REPORT_WRITING")));
     Ok(())
 }
 
@@ -5868,6 +5947,135 @@ fn fullcycle_plan_ignores_mismatched_previous_state_scope() -> anyhow::Result<()
         json_u64(&plan, "no_progress_streak")? == 1,
         "no_progress_streak should not inherit mismatched target/session state"
     );
+    Ok(())
+}
+
+#[test]
+fn fullcycle_state_is_scoped_per_target_and_requires_filter_when_ambiguous() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let session_dir = tmp.path().join("session");
+    fs::create_dir_all(&session_dir)?;
+    let mut session = sample_session(&session_dir);
+
+    let main_report_path = session_dir.join("12-00-00-000_refs_heads_main_feedface.md");
+    fs::write(
+        &main_report_path,
+        valid_parent_report(
+            "feedface",
+            "sess0003",
+            "refs/heads/main",
+            SeverityCounts {
+                blocker: 0,
+                major: 0,
+                minor: 1,
+                nit: 0,
+            },
+        ),
+    )?;
+    update_finished_parent(
+        &mut session,
+        "feedface",
+        "sess0003",
+        SeverityCounts {
+            blocker: 0,
+            major: 0,
+            minor: 1,
+            nit: 0,
+        },
+        InitiatorStatus::Applied,
+        "12-00-00-000_refs_heads_main_feedface.md",
+        "2026-01-11T01:00:00Z",
+        "2026-01-11T01:30:00Z",
+    );
+
+    let feature_report_path = session_dir.join("12-30-00-000_refs_heads_feature_alpha_deadbeef.md");
+    fs::write(
+        &feature_report_path,
+        valid_parent_report(
+            "deadbeef",
+            "sess0009",
+            "refs/heads/feature-alpha",
+            SeverityCounts {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            },
+        ),
+    )?;
+    session.reviewers.push("deadbeef".to_string());
+    session.reviews.push(ReviewEntry {
+        reviewer_id: "deadbeef".to_string(),
+        session_id: "sess0009".to_string(),
+        target_ref: "refs/heads/feature-alpha".to_string(),
+        initiator_status: InitiatorStatus::Applied,
+        status: ReviewerStatus::Finished,
+        parent_id: None,
+        started_at: "2026-01-11T02:00:00Z".to_string(),
+        updated_at: "2026-01-11T02:30:00Z".to_string(),
+        finished_at: Some("2026-01-11T02:30:00Z".to_string()),
+        current_phase: Some(ReviewPhase::ReportWriting),
+        verdict: Some(ReviewVerdict::RequestChanges),
+        counts: SeverityCounts {
+            blocker: 0,
+            major: 1,
+            minor: 0,
+            nit: 0,
+        },
+        report_file: Some("12-30-00-000_refs_heads_feature_alpha_deadbeef.md".to_string()),
+        notes: Vec::new(),
+        child_reviews: Vec::new(),
+        extra: serde_json::Map::default(),
+    });
+
+    insert_scoped_fullcycle_state(
+        &mut session,
+        "refs/heads/main",
+        "sess0003",
+        "terminal_minor_cleanup",
+    );
+    insert_scoped_fullcycle_state(
+        &mut session,
+        "refs/heads/feature-alpha",
+        "sess0009",
+        "final_minor_check",
+    );
+
+    write_session_file(&session_dir, &session)?;
+    let session_dir_str = session_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path"))?;
+
+    let plan = run_cmd_json(&[
+        "fullcycle",
+        "plan",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&plan, "state")? == "final_minor_check");
+
+    let state = run_cmd_json(&[
+        "fullcycle",
+        "state",
+        "--session-dir",
+        session_dir_str,
+        "--target-ref",
+        "refs/heads/main",
+        "--session-id",
+        "sess0003",
+    ])?;
+    ensure!(json_str(&state, "target_ref")? == "refs/heads/main");
+    ensure!(json_str(&state, "cycle_phase")? == "terminal_minor_cleanup");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args(["fullcycle", "state", "--session-dir", session_dir_str])
+        .output()?;
+    ensure!(!output.status.success());
+    ensure!(String::from_utf8_lossy(&output.stderr).contains("multiple fullcycle states found"));
     Ok(())
 }
 

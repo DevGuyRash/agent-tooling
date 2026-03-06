@@ -111,10 +111,12 @@ pub struct ParentReportTelemetry {
     pub residual_risks: Vec<ParentResidualRiskTelemetry>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MachineBlock {
     format: MachineBlockFormat,
     content: String,
+    start_line: usize,
+    end_line: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,25 +539,86 @@ fn extract_machine_blocks(markdown: &str) -> anyhow::Result<Vec<MachineBlock>> {
             .get(start..idx)
             .ok_or_else(|| anyhow::anyhow!("invalid machine block bounds"))?
             .join("\n");
-        blocks.push(MachineBlock { format, content });
+        blocks.push(MachineBlock {
+            format,
+            content,
+            start_line: start.saturating_sub(1),
+            end_line: idx,
+        });
         idx += 1;
     }
     Ok(blocks)
 }
 
-fn extract_machine_block(markdown: &str) -> anyhow::Result<MachineBlock> {
-    let blocks = extract_machine_blocks(markdown)?;
-    if let Some(block) = blocks
-        .into_iter()
-        .find(|block| block.format == MachineBlockFormat::Toml)
-    {
-        return Ok(block);
+fn block_declares_kind(block: &MachineBlock, kind: ReportValidationKind) -> bool {
+    let expected = match kind {
+        ReportValidationKind::ChildProofPacket => CHILD_ARTIFACT_KIND,
+        ReportValidationKind::ParentReviewReport => PARENT_ARTIFACT_KIND,
+    };
+    match kind {
+        ReportValidationKind::ChildProofPacket | ReportValidationKind::ParentReviewReport => {
+            match block.format {
+                MachineBlockFormat::Toml => toml::from_str::<toml::Value>(&block.content)
+                    .ok()
+                    .and_then(|value| value.get("artifact_kind").cloned())
+                    .and_then(|value| value.as_str().map(ToOwned::to_owned)),
+                MachineBlockFormat::Json => {
+                    serde_json::from_str::<serde_json::Value>(&block.content)
+                        .ok()
+                        .and_then(|value| value.get("artifact_kind").cloned())
+                        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                }
+            }
+            .is_some_and(|artifact_kind| artifact_kind == expected)
+        }
     }
+}
+
+fn select_machine_block(
+    markdown: &str,
+    kind: ReportValidationKind,
+) -> anyhow::Result<Option<MachineBlock>> {
     let blocks = extract_machine_blocks(markdown)?;
-    if let Some(block) = blocks
-        .into_iter()
-        .find(|block| block.format == MachineBlockFormat::Json)
+    let toml_blocks = blocks
+        .iter()
+        .filter(|block| block.format == MachineBlockFormat::Toml)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(block) = toml_blocks
+        .iter()
+        .find(|block| block_declares_kind(block, kind))
+        .cloned()
     {
+        return Ok(Some(block));
+    }
+    if toml_blocks.len() == 1 {
+        return Ok(toml_blocks.into_iter().next());
+    }
+
+    let blocks = extract_machine_blocks(markdown)?;
+    let json_blocks = blocks
+        .iter()
+        .filter(|block| block.format == MachineBlockFormat::Json)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(block) = json_blocks
+        .iter()
+        .find(|block| block_declares_kind(block, kind))
+        .cloned()
+    {
+        return Ok(Some(block));
+    }
+    if json_blocks.len() == 1 {
+        return Ok(json_blocks.into_iter().next());
+    }
+    Ok(None)
+}
+
+fn extract_machine_block(
+    markdown: &str,
+    kind: ReportValidationKind,
+) -> anyhow::Result<MachineBlock> {
+    if let Some(block) = select_machine_block(markdown, kind)? {
         return Ok(block);
     }
     Err(anyhow::anyhow!(
@@ -1604,7 +1667,7 @@ pub fn validate_report_markdown(
     expected_counts: Option<SeverityExpectation>,
     expected_identity: Option<&ReportIdentityExpectation>,
 ) -> anyhow::Result<ReportValidationSummary> {
-    let block = extract_machine_block(markdown)?;
+    let block = extract_machine_block(markdown, kind)?;
     match kind {
         ReportValidationKind::ChildProofPacket => {
             let doc = parse_child_doc(&block)?;
@@ -1634,7 +1697,7 @@ pub fn validate_report_markdown(
 /// # Errors
 /// Returns an error when the report lacks a valid machine block or cannot be parsed.
 pub fn extract_parent_report_telemetry(markdown: &str) -> anyhow::Result<ParentReportTelemetry> {
-    let block = extract_machine_block(markdown)?;
+    let block = extract_machine_block(markdown, ReportValidationKind::ParentReviewReport)?;
     let doc = parse_parent_doc(&block)?;
     let merged_findings = doc
         .merged_findings
@@ -1686,75 +1749,45 @@ pub fn extract_parent_report_telemetry(markdown: &str) -> anyhow::Result<ParentR
 ///
 /// # Errors
 /// Returns an error when machine block extraction/parsing fails.
-pub fn canonicalize_report_markdown(markdown: &str) -> anyhow::Result<String> {
-    let blocks = extract_machine_blocks(markdown)?;
-    if blocks
-        .iter()
-        .any(|block| block.format == MachineBlockFormat::Toml)
-    {
+pub fn canonicalize_report_markdown(
+    markdown: &str,
+    kind: ReportValidationKind,
+) -> anyhow::Result<String> {
+    let Some(block) = select_machine_block(markdown, kind)? else {
+        return Ok(markdown.to_string());
+    };
+    if block.format == MachineBlockFormat::Toml {
         return Ok(markdown.to_string());
     }
-    if !blocks
-        .iter()
-        .any(|block| block.format == MachineBlockFormat::Json)
-    {
-        return Ok(markdown.to_string());
-    }
+    let parsed_json: serde_json::Value =
+        serde_json::from_str(&block.content).context("parse json machine block")?;
+    let toml_body = toml::to_string_pretty(&parsed_json)
+        .context("serialize machine block to canonical toml")?;
 
     let lines: Vec<&str> = markdown.lines().collect();
-    let mut idx = 0usize;
-    while idx < lines.len() {
-        let Some(line) = lines.get(idx) else {
-            break;
-        };
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("```json") {
-            let start_content = idx + 1;
-            idx += 1;
-            while idx < lines.len() && lines.get(idx).is_some_and(|line| line.trim() != "```") {
-                idx += 1;
-            }
-            if idx >= lines.len() {
-                return Err(anyhow::anyhow!(
-                    "report validation failed:\n- unterminated_machine_block: missing closing fence for machine-readable block"
-                ));
-            }
-            let end_fence = idx;
-            let json_body = lines
-                .get(start_content..end_fence)
-                .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block bounds"))?
-                .join("\n");
-            let parsed_json: serde_json::Value =
-                serde_json::from_str(&json_body).context("parse json machine block")?;
-            let toml_body = toml::to_string_pretty(&parsed_json)
-                .context("serialize machine block to canonical toml")?;
+    let prefix = lines
+        .get(..block.start_line)
+        .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block prefix bounds"))?;
+    let suffix = lines
+        .get((block.end_line + 1)..)
+        .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block suffix bounds"))?;
 
-            let mut rebuilt = String::new();
-            if start_content >= 2 {
-                let prefix = lines
-                    .get(..(start_content - 1))
-                    .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block prefix bounds"))?;
-                rebuilt.push_str(&prefix.join("\n"));
-                rebuilt.push('\n');
-            }
-            rebuilt.push_str("```toml\n");
-            rebuilt.push_str(toml_body.trim_end());
-            rebuilt.push_str("\n```");
-            if end_fence + 1 < lines.len() {
-                let suffix = lines
-                    .get((end_fence + 1)..)
-                    .ok_or_else(|| anyhow::anyhow!("invalid JSON machine block suffix bounds"))?;
-                rebuilt.push('\n');
-                rebuilt.push_str(&suffix.join("\n"));
-            }
-            if markdown.ends_with('\n') && !rebuilt.ends_with('\n') {
-                rebuilt.push('\n');
-            }
-            return Ok(rebuilt);
-        }
-        idx += 1;
+    let mut rebuilt = String::new();
+    if !prefix.is_empty() {
+        rebuilt.push_str(&prefix.join("\n"));
+        rebuilt.push('\n');
     }
-    Ok(markdown.to_string())
+    rebuilt.push_str("```toml\n");
+    rebuilt.push_str(toml_body.trim_end());
+    rebuilt.push_str("\n```");
+    if !suffix.is_empty() {
+        rebuilt.push('\n');
+        rebuilt.push_str(&suffix.join("\n"));
+    }
+    if markdown.ends_with('\n') && !rebuilt.ends_with('\n') {
+        rebuilt.push('\n');
+    }
+    Ok(rebuilt)
 }
 
 fn validate_identity_expectation(
@@ -2408,6 +2441,65 @@ retry_count = 0
         )?;
         ensure!(summary.format == MachineBlockFormat::Json);
         ensure!(summary.findings == 1);
+        Ok(())
+    }
+
+    #[test]
+    fn canonicalize_parent_report_rewrites_matching_json_block_only() -> anyhow::Result<()> {
+        let markdown = format!(
+            concat!(
+                "Inline JSON example:\n",
+                "```json\n",
+                "{{\"demo\":true}}\n",
+                "```\n\n",
+                "{}"
+            ),
+            VALID_PARENT_JSON
+        );
+        let canonical =
+            canonicalize_report_markdown(&markdown, ReportValidationKind::ParentReviewReport)?;
+        ensure!(canonical.contains("```json\n{\"demo\":true}\n```"));
+        ensure!(canonical.matches("```json").count() == 1);
+        ensure!(canonical.matches("```toml").count() == 1);
+        let summary = validate_report_markdown(
+            &canonical,
+            ReportValidationKind::ParentReviewReport,
+            Some(SeverityExpectation {
+                blocker: 0,
+                major: 1,
+                minor: 0,
+                nit: 0,
+            }),
+            None,
+        )?;
+        ensure!(summary.format == MachineBlockFormat::Toml);
+        Ok(())
+    }
+
+    #[test]
+    fn canonicalize_child_report_rewrites_matching_json_block_only() -> anyhow::Result<()> {
+        let markdown = format!(
+            concat!(
+                "### Finding Example\n",
+                "```json\n",
+                "{{\"anchor\":\"demo\"}}\n",
+                "```\n\n",
+                "{}"
+            ),
+            VALID_CHILD_JSON
+        );
+        let canonical =
+            canonicalize_report_markdown(&markdown, ReportValidationKind::ChildProofPacket)?;
+        ensure!(canonical.contains("```json\n{\"anchor\":\"demo\"}\n```"));
+        ensure!(canonical.matches("```json").count() == 1);
+        ensure!(canonical.matches("```toml").count() == 1);
+        let summary = validate_report_markdown(
+            &canonical,
+            ReportValidationKind::ChildProofPacket,
+            None,
+            None,
+        )?;
+        ensure!(summary.format == MachineBlockFormat::Toml);
         Ok(())
     }
 

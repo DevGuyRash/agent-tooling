@@ -1272,6 +1272,10 @@ enum FullcycleCommands {
     State {
         #[command(flatten)]
         session: SessionDirArgs,
+        #[arg(long, value_name = "REF", help = "Optional target reference filter.")]
+        target_ref: Option<String>,
+        #[arg(long, value_name = "ID8", help = "Optional session id filter.")]
+        session_id: Option<String>,
     },
     /// Persist a deterministic full-cycle telemetry checkpoint.
     Checkpoint {
@@ -2138,9 +2142,17 @@ fn run() -> anyhow::Result<()> {
                 })?;
                 write_result(json, json_pretty, &plan)?;
             }
-            FullcycleCommands::State { session } => {
+            FullcycleCommands::State {
+                session,
+                target_ref,
+                session_id,
+            } => {
                 let resolved = resolve_session_input(use_env, &session, now.date())?;
-                let out = fullcycle_plan::load_state(&SessionLocator::new(resolved.session_dir))?;
+                let out = fullcycle_plan::load_state(
+                    &SessionLocator::new(resolved.session_dir),
+                    target_ref.as_deref(),
+                    session_id.as_deref(),
+                )?;
                 write_result(json, json_pretty, &out)?;
             }
             FullcycleCommands::Checkpoint {
@@ -2765,21 +2777,7 @@ fn resolve_absoluteish_path(path: &Path) -> anyhow::Result<PathBuf> {
 }
 
 fn is_yyyy_mm_dd(name: &str) -> bool {
-    if name.len() != 10 {
-        return false;
-    }
-    let bytes = name.as_bytes();
-    for (idx, byte) in bytes.iter().enumerate() {
-        let is_hyphen = idx == 4 || idx == 7;
-        if is_hyphen {
-            if *byte != b'-' {
-                return false;
-            }
-        } else if !byte.is_ascii_digit() {
-            return false;
-        }
-    }
-    true
+    name.len() == 10 && parse_date_ymd(name).is_ok()
 }
 
 fn parse_content(as_json: bool, raw: &str) -> anyhow::Result<Value> {
@@ -3182,6 +3180,14 @@ mod tests {
         ensure!(parse_date_ymd("2026-13-01").is_err());
         ensure!(parse_date_ymd("not-a-date").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn is_yyyy_mm_dd_requires_real_calendar_date() {
+        assert!(is_yyyy_mm_dd("2026-01-11"));
+        assert!(!is_yyyy_mm_dd("2026-13-01"));
+        assert!(!is_yyyy_mm_dd("2026-02-30"));
+        assert!(!is_yyyy_mm_dd("2026-1-11"));
     }
 
     #[test]

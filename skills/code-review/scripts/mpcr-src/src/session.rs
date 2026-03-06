@@ -4812,9 +4812,11 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
     validate_id8(&params.reviewer_id, "reviewer_id")?;
     validate_id8(&params.session_id, "session_id")?;
     validate_auto_close_status(params.auto_close_children_status)?;
-    let report_markdown =
-        canonicalize_report_markdown(&load_report_markdown(&params.report_input)?)
-            .context("canonicalize report artifact to TOML-first format")?;
+    let report_markdown = canonicalize_report_markdown(
+        &load_report_markdown(&params.report_input)?,
+        params.validation_kind,
+    )
+    .context("canonicalize report artifact to TOML-first format")?;
     validate_report_markdown(
         &report_markdown,
         params.validation_kind,
@@ -4905,7 +4907,7 @@ pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeR
                 let latest_source_markdown = std::fs::read_to_string(source_path)
                     .with_context(|| format!("read report input file {}", source_path.display()))?;
                 let canonical_source_markdown =
-                    canonicalize_report_markdown(&latest_source_markdown)
+                    canonicalize_report_markdown(&latest_source_markdown, params.validation_kind)
                         .context("canonicalize report input file to TOML-first format")?;
                 write_markdown_report_file(&report_path, canonical_source_markdown)?;
                 report_path_created = true;
