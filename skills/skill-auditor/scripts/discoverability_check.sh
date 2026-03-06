@@ -309,7 +309,7 @@ while IFS= read -r opt; do
     printf '%s\t%s\t%s\n' "$opt" "$status" "$evidence" >> "$tmp_opt_rows"
 done < "$tmp_opts"
 
-discovery_gaps=$((missing_doc_helper + missing_cli_helper + cli_unavailable + missing_step_helper))
+discovery_gaps=$((missing_doc_helper + missing_cli_helper + cli_unavailable + missing_step_helper + option_help_coverage_failures))
 
 if [ "$FORMAT" = "json" ]; then
     printf '{'

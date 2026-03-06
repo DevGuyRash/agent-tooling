@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,22 @@ class AuditSkillCliTests(unittest.TestCase):
         self.assertEqual(data["step"], "6")
         self.assertIn("check-all", data["command"])
         self.assertIn("domains", data)
+
+    def test_check_preserves_quoted_skill_directory_argument(self):
+        with tempfile.TemporaryDirectory(prefix="skill path ") as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+
+            completed = subprocess.run(
+                ["sh", str(SCRIPT), "check", "surface", str(skill_dir)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("Surface Check", completed.stdout)
+        self.assertNotIn("error: not a directory", completed.stdout)
 
 
 if __name__ == "__main__":

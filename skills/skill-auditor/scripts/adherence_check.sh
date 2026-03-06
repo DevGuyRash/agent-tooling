@@ -32,8 +32,27 @@ if [ ! -d "$SKILL_DIR" ]; then
     exit 1
 fi
 
-ROOT_DIR=$(cd "$SKILL_DIR/../.." && pwd)
-AGENTS_FILE="$ROOT_DIR/AGENTS.md"
+find_agents_file() {
+    current_dir=$(cd "$1" && pwd)
+    while :; do
+        candidate="$current_dir/AGENTS.md"
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+
+        parent_dir=$(dirname "$current_dir")
+        if [ "$parent_dir" = "$current_dir" ]; then
+            return 1
+        fi
+        current_dir="$parent_dir"
+    done
+}
+
+AGENTS_FILE="${AGENTS_FILE:-}"
+if [ -z "$AGENTS_FILE" ]; then
+    AGENTS_FILE=$(find_agents_file "$SKILL_DIR" || true)
+fi
 SKILL_FILE="$SKILL_DIR/SKILL.md"
 MANIFEST_FILE="$SKILL_DIR/scripts/audit-skill.toml"
 DOMAINS_FILE="$SKILL_DIR/references/domains-analysis.md"
@@ -44,9 +63,8 @@ echo "═══ Adherence Check: $(basename "$SKILL_DIR") ═══"
 echo ""
 
 echo "── AGENTS Absorption ──"
-if [ ! -f "$AGENTS_FILE" ]; then
-    echo "  ⚠ AGENTS.md not found at repo root: $AGENTS_FILE [MINOR]"
-    issues=$((issues + 1))
+if [ -z "$AGENTS_FILE" ]; then
+    echo "  ○ No governing AGENTS.md found above the skill directory; skipping AGENTS-specific absorption checks"
 else
     if grep -q 'CLI-served self-documentation' "$AGENTS_FILE"; then
         echo "  ✓ AGENTS.md documents CLI-served self-documentation"

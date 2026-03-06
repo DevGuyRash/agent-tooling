@@ -163,6 +163,10 @@ class DiscoverabilityCheckTests(unittest.TestCase):
 
         self.assertGreaterEqual(data["summary"]["discovery_gaps"], 1)
         self.assertEqual(data["summary"]["option_help_coverage_failures"], 1)
+        self.assertGreaterEqual(
+            data["summary"]["discovery_gaps"],
+            data["summary"]["option_help_coverage_failures"],
+        )
         self.assertEqual(data["options"][0]["status"], "missing-in-help")
 
     def test_json_contains_expected_keys(self):

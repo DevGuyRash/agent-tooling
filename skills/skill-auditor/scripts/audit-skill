@@ -693,7 +693,12 @@ cmd_self_check() {
     cmd_check_all "$SKILL_ROOT"
 }
 
-args=""
+args_file=$(mktemp)
+cleanup_args_file() {
+    rm -f "$args_file"
+}
+trap cleanup_args_file EXIT INT TERM
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --format)
@@ -706,11 +711,7 @@ while [ $# -gt 0 ]; do
             continue
             ;;
     esac
-    if [ -n "$args" ]; then
-        args="$args $1"
-    else
-        args="$1"
-    fi
+    printf '%s\n' "$1" >> "$args_file"
     shift
 done
 
@@ -722,8 +723,10 @@ case "$FORMAT" in
         ;;
 esac
 
-# shellcheck disable=SC2086
-set -- $args 2>/dev/null || true
+set --
+while IFS= read -r arg; do
+    set -- "$@" "$arg"
+done < "$args_file"
 
 command="${1-}"
 shift 2>/dev/null || true
