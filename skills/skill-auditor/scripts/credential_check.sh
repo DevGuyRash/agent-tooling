@@ -41,23 +41,34 @@ total_issues=0
 echo "── Secret File Detection ──"
 secret_patterns=".env credentials.* *.secret* *.token* *.key *.pem *.p12 *.pfx"
 found_secrets=0
+gitignore="$SKILL_DIR/.gitignore"
+tmp_secret_hits=$(mktemp)
+trap 'rm -f "$tmp_secret_hits"' EXIT INT TERM
+: > "$tmp_secret_hits"
 for pattern in $secret_patterns; do
-    matches=$(find "$SKILL_DIR" -name "$pattern" -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null || true)
-    if [ -n "$matches" ]; then
-        printf '%s\n' "$matches" | while IFS= read -r f; do
+    find "$SKILL_DIR" -name "$pattern" -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null \
+        | while IFS= read -r f; do
             [ -z "$f" ] && continue
             relpath="${f#"$SKILL_DIR"/}"
-            # Check if in .gitignore
-            gitignore="$SKILL_DIR/.gitignore"
             if [ -f "$gitignore" ] && grep -qF "$relpath" "$gitignore" 2>/dev/null; then
-                echo "  ✓ $relpath — in .gitignore"
+                printf 'ignored\t%s\n' "$relpath"
             else
-                echo "  ✗ $relpath — potential secret file not in .gitignore [BLOCKER]"
-                found_secrets=1
+                printf 'secret\t%s\n' "$relpath"
             fi
-        done
-    fi
+        done >> "$tmp_secret_hits"
 done
+while IFS="$(printf '\t')" read -r status relpath; do
+    [ -z "$relpath" ] && continue
+    case "$status" in
+        ignored)
+            echo "  ✓ $relpath — in .gitignore"
+            ;;
+        secret)
+            echo "  ✗ $relpath — potential secret file not in .gitignore [BLOCKER]"
+            found_secrets=1
+            ;;
+    esac
+done < "$tmp_secret_hits"
 if [ "$found_secrets" -gt 0 ]; then
     total_issues=$((total_issues + 1))
 else

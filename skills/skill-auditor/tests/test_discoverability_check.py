@@ -65,6 +65,33 @@ class DiscoverabilityCheckTests(unittest.TestCase):
         self.assertEqual(data["summary"]["total_enum_options"], 0)
         self.assertEqual(data["summary"]["discovery_gaps"], 0)
 
+    def test_detects_concrete_enum_values_in_docs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n```bash\ntool dispatch --role applicator-worker\ntool build --mode compose\n```\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir)
+
+        self.assertEqual(data["summary"]["total_enum_options"], 2)
+        self.assertEqual([row["option"] for row in data["options"]], ["--mode", "--role"])
+
+    def test_detects_phased_workflow_from_markdown_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\n## Workflow\n\nPhase 1 starts here.\n",
+                encoding="utf-8",
+            )
+
+            data = run_discoverability_check(skill_dir)
+
+        self.assertGreaterEqual(data["summary"]["phased_workflow_detected"], 1)
+        self.assertEqual(data["summary"]["doc_next_step_examples"], 0)
+        self.assertEqual(data["summary"]["discovery_gaps"], 1)
+
     def test_passes_with_doc_helper_and_cli_help_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)

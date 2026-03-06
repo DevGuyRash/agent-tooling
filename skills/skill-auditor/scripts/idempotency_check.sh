@@ -37,6 +37,10 @@ while [ $# -gt 0 ]; do
                     echo "error: --max-scripts must be a positive integer"
                     exit 1
                     ;;
+                0)
+                    echo "error: --max-scripts must be a positive integer"
+                    exit 1
+                    ;;
             esac
             ;;
         --*)

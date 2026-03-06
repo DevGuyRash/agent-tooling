@@ -16,11 +16,33 @@ TAB=$(printf '\t')
 
 extract_enum_options() {
     awk '
+        function is_enum_flag(flag, lower) {
+            lower = tolower(flag)
+            if (lower ~ /(role|mode|phase|status|type|format|level|profile|variant|provider|backend|engine|target|env|environment|strategy|policy|kind)/) return 1
+            return 0
+        }
         function is_enum_placeholder(raw, lower) {
             lower = tolower(raw)
             if (raw ~ /[|,\/]/) return 1
             if (lower ~ /(role|mode|phase|status|type|format|level|profile|variant|provider|backend|engine|target|env|environment|strategy|policy|kind)/) return 1
             return 0
+        }
+        function is_literal_enum_value(raw, lower) {
+            lower = tolower(raw)
+            if (raw == "" || raw ~ /^--/) return 0
+            if (raw ~ /^<[^>]+>$/) return 0
+            if (raw ~ /^\[[^][]+\]$/) return 0
+            if (raw ~ /^[\"'\''`]/) return 0
+            if (raw ~ /[\"'\''`]$/) return 0
+            if (raw ~ /^(\/|\.\/|\.\.\/)/) return 0
+            if (raw ~ /[\/]/) return 0
+            if (raw ~ /^\$/) return 0
+            if (raw ~ /^</ || raw ~ />$/) return 0
+            if (raw ~ /^[][(){}.,;:]+$/) return 0
+            if (lower ~ /^(true|false|yes|no|on|off|none|null|auto)$/) return 0
+            if (lower ~ /^(file|path|dir|directory|output|input|binary|command|script|skill-directory|skill-dir)$/) return 0
+            if (raw ~ /\.(md|txt|rst|json|toml|ya?ml|csv|tsv|png|jpg|jpeg|gif|svg|pdf|sh|py|rb|pl|js|ts|rs)$/) return 0
+            return (raw ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/)
         }
         {
             line = $0
@@ -32,6 +54,17 @@ extract_enum_options() {
                 gsub(/>$/, "", ph)
                 if (is_enum_placeholder(ph)) {
                     print fields[1]
+                }
+                line = substr(line, RSTART + RLENGTH)
+            }
+            line = $0
+            while (match(line, /--[a-z][a-z0-9-]*[[:space:]]+[A-Za-z0-9._-]+/)) {
+                chunk = substr(line, RSTART, RLENGTH)
+                split(chunk, fields, /[[:space:]]+/)
+                flag = fields[1]
+                value = fields[2]
+                if (is_enum_flag(flag) && is_literal_enum_value(value)) {
+                    print flag
                 }
                 line = substr(line, RSTART + RLENGTH)
             }
@@ -145,7 +178,12 @@ done < "$tmp_md"
 sort -u "$tmp_opts" -o "$tmp_opts"
 
 total_enum_options=$(grep -c '.' "$tmp_opts" 2>/dev/null || true)
-phased_workflow_detected=$(grep -Eic -- '(^|[^[:alnum:]])phase[[:space:]]+[0-9]|phase <|phase-specific|workflow step|next-steps|step <' "$tmp_md" 2>/dev/null || true)
+phased_workflow_detected=0
+while IFS= read -r md; do
+    [ -z "$md" ] && continue
+    hits=$(grep -Eic -- '(^|[^[:alnum:]])phase[[:space:]]+[0-9]|phase <|phase-specific|workflow step|next-steps|step <' "$md" 2>/dev/null || true)
+    phased_workflow_detected=$((phased_workflow_detected + hits))
+done < "$tmp_md"
 
 doc_discovery_examples=0
 doc_next_step_examples=0

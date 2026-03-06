@@ -16,6 +16,20 @@ def run_idempotency_check(skill_dir: Path, *extra: str) -> str:
 
 
 class IdempotencyCheckTests(unittest.TestCase):
+    def test_rejects_zero_max_scripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+
+            completed = subprocess.run(
+                ["sh", str(SCRIPT), str(skill_dir), "--max-scripts", "0"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("--max-scripts must be a positive integer", completed.stdout)
+
     def test_default_run_is_bounded_and_skips_recursive_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp)

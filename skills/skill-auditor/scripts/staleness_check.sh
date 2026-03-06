@@ -1016,6 +1016,7 @@ fi
 
 awk -F '\t' \
     -v total_examples="$total_examples" \
+    -v examples_capped="$examples_capped" \
     -v executed="$executed" \
     -v runtime_failed="$runtime_failed" \
     -v missing_target="$missing_target" \

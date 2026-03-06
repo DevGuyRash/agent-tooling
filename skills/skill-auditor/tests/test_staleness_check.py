@@ -269,7 +269,28 @@ class StalenessCheckTests(unittest.TestCase):
             data = run_staleness_check(skill_dir, "--max-examples", "2")
 
         self.assertEqual(data["summary"]["total_examples"], 2)
-        self.assertIn("examples_capped", data["summary"])
+        self.assertEqual(data["summary"]["examples_capped"], 1)
+
+    def test_examples_capped_is_zero_when_limit_not_applied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp)
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir(parents=True)
+            script = scripts_dir / "run.sh"
+            script.write_text(
+                "#!/usr/bin/env sh\nif [ \"${1-}\" = \"--help\" ]; then echo ok; exit 0; fi\nexit 0\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            (skill_dir / "SKILL.md").write_text(
+                "# Skill\n\nRun `scripts/run.sh --help`.\n",
+                encoding="utf-8",
+            )
+
+            data = run_staleness_check(skill_dir, "--max-examples", "2")
+
+        self.assertEqual(data["summary"]["total_examples"], 1)
+        self.assertEqual(data["summary"]["examples_capped"], 0)
 
     def test_executes_local_script_with_quoted_env_assignment_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
