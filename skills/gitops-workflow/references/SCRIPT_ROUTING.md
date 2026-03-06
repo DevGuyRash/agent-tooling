@@ -7,6 +7,7 @@ This document defines when agents must use bundled scripts instead of ad hoc com
 If a script exists for the operation, use the script first.
 Resolve script paths from the skill directory, not the target repository directory.
 Set `SKILL_ROOT` to the absolute path of the `gitops-workflow` skill folder (the folder containing `SKILL.md`), then call scripts via `"$SKILL_ROOT/scripts/..."`.
+If you are editing `gitops-workflow` itself inside a worktree/checkout of the skill repository, set `SKILL_ROOT` from the active worktree copy under review so helper behavior matches the branch contents rather than a separate source checkout.
 
 Only bypass when:
 - script cannot express required inputs,
@@ -53,8 +54,10 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --all [--author <login>] [--dry-run]`
   - `bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> [--repo owner/repo] --thread-id <id> [--thread-id <id> ...] [--dry-run]`
 - Inline review reply:
-  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "<reply text>" [--repo owner/repo]`
-  - Literal `\n` in `<reply text>` is normalized to real newlines.
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body-file <path> [--repo owner/repo]` (preferred)
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "<text>" [--repo owner/repo]`
+  - `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body=<text> [--repo owner/repo]` for literals that begin with `--`
+  - Literal `\n` in `--body` text is normalized to real newlines.
 - Issue templates and creation:
   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`
   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--dry-run]`

@@ -1132,7 +1132,115 @@ class PrRequestReviewScriptTests(unittest.TestCase):
 
 
 class PrReplyScriptTests(unittest.TestCase):
-    def test_pr_reply_normalizes_literal_newline_sequences(self):
+    def test_pr_reply_missing_pr_number_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("missing <pr_number>", proc.stderr)
+
+    def test_pr_reply_missing_comment_id_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("missing <comment_id>", proc.stderr)
+
+    def test_pr_reply_non_numeric_pr_number_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "x",
+                "12345",
+                "--body",
+                "ok",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid <pr_number>: must be numeric", proc.stderr)
+
+    def test_pr_reply_non_numeric_comment_id_fails(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "abc",
+                "--body",
+                "ok",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid <comment_id>: must be numeric", proc.stderr)
+
+    def test_pr_reply_rejects_positional_body(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "legacy body",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("unknown argument: legacy body", proc.stderr)
+
+    def test_pr_reply_requires_body_source(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--repo",
+                "acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("missing reply text; pass --body or --body-file", proc.stderr)
+
+    def test_pr_reply_rejects_option_token_as_body_value(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--body",
+                "--repo=acme/widget",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' requires a value", proc.stderr)
+
+    def test_pr_reply_body_equals_accepts_help_literal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             fake_bin = temp_path / "bin"
@@ -1149,11 +1257,11 @@ class PrReplyScriptTests(unittest.TestCase):
                 "fi\n"
                 "if [[ \"${1:-}\" == \"api\" ]]; then\n"
                 "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"-f\" ]]; then\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
                 "      next=$((i+1))\n"
                 "      value=\"${!next}\"\n"
-                "      if [[ \"$value\" == body=* ]]; then\n"
-                "        printf '%s' \"${value#body=}\" > \"${BODY_CAPTURE}\"\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
                 "      fi\n"
                 "    fi\n"
                 "  done\n"
@@ -1174,6 +1282,130 @@ class PrReplyScriptTests(unittest.TestCase):
                     str(SCRIPTS_DIR / "pr-reply.sh"),
                     "8",
                     "12345",
+                    "--body=--help",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "--help")
+
+    def test_pr_reply_body_equals_accepts_markdown_separator(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "--body=---",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "---")
+
+    def test_pr_reply_body_equals_rejects_empty_value(self):
+        proc = run(
+            [
+                "bash",
+                str(SCRIPTS_DIR / "pr-reply.sh"),
+                "8",
+                "12345",
+                "--body=",
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("option '--body' requires a value", proc.stderr)
+
+    def test_pr_reply_normalizes_literal_newline_sequences_in_body(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "--body",
                     "line one\\nline two",
                     "--repo",
                     "acme/widget",
@@ -1185,6 +1417,123 @@ class PrReplyScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             body = body_capture.read_text(encoding="utf-8")
             self.assertEqual(body, "line one\nline two")
+
+    def test_pr_reply_body_preserves_leading_at_literal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "--body",
+                    "@/etc/passwd",
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "@/etc/passwd")
+
+    def test_pr_reply_body_file_uses_file_transport(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_bin = temp_path / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            body_capture = temp_path / "reply_body.txt"
+            mode_capture = temp_path / "mode.txt"
+            body_file = temp_path / "reply.md"
+            body_file.write_text("hello from file\n", encoding="utf-8")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  echo \"acme/widget\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  for ((i=1; i<=$#; i++)); do\n"
+                "    if [[ \"${!i}\" == \"-F\" ]]; then\n"
+                "      printf '%s' \"${!i}\" > \"${MODE_CAPTURE}\"\n"
+                "      next=$((i+1))\n"
+                "      value=\"${!next}\"\n"
+                "      if [[ \"$value\" == body=@* ]]; then\n"
+                "        cat \"${value#body=@}\" > \"${BODY_CAPTURE}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "  done\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BODY_CAPTURE"] = str(body_capture)
+            env["MODE_CAPTURE"] = str(mode_capture)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "pr-reply.sh"),
+                    "8",
+                    "12345",
+                    "--body-file",
+                    str(body_file),
+                    "--repo",
+                    "acme/widget",
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            body = body_capture.read_text(encoding="utf-8")
+            mode = mode_capture.read_text(encoding="utf-8")
+            self.assertEqual(body, "hello from file\n")
+            self.assertEqual(mode, "-F")
 
 
 class PrMarkReadyScriptTests(unittest.TestCase):

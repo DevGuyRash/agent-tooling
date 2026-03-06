@@ -132,12 +132,17 @@ bash "$SKILL_ROOT/scripts/pr-resolve-threads.sh" <pr_number> --all
 
 If you only have a comment id and need to reply via API:
 ```bash
-bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Reply text"
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body-file <path-to-reply.md>
 ```
 
 Literal `\n` is normalized automatically in `pr-reply.sh`, so this is safe:
 ```bash
-bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> "Line 1\nLine 2"
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body "Line 1\nLine 2"
+```
+
+If reply text must start with an option-like token, use the equals form:
+```bash
+bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> --body=--help --repo <owner/repo>
 ```
 
 ## Deterministic governance

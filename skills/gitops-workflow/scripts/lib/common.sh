@@ -18,6 +18,21 @@ require_opt_value() {
   fi
 }
 
+require_opt_value_present() {
+  local opt="$1"
+  local val="${2:-}"
+  if [[ -z "$val" ]]; then
+    die "option '$opt' requires a value"
+  fi
+}
+
+require_numeric_id() {
+  local label="$1"
+  local val="${2:-}"
+  [[ -n "$val" ]] || die "missing <$label>"
+  [[ "$val" =~ ^[0-9]+$ ]] || die "invalid <$label>: must be numeric"
+}
+
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
     base64 --decode
