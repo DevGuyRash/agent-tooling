@@ -8,6 +8,7 @@
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::too_many_lines)]
+#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -145,6 +146,13 @@ pub struct ProtocolListEntry {
     pub title: String,
     /// CLI invocation to retrieve this entry.
     pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProtocolCapabilities {
+    pub schema_version: String,
+    pub protocol_commands: Vec<String>,
+    pub protocol_entry_count: usize,
 }
 
 // ── Query functions ──────────────────────────────────────────────────────────
@@ -408,6 +416,12 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         title: "Full-Cycle Convergence".to_string(),
         command: "mpcr protocol fullcycle".to_string(),
     });
+    entries.push(ProtocolListEntry {
+        category: "meta".to_string(),
+        key: "capabilities".to_string(),
+        title: "Protocol Capabilities".to_string(),
+        command: "mpcr protocol capabilities".to_string(),
+    });
     let orchestrator: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
         .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
     entries.push(ProtocolListEntry {
@@ -509,6 +523,25 @@ pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
         }
     }
     Ok(entries)
+}
+
+/// List protocol capability metadata exposed by this binary.
+///
+/// # Errors
+/// Returns an error if embedded protocol TOML cannot be parsed.
+pub fn capabilities() -> anyhow::Result<ProtocolCapabilities> {
+    let entries = list_entries()?;
+    let mut commands = entries
+        .iter()
+        .map(|entry| entry.command.clone())
+        .collect::<Vec<_>>();
+    commands.sort();
+    commands.dedup();
+    Ok(ProtocolCapabilities {
+        schema_version: "protocol_capabilities.v1".to_string(),
+        protocol_commands: commands,
+        protocol_entry_count: entries.len(),
+    })
 }
 
 fn render_doc_section(output: &ProtocolOutput, key: &str) -> String {

@@ -8,6 +8,8 @@
 
 /// Language-agnostic static analysis checks for code review workers.
 pub mod analyze;
+/// Deterministic full-cycle planning/telemetry helpers.
+pub mod fullcycle_plan;
 /// Random identifier generation (id8 / hex).
 pub mod id;
 /// File-based lock for coordinating `_session.toml` writers.

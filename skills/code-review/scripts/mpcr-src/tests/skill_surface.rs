@@ -200,9 +200,14 @@ fn skill_router_and_fallbacks_preserve_progressive_disclosure() -> anyhow::Resul
     let root = skill_root()?;
     let skill_md = read_rel(&root, "SKILL.md")?;
     ensure!(skill_md.contains("<skills-file-root>"));
-    ensure!(skill_md.contains("/tmp/skill-errors/"));
+    ensure!(skill_md.contains("/tmp/skill-errors/code-review/"));
     ensure!(skill_md.contains("%TEMP%"));
-    ensure!(skill_md.contains("_code-review_errors.md"));
+    ensure!(skill_md.contains("\\\\code-review\\\\"));
+    ensure!(skill_md.contains("_errors.md"));
+    ensure!(skill_md.contains("coordinator-only"));
+    ensure!(skill_md.contains("\"Single-agent\" review still means one dispatched worker"));
+    ensure!(skill_md.contains("mpcr fullcycle plan"));
+    ensure!(skill_md.contains("mpcr fullcycle state"));
     ensure!(
         skill_md.lines().count() <= 120,
         "SKILL.md should stay router-sized"
@@ -218,6 +223,14 @@ fn skill_router_and_fallbacks_preserve_progressive_disclosure() -> anyhow::Resul
             "{rel} should not chain to nested references"
         );
     }
+    let orchestrator_fallback = read_rel(&root, "references/orchestrator-fallback.md")?;
+    ensure!(
+        orchestrator_fallback.contains("You SHALL NOT emit direct file:line findings yourself.")
+    );
+    ensure!(orchestrator_fallback.contains("Single-agent mode still requires a dispatched worker"));
+    let fullcycle_fallback = read_rel(&root, "references/fullcycle-fallback.md")?;
+    ensure!(fullcycle_fallback.contains("mpcr fullcycle plan"));
+    ensure!(fullcycle_fallback.contains("mpcr fullcycle checkpoint"));
     Ok(())
 }
 

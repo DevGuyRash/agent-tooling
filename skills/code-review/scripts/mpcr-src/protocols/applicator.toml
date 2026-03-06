@@ -66,6 +66,7 @@ BEFORE accepting any finding at face value, you SHALL independently verify its l
 - You SHALL DECLINE findings that fail evidence challenge, regardless of stated severity.
 - WHEN declining a BLOCKER, your challenge evidence SHALL be specific and traceable (cite file:line).
 - You SHALL record a disposition note via `mpcr applicator note` for every finding.
+- MINOR/NIT findings SHALL NOT reopen the workflow by themselves. WHEN they are verified but not required for this patch, DEFER them or batch them only when a full-cycle terminal minor cleanup explicitly requests it.
 
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status REVIEWED`
 """
@@ -79,11 +80,12 @@ You SHALL apply accepted feedback using parallel applicator subagents:
 1. Group APPLIED findings by file cluster.
 2. For each cluster, get dispatch prompt: `mpcr protocol dispatch --role applicator-worker`
 3. Customize with: assigned findings (full detail including disproof scenarios), file list, acceptance criteria.
-4. Launch applicator-worker subagents in parallel (subject to concurrency cap of 8).
+4. Launch applicator-worker subagents in parallel (with dynamic worker budget (baseline 4; probe 6 and 8 cautiously when cycle health is stable)).
 5. Each worker SHALL spawn explorer subagents for context gathering rather than reading unassigned files directly.
 6. Each worker applies fixes and returns an Application Report.
 7. Collect results. Verify all APPLIED findings were addressed.
 8. WHEN APPLIED findings span at least 2 file clusters, launch an applicator-verifier subagent to spot-check fixes against original disproofs.
+9. In standalone applicator mode, you SHALL apply only the assigned findings. You SHALL NOT self-expand into adjacent cleanup unless the user explicitly requested broader polish.
 
 ## Worker mode (you are a subagent applying fixes)
 IF MPCR_APPLICATOR_ROLE is set, you are a worker:
@@ -93,7 +95,8 @@ IF MPCR_APPLICATOR_ROLE is set, you are a worker:
 4. Verify each change addresses the specific scenario from the disproof.
 5. WHEN tests exist, run relevant tests after each change.
 6. IF a change introduces new issues, note them but do NOT cascade-fix.
-7. Return your Application Report.
+7. Only BLOCKER/MAJOR regressions or behavior-facing staleness MAY reopen the workflow. Record MINOR/NIT side effects as follow-up or deferred notes instead of spawning another recursive cleanup pass.
+8. Return your Application Report.
 
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLYING`
 """
@@ -110,7 +113,8 @@ You SHALL record final state:
 You SHALL run: `mpcr applicator set-status --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --initiator-status APPLIED`
 
 You SHALL present the user a summary:
-- Applied: N findings
+- Applied required-now findings: N
+- Applied terminal MINOR/NIT cleanup findings: N
 - Declined: N findings (with reasons)
 - Deferred: N findings (with tracking refs)
 - Already addressed: N findings
@@ -120,9 +124,10 @@ IF this application is part of a full-cycle (review → apply → re-review):
 2. The re-review SHALL NOT re-examine previously reviewed code that was not modified.
 3. The re-review SHALL use fresh subagents (not reuse previous cycle workers).
 4. The re-review SHALL include the `staleness-auditor` domain reviewer alongside other relevant domains.
-5. Convergence: IF re-review produces zero net-new actionable findings (BLOCKER/MAJOR, plus staleness mismatches that affect shipped behavior or operator guidance) → stop.
-6. IF net-new actionable findings exist, recurse another cycle on net-new findings only.
-7. Continue recursion until a fixed point is reached (no net-new actionable findings).
+5. Convergence reopen bar: only BLOCKER/MAJOR findings and staleness mismatches that affect shipped behavior or operator guidance reopen the workflow.
+6. IF the reopen bar is non-zero, recurse another cycle on those required-now findings only.
+7. IF the reopen bar is zero and only verified MINOR/NIT findings remain, batch them into one terminal cleanup pass, then allow exactly one final delta-only re-review.
+8. IF that final check reports only MINOR/NIT (or no findings), stop and carry any remainder as follow-up or residual polish.
 
 ## Artifact cleanup
 AFTER finalization completes:

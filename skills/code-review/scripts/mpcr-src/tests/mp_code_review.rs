@@ -54,6 +54,7 @@ verification = "Add regression coverage for {id}."
 source_packets = ["{source_ref}"]
 confidence_label = "HIGH"
 confidence_score = 90
+reopen_eligible = false
 "#
             ));
         }
@@ -88,6 +89,7 @@ reviewer_id = "{reviewer_id}"
 session_id = "{session_id}"
 target_ref = "{target_ref}"
 verdict = "REQUEST_CHANGES"
+reopen_eligibility_contract_version = 1
 
 [counts]
 blocker = {blocker}
@@ -137,6 +139,7 @@ area = "Runtime parity"
 gap = "No production traffic replay."
 impact = "Integration behavior may still differ."
 next_action = "Run staging verification."
+reopen_eligible = false
 
 [validation_summary]
 packets_validated = 1
@@ -147,8 +150,11 @@ retry_count = 0
 ## Ship-Readiness
 **Verdict:** SHIP_WITH_FIXES
 
-## Findings
+## Required Now
 {findings_line}
+
+## Follow-Up Opportunities
+- None.
 
 ## Defended Proofs
 - Token redaction held across tested paths.
