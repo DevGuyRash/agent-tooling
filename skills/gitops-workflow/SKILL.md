@@ -99,9 +99,12 @@ When a bundled script exists for the requested operation, use the script first.
 Direct ad hoc `gh`/`git` command sequences are fallback-only.
 
 Path resolution (mandatory):
-- Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to `<skills-file-root>` (the directory containing this `SKILL.md`), not relative to the target repository where git work is being performed.
-- Shell and Python entrypoints automatically re-exec the repo-local copy under `<repo-root>/skills/gitops-workflow` when invoked from a checkout/worktree that contains this skill, so callers do not need worktree-specific path logic.
-- When a command snippet uses `"$SKILL_ROOT/..."`, treat `SKILL_ROOT=<skills-file-root>` as shorthand rather than an installed-path requirement.
+- Treat all `scripts/`, `references/`, and `assets/` paths in this skill as relative to this skill folder (the folder containing this `SKILL.md`), not relative to the target repository where git work is being performed.
+- If the target repository is itself a checkout/worktree of the skill repository and the task is modifying `gitops-workflow`, prefer the copies under the active worktree/repository being edited so script behavior matches the branch under review. Use the canonical skill-source path only when it matches the active checkout or when the active repository is not modifying this skill.
+- Before dispatching, resolve and keep a local variable:
+  - `SKILL_ROOT=<absolute-path-to-this-skill-folder>`
+  - Example placeholder: `<absolute-path>/gitops-workflow`
+- Execute helpers via `"$SKILL_ROOT/scripts/..."` so they are found even when CWD is another repo.
 
 | Task | Required script |
 | --- | --- |

@@ -18,13 +18,7 @@ set -euo pipefail
 # - git
 # - gh/jq (required only with --create)
 
-case "${BASH_SOURCE[0]}" in
-  */*) SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" ;;
-  *) SCRIPT_DIR="$(pwd -P)" ;;
-esac
-# shellcheck source=skills/gitops-workflow/scripts/lib/bootstrap.sh
-source "$SCRIPT_DIR/lib/bootstrap.sh"
-gitops_workflow_maybe_reexec_repo_local_copy "$SCRIPT_DIR" "pr-create.sh" "$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 

@@ -10,7 +10,7 @@ Script-first policy:
 Set script root once when running commands from this checklist:
 
 ```bash
-SKILL_ROOT=<skills-file-root>
+SKILL_ROOT=<absolute-path-to-gitops-workflow>
 ```
 
 ---

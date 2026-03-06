@@ -14,14 +14,6 @@ set -euo pipefail
 EXIT_SETUP=2
 EXIT_PERMISSIONS=5
 
-case "${BASH_SOURCE[0]}" in
-  */*) SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" ;;
-  *) SCRIPT_DIR="$(pwd -P)" ;;
-esac
-# shellcheck source=skills/gitops-workflow/scripts/lib/bootstrap.sh
-source "$SCRIPT_DIR/lib/bootstrap.sh"
-gitops_workflow_maybe_reexec_repo_local_copy "$SCRIPT_DIR" "gh-scope-check.sh" "$@"
-
 REPO=""
 FORMAT="text"
 

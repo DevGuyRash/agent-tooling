@@ -26,15 +26,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
-LIB_DIR = Path(__file__).resolve().parent / "lib"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
-
-from bootstrap import maybe_reexec_repo_local_copy
-
-
-maybe_reexec_repo_local_copy(Path(__file__).resolve(), sys.argv)
-
 SCHEMA_VERSION = "github-governance/v1"
 
 EXIT_OK = 0

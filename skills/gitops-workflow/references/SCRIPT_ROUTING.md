@@ -5,9 +5,9 @@ This document defines when agents must use bundled scripts instead of ad hoc com
 ## Rule
 
 If a script exists for the operation, use the script first.
-Resolve script paths from `<skills-file-root>`, not the target repository directory.
-Treat `SKILL_ROOT=<skills-file-root>` as shorthand when examples use `"$SKILL_ROOT/scripts/..."`.
-Shell and Python entrypoints automatically re-exec the repo-local copy under `<repo-root>/skills/gitops-workflow` when the active checkout contains this skill.
+Resolve script paths from the skill directory, not the target repository directory.
+Set `SKILL_ROOT` to the absolute path of the `gitops-workflow` skill folder (the folder containing `SKILL.md`), then call scripts via `"$SKILL_ROOT/scripts/..."`.
+If you are editing `gitops-workflow` itself inside a worktree/checkout of the skill repository, set `SKILL_ROOT` from the active worktree copy under review so helper behavior matches the branch contents rather than a separate source checkout.
 
 Only bypass when:
 - script cannot express required inputs,

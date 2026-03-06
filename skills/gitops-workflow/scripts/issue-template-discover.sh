@@ -7,13 +7,7 @@ set -euo pipefail
 #   bash scripts/issue-template-discover.sh [--repo owner/repo] [--format text|json]
 #   bash scripts/issue-template-discover.sh [--repo owner/repo] --template-id <path>
 
-case "${BASH_SOURCE[0]}" in
-  */*) SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" ;;
-  *) SCRIPT_DIR="$(pwd -P)" ;;
-esac
-# shellcheck source=skills/gitops-workflow/scripts/lib/bootstrap.sh
-source "$SCRIPT_DIR/lib/bootstrap.sh"
-gitops_workflow_maybe_reexec_repo_local_copy "$SCRIPT_DIR" "issue-template-discover.sh" "$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 

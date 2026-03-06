@@ -2,9 +2,9 @@
 
 These are common `gh` commands used by the playbooks.
 
-Use `<skills-file-root>` as the directory containing this skill's `SKILL.md`:
+Set `SKILL_ROOT` to the installed skill root:
 ```bash
-export SKILL_ROOT="<skills-file-root>"
+export SKILL_ROOT="/absolute/path/to/gitops-workflow"
 ```
 
 ## Issues
