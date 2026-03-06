@@ -569,7 +569,7 @@ enum ReviewerCommands {
         #[arg(
             long,
             conflicts_with = "clear_all_session_days",
-            help = "Remove the resolved <repo_root>/.local/reports/code_reviews/<date> directory before registering."
+            help = "Remove the canonical <repo_root>/.local/reports/code_reviews/<date> directory before registering; rejects custom session-dir overrides."
         )]
         clear_session_day: bool,
         #[arg(
@@ -1498,7 +1498,14 @@ fn run() -> anyhow::Result<()> {
                     }
                 }
                 if clear_session_day {
-                    clear_session_day_dir(&resolved.session_dir)?;
+                    let canonical_session_dir =
+                        mpcr::paths::session_paths(&resolved.repo_root, resolved.session_date)
+                            .session_dir;
+                    ensure_paths_match_for_clear_session_day(
+                        &resolved.session_dir,
+                        &canonical_session_dir,
+                    )?;
+                    clear_session_day_dir(&canonical_session_dir)?;
                 } else if clear_all_session_days {
                     clear_all_session_days_under_repo_root(&resolved.repo_root)?;
                 }
@@ -2690,6 +2697,48 @@ fn clear_all_session_days_under_repo_root(repo_root: &Path) -> anyhow::Result<()
             .with_context(|| format!("remove session day dir {}", path.display()))?;
     }
     Ok(())
+}
+
+fn ensure_paths_match_for_clear_session_day(
+    session_dir: &Path,
+    canonical_session_dir: &Path,
+) -> anyhow::Result<()> {
+    if same_or_equivalent_path(session_dir, canonical_session_dir)? {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "--clear-session-day only supports the canonical session day directory {}; got {}",
+        display_absoluteish_path(canonical_session_dir)?,
+        display_absoluteish_path(session_dir)?,
+    ))
+}
+
+fn same_or_equivalent_path(a: &Path, b: &Path) -> anyhow::Result<bool> {
+    Ok(resolve_absoluteish_path(a)? == resolve_absoluteish_path(b)?)
+}
+
+fn display_absoluteish_path(path: &Path) -> anyhow::Result<String> {
+    Ok(resolve_absoluteish_path(path)?.display().to_string())
+}
+
+fn resolve_absoluteish_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().context("get cwd")?.join(path)
+    };
+    if let Ok(canonical) = path.canonicalize() {
+        return Ok(canonical);
+    }
+    if let Some(parent) = path.parent() {
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            let name = path
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("path {} has no final component", path.display()))?;
+            return Ok(canonical_parent.join(name));
+        }
+    }
+    Ok(path)
 }
 
 fn is_yyyy_mm_dd(name: &str) -> bool {

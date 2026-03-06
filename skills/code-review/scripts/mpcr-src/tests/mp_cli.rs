@@ -1136,6 +1136,105 @@ fn reviewer_register_clear_session_day_validates_use_env_ids_before_cleanup() ->
 }
 
 #[test]
+fn reviewer_register_clear_session_day_rejects_custom_session_dir_override() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let canonical_session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    let custom_session_dir = repo_root.path().join("custom-session");
+    fs::create_dir_all(&canonical_session_dir)?;
+    fs::create_dir_all(&custom_session_dir)?;
+    let canonical_stale = canonical_session_dir.join("canonical-stale.txt");
+    let custom_stale = custom_session_dir.join("custom-stale.txt");
+    fs::write(&canonical_stale, "canonical")?;
+    fs::write(&custom_stale, "custom")?;
+
+    let stderr = run_cmd_failure(&[
+        "reviewer",
+        "register",
+        "--target-ref",
+        "refs/heads/main",
+        "--repo-root",
+        &repo_root_str,
+        "--date",
+        "2026-01-11",
+        "--session-dir",
+        &custom_session_dir.to_string_lossy(),
+        "--reviewer-id",
+        "deadbeef",
+        "--session-id",
+        "sess0001",
+        "--clear-session-day",
+    ])?;
+
+    ensure!(
+        stderr.contains("--clear-session-day only supports the canonical session day directory")
+    );
+    ensure!(
+        canonical_stale.exists(),
+        "canonical session day should remain when cleanup is rejected"
+    );
+    ensure!(
+        custom_stale.exists(),
+        "custom session-dir should never be deleted by --clear-session-day"
+    );
+    Ok(())
+}
+
+#[test]
+fn reviewer_register_clear_session_day_rejects_env_session_dir_override() -> anyhow::Result<()> {
+    let repo_root = tempfile::tempdir()?;
+    let repo_root_str = repo_root.path().to_string_lossy().to_string();
+    let date = Date::from_calendar_date(2026, Month::January, 11)?;
+    let canonical_session_dir = paths::session_paths(repo_root.path(), date).session_dir;
+    let env_session_dir = repo_root.path().join("env-session");
+    fs::create_dir_all(&canonical_session_dir)?;
+    fs::create_dir_all(&env_session_dir)?;
+    let canonical_stale = canonical_session_dir.join("canonical-stale.txt");
+    let env_stale = env_session_dir.join("env-stale.txt");
+    fs::write(&canonical_stale, "canonical")?;
+    fs::write(&env_stale, "env")?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mpcr"))
+        .args([
+            "--use-env",
+            "reviewer",
+            "register",
+            "--target-ref",
+            "refs/heads/main",
+            "--repo-root",
+            &repo_root_str,
+            "--date",
+            "2026-01-11",
+            "--reviewer-id",
+            "deadbeef",
+            "--session-id",
+            "sess0001",
+            "--clear-session-day",
+        ])
+        .env("MPCR_SESSION_DIR", &env_session_dir)
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "register should reject env-backed custom session dir for clear-session-day"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    ensure!(
+        stderr.contains("--clear-session-day only supports the canonical session day directory")
+    );
+    ensure!(
+        canonical_stale.exists(),
+        "canonical session day should remain when env override is rejected"
+    );
+    ensure!(
+        env_stale.exists(),
+        "env session-dir should never be deleted by --clear-session-day"
+    );
+    Ok(())
+}
+
+#[test]
 fn reviewer_register_rejects_cleanup_flags_for_child_registration() -> anyhow::Result<()> {
     let repo_root = tempfile::tempdir()?;
     let repo_root_str = repo_root.path().to_string_lossy().to_string();
