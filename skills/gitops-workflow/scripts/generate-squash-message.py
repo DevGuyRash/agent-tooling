@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from squash_renderer import CommitEntry, render_squash_message  # noqa: E402
+from squash_renderer import CommitEntry, SquashRenderError, render_squash_message  # noqa: E402
 
 
 ALLOWED_TYPES = {
@@ -163,12 +163,16 @@ def main() -> int:
         refs.append(f"#{args.pr}")
     refs.extend(args.refs)
 
-    rendered = render_squash_message(
-        title=header,
-        commits=commits,
-        pr_ref=f"PR #{args.pr}" if args.pr else None,
-        refs=refs,
-    )
+    try:
+        rendered = render_squash_message(
+            title=header,
+            commits=commits,
+            pr_ref=f"PR #{args.pr}" if args.pr else None,
+            refs=refs,
+        )
+    except SquashRenderError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
     print(rendered.subject)
     print("")

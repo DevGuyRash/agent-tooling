@@ -165,10 +165,14 @@ data = json.loads(sys.argv[3])
 script_dir = Path(sys.argv[4])
 sys.path.insert(0, str(script_dir / "lib"))
 
-from squash_renderer import build_subject  # noqa: E402
+from squash_renderer import SquashRenderError, build_subject  # noqa: E402
 
 title = (data.get("title") or "").strip()
-subject = build_subject(title, summary_override=summary_override)
+try:
+    subject = build_subject(title, summary_override=summary_override)
+except SquashRenderError as exc:
+    print(f"Error: {exc}", file=sys.stderr)
+    raise SystemExit(2)
 meta = {
     "subject": subject,
     "headRefOid": data.get("headRefOid") or "",
@@ -200,7 +204,7 @@ data = json.loads(sys.argv[4])
 script_dir = Path(sys.argv[5])
 sys.path.insert(0, str(script_dir / "lib"))
 
-from squash_renderer import CommitEntry, render_squash_message  # noqa: E402
+from squash_renderer import CommitEntry, SquashRenderError, render_squash_message  # noqa: E402
 
 title = (data.get("title") or "").strip()
 commits_raw = data.get("commits") or []
@@ -225,13 +229,17 @@ for item in commits_raw:
 
 number = data.get("number")
 refs = [f"#{number}"] if number is not None else []
-rendered = render_squash_message(
-    title=title,
-    commits=commits,
-    pr_ref=f"PR #{number}" if number is not None else None,
-    refs=refs,
-    summary_override=summary_override,
-)
+try:
+    rendered = render_squash_message(
+        title=title,
+        commits=commits,
+        pr_ref=f"PR #{number}" if number is not None else None,
+        refs=refs,
+        summary_override=summary_override,
+    )
+except SquashRenderError as exc:
+    print(f"Error: {exc}", file=sys.stderr)
+    raise SystemExit(2)
 
 with open(body_file, "w", encoding="utf-8") as f:
     f.write(rendered.body)

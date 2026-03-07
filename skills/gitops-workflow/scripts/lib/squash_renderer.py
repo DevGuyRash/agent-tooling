@@ -32,6 +32,10 @@ CC_HEADER_RE = re.compile(
 CC_TITLE_RE = re.compile(r"^(?P<prefix>[a-z]+(?:\([^)]+\))?(?:!)?:\s)(?P<desc>.+)$")
 
 
+class SquashRenderError(ValueError):
+    """User-facing squash rendering error."""
+
+
 @dataclass(frozen=True)
 class CommitEntry:
     sha: str
@@ -49,7 +53,7 @@ def build_subject(title: str, summary_override: str = "") -> str:
     clean_title = (title or "").strip()
     match = CC_TITLE_RE.match(clean_title)
     if not match:
-        raise ValueError("PR title must follow Conventional Commits format for squash subject")
+        raise SquashRenderError("PR title must follow Conventional Commits format for squash subject")
     override = (summary_override or "").strip()
     if not override:
         return clean_title
