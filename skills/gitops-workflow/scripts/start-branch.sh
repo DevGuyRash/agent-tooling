@@ -60,7 +60,7 @@ Options:
 
 Deterministic defaults when <slug> is omitted:
   - With --issue: issue-<id>
-  - Without --issue: wip-<YYYYMMDD-HHMMSS> (local timezone)
+  - Without --issue: wip-<YYYYMMDD-HHMMSS>-<HEAD8> when HEAD exists, otherwise wip-<YYYYMMDD-HHMMSS> (local timezone)
 EOF
 }
 

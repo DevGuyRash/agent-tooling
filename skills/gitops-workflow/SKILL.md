@@ -213,8 +213,9 @@ Create a correctly named branch from the default branch, without accidentally wo
 1. If working tree is dirty and you are using branch mode, stash tracked + untracked changes with deterministic metadata.
    - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
    - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
-2. Sync the default branch:
-   - `git checkout <default-branch> && git pull`
+2. Sync the default branch for the mode you are using:
+   - branch mode: `git checkout <default-branch> && git pull`
+   - linked worktree mode: let `start-branch.sh --worktree` resolve from the default branch without switching the current checkout
 3. Create either:
    - a local branch in the current checkout, or
    - a linked worktree at `<main-checkout>.worktrees/<type>/<short-desc>` when `--worktree` is passed.

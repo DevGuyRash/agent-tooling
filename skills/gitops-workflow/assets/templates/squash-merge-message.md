@@ -2,7 +2,7 @@
 
 ## Overview
 
-Squash merge summary for PR #<number>.
+Squash merge for PR #<number>.
 
 ## New Features
 

@@ -19,10 +19,11 @@ SKILL_ROOT=<absolute-path-to-gitops-workflow>
 
 - [ ] if branch mode worktree is dirty, start helper auto-stashes tracked + untracked and restores safely
 - [ ] branch helper auto-installs managed pre-commit hook unless `--no-install-hooks` is used
-- [ ] you are on the default branch (`main`/`master`)
-- [ ] default branch is up to date (`git pull`)
+- [ ] branch mode starts from an up-to-date default branch checkout (`main`/`master`)
+- [ ] linked worktree mode may stay on the current checkout; helper resolves from the default branch without switching the active worktree
 - [ ] new branch name matches allowed pattern: `<type>/<short-desc>`
 - [ ] branch name is kebab-case and concise (`add-json-output`, not `AddedJsonOutput`)
+- [ ] if `<slug>` is omitted without `--issue`, the helper default is `wip-<YYYYMMDD-HHMMSS>-<HEAD8>` when `HEAD` exists
 - [ ] if using linked worktree mode, target path is `<main-checkout>.worktrees/<type>/<short-desc>`
 
 Recommended:
