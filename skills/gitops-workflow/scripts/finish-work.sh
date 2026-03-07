@@ -14,7 +14,7 @@ Behavior:
   - Verifies the target branch is safe to clean up.
   - Requires the remote tracking branch to be gone after fetch/prune.
   - Confirms changes landed on the base branch via merged PR state or branch ancestry.
-  - If invoked from a linked worktree, removes that worktree and returns control to the main checkout.
+  - If invoked from a linked worktree, removes the linked worktree attached to the target branch and returns control to the main checkout.
   - If invoked from a normal branch checkout, switches to the base branch and deletes the merged branch.
 
 Options:
@@ -51,6 +51,14 @@ git_path_resolves_branch() {
 remote_branch_exists() {
   local branch="$1"
   git show-ref --verify --quiet "refs/remotes/origin/$branch"
+}
+
+worktree_path_for_branch() {
+  local branch="$1"
+  git worktree list --porcelain | awk -v want="refs/heads/$branch" '
+    $1 == "worktree" { path = substr($0, 10) }
+    $1 == "branch" && $2 == want { print path; exit }
+  '
 }
 
 pr_merge_confirms_branch() {
@@ -156,6 +164,7 @@ branch_is_merged "$BRANCH" "$BASE" || die "branch '$BRANCH' is not confirmed on 
 TOPLEVEL="$(git rev-parse --show-toplevel)"
 COMMON_DIR="$(git rev-parse --git-common-dir)"
 MAIN_CHECKOUT="$(cd "$COMMON_DIR/.." && pwd -P)"
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 IN_LINKED_WORKTREE="false"
 if [[ "$TOPLEVEL" != "$MAIN_CHECKOUT" ]]; then
   IN_LINKED_WORKTREE="true"
@@ -165,16 +174,44 @@ echo "Base branch: $BASE"
 echo "Branch cleanup target: $BRANCH"
 
 if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
-  echo "Linked worktree detected: $TOPLEVEL"
+  TARGET_WORKTREE="$(worktree_path_for_branch "$BRANCH")"
+  TARGET_IN_MAIN_CHECKOUT="false"
+  if [[ "$TARGET_WORKTREE" == "$MAIN_CHECKOUT" ]]; then
+    TARGET_IN_MAIN_CHECKOUT="true"
+  fi
+  if [[ -z "$TARGET_WORKTREE" ]]; then
+    if [[ "$BRANCH" != "$CURRENT_BRANCH" ]]; then
+      die "branch '$BRANCH' is not attached to a linked worktree; rerun from the main checkout or omit --branch"
+    fi
+    TARGET_WORKTREE="$TOPLEVEL"
+  fi
   echo "Main checkout: $MAIN_CHECKOUT"
+  if [[ "$TARGET_IN_MAIN_CHECKOUT" == "true" ]]; then
+    echo "Target branch is checked out in the main checkout."
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
+      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\""
+    else
+      git -C "$MAIN_CHECKOUT" checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE' in main checkout"
+      git -C "$MAIN_CHECKOUT" branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH' from main checkout"
+    fi
+    echo ""
+    echo "✅ Cleaned branch: $BRANCH"
+    echo "Next workdir: $MAIN_CHECKOUT"
+    echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
+    exit 0
+  fi
+  echo "Linked worktree detected: $TARGET_WORKTREE"
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
-    echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" worktree remove \"$TOPLEVEL\""
-    echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\""
+    echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" worktree remove \"$TARGET_WORKTREE\""
+    echo "DRY-RUN: if git show-ref --verify --quiet \"refs/heads/$BRANCH\"; then git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\"; fi"
   else
     git -C "$MAIN_CHECKOUT" checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE' in main checkout"
-    git -C "$MAIN_CHECKOUT" worktree remove "$TOPLEVEL" || die "failed to remove linked worktree '$TOPLEVEL'"
-    git -C "$MAIN_CHECKOUT" branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH' from main checkout"
+    git -C "$MAIN_CHECKOUT" worktree remove "$TARGET_WORKTREE" || die "failed to remove linked worktree '$TARGET_WORKTREE'"
+    if git -C "$MAIN_CHECKOUT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+      git -C "$MAIN_CHECKOUT" branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH' from main checkout"
+    fi
   fi
   echo ""
   echo "✅ Cleaned worktree for: $BRANCH"

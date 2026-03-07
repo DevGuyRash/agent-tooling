@@ -537,6 +537,8 @@ class StartBranchScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
 
     def test_start_branch_auto_stashes_dirty_tree_and_restores(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -730,6 +732,8 @@ class FinishWorkScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
         run(["git", "checkout", "-b", "main"], cwd=repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         run(["git", "add", "README.md"], cwd=repo)
@@ -826,6 +830,112 @@ class FinishWorkScriptTests(unittest.TestCase):
             )
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("is not confirmed on 'main'", proc.stderr)
+
+    def test_finish_work_from_linked_checkout_cleans_branch_in_main_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            create_proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "cleanup-worktree",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            worktree_path = Path(f"{repo}.worktrees") / "feat" / "cleanup-worktree"
+
+            run(["git", "checkout", "-b", "feat/main-checkout-target"], cwd=repo)
+            (repo / "main-only.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "main-only.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add main checkout target"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/main-checkout-target", "-m", "merge feat/main-checkout-target"], cwd=repo)
+            run(["git", "checkout", "feat/main-checkout-target"], cwd=repo)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/main-checkout-target",
+                ],
+                cwd=worktree_path,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Target branch is checked out in the main checkout.", proc.stdout)
+            self.assertTrue(repo.exists())
+            self.assertTrue(worktree_path.exists())
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+            branch_check = run(
+                ["git", "show-ref", "--verify", "refs/heads/feat/main-checkout-target"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(branch_check.returncode, 0)
+
+    def test_finish_work_dry_run_from_linked_checkout_skips_main_checkout_removal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            create_proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "cleanup-worktree",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            worktree_path = Path(f"{repo}.worktrees") / "feat" / "cleanup-worktree"
+
+            run(["git", "checkout", "-b", "feat/main-checkout-target"], cwd=repo)
+            (repo / "main-only.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "main-only.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add main checkout target"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/main-checkout-target", "-m", "merge feat/main-checkout-target"], cwd=repo)
+            run(["git", "checkout", "feat/main-checkout-target"], cwd=repo)
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/main-checkout-target",
+                    "--dry-run",
+                ],
+                cwd=worktree_path,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn('DRY-RUN: git -C "', proc.stdout)
+            self.assertIn(f'DRY-RUN: git -C "{repo}" checkout "main"', proc.stdout)
+            self.assertIn('DRY-RUN: git -C "', proc.stdout)
+            self.assertIn('branch -D "feat/main-checkout-target"', proc.stdout)
+            self.assertNotIn(f'worktree remove "{repo}"', proc.stdout)
+            self.assertTrue(repo.exists())
+            self.assertTrue(worktree_path.exists())
 
 
 class MergeSquashScriptTests(unittest.TestCase):
@@ -1128,6 +1238,8 @@ class DeterministicGeneratorScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
         run(["git", "checkout", "-b", "main"], cwd=repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         run(["git", "add", "README.md"], cwd=repo)
