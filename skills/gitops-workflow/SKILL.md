@@ -81,8 +81,7 @@ Unless the repo explicitly defines otherwise, follow these rules:
    - at least one approving review (unless explicitly waived)
    - PR author confirms ready
    - branch is up to date / rebased
-8. **Default merge strategy is Squash & Merge**, using the structured squash body in
-   [assets/templates/squash-merge-message.md](assets/templates/squash-merge-message.md).
+8. **Default merge strategy is Squash & Merge**. Generate the deterministic squash body first, then optionally edit the generated body file before the final merge run when cleaner prose is needed.
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
 11. **When asked to "commit worktree" or "commit changes"**, create **batched Conventional Commits** grouped by logical change (feat/fix/docs/test/refactor/chore/etc.); do **not** make a single catch-all commit unless explicitly requested.
@@ -108,7 +107,7 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]` |
+| Start branch from default branch or linked worktree | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]` |
 | Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
 | Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
@@ -127,7 +126,8 @@ Path resolution (mandatory):
 | Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> (--body-file <path> | --body "<text>" | --body=<text>) [--repo owner/repo]` |
 | Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
 | Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
-| Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--admin] [--dry-run]` |
+| Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--body-file <path> \| --body-out <path>] [--admin] [--dry-run]` |
+| Clean up merged branch or worktree and return to base | `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
 | Governance enforcement sequence | `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] --repo owner/repo [--no-write-codeowners]` |
@@ -178,6 +178,8 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+# or create a clean linked checkout:
+# bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
 bash "$SKILL_ROOT/scripts/setup-security.sh"
 bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
 bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
@@ -189,27 +191,34 @@ bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>
 # bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create --force-create --repo <owner/repo> --label bug --label enhancement
 # after checks/threads are clean:
 # bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo>
-bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>
+# draft merge body for optional edits:
+# bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --body-out /tmp/squash-body.md --dry-run
+# edit /tmp/squash-body.md if desired, then:
+bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--body-file /tmp/squash-body.md]
 python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base origin/main
+# after confirming merge landed on main and remote branch is gone:
+# bash "$SKILL_ROOT/scripts/finish-work.sh"
 ```
 
 ---
 
-## Playbook A: Start work (branching)
+## Playbook A: Start work (branch or worktree)
 
 ### Goal
 
-Create a correctly named branch from the default branch, without accidentally working on `main`.
+Create a correctly named branch from the default branch, without accidentally working on `main`. Default behavior stays in-place branch creation; add `--worktree` to create a clean linked checkout instead.
 
 ### Steps
 
-1. If working tree is dirty, stash tracked + untracked changes with deterministic metadata.
+1. If working tree is dirty and you are using branch mode, stash tracked + untracked changes with deterministic metadata.
    - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
    - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
-2. Sync the default branch:
-   - `git checkout <default-branch> && git pull`
-3. Create a branch:
-   - `git checkout -b <type>/<short-desc>`
+2. Sync the default branch for the mode you are using:
+   - branch mode: `git checkout <default-branch> && git pull`
+   - linked worktree mode: let `start-branch.sh --worktree` resolve from the default branch without switching the current checkout
+3. Create either:
+   - a local branch in the current checkout, or
+   - a linked worktree at `<main-checkout>.worktrees/<type>/<short-desc>` when `--worktree` is passed.
 
 **Recommended helper** (handles default-branch detection + naming validation):
 
@@ -221,6 +230,7 @@ Example:
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 4321 --stash-name "carry-local-wip"
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
 ```
 
 ---
@@ -339,11 +349,15 @@ Draft-ready lifecycle:
 4. Squash merge body omits empty optional sections and is generated deterministically with commit bullets:
    - `- <short-sha> <first-line commit subject>`
    - `## Commits` and `## Refs` are always present
+   - for a cleaner final body, first run `--body-out <path> --dry-run`, edit the file, then rerun with `--body-file <path>`
 5. Optional escalation path for repository admins:
    - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin`
    - this passes `--admin` (while preserving `--delete-branch`) to `gh pr merge` and relaxes approval/check gates
 6. After merge, emit a commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
+7. After the receipt, clean up local state:
+   - `bash "$SKILL_ROOT/scripts/finish-work.sh"`
+   - this refuses cleanup until the remote branch is gone and the change is confirmed on the base branch
 
 ---
 

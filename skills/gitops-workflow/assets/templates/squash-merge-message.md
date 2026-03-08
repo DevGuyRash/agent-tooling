@@ -2,19 +2,19 @@
 
 ## Overview
 
-<2-4 lines on context, intent, impact; no refs here>
+Squash merge for PR #<number>.
 
 ## New Features
 
-- <new feature>
+- <deduplicated feature summary>
 
 ## What's Changed
 
-- <enhancement/refactor/perf/docs/ci/build/style/deps/test/security/etc>
+- <deduplicated non-feature summary>
 
 ## Bug Fixes
 
-- <concise bug fix>
+- <deduplicated fix summary>
 
 ## Breaking Changes
 
@@ -30,3 +30,5 @@
 - #123
 - owner/repo#123
 - https://example.com/issue/456
+
+Use the generated draft body as the source of truth. If the deterministic draft reads awkwardly, edit that body file and pass it back via `pr-merge-squash.sh --body-file <path>` rather than rewriting sections ad hoc.
