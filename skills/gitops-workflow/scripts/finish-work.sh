@@ -53,12 +53,47 @@ remote_branch_exists() {
   git show-ref --verify --quiet "refs/remotes/origin/$branch"
 }
 
+require_clean_checkout() {
+  local path="$1"
+  local label="$2"
+  if [[ -n "$(git -C "$path" status --porcelain)" ]]; then
+    die "$label has uncommitted changes; commit, stash, or discard them before cleanup"
+  fi
+}
+
 worktree_path_for_branch() {
   local branch="$1"
   git worktree list --porcelain | awk -v want="refs/heads/$branch" '
     $1 == "worktree" { path = substr($0, 10) }
     $1 == "branch" && $2 == want { print path; exit }
   '
+}
+
+branch_diff_applied_to_base() {
+  local branch="$1"
+  local base="$2"
+  local merge_base=""
+  merge_base="$(git merge-base "$branch" "$base" 2>/dev/null || true)"
+  [[ -n "$merge_base" ]] || return 1
+
+  if git diff --quiet "$merge_base" "$branch" --; then
+    return 0
+  fi
+
+  local scratch=""
+  scratch="$(mktemp -d)"
+  trap 'rm -rf "$scratch"' RETURN
+
+  git archive "$base" | tar -x -C "$scratch"
+  if git diff --binary "$merge_base" "$branch" | git -C "$scratch" apply --check --reverse >/dev/null 2>&1; then
+    rm -rf "$scratch"
+    trap - RETURN
+    return 0
+  fi
+
+  rm -rf "$scratch"
+  trap - RETURN
+  return 1
 }
 
 pr_merge_confirms_branch() {
@@ -89,6 +124,9 @@ branch_is_merged() {
   local branch="$1"
   local base="$2"
   if git merge-base --is-ancestor "$branch" "$base" >/dev/null 2>&1; then
+    return 0
+  fi
+  if branch_diff_applied_to_base "$branch" "$base"; then
     return 0
   fi
   pr_merge_confirms_branch "$branch" "$base"
@@ -187,6 +225,7 @@ if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
   fi
   echo "Main checkout: $MAIN_CHECKOUT"
   if [[ "$TARGET_IN_MAIN_CHECKOUT" == "true" ]]; then
+    require_clean_checkout "$MAIN_CHECKOUT" "main checkout '$MAIN_CHECKOUT'"
     echo "Target branch is checked out in the main checkout."
     if [[ "$DRY_RUN" == "true" ]]; then
       echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
@@ -201,6 +240,7 @@ if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
     echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
     exit 0
   fi
+  require_clean_checkout "$TARGET_WORKTREE" "linked worktree '$TARGET_WORKTREE'"
   echo "Linked worktree detected: $TARGET_WORKTREE"
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
@@ -220,12 +260,23 @@ if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
   exit 0
 fi
 
-if [[ "$DRY_RUN" == "true" ]]; then
-  echo "DRY-RUN: git checkout \"$BASE\""
-  echo "DRY-RUN: git branch -D \"$BRANCH\""
+if [[ "$CURRENT_BRANCH" == "$BASE" && "$BRANCH" != "$BASE" ]]; then
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY-RUN: git branch -D \"$BRANCH\""
+  else
+    git branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH'"
+  fi
+elif [[ "$CURRENT_BRANCH" == "$BRANCH" ]]; then
+  require_clean_checkout "$TOPLEVEL" "current checkout '$TOPLEVEL'"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY-RUN: git checkout \"$BASE\""
+    echo "DRY-RUN: git branch -D \"$BRANCH\""
+  else
+    git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE'"
+    git branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH'"
+  fi
 else
-  git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE'"
-  git branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH'"
+  die "current checkout '$CURRENT_BRANCH' is neither '$BASE' nor '$BRANCH'; rerun from the base branch or the target branch"
 fi
 
 echo ""

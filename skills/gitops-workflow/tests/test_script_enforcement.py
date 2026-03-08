@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -739,6 +740,15 @@ class FinishWorkScriptTests(unittest.TestCase):
         run(["git", "add", "README.md"], cwd=repo)
         run(["git", "commit", "-m", "chore: base"], cwd=repo)
 
+    def _env_without_gh(self, root: Path):
+        fake_bin = Path(tempfile.mkdtemp(prefix="no-gh-bin-"))
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+        fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        return env
+
     def test_finish_work_switches_to_base_and_deletes_merged_branch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -826,6 +836,254 @@ class FinishWorkScriptTests(unittest.TestCase):
             proc = run(
                 ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
                 cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("is not confirmed on 'main'", proc.stderr)
+
+    def test_finish_work_refuses_dirty_target_branch_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/dirty-branch"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add dirty cleanup"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/dirty-branch", "-m", "merge feat/dirty-branch"], cwd=repo)
+            run(["git", "checkout", "feat/dirty-branch"], cwd=repo)
+            (repo / "local.txt").write_text("local change\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("current checkout", proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "feat/dirty-branch")
+
+    def test_finish_work_allows_dirty_base_checkout_when_cleaning_other_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/delete-other"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add other branch cleanup"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/delete-other", "-m", "merge feat/delete-other"], cwd=repo)
+            (repo / "local.txt").write_text("keep me\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/delete-other",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+            self.assertEqual((repo / "local.txt").read_text(encoding="utf-8"), "keep me\n")
+            branch_check = run(
+                ["git", "show-ref", "--verify", "refs/heads/feat/delete-other"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertNotEqual(branch_check.returncode, 0)
+
+    def test_finish_work_dry_run_allows_dirty_base_checkout_when_cleaning_other_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/delete-other"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add other branch cleanup"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/delete-other", "-m", "merge feat/delete-other"], cwd=repo)
+            (repo / "local.txt").write_text("keep me\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/delete-other",
+                    "--dry-run",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn('DRY-RUN: git branch -D "feat/delete-other"', proc.stdout)
+            self.assertNotIn('DRY-RUN: git checkout "main"', proc.stdout)
+            self.assertEqual((repo / "local.txt").read_text(encoding="utf-8"), "keep me\n")
+
+    def test_finish_work_refuses_dirty_main_checkout_target_from_linked_worktree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            create_proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "start-branch.sh"),
+                    "feat",
+                    "cleanup-worktree",
+                    "--base",
+                    "main",
+                    "--worktree",
+                ],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            worktree_path = Path(f"{repo}.worktrees") / "feat" / "cleanup-worktree"
+
+            run(["git", "checkout", "-b", "feat/main-dirty"], cwd=repo)
+            (repo / "main-only.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "main-only.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add main dirty target"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/main-dirty", "-m", "merge feat/main-dirty"], cwd=repo)
+            run(["git", "checkout", "feat/main-dirty"], cwd=repo)
+            (repo / "local.txt").write_text("dirty\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/main-dirty",
+                ],
+                cwd=worktree_path,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("main checkout", proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "feat/main-dirty")
+            self.assertTrue(worktree_path.exists())
+
+    def test_finish_work_refuses_dirty_target_linked_worktree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+
+            for name in ("cleanup-worktree", "other-worktree"):
+                create_proc = run(
+                    [
+                        "bash",
+                        str(SCRIPTS_DIR / "start-branch.sh"),
+                        "feat",
+                        name,
+                        "--base",
+                        "main",
+                        "--worktree",
+                    ],
+                    cwd=repo,
+                    check=False,
+                )
+                self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            target_path = Path(f"{repo}.worktrees") / "feat" / "cleanup-worktree"
+            caller_path = Path(f"{repo}.worktrees") / "feat" / "other-worktree"
+
+            (target_path / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=target_path)
+            run(["git", "commit", "-m", "feat: add target cleanup"], cwd=target_path)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/cleanup-worktree", "-m", "merge feat/cleanup-worktree"], cwd=repo)
+            (target_path / "local.txt").write_text("dirty\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPTS_DIR / "finish-work.sh"),
+                    "--base",
+                    "main",
+                    "--branch",
+                    "feat/cleanup-worktree",
+                ],
+                cwd=caller_path,
+                check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("linked worktree", proc.stderr)
+            self.assertTrue(target_path.exists())
+
+    def test_finish_work_accepts_offline_squash_merged_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            env = self._env_without_gh(repo)
+
+            run(["git", "checkout", "-b", "feat/offline-squash"], cwd=repo)
+            (repo / "feature.txt").write_text("alpha\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add offline squash"], cwd=repo)
+            (repo / "feature.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: extend offline squash"], cwd=repo)
+
+            squashed = run(["git", "diff", "main...feat/offline-squash"], cwd=repo).stdout
+            run(["git", "checkout", "main"], cwd=repo)
+            patch_proc = subprocess.run(
+                ["git", "apply", "-"],
+                input=squashed,
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(patch_proc.returncode, 0)
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: squash offline branch"], cwd=repo)
+            run(["git", "checkout", "feat/offline-squash"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+
+    def test_finish_work_rejects_offline_branch_when_base_diff_does_not_match(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            env = self._env_without_gh(repo)
+
+            run(["git", "checkout", "-b", "feat/offline-mismatch"], cwd=repo)
+            (repo / "feature.txt").write_text("branch change\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: add offline mismatch"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            (repo / "feature.txt").write_text("different base\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: unrelated base change"], cwd=repo)
+            run(["git", "checkout", "feat/offline-mismatch"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--base", "main"],
+                cwd=repo,
+                env=env,
                 check=False,
             )
             self.assertNotEqual(proc.returncode, 0)
