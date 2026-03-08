@@ -15,19 +15,22 @@ SKILL_ROOT=<absolute-path-to-gitops-workflow>
 
 ---
 
-## A) Start work checklist (branching)
+## A) Start work checklist (branch or worktree)
 
-- [ ] if worktree is dirty, branch helper auto-stashes tracked + untracked and restores safely
+- [ ] if branch mode worktree is dirty, start helper auto-stashes tracked + untracked and restores safely
 - [ ] branch helper auto-installs managed pre-commit hook unless `--no-install-hooks` is used
-- [ ] you are on the default branch (`main`/`master`)
-- [ ] default branch is up to date (`git pull`)
+- [ ] branch mode starts from an up-to-date default branch checkout (`main`/`master`)
+- [ ] linked worktree mode may stay on the current checkout; helper resolves from the default branch without switching the active worktree
 - [ ] new branch name matches allowed pattern: `<type>/<short-desc>`
 - [ ] branch name is kebab-case and concise (`add-json-output`, not `AddedJsonOutput`)
+- [ ] if `<slug>` is omitted without `--issue`, the helper default is `wip-<YYYYMMDD-HHMMSS>-<HEAD8>` when `HEAD` exists
+- [ ] if using linked worktree mode, target path is `<main-checkout>.worktrees/<type>/<short-desc>`
 
 Recommended:
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry-local-wip"
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
 ```
 
 ---
@@ -118,12 +121,17 @@ Before pushing *any* updates to a PR:
 - [ ] run deterministic merge helper:
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number>`
 - [ ] confirm source branch is deleted by helper (`--delete-branch`) unless merge fails.
+- [ ] if you want to polish the squash body, generate a draft first:
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number> --body-out /tmp/squash-body.md --dry-run`
+  - edit `/tmp/squash-body.md`, then rerun with `--body-file /tmp/squash-body.md`
 - [ ] squash commit body includes `## Commits` bullets:
   - each bullet is `<short-sha> <first-line commit subject>`
 - [ ] if emergency admin merge is required, use:
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number> --admin`
 - [ ] after merge/push, emit commit receipt:
   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
+- [ ] after merge, run local cleanup:
+  - `bash "$SKILL_ROOT/scripts/finish-work.sh"`
 
 ---
 

@@ -20,7 +20,7 @@ When bypassing, record:
 ## Routing table
 
 - Branch creation:
-  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-install-hooks]`
+  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]`
 - Security bootstrap (hooks + CI files):
   - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
 - Governance capability preflight (required before governance enforce):
@@ -62,7 +62,10 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`
   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--dry-run]`
 - Squash merge (deterministic, required; auto-deletes source branch on success):
-  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--admin] [--dry-run]`
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]`
+  - Recommended deterministic flow when better prose is needed: (1) run with `--body-out <path> --dry-run`, (2) review/edit that file, then (3) rerun with `--body-file <path>`.
+- Post-merge local cleanup:
+  - `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]`
 - Receipt generation:
   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]`
 - Governance enforcement:

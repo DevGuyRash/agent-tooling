@@ -23,8 +23,11 @@ import argparse
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from squash_renderer import CommitEntry, SquashRenderError, render_squash_message  # noqa: E402
 
 
 ALLOWED_TYPES = {
@@ -64,13 +67,6 @@ def try_run(cmd: List[str]) -> Optional[str]:
         return None
 
 
-@dataclass(frozen=True)
-class Commit:
-    sha: str
-    subject: str
-    body: str
-
-
 def detect_base_ref() -> str:
     sym = try_run(["git", "symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
     if sym:
@@ -94,12 +90,12 @@ def merge_base(base_ref: str) -> str:
     return run(["git", "merge-base", "HEAD", base_ref])
 
 
-def iter_commits(range_expr: str) -> List[Commit]:
+def iter_commits(range_expr: str) -> List[CommitEntry]:
     us = "\x1f"
     rs = "\x1e"
     fmt = f"%H{us}%s{us}%B{rs}"
     raw = run(["git", "log", "--no-merges", f"--pretty=format:{fmt}", range_expr])
-    commits: List[Commit] = []
+    commits: List[CommitEntry] = []
     for record in raw.split(rs):
         record = record.strip()
         if not record:
@@ -108,7 +104,7 @@ def iter_commits(range_expr: str) -> List[Commit]:
         if len(parts) < 3:
             continue
         sha, subject, body = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        commits.append(Commit(sha=sha, subject=subject, body=body))
+        commits.append(CommitEntry(sha=sha, headline=subject, body=body))
     commits.reverse()  # oldest-first
     return commits
 
@@ -153,93 +149,34 @@ def main() -> int:
     scope = args.scope
     summary = args.summary.strip()
 
-    new_features: List[str] = []
-    bug_fixes: List[str] = []
-    whats_changed: List[str] = []
-    breaking_changes: List[str] = []
-    commit_lines: List[str] = []
-
-    any_breaking = False
-
-    for c in commits:
-        parsed = parse_conventional(c.subject)
-        commit_lines.append(f"- `{c.sha[:7]}` {c.subject}")
-        if not parsed:
-            whats_changed.append(f"- {c.subject}")
-            continue
-
-        c_type, c_scope, c_breaking_header, desc = parsed
-        has_breaking_footer = "BREAKING CHANGE" in c.body
-        is_breaking = c_breaking_header or has_breaking_footer
-        if is_breaking:
-            any_breaking = True
-
-        scope_prefix = f"{c_scope}: " if c_scope else ""
-        bullet = f"- {scope_prefix}{desc}"
-
-        if c_type == "feat":
-            new_features.append(bullet)
-        elif c_type in {"fix", "hotfix"}:
-            bug_fixes.append(bullet)
-        else:
-            whats_changed.append(bullet)
-
-        if is_breaking:
-            breaking_changes.append(f"- {scope_prefix}{desc}; migration: <add steps>")
-
     header_scope = f"({scope})" if scope else ""
+    any_breaking = any(
+        parsed and (parsed[2] or "BREAKING CHANGE" in commit.body)
+        for commit in commits
+        for parsed in [parse_conventional(commit.headline)]
+    )
     bang = "!" if any_breaking else ""
     header = f"{typ}{header_scope}{bang}: {summary}"
-
-    print(header)
-    print("")
-    print("## Overview")
-    print("")
-    print("Write 2–4 lines on context, intent, and impact. No refs here.")
-    print("")
-    if new_features:
-        print("## New Features")
-        print("")
-        print("\n".join(new_features))
-        print("")
-    if whats_changed:
-        print("## What's Changed")
-        print("")
-        print("\n".join(whats_changed))
-        print("")
-    if bug_fixes:
-        print("## Bug Fixes")
-        print("")
-        print("\n".join(bug_fixes))
-        print("")
-    if any_breaking:
-        print("## Breaking Changes")
-        print("")
-        if breaking_changes:
-            print("\n".join(breaking_changes))
-        else:
-            print("- <describe breaking change>; migration: <steps>")
-        print("")
-    print("## Commits")
-    print("")
-    if commit_lines:
-        print("\n".join(commit_lines))
-    else:
-        print("- (none)")
-    print("")
 
     refs: List[str] = []
     if args.pr:
         refs.append(f"#{args.pr}")
     refs.extend(args.refs)
 
-    print("## Refs")
+    try:
+        rendered = render_squash_message(
+            title=header,
+            commits=commits,
+            pr_ref=f"PR #{args.pr}" if args.pr else None,
+            refs=refs,
+        )
+    except SquashRenderError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    print(rendered.subject)
     print("")
-    if refs:
-        for r in refs:
-            print(f"- {r}")
-    else:
-        print("- (none provided)")
+    print(rendered.body, end="")
     return 0
 
 
