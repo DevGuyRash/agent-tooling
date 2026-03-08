@@ -1,0 +1,27 @@
+[
+  {
+    "question": "Packaging fit",
+    "reference": "<skills-file-root>/references/packaging-fit.md",
+    "terms": ["migrate_to_agents", "migrate_to_tool", "hybrid_recommended"]
+  },
+  {
+    "question": "Trigger fit",
+    "reference": "<skills-file-root>/references/trigger-evals.md",
+    "terms": ["explicit", "implicit", "negative", "ambiguous"]
+  },
+  {
+    "question": "Task fit",
+    "reference": "<skills-file-root>/references/task-evals.md",
+    "terms": ["canonical tasks", "outcome", "efficiency"]
+  },
+  {
+    "question": "Context fit",
+    "reference": "<skills-file-root>/references/context-redesign.md",
+    "terms": ["one hop", "operational", "on demand"]
+  },
+  {
+    "question": "Verification fit",
+    "reference": "<skills-file-root>/references/verification-loop.md",
+    "terms": ["verification plan", "rerun", "compare"]
+  }
+]

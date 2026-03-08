@@ -1,0 +1,26 @@
+[
+  {
+    "profile": "open-standard",
+    "cue": "portable skill folder"
+  },
+  {
+    "profile": "claude-skill",
+    "cue": "claude-style skills"
+  },
+  {
+    "profile": "codex-skill",
+    "cue": "agents.md layering"
+  },
+  {
+    "profile": "copilot-skill",
+    "cue": "copilot-specific"
+  },
+  {
+    "profile": "internal-house-style",
+    "cue": "local, not universal"
+  },
+  {
+    "profile": "auto",
+    "cue": "avoid false certainty"
+  }
+]
