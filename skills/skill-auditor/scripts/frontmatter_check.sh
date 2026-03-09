@@ -12,7 +12,7 @@ Validate SKILL.md frontmatter for:
   - YAML frontmatter delimiters
   - name presence and directory match
   - name format constraints
-  - description presence and trigger wording
+  - description presence and basic trigger quality
 EOF
 }
 
@@ -29,6 +29,21 @@ append_issue() {
     fi
     ISSUE_JSON="$ISSUE_JSON{\"code\":\"$(json_escape "$code")\",\"severity\":\"$(json_escape "$severity")\",\"message\":\"$(json_escape "$message")\"}"
     ISSUE_COUNT=$((ISSUE_COUNT + 1))
+    TEXT_ISSUES="$TEXT_ISSUES
+- $severity $code: $message"
+}
+
+append_warning() {
+    code="$1"
+    severity="$2"
+    message="$3"
+    if [ "$WARNING_COUNT" -gt 0 ]; then
+        WARNING_JSON="$WARNING_JSON,"
+    fi
+    WARNING_JSON="$WARNING_JSON{\"code\":\"$(json_escape "$code")\",\"severity\":\"$(json_escape "$severity")\",\"message\":\"$(json_escape "$message")\"}"
+    WARNING_COUNT=$((WARNING_COUNT + 1))
+    TEXT_WARNINGS="$TEXT_WARNINGS
+- $severity $code: $message"
 }
 
 load_frontmatter() {
@@ -75,12 +90,20 @@ print_text() {
         echo "PASS frontmatter_check"
         echo "name=$NAME_VALUE"
         echo "description_chars=$DESC_CHARS"
+        echo "warning_count=$WARNING_COUNT"
+        if [ "$WARNING_COUNT" -gt 0 ]; then
+            printf '%s\n' "$TEXT_WARNINGS"
+        fi
         exit 0
     fi
 
     echo "FAIL frontmatter_check"
     echo "issues=$ISSUE_COUNT"
     printf '%s\n' "$TEXT_ISSUES"
+    if [ "$WARNING_COUNT" -gt 0 ]; then
+        echo "warning_count=$WARNING_COUNT"
+        printf '%s\n' "$TEXT_WARNINGS"
+    fi
     exit 1
 }
 
@@ -95,8 +118,11 @@ print_json() {
     printf '"skill_dir":"%s",' "$(json_escape "$SKILL_DIR")"
     printf '"name":"%s",' "$(json_escape "$NAME_VALUE")"
     printf '"description_chars":%s,' "$DESC_CHARS"
+    printf '"description_words":%s,' "$DESC_WORDS"
     printf '"issue_count":%s,' "$ISSUE_COUNT"
-    printf '"issues":[%s]' "$ISSUE_JSON"
+    printf '"warning_count":%s,' "$WARNING_COUNT"
+    printf '"issues":[%s],' "$ISSUE_JSON"
+    printf '"warnings":[%s]' "$WARNING_JSON"
     printf '}\n'
 
     if [ "$ISSUE_COUNT" -eq 0 ]; then
@@ -106,11 +132,14 @@ print_json() {
 }
 
 TEXT_ISSUES=""
+TEXT_WARNINGS=""
 ISSUE_JSON=""
+WARNING_JSON=""
 ISSUE_COUNT=0
+WARNING_COUNT=0
 NAME_VALUE=""
 DESC_CHARS=0
-
+DESC_WORDS=0
 SKILL_DIR=""
 
 while [ $# -gt 0 ]; do
@@ -149,82 +178,72 @@ fi
 
 if [ ! -d "$SKILL_DIR" ]; then
     append_issue "missing_directory" "BLOCKER" "skill directory not found: $SKILL_DIR"
-    TEXT_ISSUES="- BLOCKER missing_directory: skill directory not found: $SKILL_DIR"
-    if [ "$FORMAT" = "json" ]; then
-        print_json
-    fi
-    print_text
+    case "$FORMAT" in
+        json) print_json ;;
+        text) print_text ;;
+        *) echo "error: unsupported format: $FORMAT" >&2; exit 2 ;;
+    esac
 fi
 
 SKILL_FILE="$SKILL_DIR/SKILL.md"
 if [ ! -f "$SKILL_FILE" ]; then
     append_issue "missing_skill_md" "BLOCKER" "SKILL.md not found in $SKILL_DIR"
-    TEXT_ISSUES="- BLOCKER missing_skill_md: SKILL.md not found in $SKILL_DIR"
-    if [ "$FORMAT" = "json" ]; then
-        print_json
-    fi
-    print_text
+    case "$FORMAT" in
+        json) print_json ;;
+        text) print_text ;;
+        *) echo "error: unsupported format: $FORMAT" >&2; exit 2 ;;
+    esac
 fi
 
 if ! FRONTMATTER=$(load_frontmatter "$SKILL_FILE"); then
     append_issue "frontmatter_missing" "BLOCKER" "YAML frontmatter is missing or malformed"
-    TEXT_ISSUES="- BLOCKER frontmatter_missing: YAML frontmatter is missing or malformed"
-    if [ "$FORMAT" = "json" ]; then
-        print_json
-    fi
-    print_text
+    case "$FORMAT" in
+        json) print_json ;;
+        text) print_text ;;
+        *) echo "error: unsupported format: $FORMAT" >&2; exit 2 ;;
+    esac
 fi
 
 NAME_VALUE=$(printf '%s\n' "$FRONTMATTER" | sed -n 's/^name:[[:space:]]*//p' | head -1 | sed "s/^['\"]//;s/['\"]$//")
 if [ -z "$NAME_VALUE" ]; then
     append_issue "name_missing" "BLOCKER" "frontmatter is missing a name field"
-    TEXT_ISSUES="$TEXT_ISSUES
-- BLOCKER name_missing: frontmatter is missing a name field"
 else
     DIR_NAME=$(basename "$SKILL_DIR")
     if [ "$NAME_VALUE" != "$DIR_NAME" ]; then
         append_issue "name_mismatch" "MAJOR" "name does not match directory: $NAME_VALUE != $DIR_NAME"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR name_mismatch: name does not match directory: $NAME_VALUE != $DIR_NAME"
     fi
     if ! printf '%s' "$NAME_VALUE" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
         append_issue "name_format" "MAJOR" "name must use lowercase letters, numbers, and single hyphens only"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR name_format: name must use lowercase letters, numbers, and single hyphens only"
     fi
     if printf '%s' "$NAME_VALUE" | grep -q -- '--'; then
         append_issue "name_double_hyphen" "MAJOR" "name must not contain consecutive hyphens"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR name_double_hyphen: name must not contain consecutive hyphens"
     fi
     NAME_LEN=$(printf '%s' "$NAME_VALUE" | wc -c | tr -d ' ')
     if [ "$NAME_LEN" -gt 64 ]; then
         append_issue "name_length" "MAJOR" "name exceeds 64 characters"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR name_length: name exceeds 64 characters"
     fi
 fi
 
 if ! DESCRIPTION=$(extract_description "$FRONTMATTER"); then
     append_issue "description_missing" "BLOCKER" "frontmatter is missing a description field"
-    TEXT_ISSUES="$TEXT_ISSUES
-- BLOCKER description_missing: frontmatter is missing a description field"
 else
     DESC_CHARS=$(printf '%s' "$DESCRIPTION" | wc -c | tr -d ' ')
+    DESC_WORDS=$(printf '%s' "$DESCRIPTION" | wc -w | tr -d ' ')
     if [ "$DESC_CHARS" -eq 0 ]; then
         append_issue "description_empty" "BLOCKER" "description must not be empty"
-        TEXT_ISSUES="$TEXT_ISSUES
-- BLOCKER description_empty: description must not be empty"
     fi
     if [ "$DESC_CHARS" -gt 1024 ]; then
         append_issue "description_length" "MAJOR" "description exceeds 1024 characters"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR description_length: description exceeds 1024 characters"
     fi
-    if ! printf '%s' "$DESCRIPTION" | grep -qi 'use when'; then
-        append_issue "description_trigger" "MAJOR" "description should include a clear 'Use when' trigger phrase"
-        TEXT_ISSUES="$TEXT_ISSUES
-- MAJOR description_trigger: description should include a clear 'Use when' trigger phrase"
+    if [ "$DESC_WORDS" -lt 4 ]; then
+        append_issue "description_too_vague" "MAJOR" "description is too short to explain what the skill does and when to use it"
+    elif [ "$DESC_WORDS" -lt 10 ]; then
+        append_warning "description_brief" "MINOR" "description is brief and may underspecify trigger boundaries"
+    fi
+
+    desc_lower=$(printf '%s' "$DESCRIPTION" | tr '[:upper:]' '[:lower:]')
+    if printf '%s' "$desc_lower" | grep -Eq '^(helps with|assists with|supports|tool for|utility for)\b'; then
+        append_warning "description_trigger_weak" "MINOR" "description uses generic wording and may not describe trigger boundaries clearly"
     fi
 fi
 

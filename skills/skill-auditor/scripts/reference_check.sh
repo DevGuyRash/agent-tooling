@@ -38,6 +38,18 @@ contains_line() {
     printf '%s\n' "$haystack" | grep -Fx -- "$needle" >/dev/null 2>&1
 }
 
+normalize_link() {
+    raw_link="$1"
+    case "$raw_link" in
+        '<skills-file-root>'/*)
+            printf '%s\n' "${raw_link#<skills-file-root>/}"
+            ;;
+        *)
+            printf '%s\n' "$raw_link"
+            ;;
+    esac
+}
+
 collect_skill_links() {
     skill_file="$1"
     grep -oE '(<skills-file-root>/)?references/[A-Za-z0-9._/-]+\.md' "$skill_file" 2>/dev/null | sort -u || true
@@ -139,26 +151,18 @@ if [ ! -f "$SKILL_FILE" ]; then
 fi
 
 RAW_LINKS=$(collect_skill_links "$SKILL_FILE")
-TOKENIZED_LINKS=""
+NORMALIZED_LINKS=""
 
 if [ -n "$RAW_LINKS" ]; then
     while IFS= read -r raw_link; do
         [ -n "$raw_link" ] || continue
-        case "$raw_link" in
-            '<skills-file-root>'/*)
-                rel_path=${raw_link#<skills-file-root>/}
-                ;;
-            *)
-                rel_path=$raw_link
-                append_issue "bare_reference_path" "MAJOR" "SKILL.md should reference active docs with <skills-file-root>/$raw_link"
-                ;;
-        esac
+        rel_path=$(normalize_link "$raw_link")
 
-        if [ -n "$TOKENIZED_LINKS" ]; then
-            TOKENIZED_LINKS="$TOKENIZED_LINKS
+        if [ -n "$NORMALIZED_LINKS" ]; then
+            NORMALIZED_LINKS="$NORMALIZED_LINKS
 $rel_path"
         else
-            TOKENIZED_LINKS="$rel_path"
+            NORMALIZED_LINKS="$rel_path"
         fi
 
         if [ ! -f "$SKILL_DIR/$rel_path" ]; then
@@ -169,8 +173,8 @@ $RAW_LINKS
 EOF
 fi
 
-if [ -n "$TOKENIZED_LINKS" ]; then
-    LINKED_COUNT=$(printf '%s\n' "$TOKENIZED_LINKS" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
+if [ -n "$NORMALIZED_LINKS" ]; then
+    LINKED_COUNT=$(printf '%s\n' "$NORMALIZED_LINKS" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 fi
 
 REFERENCE_DIR="$SKILL_DIR/references"
@@ -185,11 +189,11 @@ if [ -n "$ACTIVE_REFS" ]; then
     while IFS= read -r ref_file; do
         [ -n "$ref_file" ] || continue
         rel_ref=${ref_file#"$SKILL_DIR"/}
-        if ! contains_line "$rel_ref" "$TOKENIZED_LINKS"; then
+        if ! contains_line "$rel_ref" "$NORMALIZED_LINKS"; then
             append_issue "unlinked_reference" "MAJOR" "active reference is not directly linked from SKILL.md: $rel_ref"
         fi
 
-        nested_links=$(grep -oE 'references/[A-Za-z0-9._/-]+\.md' "$ref_file" 2>/dev/null | sort -u || true)
+        nested_links=$(grep -oE '(<skills-file-root>/)?references/[A-Za-z0-9._/-]+\.md' "$ref_file" 2>/dev/null | sort -u || true)
         if [ -n "$nested_links" ]; then
             append_issue "nested_reference_link" "MAJOR" "reference points to another reference file: $rel_ref"
         fi

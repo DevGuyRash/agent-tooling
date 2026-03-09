@@ -1,23 +1,23 @@
 [
   {
     "profile": "open-standard",
-    "cue": "portable skill folder"
+    "cue": "relative paths"
   },
   {
     "profile": "claude-skill",
-    "cue": "claude-style skills"
+    "cue": "claude-specific packaging"
   },
   {
     "profile": "codex-skill",
-    "cue": "agents.md layering"
+    "cue": "agents/openai.yaml"
   },
   {
     "profile": "copilot-skill",
-    "cue": "copilot-specific"
+    "cue": "always-on instructions"
   },
   {
     "profile": "internal-house-style",
-    "cue": "local, not universal"
+    "cue": "local overlays, not universal"
   },
   {
     "profile": "auto",

@@ -23,7 +23,35 @@ def run_reference_check(skill_dir: Path) -> tuple[subprocess.CompletedProcess[st
 
 
 class ReferenceCheckTests(unittest.TestCase):
-    def test_valid_references_pass(self) -> None:
+    def test_valid_relative_references_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            refs_dir = skill_dir / "references"
+            skill_dir.mkdir()
+            refs_dir.mkdir()
+            (refs_dir / "packaging-fit.md").write_text("# Packaging\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                      Check a demo skill and explain what it does. Use when
+                      reviewing demo skills.
+                    ---
+
+                    - Packaging fit → `references/packaging-fit.md`
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_reference_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+
+    def test_tokenized_reference_paths_also_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "demo-skill"
             refs_dir = skill_dir / "references"
@@ -69,7 +97,7 @@ class ReferenceCheckTests(unittest.TestCase):
                       reviewing demo skills.
                     ---
 
-                    - Packaging fit → `<skills-file-root>/references/packaging-fit.md`
+                    - Packaging fit → `references/packaging-fit.md`
                     """
                 ),
                 encoding="utf-8",
@@ -101,8 +129,8 @@ class ReferenceCheckTests(unittest.TestCase):
                       reviewing demo skills.
                     ---
 
-                    - Packaging fit → `<skills-file-root>/references/packaging-fit.md`
-                    - Trigger fit → `<skills-file-root>/references/trigger-evals.md`
+                    - Packaging fit → `references/packaging-fit.md`
+                    - Trigger fit → `references/trigger-evals.md`
                     """
                 ),
                 encoding="utf-8",

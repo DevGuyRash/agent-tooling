@@ -22,22 +22,34 @@ WHEN the request is ambiguous THEN you SHALL start with packaging fit.
 You SHALL read at most one question-specific reference file before drafting the
 first brief.
 WHEN you need profile-specific interpretation THEN you SHALL read
-`<skills-file-root>/references/profile-rules.md`.
+`references/profile-rules.md`.
 WHEN you need reusable repair ideas THEN you MAY read
-`<skills-file-root>/references/improvement-patterns.md`.
+`references/improvement-patterns.md`.
 You SHALL format the default deliverable with
-`<skills-file-root>/references/output-contract.md`.
+`references/output-contract.md`.
+
+## Default Leverage Order
+
+You SHALL use this default order unless a downstream failure is obviously the
+dominant blocker:
+
+1. Packaging fit
+2. Trigger fit
+3. Task fit
+4. Context fit
+5. Verification fit
 
 ## Choose The Primary Question
 
-- Packaging fit → `<skills-file-root>/references/packaging-fit.md`
-- Trigger fit → `<skills-file-root>/references/trigger-evals.md`
-- Task fit → `<skills-file-root>/references/task-evals.md`
-- Context fit → `<skills-file-root>/references/context-redesign.md`
-- Verification fit → `<skills-file-root>/references/verification-loop.md`
+- Packaging fit → `references/packaging-fit.md`
+- Trigger fit → `references/trigger-evals.md`
+- Task fit → `references/task-evals.md`
+- Context fit → `references/context-redesign.md`
+- Verification fit → `references/verification-loop.md`
 
 WHEN the target may belong in `AGENTS.md`, custom instructions, an explicit
-prompt surface, or a tool THEN you SHALL use packaging fit.
+prompt surface, an MCP-backed workflow, or a tool THEN you SHALL use packaging
+fit.
 WHEN the skill activates at the wrong times or misses obvious prompts THEN you
 SHALL use trigger fit.
 WHEN the skill triggers but does not improve task completion THEN you SHALL use
@@ -49,9 +61,9 @@ verification fit.
 
 ## Direct References
 
-- Output contract → `<skills-file-root>/references/output-contract.md`
-- Profile rules → `<skills-file-root>/references/profile-rules.md`
-- Improvement patterns → `<skills-file-root>/references/improvement-patterns.md`
+- Output contract → `references/output-contract.md`
+- Profile rules → `references/profile-rules.md`
+- Improvement patterns → `references/improvement-patterns.md`
 
 ## Default Workflow
 
@@ -62,7 +74,10 @@ WHEN the packaging verdict is `MIGRATE_TO_AGENTS`,
 you SHALL stop optimizing the target as a standalone skill and you SHALL return
 migration guidance plus verification.
 WHEN the packaging verdict is `KEEP_AS_SKILL` or `REWORK_AS_SKILL` THEN you
-SHALL continue to the next highest-leverage question.
+SHALL continue in default leverage order unless a later question is clearly the
+better next move.
+WHEN the first brief reveals a second bottleneck THEN you MAY load one
+additional direct reference at a time only as needed.
 WHEN the user asks for a full reboot or end-to-end revision THEN you MAY answer
 multiple questions, one at a time, in leverage order.
 You SHALL keep the default output concise enough for a human maintainer to act
@@ -74,9 +89,10 @@ gates for normal use.
 
 WHEN structural evidence helps THEN you MAY run one or more of these helpers:
 
-- `<skills-file-root>/scripts/frontmatter_check.sh`
-- `<skills-file-root>/scripts/reference_check.sh`
-- `<skills-file-root>/scripts/script_sanity.sh`
+- `scripts/frontmatter_check.sh`
+- `scripts/reference_check.sh`
+- `scripts/script_sanity.sh`
 
 WHEN reasoning alone answers the question well enough THEN you SHALL NOT run
 scripts just to satisfy the workflow.
+WHEN helpers do not add deterministic leverage THEN you SHALL skip them.

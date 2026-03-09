@@ -3,19 +3,17 @@
 set -eu
 
 FORMAT=text
-ALLOWED_SCRIPTS="frontmatter_check.sh
-reference_check.sh
-script_sanity.sh
-capture_eval.sh"
+WARNING_SCRIPT_COUNT_THRESHOLD=6
 
 usage() {
     cat <<'EOF'
 Usage: script_sanity.sh <skill-directory> [--format json]
 
-Validate that the active script surface is small and structurally sound:
-  - only approved top-level scripts are present
-  - required scripts exist
-  - scripts are executable, use LF line endings, and have shebangs
+Validate the script surface structurally:
+  - top-level scripts use LF line endings
+  - shell launchers are executable and have shebangs
+  - executable non-shell scripts have shebangs
+  - large script surfaces are reported as advisories
 EOF
 }
 
@@ -36,9 +34,17 @@ append_issue() {
 - $severity $code: $message"
 }
 
-is_allowed() {
-    candidate="$1"
-    printf '%s\n' "$ALLOWED_SCRIPTS" | grep -Fx -- "$candidate" >/dev/null 2>&1
+append_warning() {
+    code="$1"
+    severity="$2"
+    message="$3"
+    if [ "$WARNING_COUNT" -gt 0 ]; then
+        WARNING_JSON="$WARNING_JSON,"
+    fi
+    WARNING_JSON="$WARNING_JSON{\"code\":\"$(json_escape "$code")\",\"severity\":\"$(json_escape "$severity")\",\"message\":\"$(json_escape "$message")\"}"
+    WARNING_COUNT=$((WARNING_COUNT + 1))
+    TEXT_WARNINGS="$TEXT_WARNINGS
+- $severity $code: $message"
 }
 
 has_crlf() {
@@ -46,16 +52,33 @@ has_crlf() {
     awk '/\r$/ { found = 1; exit 0 } END { exit(found ? 0 : 1) }' "$file"
 }
 
+requires_launcher_contract() {
+    script_name="$1"
+    case "$script_name" in
+        *.sh) return 0 ;;
+        *.*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 print_text() {
     if [ "$ISSUE_COUNT" -eq 0 ]; then
         echo "PASS script_sanity"
         echo "script_count=$SCRIPT_COUNT"
+        echo "warning_count=$WARNING_COUNT"
+        if [ "$WARNING_COUNT" -gt 0 ]; then
+            printf '%s\n' "$TEXT_WARNINGS"
+        fi
         exit 0
     fi
 
     echo "FAIL script_sanity"
     echo "issues=$ISSUE_COUNT"
     printf '%s\n' "$TEXT_ISSUES"
+    if [ "$WARNING_COUNT" -gt 0 ]; then
+        echo "warning_count=$WARNING_COUNT"
+        printf '%s\n' "$TEXT_WARNINGS"
+    fi
     exit 1
 }
 
@@ -70,7 +93,9 @@ print_json() {
     printf '"skill_dir":"%s",' "$(json_escape "$SKILL_DIR")"
     printf '"script_count":%s,' "$SCRIPT_COUNT"
     printf '"issue_count":%s,' "$ISSUE_COUNT"
-    printf '"issues":[%s]' "$ISSUE_JSON"
+    printf '"warning_count":%s,' "$WARNING_COUNT"
+    printf '"issues":[%s],' "$ISSUE_JSON"
+    printf '"warnings":[%s]' "$WARNING_JSON"
     printf '}\n'
 
     if [ "$ISSUE_COUNT" -eq 0 ]; then
@@ -80,8 +105,11 @@ print_json() {
 }
 
 TEXT_ISSUES=""
+TEXT_WARNINGS=""
 ISSUE_JSON=""
+WARNING_JSON=""
 ISSUE_COUNT=0
+WARNING_COUNT=0
 SCRIPT_COUNT=0
 SKILL_DIR=""
 
@@ -130,7 +158,6 @@ fi
 
 SCRIPTS_DIR="$SKILL_DIR/scripts"
 if [ ! -d "$SCRIPTS_DIR" ]; then
-    append_issue "missing_scripts_dir" "BLOCKER" "scripts directory not found: $SCRIPTS_DIR"
     case "$FORMAT" in
         json) print_json ;;
         text) print_text ;;
@@ -144,35 +171,41 @@ if [ -n "$TOP_LEVEL_SCRIPTS" ]; then
     SCRIPT_COUNT=$(printf '%s\n' "$TOP_LEVEL_SCRIPTS" | sed '/^$/d' | wc -l | tr -d ' ')
 fi
 
-if [ "$SCRIPT_COUNT" -gt 4 ]; then
-    append_issue "script_count" "MAJOR" "active script surface exceeds four top-level scripts"
+if [ "$SCRIPT_COUNT" -gt "$WARNING_SCRIPT_COUNT_THRESHOLD" ]; then
+    append_warning "script_surface_large" "MINOR" "top-level script surface is larger than typical and may deserve review"
 fi
-
-for required in frontmatter_check.sh reference_check.sh script_sanity.sh; do
-    if [ ! -f "$SCRIPTS_DIR/$required" ]; then
-        append_issue "missing_required_script" "BLOCKER" "required script missing: scripts/$required"
-    fi
-done
 
 if [ -n "$TOP_LEVEL_SCRIPTS" ]; then
     while IFS= read -r script_file; do
         [ -n "$script_file" ] || continue
         script_name=$(basename "$script_file")
-        if ! is_allowed "$script_name"; then
-            append_issue "unexpected_script" "MAJOR" "unexpected active script: scripts/$script_name"
-        fi
-        if [ ! -x "$script_file" ]; then
-            append_issue "not_executable" "BLOCKER" "script is not executable: scripts/$script_name"
+        executable=false
+        if [ -x "$script_file" ]; then
+            executable=true
         fi
         shebang=$(head -1 "$script_file" 2>/dev/null || true)
-        case "$shebang" in
-            '#!'*) ;;
-            *)
-                append_issue "missing_shebang" "BLOCKER" "script is missing a shebang: scripts/$script_name"
-                ;;
-        esac
+
         if has_crlf "$script_file"; then
             append_issue "crlf" "BLOCKER" "script uses CRLF line endings: scripts/$script_name"
+        fi
+
+        if requires_launcher_contract "$script_name"; then
+            if [ "$executable" != "true" ]; then
+                append_issue "not_executable" "BLOCKER" "launcher script is not executable: scripts/$script_name"
+            fi
+            case "$shebang" in
+                '#!'*) ;;
+                *)
+                    append_issue "missing_shebang" "BLOCKER" "launcher script is missing a shebang: scripts/$script_name"
+                    ;;
+            esac
+        elif [ "$executable" = "true" ]; then
+            case "$shebang" in
+                '#!'*) ;;
+                *)
+                    append_issue "missing_shebang" "BLOCKER" "executable script is missing a shebang: scripts/$script_name"
+                    ;;
+            esac
         fi
     done <<EOF
 $TOP_LEVEL_SCRIPTS

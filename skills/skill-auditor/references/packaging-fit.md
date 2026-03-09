@@ -26,6 +26,9 @@ WHEN the capability is an explicit, user-chosen workflow with meaningful
 arguments or modes THEN you SHALL favor `MIGRATE_TO_EXPLICIT_PROMPT`.
 WHEN the core value is deterministic execution, external data, or generated
 artifacts rather than instructions THEN you SHALL favor `MIGRATE_TO_TOOL`.
+WHEN the main value is access to external systems or shared services THEN you
+SHOULD recommend MCP-backed tooling or an MCP-backed workflow instead of a pure
+instruction-only skill.
 WHEN reusable expertise should stay on demand and metadata can trigger it well
 THEN you MAY keep it as a skill.
 WHEN the strongest design splits work between a skill and another primitive

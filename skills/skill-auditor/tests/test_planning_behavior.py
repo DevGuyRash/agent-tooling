@@ -34,9 +34,7 @@ class PlanningBehaviorTests(unittest.TestCase):
         for case in load_json("planning_cases.json"):
             with self.subTest(case=case["question"]):
                 self.assertEqual(mappings[case["question"]], case["reference"])
-                reference_text = (ROOT / case["reference"].replace("<skills-file-root>/", "")).read_text(
-                    encoding="utf-8"
-                ).lower()
+                reference_text = (ROOT / case["reference"]).read_text(encoding="utf-8").lower()
                 for term in case["terms"]:
                     self.assertIn(term.lower(), reference_text)
 
@@ -59,6 +57,24 @@ class PlanningBehaviorTests(unittest.TestCase):
 
         self.assertEqual(sorted(positions), positions)
         self.assertLessEqual(len(SKILL_MD.read_text(encoding="utf-8").splitlines()), 120)
+
+    def test_default_leverage_order_is_defined(self) -> None:
+        normalized = normalize(SKILL_MD.read_text(encoding="utf-8"))
+        expected_sequence = [
+            "1. packaging fit",
+            "2. trigger fit",
+            "3. task fit",
+            "4. context fit",
+            "5. verification fit",
+        ]
+
+        positions = []
+        for item in expected_sequence:
+            index = normalized.find(item)
+            self.assertNotEqual(index, -1, item)
+            positions.append(index)
+
+        self.assertEqual(sorted(positions), positions)
 
     def test_active_skill_drops_router_cli_and_domain_taxonomy(self) -> None:
         content = SKILL_MD.read_text(encoding="utf-8")

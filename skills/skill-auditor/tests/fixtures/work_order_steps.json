@@ -2,5 +2,6 @@
   "read the target skill's skill.md before loading other target files",
   "decide which of the five improvement questions is primary",
   "read at most one question-specific reference file before drafting the first brief",
-  "format the default deliverable"
+  "format the default deliverable",
+  "load one additional direct reference at a time only as needed"
 ]

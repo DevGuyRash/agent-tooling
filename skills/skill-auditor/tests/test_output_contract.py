@@ -50,6 +50,12 @@ class OutputContractTests(unittest.TestCase):
         self.assertIn("long audit dissertation", content)
         self.assertIn("script dump", content)
 
+    def test_contract_requires_concrete_evidence_anchors(self) -> None:
+        content = OUTPUT_CONTRACT.read_text(encoding="utf-8")
+
+        self.assertIn("concrete observed prompt, output, or file anchor", content)
+        self.assertIn("## Key evidence", content)
+
 
 if __name__ == "__main__":
     unittest.main()

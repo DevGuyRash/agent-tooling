@@ -49,7 +49,31 @@ class FrontmatterCheckTests(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["issue_count"], 0)
 
-    def test_missing_use_when_trigger_fails(self) -> None:
+    def test_strong_description_without_literal_use_when_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                      Review demo skills for maintainers revising metadata,
+                      references, and workflow instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["warning_count"], 0)
+
+    def test_generic_description_becomes_advisory_not_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "demo-skill"
             skill_dir.mkdir()
@@ -67,9 +91,9 @@ class FrontmatterCheckTests(unittest.TestCase):
 
             completed, data = run_frontmatter_check(skill_dir)
 
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertFalse(data["ok"])
-        self.assertIn("description_trigger", {issue["code"] for issue in data["issues"]})
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertIn("description_trigger_weak", {warning["code"] for warning in data["warnings"]})
 
     def test_active_skill_passes(self) -> None:
         completed, data = run_frontmatter_check(ROOT)

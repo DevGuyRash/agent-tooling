@@ -30,13 +30,24 @@ def write_script(path: Path, *, executable: bool = True, line_ending: str = "\n"
 
 
 class ScriptSanityTests(unittest.TestCase):
+    def test_missing_scripts_directory_passes_for_instruction_only_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+
+            completed, data = run_script_sanity(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["script_count"], 0)
+
     def test_valid_script_surface_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "demo-skill"
             scripts_dir = skill_dir / "scripts"
             skill_dir.mkdir()
             scripts_dir.mkdir()
-            for name in ("frontmatter_check.sh", "reference_check.sh", "script_sanity.sh"):
+            for name in ("start.sh", "verify.sh", "helper.py"):
                 write_script(scripts_dir / name)
 
             completed, data = run_script_sanity(skill_dir)
@@ -44,19 +55,19 @@ class ScriptSanityTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertTrue(data["ok"])
 
-    def test_unexpected_script_fails(self) -> None:
+    def test_generic_script_names_do_not_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "demo-skill"
             scripts_dir = skill_dir / "scripts"
             skill_dir.mkdir()
             scripts_dir.mkdir()
-            for name in ("frontmatter_check.sh", "reference_check.sh", "script_sanity.sh", "extra_check.sh"):
+            for name in ("build.sh", "check.sh", "lint.sh", "repair.sh"):
                 write_script(scripts_dir / name)
 
             completed, data = run_script_sanity(skill_dir)
 
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("unexpected_script", {issue["code"] for issue in data["issues"]})
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
 
     def test_non_executable_script_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,14 +75,29 @@ class ScriptSanityTests(unittest.TestCase):
             scripts_dir = skill_dir / "scripts"
             skill_dir.mkdir()
             scripts_dir.mkdir()
-            write_script(scripts_dir / "frontmatter_check.sh")
-            write_script(scripts_dir / "reference_check.sh")
-            write_script(scripts_dir / "script_sanity.sh", executable=False)
+            write_script(scripts_dir / "start.sh")
+            write_script(scripts_dir / "verify.sh")
+            write_script(scripts_dir / "repair.sh", executable=False)
 
             completed, data = run_script_sanity(skill_dir)
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("not_executable", {issue["code"] for issue in data["issues"]})
+
+    def test_executable_python_script_without_shebang_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            scripts_dir = skill_dir / "scripts"
+            skill_dir.mkdir()
+            scripts_dir.mkdir()
+            script_path = scripts_dir / "helper.py"
+            script_path.write_text("print('hi')\n", encoding="utf-8")
+            script_path.chmod(0o755)
+
+            completed, data = run_script_sanity(skill_dir)
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("missing_shebang", {issue["code"] for issue in data["issues"]})
 
     def test_active_skill_passes(self) -> None:
         completed, data = run_script_sanity(ROOT)

@@ -5,6 +5,8 @@ act on immediately.
 
 You SHALL include every required section in the default brief.
 You SHALL keep the default brief compact enough to read without appendices.
+You SHALL include at least one concrete observed prompt, output, or file anchor
+in `Key evidence`.
 WHEN detailed evidence helps THEN you MAY append eval tables, deterministic
 checks, or before/after notes after the default brief.
 You SHALL NOT default to a large taxonomy table, a long audit dissertation, or
@@ -20,6 +22,10 @@ a script dump.
 
 ## One-sentence diagnosis
 <What is most fundamentally wrong or right>
+
+## Key evidence
+- <one prompt, output, or file observation>
+- <one prompt, output, or file observation>
 
 ## Top issues
 1. <issue>
@@ -46,6 +52,7 @@ a script dump.
 
 You SHALL lead with the packaging verdict.
 You SHALL keep the diagnosis to one sentence.
+You SHALL keep `Key evidence` concrete and observed rather than abstract.
 You SHALL limit the default issue and change lists to the highest-leverage
 items.
 You SHALL always include a verification plan.
