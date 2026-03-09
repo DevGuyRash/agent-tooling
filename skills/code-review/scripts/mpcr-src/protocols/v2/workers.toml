@@ -1,0 +1,164 @@
+[[policy]]
+id = "review-composite"
+version = "2026.03.08"
+summary = "Single-worker direct review that performs surface mapping, baseline correctness, staleness when needed, and ship readiness."
+must = ["produce child_findings or parent_review artifacts only", "cover baseline correctness", "cover staleness when required", "cover ship readiness"]
+must_not = ["delegate to an orchestrator layer", "emit narrative-only output"]
+inputs = ["route_decision", "surface_map", "selected module packs"]
+outputs = ["child_findings"]
+checks = ["keep scope bounded to routed surfaces", "record loaded_policy_refs", "compute fingerprints for findings"]
+stop_when = ["child_findings artifact is finalized"]
+escalate_when = ["new high-weight surface appears"]
+anti_patterns = ["acting as an orchestrator", "skipping evidence fields"]
+examples = ["Low-risk direct review over docs and tests."]
+schema = ["worker_kind", "module_ids", "findings", "defended_checks", "residual_risks", "route_revision_refs"]
+
+[[policy]]
+id = "apply-composite"
+version = "2026.03.08"
+summary = "Single-worker direct application that challenges evidence, records dispositions, and emits verification results."
+must = ["challenge anchor, scenario, severity, hallucination, duplication", "emit application_result then verification_result"]
+must_not = ["apply without disposition records", "skip verification-needed bookkeeping"]
+inputs = ["parent_review", "selected module packs"]
+outputs = ["application_result", "verification_result"]
+checks = ["decline codes are categorical", "verification buckets are consistent"]
+stop_when = ["application_result and verification_result are finalized"]
+escalate_when = ["evidence challenge fails"]
+anti_patterns = ["unbounded patching", "narrative-only decline reasons"]
+examples = ["Direct apply for one low-risk review report."]
+schema = ["source_finding_ids", "dispositions", "verification_needed", "decline_codes"]
+
+[[policy]]
+id = "surface-mapper"
+version = "2026.03.08"
+summary = "Build the semantic surface map and determine whether staleness checks are required."
+must = ["emit risk_surface_record values", "mark behavior-facing artifacts", "decide staleness_required deterministically"]
+must_not = ["route by churn alone"]
+inputs = ["changed_files", "public_interfaces", "behavior_facing_artifacts"]
+outputs = ["surface_map"]
+checks = ["surface weights match defaults", "suggested modules include always-on modules later"]
+stop_when = ["surface_map is emitted"]
+escalate_when = ["new surface weight >= 4 appears"]
+anti_patterns = ["classifying purely by file count"]
+examples = ["Config and CLI help changes imply config-surface plus docs-staleness."]
+schema = ["changed_files", "risk_surfaces", "suggested_modules", "staleness_required"]
+
+[[policy]]
+id = "invariant-challenger"
+version = "2026.03.08"
+summary = "Use theorem/disproof style checks for correctness, integrity, and concurrency concerns."
+must = ["state the invariant", "attempt a counterexample", "emit defended or failed evidence"]
+must_not = ["use rhetorical prose as evidence"]
+inputs = ["surface_map", "module packs", "focus files"]
+outputs = ["child_findings"]
+checks = ["anchors are precise", "defended checks include attempted_counterexample"]
+stop_when = ["targeted concern is covered"]
+escalate_when = ["counterexample implies major or blocker"]
+anti_patterns = ["unsupported severity inflation"]
+examples = ["Persistence and data-integrity checks over migration code."]
+schema = ["findings", "defended_checks", "residual_risks"]
+
+[[policy]]
+id = "exploit-tracer"
+version = "2026.03.08"
+summary = "Trace exploit paths across auth, privilege, and input-validation surfaces."
+must = ["follow untrusted input to privileged operations", "state exploit scenario concretely"]
+must_not = ["emit abstract security claims without path evidence"]
+inputs = ["auth/access surfaces", "privilege boundaries", "input validation surfaces"]
+outputs = ["child_findings"]
+checks = ["scenario is reproducible", "severity is proportional"]
+stop_when = ["security path coverage is complete"]
+escalate_when = ["privilege or auth bypass is plausible"]
+anti_patterns = ["security theater findings"]
+examples = ["Input reaches shell invocation without validation."]
+schema = ["findings", "surface_ids", "anchors", "recommendation"]
+
+[[policy]]
+id = "contract-comparer"
+version = "2026.03.08"
+summary = "Compare API, schema, CLI, config, and migration contracts for congruent behavior across versions."
+must = ["compare before and after contracts", "call out compatibility drift"]
+must_not = ["treat implementation refactors as contract drift without evidence"]
+inputs = ["public interfaces", "config surfaces", "migration surfaces"]
+outputs = ["child_findings"]
+checks = ["claim references a concrete contract element", "verification is actionable"]
+stop_when = ["contract deltas are covered"]
+escalate_when = ["compatibility break is unguarded"]
+anti_patterns = ["naming-only complaints"]
+examples = ["CLI help text changed but config key docs did not."]
+schema = ["findings", "defended_checks"]
+
+[[policy]]
+id = "congruence-checker"
+version = "2026.03.08"
+summary = "Check congruence between behavior-facing code changes and docs, comments, examples, or operator guidance."
+must = ["treat staleness as first-class", "check docs whenever behavior-facing evidence requires it"]
+must_not = ["assume docs are irrelevant when code changes behavior"]
+inputs = ["surface_map", "behavior-facing artifacts", "docs changes"]
+outputs = ["child_findings"]
+checks = ["behavior-facing mismatch is explicit", "reopen_eligible is set correctly"]
+stop_when = ["staleness coverage is complete"]
+escalate_when = ["behavior-facing staleness remains"]
+anti_patterns = ["style-only docs feedback as reopen"]
+examples = ["Example output no longer matches CLI behavior."]
+schema = ["findings", "residual_risks"]
+
+[[policy]]
+id = "simplification-checker"
+version = "2026.03.08"
+summary = "Interrogate scope creep and overengineering when the route or revision indicates excess complexity."
+must = ["justify scope-creep claims with concrete simplification paths"]
+must_not = ["treat any abstraction as overengineering"]
+inputs = ["changed_files", "scope signals"]
+outputs = ["child_findings"]
+checks = ["recommendation simplifies behavior or structure", "severity stays bounded"]
+stop_when = ["scope-creep concerns are resolved"]
+escalate_when = ["change scope meaningfully exceeds routed need"]
+anti_patterns = ["taste-based style feedback"]
+examples = ["Large helper framework added for one small feature."]
+schema = ["findings", "residual_risks"]
+
+[[policy]]
+id = "release-risk-assessor"
+version = "2026.03.08"
+summary = "Assess ship readiness after concern-specific review is complete."
+must = ["synthesize ship risk last", "record blocking items and verdict"]
+must_not = ["duplicate lower-level findings as new evidence"]
+inputs = ["child_findings", "route_decision", "coverage summary"]
+outputs = ["parent_review"]
+checks = ["blocking item counts match required_now", "ship_readiness is consistent"]
+stop_when = ["parent_review is emitted"]
+escalate_when = ["blocking items remain"]
+anti_patterns = ["rendered markdown as source of truth"]
+examples = ["Migration risk blocks shipping until rollback plan exists."]
+schema = ["final_verdict", "ship_readiness", "coverage_summary"]
+
+[[policy]]
+id = "applicator-worker"
+version = "2026.03.08"
+summary = "Apply accepted findings after evidence challenge and record structured dispositions."
+must = ["record one disposition per finding", "capture modified files", "carry verification-needed findings forward"]
+must_not = ["mutate findings in place", "discard decline reasons"]
+inputs = ["parent_review", "application plan"]
+outputs = ["application_result"]
+checks = ["verification_needed matches dispositions", "decline codes are categorical"]
+stop_when = ["application_result is emitted"]
+escalate_when = ["repro or anchor challenge fails"]
+anti_patterns = ["bulk applied without references"]
+examples = ["Apply two major findings and defer one follow-up."]
+schema = ["dispositions", "modified_files", "verification_needed", "decline_codes"]
+
+[[policy]]
+id = "applicator-verifier"
+version = "2026.03.08"
+summary = "Verify applied findings and emit categorical verification outcomes plus residual risks."
+must = ["emit yes/no/partial buckets", "record residual risks after verification"]
+must_not = ["treat verification notes as optional for failed items"]
+inputs = ["application_result", "verification evidence"]
+outputs = ["verification_result"]
+checks = ["item buckets match status values", "residual risks are confidence-scored"]
+stop_when = ["verification_result is emitted"]
+escalate_when = ["verification fails", "fix regression appears"]
+anti_patterns = ["free-form verification prose without records"]
+examples = ["One finding verified, one partially verified due missing migration test."]
+schema = ["verified_items", "failed_items", "partial_items", "residual_risks"]

@@ -1,0 +1,1116 @@
+//! Adaptive semantic routing for the v2 code-review workflow.
+#![allow(missing_docs)]
+
+use crate::artifacts::{
+    ArtifactHeader, CapabilityProfile, EscalationId, ExecutionArchitecture, Mode, ModuleId,
+    PolicyCategory, PolicyRef, PolicyView, ResourceBudget, RigorLevel, RiskSurfaceRecord,
+    RouteDecisionArtifact, RouteRevisionArtifact, SurfaceId, SurfaceMapArtifact, WorkerKind,
+    WorkerPlanRecord, POLICY_BUNDLE_VERSION,
+};
+use crate::router_types::{HistorySignals, RouteInputs, RouteRevisionRequest, ScopeSignals};
+
+fn router_policy_ref(id: &str) -> PolicyRef {
+    PolicyRef {
+        category: PolicyCategory::Worker,
+        id: id.to_string(),
+        version: POLICY_BUNDLE_VERSION.to_string(),
+        view: PolicyView::Checklist,
+    }
+}
+
+fn module_policy_ref(id: ModuleId) -> PolicyRef {
+    PolicyRef {
+        category: PolicyCategory::Module,
+        id: toml::Value::try_from(id).map_or_else(
+            |_| "unknown".to_string(),
+            |value| value.to_string().trim_matches('"').to_string(),
+        ),
+        version: POLICY_BUNDLE_VERSION.to_string(),
+        view: PolicyView::Checklist,
+    }
+}
+
+fn risk_surface(
+    surface_id: SurfaceId,
+    reason: impl Into<String>,
+    evidence: Vec<String>,
+) -> RiskSurfaceRecord {
+    RiskSurfaceRecord {
+        surface_id,
+        weight: surface_id.default_weight(),
+        reason: reason.into(),
+        evidence_refs: evidence,
+        behavior_facing: matches!(
+            surface_id,
+            SurfaceId::PublicApi
+                | SurfaceId::DocsStaleness
+                | SurfaceId::OperatorGuidance
+                | SurfaceId::ConfigSurface
+        ),
+    }
+}
+
+fn detect_surfaces_for_file(path: &str) -> Vec<SurfaceId> {
+    let lower = path.to_ascii_lowercase();
+    let mut surfaces = Vec::new();
+    if lower.contains("api")
+        || lower.contains("openapi")
+        || lower.contains("proto")
+        || lower.contains("graphql")
+        || lower.contains("route")
+        || lower.contains("cli")
+    {
+        surfaces.push(SurfaceId::PublicApi);
+    }
+    if lower.contains("auth") || lower.contains("login") || lower.contains("permission") {
+        surfaces.push(SurfaceId::AuthAccess);
+    }
+    if lower.contains("input") || lower.contains("validate") || lower.contains("sanitize") {
+        surfaces.push(SurfaceId::InputValidation);
+    }
+    if lower.contains("admin") || lower.contains("privilege") || lower.contains("rbac") {
+        surfaces.push(SurfaceId::PrivilegeBoundary);
+    }
+    if lower.contains("db") || lower.contains("store") || lower.contains("persist") {
+        surfaces.push(SurfaceId::Persistence);
+    }
+    if lower.contains("migration") || lower.contains("schema") {
+        surfaces.push(SurfaceId::Migration);
+        surfaces.push(SurfaceId::Persistence);
+        surfaces.push(SurfaceId::DataIntegrity);
+    }
+    if lower.contains("integrity") || lower.contains("checksum") {
+        surfaces.push(SurfaceId::DataIntegrity);
+    }
+    if lower.contains("async")
+        || lower.contains("concurr")
+        || lower.contains("thread")
+        || lower.contains("atomic")
+        || lower.contains("queue")
+    {
+        surfaces.push(SurfaceId::Concurrency);
+    }
+    if lower.contains("state") || lower.contains("workflow") || lower.contains("fsm") {
+        surfaces.push(SurfaceId::StateMachine);
+    }
+    if lower.ends_with(".md")
+        || lower.contains("readme")
+        || lower.contains("example")
+        || lower.contains("help")
+    {
+        surfaces.push(SurfaceId::DocsStaleness);
+    }
+    if lower.contains("runbook") || lower.contains("deploy") || lower.contains("operator") {
+        surfaces.push(SurfaceId::OperatorGuidance);
+    }
+    if lower.contains("config")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+        || lower.ends_with(".env")
+    {
+        surfaces.push(SurfaceId::ConfigSurface);
+    }
+    if lower.contains("perf") || lower.contains("cache") || lower.contains("benchmark") {
+        surfaces.push(SurfaceId::PerformanceHotpath);
+    }
+    if lower.ends_with("cargo.toml")
+        || lower.contains("package-lock")
+        || lower.contains("pnpm-lock")
+        || lower.contains("poetry.lock")
+        || lower.contains("dockerfile")
+    {
+        surfaces.push(SurfaceId::DependencyBuild);
+    }
+    if lower.contains("test") || lower.contains("spec") {
+        surfaces.push(SurfaceId::TestCoverage);
+    }
+    if lower.contains("metric") || lower.contains("trace") || lower.contains("log") {
+        surfaces.push(SurfaceId::Observability);
+    }
+    if lower.contains("privacy") || lower.contains("pii") || lower.contains("gdpr") {
+        surfaces.push(SurfaceId::Privacy);
+    }
+    surfaces.sort_unstable();
+    surfaces.dedup();
+    surfaces
+}
+
+fn has_docs_change(changed_files: &[String]) -> bool {
+    changed_files.iter().any(|file| {
+        let lower = file.to_ascii_lowercase();
+        lower.ends_with(".md")
+            || lower.contains("readme")
+            || lower.contains("docs/")
+            || lower.contains("example")
+            || lower.contains("help")
+    })
+}
+
+fn modules_for_surface(surface_id: SurfaceId) -> Vec<ModuleId> {
+    match surface_id {
+        SurfaceId::PublicApi => vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness],
+        SurfaceId::AuthAccess => vec![ModuleId::AuthAccess, ModuleId::InputValidation],
+        SurfaceId::InputValidation => vec![ModuleId::InputValidation],
+        SurfaceId::PrivilegeBoundary => vec![ModuleId::AuthAccess, ModuleId::Privacy],
+        SurfaceId::Persistence => vec![ModuleId::Persistence, ModuleId::DataIntegrity],
+        SurfaceId::Migration => vec![
+            ModuleId::Persistence,
+            ModuleId::DataIntegrity,
+            ModuleId::ShipReadiness,
+        ],
+        SurfaceId::DataIntegrity => vec![ModuleId::DataIntegrity],
+        SurfaceId::Concurrency => vec![ModuleId::Concurrency],
+        SurfaceId::StateMachine => vec![ModuleId::CoreCorrectness, ModuleId::Concurrency],
+        SurfaceId::DocsStaleness => vec![ModuleId::DocsStaleness],
+        SurfaceId::OperatorGuidance => vec![ModuleId::OperatorGuidance, ModuleId::DocsStaleness],
+        SurfaceId::ConfigSurface => vec![ModuleId::OperatorGuidance, ModuleId::ShipReadiness],
+        SurfaceId::PerformanceHotpath => vec![ModuleId::Performance],
+        SurfaceId::DependencyBuild => vec![ModuleId::Dependency, ModuleId::ShipReadiness],
+        SurfaceId::TestCoverage => vec![ModuleId::Tests],
+        SurfaceId::Observability => vec![ModuleId::Observability],
+        SurfaceId::Privacy => vec![ModuleId::Privacy],
+    }
+}
+
+fn canonical_selected_modules(
+    surfaces: &[RiskSurfaceRecord],
+    extra_modules: &[ModuleId],
+) -> Vec<ModuleId> {
+    let mut selected_modules = vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness];
+    for surface in surfaces {
+        selected_modules.extend(modules_for_surface(surface.surface_id));
+    }
+    selected_modules.extend(extra_modules.iter().copied());
+    selected_modules.sort_unstable();
+    selected_modules.dedup();
+    selected_modules
+}
+
+fn scope_signals_for_modules(
+    mut scope_signals: ScopeSignals,
+    selected_modules: &[ModuleId],
+) -> ScopeSignals {
+    if selected_modules.contains(&ModuleId::ScopeCreep) {
+        scope_signals.scope_creep_detected = true;
+    }
+    scope_signals
+}
+
+fn heldback_escalations_for_route(
+    mode: Mode,
+    surfaces: &[RiskSurfaceRecord],
+    scope_signals: &ScopeSignals,
+) -> Vec<EscalationId> {
+    let mut heldback_escalations = vec![EscalationId::MalformedOutput];
+    if surfaces.iter().any(|surface| {
+        matches!(
+            surface.surface_id,
+            SurfaceId::AuthAccess
+                | SurfaceId::PrivilegeBoundary
+                | SurfaceId::InputValidation
+                | SurfaceId::Privacy
+        )
+    }) {
+        heldback_escalations.push(EscalationId::SecurityEscalation);
+    }
+    if mode == Mode::FullCycle {
+        heldback_escalations.push(EscalationId::Reopen);
+    }
+    if scope_signals.scope_creep_detected || scope_signals.overengineering_detected {
+        heldback_escalations.push(EscalationId::ScopeCreep);
+    }
+    heldback_escalations.sort_unstable();
+    heldback_escalations.dedup();
+    heldback_escalations
+}
+
+fn widen_architecture(architecture: ExecutionArchitecture) -> ExecutionArchitecture {
+    match architecture {
+        ExecutionArchitecture::Direct => ExecutionArchitecture::Hybrid,
+        ExecutionArchitecture::Hybrid | ExecutionArchitecture::Delegated => {
+            ExecutionArchitecture::Delegated
+        }
+    }
+}
+
+fn determine_rigor(
+    surfaces: &[RiskSurfaceRecord],
+    history: &crate::router_types::HistorySignals,
+) -> RigorLevel {
+    let surface_ids = surfaces
+        .iter()
+        .map(|record| record.surface_id)
+        .collect::<Vec<_>>();
+    let total_weight = surfaces
+        .iter()
+        .map(|record| u16::from(record.weight))
+        .sum::<u16>();
+    let has_behavior_facing = surfaces.iter().any(|record| record.behavior_facing);
+    let has_high_risk = surface_ids.iter().any(|surface_id| {
+        matches!(
+            surface_id,
+            SurfaceId::PublicApi
+                | SurfaceId::AuthAccess
+                | SurfaceId::PrivilegeBoundary
+                | SurfaceId::Migration
+                | SurfaceId::DataIntegrity
+                | SurfaceId::Concurrency
+        )
+    });
+    let lite = surfaces.iter().all(|surface| surface.weight < 4)
+        && !has_behavior_facing
+        && !surface_ids.iter().any(|surface_id| {
+            matches!(
+                surface_id,
+                SurfaceId::PublicApi
+                    | SurfaceId::AuthAccess
+                    | SurfaceId::PrivilegeBoundary
+                    | SurfaceId::Persistence
+                    | SurfaceId::Migration
+                    | SurfaceId::DataIntegrity
+                    | SurfaceId::Concurrency
+                    | SurfaceId::Privacy
+                    | SurfaceId::PerformanceHotpath
+            )
+        });
+    if lite {
+        return RigorLevel::Lite;
+    }
+    if has_high_risk || total_weight >= 9 {
+        return RigorLevel::Forensic;
+    }
+    if total_weight >= 8 && history.prior_reopens > 0 {
+        return RigorLevel::Forensic;
+    }
+    RigorLevel::Standard
+}
+
+fn determine_architecture(
+    capability: crate::artifacts::ExecutionCapability,
+    rigor: RigorLevel,
+    surface_count: usize,
+) -> ExecutionArchitecture {
+    match capability {
+        crate::artifacts::ExecutionCapability::SingleProcess => ExecutionArchitecture::Direct,
+        crate::artifacts::ExecutionCapability::BoundedHelpers => {
+            if rigor == RigorLevel::Lite && surface_count <= 2 {
+                ExecutionArchitecture::Direct
+            } else {
+                ExecutionArchitecture::Hybrid
+            }
+        }
+        crate::artifacts::ExecutionCapability::ParallelSubagents => {
+            if rigor == RigorLevel::Lite && surface_count <= 2 {
+                ExecutionArchitecture::Direct
+            } else if rigor == RigorLevel::Forensic || surface_count >= 3 {
+                ExecutionArchitecture::Delegated
+            } else {
+                ExecutionArchitecture::Hybrid
+            }
+        }
+    }
+}
+
+fn build_worker_plan(
+    mode: Mode,
+    architecture: ExecutionArchitecture,
+    surfaces: &[RiskSurfaceRecord],
+    selected_modules: &[ModuleId],
+    scope_signals: ScopeSignals,
+    staleness_required: bool,
+) -> Vec<WorkerPlanRecord> {
+    if architecture == ExecutionArchitecture::Direct {
+        return vec![WorkerPlanRecord {
+            worker_kind: if mode == Mode::Applicator {
+                WorkerKind::ApplyComposite
+            } else {
+                WorkerKind::ReviewComposite
+            },
+            module_ids: selected_modules.to_vec(),
+            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
+            required: true,
+            parallelizable: false,
+        }];
+    }
+
+    if mode == Mode::Applicator {
+        let focus_surfaces = surfaces
+            .iter()
+            .map(|surface| surface.surface_id)
+            .collect::<Vec<_>>();
+        return vec![
+            WorkerPlanRecord {
+                worker_kind: WorkerKind::ApplicatorWorker,
+                module_ids: selected_modules.to_vec(),
+                focus_surfaces: focus_surfaces.clone(),
+                required: true,
+                parallelizable: architecture == ExecutionArchitecture::Delegated,
+            },
+            WorkerPlanRecord {
+                worker_kind: WorkerKind::ApplicatorVerifier,
+                module_ids: selected_modules.to_vec(),
+                focus_surfaces,
+                required: true,
+                parallelizable: false,
+            },
+        ];
+    }
+
+    let mut plan = vec![
+        WorkerPlanRecord {
+            worker_kind: WorkerKind::SurfaceMapper,
+            module_ids: Vec::new(),
+            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
+            required: true,
+            parallelizable: false,
+        },
+        WorkerPlanRecord {
+            worker_kind: WorkerKind::InvariantChallenger,
+            module_ids: vec![ModuleId::CoreCorrectness],
+            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
+            required: true,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        },
+    ];
+
+    let surface_ids = surfaces
+        .iter()
+        .map(|surface| surface.surface_id)
+        .collect::<Vec<_>>();
+    if staleness_required {
+        plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::CongruenceChecker,
+            module_ids: vec![ModuleId::DocsStaleness],
+            focus_surfaces: vec![SurfaceId::DocsStaleness],
+            required: true,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        });
+    }
+    if surface_ids.iter().any(|surface_id| {
+        matches!(
+            surface_id,
+            SurfaceId::PublicApi | SurfaceId::Migration | SurfaceId::ConfigSurface
+        )
+    }) {
+        plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::ContractComparer,
+            module_ids: vec![ModuleId::CoreCorrectness],
+            focus_surfaces: surface_ids
+                .iter()
+                .copied()
+                .filter(|surface_id| {
+                    matches!(
+                        surface_id,
+                        SurfaceId::PublicApi | SurfaceId::Migration | SurfaceId::ConfigSurface
+                    )
+                })
+                .collect(),
+            required: true,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        });
+    }
+    if surface_ids.iter().any(|surface_id| {
+        matches!(
+            surface_id,
+            SurfaceId::AuthAccess | SurfaceId::InputValidation | SurfaceId::PrivilegeBoundary
+        )
+    }) {
+        plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::ExploitTracer,
+            module_ids: vec![
+                ModuleId::AuthAccess,
+                ModuleId::InputValidation,
+                ModuleId::Privacy,
+            ],
+            focus_surfaces: surface_ids
+                .iter()
+                .copied()
+                .filter(|surface_id| {
+                    matches!(
+                        surface_id,
+                        SurfaceId::AuthAccess
+                            | SurfaceId::InputValidation
+                            | SurfaceId::PrivilegeBoundary
+                    )
+                })
+                .collect(),
+            required: true,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        });
+    }
+    let invariant_focus = surface_ids
+        .iter()
+        .copied()
+        .filter(|surface_id| {
+            matches!(
+                surface_id,
+                SurfaceId::Persistence
+                    | SurfaceId::DataIntegrity
+                    | SurfaceId::Concurrency
+                    | SurfaceId::StateMachine
+            )
+        })
+        .collect::<Vec<_>>();
+    if !invariant_focus.is_empty() {
+        plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::InvariantChallenger,
+            module_ids: vec![
+                ModuleId::Persistence,
+                ModuleId::DataIntegrity,
+                ModuleId::Concurrency,
+                ModuleId::CoreCorrectness,
+            ],
+            focus_surfaces: invariant_focus,
+            required: true,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        });
+    }
+    if scope_signals.scope_creep_detected || scope_signals.overengineering_detected {
+        plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::SimplificationChecker,
+            module_ids: vec![ModuleId::ScopeCreep],
+            focus_surfaces: surface_ids.clone(),
+            required: false,
+            parallelizable: architecture == ExecutionArchitecture::Delegated,
+        });
+    }
+    plan.push(WorkerPlanRecord {
+        worker_kind: WorkerKind::ReleaseRiskAssessor,
+        module_ids: vec![ModuleId::ShipReadiness],
+        focus_surfaces: surface_ids,
+        required: true,
+        parallelizable: false,
+    });
+    plan
+}
+
+fn budgeted_worker_plan(
+    mode: Mode,
+    architecture: ExecutionArchitecture,
+    surfaces: &[RiskSurfaceRecord],
+    selected_modules: &[ModuleId],
+    scope_signals: ScopeSignals,
+    staleness_required: bool,
+    max_worker_count: u8,
+) -> (ExecutionArchitecture, Vec<WorkerPlanRecord>) {
+    let max_worker_count = usize::from(max_worker_count.max(1));
+    let mut final_architecture = architecture;
+    let mut worker_plan = build_worker_plan(
+        mode,
+        final_architecture,
+        surfaces,
+        selected_modules,
+        scope_signals.clone(),
+        staleness_required,
+    );
+    if worker_plan.len() <= max_worker_count {
+        return (final_architecture, worker_plan);
+    }
+
+    worker_plan.retain(|worker| worker.required);
+    if worker_plan.len() <= max_worker_count {
+        return (final_architecture, worker_plan);
+    }
+
+    if mode == Mode::Applicator && max_worker_count >= 2 {
+        final_architecture = ExecutionArchitecture::Hybrid;
+        worker_plan = build_worker_plan(
+            mode,
+            final_architecture,
+            surfaces,
+            selected_modules,
+            scope_signals.clone(),
+            staleness_required,
+        );
+        if worker_plan.len() <= max_worker_count {
+            return (final_architecture, worker_plan);
+        }
+    }
+
+    final_architecture = ExecutionArchitecture::Direct;
+    worker_plan = build_worker_plan(
+        mode,
+        final_architecture,
+        surfaces,
+        selected_modules,
+        scope_signals,
+        staleness_required,
+    );
+    (final_architecture, worker_plan)
+}
+
+/// Build a deterministic surface map from changed files and declared interfaces.
+pub fn build_surface_map(header: ArtifactHeader, inputs: &RouteInputs) -> SurfaceMapArtifact {
+    let mut discovered = Vec::new();
+    let mut behavior_facing_artifacts = inputs.behavior_facing_artifacts.clone();
+    for file in &inputs.changed_files {
+        let surfaces = detect_surfaces_for_file(file);
+        for surface_id in surfaces {
+            if !discovered
+                .iter()
+                .any(|existing: &RiskSurfaceRecord| existing.surface_id == surface_id)
+            {
+                discovered.push(risk_surface(
+                    surface_id,
+                    format!("derived from changed file `{file}`"),
+                    vec![file.clone()],
+                ));
+            }
+        }
+        let lower = file.to_ascii_lowercase();
+        if lower.ends_with(".md")
+            || lower.contains("readme")
+            || lower.contains("example")
+            || lower.contains("help")
+            || lower.contains("config")
+            || lower.contains("runbook")
+        {
+            behavior_facing_artifacts.push(file.clone());
+        }
+    }
+    for interface in &inputs.public_interfaces {
+        if !discovered
+            .iter()
+            .any(|existing| existing.surface_id == SurfaceId::PublicApi)
+        {
+            discovered.push(risk_surface(
+                SurfaceId::PublicApi,
+                "derived from declared public interfaces".to_string(),
+                inputs.public_interfaces.clone(),
+            ));
+        }
+        behavior_facing_artifacts.push(interface.clone());
+    }
+
+    behavior_facing_artifacts.sort();
+    behavior_facing_artifacts.dedup();
+    let staleness_required = !behavior_facing_artifacts.is_empty()
+        || (discovered.iter().any(|surface| {
+            matches!(
+                surface.surface_id,
+                SurfaceId::PublicApi | SurfaceId::ConfigSurface | SurfaceId::OperatorGuidance
+            )
+        }) && !has_docs_change(&inputs.changed_files));
+
+    if staleness_required
+        && !discovered
+            .iter()
+            .any(|surface| surface.surface_id == SurfaceId::DocsStaleness)
+    {
+        discovered.push(risk_surface(
+            SurfaceId::DocsStaleness,
+            "behavior-facing change requires staleness checks".to_string(),
+            behavior_facing_artifacts.clone(),
+        ));
+    }
+    discovered.sort_by_key(|surface| surface.surface_id);
+
+    let mut suggested_modules = vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness];
+    for surface in &discovered {
+        suggested_modules.extend(modules_for_surface(surface.surface_id));
+    }
+    if staleness_required {
+        suggested_modules.push(ModuleId::DocsStaleness);
+    }
+    suggested_modules.sort_unstable();
+    suggested_modules.dedup();
+
+    SurfaceMapArtifact {
+        header,
+        changed_files: inputs.changed_files.clone(),
+        public_interfaces: inputs.public_interfaces.clone(),
+        behavior_facing_artifacts,
+        risk_surfaces: discovered,
+        suggested_modules,
+        staleness_required,
+    }
+}
+
+/// Build a deterministic route decision from a surface map and execution inputs.
+pub fn build_route_decision(
+    header: ArtifactHeader,
+    mode: Mode,
+    surface_map: &SurfaceMapArtifact,
+    inputs: &RouteInputs,
+) -> RouteDecisionArtifact {
+    let rigor_level = determine_rigor(&surface_map.risk_surfaces, &inputs.history_signals);
+    let requested_architecture = determine_architecture(
+        inputs.execution_capability,
+        rigor_level,
+        surface_map.risk_surfaces.len(),
+    );
+    let selected_modules =
+        canonical_selected_modules(&surface_map.risk_surfaces, &surface_map.suggested_modules);
+    let staleness_required = selected_modules.contains(&ModuleId::DocsStaleness);
+    let scope_signals = scope_signals_for_modules(
+        ScopeSignals::from_changed_files(&surface_map.changed_files),
+        &selected_modules,
+    );
+    let (execution_architecture, worker_plan) = budgeted_worker_plan(
+        mode,
+        requested_architecture,
+        &surface_map.risk_surfaces,
+        &selected_modules,
+        scope_signals.clone(),
+        staleness_required,
+        inputs.max_worker_count,
+    );
+    let capability_profile = CapabilityProfile {
+        execution_capability: inputs.execution_capability,
+        max_worker_count: inputs.max_worker_count,
+        orchestrator_read_budget_lines: inputs.orchestrator_read_budget_lines,
+        orchestrator_read_budget_snippets: inputs.orchestrator_read_budget_snippets,
+    };
+    let planned_worker_count = match u8::try_from(worker_plan.len()) {
+        Ok(value) => value,
+        Err(_err) => inputs.max_worker_count,
+    };
+    let resource_budget = ResourceBudget {
+        planned_worker_count,
+        max_worker_count: inputs.max_worker_count,
+    };
+    let heldback_escalations =
+        heldback_escalations_for_route(mode, &surface_map.risk_surfaces, &scope_signals);
+    let stop_conditions = match mode {
+        Mode::Reviewer => vec![
+            "parent_review finalized".to_string(),
+            "hard validation failure".to_string(),
+        ],
+        Mode::Applicator => vec![
+            "application_result finalized".to_string(),
+            "verification_result finalized".to_string(),
+            "hard validation failure".to_string(),
+        ],
+        Mode::FullCycle => vec![
+            "convergence_state persisted".to_string(),
+            "hard validation failure".to_string(),
+        ],
+    };
+
+    RouteDecisionArtifact {
+        header,
+        mode,
+        execution_architecture,
+        rigor_level,
+        capability_profile,
+        resource_budget,
+        risk_surfaces: surface_map.risk_surfaces.clone(),
+        selected_modules,
+        worker_plan,
+        heldback_escalations,
+        stop_conditions,
+    }
+}
+
+/// Apply a bounded route revision to an existing route decision.
+pub fn apply_route_revision(
+    route: &RouteDecisionArtifact,
+    revision: &RouteRevisionRequest,
+) -> RouteDecisionArtifact {
+    let mut revised = route.clone();
+    for surface_id in &revision.discovered_surfaces {
+        if !revised
+            .risk_surfaces
+            .iter()
+            .any(|surface| surface.surface_id == *surface_id)
+        {
+            revised.risk_surfaces.push(risk_surface(
+                *surface_id,
+                "route revision discovered new semantic surface".to_string(),
+                Vec::new(),
+            ));
+        }
+    }
+    revised
+        .risk_surfaces
+        .sort_by_key(|surface| surface.surface_id);
+    let mut extra_modules = route.selected_modules.clone();
+    extra_modules.extend(revision.added_modules.iter().copied());
+    revised.selected_modules = canonical_selected_modules(&revised.risk_surfaces, &extra_modules);
+    let scope_signals = scope_signals_for_modules(
+        ScopeSignals::from_changed_files(&[]),
+        &revised.selected_modules,
+    );
+    let recomputed_rigor = determine_rigor(&revised.risk_surfaces, &HistorySignals::default());
+    revised.rigor_level = if revision.raise_rigor {
+        RigorLevel::Forensic
+    } else {
+        route.rigor_level.max(recomputed_rigor)
+    };
+    let requested_architecture = if revision.widen_architecture {
+        widen_architecture(route.execution_architecture)
+    } else {
+        route.execution_architecture
+    };
+    let staleness_required = revised.selected_modules.contains(&ModuleId::DocsStaleness);
+    let (execution_architecture, worker_plan) = budgeted_worker_plan(
+        route.mode,
+        requested_architecture,
+        &revised.risk_surfaces,
+        &revised.selected_modules,
+        scope_signals.clone(),
+        staleness_required,
+        route.capability_profile.max_worker_count,
+    );
+    revised.execution_architecture = execution_architecture;
+    revised.worker_plan = worker_plan;
+    revised.heldback_escalations =
+        heldback_escalations_for_route(route.mode, &revised.risk_surfaces, &scope_signals);
+    revised.resource_budget = ResourceBudget {
+        planned_worker_count: match u8::try_from(revised.worker_plan.len()) {
+            Ok(value) => value,
+            Err(_err) => route.capability_profile.max_worker_count,
+        },
+        max_worker_count: route.capability_profile.max_worker_count,
+    };
+    revised
+}
+
+/// Build a route-revision artifact from a request.
+pub fn build_route_revision(
+    header: ArtifactHeader,
+    route: &RouteDecisionArtifact,
+    source_artifact_id: String,
+    revision: &RouteRevisionRequest,
+) -> RouteRevisionArtifact {
+    RouteRevisionArtifact {
+        header,
+        discovered_surfaces: revision
+            .discovered_surfaces
+            .iter()
+            .map(|surface_id| {
+                risk_surface(*surface_id, "route revision input".to_string(), Vec::new())
+            })
+            .collect(),
+        added_modules: revision.added_modules.clone(),
+        rigor_change: (revision.raise_rigor && route.rigor_level != RigorLevel::Forensic)
+            .then_some(RigorLevel::Forensic),
+        architecture_change: revision
+            .widen_architecture
+            .then_some(widen_architecture(route.execution_architecture)),
+        reason_code: "semantic-surface-discovery".to_string(),
+        source_artifact_id,
+    }
+}
+
+/// Default policy refs used for the router-produced artifacts.
+pub fn default_router_policy_refs(selected_modules: &[ModuleId]) -> Vec<PolicyRef> {
+    let mut refs = vec![router_policy_ref("surface-mapper")];
+    refs.extend(selected_modules.iter().copied().map(module_policy_ref));
+    refs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifacts::{
+        ArtifactKind, ConfidenceLabel, ExecutionCapability, PolicyCategory, PolicyView,
+        ProducerKind,
+    };
+    use anyhow::ensure;
+
+    fn header(kind: ArtifactKind) -> anyhow::Result<ArtifactHeader> {
+        ArtifactHeader::new(
+            kind,
+            "abc123def456".to_string(),
+            "sess0001".to_string(),
+            "refs/heads/main".to_string(),
+            ProducerKind::Router,
+            "2026-03-08T00:00:00Z".to_string(),
+            ConfidenceLabel::High,
+            90,
+            vec![PolicyRef {
+                category: PolicyCategory::Worker,
+                id: "surface-mapper".to_string(),
+                version: POLICY_BUNDLE_VERSION.to_string(),
+                view: PolicyView::Checklist,
+            }],
+        )
+    }
+
+    fn inputs() -> RouteInputs {
+        RouteInputs {
+            changed_files: vec![
+                "src/auth.rs".to_string(),
+                "src/api.rs".to_string(),
+                "docs/api.md".to_string(),
+            ],
+            public_interfaces: vec!["src/api.rs".to_string()],
+            behavior_facing_artifacts: Vec::new(),
+            execution_capability: ExecutionCapability::ParallelSubagents,
+            max_worker_count: 6,
+            orchestrator_read_budget_lines: 120,
+            orchestrator_read_budget_snippets: 12,
+            history_signals: Default::default(),
+        }
+    }
+
+    #[test]
+    fn routing_is_semantic_and_deterministic() -> anyhow::Result<()> {
+        let inputs = inputs();
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route_a = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        let route_b = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc124".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:02Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        ensure!(route_a.rigor_level == RigorLevel::Forensic);
+        ensure!(route_a.execution_architecture == route_b.execution_architecture);
+        ensure!(route_a.worker_plan == route_b.worker_plan);
+        ensure!(surface_map.staleness_required);
+        ensure!(route_a.selected_modules.contains(&ModuleId::DocsStaleness));
+        Ok(())
+    }
+
+    #[test]
+    fn route_revision_can_raise_rigor_and_expand_modules() -> anyhow::Result<()> {
+        let inputs = inputs();
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        let revised = apply_route_revision(
+            &route,
+            &RouteRevisionRequest {
+                discovered_surfaces: vec![SurfaceId::Privacy],
+                added_modules: vec![ModuleId::Privacy],
+                raise_rigor: true,
+                widen_architecture: true,
+            },
+        );
+        ensure!(revised.selected_modules.contains(&ModuleId::Privacy));
+        ensure!(revised.rigor_level == RigorLevel::Forensic);
+        ensure!(revised
+            .heldback_escalations
+            .contains(&EscalationId::SecurityEscalation));
+        ensure!(revised.worker_plan.len() as u8 == revised.resource_budget.planned_worker_count);
+        Ok(())
+    }
+
+    #[test]
+    fn weak_history_priors_only_nudge_borderline_standard_cases() -> anyhow::Result<()> {
+        let mut inputs = RouteInputs {
+            changed_files: vec!["src/api.rs".to_string(), "src/config.rs".to_string()],
+            public_interfaces: vec!["src/api.rs".to_string()],
+            behavior_facing_artifacts: Vec::new(),
+            execution_capability: ExecutionCapability::ParallelSubagents,
+            max_worker_count: 6,
+            orchestrator_read_budget_lines: 120,
+            orchestrator_read_budget_snippets: 12,
+            history_signals: Default::default(),
+        };
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        inputs.history_signals.prior_reopens = 1;
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        ensure!(route.rigor_level == RigorLevel::Forensic);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_review_composite_includes_all_selected_modules() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::SingleProcess;
+        inputs.changed_files = vec!["src/api.rs".to_string(), "docs/api.md".to_string()];
+        inputs.public_interfaces = vec!["src/api.rs".to_string()];
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
+        ensure!(route.worker_plan.len() == 1);
+        ensure!(route.worker_plan[0].worker_kind == WorkerKind::ReviewComposite);
+        ensure!(route.worker_plan[0].module_ids == route.selected_modules);
+        ensure!(route.selected_modules.contains(&ModuleId::DocsStaleness));
+        Ok(())
+    }
+
+    #[test]
+    fn non_direct_applicator_uses_applicator_workers_only() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::BoundedHelpers;
+        inputs.changed_files = vec!["src/auth.rs".to_string(), "src/api.rs".to_string()];
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Applicator,
+            &surface_map,
+            &inputs,
+        );
+
+        let worker_kinds = route
+            .worker_plan
+            .iter()
+            .map(|worker| worker.worker_kind)
+            .collect::<Vec<_>>();
+        ensure!(route.execution_architecture != ExecutionArchitecture::Direct);
+        ensure!(worker_kinds == vec![WorkerKind::ApplicatorWorker, WorkerKind::ApplicatorVerifier]);
+        Ok(())
+    }
+
+    #[test]
+    fn worker_budget_is_honored_by_route_planning() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.max_worker_count = 1;
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(
+            route.resource_budget.planned_worker_count <= route.resource_budget.max_worker_count
+        );
+        ensure!(route.worker_plan.len() <= usize::from(route.resource_budget.max_worker_count));
+        Ok(())
+    }
+
+    #[test]
+    fn route_revision_reports_actual_architecture_change() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::BoundedHelpers;
+        inputs.changed_files = vec!["tests/unit/foo_test.rs".to_string()];
+        inputs.public_interfaces = Vec::new();
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
+
+        let revision = RouteRevisionRequest {
+            discovered_surfaces: vec![SurfaceId::AuthAccess],
+            added_modules: vec![ModuleId::AuthAccess],
+            raise_rigor: false,
+            widen_architecture: true,
+        };
+        let artifact = build_route_revision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteRevision,
+                "abc123def789".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:02Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&route.selected_modules),
+            )?,
+            &route,
+            route.header.artifact_id.clone(),
+            &revision,
+        );
+        let revised = apply_route_revision(&route, &revision);
+
+        ensure!(artifact.architecture_change == Some(ExecutionArchitecture::Hybrid));
+        ensure!(revised.execution_architecture == ExecutionArchitecture::Hybrid);
+        ensure!(revised
+            .worker_plan
+            .iter()
+            .any(|worker| worker.worker_kind == WorkerKind::SurfaceMapper));
+        Ok(())
+    }
+}

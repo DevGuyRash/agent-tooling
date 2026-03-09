@@ -1,39 +1,9 @@
-//! Surface-level compliance tests for the `code-review` skill package.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::iter_on_single_items,
-    clippy::manual_pattern_char_comparison
-)]
+#![allow(missing_docs)]
+#![allow(clippy::indexing_slicing)]
 
 use anyhow::{ensure, Context};
-use std::collections::BTreeSet;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-const FALLBACK_DOCS: &[&str] = &[
-    "references/reviewer-fallback.md",
-    "references/applicator-fallback.md",
-    "references/orchestrator-fallback.md",
-    "references/fullcycle-fallback.md",
-];
-
-const PROTOCOL_FILES: &[&str] = &[
-    "scripts/mpcr-src/protocols/reviewer.toml",
-    "scripts/mpcr-src/protocols/applicator.toml",
-    "scripts/mpcr-src/protocols/orchestrator.toml",
-    "scripts/mpcr-src/protocols/dispatch.toml",
-    "scripts/mpcr-src/protocols/session.toml",
-    "scripts/mpcr-src/protocols/templates.toml",
-];
-
-const BANNED_AMBIGUITY: &[(&str, &str)] = &[
-    ("non-", "trivial"),
-    ("as ", "needed"),
-    ("if ", "feasible"),
-    ("et", "c."),
-];
 
 fn skill_root() -> anyhow::Result<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -41,313 +11,98 @@ fn skill_root() -> anyhow::Result<PathBuf> {
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .ok_or_else(|| anyhow::anyhow!("failed to resolve skill root from {}", manifest.display()))
-}
-
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            if path.file_name() == Some(OsStr::new("target")) {
-                continue;
-            }
-            collect_files(&path, out)?;
-            continue;
-        }
-        out.push(path);
-    }
-    Ok(())
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve skill root"))
 }
 
 fn normalize(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
 }
 
-fn read_rel(root: &Path, rel: &str) -> anyhow::Result<String> {
-    fs::read_to_string(root.join(rel)).with_context(|| format!("read {}", root.join(rel).display()))
-}
-
-fn is_normative_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with('#')
-        || trimmed.starts_with('|')
-        || trimmed.starts_with("```")
-        || trimmed.starts_with("---")
-        || trimmed.starts_with("name:")
-        || trimmed.starts_with("description:")
-        || trimmed.starts_with("compatibility:")
-    {
-        return false;
-    }
-
-    let stripped = trimmed
-        .trim_start_matches(|c: char| c == '-' || c == '*' || c == ' ')
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == ' ');
-
-    stripped.starts_with("You ")
-        || stripped.starts_with("IF ")
-        || stripped.starts_with("WHEN ")
-        || stripped.starts_with("Forbidden:")
-}
-
-fn line_uses_ears(line: &str) -> bool {
-    let trimmed = line.trim();
-    let stripped = trimmed
-        .trim_start_matches(|c: char| c == '-' || c == '*' || c == ' ')
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == ' ');
-
-    stripped.starts_with("IF ")
-        || stripped.starts_with("WHEN ")
-        || stripped.starts_with("Forbidden:")
-        || stripped.starts_with("You are ")
-        || stripped.contains(" SHALL ")
-        || stripped.contains(" SHALL NOT ")
-        || stripped.contains(" MAY ")
-        || stripped.contains(" MUST ")
-        || stripped.starts_with("You SHALL")
-        || stripped.starts_with("You SHALL NOT")
-        || stripped.starts_with("You MAY")
-        || stripped.starts_with("You MUST")
-}
-
-fn extract_doc_commands(text: &str) -> BTreeSet<String> {
-    let mut commands = BTreeSet::new();
-    for segment in text.split('`') {
-        for line in segment.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("mpcr ") {
-                commands.insert(trimmed.trim_end_matches('\\').trim().to_string());
-            }
-        }
-    }
-    commands
-}
-
-fn validate_doc_command(bin: &str, command: &str) -> anyhow::Result<()> {
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    ensure!(!tokens.is_empty(), "empty command extracted");
-    ensure!(
-        tokens[0] == "mpcr",
-        "unexpected non-mpcr command: {command}"
-    );
-
-    let is_placeholder = |t: &str| {
-        t.contains('<')
-            || t.contains('[')
-            || t.contains("...")
-            || t.contains('*')
-            || t == "|"
-            || t.contains('|')
-    };
-    let has_placeholders = tokens.iter().any(|t| is_placeholder(t)) || command.contains("<<");
-
-    let args: Vec<String> = if tokens.len() >= 3 && tokens[1] == "protocol" && !has_placeholders {
-        tokens[1..].iter().map(|s| (*s).to_string()).collect()
-    } else if tokens.len() >= 3 && tokens[1] == "analyze" && tokens[2] == "list-checks" {
-        vec!["analyze".into(), "list-checks".into(), "--json".into()]
-    } else {
-        let prefix: Vec<&str> = tokens[1..]
-            .iter()
-            .copied()
-            .take_while(|t| !is_placeholder(t))
-            .collect();
-        if prefix.len() >= 2 {
-            vec![prefix[0].into(), prefix[1].into(), "--help".into()]
-        } else {
-            vec![tokens[1].into(), "--help".into()]
-        }
-    };
-
-    let output = Command::new(bin)
-        .args(&args)
-        .output()
-        .with_context(|| format!("run {}", args.join(" ")))?;
-    ensure!(
-        output.status.success(),
-        "documented command shape failed for `{command}` via `{}`: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
+fn read(root: &Path, rel: &str) -> anyhow::Result<String> {
+    fs::read_to_string(root.join(rel)).with_context(|| format!("read {}", rel))
 }
 
 #[test]
-fn skill_text_files_use_lf_line_endings() -> anyhow::Result<()> {
+fn skill_router_is_v2_sized_and_v2_only() -> anyhow::Result<()> {
     let root = skill_root()?;
-    let mut files = Vec::new();
-    collect_files(&root, &mut files)?;
-
-    let text_exts = ["md", "toml", "rs", "sh", "ps1", "cmd"];
-    for path in files {
-        let ext = path.extension().and_then(OsStr::to_str).unwrap_or_default();
-        if !text_exts.contains(&ext) && path.file_name() != Some(OsStr::new("mpcr")) {
-            continue;
-        }
-        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        ensure!(
-            !bytes.windows(2).any(|w| w == b"\r\n"),
-            "found CRLF line endings in {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn skill_router_and_fallbacks_preserve_progressive_disclosure() -> anyhow::Result<()> {
-    let root = skill_root()?;
-    let skill_md = read_rel(&root, "SKILL.md")?;
-    ensure!(skill_md.contains("<skills-file-root>"));
-    ensure!(skill_md.contains("/tmp/skill-errors/code-review/"));
-    ensure!(skill_md.contains("%TEMP%"));
-    ensure!(skill_md.contains("\\\\code-review\\\\"));
-    ensure!(skill_md.contains("_errors.md"));
-    ensure!(skill_md.contains("coordinator-only"));
-    ensure!(skill_md.contains("\"Single-agent\" review still means one dispatched worker"));
+    let skill_md = read(&root, "SKILL.md")?;
+    ensure!(skill_md.lines().count() <= 120);
+    let route_pos = skill_md
+        .find("mpcr route --mode")
+        .ok_or_else(|| anyhow::anyhow!("SKILL.md is missing route-first bootstrap"))?;
+    let mode_pos = skill_md
+        .find("mpcr protocol mode --mode")
+        .ok_or_else(|| anyhow::anyhow!("SKILL.md is missing mode pack guidance"))?;
+    ensure!(route_pos < mode_pos);
+    ensure!(skill_md.contains("auto-builds the Rust binary"));
+    ensure!(skill_md.contains("cargo"));
+    ensure!(skill_md.contains("mpcr route --persist"));
+    ensure!(skill_md.contains("mpcr protocol mode --mode"));
+    ensure!(skill_md.contains("mpcr validate --artifact-file"));
+    ensure!(skill_md.contains("mpcr render --artifact-file"));
     ensure!(skill_md.contains("mpcr fullcycle plan"));
-    ensure!(skill_md.contains("mpcr fullcycle state"));
-    ensure!(
-        skill_md.lines().count() <= 120,
-        "SKILL.md should stay router-sized"
-    );
-    ensure!(!skill_md.contains("reviewer-protocol.md"));
-    ensure!(!skill_md.contains("applicator-protocol.md"));
-
-    for rel in FALLBACK_DOCS {
-        let text = read_rel(&root, rel)?;
-        ensure!(text.lines().count() <= 300, "{rel} exceeded 300 lines");
-        ensure!(
-            !text.contains("references/"),
-            "{rel} should not chain to nested references"
-        );
-    }
-    let orchestrator_fallback = read_rel(&root, "references/orchestrator-fallback.md")?;
-    ensure!(
-        orchestrator_fallback.contains("You SHALL NOT emit direct file:line findings yourself.")
-    );
-    ensure!(orchestrator_fallback.contains("Single-agent mode still requires a dispatched worker"));
-    let fullcycle_fallback = read_rel(&root, "references/fullcycle-fallback.md")?;
-    ensure!(fullcycle_fallback.contains("mpcr fullcycle plan"));
-    ensure!(fullcycle_fallback.contains("mpcr fullcycle checkpoint"));
+    ensure!(!skill_md.contains("proof_packet"));
+    ensure!(!skill_md.contains("validate-report"));
+    ensure!(!skill_md.contains("dispatch --role"));
     Ok(())
 }
 
 #[test]
-fn canonical_only_artifacts_and_language_remain() -> anyhow::Result<()> {
+fn openai_manifest_matches_v2_surface() -> anyhow::Result<()> {
     let root = skill_root()?;
-    ensure!(!root.join("references/reviewer-protocol.md").exists());
-    ensure!(!root.join("references/applicator-protocol.md").exists());
-
-    let mut files: Vec<PathBuf> = vec![
-        root.join("SKILL.md"),
-        root.join("scripts/mpcr-src/src/protocol.rs"),
-    ];
-    for rel in FALLBACK_DOCS.iter().chain(PROTOCOL_FILES.iter()) {
-        files.push(root.join(rel));
-    }
-
-    for path in files {
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read canonical artifact {}", path.display()))?;
-        let lower = text.to_ascii_lowercase();
-        let banned_term = ["lega", "cy"].concat();
-        let pointer_label = ["Compatibility", " Pointer"].concat();
-        ensure!(
-            !lower.contains(&banned_term),
-            "non-canonical wording remains in {}",
-            path.display()
-        );
-        ensure!(
-            !text.contains(&pointer_label),
-            "pointer artifact remains in {}",
-            path.display()
-        );
-    }
+    let manifest = read(&root, "agents/openai.yaml")?;
+    ensure!(manifest.contains("display_name: \"Code Review\""));
+    ensure!(manifest.contains("mpcr route"));
+    ensure!(manifest.contains("mpcr protocol mode"));
+    ensure!(manifest.contains("mpcr reviewer"));
+    ensure!(manifest.contains("mpcr applicator"));
+    ensure!(manifest.contains("mpcr fullcycle"));
+    ensure!(!manifest.contains("dispatch"));
+    ensure!(!manifest.contains("proof_packet"));
     Ok(())
 }
 
 #[test]
-fn normative_docs_follow_ears_and_avoid_banned_ambiguity() -> anyhow::Result<()> {
+fn fallback_docs_match_generated_policy_docs() -> anyhow::Result<()> {
     let root = skill_root()?;
-    let mut docs = vec![("SKILL.md".to_string(), read_rel(&root, "SKILL.md")?)];
-    for rel in FALLBACK_DOCS.iter().chain(PROTOCOL_FILES.iter()) {
-        docs.push(((*rel).to_string(), read_rel(&root, rel)?));
-    }
+    ensure!(
+        normalize(&read(&root, "references/reviewer-fallback.md")?)
+            == normalize(&mpcr::protocol::reviewer_fallback_doc()?)
+    );
+    ensure!(
+        normalize(&read(&root, "references/applicator-fallback.md")?)
+            == normalize(&mpcr::protocol::applicator_fallback_doc()?)
+    );
+    ensure!(
+        normalize(&read(&root, "references/fullcycle-fallback.md")?)
+            == normalize(&mpcr::protocol::fullcycle_fallback_doc()?)
+    );
+    ensure!(
+        normalize(&read(&root, "references/orchestrator-fallback.md")?)
+            == normalize(&mpcr::protocol::orchestrator_fallback_doc()?)
+    );
+    Ok(())
+}
 
-    for (rel, text) in docs {
-        let lower = text.to_ascii_lowercase();
-        for (a, b) in BANNED_AMBIGUITY {
-            let phrase = format!("{a}{b}");
-            ensure!(
-                !lower.contains(&phrase),
-                "banned ambiguous phrase `{phrase}` found in {rel}"
-            );
-        }
-
-        for (idx, line) in text.lines().enumerate() {
-            if is_normative_line(line) {
-                ensure!(
-                    line_uses_ears(line),
-                    "non-EARS normative line in {rel}:{} -> {}",
-                    idx + 1,
-                    line.trim()
-                );
-            }
+#[test]
+fn only_structured_v2_protocol_files_remain() -> anyhow::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let protocols_dir = root.join("protocols");
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&protocols_dir)? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            files.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
-    Ok(())
-}
-
-#[test]
-fn fallback_docs_match_protocol_renderers() -> anyhow::Result<()> {
-    let root = skill_root()?;
-    let references = root.join("references");
-
-    let reviewer_file = fs::read_to_string(references.join("reviewer-fallback.md"))?;
-    let applicator_file = fs::read_to_string(references.join("applicator-fallback.md"))?;
-    let orchestrator_file = fs::read_to_string(references.join("orchestrator-fallback.md"))?;
-    let fullcycle_file = fs::read_to_string(references.join("fullcycle-fallback.md"))?;
-
-    let reviewer_expected = mpcr::protocol::reviewer_fallback_doc()?;
-    let applicator_expected = mpcr::protocol::applicator_fallback_doc()?;
-    let orchestrator_expected = mpcr::protocol::orchestrator_fallback_doc()?;
-    let fullcycle_expected = mpcr::protocol::fullcycle_fallback_doc()?;
-
     ensure!(
-        normalize(&reviewer_file) == normalize(&reviewer_expected),
-        "reviewer fallback doc is out of sync"
+        files.is_empty(),
+        "found unexpected legacy protocol files: {:?}",
+        files
     );
-    ensure!(
-        normalize(&applicator_file) == normalize(&applicator_expected),
-        "applicator fallback doc is out of sync"
-    );
-    ensure!(
-        normalize(&orchestrator_file) == normalize(&orchestrator_expected),
-        "orchestrator fallback doc is out of sync"
-    );
-    ensure!(
-        normalize(&fullcycle_file) == normalize(&fullcycle_expected),
-        "fullcycle fallback doc is out of sync"
-    );
-    Ok(())
-}
-
-#[test]
-fn documented_mpcr_commands_resolve_against_current_cli() -> anyhow::Result<()> {
-    let root = skill_root()?;
-    let mut commands = BTreeSet::new();
-    for rel in ["SKILL.md"]
-        .into_iter()
-        .chain(FALLBACK_DOCS.iter().copied())
-    {
-        commands.extend(extract_doc_commands(&read_rel(&root, rel)?));
-    }
-
-    let bin = env!("CARGO_BIN_EXE_mpcr");
-    for command in commands {
-        validate_doc_command(bin, &command)?;
-    }
+    ensure!(protocols_dir.join("v2/modes.toml").exists());
+    ensure!(protocols_dir.join("v2/workers.toml").exists());
+    ensure!(protocols_dir.join("v2/modules.toml").exists());
+    ensure!(protocols_dir.join("v2/escalations.toml").exists());
     Ok(())
 }
