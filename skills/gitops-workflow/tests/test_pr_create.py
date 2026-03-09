@@ -87,16 +87,94 @@ class PrCreateScriptTests(unittest.TestCase):
             body_path = Path(m.group(1))
             body = body_path.read_text(encoding="utf-8")
             self.assertIn("# Summary", body)
-            self.assertIn("This PR introduces changes from `feat/demo` into `main`", body)
+            self.assertIn("This PR brings `feat/demo` into `main`", body)
             self.assertIn("# Changes", body)
-            self.assertIn("- feat(demo): add sample change", body)
+            self.assertIn("# Review Focus", body)
             self.assertIn("# Testing", body)
+            self.assertIn("- [ ] Automated tests run", body)
+            self.assertIn("### Features", body)
+            self.assertIn("- demo: add sample change", body)
             self.assertIn("git diff --stat \"main...feat/demo\"", body)
             self.assertIn("# Reviewers / bots", body)
-            self.assertIn("@codex", body)
-            self.assertIn("/gemini review", body)
+            self.assertIn("Breaking changes? **No**", body)
 
-    def test_remote_template_content_suppresses_generated_fallback_body(self):
+    def test_uses_local_template_before_remote_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+            (repo / ".github").mkdir(parents=True, exist_ok=True)
+            (repo / ".github" / "pull_request_template.md").write_text("# Local Template\n", encoding="utf-8")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    echo \"main\"\n"
+                "  else\n"
+                "    echo \"acme/widget\"\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  endpoint=\"${2:-}\"\n"
+                "  case \"$endpoint\" in\n"
+                "    repos/acme/widget/contents/.github/pull_request_template.md?ref=main)\n"
+                "      echo '{\"type\":\"file\",\"encoding\":\"base64\",\"content\":\"IyBSZW1vdGUgVGVtcGxhdGUK\"}'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/.github/PULL_REQUEST_TEMPLATE?ref=main|repos/acme/widget/contents/PULL_REQUEST_TEMPLATE?ref=main|repos/acme/widget/contents/docs/PULL_REQUEST_TEMPLATE?ref=main)\n"
+                "      echo '[]'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/*)\n"
+                "      echo '{}'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "  esac\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
+            self.assertIsNotNone(m, proc.stdout)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("Local PR template source: local:.github/pull_request_template.md", body)
+            self.assertIn("# Local Template", body)
+            self.assertNotIn("# Remote Template", body)
+            self.assertNotIn("# Summary", body)
+
+    def test_remote_template_content_is_used_verbatim(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             repo = tmp_path / "repo"
@@ -168,12 +246,11 @@ class PrCreateScriptTests(unittest.TestCase):
             m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
             self.assertIsNotNone(m, proc.stdout)
             body = Path(m.group(1)).read_text(encoding="utf-8")
-            self.assertIn("Remote PR template source: acme/widget:.github/pull_request_template.md", body)
+            self.assertIn("Remote PR template source: acme/widget:remote:.github/pull_request_template.md", body)
             self.assertIn("# Remote Template", body)
             self.assertIn("- from repo", body)
             self.assertNotIn("# Summary", body)
-            self.assertNotIn("# Changes", body)
-            self.assertNotIn("# Reviewers / bots", body)
+            self.assertNotIn("### Features", body)
 
     def test_fails_when_no_commits_between_base_and_head(self):
         with tempfile.TemporaryDirectory() as tmp:

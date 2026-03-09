@@ -4,19 +4,19 @@ set -euo pipefail
 # pr-create.sh - Create a PR using deterministic context and repository-aware defaults.
 #
 # Usage:
-#   bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--ready] [--draft] [--base main] [--head my-branch] [--repo owner/repo] [--label <name> ...] [--no-labels] [--template-id <path>]
+#   bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--ready] [--draft] [--base main] [--head my-branch] [--repo owner/repo] [--label <name> ...] [--no-labels] [--template-id <id>]
 #
 # Behavior:
-# - Writes a prefilled PR body with deterministic sections derived from git metadata.
+# - Writes a prefilled PR body with deterministic reviewer context derived from git metadata.
 # - By default, does NOT create a PR; it prints the body path for human/agent review.
 # - `--create` requires `--force-create` to run `gh pr create --body-file <file>`.
 # - When `--create` is used, draft mode is the default; pass `--ready` to create non-draft PRs.
 # - Before `--create`, labels must be explicit (`--label ...` or `--no-labels`) when labels exist.
-# - For repositories with multiple remote PR templates, `--template-id` is required before `--create`.
+# - For repositories with multiple discovered PR templates, `--template-id` is required before `--create`.
 #
 # Requirements:
 # - git
-# - gh/jq (required only with --create)
+# - gh/jq (required only for remote discovery/create)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
@@ -90,14 +90,14 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'HELP'
 Usage:
-  bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--ready] [--draft] [--base main] [--head my-branch] [--repo owner/repo] [--label <name> ...] [--no-labels] [--template-id <path>]
+  bash scripts/pr-create.sh --title "feat(cli): add --json output" [--create --force-create] [--ready] [--draft] [--base main] [--head my-branch] [--repo owner/repo] [--label <name> ...] [--no-labels] [--template-id <id>]
 
 Behavior:
   - Writes a deterministic PR body file from git metadata by default.
   - Does not create a PR unless --create and --force-create are both provided.
   - When creating, draft is default unless --ready is provided.
   - If labels exist in the target repository, pass --label ... or --no-labels.
-  - If multiple remote PR templates exist, pass --template-id <path>.
+  - If multiple PR templates exist, pass --template-id <id>.
 HELP
       exit 0
       ;;
@@ -114,10 +114,15 @@ fi
 if [[ "$NO_LABELS" == "true" && "${#LABELS[@]}" -gt 0 ]]; then
   die "--no-labels cannot be combined with --label"
 fi
+if [[ "$CREATE" == "true" && "$FORCE_CREATE" != "true" ]]; then
+  die "--create requires --force-create to avoid accidental PR creation"
+fi
 
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PR_LABELS_SCRIPT="$SCRIPT_DIR/pr-labels-list.sh"
 PR_TEMPLATE_SCRIPT="$SCRIPT_DIR/pr-template-discover.sh"
+PR_BODY_RENDERER="$SCRIPT_DIR/lib/pr_body_renderer.py"
+DEFAULT_PR_TEMPLATE="$SKILL_ROOT/assets/templates/pull-request-body.md"
 
 require_cmd git
 
@@ -183,142 +188,108 @@ if [[ ! -s "$COMMITS_FILE" ]]; then
   die "no commits between $BASE and $HEAD; cannot create meaningful PR body"
 fi
 
-render_changes_section() {
-  local count=0
-  while IFS= read -r subject || [[ -n "$subject" ]]; do
-    [[ -z "$subject" ]] && continue
-    printf -- "- %s\n" "$subject"
-    count=$((count + 1))
-    if [[ "$count" -ge 12 ]]; then
-      break
-    fi
-  done < "$COMMITS_FILE"
-  if [[ "$count" -eq 0 ]]; then
-    printf -- "- Changes present between %s and %s\n" "$BASE" "$HEAD"
-  fi
-}
-
-render_test_commands() {
-  local py_changed sh_changed
-  py_changed="$(grep -E '\.py$' "$CHANGES_FILE" || true)"
-  sh_changed="$(grep -E '\.sh$' "$CHANGES_FILE" || true)"
-
-  if [[ -n "$py_changed" ]]; then
-    echo "python3 -m unittest"
-  fi
-  if [[ -n "$sh_changed" ]]; then
-    echo "bash -n scripts/*.sh"
-  fi
-  echo "git diff --stat \"$BASE...$HEAD\""
-}
-
-render_refs_section() {
-  local refs=()
-  mapfile -t refs < <(grep -Eo '#[0-9]+' "$COMMITS_FILE" | awk '!seen[$0]++' || true)
-
-  if [[ "${#refs[@]}" -eq 0 ]]; then
-    echo "- (none provided)"
-    return 0
-  fi
-
-  local ref
-  for ref in "${refs[@]}"; do
-    echo "- Related to $ref"
-  done
-}
-
 EFFECTIVE_REPO="$(resolve_repo)"
 if [[ -n "$EFFECTIVE_REPO" ]]; then
   parse_repo "$EFFECTIVE_REPO" >/dev/null
 fi
-REMOTE_TEMPLATE_ID=""
-REMOTE_TEMPLATE_CONTENT=""
+SELECTED_TEMPLATE_ID=""
+SELECTED_TEMPLATE_CONTENT=""
+SELECTED_TEMPLATE_SOURCE=""
+EXPLICIT_TEMPLATE_SELECTION="false"
 
 if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
-  die "--template-id requires --repo or an inferable gh repo context"
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "--template-id requires a git checkout or --repo owner/repo"
+  fi
 fi
 
-if [[ -n "$EFFECTIVE_REPO" && -f "$PR_TEMPLATE_SCRIPT" ]]; then
+if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
   TEMPLATES_JSON=""
-  if ! TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format json)"; then
+  TEMPLATE_DISCOVER_ARGS=(--format json)
+  TEMPLATE_DISCOVER_TEXT_ARGS=(--format text)
+  if [[ -n "$EFFECTIVE_REPO" ]]; then
+    TEMPLATE_DISCOVER_ARGS=(--repo "$EFFECTIVE_REPO" --format json)
+    TEMPLATE_DISCOVER_TEXT_ARGS=(--repo "$EFFECTIVE_REPO" --format text)
+  fi
+  if ! TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_ARGS[@]}")"; then
     if [[ "$CREATE" == "true" ]]; then
-      die "template discovery failed for $EFFECTIVE_REPO; refusing --create"
+      die "template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; refusing --create"
     fi
-    echo "Warning: template discovery failed for $EFFECTIVE_REPO; using deterministic fallback body." >&2
+    echo "Warning: template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; using skill fallback template." >&2
   fi
   if [[ -n "$TEMPLATES_JSON" ]] && printf '%s' "$TEMPLATES_JSON" | jq -e '.templates' >/dev/null 2>&1; then
     TEMPLATE_COUNT="$(printf '%s' "$TEMPLATES_JSON" | jq '.templates | length')"
     if [[ "$TEMPLATE_COUNT" -eq 1 ]]; then
-      REMOTE_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '.templates[0].id')"
+      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '.templates[0].id')"
     fi
 
     if [[ -n "$TEMPLATE_ID" ]]; then
       FOUND="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" 'any(.templates[]?; .id == $id)')"
-      [[ "$FOUND" == "true" ]] || die "template id not found in $EFFECTIVE_REPO: $TEMPLATE_ID"
-      REMOTE_TEMPLATE_ID="$TEMPLATE_ID"
+      if [[ "$FOUND" != "true" ]]; then
+        FOUND="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" '[(.templates[]? | select(.path == $id))] | length')"
+        [[ "$FOUND" == "1" ]] || die "template id not found in discovered templates: $TEMPLATE_ID"
+        SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" '.templates[] | select(.path == $id) | .id')"
+      else
+        SELECTED_TEMPLATE_ID="$TEMPLATE_ID"
+      fi
+      EXPLICIT_TEMPLATE_SELECTION="true"
+    elif [[ "$TEMPLATE_COUNT" -eq 1 ]]; then
+      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '.templates[0].id')"
+    else
+      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '[.templates[] | select(.source == "local")][0].id // empty')"
     fi
 
-    if [[ "$CREATE" == "true" && "$TEMPLATE_COUNT" -gt 1 && -z "$REMOTE_TEMPLATE_ID" ]]; then
-      echo "Multiple remote PR templates detected. Select one with --template-id <path>."
-      bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --format text
+    if [[ "$CREATE" == "true" && "$TEMPLATE_COUNT" -gt 1 && "$EXPLICIT_TEMPLATE_SELECTION" != "true" ]]; then
+      echo "Multiple PR templates detected. Select one with --template-id <id>."
+      bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_TEXT_ARGS[@]}"
       die "template selection required before --create"
     fi
 
-    if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
-      REMOTE_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" --repo "$EFFECTIVE_REPO" --template-id "$REMOTE_TEMPLATE_ID")"
+    if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
+      TEMPLATE_FETCH_ARGS=(--template-id "$SELECTED_TEMPLATE_ID")
+      if [[ -n "$EFFECTIVE_REPO" ]]; then
+        TEMPLATE_FETCH_ARGS=(--repo "$EFFECTIVE_REPO" --template-id "$SELECTED_TEMPLATE_ID")
+      fi
+      SELECTED_TEMPLATE_SOURCE="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$SELECTED_TEMPLATE_ID" '.templates[] | select(.id == $id) | .source')"
+      SELECTED_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_FETCH_ARGS[@]}")"
     fi
   fi
 fi
 
 OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
-{
-  if [[ -n "$REMOTE_TEMPLATE_CONTENT" ]]; then
-    echo "<!-- Remote PR template source: $EFFECTIVE_REPO:$REMOTE_TEMPLATE_ID -->"
+[[ -f "$DEFAULT_PR_TEMPLATE" ]] || die "missing fallback template: $DEFAULT_PR_TEMPLATE"
+[[ -f "$PR_BODY_RENDERER" ]] || die "missing PR body renderer: $PR_BODY_RENDERER"
+
+if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
+  {
+    if [[ "$SELECTED_TEMPLATE_SOURCE" == "remote" ]]; then
+      echo "<!-- Remote PR template source: $EFFECTIVE_REPO:$SELECTED_TEMPLATE_ID -->"
+    else
+      echo "<!-- Local PR template source: $SELECTED_TEMPLATE_ID -->"
+    fi
     echo
-    printf '%s\n' "$REMOTE_TEMPLATE_CONTENT"
-  else
-    echo "# Summary"
-    echo
-    echo "This PR introduces changes from \`$HEAD\` into \`$BASE\` for: $TITLE."
-    echo "It is prefilled from git history to avoid empty PR sections and improve reviewer context."
-    echo
-    echo "# Changes"
-    echo
-    render_changes_section
-    echo
-    echo "# Testing"
-    echo
-    echo "- [x] Unit tests"
-    echo "- [ ] Integration tests"
-    echo "- [x] Manual testing"
-    echo
-    echo "Describe how you tested:"
-    echo
-    echo '```bash'
-    render_test_commands
-    echo '```'
-    echo
-    echo "# Risk"
-    echo
-    echo "- Breaking changes? **No**"
-    echo "- Rollback plan (if risky): Revert the PR merge commit."
-    echo
-    echo "# Refs"
-    echo
-    render_refs_section
-    echo
-    echo "# Reviewers / bots"
-    echo
-    echo "@codex review"
-    echo "/gemini review"
-  fi
-} > "$OUT_FILE"
+    printf '%s\n' "$SELECTED_TEMPLATE_CONTENT"
+  } > "$OUT_FILE"
+else
+  python3 "$PR_BODY_RENDERER" \
+    --mode fallback \
+    --title "$TITLE" \
+    --base "$BASE" \
+    --head "$HEAD" \
+    --commits-file "$COMMITS_FILE" \
+    --changes-file "$CHANGES_FILE" \
+    --template-file "$DEFAULT_PR_TEMPLATE" > "$OUT_FILE"
+fi
 
 echo "📝 PR body file created: $OUT_FILE"
-if [[ -n "$REMOTE_TEMPLATE_ID" ]]; then
-  echo "Template source: remote ($EFFECTIVE_REPO:$REMOTE_TEMPLATE_ID)"
+if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
+  if [[ "$SELECTED_TEMPLATE_SOURCE" == "remote" ]]; then
+    echo "Template source: remote ($EFFECTIVE_REPO:$SELECTED_TEMPLATE_ID)"
+  else
+    echo "Template source: local ($SELECTED_TEMPLATE_ID)"
+  fi
 else
-  echo "Template source: local deterministic defaults"
+  echo "Template source: skill fallback template"
 fi
 echo "Review/edit this file as needed, then create the PR with:"
 PREVIEW_ARGS=(pr create --title "$TITLE" --body-file "$OUT_FILE")
@@ -348,10 +319,6 @@ echo ""
 
 if [[ "$CREATE" != "true" ]]; then
   exit 0
-fi
-
-if [[ "$FORCE_CREATE" != "true" ]]; then
-  die "--create requires --force-create to avoid accidental PR creation"
 fi
 
 require_cmd gh

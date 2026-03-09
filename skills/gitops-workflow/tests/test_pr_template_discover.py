@@ -92,6 +92,35 @@ class PrTemplateDiscoverDecodeTests(unittest.TestCase):
 
 
 class PrTemplateDiscoverCoverageTests(unittest.TestCase):
+    def test_discovers_local_templates_without_github_cli(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            run(["git", "init"], cwd=repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            template_dir = repo / ".github" / "PULL_REQUEST_TEMPLATE"
+            template_dir.mkdir(parents=True, exist_ok=True)
+            (template_dir / "feature.md").write_text("# Local Template\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPT), "--format", "json"],
+                cwd=repo,
+            )
+
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["repo"], "")
+            self.assertEqual(payload["ref"], "")
+            self.assertEqual(
+                payload["templates"],
+                [
+                    {
+                        "id": "local:.github/PULL_REQUEST_TEMPLATE/feature.md",
+                        "path": ".github/PULL_REQUEST_TEMPLATE/feature.md",
+                        "source": "local",
+                    }
+                ],
+            )
+
     def test_invalid_repo_slug_is_rejected(self):
         proc = run(
             [
@@ -174,14 +203,14 @@ class PrTemplateDiscoverCoverageTests(unittest.TestCase):
             payload = json.loads(proc.stdout)
             ids = [entry["id"] for entry in payload["templates"]]
             self.assertEqual(ids, sorted(set(ids)))
-            self.assertIn(".github/PULL_REQUEST_TEMPLATE.md", ids)
-            self.assertIn("PULL_REQUEST_TEMPLATE.md", ids)
-            self.assertIn("docs/PULL_REQUEST_TEMPLATE.md", ids)
-            self.assertIn(".github/PULL_REQUEST_TEMPLATE/a.md", ids)
-            self.assertIn(".github/PULL_REQUEST_TEMPLATE/B.MD", ids)
-            self.assertIn("PULL_REQUEST_TEMPLATE/root.md", ids)
-            self.assertIn("docs/PULL_REQUEST_TEMPLATE/doc.md", ids)
-            self.assertNotIn(".github/PULL_REQUEST_TEMPLATE/not.txt", ids)
+            self.assertIn("remote:.github/PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn("remote:PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn("remote:docs/PULL_REQUEST_TEMPLATE.md", ids)
+            self.assertIn("remote:.github/PULL_REQUEST_TEMPLATE/a.md", ids)
+            self.assertIn("remote:.github/PULL_REQUEST_TEMPLATE/B.MD", ids)
+            self.assertIn("remote:PULL_REQUEST_TEMPLATE/root.md", ids)
+            self.assertIn("remote:docs/PULL_REQUEST_TEMPLATE/doc.md", ids)
+            self.assertNotIn("remote:.github/PULL_REQUEST_TEMPLATE/not.txt", ids)
 
     def test_extracts_uppercase_template_by_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -228,7 +257,7 @@ class PrTemplateDiscoverCoverageTests(unittest.TestCase):
                     "--repo",
                     "acme/widget",
                     "--template-id",
-                    ".github/PULL_REQUEST_TEMPLATE.md",
+                    "remote:.github/PULL_REQUEST_TEMPLATE.md",
                 ],
                 cwd=ROOT,
                 env=env,
