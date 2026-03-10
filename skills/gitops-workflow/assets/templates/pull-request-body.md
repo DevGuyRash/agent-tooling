@@ -56,3 +56,5 @@ Defaults:
 @codex review
 /gemini review
 -->
+@codex review
+/gemini review

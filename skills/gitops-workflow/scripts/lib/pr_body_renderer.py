@@ -194,6 +194,106 @@ def render_fallback_template(template_text: str, *, summary: str, changes: str, 
     return rendered.rstrip() + "\n"
 
 
+def has_fallback_placeholders(template_text: str) -> bool:
+    return any(
+        marker in template_text
+        for marker in (
+            "<!-- SUMMARY_PLACEHOLDER -->",
+            "<!-- CHANGES_PLACEHOLDER -->",
+            "<!-- TEST_COMMANDS_PLACEHOLDER -->",
+            "<!-- RISK_PLACEHOLDER -->",
+            "<!-- REFS_PLACEHOLDER -->",
+        )
+    )
+
+
+def render_review_focus(review_lines: list[str]) -> str:
+    return "\n".join(review_lines)
+
+
+TRAILING_TRIGGER_LINE_RE = re.compile(r"^\s*(?:@|/)\S")
+
+
+def split_trailing_trigger_block(template_text: str) -> tuple[str, str]:
+    lines = template_text.rstrip().splitlines()
+    if not lines:
+        return "", ""
+
+    end = len(lines)
+    while end > 0 and not lines[end - 1].strip():
+        end -= 1
+
+    start = end
+    while start > 0 and TRAILING_TRIGGER_LINE_RE.match(lines[start - 1]):
+        start -= 1
+
+    if start == end:
+        return "\n".join(lines[:end]), ""
+
+    prefix = "\n".join(lines[:start]).rstrip()
+    suffix = "\n".join(lines[start:end]).rstrip()
+    return prefix, suffix
+
+
+def render_augmented_template(
+    template_text: str,
+    *,
+    summary: str,
+    changes: str,
+    review_lines: list[str],
+    test_commands: str,
+    risk_lines: str,
+    refs_lines: list[str],
+) -> str:
+    if has_fallback_placeholders(template_text):
+        return render_fallback_template(
+            template_text,
+            summary=summary,
+            changes=changes,
+            test_commands=test_commands,
+            risk_lines=risk_lines,
+            refs_lines=refs_lines,
+        )
+
+    template_prefix, trailing_triggers = split_trailing_trigger_block(template_text)
+    sections = [
+        template_prefix,
+        "",
+        "---",
+        "",
+        "## Generated Review Context",
+        "",
+        "### Summary",
+        "",
+        summary,
+        "",
+        "### Changes",
+        "",
+        changes,
+        "",
+        "### Review Focus",
+        "",
+        render_review_focus(review_lines),
+        "",
+        "### Testing",
+        "",
+        "```bash",
+        test_commands,
+        "```",
+        "",
+        "### Risks / rollout",
+        "",
+        risk_lines,
+        "",
+        "### Refs",
+        "",
+        "\n".join(refs_lines),
+    ]
+    if trailing_triggers:
+        sections.extend(["", trailing_triggers])
+    return "\n".join(sections).rstrip() + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices={"augment", "fallback"}, required=True)
@@ -210,10 +310,6 @@ def main() -> int:
     template_text = Path(args.template_file).read_text(encoding="utf-8")
     features, fixes, changes, breaking = categorize_commits(commit_lines)
 
-    if args.mode == "augment":
-        print(template_text.rstrip() + "\n")
-        return 0
-
     refs_lines = build_refs(commit_lines)
     summary = build_summary(
         title=args.title,
@@ -224,13 +320,30 @@ def main() -> int:
         fixes=fixes,
         changes=changes,
     )
+    review_lines = build_review_guide(changed_files)
     test_commands = "\n".join(build_verification(args.base, args.head, changed_files))
     risk_lines = build_risk_lines(breaking)
+    changes_text = build_changes(features, fixes, changes, changed_files)
+    if args.mode == "augment":
+        print(
+            render_augmented_template(
+                template_text,
+                summary=summary,
+                changes=changes_text,
+                review_lines=review_lines,
+                test_commands=test_commands,
+                risk_lines=risk_lines,
+                refs_lines=refs_lines,
+            ),
+            end="",
+        )
+        return 0
+
     print(
         render_fallback_template(
             template_text,
             summary=summary,
-            changes=build_changes(features, fixes, changes, changed_files),
+            changes=changes_text,
             test_commands=test_commands,
             risk_lines=risk_lines,
             refs_lines=refs_lines,

@@ -27,6 +27,7 @@ def init_repo(path: Path) -> None:
     run(["git", "init"], cwd=path)
     run(["git", "config", "user.email", "dev@example.com"], cwd=path)
     run(["git", "config", "user.name", "Dev"], cwd=path)
+    run(["git", "config", "commit.gpgsign", "false"], cwd=path)
     run(["git", "checkout", "-b", "main"], cwd=path)
 
 
@@ -96,6 +97,8 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("- demo: add sample change", body)
             self.assertIn("git diff --stat \"main...feat/demo\"", body)
             self.assertIn("# Reviewers / bots", body)
+            self.assertIn("@codex review", body)
+            self.assertIn("/gemini review", body)
             self.assertIn("Breaking changes? **No**", body)
 
     def test_uses_local_template_before_remote_template(self):
@@ -172,9 +175,13 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("Local PR template source: local:.github/pull_request_template.md", body)
             self.assertIn("# Local Template", body)
             self.assertNotIn("# Remote Template", body)
-            self.assertNotIn("# Summary", body)
+            self.assertIn("## Generated Review Context", body)
+            self.assertIn("### Summary", body)
+            self.assertIn("This PR brings `feat/demo` into `main`", body)
+            self.assertIn("### Testing", body)
+            self.assertIn("### Risks / rollout", body)
 
-    def test_remote_template_content_is_used_verbatim(self):
+    def test_remote_template_content_is_augmented_with_generated_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             repo = tmp_path / "repo"
@@ -249,8 +256,82 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("Remote PR template source: acme/widget:remote:.github/pull_request_template.md", body)
             self.assertIn("# Remote Template", body)
             self.assertIn("- from repo", body)
-            self.assertNotIn("# Summary", body)
-            self.assertNotIn("### Features", body)
+            self.assertIn("## Generated Review Context", body)
+            self.assertIn("### Summary", body)
+            self.assertIn("This PR brings `feat/demo` into `main`", body)
+            self.assertIn("### Changes", body)
+            self.assertIn("### Testing", body)
+
+    def test_preview_fails_for_invalid_explicit_template_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+            (repo / ".github").mkdir(parents=True, exist_ok=True)
+            (repo / ".github" / "pull_request_template.md").write_text("# Local Template\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--template-id",
+                    "local:.github/missing.md",
+                ],
+                cwd=repo,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("template id not found in discovered templates: local:.github/missing.md", proc.stderr)
+            self.assertNotIn("using skill fallback template", proc.stderr)
+
+    def test_augmented_template_keeps_trailing_reviewer_triggers_at_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+            (repo / ".github").mkdir(parents=True, exist_ok=True)
+            (repo / ".github" / "pull_request_template.md").write_text(
+                "# Local Template\n\nPlease review carefully.\n\n@codex review\n/gemini review\n",
+                encoding="utf-8",
+            )
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                ],
+                cwd=repo,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
+            self.assertIsNotNone(m, proc.stdout)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("## Generated Review Context", body)
+            self.assertLess(body.index("## Generated Review Context"), body.index("@codex review"))
+            self.assertTrue(body.rstrip().endswith("@codex review\n/gemini review"))
 
     def test_fails_when_no_commits_between_base_and_head(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -160,6 +160,111 @@ resolve_repo() {
   gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true
 }
 
+select_template_from_json() {
+  local requested_id="${1:-}"
+  local templates_json="${2:-}"
+  python3 - "$requested_id" "$templates_json" <<'PY'
+import json
+import sys
+
+requested = sys.argv[1]
+payload = sys.argv[2]
+
+try:
+    data = json.loads(payload or "{}")
+except json.JSONDecodeError as exc:
+    sys.stderr.write(f"invalid template discovery json: {exc}\n")
+    raise SystemExit(2)
+
+templates = data.get("templates")
+if not isinstance(templates, list):
+    sys.stderr.write("template discovery payload missing templates array\n")
+    raise SystemExit(2)
+
+count = len(templates)
+selected = None
+
+if requested:
+    exact = [template for template in templates if template.get("id") == requested]
+    if exact:
+        selected = exact[0]
+    else:
+        path_matches = [template for template in templates if template.get("path") == requested]
+        if len(path_matches) == 1:
+            selected = path_matches[0]
+        elif len(path_matches) > 1:
+            sys.stderr.write(f"template id '{requested}' is ambiguous; use a discovered id\n")
+            raise SystemExit(3)
+        else:
+            sys.stderr.write(f"template id not found in discovered templates: {requested}\n")
+            raise SystemExit(3)
+elif count == 1:
+    selected = templates[0]
+else:
+    for template in templates:
+        if template.get("source") == "local":
+            selected = template
+            break
+
+selected_id = selected.get("id", "") if selected else ""
+selected_source = selected.get("source", "") if selected else ""
+
+print(count)
+print(selected_id)
+print(selected_source)
+PY
+}
+
+load_selected_template() {
+  local templates_json="$1"
+  local discovery_mode="$2"
+  local selection_output=""
+  local selection_error=""
+  local template_fetch_args=()
+  local template_count=""
+  local selected_id=""
+  local selected_source=""
+  local selection_status=0
+  local selection_message=""
+
+  selection_error="$(mktemp -t pr-template-selection.XXXXXX.err)"
+  if selection_output="$(select_template_from_json "$TEMPLATE_ID" "$templates_json" 2>"$selection_error")"; then
+    mapfile -t _template_selection <<< "$selection_output"
+    template_count="${_template_selection[0]:-0}"
+    selected_id="${_template_selection[1]:-}"
+    selected_source="${_template_selection[2]:-}"
+  else
+    selection_status=$?
+    selection_message="$(tr '\n' ' ' < "$selection_error" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+    rm -f "$selection_error"
+    LAST_TEMPLATE_SELECTION_ERROR="${selection_message:-template selection failed}"
+    if [[ "$selection_status" -eq 3 && -n "$EFFECTIVE_REPO" && "$discovery_mode" == "local-only" ]]; then
+      return 10
+    fi
+    if [[ "$CREATE" == "true" || -n "$TEMPLATE_ID" ]]; then
+      die "${selection_message:-template selection failed}"
+    fi
+    echo "Warning: ${selection_message:-template selection failed}; using skill fallback template." >&2
+    return 1
+  fi
+  rm -f "$selection_error"
+
+  TEMPLATE_COUNT="$template_count"
+  SELECTED_TEMPLATE_ID="$selected_id"
+  SELECTED_TEMPLATE_SOURCE="$selected_source"
+
+  if [[ -z "$SELECTED_TEMPLATE_ID" ]]; then
+    return 0
+  fi
+
+  template_fetch_args=(--template-id "$SELECTED_TEMPLATE_ID")
+  if [[ "$discovery_mode" == "repo-aware" && -n "$EFFECTIVE_REPO" ]]; then
+    template_fetch_args=(--repo "$EFFECTIVE_REPO" --template-id "$SELECTED_TEMPLATE_ID")
+  fi
+  SELECTED_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" "${template_fetch_args[@]}")"
+  return 0
+}
+
 if [[ -z "$HEAD" ]]; then
   HEAD="$(git rev-parse --abbrev-ref HEAD)"
 fi
@@ -192,10 +297,12 @@ EFFECTIVE_REPO="$(resolve_repo)"
 if [[ -n "$EFFECTIVE_REPO" ]]; then
   parse_repo "$EFFECTIVE_REPO" >/dev/null
 fi
+TEMPLATE_COUNT=0
 SELECTED_TEMPLATE_ID=""
 SELECTED_TEMPLATE_CONTENT=""
 SELECTED_TEMPLATE_SOURCE=""
 EXPLICIT_TEMPLATE_SELECTION="false"
+LAST_TEMPLATE_SELECTION_ERROR=""
 
 if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -204,55 +311,52 @@ if [[ -n "$TEMPLATE_ID" && -z "$EFFECTIVE_REPO" ]]; then
 fi
 
 if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
-  TEMPLATES_JSON=""
-  TEMPLATE_DISCOVER_ARGS=(--format json)
   TEMPLATE_DISCOVER_TEXT_ARGS=(--format text)
   if [[ -n "$EFFECTIVE_REPO" ]]; then
-    TEMPLATE_DISCOVER_ARGS=(--repo "$EFFECTIVE_REPO" --format json)
     TEMPLATE_DISCOVER_TEXT_ARGS=(--repo "$EFFECTIVE_REPO" --format text)
   fi
-  if ! TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_ARGS[@]}")"; then
-    if [[ "$CREATE" == "true" ]]; then
-      die "template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; refusing --create"
+
+  if [[ "$CREATE" != "true" ]]; then
+    LOCAL_TEMPLATES_JSON=""
+    if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --format json 2>/dev/null)"; then
+      if load_selected_template "$LOCAL_TEMPLATES_JSON" "local-only"; then
+        :
+      elif [[ $? -eq 10 ]]; then
+        SELECTED_TEMPLATE_ID=""
+        SELECTED_TEMPLATE_SOURCE=""
+        SELECTED_TEMPLATE_CONTENT=""
+      fi
     fi
-    echo "Warning: template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; using skill fallback template." >&2
   fi
-  if [[ -n "$TEMPLATES_JSON" ]] && printf '%s' "$TEMPLATES_JSON" | jq -e '.templates' >/dev/null 2>&1; then
-    TEMPLATE_COUNT="$(printf '%s' "$TEMPLATES_JSON" | jq '.templates | length')"
-    if [[ "$TEMPLATE_COUNT" -eq 1 ]]; then
-      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '.templates[0].id')"
-    fi
 
-    if [[ -n "$TEMPLATE_ID" ]]; then
-      FOUND="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" 'any(.templates[]?; .id == $id)')"
-      if [[ "$FOUND" != "true" ]]; then
-        FOUND="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" '[(.templates[]? | select(.path == $id))] | length')"
-        [[ "$FOUND" == "1" ]] || die "template id not found in discovered templates: $TEMPLATE_ID"
-        SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$TEMPLATE_ID" '.templates[] | select(.path == $id) | .id')"
-      else
-        SELECTED_TEMPLATE_ID="$TEMPLATE_ID"
+  if [[ -z "$SELECTED_TEMPLATE_ID" ]]; then
+    TEMPLATES_JSON=""
+    TEMPLATE_DISCOVER_ARGS=(--format json)
+    if [[ -n "$EFFECTIVE_REPO" ]]; then
+      TEMPLATE_DISCOVER_ARGS=(--repo "$EFFECTIVE_REPO" --format json)
+    fi
+    if ! TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_ARGS[@]}")"; then
+      if [[ "$CREATE" == "true" ]]; then
+        die "template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; refusing --create"
       fi
-      EXPLICIT_TEMPLATE_SELECTION="true"
-    elif [[ "$TEMPLATE_COUNT" -eq 1 ]]; then
-      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '.templates[0].id')"
-    else
-      SELECTED_TEMPLATE_ID="$(printf '%s' "$TEMPLATES_JSON" | jq -r '[.templates[] | select(.source == "local")][0].id // empty')"
+      echo "Warning: template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; using skill fallback template." >&2
+    elif [[ -n "$TEMPLATES_JSON" ]]; then
+      load_selected_template "$TEMPLATES_JSON" "repo-aware" || true
     fi
+  fi
 
-    if [[ "$CREATE" == "true" && "$TEMPLATE_COUNT" -gt 1 && "$EXPLICIT_TEMPLATE_SELECTION" != "true" ]]; then
-      echo "Multiple PR templates detected. Select one with --template-id <id>."
-      bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_TEXT_ARGS[@]}"
-      die "template selection required before --create"
-    fi
+  if [[ -n "$TEMPLATE_ID" && -n "$SELECTED_TEMPLATE_ID" ]]; then
+    EXPLICIT_TEMPLATE_SELECTION="true"
+  fi
 
-    if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
-      TEMPLATE_FETCH_ARGS=(--template-id "$SELECTED_TEMPLATE_ID")
-      if [[ -n "$EFFECTIVE_REPO" ]]; then
-        TEMPLATE_FETCH_ARGS=(--repo "$EFFECTIVE_REPO" --template-id "$SELECTED_TEMPLATE_ID")
-      fi
-      SELECTED_TEMPLATE_SOURCE="$(printf '%s' "$TEMPLATES_JSON" | jq -r --arg id "$SELECTED_TEMPLATE_ID" '.templates[] | select(.id == $id) | .source')"
-      SELECTED_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_FETCH_ARGS[@]}")"
-    fi
+  if [[ -n "$TEMPLATE_ID" && -z "$SELECTED_TEMPLATE_ID" ]]; then
+    die "${LAST_TEMPLATE_SELECTION_ERROR:-template selection failed}"
+  fi
+
+  if [[ "$CREATE" == "true" && "$TEMPLATE_COUNT" -gt 1 && "$EXPLICIT_TEMPLATE_SELECTION" != "true" ]]; then
+    echo "Multiple PR templates detected. Select one with --template-id <id>."
+    bash "$PR_TEMPLATE_SCRIPT" "${TEMPLATE_DISCOVER_TEXT_ARGS[@]}"
+    die "template selection required before --create"
   fi
 fi
 
@@ -261,6 +365,8 @@ OUT_FILE="$(mktemp -t pr-body.XXXXXX.md)"
 [[ -f "$PR_BODY_RENDERER" ]] || die "missing PR body renderer: $PR_BODY_RENDERER"
 
 if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
+  SELECTED_TEMPLATE_FILE="$(mktemp -t pr-template.XXXXXX.md)"
+  printf '%s\n' "$SELECTED_TEMPLATE_CONTENT" > "$SELECTED_TEMPLATE_FILE"
   {
     if [[ "$SELECTED_TEMPLATE_SOURCE" == "remote" ]]; then
       echo "<!-- Remote PR template source: $EFFECTIVE_REPO:$SELECTED_TEMPLATE_ID -->"
@@ -268,8 +374,16 @@ if [[ -n "$SELECTED_TEMPLATE_ID" ]]; then
       echo "<!-- Local PR template source: $SELECTED_TEMPLATE_ID -->"
     fi
     echo
-    printf '%s\n' "$SELECTED_TEMPLATE_CONTENT"
+    python3 "$PR_BODY_RENDERER" \
+      --mode augment \
+      --title "$TITLE" \
+      --base "$BASE" \
+      --head "$HEAD" \
+      --commits-file "$COMMITS_FILE" \
+      --changes-file "$CHANGES_FILE" \
+      --template-file "$SELECTED_TEMPLATE_FILE"
   } > "$OUT_FILE"
+  rm -f "$SELECTED_TEMPLATE_FILE"
 else
   python3 "$PR_BODY_RENDERER" \
     --mode fallback \
