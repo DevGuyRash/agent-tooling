@@ -21,6 +21,21 @@ def normalize(text: str) -> str:
 
 
 class PlanningBehaviorTests(unittest.TestCase):
+    def test_description_uses_realistic_trigger_language(self) -> None:
+        skill_text = SKILL_MD.read_text(encoding="utf-8")
+        description_match = re.search(r"^description:\s*>-\n((?:\s{2}.+\n)+)", skill_text, flags=re.MULTILINE)
+        self.assertIsNotNone(description_match)
+        description = normalize(description_match.group(1))
+        prompt_terms = load_json("trigger_prompts.json")
+
+        for term in prompt_terms["positive_terms"]:
+            with self.subTest(term=term):
+                self.assertIn(normalize(term), description)
+
+        for term in prompt_terms["negative_terms"]:
+            with self.subTest(term=term):
+                self.assertNotIn(normalize(term), description)
+
     def test_question_router_maps_fixture_cases(self) -> None:
         content = SKILL_MD.read_text(encoding="utf-8")
         mappings = dict(
@@ -82,6 +97,34 @@ class PlanningBehaviorTests(unittest.TestCase):
         self.assertNotIn("audit-skill", content)
         self.assertNotIn("25 domains", content.lower())
         self.assertIsNone(re.search(r"\bD\d+\b", content))
+
+    def test_default_workflow_has_concise_run_stop_rule(self) -> None:
+        normalized = normalize(SKILL_MD.read_text(encoding="utf-8"))
+
+        self.assertIn(
+            normalize(
+                "WHEN the packaging verdict is `KEEP_AS_SKILL` or `REWORK_AS_SKILL` "
+                "THEN you SHALL continue only until the leading bottleneck and next "
+                "verification step are clear unless the user explicitly asks for a "
+                "full reboot or end-to-end revision."
+            ),
+            normalized,
+        )
+        self.assertIn(
+            normalize(
+                "WHEN the user asks for a full reboot or end-to-end revision "
+                "AND the first brief reveals a second bottleneck THEN you MAY "
+                "load one additional direct reference at a time only as needed."
+            ),
+            normalized,
+        )
+        self.assertIn(
+            normalize(
+                "WHEN the user asks for a full reboot or end-to-end revision "
+                "THEN you MAY answer multiple questions, one at a time, in leverage order."
+            ),
+            normalized,
+        )
 
 
 if __name__ == "__main__":

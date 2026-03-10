@@ -1,11 +1,10 @@
 ---
 name: skill-auditor
 description: >-
-  Evaluate whether a target capability is correctly packaged as a skill,
-  improve its trigger behavior, task leverage, context design, and
-  verification loop, and produce a concise Skill Improvement Brief with
-  actionable changes and checks. Use when reviewing or revising a skill, not
-  when enforcing a large lint taxonomy or rebuilding a router CLI.
+  Audit a skill's packaging, trigger behavior, task leverage, context design,
+  verification loop, and AGENTS.md adherence, then produce a concise Skill
+  Improvement Brief with concrete changes and checks. Use when asked to audit,
+  self-audit, health-check, evaluate, review, or revise a skill.
 ---
 
 # Skill Auditor
@@ -74,12 +73,13 @@ WHEN the packaging verdict is `MIGRATE_TO_AGENTS`,
 you SHALL stop optimizing the target as a standalone skill and you SHALL return
 migration guidance plus verification.
 WHEN the packaging verdict is `KEEP_AS_SKILL` or `REWORK_AS_SKILL` THEN you
-SHALL continue in default leverage order unless a later question is clearly the
-better next move.
-WHEN the first brief reveals a second bottleneck THEN you MAY load one
-additional direct reference at a time only as needed.
-WHEN the user asks for a full reboot or end-to-end revision THEN you MAY answer
-multiple questions, one at a time, in leverage order.
+SHALL continue only until the leading bottleneck and next verification step are
+clear unless the user explicitly asks for a full reboot or end-to-end revision.
+WHEN the user asks for a full reboot or end-to-end revision AND the first
+brief reveals a second bottleneck THEN you MAY load one additional direct
+reference at a time only as needed.
+WHEN the user asks for a full reboot or end-to-end revision THEN you MAY
+answer multiple questions, one at a time, in leverage order.
 You SHALL keep the default output concise enough for a human maintainer to act
 on without appendices.
 You SHALL NOT require a router CLI, a phase/domain matrix, or heuristic lint

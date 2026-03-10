@@ -9,7 +9,7 @@ sequenceDiagram
     participant Ref as One Reference Module
     participant Helpers as Optional Deterministic Helpers
 
-    User->>Agent: Review or improve this skill
+    User->>Agent: Audit or improve this skill
     Agent->>Target: Read target SKILL.md
     Agent->>Router: Route on primary question
     Router->>Ref: Load one direct reference
@@ -22,7 +22,11 @@ sequenceDiagram
 
     Agent->>Agent: Synthesize observed evidence
     Agent->>Agent: Draft Improvement Brief
-    Agent->>Target: Apply or propose changes
-    Agent->>Target: Re-run prompt / task / structure checks
-    Agent-->>User: Updated brief and verification result
+    alt User asked for concise audit
+        Agent-->>User: Brief with leading bottleneck + next verification step
+    else User asked for reboot or end-to-end revision
+        Agent->>Target: Apply or propose changes
+        Agent->>Target: Re-run prompt / task / structure checks
+        Agent-->>User: Updated brief and verification result
+    end
 ```

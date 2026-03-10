@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-    A[User asks to review or revise a skill] --> B[Read target SKILL.md first]
+    A[User asks to audit, self-audit, health-check, evaluate, review, or revise a skill] --> B[Read target SKILL.md first]
     B --> C[Use skill-auditor]
     C --> D{Choose primary question}
 
@@ -23,7 +23,7 @@ flowchart TD
 
     L --> M[Gather smallest useful evidence set]
     M --> N[Draft Skill Improvement Brief]
-    N --> O{More leverage needed?}
+    N --> O{User asked for end-to-end reboot or is another bottleneck clearly next?}
     O -->|Yes| P[Load one more direct reference]
     P --> M
     O -->|No| Q[Return concise brief + verification plan]

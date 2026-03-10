@@ -3,6 +3,7 @@
 ```mermaid
 flowchart TB
     A[Frontmatter metadata] --> B[SKILL.md router]
+    A --> G[agents/openai.yaml UI metadata]
     B --> C[Direct references]
     B --> D[Optional deterministic helpers]
     C --> E[Improvement Brief]
@@ -11,7 +12,9 @@ flowchart TB
 
     subgraph Active Files
         A1[name + description]
+        G1[display_name + short_description + default_prompt]
         B1[question routing + leverage order]
+        B2[concise-run stop rule]
         C1[packaging-fit.md]
         C2[trigger-evals.md]
         C3[task-evals.md]
@@ -23,12 +26,14 @@ flowchart TB
         D1[frontmatter_check.sh]
         D2[reference_check.sh]
         D3[script_sanity.sh]
-        T[focused tests]
+        T[focused tests + trigger fixtures]
         X[private context diagrams]
     end
 
     A --> A1
+    G --> G1
     B --> B1
+    B --> B2
     C --> C1
     C --> C2
     C --> C3
@@ -41,5 +46,5 @@ flowchart TB
     D --> D2
     D --> D3
     F --> T
-    B --> X
+    T --> X
 ```
