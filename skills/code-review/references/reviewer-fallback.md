@@ -55,6 +55,8 @@ Produce canonical review artifacts from semantic routing and concern-specific wo
 - selected_modules
 - loaded_policy_refs
 
+Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.
+
 # review-composite
 version: 2026.03.08
 Single-worker direct review that performs surface mapping, baseline correctness, staleness when needed, and ship readiness.

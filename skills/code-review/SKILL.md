@@ -73,6 +73,7 @@ Use these only when `mpcr protocol ...` cannot run.
 | File | When to read |
 | --- | --- |
 | `<skills-file-root>/references/reviewer-fallback.md` | Reviewer mode fallback |
+| `<skills-file-root>/references/reviewer-artifact-examples.md` | Canonical reviewer artifact examples for manual `validate` / `finalize` flows |
 | `<skills-file-root>/references/applicator-fallback.md` | Applicator mode fallback |
 | `<skills-file-root>/references/fullcycle-fallback.md` | Full-cycle fallback |
 | `<skills-file-root>/references/orchestrator-fallback.md` | Routing and policy-load fallback |

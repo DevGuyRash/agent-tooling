@@ -118,6 +118,140 @@ fn route_cli_emits_surface_map_and_route_decision() -> anyhow::Result<()> {
 }
 
 #[test]
+fn route_cli_marks_generic_source_changes_as_behavior_change() -> anyhow::Result<()> {
+    let repo_root = tempdir()?;
+    let date = Date::from_calendar_date(2026, Month::March, 8)?;
+    let session_dir = session_paths(repo_root.path(), date).session_dir;
+    let session_dir_arg = session_dir.to_string_lossy().into_owned();
+    let output = run_cmd(&[
+        "--json",
+        "route",
+        "--session-dir",
+        &session_dir_arg,
+        "--mode",
+        "reviewer",
+        "--target-ref",
+        "refs/heads/main",
+        "--execution-capability",
+        "single_process",
+        "--max-worker-count",
+        "2",
+        "--orchestrator-read-budget-lines",
+        "120",
+        "--orchestrator-read-budget-snippets",
+        "12",
+        "--changed-file",
+        "src/orders.js",
+        "--changed-file",
+        "README.md",
+    ])?;
+    ensure!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(value
+        .get("surface_map")
+        .and_then(|surface_map| surface_map.get("risk_surfaces"))
+        .and_then(Value::as_array)
+        .is_some_and(|surfaces| surfaces.iter().any(|surface| {
+            surface.get("surface_id").and_then(Value::as_str) == Some("behavior-change")
+        })));
+    Ok(())
+}
+
+#[test]
+fn route_cli_does_not_treat_embedded_test_or_spec_substrings_as_test_files() -> anyhow::Result<()> {
+    let repo_root = tempdir()?;
+    let date = Date::from_calendar_date(2026, Month::March, 8)?;
+    let session_dir = session_paths(repo_root.path(), date).session_dir;
+    let session_dir_arg = session_dir.to_string_lossy().into_owned();
+
+    for changed_file in ["src/contest.rs", "app/species_controller.rb"] {
+        let output = run_cmd(&[
+            "--json",
+            "route",
+            "--session-dir",
+            &session_dir_arg,
+            "--mode",
+            "reviewer",
+            "--target-ref",
+            "refs/heads/main",
+            "--execution-capability",
+            "single_process",
+            "--max-worker-count",
+            "2",
+            "--orchestrator-read-budget-lines",
+            "120",
+            "--orchestrator-read-budget-snippets",
+            "12",
+            "--changed-file",
+            changed_file,
+        ])?;
+        ensure!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        let surfaces = value
+            .get("surface_map")
+            .and_then(|surface_map| surface_map.get("risk_surfaces"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing risk surfaces for {changed_file}"))?;
+        ensure!(surfaces.iter().any(|surface| {
+            surface.get("surface_id").and_then(Value::as_str) == Some("behavior-change")
+        }));
+        ensure!(!surfaces.iter().any(|surface| {
+            surface.get("surface_id").and_then(Value::as_str) == Some("test-coverage")
+        }));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn route_cli_still_marks_real_test_files_as_test_coverage() -> anyhow::Result<()> {
+    let repo_root = tempdir()?;
+    let date = Date::from_calendar_date(2026, Month::March, 8)?;
+    let session_dir = session_paths(repo_root.path(), date).session_dir;
+    let session_dir_arg = session_dir.to_string_lossy().into_owned();
+
+    for changed_file in [
+        "src/orders_test.rs",
+        "app/models/user_spec.rb",
+        "tests/router_behavior.rs",
+        "__tests__/router.test.ts",
+    ] {
+        let output = run_cmd(&[
+            "--json",
+            "route",
+            "--session-dir",
+            &session_dir_arg,
+            "--mode",
+            "reviewer",
+            "--target-ref",
+            "refs/heads/main",
+            "--execution-capability",
+            "single_process",
+            "--max-worker-count",
+            "2",
+            "--orchestrator-read-budget-lines",
+            "120",
+            "--orchestrator-read-budget-snippets",
+            "12",
+            "--changed-file",
+            changed_file,
+        ])?;
+        ensure!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        let surfaces = value
+            .get("surface_map")
+            .and_then(|surface_map| surface_map.get("risk_surfaces"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing risk surfaces for {changed_file}"))?;
+        ensure!(surfaces.iter().any(|surface| {
+            surface.get("surface_id").and_then(Value::as_str) == Some("test-coverage")
+        }));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn route_persist_writes_artifacts_and_updates_session_pointers() -> anyhow::Result<()> {
     let repo_root = tempdir()?;
     let date = Date::from_calendar_date(2026, Month::March, 8)?;

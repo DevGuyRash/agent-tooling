@@ -2,8 +2,13 @@
 #![allow(clippy::indexing_slicing)]
 
 use anyhow::{ensure, Context};
+use mpcr::artifacts::ArtifactKind;
+use mpcr::paths::{artifact_path, ensure_session_layout, session_paths};
+use mpcr::validate::{validate_artifact_file, ValidationLayer};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tempfile::tempdir;
+use time::{Date, Month};
 
 fn skill_root() -> anyhow::Result<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -104,5 +109,53 @@ fn only_structured_v2_protocol_files_remain() -> anyhow::Result<()> {
     ensure!(protocols_dir.join("v2/workers.toml").exists());
     ensure!(protocols_dir.join("v2/modules.toml").exists());
     ensure!(protocols_dir.join("v2/escalations.toml").exists());
+    Ok(())
+}
+
+#[test]
+fn reviewer_artifact_examples_are_machine_valid() -> anyhow::Result<()> {
+    let root = skill_root()?;
+    let temp = tempdir()?;
+    let date = Date::from_calendar_date(2026, Month::March, 8)?;
+    let session_dir = session_paths(temp.path(), date).session_dir;
+    ensure_session_layout(&session_dir)?;
+
+    let child_example = root.join("references/examples/reviewer-child-findings.toml");
+    let child_summary = validate_artifact_file(
+        &child_example,
+        ArtifactKind::ChildFindings,
+        ValidationLayer::Hard,
+        Some(&session_dir),
+    )?;
+    ensure!(child_summary.errors.is_empty());
+
+    let persisted_child = artifact_path(&session_dir, ArtifactKind::ChildFindings, "73078a595848");
+    fs::copy(&child_example, &persisted_child)?;
+
+    let parent_example = root.join("references/examples/reviewer-parent-review.toml");
+    let parent_summary = validate_artifact_file(
+        &parent_example,
+        ArtifactKind::ParentReview,
+        ValidationLayer::Hard,
+        Some(&session_dir),
+    )?;
+    ensure!(parent_summary.errors.is_empty());
+    Ok(())
+}
+
+#[test]
+fn skill_docs_reference_reviewer_artifact_examples() -> anyhow::Result<()> {
+    let root = skill_root()?;
+    let skill_md = read(&root, "SKILL.md")?;
+    ensure!(skill_md.contains("references/reviewer-artifact-examples.md"));
+
+    let fallback = read(&root, "references/reviewer-fallback.md")?;
+    ensure!(fallback.contains("references/reviewer-artifact-examples.md"));
+    ensure!(root
+        .join("references/examples/reviewer-child-findings.toml")
+        .exists());
+    ensure!(root
+        .join("references/examples/reviewer-parent-review.toml")
+        .exists());
     Ok(())
 }

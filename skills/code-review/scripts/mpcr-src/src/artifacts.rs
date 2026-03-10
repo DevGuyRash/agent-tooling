@@ -181,6 +181,7 @@ impl ProducerKind {
 #[serde(rename_all = "kebab-case")]
 /// Semantic risk surfaces used by the adaptive router.
 pub enum SurfaceId {
+    BehaviorChange,
     PublicApi,
     AuthAccess,
     InputValidation,
@@ -205,6 +206,7 @@ impl SurfaceId {
     #[must_use]
     pub const fn default_weight(self) -> u8 {
         match self {
+            Self::BehaviorChange => 4,
             Self::PublicApi => 4,
             Self::AuthAccess => 5,
             Self::InputValidation => 4,
@@ -227,8 +229,9 @@ impl SurfaceId {
 
     /// Stable ordering of all surfaces.
     #[must_use]
-    pub const fn all() -> [Self; 17] {
+    pub const fn all() -> [Self; 18] {
         [
+            Self::BehaviorChange,
             Self::PublicApi,
             Self::AuthAccess,
             Self::InputValidation,

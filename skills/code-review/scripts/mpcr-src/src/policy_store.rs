@@ -251,6 +251,7 @@ fn compose_doc(title: &str, sections: &[String]) -> String {
 pub fn generate_reviewer_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
         store.render(PolicyCategory::Mode, "reviewer", PolicyView::Full)?,
+        "Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.".to_string(),
         store.render(
             PolicyCategory::Worker,
             "review-composite",

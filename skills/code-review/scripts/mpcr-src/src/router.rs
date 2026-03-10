@@ -122,7 +122,7 @@ fn detect_surfaces_for_file(path: &str) -> Vec<SurfaceId> {
     {
         surfaces.push(SurfaceId::DependencyBuild);
     }
-    if lower.contains("test") || lower.contains("spec") {
+    if has_test_or_spec_signal(&lower) {
         surfaces.push(SurfaceId::TestCoverage);
     }
     if lower.contains("metric") || lower.contains("trace") || lower.contains("log") {
@@ -134,6 +134,72 @@ fn detect_surfaces_for_file(path: &str) -> Vec<SurfaceId> {
     surfaces.sort_unstable();
     surfaces.dedup();
     surfaces
+}
+
+fn has_test_or_spec_signal(path: &str) -> bool {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut components = trimmed.split('/').peekable();
+    while let Some(component) = components.next() {
+        let is_last = components.peek().is_none();
+        if component == "test"
+            || component == "tests"
+            || component == "spec"
+            || component == "specs"
+            || component == "__tests__"
+            || component == "__specs__"
+        {
+            return true;
+        }
+
+        if is_last && file_name_has_test_or_spec_signal(component) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn file_name_has_test_or_spec_signal(file_name: &str) -> bool {
+    let stem = file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(stem, _ext)| stem);
+
+    stem == "test"
+        || stem == "spec"
+        || stem.starts_with("test_")
+        || stem.starts_with("spec_")
+        || stem.ends_with("_test")
+        || stem.ends_with("_spec")
+        || stem.ends_with(".test")
+        || stem.ends_with(".spec")
+}
+
+fn is_source_like_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let source_roots = ["src/", "lib/", "app/", "server/", "client/"];
+    let source_exts = [
+        ".rs", ".js", ".jsx", ".ts", ".tsx", ".py", ".go", ".java", ".kt", ".cs", ".rb", ".php",
+    ];
+    let excluded_exts = [".md", ".toml", ".yaml", ".yml", ".json", ".lock", ".env"];
+
+    if excluded_exts.iter().any(|ext| lower.ends_with(ext)) {
+        return false;
+    }
+    if lower.contains("docs/")
+        || lower.contains("readme")
+        || lower.contains("example")
+        || lower.contains("help")
+        || has_test_or_spec_signal(&lower)
+    {
+        return false;
+    }
+
+    source_roots.iter().any(|root| lower.contains(root))
+        || source_exts.iter().any(|ext| lower.ends_with(ext))
 }
 
 fn has_docs_change(changed_files: &[String]) -> bool {
@@ -149,6 +215,7 @@ fn has_docs_change(changed_files: &[String]) -> bool {
 
 fn modules_for_surface(surface_id: SurfaceId) -> Vec<ModuleId> {
     match surface_id {
+        SurfaceId::BehaviorChange => vec![ModuleId::CoreCorrectness],
         SurfaceId::PublicApi => vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness],
         SurfaceId::AuthAccess => vec![ModuleId::AuthAccess, ModuleId::InputValidation],
         SurfaceId::InputValidation => vec![ModuleId::InputValidation],
@@ -546,6 +613,7 @@ pub fn build_surface_map(header: ArtifactHeader, inputs: &RouteInputs) -> Surfac
     let mut behavior_facing_artifacts = inputs.behavior_facing_artifacts.clone();
     for file in &inputs.changed_files {
         let surfaces = detect_surfaces_for_file(file);
+        let has_detected_surface = !surfaces.is_empty();
         for surface_id in surfaces {
             if !discovered
                 .iter()
@@ -557,6 +625,18 @@ pub fn build_surface_map(header: ArtifactHeader, inputs: &RouteInputs) -> Surfac
                     vec![file.clone()],
                 ));
             }
+        }
+        if is_source_like_file(file)
+            && !has_detected_surface
+            && !discovered
+                .iter()
+                .any(|existing| existing.surface_id == SurfaceId::BehaviorChange)
+        {
+            discovered.push(risk_surface(
+                SurfaceId::BehaviorChange,
+                format!("derived from generic source change `{file}`"),
+                vec![file.clone()],
+            ));
         }
         let lower = file.to_ascii_lowercase();
         if lower.ends_with(".md")
@@ -959,6 +1039,44 @@ mod tests {
             &inputs,
         );
         ensure!(route.rigor_level == RigorLevel::Forensic);
+        Ok(())
+    }
+
+    #[test]
+    fn generic_source_changes_emit_behavior_change_surface() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::SingleProcess;
+        inputs.changed_files = vec!["src/orders.js".to_string(), "README.md".to_string()];
+        inputs.public_interfaces = Vec::new();
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(surface_map
+            .risk_surfaces
+            .iter()
+            .any(|surface| surface.surface_id == SurfaceId::BehaviorChange));
+        ensure!(surface_map
+            .risk_surfaces
+            .iter()
+            .any(|surface| surface.surface_id == SurfaceId::DocsStaleness));
+        ensure!(route.selected_modules.contains(&ModuleId::CoreCorrectness));
+        ensure!(route.selected_modules.contains(&ModuleId::DocsStaleness));
+        ensure!(route.selected_modules.contains(&ModuleId::ShipReadiness));
         Ok(())
     }
 
