@@ -52,6 +52,14 @@ has_crlf() {
     awk '/\r$/ { found = 1; exit 0 } END { exit(found ? 0 : 1) }' "$file"
 }
 
+is_text_like_file() {
+    file="$1"
+    if [ ! -s "$file" ]; then
+        return 0
+    fi
+    LC_ALL=C grep -Iq . "$file"
+}
+
 requires_launcher_contract() {
     script_name="$1"
     case "$script_name" in
@@ -182,6 +190,9 @@ if [ -n "$TOP_LEVEL_SCRIPTS" ]; then
         executable=false
         if [ -x "$script_file" ]; then
             executable=true
+        fi
+        if ! is_text_like_file "$script_file"; then
+            continue
         fi
         shebang=$(head -1 "$script_file" 2>/dev/null || true)
 

@@ -141,6 +141,36 @@ class ReferenceCheckTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("nested_reference_link", {issue["code"] for issue in data["issues"]})
 
+    def test_recurses_into_nested_reference_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            refs_dir = skill_dir / "references"
+            nested_dir = refs_dir / "aws"
+            skill_dir.mkdir()
+            nested_dir.mkdir(parents=True)
+            (refs_dir / "packaging-fit.md").write_text("# Packaging\n", encoding="utf-8")
+            (nested_dir / "setup.md").write_text("# Setup\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                      Check a demo skill and explain what it does. Use when
+                      reviewing demo skills.
+                    ---
+
+                    - Packaging fit -> `references/packaging-fit.md`
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_reference_check(skill_dir)
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unlinked_reference", {issue["code"] for issue in data["issues"]})
+
     def test_active_skill_passes(self) -> None:
         completed, data = run_reference_check(ROOT)
 

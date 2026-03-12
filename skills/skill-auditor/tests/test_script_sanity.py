@@ -99,6 +99,21 @@ class ScriptSanityTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("missing_shebang", {issue["code"] for issue in data["issues"]})
 
+    def test_executable_binary_without_extension_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            scripts_dir = skill_dir / "scripts"
+            skill_dir.mkdir()
+            scripts_dir.mkdir()
+            binary_path = scripts_dir / "tool"
+            binary_path.write_bytes(b"\x7fELF\x02\x01\x01\x00binary payload")
+            binary_path.chmod(0o755)
+
+            completed, data = run_script_sanity(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+
     def test_active_skill_passes(self) -> None:
         completed, data = run_script_sanity(ROOT)
 

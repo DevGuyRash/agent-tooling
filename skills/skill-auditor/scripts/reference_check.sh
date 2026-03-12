@@ -179,7 +179,7 @@ fi
 
 REFERENCE_DIR="$SKILL_DIR/references"
 if [ -d "$REFERENCE_DIR" ]; then
-    ACTIVE_REFS=$(find "$REFERENCE_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+    ACTIVE_REFS=$(find "$REFERENCE_DIR" -type f -name '*.md' | sort)
 else
     ACTIVE_REFS=""
 fi
