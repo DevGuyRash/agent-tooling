@@ -17,6 +17,7 @@
 // - Skips test-only code: `#[cfg(test)]` blocks, `mod tests { ... }`, and
 //   test-only directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
 // - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable` families.
+// - Treats `unsafe impl Send/Sync` as always banned in production code.
 // - Use this together with clippy lints (see clippy-lints.toml) to cover
 //   broader non-idiomatic patterns.
 //
@@ -98,7 +99,7 @@ fn banned_family_is_absent_in_production_code() {
                         ));
                     }
                 }
-                if is_unsafe_impl_send_or_sync_violation(line, raw_line, &mut unsafe_impl_state) {
+                if is_unsafe_impl_send_or_sync_violation(line, &mut unsafe_impl_state) {
                     violations.push(format!(
                         "{}:{}:1: banned `unsafe impl Send/Sync`",
                         path.display(),
@@ -608,8 +609,6 @@ struct UnsafeImplState {
     phase: UnsafeImplPhase,
     // Only meaningful when `phase == SawUnsafeImpl`.
     impl_generic_depth: usize,
-    // Escape marker discovered on `unsafe impl` line before `Send`/`Sync` appears.
-    impl_escape_pending: bool,
 }
 
 impl UnsafeImplState {
@@ -617,7 +616,6 @@ impl UnsafeImplState {
         Self {
             phase: UnsafeImplPhase::Searching,
             impl_generic_depth: 0,
-            impl_escape_pending: false,
         }
     }
 
@@ -625,23 +623,11 @@ impl UnsafeImplState {
         self.phase = phase;
         if phase != UnsafeImplPhase::SawUnsafeImpl {
             self.impl_generic_depth = 0;
-            self.impl_escape_pending = false;
         }
-    }
-
-    fn take_pending_escape(&mut self) -> bool {
-        let pending = self.impl_escape_pending;
-        self.impl_escape_pending = false;
-        pending
     }
 }
 
-fn contains_unsafe_impl_send_or_sync(
-    line: &str,
-    raw_line: &str,
-    state: &mut UnsafeImplState,
-) -> bool {
-    let has_escape_marker = has_unsafe_impl_escape(raw_line);
+fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) -> bool {
     let mut i = 0;
     let bytes = line.as_bytes();
     while i < bytes.len() {
@@ -655,12 +641,7 @@ fn contains_unsafe_impl_send_or_sync(
             let token = &line[start..i];
             let next_phase = match (state.phase, token) {
                 (_, "unsafe") => UnsafeImplPhase::SawUnsafe,
-                (UnsafeImplPhase::SawUnsafe, "impl") => {
-                    if has_escape_marker {
-                        state.impl_escape_pending = true;
-                    }
-                    UnsafeImplPhase::SawUnsafeImpl
-                }
+                (UnsafeImplPhase::SawUnsafe, "impl") => UnsafeImplPhase::SawUnsafeImpl,
                 (UnsafeImplPhase::SawUnsafeImpl, "for") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "where") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "Send" | "Sync")
@@ -694,130 +675,12 @@ fn contains_unsafe_impl_send_or_sync(
     false
 }
 
-fn is_unsafe_impl_send_or_sync_violation(
-    sanitized_line: &str,
-    raw_line: &str,
-    state: &mut UnsafeImplState,
-) -> bool {
-    if !contains_unsafe_impl_send_or_sync(sanitized_line, raw_line, state) {
+fn is_unsafe_impl_send_or_sync_violation(sanitized_line: &str, state: &mut UnsafeImplState) -> bool {
+    if !contains_unsafe_impl_send_or_sync(sanitized_line, state) {
         return false;
     }
-    let escaped_on_current_line = has_unsafe_impl_escape(raw_line);
-    let escaped_on_impl_line = state.take_pending_escape();
     state.set_phase(UnsafeImplPhase::Searching);
-    !escaped_on_current_line && !escaped_on_impl_line
-}
-
-fn has_unsafe_impl_escape(raw_line: &str) -> bool {
-    let bytes = raw_line.as_bytes();
-    let mut i = 0usize;
-    let mut in_string = false;
-    let mut in_char = false;
-    let mut raw_hashes: Option<usize> = None;
-    let mut block_comment_depth = 0usize;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        let next = bytes.get(i + 1).copied().unwrap_or(b'\0');
-
-        if let Some(hashes) = raw_hashes {
-            if b == b'"' {
-                if hashes == 0 {
-                    raw_hashes = None;
-                    i += 1;
-                    continue;
-                }
-                let mut matched = 0usize;
-                let mut j = i + 1;
-                while matched < hashes && j < bytes.len() && bytes[j] == b'#' {
-                    matched += 1;
-                    j += 1;
-                }
-                if matched == hashes {
-                    raw_hashes = None;
-                    i = j;
-                    continue;
-                }
-            }
-            i += 1;
-            continue;
-        }
-
-        if block_comment_depth > 0 {
-            if b == b'/' && next == b'*' {
-                block_comment_depth += 1;
-                i += 2;
-                continue;
-            }
-            if b == b'*' && next == b'/' {
-                block_comment_depth -= 1;
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            if b == b'\\' {
-                i += usize::from(i + 1 < bytes.len()) + 1;
-            } else {
-                if b == b'"' {
-                    in_string = false;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        if in_char {
-            if b == b'\\' {
-                i += usize::from(i + 1 < bytes.len()) + 1;
-            } else {
-                if b == b'\'' {
-                    in_char = false;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        if b == b'/' && next == b'/' {
-            let comment = &raw_line[i..];
-            return comment.contains("// ALLOW:") || comment.contains("// SAFETY:");
-        }
-        if b == b'/' && next == b'*' {
-            block_comment_depth = 1;
-            i += 2;
-            continue;
-        }
-
-        if b == b'r' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j] == b'#' {
-                j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b'"' {
-                raw_hashes = Some(j - (i + 1));
-                i = j + 1;
-                continue;
-            }
-        }
-
-        if b == b'"' {
-            in_string = true;
-            i += 1;
-            continue;
-        }
-        if b == b'\'' {
-            in_char = true;
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-
-    false
+    true
 }
 
 fn strip_comments_and_strings(source: &str) -> String {
@@ -1220,48 +1083,26 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl Send for Worker {}",
-            "unsafe impl Send for Worker {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl<T> Sync for Cache<T> {}",
-            "unsafe impl<T> Sync for Cache<T> {}",
             &mut state
         ));
         let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(
-            &sanitized,
-            "let msg = \"unsafe impl Send\";",
-            &mut state
-        ));
+        assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(
-            "impl Send for Worker {}",
-            "impl Send for Worker {}",
-            &mut state
-        ));
+        assert!(!contains_unsafe_impl_send_or_sync("impl Send for Worker {}", &mut state));
     }
 
     #[test]
     fn unsafe_impl_send_sync_detection_spans_multiple_lines() {
         let mut state = super::UnsafeImplState::searching();
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            "unsafe impl<T>",
-            "unsafe impl<T>",
-            &mut state
-        ));
-        assert!(super::is_unsafe_impl_send_or_sync_violation(
-            "Send for Worker<T> {}",
-            "Send for Worker<T> {}",
-            &mut state
-        ));
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            "let keep_scanning = Send;",
-            "let keep_scanning = Send;",
-            &mut state
-        ));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation("unsafe impl<T>", &mut state));
+        assert!(super::is_unsafe_impl_send_or_sync_violation("Send for Worker<T> {}", &mut state));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation("let keep_scanning = Send;", &mut state));
     }
 
     #[test]
@@ -1269,88 +1110,47 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
-            "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(
-            "unsafe impl<T>",
-            "unsafe impl<T>",
-            &mut state
-        ));
-        assert!(!contains_unsafe_impl_send_or_sync(
-            "Service for Worker<T>",
-            "Service for Worker<T>",
-            &mut state
-        ));
-        assert!(!contains_unsafe_impl_send_or_sync(
-            "where T: Send + Sync {}",
-            "where T: Send + Sync {}",
-            &mut state
-        ));
+        assert!(!contains_unsafe_impl_send_or_sync("unsafe impl<T>", &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync("Service for Worker<T>", &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync("where T: Send + Sync {}", &mut state));
     }
 
     #[test]
-    fn unsafe_impl_send_sync_escape_hatches_are_detected() {
-        assert!(super::has_unsafe_impl_escape(
-            "unsafe impl Send for Worker {} // SAFETY: bounded by internal runtime invariants"
-        ));
-        assert!(super::has_unsafe_impl_escape(
-            "unsafe impl Sync for Cache {} // ALLOW: required for compatibility"
-        ));
-        assert!(!super::has_unsafe_impl_escape(
-            "unsafe impl Send for Worker {}"
-        ));
-    }
-
-    #[test]
-    fn unsafe_impl_escape_on_same_line_is_not_a_violation() {
-        let raw = "unsafe impl Send for Worker {} // SAFETY: bounded by runtime invariants";
+    fn unsafe_impl_comments_do_not_create_exceptions() {
+        let raw = "unsafe impl Send for Worker {} // SAFETY: still forbidden";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
-        ));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
     }
 
     #[test]
-    fn unsafe_impl_escape_ignores_string_literal_markers() {
+    fn unsafe_impl_comment_markers_in_strings_still_fail() {
         let raw = "static DOCS: &str = \"// SAFETY: fake\"; unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
-        ));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
     }
 
     #[test]
-    fn unsafe_impl_escape_ignores_block_comment_markers() {
+    fn unsafe_impl_comment_markers_in_block_comments_still_fail() {
         let raw = "/* // SAFETY: fake */ unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
-        ));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
     }
 
     #[test]
-    fn unsafe_impl_escape_on_impl_line_applies_to_multiline_send() {
+    fn unsafe_impl_multiline_sequences_remain_violations_even_with_comments() {
         let mut state = super::UnsafeImplState::searching();
-        let raw_impl_line = "unsafe impl<T> // SAFETY: marker applies to the impl";
+        let raw_impl_line = "unsafe impl<T> // SAFETY: still forbidden";
         let impl_line = strip_comments_and_strings(raw_impl_line);
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            &impl_line,
-            raw_impl_line,
-            &mut state
-        ));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(&impl_line, &mut state));
         assert_eq!(state.phase, super::UnsafeImplPhase::SawUnsafeImpl);
-        assert!(state.impl_escape_pending);
         let raw_send_line = "Send for Worker<T> {}";
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            raw_send_line,
-            raw_send_line,
-            &mut state
-        ));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(raw_send_line, &mut state));
     }
 
     #[test]

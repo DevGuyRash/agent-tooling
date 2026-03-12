@@ -389,6 +389,8 @@ fi
 # Check 2: CI workflow
 _ci_yml=""
 _ci_script=""
+_ci_verify=""
+_ci_workspace_members=""
 if [ -f ".github/workflows/ci.yml" ]; then
   _ci_yml=".github/workflows/ci.yml"
 elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/workflows/ci.yml" ]; then
@@ -398,6 +400,16 @@ if [ -f ".github/scripts/detect_rust_workspaces.py" ]; then
   _ci_script=".github/scripts/detect_rust_workspaces.py"
 elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/scripts/detect_rust_workspaces.py" ]; then
   _ci_script="$git_root_dir/.github/scripts/detect_rust_workspaces.py"
+fi
+if [ -f ".github/scripts/verify.sh" ]; then
+  _ci_verify=".github/scripts/verify.sh"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/scripts/verify.sh" ]; then
+  _ci_verify="$git_root_dir/.github/scripts/verify.sh"
+fi
+if [ -f ".github/scripts/workspace-members.sh" ]; then
+  _ci_workspace_members=".github/scripts/workspace-members.sh"
+elif [ -n "$git_root_dir" ] && [ -f "$git_root_dir/.github/scripts/workspace-members.sh" ]; then
+  _ci_workspace_members="$git_root_dir/.github/scripts/workspace-members.sh"
 fi
 if [ -n "$_ci_yml" ]; then
   pass "CI workflow installed: $_ci_yml"
@@ -409,6 +421,18 @@ if [ -n "$_ci_script" ]; then
   pass "CI detector script installed: $_ci_script"
 else
   warn "CI detector script not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+if [ -n "$_ci_verify" ]; then
+  pass "CI verify script installed: $_ci_verify"
+else
+  warn "CI verify script not found (run scaffold.sh --ci)"
+  _install_ok=0
+fi
+if [ -n "$_ci_workspace_members" ]; then
+  pass "CI workspace helper installed: $_ci_workspace_members"
+else
+  warn "CI workspace helper not found (run scaffold.sh --ci)"
   _install_ok=0
 fi
 
@@ -538,8 +562,6 @@ _search 'pub[[:space:]]+fn.*->[[:space:]]*Result<.*,[[:space:]]*Box<dyn[[:space:
 echo ""
 echo "Security:"
 _search 'Command::new\([[:space:]]*"(sh|bash|cmd)"[[:space:]]*\)' "" "no shell injection via Command" || true
-_search 'unsafe[[:space:]]+impl[[:space:]]+(Send|Sync)' "" "no unsafe impl Send/Sync" "exclude_tests" || true
-
 echo ""
 echo "String allocation:"
 _search 'String::from\(""\)' "" 'no String::from("")' || true
@@ -549,9 +571,11 @@ echo ""
 echo "Resource safety:"
 _search_excluding 'mem::forget\(' '// ALLOW:' "no mem::forget()" "exclude_tests" || true
 _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || true
-# Check unsafe blocks: // SAFETY: may be on the same line OR the preceding line
+
+echo ""
+echo "Unsafe code:"
 {
-  _unsafe_label="no unsafe block without // SAFETY:"
+  _unsafe_label="no unsafe code in non-test files"
   _unsafe_violations_tmp="$(mktemp "${TMPDIR:-/tmp}/rust-verify-unsafe.XXXXXX")"
   _register_tmp "$_unsafe_violations_tmp"
   _unsafe_files=""
@@ -562,7 +586,7 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       -g '!**/example/**' -g '!**/examples/**' \
       -g '!**/fixture/**' -g '!**/fixtures/**' \
       -g '!**/*_test.rs' -g '!**/tests.rs' \
-      -- 'unsafe[[:space:]]*\{' 2>/dev/null)" || true
+      -- 'unsafe' 2>/dev/null)" || true
   else
     _unsafe_files="$(find . -name '*.rs' -not -path '*/target/*' \
       -not -path '*/test/*' -not -path '*/tests/*' \
@@ -571,7 +595,7 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
       -not -path '*/examples/*' -not -path '*/fixture/*' \
       -not -path '*/fixtures/*' -not -name '*_test.rs' \
       -not -name 'tests.rs' \
-      -exec grep -lE 'unsafe[[:space:]]*\{' {} + 2>/dev/null)" || true
+      -exec grep -l 'unsafe' {} + 2>/dev/null)" || true
   fi
   if [ -n "$_unsafe_files" ]; then
     while IFS= read -r _unsafe_file; do
@@ -608,7 +632,6 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
           return 0
         }
         BEGIN {
-          prev_is_safety_comment = 0
           in_block_comment = 0
           in_double = 0
           in_single = 0
@@ -726,15 +749,9 @@ _search_excluding 'Box::leak\(' '// ALLOW:' "no Box::leak()" "exclude_tests" || 
             _scan_code = _scan_code c
             i++
           }
-
-          cur_has_inline_safety = (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
-          cur_is_safety_comment = (_scan_code ~ /^[[:space:]]*$/) && (_scan_comment ~ /^\/\/[[:space:]]*SAFETY:/)
-          if (_scan_code ~ /unsafe[[:space:]]*\{/) {
-            if (!(cur_has_inline_safety || prev_is_safety_comment)) {
-              printf "%s:%d:%s\n", FILENAME, NR, line
-            }
+          if (_scan_code ~ /(^|[^[:alnum:]_#])unsafe([^[:alnum:]_]|$)/) {
+            printf "%s:%d:%s\n", FILENAME, NR, line
           }
-          prev_is_safety_comment = cur_is_safety_comment
         }
       ' "$_unsafe_file" >> "$_unsafe_violations_tmp"
     done <<UNSAFE_FILES_EOF

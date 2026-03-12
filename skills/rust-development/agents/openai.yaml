@@ -1,4 +1,4 @@
 interface:
   display_name: "Rust Development"
   short_description: "Idiomatic, production-grade Rust development"
-  default_prompt: "Use $rust-development for phased Rust delivery (Round -1, Phase 0-3, Round 5), strict banned-pattern verification via scripts/verify.sh, and workspace bootstrap via scripts/scaffold.sh."
+  default_prompt: "Use $rust-development for repo-adaptive Rust delivery: start with the compatibility map, choose Fast Path only for deterministic localized changes, use the phased Standard workflow otherwise, and enforce verification/bootstrap via scripts/verify.sh and scripts/scaffold.sh."

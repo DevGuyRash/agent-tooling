@@ -4,13 +4,13 @@
 # Usage:
 #   scaffold.sh <workspace-root> [--clippy] [--banned-test] [--ci] [--all] [--force]
 #
-# Copies lint config, test harness, and/or CI workflow from the skill's
-# assets/ directory into the target workspace.
+# Copies lint config, test harness, and/or CI/verifier files from the skill's
+# assets/ and scripts/ directories into the target workspace.
 #
 # Options:
 #   --clippy       Append workspace lint config to Cargo.toml
 #   --banned-test  Copy banned_family.rs into a runnable crate test dir
-#   --ci           Copy .github/workflows/ci.yml into the workspace
+#   --ci           Copy the GitHub Actions workflow, detector, and verifier stack
 #   --all          All of the above
 #   --force        Overwrite existing files
 #
@@ -479,7 +479,7 @@ fi
 # CI workflow
 # ---------------------------------------------------------------------------
 if [ "$do_ci" -eq 1 ]; then
-  echo "═══ GitHub Actions CI workflow ═══"
+  echo "═══ GitHub Actions CI + verifier stack ═══"
 
   # CI files belong at the repository root, not the Rust workspace root.
   ci_base="$workspace_root"
@@ -494,6 +494,16 @@ if [ "$do_ci" -eq 1 ]; then
     "${assets_dir}/detect_rust_workspaces.py" \
     "${ci_base}/.github/scripts/detect_rust_workspaces.py" \
     "detect_rust_workspaces.py" \
+    "1"
+  safe_copy \
+    "${script_dir}/verify.sh" \
+    "${ci_base}/.github/scripts/verify.sh" \
+    "verify.sh" \
+    "1"
+  safe_copy \
+    "${script_dir}/workspace-members.sh" \
+    "${ci_base}/.github/scripts/workspace-members.sh" \
+    "workspace-members.sh" \
     "1"
   safe_copy \
     "${assets_dir}/ci.yml" \
