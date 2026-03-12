@@ -110,3 +110,128 @@ images:
       - compute
     security_notes:
       - OpenCL/GPU workloads may require device reservations and host runtime integration.
+
+  - id: KB-N8N
+    match:
+      registries: [docker.io]
+      repositories: [n8nio/n8n]
+    runtime_uid: 1000
+    runtime_gid: 1000
+    required_mounts:
+      - /home/node/.n8n
+    recommended_env:
+      - key: N8N_HOST
+        default_value: "0.0.0.0"
+        required: false
+        rationale: Bind address for the n8n web interface.
+      - key: N8N_PORT
+        default_value: "5678"
+        required: false
+        rationale: Port for the n8n web interface.
+      - key: DB_TYPE
+        default_value: postgresdb
+        required: false
+        rationale: Database backend type; postgresdb for production use.
+      - key: DB_POSTGRESDB_HOST
+        required: true
+        rationale: Hostname of the PostgreSQL server.
+      - key: DB_POSTGRESDB_PORT
+        default_value: "5432"
+        required: false
+        rationale: Port of the PostgreSQL server.
+      - key: DB_POSTGRESDB_DATABASE
+        default_value: n8n
+        required: false
+        rationale: Database name for n8n.
+      - key: DB_POSTGRESDB_USER
+        required: true
+        rationale: PostgreSQL user for n8n connections.
+      - key: DB_POSTGRESDB_PASSWORD
+        required: true
+        rationale: PostgreSQL password; supports _FILE suffix for Docker secrets (DB_POSTGRESDB_PASSWORD_FILE).
+      - key: N8N_ENCRYPTION_KEY
+        required: true
+        rationale: Encryption key for stored credentials; must persist across restarts.
+      - key: N8N_USER_MANAGEMENT_JWT_SECRET
+        required: false
+        rationale: JWT secret for user management; auto-generated if omitted.
+    preferred_healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --spider http://127.0.0.1:5678/healthz/readiness || exit 1
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    security_notes:
+      - /home/node/.n8n must be writable even under read-only root; mount a named volume.
+      - Prefer _FILE-suffixed env vars (e.g., DB_POSTGRESDB_PASSWORD_FILE) for Docker secrets integration.
+      - N8N_ENCRYPTION_KEY must be stable across container restarts; losing it invalidates stored credentials.
+
+  - id: KB-MARIADB
+    match:
+      registries: [docker.io]
+      repositories: [library/mariadb]
+    runtime_uid: 999
+    runtime_gid: 999
+    required_mounts:
+      - /var/lib/mysql
+    recommended_env:
+      - key: MARIADB_ROOT_PASSWORD
+        required: true
+        rationale: Required unless MARIADB_ALLOW_EMPTY_ROOT_PASSWORD or MARIADB_RANDOM_ROOT_PASSWORD is set.
+      - key: MARIADB_DATABASE
+        required: false
+        rationale: Creates the named database at first startup.
+      - key: MARIADB_USER
+        required: false
+        rationale: Creates a user with GRANT ALL on MARIADB_DATABASE.
+      - key: MARIADB_PASSWORD
+        required: false
+        rationale: Password for MARIADB_USER; required when MARIADB_USER is set.
+    preferred_healthcheck:
+      test:
+        - CMD
+        - healthcheck.sh
+        - --su-mysql
+        - --connect
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    security_notes:
+      - Keep /var/lib/mysql writable even when root filesystem is read-only.
+      - The healthcheck.sh script is bundled in official MariaDB images from 10.4+.
+
+  - id: KB-MONGO
+    match:
+      registries: [docker.io]
+      repositories: [library/mongo]
+    runtime_uid: 999
+    runtime_gid: 999
+    required_mounts:
+      - /data/db
+      - /data/configdb
+    recommended_env:
+      - key: MONGO_INITDB_ROOT_USERNAME
+        required: true
+        rationale: Creates the initial admin user at first startup.
+      - key: MONGO_INITDB_ROOT_PASSWORD
+        required: true
+        rationale: Password for the initial admin user.
+      - key: MONGO_INITDB_DATABASE
+        required: false
+        rationale: Database used for init scripts in /docker-entrypoint-initdb.d/.
+    preferred_healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --eval
+        - "db.adminCommand('ping')"
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    security_notes:
+      - Both /data/db and /data/configdb must be writable under read-only root; mount named volumes.
+      - mongosh is available in MongoDB 6.0+; older images use mongo shell instead.

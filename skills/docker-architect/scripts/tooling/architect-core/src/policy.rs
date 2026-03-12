@@ -17,6 +17,16 @@ use crate::model::{CachedProfiles, ImageProfile};
 use crate::read_utf8_file_with_size_limit;
 
 const MAX_YAML_MERGE_DEPTH: u8 = 128;
+const INIT_PERMISSIONS_REQUIRED_FIELDS: [&str; 8] = [
+    "user",
+    "cap_drop",
+    "cap_add",
+    "security_opt",
+    "read_only",
+    "tmpfs",
+    "network_mode",
+    "restart",
+];
 
 /// Supported policy domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1654,6 +1664,14 @@ struct ServiceRuleContext<'a> {
     active_mode: DeployMode,
 }
 
+struct ExistingInitSidecarContext<'a> {
+    service_name: &'a str,
+    init_name: &'a str,
+    service: &'a Mapping,
+    existing_sidecar: &'a Mapping,
+    canonical_service_body: &'a JsonValue,
+}
+
 fn evaluate_rule_for_service(
     rule: &PolicyRule,
     context: ServiceRuleContext<'_>,
@@ -1853,9 +1871,12 @@ fn evaluate_rule_for_service(
                 }
                 return Ok(());
             }
-            if service_has_permission_init_sidecar(service_name, service, services) {
-                return Ok(());
-            }
+
+            let init_name = format!("{service_name}-init-perms");
+            let existing_init_sidecar = services
+                .get(YamlValue::String(init_name.clone()))
+                .and_then(YamlValue::as_mapping);
+
             for target in heuristics::bind_mount_targets(service) {
                 add_compose_violation(
                     violations,
@@ -1867,8 +1888,41 @@ fn evaluate_rule_for_service(
                     ),
                 );
             }
+
             let synthesized =
                 heuristics::ensure_volume_permissions(service_name, service, service_profile)?;
+            let requires_init_sidecar =
+                synthesized.iter().any(|patch| patch.op == "inject_service");
+            if !requires_init_sidecar {
+                return Ok(());
+            }
+
+            let canonical_service_body = synthesized
+                .iter()
+                .find(|patch| {
+                    patch.op == "inject_service" && patch.path == format!("services.{init_name}")
+                })
+                .map(|patch| &patch.value);
+
+            if let Some(existing_sidecar) = existing_init_sidecar {
+                let Some(canonical_service_body) = canonical_service_body else {
+                    return Ok(());
+                };
+                validate_existing_init_sidecar(
+                    violations,
+                    patches,
+                    rule,
+                    ExistingInitSidecarContext {
+                        service_name,
+                        init_name: &init_name,
+                        service,
+                        existing_sidecar,
+                        canonical_service_body,
+                    },
+                )?;
+                return Ok(());
+            }
+
             for patch in synthesized {
                 add_compose_violation(
                     violations,
@@ -2028,6 +2082,21 @@ fn add_compose_violation(
     });
 }
 
+fn add_compose_block_violation(
+    violations: &mut Vec<PolicyViolation>,
+    rule: &PolicyRule,
+    service_name: &str,
+    key: &str,
+    reason: String,
+) {
+    violations.push(PolicyViolation {
+        rule_id: rule.id.clone(),
+        severity: RuleSeverity::Block,
+        target: format!("services.{service_name}.{key}"),
+        reason,
+    });
+}
+
 fn is_init_permissions_service_name(service_name: &str) -> bool {
     // Only sidecars that follow the explicit `<service>-init-perms` naming convention
     // are exempt from EnsureKey and RequireNonRootUser checks. Generic `init-*`
@@ -2092,32 +2161,135 @@ fn validate_companion_file_key(key: &str, rule_id: &str) -> Result<(), AppError>
     Ok(())
 }
 
-fn service_has_permission_init_sidecar(
-    service_name: &str,
-    service: &Mapping,
-    services: &Mapping,
-) -> bool {
-    let init_name = format!("{service_name}-init-perms");
-    let init_service_exists = services
-        .get(YamlValue::String(init_name.clone()))
-        .and_then(YamlValue::as_mapping)
-        .is_some();
-    if !init_service_exists {
-        return false;
+fn validate_existing_init_sidecar(
+    violations: &mut Vec<PolicyViolation>,
+    patches: &mut Vec<PatchOperation>,
+    rule: &PolicyRule,
+    context: ExistingInitSidecarContext<'_>,
+) -> Result<(), AppError> {
+    let ExistingInitSidecarContext {
+        service_name,
+        init_name,
+        service,
+        existing_sidecar,
+        canonical_service_body,
+    } = context;
+    let Some(canonical_sidecar) = canonical_service_body.as_object() else {
+        return Ok(());
+    };
+
+    if !service_depends_on_init_sidecar(service, init_name) {
+        add_compose_block_violation(
+            violations,
+            rule,
+            service_name,
+            "depends_on",
+            "service requires init sidecar dependency wiring for deterministic startup ordering"
+                .to_string(),
+        );
+        patches.push(PatchOperation {
+            op: "depends_on_add".to_string(),
+            path: format!("services.{service_name}.depends_on.{init_name}"),
+            value: JsonValue::Object(
+                [(
+                    "condition".to_string(),
+                    JsonValue::String("service_completed_successfully".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            rule_id: rule.id.clone(),
+        });
     }
 
+    for field in INIT_PERMISSIONS_REQUIRED_FIELDS {
+        let Some(expected) = canonical_sidecar.get(field) else {
+            continue;
+        };
+        let actual = existing_sidecar.get(YamlValue::String(field.to_string()));
+        if init_sidecar_field_matches(actual, expected) {
+            continue;
+        }
+        add_compose_block_violation(
+            violations,
+            rule,
+            init_name,
+            field,
+            format!("init-perms sidecar field `{field}` does not match the canonical contract"),
+        );
+        patches.push(PatchOperation {
+            op: "set".to_string(),
+            path: format!("services.{init_name}.{field}"),
+            value: expected.clone(),
+            rule_id: rule.id.clone(),
+        });
+    }
+
+    if existing_sidecar
+        .get(YamlValue::String("profiles".to_string()))
+        .is_some()
+    {
+        add_compose_block_violation(
+            violations,
+            rule,
+            init_name,
+            "profiles",
+            "required init-perms sidecar must not be gated behind profiles".to_string(),
+        );
+        patches.push(PatchOperation {
+            op: "remove".to_string(),
+            path: format!("services.{init_name}.profiles"),
+            value: JsonValue::Null,
+            rule_id: rule.id.clone(),
+        });
+    }
+
+    Ok(())
+}
+
+fn service_depends_on_init_sidecar(service: &Mapping, init_name: &str) -> bool {
     let Some(depends_on) = service.get(YamlValue::String("depends_on".to_string())) else {
         return false;
     };
 
     match depends_on {
-        YamlValue::Mapping(map) => map.get(YamlValue::String(init_name.clone())).is_some(),
+        YamlValue::Mapping(map) => map.get(YamlValue::String(init_name.to_string())).is_some(),
         YamlValue::Sequence(items) => items
             .iter()
             .filter_map(YamlValue::as_str)
-            .any(|item| item == init_name.as_str()),
+            .any(|item| item == init_name),
         _ => false,
     }
+}
+
+fn init_sidecar_field_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    match expected {
+        JsonValue::Bool(value) => actual.and_then(YamlValue::as_bool) == Some(*value),
+        JsonValue::String(value) => {
+            actual.and_then(yaml_scalar_to_string).as_deref() == Some(value)
+        }
+        JsonValue::Array(items) => yaml_string_list_matches(actual, items),
+        _ => actual
+            .and_then(|value| serde_json::to_value(value).ok())
+            .is_some_and(|value| value == *expected),
+    }
+}
+
+fn yaml_string_list_matches(actual: Option<&YamlValue>, expected: &[JsonValue]) -> bool {
+    let actual_values = match actual {
+        Some(YamlValue::Sequence(items)) => items
+            .iter()
+            .filter_map(yaml_scalar_to_string)
+            .collect::<BTreeSet<_>>(),
+        Some(YamlValue::String(value)) => [value.to_string()].into_iter().collect(),
+        _ => return false,
+    };
+    let expected_values: BTreeSet<String> = expected
+        .iter()
+        .filter_map(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    actual_values == expected_values
 }
 
 fn get_service_key<'a>(service: &'a Mapping, key: &str) -> Option<&'a YamlValue> {

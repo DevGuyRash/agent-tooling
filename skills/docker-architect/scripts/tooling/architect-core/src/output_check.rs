@@ -28,6 +28,20 @@ pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>
             "Configuration Files",
             "Operational Guide",
         ],
+        "swarm" => vec![
+            "Requirements",
+            "Mode Applicability Matrix",
+            "Image Research",
+            "Unknown Unknowns",
+            "Stack Overview",
+            "Architecture Plan",
+            "Visualization",
+            "Task List",
+            "Directory/Prerequisites",
+            "Configuration Files",
+            "Ownership Bootstrap",
+            "Operational Guide",
+        ],
         "image" => vec![
             "Requirements",
             "Mode Applicability Matrix",
@@ -88,6 +102,20 @@ pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>
     for marker in ["AC-", "IMG-", "RSK-", "O-"] {
         if !content.contains(marker) {
             errors.push(format!("missing marker family: {marker}*"));
+        }
+    }
+
+    if mode == "image" {
+        let lower = content.to_ascii_lowercase();
+        if !(lower.contains("docker-bake.hcl") || lower.contains("docker buildx bake")) {
+            errors.push(
+                "warning: image output is missing bake/buildx release instructions".to_string(),
+            );
+        }
+        if !(lower.contains("sbom") || lower.contains("provenance")) {
+            errors.push(
+                "warning: image output is missing sbom/provenance attestation guidance".to_string(),
+            );
         }
     }
 
@@ -316,5 +344,68 @@ RSK-CMP-2
 "#;
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn validate_output_contract_accepts_well_formed_swarm_sections() {
+        let doc = r#"
+# Requirements
+AC-1
+# Mode Applicability Matrix
+O-1
+# Image Research
+IMG-1
+# Unknown Unknowns
+RSK-1
+# Stack Overview
+AC-2
+# Architecture Plan
+AC-3
+# Visualization
+O-2
+# Task List
+AC-4
+# Directory/Prerequisites
+O-3
+# Configuration Files
+IMG-2
+# Ownership Bootstrap
+AC-5
+# Operational Guide
+RSK-2
+"#;
+        let result = validate_output_contract(doc, "swarm").expect("validation should succeed");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn validate_output_contract_warns_when_image_bake_content_is_missing() {
+        let doc = r#"
+# Requirements
+AC-1
+# Mode Applicability Matrix
+O-1
+# Image Research
+IMG-1
+# Unknown Unknowns
+RSK-1
+# Build Overview
+AC-2
+# Build Design Plan
+AC-3
+# Visualization
+O-2
+# Task List
+AC-4
+# Project Layout/Prerequisites
+O-3
+# Generated Files
+IMG-2
+# Operational Guide
+RSK-2
+"#;
+        let result = validate_output_contract(doc, "image").expect("validation should succeed");
+        assert!(result.iter().any(|item| item.contains("bake/buildx")));
+        assert!(result.iter().any(|item| item.contains("sbom/provenance")));
     }
 }

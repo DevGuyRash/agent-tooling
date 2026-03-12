@@ -1,0 +1,86 @@
+# ── Stateful CI Verify Fixture ──
+# Tests the hardest case: database with init-perms sidecar, non-root user,
+# read-only root, healthcheck, and named volumes.
+# Used by: docker-architect-ci-gate --verify-compose-file
+
+x-hardening-core: &hardening_core
+  cap_drop:
+    - ALL
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+
+x-init-permissions-core: &init_permissions_core
+  cap_add:
+    - CHOWN
+    - FOWNER
+  cap_drop:
+    - ALL
+  network_mode: none
+  read_only: true
+  restart: "no"
+  security_opt:
+    - no-new-privileges:true
+  user: "0:0"
+
+services:
+  db:
+    <<: *hardening_core
+    image: postgres:16-alpine
+    user: "999:999"
+    cpus: "1.0"
+    mem_limit: 512m
+    pids_limit: 256
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: citest
+      POSTGRES_USER: citest
+      POSTGRES_PASSWORD: citest_insecure_fixture_only
+      PGDATA: /var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U citest -d postgres || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 40s
+      retries: 10
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=16m,uid=999,gid=999,mode=775
+    depends_on:
+      db-init-perms:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  db-init-perms:
+    <<: [*hardening_core, *init_permissions_core]
+    image: docker.io/library/alpine:3.20
+    cpus: "0.5"
+    mem_limit: 64m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    command:
+      - /bin/sh
+      - -euxc
+      - |
+        set -eu
+        for path in /mnt/perm-0; do
+          mkdir -p "$$path"
+          owner="$$(stat -c '%u:%g' "$$path" 2>/dev/null || true)"
+          if [ "$$owner" != "999:999" ]; then chown -R 999:999 "$$path"; fi
+        done
+    volumes:
+      - db-data:/mnt/perm-0
+
+volumes:
+  db-data:
+
+networks:
+  backend:
+    driver: bridge

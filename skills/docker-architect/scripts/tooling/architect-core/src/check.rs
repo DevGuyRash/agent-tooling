@@ -69,6 +69,25 @@ pub fn validate_cache(cache: &CachedProfiles, strictness: &str) -> Result<Vec<St
         if profile.platforms.is_empty() {
             warnings.push(format!("{} missing platforms", profile.id));
         }
+        if is_docker_hub_image(&profile.image) && runtime_user_is_unresolved(&profile.runtime.user)
+        {
+            let issue = match (
+                profile.researched_config.runtime_uid,
+                profile.researched_config.runtime_gid,
+            ) {
+                (Some(uid), Some(gid)) => format!(
+                    "{} missing deterministic runtime user; curated knowledge suggests {}:{}",
+                    profile.id, uid, gid
+                ),
+                (Some(uid), None) => format!(
+                    "{} missing deterministic runtime user; curated knowledge suggests uid {}",
+                    profile.id, uid
+                ),
+                _ => format!("{} missing deterministic runtime user", profile.id),
+            };
+            warnings.push(issue.clone());
+            critical.push(issue);
+        }
     }
 
     if strictness == "enforcing" && (!warnings.is_empty() || !critical.is_empty()) {
@@ -88,6 +107,12 @@ pub fn validate_cache(cache: &CachedProfiles, strictness: &str) -> Result<Vec<St
 
 fn is_docker_hub_image(image: &str) -> bool {
     image.starts_with("docker.io/")
+}
+
+fn runtime_user_is_unresolved(user: &Option<String>) -> bool {
+    user.as_deref()
+        .map(str::trim)
+        .is_none_or(|value| value.is_empty() || value.eq_ignore_ascii_case("unknown"))
 }
 
 #[cfg(test)]
@@ -166,6 +191,25 @@ mod tests {
     fn balanced_rejects_missing_digest_for_non_docker_hub_image() {
         let mut profile = base_profile("ghcr.io/openfaas/gateway:latest");
         profile.digest = None;
+        let cache = CachedProfiles {
+            schema_version: 1,
+            profiles: vec![profile],
+            unresolved_references: Vec::new(),
+        };
+
+        let result = validate_cache(&cache, "balanced");
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::InvalidInput { .. })
+        ));
+    }
+
+    #[test]
+    fn balanced_rejects_missing_runtime_user_for_docker_hub_image() {
+        let mut profile = base_profile("docker.io/library/nginx:1.27");
+        profile.runtime.user = None;
+        profile.researched_config.runtime_uid = Some(1000);
+        profile.researched_config.runtime_gid = Some(1000);
         let cache = CachedProfiles {
             schema_version: 1,
             profiles: vec![profile],

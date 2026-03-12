@@ -210,8 +210,8 @@ pub struct VerifyArgs {
     pub output: Option<PathBuf>,
     /// Tear down resources after verification run.
     ///
-    /// Verification runs `up -d` and immediate inspect/log checks; it does not wait/poll for
-    /// health status transitions.
+    /// Verification runs `up -d`, waits up to 60 seconds for healthchecked services to become
+    /// healthy, then performs baseline inspect/log checks.
     #[arg(long, default_value_t = true)]
     pub teardown: bool,
 }

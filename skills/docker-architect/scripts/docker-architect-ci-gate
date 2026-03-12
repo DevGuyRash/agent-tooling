@@ -29,26 +29,91 @@ tooling_dir="${script_dir}/tooling"
 tooling_manifest="${tooling_dir}/Cargo.toml"
 compose_launcher="${script_dir}/docker-architect-compose"
 
+# ── Argument parsing ──
+run_mode="default"
+custom_compose_file=""
+
+show_help() {
+  cat <<'HELP'
+Usage: docker-architect-ci-gate [OPTIONS]
+
+Run deterministic golden pipeline tests and optionally live-verify Docker
+Compose fixtures for the docker-architect skill.
+
+Options:
+  --help                      Show this help message and exit.
+  --verify                    Run only the live Docker verify step (skip golden tests).
+  --verify-compose-file PATH  Verify a specific compose file instead of the default fixture.
+
+Environment:
+  DOCKER_ARCHITECT_ENABLE_VERIFY   Set to 1/true/yes/on to enable live verify
+                                   in default mode (golden tests + verify).
+  DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE
+                                   Override the default live-verify fixture set with one file.
+
+Examples:
+  docker-architect-ci-gate                        # golden tests only (default)
+  docker-architect-ci-gate --verify               # live verify smoke + stateful fixtures
+  docker-architect-ci-gate --verify-compose-file path/to/compose.yaml
+  DOCKER_ARCHITECT_ENABLE_VERIFY=1 docker-architect-ci-gate  # golden + verify
+HELP
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    --verify)
+      run_mode="verify-only"
+      shift
+      ;;
+    --verify-compose-file)
+      if [ $# -lt 2 ]; then
+        echo "error: --verify-compose-file requires a PATH argument" >&2
+        exit 2
+      fi
+      run_mode="verify-only"
+      custom_compose_file="$2"
+      shift 2
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      echo "Run with --help for usage." >&2
+      exit 2
+      ;;
+  esac
+done
+
 if [ ! -f "${tooling_manifest}" ]; then
   echo "error: missing ${tooling_manifest} (docker-architect tooling workspace not found)" >&2
   exit 2
 fi
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "error: cargo is required to run deterministic golden tests" >&2
-  exit 127
+# ── Golden pipeline tests (skip in verify-only mode) ──
+if [ "${run_mode}" != "verify-only" ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "error: cargo is required to run deterministic golden tests" >&2
+    exit 127
+  fi
+
+  echo "[docker-architect-ci-gate] running deterministic golden pipeline tests"
+  cargo test --manifest-path "${tooling_manifest}" --locked -p architect-core --test golden_pipeline
 fi
 
-echo "[docker-architect-ci-gate] running deterministic golden pipeline tests"
-cargo test --manifest-path "${tooling_manifest}" --locked -p architect-core --test golden_pipeline
+# ── Determine whether to run live verify ──
+run_verify=0
+if [ "${run_mode}" = "verify-only" ]; then
+  run_verify=1
+else
+  verify_enabled_value="$(printf '%s' "${DOCKER_ARCHITECT_ENABLE_VERIFY:-0}" | tr '[:upper:]' '[:lower:]')"
+  case "${verify_enabled_value}" in
+    1|true|yes|on) run_verify=1 ;;
+  esac
+fi
 
-verify_enabled_value="$(printf '%s' "${DOCKER_ARCHITECT_ENABLE_VERIFY:-0}" | tr '[:upper:]' '[:lower:]')"
-verify_enabled=0
-case "${verify_enabled_value}" in
-  1|true|yes|on) verify_enabled=1 ;;
-esac
-
-if [ "${verify_enabled}" -ne 1 ]; then
+if [ "${run_verify}" -ne 1 ]; then
   echo "[docker-architect-ci-gate] skipping live docker verify (set DOCKER_ARCHITECT_ENABLE_VERIFY=1 to enable)"
   exit 0
 fi
@@ -67,27 +132,49 @@ if ! docker info >/dev/null 2>&1; then
   exit 2
 fi
 
-verify_compose_file="${DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE:-${skill_root}/references/ci/verify.compose.yaml}"
-if [ ! -f "${verify_compose_file}" ]; then
-  echo "error: verify compose file not found: ${verify_compose_file}" >&2
-  exit 2
-fi
-
 if [ ! -x "${compose_launcher}" ] || [ ! -f "${compose_launcher}" ]; then
   echo "error: missing executable compose launcher: ${compose_launcher}" >&2
   exit 2
 fi
 
-report_file="$(mktemp "${TMPDIR:-/tmp}/docker-architect-verify-report.XXXXXX.json")"
-trap 'rm -f "${report_file}"' EXIT HUP INT TERM
+run_live_verify_fixture() {
+  fixture_path="$1"
+  if [ ! -f "${fixture_path}" ]; then
+    echo "error: verify compose file not found: ${fixture_path}" >&2
+    exit 2
+  fi
 
-echo "[docker-architect-ci-gate] running live docker verify with ${verify_compose_file}"
-"${compose_launcher}" verify "${verify_compose_file}" --mode compose --output "${report_file}"
+  echo "[docker-architect-ci-gate] validating verify compose fixture with docker compose config -q: ${fixture_path}"
+  if ! docker compose -f "${fixture_path}" config -q; then
+    echo "error: verify compose fixture is invalid: ${fixture_path}" >&2
+    exit 2
+  fi
 
-if ! jq -e '.success == true' "${report_file}" >/dev/null 2>&1; then
-  echo "error: live docker verify failed (success=false)" >&2
-  cat "${report_file}" >&2
-  exit 1
+  report_file="$(mktemp "${TMPDIR:-/tmp}/docker-architect-verify-report.XXXXXX.json")"
+  echo "[docker-architect-ci-gate] running live docker verify with ${fixture_path}"
+  if ! "${compose_launcher}" verify "${fixture_path}" --mode compose --output "${report_file}"; then
+    cat "${report_file}" >&2 2>/dev/null || true
+    rm -f "${report_file}"
+    exit 1
+  fi
+
+  if ! jq -e '.success == true' "${report_file}" >/dev/null 2>&1; then
+    echo "error: live docker verify failed for fixture ${fixture_path} (success=false)" >&2
+    cat "${report_file}" >&2
+    rm -f "${report_file}"
+    exit 1
+  fi
+
+  rm -f "${report_file}"
+}
+
+selected_verify_fixture="${custom_compose_file:-${DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE:-}}"
+if [ -n "${selected_verify_fixture}" ]; then
+  run_live_verify_fixture "${selected_verify_fixture}"
+  echo "[docker-architect-ci-gate] live docker verify passed"
+  exit 0
 fi
 
+run_live_verify_fixture "${skill_root}/references/ci/verify.compose.yaml"
+run_live_verify_fixture "${skill_root}/references/ci/verify-stateful.compose.yaml"
 echo "[docker-architect-ci-gate] live docker verify passed"

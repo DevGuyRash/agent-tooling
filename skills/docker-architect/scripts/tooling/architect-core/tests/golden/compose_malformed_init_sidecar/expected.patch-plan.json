@@ -1,0 +1,87 @@
+[
+  {
+    "op": "set",
+    "path": "services.api.image",
+    "value": "nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rule_id": "AC-CMP-DIGEST"
+  },
+  {
+    "op": "set",
+    "path": "services.api.healthcheck",
+    "value": {
+      "interval": "10s",
+      "retries": 3,
+      "start_period": "10s",
+      "test": [
+        "CMD",
+        "nginx",
+        "-t"
+      ],
+      "timeout": "5s"
+    },
+    "rule_id": "AC-CMP-HEALTH"
+  },
+  {
+    "op": "set",
+    "path": "services.api-init-perms.cap_add",
+    "value": [
+      "CHOWN",
+      "FOWNER"
+    ],
+    "rule_id": "AC-CMP-PERMS-INIT"
+  },
+  {
+    "op": "remove",
+    "path": "services.api-init-perms.profiles",
+    "value": null,
+    "rule_id": "AC-CMP-PERMS-INIT"
+  },
+  {
+    "op": "set",
+    "path": "services.api-init-perms.restart",
+    "value": "no",
+    "rule_id": "AC-CMP-PERMS-INIT"
+  },
+  {
+    "op": "set",
+    "path": "services.api.cpus",
+    "value": "1.0",
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.mem_limit",
+    "value": "512m",
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.pids_limit",
+    "value": 256,
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.restart",
+    "value": "unless-stopped",
+    "rule_id": "AC-CMP-RESTART"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/run:rw,noexec,nosuid,nodev,size=16m",
+    "rule_id": "AC-CMP-WRITABLE"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/tmp:rw,noexec,nosuid,nodev,size=64m",
+    "rule_id": "AC-CMP-WRITABLE"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/var/run:rw,noexec,nosuid,nodev,size=16m",
+    "rule_id": "AC-CMP-WRITABLE"
+  }
+]
