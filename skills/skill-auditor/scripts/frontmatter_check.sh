@@ -64,17 +64,36 @@ extract_description() {
     [ -n "$desc_line" ] || return 1
 
     desc_start=$(printf '%s' "$desc_line" | cut -d: -f1)
-    desc_raw=$(printf '%s\n' "$fm_block" | sed -n "${desc_start}p" | sed 's/^description:[[:space:]]*//')
+    desc_full_line=$(printf '%s\n' "$fm_block" | sed -n "${desc_start}p")
+    desc_raw=$(printf '%s\n' "$desc_full_line" | sed 's/^description:[[:space:]]*//')
+    desc_indent=$(printf '%s\n' "$desc_full_line" | awk 'match($0, /^[[:space:]]*/){ print RLENGTH }')
 
     case "$desc_raw" in
-        ">-"|">"|"|"|"|-")
+        ">"|">-"|">+"|"|"|"|-"|"|+")
             desc_text=$(
-                printf '%s\n' "$fm_block" | tail -n +"$((desc_start + 1))" | while IFS= read -r line; do
-                    case "$line" in
-                        "  "*|"	"*) printf '%s ' "$(printf '%s' "$line" | sed 's/^[[:space:]]*//')" ;;
-                        *) break ;;
-                    esac
-                done
+                printf '%s\n' "$fm_block" | tail -n +"$((desc_start + 1))" | awk -v min_indent="$((desc_indent + 1))" '
+                    function line_indent(text) {
+                        match(text, /^[[:space:]]*/)
+                        return RLENGTH
+                    }
+
+                    {
+                        if ($0 ~ /^[[:space:]]*$/) {
+                            if (seen_content) {
+                                printf " "
+                            }
+                            next
+                        }
+
+                        if (line_indent($0) < min_indent) {
+                            exit
+                        }
+
+                        seen_content = 1
+                        sub(/^[[:space:]]*/, "", $0)
+                        printf "%s ", $0
+                    }
+                '
             )
             ;;
         *)
