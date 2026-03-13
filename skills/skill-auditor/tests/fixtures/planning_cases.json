@@ -1,0 +1,27 @@
+[
+  {
+    "question": "Packaging fit",
+    "reference": "references/packaging-fit.md",
+    "terms": ["migrate_to_agents", "migrate_to_tool", "hybrid_recommended"]
+  },
+  {
+    "question": "Trigger fit",
+    "reference": "references/trigger-evals.md",
+    "terms": ["explicit", "implicit", "negative", "ambiguous"]
+  },
+  {
+    "question": "Task fit",
+    "reference": "references/task-evals.md",
+    "terms": ["canonical tasks", "outcome", "efficiency"]
+  },
+  {
+    "question": "Context fit",
+    "reference": "references/context-redesign.md",
+    "terms": ["one hop", "operational", "on demand"]
+  },
+  {
+    "question": "Verification fit",
+    "reference": "references/verification-loop.md",
+    "terms": ["verification plan", "rerun", "compare"]
+  }
+]

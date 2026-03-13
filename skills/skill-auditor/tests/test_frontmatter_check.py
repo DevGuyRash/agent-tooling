@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "frontmatter_check.sh"
+
+
+def run_frontmatter_check(skill_dir: Path) -> tuple[subprocess.CompletedProcess[str], dict]:
+    completed = subprocess.run(
+        ["sh", str(SCRIPT), str(skill_dir), "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, json.loads(completed.stdout)
+
+
+class FrontmatterCheckTests(unittest.TestCase):
+    def test_inline_description_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: Review demo skills for maintainers updating metadata and instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["issue_count"], 0)
+
+    def test_valid_skill_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                      Check a demo skill and explain what it does. Use when
+                      reviewing demo skills.
+                    ---
+
+                    # Demo Skill
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["issue_count"], 0)
+
+    def test_strong_description_without_literal_use_when_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                      Review demo skills for maintainers revising metadata,
+                      references, and workflow instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["warning_count"], 0)
+
+    def test_description_accepts_keep_chomp_block_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >+
+                      Check a demo skill and explain what it does. Use when
+                      reviewing demo skills.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["issue_count"], 0)
+
+    def test_description_accepts_one_space_indented_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: >-
+                     Check a demo skill and explain what it does. Use when
+                     reviewing demo skills.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["issue_count"], 0)
+
+    def test_generic_description_becomes_advisory_not_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: Helps with demo skills.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+        self.assertIn("description_trigger_weak", {warning["code"] for warning in data["warnings"]})
+
+    def test_active_skill_passes(self) -> None:
+        completed, data = run_frontmatter_check(ROOT)
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(data["ok"])
+
+
+if __name__ == "__main__":
+    unittest.main()
