@@ -576,6 +576,10 @@ fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usiz
             }
             match kind {
                 MatchKind::MacroOnly => {
+                    if j != i + prefix_bytes.len() {
+                        i += 1;
+                        continue;
+                    }
                     let mut k = j;
                     while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                         k += 1;
@@ -1057,6 +1061,10 @@ mod tests {
             find_banned_prefix("assert_ne!(left, right);", "assert_ne", &MatchKind::MacroOnly),
             Some(0)
         );
+        assert_eq!(
+            find_banned_prefix("assert_eq!(left, right);", "assert", &MatchKind::MacroOnly),
+            None
+        );
     }
 
     #[test]
@@ -1075,6 +1083,10 @@ mod tests {
         );
         assert_eq!(
             find_banned_prefix("debug_assert!(ready);", "assert", &MatchKind::MacroOnly),
+            None
+        );
+        assert_eq!(
+            find_banned_prefix("assert_matches!(value, Some(_));", "assert", &MatchKind::MacroOnly),
             None
         );
     }

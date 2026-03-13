@@ -136,8 +136,9 @@ rg '\.expect(_err)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || e
 rg 'panic!\(' --type rust "$@" || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust "$@" && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!()"
 rg 'unreachable!\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
-# Assert macros outside tests are enforced by the parser-aware banned_family.rs
-# harness so inline #[cfg(test)] modules in src/*.rs are masked correctly.
+rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
+# banned_family.rs remains the stricter parser-aware backstop so inline
+# #[cfg(test)] modules in src/*.rs are masked correctly.
 rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No exit() outside entrypoints"
 
 # Placeholders
@@ -198,7 +199,7 @@ import re
 import sys
 
 SKIP_DIRS = {"target", "test", "tests", "testdata", "bench", "benches", "example", "examples", "fixture", "fixtures"}
-TOKEN = re.compile(r"(^|[^A-Za-z0-9_])unsafe([^A-Za-z0-9_]|$)")
+TOKEN = re.compile(r"(^|[^A-Za-z0-9_#])unsafe([^A-Za-z0-9_]|$)")
 violations = []
 
 def should_skip(path: Path) -> bool:
