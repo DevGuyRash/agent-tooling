@@ -5,6 +5,8 @@ import argparse
 import re
 from pathlib import Path
 
+SKILLS_FILE_ROOT = "<skills-file-root>"
+GITOPS_SKILL_PREFIX = "skills/gitops-workflow/"
 
 ALLOWED_TYPES = {
     "feat",
@@ -123,12 +125,33 @@ def build_review_guide(changed_files: list[str]) -> list[str]:
     return guide or ["- Focus review on the changed files and generated PR body output."]
 
 
+def render_verification_path(path: str) -> str:
+    if path.startswith(GITOPS_SKILL_PREFIX):
+        return f"{SKILLS_FILE_ROOT}/{path[len(GITOPS_SKILL_PREFIX):]}"
+    return path
+
+
 def build_verification(base: str, head: str, changed_files: list[str]) -> list[str]:
     commands: list[str] = []
-    if any(path.endswith(".py") for path in changed_files):
-        commands.append("python3 -m unittest skills/gitops-workflow/tests/test_pr_template_discover.py skills/gitops-workflow/tests/test_pr_create.py")
-    if any(path.endswith(".sh") for path in changed_files):
-        commands.append("bash -n skills/gitops-workflow/scripts/*.sh")
+    python_files = [path for path in changed_files if path.endswith(".py")]
+    shell_files = [path for path in changed_files if path.endswith(".sh")]
+
+    if python_files:
+        if any(path.startswith(GITOPS_SKILL_PREFIX) for path in python_files):
+            commands.append(
+                "python3 -m unittest "
+                f"{SKILLS_FILE_ROOT}/tests/test_pr_template_discover.py "
+                f"{SKILLS_FILE_ROOT}/tests/test_pr_create.py"
+            )
+        else:
+            rendered_paths = " ".join(render_verification_path(path) for path in python_files[:8])
+            commands.append(f"python3 -m py_compile {rendered_paths}")
+    if shell_files:
+        if any(path.startswith(GITOPS_SKILL_PREFIX) for path in shell_files):
+            commands.append(f"bash -n {SKILLS_FILE_ROOT}/scripts/*.sh")
+        else:
+            rendered_paths = " ".join(render_verification_path(path) for path in shell_files[:8])
+            commands.append(f"bash -n {rendered_paths}")
     commands.append(f'git diff --stat "{base}...{head}"')
     return commands
 
@@ -184,10 +207,20 @@ def build_risk_lines(breaking: bool) -> str:
     return "\n".join(lines)
 
 
-def render_fallback_template(template_text: str, *, summary: str, changes: str, test_commands: str, risk_lines: str, refs_lines: list[str]) -> str:
+def render_fallback_template(
+    template_text: str,
+    *,
+    summary: str,
+    changes: str,
+    review_lines: list[str],
+    test_commands: str,
+    risk_lines: str,
+    refs_lines: list[str],
+) -> str:
     refs_text = "\n".join(refs_lines)
     rendered = template_text.replace("<!-- SUMMARY_PLACEHOLDER -->", summary)
     rendered = rendered.replace("<!-- CHANGES_PLACEHOLDER -->", changes)
+    rendered = rendered.replace("<!-- REVIEW_FOCUS_PLACEHOLDER -->", render_review_focus(review_lines))
     rendered = rendered.replace("<!-- TEST_COMMANDS_PLACEHOLDER -->", test_commands)
     rendered = rendered.replace("<!-- RISK_PLACEHOLDER -->", risk_lines)
     rendered = rendered.replace("<!-- REFS_PLACEHOLDER -->", refs_text)
@@ -200,6 +233,7 @@ def has_fallback_placeholders(template_text: str) -> bool:
         for marker in (
             "<!-- SUMMARY_PLACEHOLDER -->",
             "<!-- CHANGES_PLACEHOLDER -->",
+            "<!-- REVIEW_FOCUS_PLACEHOLDER -->",
             "<!-- TEST_COMMANDS_PLACEHOLDER -->",
             "<!-- RISK_PLACEHOLDER -->",
             "<!-- REFS_PLACEHOLDER -->",
@@ -250,6 +284,7 @@ def render_augmented_template(
             template_text,
             summary=summary,
             changes=changes,
+            review_lines=review_lines,
             test_commands=test_commands,
             risk_lines=risk_lines,
             refs_lines=refs_lines,
@@ -344,6 +379,7 @@ def main() -> int:
             template_text,
             summary=summary,
             changes=changes_text,
+            review_lines=review_lines,
             test_commands=test_commands,
             risk_lines=risk_lines,
             refs_lines=refs_lines,

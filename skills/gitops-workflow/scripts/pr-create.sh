@@ -184,24 +184,32 @@ if not isinstance(templates, list):
 count = len(templates)
 selected = None
 
+logical_templates = {}
+for template in templates:
+    path = template.get("path")
+    if not path:
+        continue
+    existing = logical_templates.get(path)
+    if existing is None or (existing.get("source") != "local" and template.get("source") == "local"):
+        logical_templates[path] = template
+
+deduped_templates = list(logical_templates.values())
+
 if requested:
     exact = [template for template in templates if template.get("id") == requested]
     if exact:
         selected = exact[0]
     else:
-        path_matches = [template for template in templates if template.get("path") == requested]
+        path_matches = [template for template in deduped_templates if template.get("path") == requested]
         if len(path_matches) == 1:
             selected = path_matches[0]
-        elif len(path_matches) > 1:
-            sys.stderr.write(f"template id '{requested}' is ambiguous; use a discovered id\n")
-            raise SystemExit(3)
         else:
             sys.stderr.write(f"template id not found in discovered templates: {requested}\n")
             raise SystemExit(3)
-elif count == 1:
-    selected = templates[0]
+elif len(deduped_templates) == 1:
+    selected = deduped_templates[0]
 else:
-    for template in templates:
+    for template in deduped_templates:
         if template.get("source") == "local":
             selected = template
             break
@@ -209,7 +217,7 @@ else:
 selected_id = selected.get("id", "") if selected else ""
 selected_source = selected.get("source", "") if selected else ""
 
-print(count)
+print(len(deduped_templates))
 print(selected_id)
 print(selected_source)
 PY
@@ -221,11 +229,13 @@ load_selected_template() {
   local selection_output=""
   local selection_error=""
   local template_fetch_args=()
+  local template_fetch_error=""
   local template_count=""
   local selected_id=""
   local selected_source=""
   local selection_status=0
   local selection_message=""
+  local fetch_message=""
 
   selection_error="$(mktemp -t pr-template-selection.XXXXXX.err)"
   if selection_output="$(select_template_from_json "$TEMPLATE_ID" "$templates_json" 2>"$selection_error")"; then
@@ -250,19 +260,35 @@ load_selected_template() {
   rm -f "$selection_error"
 
   TEMPLATE_COUNT="$template_count"
-  SELECTED_TEMPLATE_ID="$selected_id"
-  SELECTED_TEMPLATE_SOURCE="$selected_source"
+  SELECTED_TEMPLATE_ID=""
+  SELECTED_TEMPLATE_SOURCE=""
+  SELECTED_TEMPLATE_CONTENT=""
 
-  if [[ -z "$SELECTED_TEMPLATE_ID" ]]; then
+  if [[ -z "$selected_id" ]]; then
     return 0
   fi
 
-  template_fetch_args=(--template-id "$SELECTED_TEMPLATE_ID")
+  template_fetch_args=(--template-id "$selected_id")
   if [[ "$discovery_mode" == "repo-aware" && -n "$EFFECTIVE_REPO" ]]; then
-    template_fetch_args=(--repo "$EFFECTIVE_REPO" --template-id "$SELECTED_TEMPLATE_ID")
+    template_fetch_args=(--repo "$EFFECTIVE_REPO" --template-id "$selected_id")
   fi
-  SELECTED_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" "${template_fetch_args[@]}")"
-  return 0
+  template_fetch_error="$(mktemp -t pr-template-fetch.XXXXXX.err)"
+  if SELECTED_TEMPLATE_CONTENT="$(bash "$PR_TEMPLATE_SCRIPT" "${template_fetch_args[@]}" 2>"$template_fetch_error")"; then
+    SELECTED_TEMPLATE_ID="$selected_id"
+    SELECTED_TEMPLATE_SOURCE="$selected_source"
+    rm -f "$template_fetch_error"
+    return 0
+  fi
+
+  fetch_message="$(tr '\n' ' ' < "$template_fetch_error" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+  rm -f "$template_fetch_error"
+  LAST_TEMPLATE_SELECTION_ERROR="${fetch_message:-failed to load template content: $selected_id}"
+  SELECTED_TEMPLATE_CONTENT=""
+  if [[ "$CREATE" == "true" || -n "$TEMPLATE_ID" ]]; then
+    die "${LAST_TEMPLATE_SELECTION_ERROR}"
+  fi
+  echo "Warning: ${LAST_TEMPLATE_SELECTION_ERROR}; using skill fallback template." >&2
+  return 1
 }
 
 if [[ -z "$HEAD" ]]; then
@@ -316,7 +342,7 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
     TEMPLATE_DISCOVER_TEXT_ARGS=(--repo "$EFFECTIVE_REPO" --format text)
   fi
 
-  if [[ "$CREATE" != "true" ]]; then
+  if [[ "$CREATE" != "true" && -z "$REPO" ]]; then
     LOCAL_TEMPLATES_JSON=""
     if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --format json 2>/dev/null)"; then
       if load_selected_template "$LOCAL_TEMPLATES_JSON" "local-only"; then
@@ -341,7 +367,7 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
       fi
       echo "Warning: template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; using skill fallback template." >&2
     elif [[ -n "$TEMPLATES_JSON" ]]; then
-      load_selected_template "$TEMPLATES_JSON" "repo-aware" || true
+      load_selected_template "$TEMPLATES_JSON" "repo-aware"
     fi
   fi
 

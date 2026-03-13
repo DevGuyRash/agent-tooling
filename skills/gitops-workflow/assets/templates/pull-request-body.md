@@ -10,9 +10,7 @@
 
 # Review Focus
 
-- Primary surfaces to review:
-- User-visible or API-visible behavior:
-- Areas where a reviewer should be skeptical:
+<!-- REVIEW_FOCUS_PLACEHOLDER -->
 
 # Testing
 

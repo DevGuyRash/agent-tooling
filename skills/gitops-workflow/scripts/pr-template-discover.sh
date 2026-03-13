@@ -156,13 +156,25 @@ fi
 OWNER=""
 NAME=""
 DEFAULT_BRANCH=""
+CHECKOUT_REPO=""
+USE_LOCAL_TEMPLATES="false"
 TMP_LIST="$(mktemp)"
 SORTED_LIST="$(mktemp)"
 trap 'rm -f "$TMP_LIST" "$SORTED_LIST"' EXIT
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   LOCAL_ROOT="$(git rev-parse --show-toplevel)"
-  collect_local_templates "$LOCAL_ROOT" "$TMP_LIST"
+  if [[ -z "$REPO" ]]; then
+    USE_LOCAL_TEMPLATES="true"
+  elif command -v gh >/dev/null 2>&1; then
+    CHECKOUT_REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
+    if [[ -n "$CHECKOUT_REPO" && "$CHECKOUT_REPO" == "$REPO" ]]; then
+      USE_LOCAL_TEMPLATES="true"
+    fi
+  fi
+  if [[ "$USE_LOCAL_TEMPLATES" == "true" ]]; then
+    collect_local_templates "$LOCAL_ROOT" "$TMP_LIST"
+  fi
 fi
 
 if [[ -n "$REPO" ]]; then
