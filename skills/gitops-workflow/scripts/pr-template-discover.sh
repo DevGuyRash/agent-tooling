@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 REPO=""
 FORMAT="text"
 TEMPLATE_ID=""
+JSON_RENDERER="$SCRIPT_DIR/lib/pr_template_discover_json.py"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -212,30 +213,7 @@ if [[ -n "$TEMPLATE_ID" ]]; then
 fi
 
 if [[ "$FORMAT" == "json" ]]; then
-  python3 - "$SORTED_LIST" "$REPO" "$DEFAULT_BRANCH" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-records_path = Path(sys.argv[1])
-repo = sys.argv[2]
-ref = sys.argv[3]
-templates = []
-for line in records_path.read_text(encoding="utf-8").splitlines():
-    if not line:
-        continue
-    source, path, template_id = line.split("\t")
-    entry = {
-        "id": template_id,
-        "path": path,
-        "source": source,
-    }
-    if source == "remote" and repo:
-        entry["repo"] = repo
-        entry["ref"] = ref
-    templates.append(entry)
-print(json.dumps({"repo": repo, "ref": ref, "templates": templates}))
-PY
+  python3 "$JSON_RENDERER" "$SORTED_LIST" "$REPO" "$DEFAULT_BRANCH"
   exit 0
 fi
 

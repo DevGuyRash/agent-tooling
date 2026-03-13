@@ -122,6 +122,7 @@ SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PR_LABELS_SCRIPT="$SCRIPT_DIR/pr-labels-list.sh"
 PR_TEMPLATE_SCRIPT="$SCRIPT_DIR/pr-template-discover.sh"
 PR_BODY_RENDERER="$SCRIPT_DIR/lib/pr_body_renderer.py"
+PR_TEMPLATE_SELECTION="$SCRIPT_DIR/lib/pr_template_selection.py"
 DEFAULT_PR_TEMPLATE="$SKILL_ROOT/assets/templates/pull-request-body.md"
 
 require_cmd git
@@ -163,64 +164,7 @@ resolve_repo() {
 select_template_from_json() {
   local requested_id="${1:-}"
   local templates_json="${2:-}"
-  python3 - "$requested_id" "$templates_json" <<'PY'
-import json
-import sys
-
-requested = sys.argv[1]
-payload = sys.argv[2]
-
-try:
-    data = json.loads(payload or "{}")
-except json.JSONDecodeError as exc:
-    sys.stderr.write(f"invalid template discovery json: {exc}\n")
-    raise SystemExit(2)
-
-templates = data.get("templates")
-if not isinstance(templates, list):
-    sys.stderr.write("template discovery payload missing templates array\n")
-    raise SystemExit(2)
-
-count = len(templates)
-selected = None
-
-logical_templates = {}
-for template in templates:
-    path = template.get("path")
-    if not path:
-        continue
-    existing = logical_templates.get(path)
-    if existing is None or (existing.get("source") != "local" and template.get("source") == "local"):
-        logical_templates[path] = template
-
-deduped_templates = list(logical_templates.values())
-
-if requested:
-    exact = [template for template in templates if template.get("id") == requested]
-    if exact:
-        selected = exact[0]
-    else:
-        path_matches = [template for template in deduped_templates if template.get("path") == requested]
-        if len(path_matches) == 1:
-            selected = path_matches[0]
-        else:
-            sys.stderr.write(f"template id not found in discovered templates: {requested}\n")
-            raise SystemExit(3)
-elif len(deduped_templates) == 1:
-    selected = deduped_templates[0]
-else:
-    for template in deduped_templates:
-        if template.get("source") == "local":
-            selected = template
-            break
-
-selected_id = selected.get("id", "") if selected else ""
-selected_source = selected.get("source", "") if selected else ""
-
-print(len(deduped_templates))
-print(selected_id)
-print(selected_source)
-PY
+  python3 "$PR_TEMPLATE_SELECTION" "$requested_id" "$templates_json"
 }
 
 load_selected_template() {
@@ -249,6 +193,8 @@ load_selected_template() {
     rm -f "$selection_error"
     LAST_TEMPLATE_SELECTION_ERROR="${selection_message:-template selection failed}"
     if [[ "$selection_status" -eq 3 && -n "$EFFECTIVE_REPO" && "$discovery_mode" == "local-only" ]]; then
+      # Special exit code: explicit template selection missed during local-only
+      # discovery, so the caller should retry with repository-aware discovery.
       return 10
     fi
     if [[ "$CREATE" == "true" || -n "$TEMPLATE_ID" ]]; then
