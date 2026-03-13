@@ -367,7 +367,9 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
       fi
       echo "Warning: template discovery failed${EFFECTIVE_REPO:+ for $EFFECTIVE_REPO}; using skill fallback template." >&2
     elif [[ -n "$TEMPLATES_JSON" ]]; then
-      load_selected_template "$TEMPLATES_JSON" "repo-aware"
+      if load_selected_template "$TEMPLATES_JSON" "repo-aware"; then
+        :
+      fi
     fi
   fi
 

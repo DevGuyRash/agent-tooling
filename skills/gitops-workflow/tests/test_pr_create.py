@@ -264,6 +264,83 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("### Changes", body)
             self.assertIn("### Testing", body)
 
+    def test_preview_falls_back_when_repo_template_fetch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    echo \"main\"\n"
+                "  else\n"
+                "    echo \"acme/widget\"\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  endpoint=\"${2:-}\"\n"
+                "  case \"$endpoint\" in\n"
+                "    repos/acme/widget/contents/.github/pull_request_template.md?ref=main)\n"
+                "      echo '{\"type\":\"file\",\"encoding\":\"base64\",\"content\":\"IyBSZW1vdGUgVGVtcGxhdGUK\"}'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/.github/PULL_REQUEST_TEMPLATE?ref=main|repos/acme/widget/contents/PULL_REQUEST_TEMPLATE?ref=main|repos/acme/widget/contents/docs/PULL_REQUEST_TEMPLATE?ref=main)\n"
+                "      echo '[]'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/*)\n"
+                "      echo 'fetch failed' >&2\n"
+                "      exit 1\n"
+                "      ;;\n"
+                "  esac\n"
+                "  echo '[]'\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo \"$*\" >&2\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("using skill fallback template", proc.stderr)
+            m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
+            self.assertIsNotNone(m, proc.stdout)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("# Summary", body)
+            self.assertNotIn("# Remote Template", body)
+
     def test_explicit_repo_ignores_checkout_local_template_for_other_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
