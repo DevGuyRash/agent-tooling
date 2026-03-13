@@ -2580,21 +2580,38 @@ fn lookup_runtime_user_for_image(cache: &CachedProfiles, image: &str) -> Option<
             .split_once('@')
             .map(|(head, _)| head)
             .unwrap_or(normalized_profile.as_str());
-        let Some(user) = &profile.runtime.user else {
+        let Some(user) = resolved_runtime_user_for_profile(profile) else {
             continue;
         };
         if normalized_profile == normalized {
-            exact_candidates.insert(profile.id.clone(), user.clone());
+            exact_candidates.insert(profile.id.clone(), user);
             continue;
         }
         if normalized_base == profile_base {
-            base_candidates.insert(profile.id.clone(), user.clone());
+            base_candidates.insert(profile.id.clone(), user);
         }
     }
     exact_candidates
         .into_values()
         .next()
         .or_else(|| base_candidates.into_values().next())
+}
+
+fn resolved_runtime_user_for_profile(profile: &ImageProfile) -> Option<String> {
+    if let Some(user) = profile.runtime.user.as_deref().map(str::trim) {
+        if !user.is_empty() {
+            return Some(user.to_string());
+        }
+    }
+
+    match (
+        profile.researched_config.runtime_uid,
+        profile.researched_config.runtime_gid,
+    ) {
+        (Some(uid), Some(gid)) => Some(format!("{uid}:{gid}")),
+        (Some(uid), None) => Some(uid.to_string()),
+        (None, Some(_)) | (None, None) => None,
+    }
 }
 
 fn lookup_profile_for_service<'a>(
@@ -4347,6 +4364,43 @@ rules:
             evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
         assert!(result.violations.is_empty());
         assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_uses_curated_runtime_identity_for_non_root_user_patch() {
+        let compose = r#"
+services:
+  db:
+    image: postgres:16.4-alpine
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+"#;
+        let mut cache = base_cache();
+        cache.profiles[0].image = "docker.io/library/postgres:16.4-alpine".to_string();
+        cache.profiles[0].runtime.user = None;
+        cache.profiles[0].researched_config.runtime_uid = Some(999);
+        cache.profiles[0].researched_config.runtime_gid = Some(999);
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|patch| patch.path == "services.db.user" && patch.value == json!("999:999")));
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.db.user"
+                && item.reason.contains("using non-root image runtime user")
+        }));
     }
 
     #[test]

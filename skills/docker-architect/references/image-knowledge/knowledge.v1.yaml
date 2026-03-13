@@ -224,10 +224,13 @@ images:
         rationale: Database used for init scripts in /docker-entrypoint-initdb.d/.
     preferred_healthcheck:
       test:
-        - CMD
-        - mongosh
-        - --eval
-        - "db.adminCommand('ping')"
+        - CMD-SHELL
+        - >-
+          mongosh --quiet
+          --username "$${MONGO_INITDB_ROOT_USERNAME}"
+          --password "$${MONGO_INITDB_ROOT_PASSWORD}"
+          --authenticationDatabase admin
+          --eval "db.adminCommand('ping')" || exit 1
       interval: 10s
       timeout: 5s
       start_period: 30s

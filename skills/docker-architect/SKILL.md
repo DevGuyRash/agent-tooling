@@ -106,7 +106,7 @@ Every generated compose or stack file shall satisfy:
 | 12 | (behavioral)       | Use YAML anchors (`x-defaults: &`) for shared hardening. |
 | 13 | (behavioral)       | Define explicit `networks:` (no default bridge). |
 | 14 | (behavioral)       | Use `depends_on: { svc: { condition: service_healthy } }`. |
-| 15 | (behavioral)       | Use `profiles:` for optional services (init, debug). |
+| 15 | (behavioral)       | Use `profiles:` only for optional services (debug, admin jobs), never for required `*-init-perms` sidecars. |
 | 16 | AC-SWM-RESTART     | Swarm: `deploy.restart_policy.condition: on-failure`. |
 
 Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`.
@@ -264,8 +264,9 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-
 ### CI gate
 
 - `docker-architect-ci-gate` runs deterministic fixture-based golden tests.
-- Live verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`.
-- Live verify defaults to `references/ci/verify.compose.yaml`.
+- Compose-mode executor output still treats `verify` as mandatory whenever Docker is available for the current task.
+- Repository CI keeps live verify opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1` (or local `--verify`) so non-Docker environments can still run deterministic golden tests.
+- When live verify is enabled without an override, the gate runs both `references/ci/verify.compose.yaml` and `references/ci/verify-stateful.compose.yaml`.
 
 ---
 
