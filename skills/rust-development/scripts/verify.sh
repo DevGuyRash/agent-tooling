@@ -163,6 +163,14 @@ add_warning_count_from_file() {
   echo $((n + count)) > "$_warn_file"
 }
 
+_banned_family_supports_assert_macros() {
+  _harness_path="$1"
+  [ -f "$_harness_path" ] || return 1
+  grep -qF '("assert_eq", MatchKind::MacroOnly),' "$_harness_path" &&
+    grep -qF '("assert_ne", MatchKind::MacroOnly),' "$_harness_path" &&
+    grep -qF '("assert", MatchKind::MacroOnly),' "$_harness_path"
+}
+
 _has_candidate_rust_files() {
   skip_tests="${1:-}"
   skip_entry="${2:-}"
@@ -379,8 +387,15 @@ _install_ok=1
 
 # Check 1: banned_family.rs test harness
 _found_banned="$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit 2>/dev/null || true)"
+_found_banned_assert_capable=0
 if [ -n "$_found_banned" ]; then
-  pass "banned_family.rs installed: $_found_banned"
+  if _banned_family_supports_assert_macros "$_found_banned"; then
+    pass "banned_family.rs installed with assert coverage: $_found_banned"
+    _found_banned_assert_capable=1
+  else
+    warn "banned_family.rs lacks assert coverage: $_found_banned (re-run scaffold.sh --banned-test)"
+    _install_ok=0
+  fi
 else
   warn "banned_family.rs not found (run scaffold.sh --banned-test)"
   _install_ok=0
@@ -508,7 +523,8 @@ echo ""
 echo "Panic-inducing patterns:"
 # NOTE: exclude_tests is path-based and excludes conventional test-only dirs.
 # Keep banned_family.rs as the parser-aware source of truth for cfg(test) masking
-# and assert macros outside tests whenever the harness is installed.
+# and assert macros outside tests only when the installed harness includes
+# assert-family coverage.
 # unwrap family: .unwrap(), .unwrap_err(), .unwrap_unchecked() — but NOT .unwrap_or*()
 _search_excluding '\.unwrap(_err|_unchecked)?[[:space:]]*\(' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
 # expect family: .expect(), .expect_err() — but NOT .expectation(...)
@@ -517,7 +533,7 @@ _search_excluding '\.expect(_err)?[[:space:]]*\(' '// INVARIANT:' "no panic-indu
 _search 'panic!\(' "" "no panic!()" "exclude_tests" || true
 _search 'unimplemented!\(' "" "no unimplemented!()" "exclude_tests" || true
 _search_excluding 'unreachable!\(' '// INVARIANT:' "no bare unreachable!()" "exclude_tests" || true
-if [ -n "$_found_banned" ]; then
+if [ "$_found_banned_assert_capable" -eq 1 ]; then
   pass "no assert macros outside tests (delegated to banned_family.rs)"
 else
   _search_excluding '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true

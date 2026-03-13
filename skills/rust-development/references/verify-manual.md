@@ -13,7 +13,17 @@ Before running pattern scans, you SHALL confirm the skill's artifacts are instal
 ```bash
 # banned_family.rs test harness
 found_banned=$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit)
-if [ -n "$found_banned" ]; then echo "ok: banned_family.rs installed: $found_banned"; else echo "WARN: banned_family.rs not found (run scaffold.sh --banned-test)"; fi
+if [ -n "$found_banned" ]; then
+  if grep -qF '("assert_eq", MatchKind::MacroOnly),' "$found_banned" \
+    && grep -qF '("assert_ne", MatchKind::MacroOnly),' "$found_banned" \
+    && grep -qF '("assert", MatchKind::MacroOnly),' "$found_banned"; then
+    echo "ok: banned_family.rs installed with assert coverage: $found_banned"
+  else
+    echo "WARN: banned_family.rs lacks assert coverage (re-run scaffold.sh --banned-test): $found_banned"
+  fi
+else
+  echo "WARN: banned_family.rs not found (run scaffold.sh --banned-test)"
+fi
 
 # CI workflow + verifier stack
 git_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -136,13 +146,18 @@ rg '\.expect(_err)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || e
 rg 'panic!\(' --type rust "$@" || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust "$@" && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!()"
 rg 'unreachable!\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
-if find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit | grep -q .; then
+found_banned=$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit)
+if [ -n "$found_banned" ] \
+  && grep -qF '("assert_eq", MatchKind::MacroOnly),' "$found_banned" \
+  && grep -qF '("assert_ne", MatchKind::MacroOnly),' "$found_banned" \
+  && grep -qF '("assert", MatchKind::MacroOnly),' "$found_banned"; then
   echo "✓ No assert macros outside tests (delegated to banned_family.rs)"
 else
   rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
 fi
 # banned_family.rs remains the stricter parser-aware backstop so inline
-# #[cfg(test)] modules in src/*.rs are masked correctly when installed.
+# #[cfg(test)] modules in src/*.rs are masked correctly when the installed
+# harness includes assert-family coverage.
 rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No exit() outside entrypoints"
 
 # Placeholders
