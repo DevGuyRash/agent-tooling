@@ -2,10 +2,10 @@
 name: docker-architect
 description: >-
   Generate hardened, production-ready Docker architecture including Dockerfiles,
-  docker-compose stacks, and Swarm deploy configs. Use when the task involves:
+  Compose stacks, and Swarm deploy configs. Use when the task involves:
   (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing
   an application (Python, Node.js, Rust, Go, Nginx, or custom stacks),
-  (3) Creating or modifying docker-compose.yaml or Docker Swarm deployments,
+  (3) Creating or modifying compose.yaml or Docker Swarm deployments,
   (4) Hardening container security (non-root users, read-only filesystems,
   resource limits, secrets management), (5) Adding healthchecks to containers,
   (6) Setting up CI/CD container scanning with hadolint, trivy, or docker scout,
@@ -38,7 +38,7 @@ Generate hardened, production-ready Docker architecture across two workflows:
 Activate this skill when the user asks to:
 
 - Write a Dockerfile or containerize an application
-- Create a docker-compose.yaml or docker-compose stack
+- Create a compose.yaml or Compose stack
 - Set up a Docker Swarm deployment
 - Harden or secure an existing Dockerfile or compose file
 - Add healthchecks to containers
@@ -122,9 +122,9 @@ Rows marked `(behavioral)` are enforced by LLM output review only and are not ch
 
 #### 4.1 Compose mode
 
-- **Deliverables:** `architecture.md`, `docker-compose.yaml`.
+- **Deliverables:** `architecture.md`, `compose.yaml`.
 - Emit each file as a fenced code block labeled with its relative path.
-- Emit order: `.dockerignore` (if applicable) → `docker-compose.yaml`.
+- Emit order: `.dockerignore` (if applicable) → `compose.yaml`.
 - Include inline comments referencing rule IDs (e.g., `# AC-CMP-USER`).
 - **Required gates:** `policy-check`, `output-check`, `docker compose config -q`, `verify` (when Docker is available).
 - Init-sidecar conformance is required for all `*-init-perms` services: must match the canonical contract (user `0:0`, cap_drop ALL, cap_add CHOWN+FOWNER, security_opt no-new-privileges, read_only true, network_mode none, restart no, no `profiles:` key).

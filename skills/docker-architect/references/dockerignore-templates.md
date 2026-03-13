@@ -28,8 +28,8 @@ bloat, avoids leaking secrets into layers, and speeds up `COPY . .` operations.
 
 # Docker files (prevent recursive context)
 Dockerfile*
-docker-compose*.yml
-docker-compose*.yaml
+compose*.yml
+compose*.yaml
 .dockerignore
 
 # Documentation
@@ -65,8 +65,8 @@ Extends the generic template with Python-specific entries.
 .vscode
 .idea
 Dockerfile*
-docker-compose*.yml
-docker-compose*.yaml
+compose*.yml
+compose*.yaml
 .dockerignore
 README*
 LICENSE
@@ -112,8 +112,8 @@ host-platform binaries and should never enter the build context.
 .vscode
 .idea
 Dockerfile*
-docker-compose*.yml
-docker-compose*.yaml
+compose*.yml
+compose*.yaml
 .dockerignore
 README*
 LICENSE
@@ -153,8 +153,8 @@ inside the container produces a Linux-native dependency tree.
 .vscode
 .idea
 Dockerfile*
-docker-compose*.yml
-docker-compose*.yaml
+compose*.yml
+compose*.yaml
 .dockerignore
 README*
 LICENSE
@@ -184,8 +184,8 @@ exceed 1 GB. Cargo rebuilds inside the container with the correct target triple.
 .vscode
 .idea
 Dockerfile*
-docker-compose*.yml
-docker-compose*.yaml
+compose*.yml
+compose*.yaml
 .dockerignore
 README*
 LICENSE

@@ -17,7 +17,10 @@ use crate::model::{CachedProfiles, ImageProfile};
 use crate::read_utf8_file_with_size_limit;
 
 const MAX_YAML_MERGE_DEPTH: u8 = 128;
-const INIT_PERMISSIONS_REQUIRED_FIELDS: [&str; 8] = [
+const INIT_PERMISSIONS_REQUIRED_FIELDS: [&str; 11] = [
+    "image",
+    "command",
+    "volumes",
     "user",
     "cap_drop",
     "cap_add",
@@ -2207,7 +2210,7 @@ fn validate_existing_init_sidecar(
             continue;
         };
         let actual = existing_sidecar.get(YamlValue::String(field.to_string()));
-        if init_sidecar_field_matches(actual, expected) {
+        if init_sidecar_field_matches(field, actual, expected) {
             continue;
         }
         add_compose_block_violation(
@@ -2253,29 +2256,47 @@ fn service_depends_on_init_sidecar(service: &Mapping, init_name: &str) -> bool {
     };
 
     match depends_on {
-        YamlValue::Mapping(map) => map.get(YamlValue::String(init_name.to_string())).is_some(),
-        YamlValue::Sequence(items) => items
-            .iter()
-            .filter_map(YamlValue::as_str)
-            .any(|item| item == init_name),
+        YamlValue::Mapping(map) => map
+            .get(YamlValue::String(init_name.to_string()))
+            .is_some_and(depends_on_entry_requires_completion),
         _ => false,
     }
 }
 
-fn init_sidecar_field_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
-    match expected {
-        JsonValue::Bool(value) => actual.and_then(YamlValue::as_bool) == Some(*value),
-        JsonValue::String(value) => {
-            actual.and_then(yaml_scalar_to_string).as_deref() == Some(value)
+fn depends_on_entry_requires_completion(entry: &YamlValue) -> bool {
+    let Some(mapping) = entry.as_mapping() else {
+        return false;
+    };
+
+    mapping
+        .get(YamlValue::String("condition".to_string()))
+        .and_then(yaml_scalar_to_string)
+        .as_deref()
+        == Some("service_completed_successfully")
+}
+
+fn init_sidecar_field_matches(field: &str, actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    match field {
+        "cap_drop" | "cap_add" | "security_opt" | "tmpfs" => {
+            yaml_unordered_string_list_matches(actual, expected)
         }
-        JsonValue::Array(items) => yaml_string_list_matches(actual, items),
-        _ => actual
-            .and_then(|value| serde_json::to_value(value).ok())
-            .is_some_and(|value| value == *expected),
+        "command" | "volumes" => yaml_ordered_string_list_matches(actual, expected),
+        _ => match expected {
+            JsonValue::Bool(value) => actual.and_then(YamlValue::as_bool) == Some(*value),
+            JsonValue::String(value) => {
+                actual.and_then(yaml_scalar_to_string).as_deref() == Some(value)
+            }
+            _ => actual
+                .and_then(|value| serde_json::to_value(value).ok())
+                .is_some_and(|value| value == *expected),
+        },
     }
 }
 
-fn yaml_string_list_matches(actual: Option<&YamlValue>, expected: &[JsonValue]) -> bool {
+fn yaml_unordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    let Some(expected_items) = expected.as_array() else {
+        return false;
+    };
     let actual_values = match actual {
         Some(YamlValue::Sequence(items)) => items
             .iter()
@@ -2284,7 +2305,27 @@ fn yaml_string_list_matches(actual: Option<&YamlValue>, expected: &[JsonValue]) 
         Some(YamlValue::String(value)) => [value.to_string()].into_iter().collect(),
         _ => return false,
     };
-    let expected_values: BTreeSet<String> = expected
+    let expected_values: BTreeSet<String> = expected_items
+        .iter()
+        .filter_map(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    actual_values == expected_values
+}
+
+fn yaml_ordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    let Some(expected_items) = expected.as_array() else {
+        return false;
+    };
+    let actual_values: Vec<String> = match actual {
+        Some(YamlValue::Sequence(items)) => items
+            .iter()
+            .filter_map(yaml_scalar_to_string)
+            .collect(),
+        Some(YamlValue::String(value)) => vec![value.to_string()],
+        _ => return false,
+    };
+    let expected_values: Vec<String> = expected_items
         .iter()
         .filter_map(JsonValue::as_str)
         .map(ToOwned::to_owned)
@@ -4360,6 +4401,183 @@ rules:
             .patch_plan
             .iter()
             .any(|item| item.op == "depends_on_add"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_list_form_init_sidecar_dependency() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      - api-init-perms
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    command:
+      - /bin/sh
+      - -euxc
+      - set -eu; for path in /mnt/perm-0; do mkdir -p "$path"; owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"; if [ "$owner" != "101:101" ]; then chown -R 101:101 "$path"; fi; done
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.api.depends_on"
+                && item.reason.contains("deterministic startup ordering")
+        }));
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "depends_on_add" && item.path == "services.api.depends_on.api-init-perms"
+        }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_non_blocking_init_sidecar_dependency_condition() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      api-init-perms:
+        condition: service_started
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    command:
+      - /bin/sh
+      - -euxc
+      - set -eu; for path in /mnt/perm-0; do mkdir -p "$path"; owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"; if [ "$owner" != "101:101" ]; then chown -R 101:101 "$path"; fi; done
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "depends_on_add" && item.path == "services.api.depends_on.api-init-perms"
+        }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_existing_init_sidecar_functional_contract() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      api-init-perms:
+        condition: service_completed_successfully
+  api-init-perms:
+    image: docker.io/library/busybox:1.36
+    command:
+      - /bin/sh
+      - -c
+      - echo wrong
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/wrong/path
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "set" && item.path == "services.api-init-perms.image"
+        }));
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "set" && item.path == "services.api-init-perms.command"
+        }));
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "set" && item.path == "services.api-init-perms.volumes"
+        }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
     }
 
     #[test]

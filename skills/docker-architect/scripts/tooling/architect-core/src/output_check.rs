@@ -4,6 +4,12 @@ use regex::Regex;
 
 use crate::error::AppError;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutputCheckResult {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
 /// Validate markdown content against required section order and traceability IDs.
 ///
 /// # Arguments
@@ -11,9 +17,12 @@ use crate::error::AppError;
 /// * `mode` - Workflow mode, `compose` or `image`.
 ///
 /// # Returns
-/// * `Ok(Vec<String>)` with validation errors; empty means pass.
+/// * `Ok(OutputCheckResult)` with validation errors and warnings; empty `errors` means pass.
 /// * `Err(AppError)` when mode is unsupported.
-pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>, AppError> {
+pub fn validate_output_contract(
+    content: &str,
+    mode: &str,
+) -> Result<OutputCheckResult, AppError> {
     let required_sections = match mode {
         "compose" => vec![
             "Requirements",
@@ -63,7 +72,7 @@ pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>
     };
 
     let headings = collect_headings(content);
-    let mut errors = Vec::new();
+    let mut result = OutputCheckResult::default();
 
     let mut previous_index = None;
     for section in &required_sections {
@@ -73,12 +82,16 @@ pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>
         match current_index {
             Some(position) => {
                 if previous_index.is_some_and(|prior| position < prior) {
-                    errors.push(format!("section out of order: {section}"));
+                    result
+                        .errors
+                        .push(format!("section out of order: {section}"));
                 }
                 previous_index = Some(position);
             }
             None => {
-                errors.push(format!("missing required section: {section}"));
+                result
+                    .errors
+                    .push(format!("missing required section: {section}"));
             }
         }
     }
@@ -94,32 +107,35 @@ pub fn validate_output_contract(content: &str, mode: &str) -> Result<Vec<String>
         if let Some((start, end)) = section_bounds(&headings, section, content.lines().count()) {
             let section_text = extract_line_span(content, start, end);
             if !marker_re.is_match(&section_text) {
-                errors.push(format!("missing traceability marker in section: {section}"));
+                result
+                    .errors
+                    .push(format!("missing traceability marker in section: {section}"));
             }
         }
     }
 
     for marker in ["AC-", "IMG-", "RSK-", "O-"] {
         if !content.contains(marker) {
-            errors.push(format!("missing marker family: {marker}*"));
+            result.errors.push(format!("missing marker family: {marker}*"));
         }
     }
 
     if mode == "image" {
         let lower = content.to_ascii_lowercase();
         if !(lower.contains("docker-bake.hcl") || lower.contains("docker buildx bake")) {
-            errors.push(
+            result.warnings.push(
                 "warning: image output is missing bake/buildx release instructions".to_string(),
             );
         }
         if !(lower.contains("sbom") || lower.contains("provenance")) {
-            errors.push(
-                "warning: image output is missing sbom/provenance attestation guidance".to_string(),
+            result.warnings.push(
+                "warning: image output is missing sbom/provenance attestation guidance"
+                    .to_string(),
             );
         }
     }
 
-    Ok(errors)
+    Ok(result)
 }
 
 fn collect_headings(content: &str) -> Vec<(usize, String)> {
@@ -236,14 +252,15 @@ IMG-2
 RSK-2
 "#;
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
-        assert!(result.is_empty());
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
     fn validate_output_contract_reports_missing_sections() {
         let doc = "# Requirements\nAC-1\n";
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
-        assert!(!result.is_empty());
+        assert!(!result.errors.is_empty());
     }
 
     #[test]
@@ -278,7 +295,7 @@ IMG-2
 RSK-2
 "#;
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
-        assert!(result.is_empty());
+        assert!(result.errors.is_empty());
     }
 
     #[test]
@@ -313,7 +330,7 @@ IMG-2
 RSK-2
 "#;
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
-        assert!(result.is_empty());
+        assert!(result.errors.is_empty());
     }
 
     #[test]
@@ -343,7 +360,8 @@ IMG-CMP-2
 RSK-CMP-2
 "#;
         let result = validate_output_contract(doc, "compose").expect("validation should succeed");
-        assert!(result.is_empty());
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -375,7 +393,8 @@ AC-5
 RSK-2
 "#;
         let result = validate_output_contract(doc, "swarm").expect("validation should succeed");
-        assert!(result.is_empty());
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -405,7 +424,14 @@ IMG-2
 RSK-2
 "#;
         let result = validate_output_contract(doc, "image").expect("validation should succeed");
-        assert!(result.iter().any(|item| item.contains("bake/buildx")));
-        assert!(result.iter().any(|item| item.contains("sbom/provenance")));
+        assert!(result.errors.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|item| item.contains("bake/buildx")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|item| item.contains("sbom/provenance")));
     }
 }
