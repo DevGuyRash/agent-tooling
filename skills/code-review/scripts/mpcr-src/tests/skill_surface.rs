@@ -28,41 +28,45 @@ fn read(root: &Path, rel: &str) -> anyhow::Result<String> {
 }
 
 #[test]
-fn skill_router_is_v2_sized_and_v2_only() -> anyhow::Result<()> {
+fn skill_router_restores_dispatch_and_recursive_reports() -> anyhow::Result<()> {
     let root = skill_root()?;
     let skill_md = read(&root, "SKILL.md")?;
-    ensure!(skill_md.lines().count() <= 120);
+    ensure!(skill_md.lines().count() <= 140);
     let route_pos = skill_md
         .find("mpcr route --mode")
         .ok_or_else(|| anyhow::anyhow!("SKILL.md is missing route-first bootstrap"))?;
-    let mode_pos = skill_md
-        .find("mpcr protocol mode --mode")
-        .ok_or_else(|| anyhow::anyhow!("SKILL.md is missing mode pack guidance"))?;
-    ensure!(route_pos < mode_pos);
+    let dispatch_pos = skill_md
+        .find("mpcr protocol dispatch --role")
+        .ok_or_else(|| anyhow::anyhow!("SKILL.md is missing dispatch guidance"))?;
+    ensure!(route_pos < dispatch_pos);
     ensure!(skill_md.contains("auto-builds the Rust binary"));
     ensure!(skill_md.contains("cargo"));
     ensure!(skill_md.contains("mpcr route --persist"));
     ensure!(skill_md.contains("mpcr protocol mode --mode"));
+    ensure!(skill_md.contains("mpcr protocol dispatch --role"));
+    ensure!(skill_md.contains("_session.json"));
+    ensure!(skill_md.contains("mpcr session reports"));
+    ensure!(skill_md.contains("mpcr session artifacts"));
     ensure!(skill_md.contains("mpcr validate --artifact-file"));
     ensure!(skill_md.contains("mpcr render --artifact-file"));
     ensure!(skill_md.contains("mpcr fullcycle plan"));
     ensure!(!skill_md.contains("proof_packet"));
     ensure!(!skill_md.contains("validate-report"));
-    ensure!(!skill_md.contains("dispatch --role"));
     Ok(())
 }
 
 #[test]
-fn openai_manifest_matches_v2_surface() -> anyhow::Result<()> {
+fn openai_manifest_matches_recursive_surface() -> anyhow::Result<()> {
     let root = skill_root()?;
     let manifest = read(&root, "agents/openai.yaml")?;
     ensure!(manifest.contains("display_name: \"Code Review\""));
     ensure!(manifest.contains("mpcr route"));
-    ensure!(manifest.contains("mpcr protocol mode"));
+    ensure!(manifest.contains("mpcr protocol dispatch"));
     ensure!(manifest.contains("mpcr reviewer"));
     ensure!(manifest.contains("mpcr applicator"));
     ensure!(manifest.contains("mpcr fullcycle"));
-    ensure!(!manifest.contains("dispatch"));
+    ensure!(manifest.contains("mpcr session reports"));
+    ensure!(manifest.contains("mpcr session artifacts"));
     ensure!(!manifest.contains("proof_packet"));
     Ok(())
 }
@@ -129,7 +133,12 @@ fn reviewer_artifact_examples_are_machine_valid() -> anyhow::Result<()> {
     )?;
     ensure!(child_summary.errors.is_empty());
 
-    let persisted_child = artifact_path(&session_dir, ArtifactKind::ChildFindings, "73078a595848");
+    let persisted_child = artifact_path(
+        &session_dir,
+        ArtifactKind::ChildFindings,
+        "73078a595848",
+        mpcr::paths::StorageFormat::Toml,
+    );
     fs::copy(&child_example, &persisted_child)?;
 
     let parent_example = root.join("references/examples/reviewer-parent-review.toml");

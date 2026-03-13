@@ -44,12 +44,13 @@ fn header(kind: ArtifactKind, session_id: &str) -> anyhow::Result<ArtifactHeader
 }
 
 #[test]
-fn protocol_surface_is_v2_only() -> anyhow::Result<()> {
+fn protocol_surface_includes_dispatch_and_static_discovery() -> anyhow::Result<()> {
     let list = run_cmd(&["protocol", "list"])?;
     ensure!(list.status.success());
     let list_stdout = String::from_utf8_lossy(&list.stdout);
     ensure!(list_stdout.contains("mode reviewer"));
     ensure!(list_stdout.contains("worker review-composite"));
+    ensure!(list_stdout.contains("worker domain:core-correctness"));
     ensure!(list_stdout.contains("module core-correctness"));
     ensure!(list_stdout.contains("escalation reopen"));
 
@@ -60,8 +61,14 @@ fn protocol_surface_is_v2_only() -> anyhow::Result<()> {
     ensure!(stdout.contains("worker"));
     ensure!(stdout.contains("module"));
     ensure!(stdout.contains("escalation"));
+    ensure!(stdout.contains("dispatch"));
     ensure!(!stdout.contains("reviewer --phase"));
-    ensure!(!stdout.contains("dispatch"));
+
+    let dispatch = run_cmd(&["protocol", "dispatch", "--role", "domain:core-correctness"])?;
+    ensure!(dispatch.status.success());
+    let dispatch_stdout = String::from_utf8_lossy(&dispatch.stdout);
+    ensure!(dispatch_stdout.contains("# Dispatch domain:core-correctness"));
+    ensure!(dispatch_stdout.contains("## Operating Rules"));
 
     let legacy = run_cmd(&["protocol", "reviewer"])?;
     ensure!(!legacy.status.success());
@@ -114,6 +121,25 @@ fn route_cli_emits_surface_map_and_route_decision() -> anyhow::Result<()> {
         .is_some_and(|modules| modules
             .iter()
             .any(|module| module.as_str() == Some("docs-staleness"))));
+    ensure!(value
+        .get("route_decision")
+        .and_then(|route| route.get("selected_modules"))
+        .and_then(Value::as_array)
+        .is_some_and(|modules| modules.len() == 15));
+    ensure!(value
+        .get("route_decision")
+        .and_then(|route| route.get("worker_plan"))
+        .and_then(Value::as_array)
+        .is_some_and(|workers| workers.iter().any(|worker| {
+            worker.get("worker_kind").and_then(Value::as_str) == Some("language-detector")
+        })));
+    ensure!(value
+        .get("route_decision")
+        .and_then(|route| route.get("worker_plan"))
+        .and_then(Value::as_array)
+        .is_some_and(|workers| workers.iter().any(|worker| {
+            worker.get("worker_kind").and_then(Value::as_str) == Some("final-synthesizer")
+        })));
     Ok(())
 }
 
@@ -364,6 +390,8 @@ fn session_metrics_reports_categorical_counts() -> anyhow::Result<()> {
         session: locator.clone(),
         target_ref: "refs/heads/main".to_string(),
         reviewer_id: Some("review01".to_string()),
+        role: None,
+        role_kind: None,
     })?;
 
     let artifact =

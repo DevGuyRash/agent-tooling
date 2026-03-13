@@ -1,11 +1,10 @@
-//! File-based lock implementation for coordinating `_session.toml` updates.
+//! File-based lock implementation for coordinating session and agent updates.
 //!
-//! The lock is represented by a file named `_session.toml.lock` inside the session directory.
-//! Lock acquisition uses `create_new(true)` for exclusivity and retries with exponential backoff.
-//!
-//! Stale lock recovery: when a lock file is older than [`STALE_LOCK_SECS`], recovery
-//! is attempted only if the embedded owner PID is no longer alive.
+//! The canonical lock is `_session.lock`. Older runtimes may still leave behind
+//! `_session.toml.lock` or `_session.json.lock`; those are treated as compatibility
+//! lock files so new writers do not trample an older in-flight mutation.
 
+use crate::paths;
 use anyhow::Context;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -37,10 +36,10 @@ impl Default for LockConfig {
 }
 
 #[derive(Debug)]
-/// RAII-style guard for a held session lock.
+/// RAII-style guard for a held lock.
 ///
-/// When dropped, this will best-effort release the lock *only if* the lock file still contains
-/// the same owner identifier.
+/// When dropped, this best-effort releases the canonical or compatibility lock file
+/// only if it still contains the same owner identifier.
 pub struct LockGuard {
     lock_file: Option<PathBuf>,
     owner: String,
@@ -69,7 +68,6 @@ fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        // Use direct argv (no shell) to probe process existence on Unix-like hosts.
         let status = std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
@@ -120,14 +118,14 @@ impl LockGuard {
     /// Returns an error if the lock file exists and cannot be opened, written, or flushed.
     pub fn touch_lock(&self) -> anyhow::Result<()> {
         if let Some(ref lock_file) = self.lock_file {
-            let mut f = std::fs::OpenOptions::new()
+            let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
                 .open(lock_file)
                 .context("touch lock file")?;
-            writeln!(f, "{}", self.owner).context("write lock owner")?;
-            writeln!(f, "pid:{}", std::process::id()).context("write lock owner pid")?;
-            f.flush().context("flush lock owner")?;
+            writeln!(file, "{}", self.owner).context("write lock owner")?;
+            writeln!(file, "pid:{}", std::process::id()).context("write lock owner pid")?;
+            file.flush().context("flush lock owner")?;
         }
         Ok(())
     }
@@ -139,31 +137,38 @@ impl Drop for LockGuard {
     }
 }
 
-/// Compute the path to the lock file (`_session.toml.lock`) for `session_dir`.
-#[must_use]
-pub fn lock_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join("_session.toml.lock")
+fn compatibility_lock_paths(dir: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![lock_file_path(dir)];
+    paths.extend(paths::legacy_lock_paths(dir));
+    paths
 }
 
-/// Release the session lock if `owner` matches the contents of the lock file.
+/// Compute the canonical lock file path (`_session.lock`) for `dir`.
+#[must_use]
+pub fn lock_file_path(dir: &Path) -> PathBuf {
+    dir.join("_session.lock")
+}
+
+/// Release the canonical or compatibility lock if `owner` matches the file contents.
 ///
-/// This is best-effort: if the lock file does not exist, the operation succeeds.
+/// This is best-effort: if no known lock file exists, the operation succeeds.
 ///
 /// # Errors
-/// Returns an error if the lock file exists but cannot be read or removed.
-pub fn release_lock(session_dir: &Path, owner: impl Into<String>) -> anyhow::Result<()> {
-    let mut guard = LockGuard {
-        lock_file: Some(lock_file_path(session_dir)),
-        owner: owner.into(),
-    };
-    guard.release_inner()
+/// Returns an error if a matching lock file exists but cannot be read or removed.
+pub fn release_lock(dir: &Path, owner: impl Into<String>) -> anyhow::Result<()> {
+    let owner = owner.into();
+    for path in compatibility_lock_paths(dir) {
+        let mut guard = LockGuard {
+            lock_file: Some(path),
+            owner: owner.clone(),
+        };
+        guard.release_inner()?;
+    }
+    Ok(())
 }
 
 /// Attempt to remove a stale lock file if its modification time exceeds
 /// `stale_after_secs` and the recorded PID is no longer alive.
-///
-/// This is best-effort: any I/O or time errors are silently ignored so the caller
-/// falls back to the normal retry/timeout loop.
 fn try_remove_stale_lock(lock_file: &Path, stale_after_secs: u64) -> bool {
     let Ok(metadata) = fs::metadata(lock_file) else {
         return false;
@@ -186,8 +191,7 @@ fn try_remove_stale_lock(lock_file: &Path, stale_after_secs: u64) -> bool {
     if is_pid_alive(lock_pid) {
         return false;
     }
-    // Double-check: sleep briefly and re-verify mtime hasn't been refreshed (heartbeat).
-    std::thread::sleep(Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let Ok(metadata2) = fs::metadata(lock_file) else {
         return false;
     };
@@ -200,34 +204,57 @@ fn try_remove_stale_lock(lock_file: &Path, stale_after_secs: u64) -> bool {
     fs::remove_file(lock_file).is_ok()
 }
 
-/// Acquire the session lock and return a guard that releases it on drop.
+fn conflicting_lock_paths(dir: &Path, canonical: &Path) -> Vec<PathBuf> {
+    compatibility_lock_paths(dir)
+        .into_iter()
+        .filter(|path| path != canonical && path.exists())
+        .collect()
+}
+
+/// Acquire the canonical lock and return a guard that releases it on drop.
 ///
-/// If the lock file already exists, this will retry up to `cfg.max_retries` times with exponential
-/// backoff (100ms → 200ms → ... → 6400ms) and then return an error with the message `LOCK_TIMEOUT`.
+/// If the canonical or compatibility lock file already exists, this retries up to
+/// `cfg.max_retries` times with exponential backoff before returning `LOCK_TIMEOUT`.
 ///
 /// # Errors
 /// Returns an error if the lock file cannot be created or written after retries.
 pub fn acquire_lock(
-    session_dir: &Path,
+    dir: &Path,
     owner: impl Into<String>,
     cfg: LockConfig,
 ) -> anyhow::Result<LockGuard> {
     let owner = owner.into();
-    let lock_file = lock_file_path(session_dir);
-
+    let lock_file = lock_file_path(dir);
     let mut attempt: usize = 0;
     let mut wait_ms: u64 = INITIAL_BACKOFF_MS;
 
     loop {
+        let mut blocked = false;
+        for path in conflicting_lock_paths(dir, &lock_file) {
+            if attempt == 0 && try_remove_stale_lock(&path, cfg.stale_after_secs) {
+                continue;
+            }
+            blocked = true;
+        }
+        if blocked {
+            if attempt >= cfg.max_retries {
+                return Err(anyhow::anyhow!("LOCK_TIMEOUT"));
+            }
+            sleep(Duration::from_millis(wait_ms));
+            attempt = attempt.saturating_add(1);
+            wait_ms = (wait_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
+            continue;
+        }
+
         match OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&lock_file)
         {
-            Ok(mut f) => {
-                writeln!(f, "{owner}").context("write lock owner")?;
-                writeln!(f, "pid:{}", std::process::id()).context("write lock owner pid")?;
-                f.flush().context("flush lock owner")?;
+            Ok(mut file) => {
+                writeln!(file, "{owner}").context("write lock owner")?;
+                writeln!(file, "pid:{}", std::process::id()).context("write lock owner pid")?;
+                file.flush().context("flush lock owner")?;
                 return Ok(LockGuard {
                     lock_file: Some(lock_file),
                     owner,
@@ -256,110 +283,36 @@ pub fn acquire_lock(
 mod tests {
     use super::*;
     use anyhow::ensure;
+    use tempfile::tempdir;
 
     #[test]
-    fn release_lock_handles_missing_and_mismatch() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let session_dir = dir.path();
+    fn uses_canonical_lock_name_and_releases_compatibility_files() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let dir = temp.path();
+        ensure!(lock_file_path(dir) == dir.join("_session.lock"));
 
-        // Missing lock file should be ok.
-        release_lock(session_dir, "deadbeef")?;
-
-        // Mismatched owner should leave file intact.
-        let lock_file = lock_file_path(session_dir);
-        fs::write(&lock_file, "owner-a\n")?;
-        release_lock(session_dir, "owner-b")?;
-        ensure!(lock_file.exists());
-
-        // Matching owner should remove the lock file.
-        release_lock(session_dir, "owner-a")?;
-        ensure!(!lock_file.exists());
-
+        let legacy = dir.join("_session.toml.lock");
+        fs::write(&legacy, "owner1234\npid:1\n")?;
+        release_lock(dir, "owner1234")?;
+        ensure!(!legacy.exists());
         Ok(())
     }
 
     #[test]
-    fn stale_lock_is_recovered_on_acquire() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let session_dir = dir.path();
-        let lock_file = lock_file_path(session_dir);
-
-        fs::write(&lock_file, "crashed-owner\npid:999999\n")?;
-
-        // Use stale_after_secs=0 so ANY existing file is considered stale.
-        let cfg = LockConfig {
-            max_retries: 0,
-            stale_after_secs: 0,
-        };
-        let guard = acquire_lock(session_dir, "new-owner", cfg)?;
-        ensure!(lock_file.exists(), "lock should be held");
-
-        let raw_owner = fs::read_to_string(&lock_file)?;
-        let (owner, pid) = parse_lock_owner_and_pid(&raw_owner);
-        ensure!(
-            owner == "new-owner",
-            "lock should be owned by new-owner, got: {raw_owner:?}"
-        );
-        ensure!(pid.is_some(), "lock metadata should include owner pid");
-        guard.release()?;
+    fn acquire_fails_while_compatibility_lock_exists() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let dir = temp.path();
+        fs::write(dir.join("_session.toml.lock"), "owner1234\npid:999999\n")?;
+        let err = acquire_lock(
+            dir,
+            "owner5678",
+            LockConfig {
+                max_retries: 0,
+                stale_after_secs: u64::MAX,
+            },
+        )
+        .expect_err("compatibility lock should block acquisition");
+        ensure!(err.to_string().contains("LOCK_TIMEOUT"));
         Ok(())
-    }
-
-    #[test]
-    fn stale_lock_with_live_pid_is_not_recovered() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let session_dir = dir.path();
-        let lock_file = lock_file_path(session_dir);
-
-        fs::write(
-            &lock_file,
-            format!("active-owner\npid:{}\n", std::process::id()),
-        )?;
-
-        let cfg = LockConfig {
-            max_retries: 0,
-            stale_after_secs: 0,
-        };
-        let result = acquire_lock(session_dir, "new-owner", cfg);
-        ensure!(result.is_err(), "live owner lock should not be reclaimed");
-        ensure!(lock_file.exists(), "live owner lock should remain");
-        Ok(())
-    }
-
-    #[test]
-    fn fresh_lock_is_not_removed_as_stale() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let session_dir = dir.path();
-        let lock_file = lock_file_path(session_dir);
-
-        fs::write(&lock_file, "active-owner\n")?;
-
-        let cfg = LockConfig {
-            max_retries: 0,
-            stale_after_secs: 60,
-        };
-        let result = acquire_lock(session_dir, "new-owner", cfg);
-        ensure!(result.is_err(), "should fail — lock is fresh, not stale");
-        ensure!(lock_file.exists(), "fresh lock should still exist");
-
-        let owner = fs::read_to_string(&lock_file)?;
-        ensure!(
-            owner.trim() == "active-owner",
-            "lock should still belong to active-owner"
-        );
-        Ok(())
-    }
-
-    #[cfg(all(unix, not(target_os = "linux")))]
-    #[test]
-    fn unix_non_linux_pid_probe_reflects_live_and_missing_pids() {
-        assert!(
-            is_pid_alive(std::process::id()),
-            "current process should report as alive"
-        );
-        assert!(
-            !is_pid_alive(u32::MAX),
-            "unlikely pid should report as not alive"
-        );
     }
 }

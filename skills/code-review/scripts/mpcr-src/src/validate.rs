@@ -74,9 +74,9 @@ fn validate_artifact_refs(refs: &[String], session_dir: Option<&Path>, errors: &
             continue;
         }
         if let Some(session_dir) = session_dir {
-            let found = crate::artifacts::ArtifactKind::all()
-                .iter()
-                .any(|kind| crate::paths::artifact_path(session_dir, *kind, artifact_id).exists());
+            let found = crate::artifacts::ArtifactKind::all().iter().any(|kind| {
+                crate::paths::existing_artifact_path(session_dir, *kind, artifact_id).is_some()
+            });
             if !found {
                 errors.push(format!(
                     "artifact ref `{artifact_id}` was not found in the session store"
@@ -94,6 +94,127 @@ fn validate_findings(findings: &[FindingRecord], errors: &mut Vec<String>) {
     }
 }
 
+fn canonical_review_modules() -> Vec<ModuleId> {
+    let mut modules = ModuleId::all().to_vec();
+    modules.sort_unstable();
+    modules
+}
+
+fn validate_recursive_review_roster(artifact: &RouteDecisionArtifact, errors: &mut Vec<String>) {
+    let mut selected_modules = artifact.selected_modules.clone();
+    selected_modules.sort_unstable();
+    selected_modules.dedup();
+    let canonical_modules = canonical_review_modules();
+    if selected_modules != canonical_modules {
+        errors.push(
+            "review and full-cycle routes must include the full canonical domain roster"
+                .to_string(),
+        );
+    }
+
+    if artifact.worker_plan.is_empty() {
+        errors.push("review and full-cycle routes must include a worker plan".to_string());
+        return;
+    }
+
+    let allowed_worker_kinds = [
+        crate::artifacts::WorkerKind::LanguageDetector,
+        crate::artifacts::WorkerKind::LanguageResearch,
+        crate::artifacts::WorkerKind::DomainReviewer,
+        crate::artifacts::WorkerKind::FinalSynthesizer,
+    ];
+    for worker in &artifact.worker_plan {
+        if !allowed_worker_kinds.contains(&worker.worker_kind) {
+            errors.push(format!(
+                "review and full-cycle routes must not include legacy worker kind `{}`",
+                toml::Value::try_from(worker.worker_kind).map_or_else(
+                    |_| "unknown".to_string(),
+                    |value| value.to_string().trim_matches('"').to_string()
+                )
+            ));
+        }
+    }
+
+    if artifact
+        .worker_plan
+        .first()
+        .map(|worker| worker.worker_kind)
+        != Some(crate::artifacts::WorkerKind::LanguageDetector)
+    {
+        errors.push("review and full-cycle routes must begin with language-detector".to_string());
+    }
+    if artifact.worker_plan.last().map(|worker| worker.worker_kind)
+        != Some(crate::artifacts::WorkerKind::FinalSynthesizer)
+    {
+        errors.push("review and full-cycle routes must end with final-synthesizer".to_string());
+    }
+
+    let language_detector_count = artifact
+        .worker_plan
+        .iter()
+        .filter(|worker| worker.worker_kind == crate::artifacts::WorkerKind::LanguageDetector)
+        .count();
+    if language_detector_count != 1 {
+        errors.push(
+            "review and full-cycle routes must include exactly one language-detector".to_string(),
+        );
+    }
+
+    let final_synth_count = artifact
+        .worker_plan
+        .iter()
+        .filter(|worker| worker.worker_kind == crate::artifacts::WorkerKind::FinalSynthesizer)
+        .count();
+    if final_synth_count != 1 {
+        errors.push(
+            "review and full-cycle routes must include exactly one final-synthesizer".to_string(),
+        );
+    }
+
+    let mut domain_modules = Vec::new();
+    for worker in &artifact.worker_plan {
+        match worker.worker_kind {
+            crate::artifacts::WorkerKind::LanguageResearch => {
+                if worker.language.as_deref().is_none_or(str::is_empty) {
+                    errors.push("language-research workers must declare a language".to_string());
+                }
+            }
+            crate::artifacts::WorkerKind::DomainReviewer => {
+                if worker.module_ids.len() != 1 {
+                    errors.push(
+                        "each domain-reviewer worker must claim exactly one module".to_string(),
+                    );
+                    continue;
+                }
+                domain_modules.push(worker.module_ids[0]);
+                let expected_role = format!(
+                    "domain:{}",
+                    toml::Value::try_from(worker.module_ids[0]).map_or_else(
+                        |_| "unknown".to_string(),
+                        |value| value.to_string().trim_matches('"').to_string()
+                    )
+                );
+                if worker.role_id.as_deref() != Some(expected_role.as_str()) {
+                    errors.push(format!(
+                        "domain-reviewer worker for `{}` must use role_id `{expected_role}`",
+                        expected_role.trim_start_matches("domain:")
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    domain_modules.sort_unstable();
+    domain_modules.dedup();
+    if domain_modules != canonical_modules {
+        errors.push(
+            "review and full-cycle routes must include exactly one domain-reviewer per canonical module"
+                .to_string(),
+        );
+    }
+}
+
 fn validate_route_decision(artifact: &RouteDecisionArtifact, errors: &mut Vec<String>) {
     if let Err(err) = validate_header(&artifact.header, ArtifactKind::RouteDecision) {
         errors.push(err.to_string());
@@ -107,82 +228,46 @@ fn validate_route_decision(artifact: &RouteDecisionArtifact, errors: &mut Vec<St
     if !artifact.selected_modules.contains(&ModuleId::ShipReadiness) {
         errors.push("selected_modules must include ship-readiness".to_string());
     }
-    if artifact.resource_budget.planned_worker_count > artifact.resource_budget.max_worker_count {
+    if artifact.mode == crate::artifacts::Mode::Applicator
+        && artifact.resource_budget.planned_worker_count > artifact.resource_budget.max_worker_count
+    {
         errors.push("planned_worker_count must not exceed max_worker_count".to_string());
     }
     if usize::from(artifact.resource_budget.planned_worker_count) != artifact.worker_plan.len() {
         errors.push("planned_worker_count must match worker_plan length".to_string());
     }
-    if artifact.execution_architecture == crate::artifacts::ExecutionArchitecture::Direct {
-        if artifact.worker_plan.len() != 1 {
-            errors.push("direct architecture must use exactly one worker".to_string());
-        } else if let Some(only_worker) = artifact.worker_plan.first() {
-            let expected = if artifact.mode == crate::artifacts::Mode::Applicator {
-                crate::artifacts::WorkerKind::ApplyComposite
-            } else {
-                crate::artifacts::WorkerKind::ReviewComposite
-            };
-            if only_worker.worker_kind != expected {
-                errors.push("direct architecture must use the composite worker".to_string());
-            }
-            if artifact.mode != crate::artifacts::Mode::Applicator {
-                let mut expected_modules = artifact.selected_modules.clone();
-                expected_modules.sort_unstable();
-                let mut actual_modules = only_worker.module_ids.clone();
-                actual_modules.sort_unstable();
-                if expected_modules != actual_modules {
+    if artifact.mode == crate::artifacts::Mode::Applicator {
+        if artifact.execution_architecture == crate::artifacts::ExecutionArchitecture::Direct {
+            if artifact.worker_plan.len() != 1 {
+                errors
+                    .push("direct applicator architecture must use exactly one worker".to_string());
+            } else if let Some(only_worker) = artifact.worker_plan.first() {
+                if only_worker.worker_kind != crate::artifacts::WorkerKind::ApplyComposite {
                     errors.push(
-                        "direct review-composite must include all selected_modules".to_string(),
+                        "direct applicator architecture must use apply-composite".to_string(),
                     );
                 }
             }
-        }
-    } else if artifact.mode == crate::artifacts::Mode::Applicator {
-        let worker_kinds = artifact
-            .worker_plan
-            .iter()
-            .map(|worker| worker.worker_kind)
-            .collect::<Vec<_>>();
-        if worker_kinds
-            != vec![
-                crate::artifacts::WorkerKind::ApplicatorWorker,
-                crate::artifacts::WorkerKind::ApplicatorVerifier,
-            ]
-        {
-            errors.push(
-                "non-direct applicator routes must use applicator-worker and applicator-verifier"
-                    .to_string(),
-            );
-        }
-    } else {
-        if !artifact
-            .worker_plan
-            .iter()
-            .any(|worker| worker.worker_kind == crate::artifacts::WorkerKind::SurfaceMapper)
-        {
-            errors.push("non-direct review routes must include surface-mapper".to_string());
-        }
-        if !artifact
-            .worker_plan
-            .iter()
-            .any(|worker| worker.worker_kind == crate::artifacts::WorkerKind::ReleaseRiskAssessor)
-        {
-            errors.push("non-direct review routes must include release-risk-assessor".to_string());
-        }
-        if artifact
-            .risk_surfaces
-            .iter()
-            .any(|surface| surface.surface_id == crate::artifacts::SurfaceId::DocsStaleness)
-            && !artifact
+        } else {
+            let worker_kinds = artifact
                 .worker_plan
                 .iter()
-                .any(|worker| worker.worker_kind == crate::artifacts::WorkerKind::CongruenceChecker)
-        {
-            errors.push(
-                "non-direct review routes touching docs-staleness must include congruence-checker"
-                    .to_string(),
-            );
+                .map(|worker| worker.worker_kind)
+                .collect::<Vec<_>>();
+            if worker_kinds
+                != vec![
+                    crate::artifacts::WorkerKind::ApplicatorWorker,
+                    crate::artifacts::WorkerKind::ApplicatorVerifier,
+                ]
+            {
+                errors.push(
+                    "non-direct applicator routes must use applicator-worker and applicator-verifier"
+                        .to_string(),
+                );
+            }
         }
+    } else {
+        validate_recursive_review_roster(artifact, errors);
     }
     for surface in &artifact.risk_surfaces {
         if !(1..=5).contains(&surface.weight) {
@@ -521,7 +606,9 @@ pub fn validate_artifact_file(
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
-        .filter(|candidate| candidate.join("_session.toml").exists());
+        .filter(|candidate| {
+            candidate.join("_session.json").exists() || candidate.join("_session.toml").exists()
+        });
     let session_dir = session_dir_override.or(derived_session_dir);
     validate_artifact_document(&artifact, layer, session_dir)
 }
@@ -557,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_validation_blocks_bad_direct_route() -> anyhow::Result<()> {
+    fn hard_validation_blocks_incomplete_recursive_review_route() -> anyhow::Result<()> {
         let artifact = ArtifactDocument::RouteDecision(RouteDecisionArtifact {
             header: header(ArtifactKind::RouteDecision)?,
             mode: Mode::Reviewer,
@@ -570,7 +657,7 @@ mod tests {
                 orchestrator_read_budget_snippets: 6,
             },
             resource_budget: ResourceBudget {
-                planned_worker_count: 2,
+                planned_worker_count: 0,
                 max_worker_count: 1,
             },
             risk_surfaces: Vec::new(),
@@ -581,6 +668,85 @@ mod tests {
         });
         let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
         ensure!(!summary.errors.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_accepts_recursive_review_roster_above_budget() -> anyhow::Result<()> {
+        let selected_modules = canonical_review_modules();
+        let mut worker_plan = vec![WorkerPlanRecord {
+            worker_kind: WorkerKind::LanguageDetector,
+            role_id: Some("language-detector".to_string()),
+            language: None,
+            module_ids: Vec::new(),
+            focus_surfaces: vec![SurfaceId::PublicApi],
+            claimed_scope: vec!["infer changed-file languages".to_string()],
+            delegated_scope: Vec::new(),
+            required: true,
+            parallelizable: false,
+        }];
+        for module_id in &selected_modules {
+            worker_plan.push(WorkerPlanRecord {
+                worker_kind: WorkerKind::DomainReviewer,
+                role_id: Some(format!(
+                    "domain:{}",
+                    toml::Value::try_from(*module_id).map_or_else(
+                        |_| "unknown".to_string(),
+                        |value| value.to_string().trim_matches('"').to_string()
+                    )
+                )),
+                language: None,
+                module_ids: vec![*module_id],
+                focus_surfaces: vec![SurfaceId::PublicApi],
+                claimed_scope: vec!["own assigned domain".to_string()],
+                delegated_scope: vec![
+                    "do not delegate the same domain investigation again".to_string()
+                ],
+                required: true,
+                parallelizable: false,
+            });
+        }
+        worker_plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::FinalSynthesizer,
+            role_id: Some("final-synthesis".to_string()),
+            language: None,
+            module_ids: vec![ModuleId::ShipReadiness],
+            focus_surfaces: vec![SurfaceId::PublicApi],
+            claimed_scope: vec!["synthesize descendant reports".to_string()],
+            delegated_scope: vec!["do not reopen low-signal duplicate findings".to_string()],
+            required: true,
+            parallelizable: false,
+        });
+
+        let artifact = ArtifactDocument::RouteDecision(RouteDecisionArtifact {
+            header: header(ArtifactKind::RouteDecision)?,
+            mode: Mode::Reviewer,
+            execution_architecture: ExecutionArchitecture::Direct,
+            rigor_level: crate::artifacts::RigorLevel::Lite,
+            capability_profile: CapabilityProfile {
+                execution_capability: ExecutionCapability::SingleProcess,
+                max_worker_count: 1,
+                orchestrator_read_budget_lines: 80,
+                orchestrator_read_budget_snippets: 6,
+            },
+            resource_budget: ResourceBudget {
+                planned_worker_count: u8::try_from(worker_plan.len())?,
+                max_worker_count: 1,
+            },
+            risk_surfaces: vec![RiskSurfaceRecord {
+                surface_id: SurfaceId::PublicApi,
+                weight: 5,
+                reason: "api".to_string(),
+                evidence_refs: vec!["src/api.rs".to_string()],
+                behavior_facing: true,
+            }],
+            selected_modules,
+            worker_plan,
+            heldback_escalations: Vec::new(),
+            stop_conditions: Vec::new(),
+        });
+        let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
+        ensure!(summary.errors.is_empty());
         Ok(())
     }
 
@@ -644,15 +810,23 @@ mod tests {
             worker_plan: vec![
                 WorkerPlanRecord {
                     worker_kind: WorkerKind::SurfaceMapper,
+                    role_id: None,
+                    language: None,
                     module_ids: Vec::new(),
                     focus_surfaces: vec![SurfaceId::AuthAccess],
+                    claimed_scope: Vec::new(),
+                    delegated_scope: Vec::new(),
                     required: true,
                     parallelizable: false,
                 },
                 WorkerPlanRecord {
                     worker_kind: WorkerKind::ReleaseRiskAssessor,
+                    role_id: None,
+                    language: None,
                     module_ids: vec![ModuleId::ShipReadiness],
                     focus_surfaces: vec![SurfaceId::AuthAccess],
+                    claimed_scope: Vec::new(),
+                    delegated_scope: Vec::new(),
                     required: true,
                     parallelizable: false,
                 },

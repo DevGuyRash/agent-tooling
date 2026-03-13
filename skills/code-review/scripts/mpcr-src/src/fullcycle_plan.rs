@@ -315,6 +315,10 @@ mod tests {
             reopen_eligible: false,
             confidence_label: ConfidenceLabel::High,
             confidence_score: 90,
+            evidence_strength: Some(ConfidenceLabel::High),
+            false_positive_risk: Some(ConfidenceLabel::Low),
+            actionable: Some(true),
+            duplicate_suspect: Some(false),
         })
     }
 
@@ -326,6 +330,8 @@ mod tests {
             session: locator.clone(),
             target_ref: "refs/heads/main".to_string(),
             reviewer_id: Some("parent01".to_string()),
+            role: None,
+            role_kind: None,
         })?;
 
         let parent_review = ArtifactDocument::ParentReview(ParentReviewArtifact {
@@ -403,6 +409,8 @@ mod tests {
             session: locator.clone(),
             target_ref: "refs/heads/main".to_string(),
             reviewer_id: Some("parent02".to_string()),
+            role: None,
+            role_kind: None,
         })?;
 
         let parent_review = ArtifactDocument::ParentReview(ParentReviewArtifact {

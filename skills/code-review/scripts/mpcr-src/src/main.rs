@@ -20,14 +20,14 @@ use mpcr::router::{build_route_decision, build_surface_map, default_router_polic
 use mpcr::router_types::RouteInputs;
 use mpcr::session::{
     append_applicator_note, append_reviewer_note, applicator_wait, apply_route_revision_artifact,
-    checkpoint_convergence_state, cleanup_session, close_child_reviews, complete_child_review,
-    ensure_session, finalize_application, finalize_review, list_artifacts, load_session,
-    persist_route_artifacts, register_reviewer, set_applicator_status, spawn_child_reviewers,
-    update_review, AppendApplicatorNoteParams, AppendReviewerNoteParams, ApplicatorArtifactParams,
-    ApplicatorStatus, ApplyRouteRevisionParams, CloseChildReviewsParams,
-    PersistRouteArtifactsParams, RegisterReviewerParams, ReviewProcessStatus,
-    ReviewerArtifactParams, SessionLocator, SetApplicatorStatusParams, SpawnChildReviewersParams,
-    UpdateReviewParams,
+    checkpoint_convergence_state, cleanup_session, close_child_reviews, collect_reports,
+    complete_child_review, ensure_session, finalize_application, finalize_review, list_artifacts,
+    load_session, persist_route_artifacts, register_reviewer, set_applicator_status,
+    spawn_child_reviewers, update_review, AppendApplicatorNoteParams, AppendReviewerNoteParams,
+    ApplicatorArtifactParams, ApplicatorStatus, ApplyRouteRevisionParams, CloseChildReviewsParams,
+    PersistRouteArtifactsParams, RegisterReviewerParams, ReportView, ReportsResult,
+    ReviewProcessStatus, ReviewerArtifactParams, SessionLocator, SetApplicatorStatusParams,
+    SpawnChildReviewersParams, UpdateReviewParams,
 };
 use mpcr::validate::{validate_artifact_file, ValidationLayer};
 use serde::Serialize;
@@ -127,6 +127,20 @@ enum SessionCommands {
     Reports {
         #[command(flatten)]
         session: SessionDirArgs,
+        #[arg(long, value_enum, default_value_t = ReportView::All)]
+        view: ReportView,
+        #[arg(long, default_value_t = false)]
+        recursive: bool,
+        #[arg(long, default_value_t = false)]
+        include_report_contents: bool,
+        #[arg(long, default_value_t = false)]
+        include_leaf_children: bool,
+        #[arg(long, default_value_t = false)]
+        concatenate: bool,
+    },
+    Artifacts {
+        #[command(flatten)]
+        session: SessionDirArgs,
         #[arg(long)]
         kind: Option<ArtifactKind>,
     },
@@ -163,6 +177,22 @@ enum ReviewerCommands {
         parent_id: String,
         #[arg(long)]
         count: u8,
+        #[arg(long)]
+        role_id: Option<String>,
+        #[arg(long, value_enum)]
+        worker_kind: Option<mpcr::artifacts::WorkerKind>,
+        #[arg(long, value_enum)]
+        domain_id: Option<mpcr::artifacts::ModuleId>,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long, value_enum)]
+        module_id: Vec<mpcr::artifacts::ModuleId>,
+        #[arg(long, value_enum)]
+        focus_surface: Vec<mpcr::artifacts::SurfaceId>,
+        #[arg(long)]
+        claimed_scope: Vec<String>,
+        #[arg(long)]
+        delegated_scope: Vec<String>,
     },
     CloseChildren {
         #[command(flatten)]
@@ -267,6 +297,16 @@ enum ProtocolCommands {
         #[arg(long, value_enum)]
         view: PolicyView,
     },
+    Dispatch {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(long)]
+        reviewer_id: Option<String>,
+        #[arg(long)]
+        role: String,
+        #[arg(long, value_enum, default_value_t = PolicyView::Checklist)]
+        view: PolicyView,
+    },
 }
 
 #[derive(Args)]
@@ -337,6 +377,12 @@ struct SessionDirArgs {
     repo_root: Option<PathBuf>,
     #[arg(long)]
     date: Option<String>,
+}
+
+impl SessionDirArgs {
+    fn is_empty(&self) -> bool {
+        self.session_dir.is_none() && self.repo_root.is_none() && self.date.is_none()
+    }
 }
 
 #[derive(Args, Clone)]
@@ -458,19 +504,97 @@ fn format_artifact_list(artifacts: &[mpcr::session::ArtifactPointer]) -> String 
         .join("\n")
 }
 
+fn review_status_text(status: ReviewProcessStatus) -> &'static str {
+    match status {
+        ReviewProcessStatus::Registered => "registered",
+        ReviewProcessStatus::InProgress => "in-progress",
+        ReviewProcessStatus::Delegating => "delegating",
+        ReviewProcessStatus::WaitingOnChildren => "waiting-on-children",
+        ReviewProcessStatus::Synthesizing => "synthesizing",
+        ReviewProcessStatus::Completed => "completed",
+        ReviewProcessStatus::Cancelled => "cancelled",
+        ReviewProcessStatus::Error => "error",
+        ReviewProcessStatus::Blocked => "blocked",
+    }
+}
+
+fn format_reports_output(reports: &ReportsResult) -> String {
+    if let Some(concatenated) = &reports.concatenated_report {
+        return concatenated.clone();
+    }
+    if reports.reports.is_empty() {
+        return "no reports".to_string();
+    }
+
+    let mut lines = vec![format!(
+        "view={} recursive={} include_leaf_children={}",
+        toml::Value::try_from(reports.view).map_or_else(
+            |_| "all".to_string(),
+            |value| value.to_string().trim_matches('"').to_string()
+        ),
+        reports.recursive,
+        reports.include_leaf_children
+    )];
+
+    for report in &reports.reports {
+        let mut line = format!(
+            "{} {} {} {}",
+            report.reviewer_id,
+            review_status_text(report.status),
+            report.role,
+            report.agent_dir
+        );
+        if let Some(report_path) = &report.report_path {
+            line.push_str(&format!(" report={report_path}"));
+        }
+        if report.child_count > 0 {
+            line.push_str(&format!(" children={}", report.child_count));
+        }
+        if !report.warnings.is_empty() {
+            line.push_str(&format!(" warnings={}", report.warnings.join(" | ")));
+        }
+        lines.push(line);
+        if let Some(contents) = &report.report_contents {
+            lines.push(String::new());
+            lines.push(format!("## {}", report.reviewer_id));
+            lines.push(contents.clone());
+        }
+    }
+    if let Some(final_report_path) = &reports.final_report_path {
+        lines.push(String::new());
+        lines.push(format!("final_report {final_report_path}"));
+    }
+    lines.join("\n")
+}
+
 fn render_protocol_output(output: &mpcr::protocol::ProtocolOutput) -> String {
     output.content.clone()
 }
 
+fn render_dispatch_output(output: &mpcr::protocol::DispatchOutput) -> String {
+    output.content.clone()
+}
+
 fn render_protocol_list(entries: &[mpcr::policy_store::PolicyListEntry]) -> String {
-    if entries.is_empty() {
-        return "no policies".to_string();
+    let mut lines = if entries.is_empty() {
+        vec!["no policies".to_string()]
+    } else {
+        entries
+            .iter()
+            .map(|entry| format!("{} {} {}", entry.category, entry.id, entry.version))
+            .collect::<Vec<_>>()
+    };
+    let dispatch_roles = protocol::dispatch_list();
+    if !dispatch_roles.is_empty() {
+        lines.push(String::new());
+        lines.push("dispatch roles".to_string());
+        lines.extend(
+            dispatch_roles
+                .into_iter()
+                .map(|role| format!("worker {role}")),
+        );
     }
-    entries
-        .iter()
-        .map(|entry| format!("{} {} {}", entry.category, entry.id, entry.version))
-        .collect::<Vec<_>>()
-        .join("\n")
+    lines.join("\n")
 }
 
 fn router_surface_policy_refs() -> Vec<PolicyRef> {
@@ -480,6 +604,37 @@ fn router_surface_policy_refs() -> Vec<PolicyRef> {
         version: POLICY_BUNDLE_VERSION.to_string(),
         view: PolicyView::Checklist,
     }]
+}
+
+fn role_slug_from_spawn_args(
+    role_id: Option<&str>,
+    worker_kind: Option<mpcr::artifacts::WorkerKind>,
+    domain_id: Option<mpcr::artifacts::ModuleId>,
+    language: Option<&str>,
+) -> String {
+    if let Some(role_id) = role_id {
+        return role_id.to_string();
+    }
+    if let Some(domain_id) = domain_id {
+        let slug = toml::Value::try_from(domain_id).map_or_else(
+            |_| "unknown".to_string(),
+            |value| value.to_string().trim_matches('"').to_string(),
+        );
+        return format!("domain:{slug}");
+    }
+    match worker_kind {
+        Some(mpcr::artifacts::WorkerKind::LanguageDetector) => "language-detector".to_string(),
+        Some(mpcr::artifacts::WorkerKind::LanguageResearch) => {
+            format!(
+                "language-research:{}",
+                language.map_or("unknown", |value| value)
+            )
+        }
+        Some(mpcr::artifacts::WorkerKind::FinalSynthesizer) => "final-synthesis".to_string(),
+        Some(mpcr::artifacts::WorkerKind::ApplicatorWorker) => "applicator-worker".to_string(),
+        Some(mpcr::artifacts::WorkerKind::ApplicatorVerifier) => "applicator-verifier".to_string(),
+        _ => "domain:unassigned".to_string(),
+    }
 }
 
 fn build_route_output(
@@ -527,9 +682,54 @@ fn build_route_output(
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("{err}");
+        eprintln!("{}", format_error_output(&err));
         std::process::exit(1);
     }
+}
+
+fn hint_for_error(text: &str) -> Option<String> {
+    if text.contains("unknown dispatch role") {
+        return Some(format!(
+            "run `mpcr protocol dispatch --role domain:core-correctness` or choose from: {}",
+            protocol::dispatch_list().join(", ")
+        ));
+    }
+    if text.contains("unknown Worker policy")
+        || text.contains("unknown Module policy")
+        || text.contains("unknown Escalation policy")
+        || text.contains("unknown Mode policy")
+    {
+        return Some("run `mpcr protocol list` to discover valid mode, worker, module, escalation, and dispatch ids".to_string());
+    }
+    if text.contains("session does not exist yet") {
+        return Some("initialize the session with `mpcr reviewer register --target-ref <ref> --session-dir <path>`".to_string());
+    }
+    if text.contains("was not found in the session") || text.contains("was not found") {
+        return Some("inspect the active reviewer tree with `mpcr session reports --recursive --session-dir <path>`".to_string());
+    }
+    if text.contains("route_decision pointer could not be resolved")
+        || text.contains("no current route_decision is persisted")
+    {
+        return Some("persist routing first with `mpcr route --persist ...` before applying a route revision".to_string());
+    }
+    if text.contains("protocol dispatch with --reviewer-id also requires a session locator") {
+        return Some("rerun with `--session-dir <path>` so the dispatch prompt can resolve the reviewer tree".to_string());
+    }
+    None
+}
+
+fn format_error_output(err: &anyhow::Error) -> String {
+    let mut message = err.to_string().trim().to_string();
+    if !message.starts_with("error:") {
+        message = format!("error: {message}");
+    }
+    if message.contains("\nhint:") {
+        return message;
+    }
+    if let Some(hint) = hint_for_error(&message) {
+        return format!("{message}\nhint: {hint}");
+    }
+    message
 }
 
 fn run() -> anyhow::Result<()> {
@@ -632,7 +832,28 @@ fn run() -> anyhow::Result<()> {
                     Ok(toml::to_string_pretty(&ledger)?)
                 })?;
             }
-            SessionCommands::Reports { session, kind } => {
+            SessionCommands::Reports {
+                session,
+                view,
+                recursive,
+                include_report_contents,
+                include_leaf_children,
+                concatenate,
+            } => {
+                let locator = resolve_session_locator(&session)?;
+                let reports = collect_reports(
+                    &locator,
+                    view,
+                    recursive,
+                    include_leaf_children,
+                    include_report_contents,
+                    concatenate,
+                )?;
+                emit_text_or_json(json, json_pretty, &reports, || {
+                    Ok(format_reports_output(&reports))
+                })?;
+            }
+            SessionCommands::Artifacts { session, kind } => {
                 let locator = resolve_session_locator(&session)?;
                 let ledger = load_session(&locator)?;
                 let artifacts = list_artifacts(&ledger, kind);
@@ -682,6 +903,8 @@ fn run() -> anyhow::Result<()> {
                     session: locator,
                     target_ref,
                     reviewer_id,
+                    role: None,
+                    role_kind: None,
                 })?;
                 emit_text_or_json(json, json_pretty, &result, || {
                     Ok(toml::to_string_pretty(&result)?)
@@ -691,12 +914,34 @@ fn run() -> anyhow::Result<()> {
                 session,
                 parent_id,
                 count,
+                role_id,
+                worker_kind,
+                domain_id,
+                language,
+                module_id,
+                focus_surface,
+                claimed_scope,
+                delegated_scope,
             } => {
                 let locator = resolve_session_locator(&session)?;
+                let role = role_slug_from_spawn_args(
+                    role_id.as_deref(),
+                    worker_kind,
+                    domain_id,
+                    language.as_deref(),
+                );
                 let result = spawn_child_reviewers(SpawnChildReviewersParams {
                     session: locator,
                     parent_id,
                     count,
+                    role_id: Some(role),
+                    worker_kind,
+                    domain_id,
+                    language,
+                    module_ids: module_id,
+                    focus_surfaces: focus_surface,
+                    claimed_scope,
+                    delegated_scope,
                 })?;
                 emit_text_or_json(json, json_pretty, &result, || {
                     Ok(toml::to_string_pretty(&result)?)
@@ -891,6 +1136,23 @@ fn run() -> anyhow::Result<()> {
                 )?;
                 emit_text_or_json(json, json_pretty, &output, || {
                     Ok(render_protocol_output(&output))
+                })?;
+            }
+            ProtocolCommands::Dispatch {
+                session,
+                reviewer_id,
+                role,
+                view,
+            } => {
+                let locator = if session.is_empty() {
+                    None
+                } else {
+                    Some(resolve_session_locator(&session)?)
+                };
+                let output =
+                    protocol::dispatch(&role, locator.as_ref(), reviewer_id.as_deref(), view)?;
+                emit_text_or_json(json, json_pretty, &output, || {
+                    Ok(render_dispatch_output(&output))
                 })?;
             }
         },

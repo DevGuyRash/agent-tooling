@@ -1,108 +1,101 @@
 # Orchestrator Fallback
 
-Use semantic routing first. Load mode second. Load worker and module packs only for the selected route. Load escalation packs only after triggers fire. Load examples only on uncertainty, malformed output, retry, or explicit request.
+Use semantic routing first. Keep the orchestrator thin: instantiate the canonical reviewer roster every run, persist session state, and hand each worker only its dispatch prompt plus relevant policy packs. Use `mpcr session reports` for report retrieval and `mpcr session artifacts` for flat artifact inventory.
 
-# surface-mapper
+# language-detector
 version: 2026.03.08
-Build the semantic surface map and determine whether staleness checks are required.
+Identify the active implementation languages early so research workers can fetch targeted primary-source guidance once.
 
 ## Must
-- emit risk_surface_record values
-- mark behavior-facing artifacts
-- decide staleness_required deterministically
+- derive languages from changed files and relevant interfaces
+- normalize languages to stable slugs
+- avoid speculative language guesses when evidence is absent
 
 ## Must Not
-- route by churn alone
+- emit product findings in place of language classification
+- trigger duplicate language research for the same language without new evidence
 
 ## Checks
-- surface weights match defaults
-- suggested modules include always-on modules later
+- every detected language has a concrete file or interface signal
+- unknown files do not block known-language handoff
 
 ## Stop When
-- surface_map is emitted
+- the language roster is stable enough for research fan-out
 
 ## Escalate When
-- new surface weight >= 4 appears
+- the change cannot be safely reviewed without resolving an unknown generated or embedded language
 
-# contract-comparer
+# language-research
 version: 2026.03.08
-Compare API, schema, CLI, config, and migration contracts for congruent behavior across versions.
+Fetch current primary-source docs, standards, and idioms for one language so downstream reviewers stop re-browsing the same material.
 
 ## Must
-- compare before and after contracts
-- call out compatibility drift
+- use primary sources first
+- capture the sources and key idioms in the authored report
+- limit research to guidance relevant to the changed language and routed domains
 
 ## Must Not
-- treat implementation refactors as contract drift without evidence
+- restate generic review doctrine instead of language-specific guidance
+- repeat research already cached for the same language without a new need
 
 ## Checks
-- claim references a concrete contract element
-- verification is actionable
+- sources are current and language-native
+- guidance maps back to routed review concerns
 
 ## Stop When
-- contract deltas are covered
+- downstream workers have enough language-specific guidance to proceed without re-browsing
 
 ## Escalate When
-- compatibility break is unguarded
+- no trustworthy primary source can be established for a critical language feature
 
-# exploit-tracer
+# domain-reviewer
 version: 2026.03.08
-Trace exploit paths across auth, privilege, and input-validation surfaces.
+Own one review domain, produce a full authored report, and persist machine findings without duplicating sibling scope.
 
 ## Must
-- follow untrusted input to privileged operations
-- state exploit scenario concretely
+- own exactly the assigned module or delegated sub-scope
+- write a full report.md even for no-findings or low-signal outcomes
+- challenge findings for anchor quality, realism, duplication, and actionability before escalating them
 
 ## Must Not
-- emit abstract security claims without path evidence
+- re-run language research already provided by upstream workers
+- re-open already-addressed or low-signal claims
+- delegate the same investigation slice twice
 
 ## Checks
-- scenario is reproducible
-- severity is proportional
+- claimed_scope and delegated_scope stay disjoint
+- defended non-findings are documented
+- residual risks explain why work stops or escalates
 
 ## Stop When
-- security path coverage is complete
+- the assigned module has a complete report and finalized child_findings
+- the assigned scope is out-of-scope or low-signal and that result is documented
 
 ## Escalate When
-- privilege or auth bypass is plausible
+- new evidence implies a different routed domain must be delegated
+- a major or blocker finding survives challenge
 
-# congruence-checker
+# final-synthesizer
 version: 2026.03.08
-Check congruence between behavior-facing code changes and docs, comments, examples, or operator guidance.
+Concatenate descendant reports, preserve recursive counts, and surface only challenged high-signal findings in the parent synthesis.
 
 ## Must
-- treat staleness as first-class
-- check docs whenever behavior-facing evidence requires it
+- walk descendant reports in stable order
+- preserve recursive counts from machine artifacts
+- filter out low-signal, duplicate, non-actionable, and already-addressed claims
 
 ## Must Not
-- assume docs are irrelevant when code changes behavior
+- invent new evidence
+- duplicate leaf findings as fresh discoveries
+- reopen loops for weak or already-resolved items
 
 ## Checks
-- behavior-facing mismatch is explicit
-- reopen_eligible is set correctly
+- final counts match descendant artifacts
+- concatenation order is stable
+- push-or-stop recommendation is evidence-backed
 
 ## Stop When
-- staleness coverage is complete
+- the final synthesis and recursive counts are internally consistent
 
 ## Escalate When
-- behavior-facing staleness remains
-
-# simplification-checker
-version: 2026.03.08
-Interrogate scope creep and overengineering when the route or revision indicates excess complexity.
-
-## Must
-- justify scope-creep claims with concrete simplification paths
-
-## Must Not
-- treat any abstraction as overengineering
-
-## Checks
-- recommendation simplifies behavior or structure
-- severity stays bounded
-
-## Stop When
-- scope-creep concerns are resolved
-
-## Escalate When
-- change scope meaningfully exceeds routed need
+- a surviving blocker or major finding requires reopen

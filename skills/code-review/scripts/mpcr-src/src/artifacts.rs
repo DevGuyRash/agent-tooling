@@ -71,7 +71,12 @@ impl ArtifactKind {
     pub const fn supports_rendered_output(self) -> bool {
         matches!(
             self,
-            Self::ParentReview | Self::ApplicationResult | Self::VerificationResult
+            Self::ChildFindings
+                | Self::ParentReview
+                | Self::ApplicationResult
+                | Self::VerificationResult
+                | Self::ConvergenceState
+                | Self::RouteRevision
         )
     }
 }
@@ -125,13 +130,17 @@ pub enum RigorLevel {
 pub enum WorkerKind {
     ReviewComposite,
     ApplyComposite,
+    DomainReviewer,
     SurfaceMapper,
+    LanguageDetector,
+    LanguageResearch,
     InvariantChallenger,
     ExploitTracer,
     ContractComparer,
     CongruenceChecker,
     SimplificationChecker,
     ReleaseRiskAssessor,
+    FinalSynthesizer,
     ApplicatorWorker,
     ApplicatorVerifier,
 }
@@ -146,13 +155,17 @@ pub enum ProducerKind {
     Validator,
     ReviewComposite,
     ApplyComposite,
+    DomainReviewer,
     SurfaceMapper,
+    LanguageDetector,
+    LanguageResearch,
     InvariantChallenger,
     ExploitTracer,
     ContractComparer,
     CongruenceChecker,
     SimplificationChecker,
     ReleaseRiskAssessor,
+    FinalSynthesizer,
     ApplicatorWorker,
     ApplicatorVerifier,
 }
@@ -164,13 +177,17 @@ impl ProducerKind {
         match worker {
             WorkerKind::ReviewComposite => Self::ReviewComposite,
             WorkerKind::ApplyComposite => Self::ApplyComposite,
+            WorkerKind::DomainReviewer => Self::DomainReviewer,
             WorkerKind::SurfaceMapper => Self::SurfaceMapper,
+            WorkerKind::LanguageDetector => Self::LanguageDetector,
+            WorkerKind::LanguageResearch => Self::LanguageResearch,
             WorkerKind::InvariantChallenger => Self::InvariantChallenger,
             WorkerKind::ExploitTracer => Self::ExploitTracer,
             WorkerKind::ContractComparer => Self::ContractComparer,
             WorkerKind::CongruenceChecker => Self::CongruenceChecker,
             WorkerKind::SimplificationChecker => Self::SimplificationChecker,
             WorkerKind::ReleaseRiskAssessor => Self::ReleaseRiskAssessor,
+            WorkerKind::FinalSynthesizer => Self::FinalSynthesizer,
             WorkerKind::ApplicatorWorker => Self::ApplicatorWorker,
             WorkerKind::ApplicatorVerifier => Self::ApplicatorVerifier,
         }
@@ -508,10 +525,18 @@ pub struct RiskSurfaceRecord {
 /// Planned worker execution entry.
 pub struct WorkerPlanRecord {
     pub worker_kind: WorkerKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     #[serde(default)]
     pub module_ids: Vec<ModuleId>,
     #[serde(default)]
     pub focus_surfaces: Vec<SurfaceId>,
+    #[serde(default)]
+    pub claimed_scope: Vec<String>,
+    #[serde(default)]
+    pub delegated_scope: Vec<String>,
     pub required: bool,
     pub parallelizable: bool,
 }
@@ -539,6 +564,14 @@ pub struct FindingRecord {
     pub reopen_eligible: bool,
     pub confidence_label: ConfidenceLabel,
     pub confidence_score: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_strength: Option<ConfidenceLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub false_positive_risk: Option<ConfidenceLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actionable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duplicate_suspect: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -585,6 +618,14 @@ pub struct DispositionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracking_ref: Option<String>,
     pub verification_needed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_strength: Option<ConfidenceLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub false_positive_risk: Option<ConfidenceLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duplicate_suspect: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_recommendation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -711,8 +752,18 @@ pub struct ChildFindingsArtifact {
     #[serde(flatten)]
     pub header: ArtifactHeader,
     pub worker_kind: WorkerKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     #[serde(default)]
     pub module_ids: Vec<ModuleId>,
+    #[serde(default)]
+    pub claimed_scope: Vec<String>,
+    #[serde(default)]
+    pub delegated_scope: Vec<String>,
+    #[serde(default)]
+    pub research_refs: Vec<String>,
     #[serde(default)]
     pub findings: Vec<FindingRecord>,
     #[serde(default)]
@@ -867,6 +918,24 @@ impl ArtifactDocument {
         };
         Ok(body)
     }
+
+    /// Serialize the document as pretty JSON.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_json_string(&self) -> anyhow::Result<String> {
+        let body = match self {
+            Self::RouteDecision(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::SurfaceMap(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::ChildFindings(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::ParentReview(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::ApplicationResult(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::VerificationResult(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::ConvergenceState(artifact) => serde_json::to_string_pretty(artifact)?,
+            Self::RouteRevision(artifact) => serde_json::to_string_pretty(artifact)?,
+        };
+        Ok(body)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -882,7 +951,15 @@ struct ArtifactProbe {
 pub fn parse_artifact_file(path: &Path) -> anyhow::Result<ArtifactDocument> {
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read artifact file {}", path.display()))?;
-    parse_artifact_str(&body)
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    {
+        parse_artifact_json_str(&body)
+    } else {
+        parse_artifact_str(&body)
+    }
 }
 
 /// Parse a canonical artifact string into a typed document.
@@ -913,6 +990,45 @@ pub fn parse_artifact_str(body: &str) -> anyhow::Result<ArtifactDocument> {
             Ok(ArtifactDocument::ConvergenceState(toml::from_str(body)?))
         }
         ArtifactKind::RouteRevision => Ok(ArtifactDocument::RouteRevision(toml::from_str(body)?)),
+    }
+}
+
+/// Parse a canonical JSON artifact string into a typed document.
+///
+/// # Errors
+/// Returns an error if the JSON cannot be parsed or is legacy state.
+pub fn parse_artifact_json_str(body: &str) -> anyhow::Result<ArtifactDocument> {
+    if body.contains("proof_packet.v2") || body.contains("parent_review_report") {
+        return Err(anyhow::anyhow!(LEGACY_REJECTION_MESSAGE));
+    }
+    let probe: ArtifactProbe = serde_json::from_str(body)
+        .map_err(|err| anyhow::anyhow!("error: parse artifact JSON: {err}"))?;
+    if probe.schema_version != ARTIFACT_SCHEMA_VERSION {
+        return Err(anyhow::anyhow!(LEGACY_REJECTION_MESSAGE));
+    }
+    match probe.artifact_kind {
+        ArtifactKind::RouteDecision => {
+            Ok(ArtifactDocument::RouteDecision(serde_json::from_str(body)?))
+        }
+        ArtifactKind::SurfaceMap => Ok(ArtifactDocument::SurfaceMap(serde_json::from_str(body)?)),
+        ArtifactKind::ChildFindings => {
+            Ok(ArtifactDocument::ChildFindings(serde_json::from_str(body)?))
+        }
+        ArtifactKind::ParentReview => {
+            Ok(ArtifactDocument::ParentReview(serde_json::from_str(body)?))
+        }
+        ArtifactKind::ApplicationResult => Ok(ArtifactDocument::ApplicationResult(
+            serde_json::from_str(body)?,
+        )),
+        ArtifactKind::VerificationResult => Ok(ArtifactDocument::VerificationResult(
+            serde_json::from_str(body)?,
+        )),
+        ArtifactKind::ConvergenceState => Ok(ArtifactDocument::ConvergenceState(
+            serde_json::from_str(body)?,
+        )),
+        ArtifactKind::RouteRevision => {
+            Ok(ArtifactDocument::RouteRevision(serde_json::from_str(body)?))
+        }
     }
 }
 
@@ -1200,6 +1316,10 @@ mod tests {
             reopen_eligible: true,
             confidence_label: ConfidenceLabel::High,
             confidence_score: 88,
+            evidence_strength: Some(ConfidenceLabel::High),
+            false_positive_risk: Some(ConfidenceLabel::Low),
+            actionable: Some(true),
+            duplicate_suspect: Some(false),
         };
         validate_finding_identity(&finding)?;
 

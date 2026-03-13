@@ -55,75 +55,107 @@ Produce canonical review artifacts from semantic routing and concern-specific wo
 - selected_modules
 - loaded_policy_refs
 
+Route first, then use `mpcr protocol dispatch --role <role>` for the current worker instead of loading the whole skill body again. The reviewer roster is language-detector, zero or more language-research workers, one domain-reviewer per canonical module, and final-synthesis.
+
 Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.
 
-# review-composite
+# language-detector
 version: 2026.03.08
-Single-worker direct review that performs surface mapping, baseline correctness, staleness when needed, and ship readiness.
+Identify the active implementation languages early so research workers can fetch targeted primary-source guidance once.
 
 ## Must
-- produce child_findings or parent_review artifacts only
-- cover baseline correctness
-- cover staleness when required
-- cover ship readiness
+- derive languages from changed files and relevant interfaces
+- normalize languages to stable slugs
+- avoid speculative language guesses when evidence is absent
 
 ## Must Not
-- delegate to an orchestrator layer
-- emit narrative-only output
+- emit product findings in place of language classification
+- trigger duplicate language research for the same language without new evidence
 
 ## Checks
-- keep scope bounded to routed surfaces
-- record loaded_policy_refs
-- compute fingerprints for findings
+- every detected language has a concrete file or interface signal
+- unknown files do not block known-language handoff
 
 ## Stop When
-- child_findings artifact is finalized
+- the language roster is stable enough for research fan-out
 
 ## Escalate When
-- new high-weight surface appears
+- the change cannot be safely reviewed without resolving an unknown generated or embedded language
 
-# invariant-challenger
+# language-research
 version: 2026.03.08
-Use theorem/disproof style checks for correctness, integrity, and concurrency concerns.
+Fetch current primary-source docs, standards, and idioms for one language so downstream reviewers stop re-browsing the same material.
 
 ## Must
-- state the invariant
-- attempt a counterexample
-- emit defended or failed evidence
+- use primary sources first
+- capture the sources and key idioms in the authored report
+- limit research to guidance relevant to the changed language and routed domains
 
 ## Must Not
-- use rhetorical prose as evidence
+- restate generic review doctrine instead of language-specific guidance
+- repeat research already cached for the same language without a new need
 
 ## Checks
-- anchors are precise
-- defended checks include attempted_counterexample
+- sources are current and language-native
+- guidance maps back to routed review concerns
 
 ## Stop When
-- targeted concern is covered
+- downstream workers have enough language-specific guidance to proceed without re-browsing
 
 ## Escalate When
-- counterexample implies major or blocker
+- no trustworthy primary source can be established for a critical language feature
 
-# release-risk-assessor
+# domain-reviewer
 version: 2026.03.08
-Assess ship readiness after concern-specific review is complete.
+Own one review domain, produce a full authored report, and persist machine findings without duplicating sibling scope.
 
 ## Must
-- synthesize ship risk last
-- record blocking items and verdict
+- own exactly the assigned module or delegated sub-scope
+- write a full report.md even for no-findings or low-signal outcomes
+- challenge findings for anchor quality, realism, duplication, and actionability before escalating them
 
 ## Must Not
-- duplicate lower-level findings as new evidence
+- re-run language research already provided by upstream workers
+- re-open already-addressed or low-signal claims
+- delegate the same investigation slice twice
 
 ## Checks
-- blocking item counts match required_now
-- ship_readiness is consistent
+- claimed_scope and delegated_scope stay disjoint
+- defended non-findings are documented
+- residual risks explain why work stops or escalates
 
 ## Stop When
-- parent_review is emitted
+- the assigned module has a complete report and finalized child_findings
+- the assigned scope is out-of-scope or low-signal and that result is documented
 
 ## Escalate When
-- blocking items remain
+- new evidence implies a different routed domain must be delegated
+- a major or blocker finding survives challenge
+
+# final-synthesizer
+version: 2026.03.08
+Concatenate descendant reports, preserve recursive counts, and surface only challenged high-signal findings in the parent synthesis.
+
+## Must
+- walk descendant reports in stable order
+- preserve recursive counts from machine artifacts
+- filter out low-signal, duplicate, non-actionable, and already-addressed claims
+
+## Must Not
+- invent new evidence
+- duplicate leaf findings as fresh discoveries
+- reopen loops for weak or already-resolved items
+
+## Checks
+- final counts match descendant artifacts
+- concatenation order is stable
+- push-or-stop recommendation is evidence-backed
+
+## Stop When
+- the final synthesis and recursive counts are internally consistent
+
+## Escalate When
+- a surviving blocker or major finding requires reopen
 
 # core-correctness
 version: 2026.03.08
@@ -144,6 +176,25 @@ Baseline correctness module that always loads for review routing.
 
 ## Escalate When
 - counterexample breaks correctness
+
+# docs-staleness
+version: 2026.03.08
+Behavior-facing documentation and example congruence module.
+
+## Must
+- compare docs/examples/comments to actual behavior
+
+## Must Not
+- treat style edits as behavior-facing drift
+
+## Checks
+- reopen eligibility is explicit
+
+## Stop When
+- staleness status is clear
+
+## Escalate When
+- behavior-facing staleness remains
 
 # ship-readiness
 version: 2026.03.08

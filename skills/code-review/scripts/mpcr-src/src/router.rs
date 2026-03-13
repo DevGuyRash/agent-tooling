@@ -241,17 +241,49 @@ fn modules_for_surface(surface_id: SurfaceId) -> Vec<ModuleId> {
 }
 
 fn canonical_selected_modules(
-    surfaces: &[RiskSurfaceRecord],
+    _surfaces: &[RiskSurfaceRecord],
     extra_modules: &[ModuleId],
 ) -> Vec<ModuleId> {
-    let mut selected_modules = vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness];
-    for surface in surfaces {
-        selected_modules.extend(modules_for_surface(surface.surface_id));
-    }
+    let mut selected_modules = ModuleId::all().to_vec();
     selected_modules.extend(extra_modules.iter().copied());
     selected_modules.sort_unstable();
     selected_modules.dedup();
     selected_modules
+}
+
+fn detect_languages(changed_files: &[String]) -> Vec<String> {
+    let mut languages = changed_files
+        .iter()
+        .filter_map(|file| {
+            let language = if file.ends_with(".rs") {
+                Some("rust")
+            } else if file.ends_with(".py") {
+                Some("python")
+            } else if file.ends_with(".js") || file.ends_with(".jsx") {
+                Some("javascript")
+            } else if file.ends_with(".ts") || file.ends_with(".tsx") {
+                Some("typescript")
+            } else if file.ends_with(".go") {
+                Some("go")
+            } else if file.ends_with(".java") {
+                Some("java")
+            } else if file.ends_with(".rb") {
+                Some("ruby")
+            } else if file.ends_with(".php") {
+                Some("php")
+            } else if file.ends_with(".kt") {
+                Some("kotlin")
+            } else if file.ends_with(".cs") {
+                Some("csharp")
+            } else {
+                None
+            };
+            language.map(ToString::to_string)
+        })
+        .collect::<Vec<_>>();
+    languages.sort();
+    languages.dedup();
+    languages
 }
 
 fn scope_signals_for_modules(
@@ -379,176 +411,140 @@ fn determine_architecture(
     }
 }
 
+fn worker_plan_record(
+    worker_kind: WorkerKind,
+    role_id: Option<String>,
+    language: Option<String>,
+    module_ids: Vec<ModuleId>,
+    focus_surfaces: Vec<SurfaceId>,
+    claimed_scope: Vec<String>,
+    delegated_scope: Vec<String>,
+    required: bool,
+    parallelizable: bool,
+) -> WorkerPlanRecord {
+    WorkerPlanRecord {
+        worker_kind,
+        role_id,
+        language,
+        module_ids,
+        focus_surfaces,
+        claimed_scope,
+        delegated_scope,
+        required,
+        parallelizable,
+    }
+}
+
 fn build_worker_plan(
     mode: Mode,
     architecture: ExecutionArchitecture,
     surfaces: &[RiskSurfaceRecord],
     selected_modules: &[ModuleId],
+    languages: &[String],
     scope_signals: ScopeSignals,
     staleness_required: bool,
 ) -> Vec<WorkerPlanRecord> {
-    if architecture == ExecutionArchitecture::Direct {
-        return vec![WorkerPlanRecord {
-            worker_kind: if mode == Mode::Applicator {
-                WorkerKind::ApplyComposite
-            } else {
-                WorkerKind::ReviewComposite
-            },
-            module_ids: selected_modules.to_vec(),
-            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
-            required: true,
-            parallelizable: false,
-        }];
-    }
-
     if mode == Mode::Applicator {
         let focus_surfaces = surfaces
             .iter()
             .map(|surface| surface.surface_id)
             .collect::<Vec<_>>();
         return vec![
-            WorkerPlanRecord {
-                worker_kind: WorkerKind::ApplicatorWorker,
-                module_ids: selected_modules.to_vec(),
-                focus_surfaces: focus_surfaces.clone(),
-                required: true,
-                parallelizable: architecture == ExecutionArchitecture::Delegated,
-            },
-            WorkerPlanRecord {
-                worker_kind: WorkerKind::ApplicatorVerifier,
-                module_ids: selected_modules.to_vec(),
+            worker_plan_record(
+                WorkerKind::ApplicatorWorker,
+                Some("applicator-worker".to_string()),
+                None,
+                selected_modules.to_vec(),
+                focus_surfaces.clone(),
+                Vec::new(),
+                Vec::new(),
+                true,
+                architecture == ExecutionArchitecture::Delegated,
+            ),
+            worker_plan_record(
+                WorkerKind::ApplicatorVerifier,
+                Some("applicator-verifier".to_string()),
+                None,
+                selected_modules.to_vec(),
                 focus_surfaces,
-                required: true,
-                parallelizable: false,
-            },
+                Vec::new(),
+                Vec::new(),
+                true,
+                false,
+            ),
         ];
     }
-
-    let mut plan = vec![
-        WorkerPlanRecord {
-            worker_kind: WorkerKind::SurfaceMapper,
-            module_ids: Vec::new(),
-            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
-            required: true,
-            parallelizable: false,
-        },
-        WorkerPlanRecord {
-            worker_kind: WorkerKind::InvariantChallenger,
-            module_ids: vec![ModuleId::CoreCorrectness],
-            focus_surfaces: surfaces.iter().map(|surface| surface.surface_id).collect(),
-            required: true,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        },
-    ];
-
     let surface_ids = surfaces
         .iter()
         .map(|surface| surface.surface_id)
         .collect::<Vec<_>>();
-    if staleness_required {
-        plan.push(WorkerPlanRecord {
-            worker_kind: WorkerKind::CongruenceChecker,
-            module_ids: vec![ModuleId::DocsStaleness],
-            focus_surfaces: vec![SurfaceId::DocsStaleness],
-            required: true,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        });
+    let mut plan = vec![worker_plan_record(
+        WorkerKind::LanguageDetector,
+        Some("language-detector".to_string()),
+        None,
+        Vec::new(),
+        surface_ids.clone(),
+        vec!["infer changed-file languages".to_string()],
+        Vec::new(),
+        true,
+        false,
+    )];
+    for language in languages {
+        plan.push(worker_plan_record(
+            WorkerKind::LanguageResearch,
+            Some(format!("language-research:{language}")),
+            Some(language.clone()),
+            Vec::new(),
+            surface_ids.clone(),
+            vec![format!("research language `{language}` primary sources")],
+            vec!["do not re-run language research in domain agents".to_string()],
+            true,
+            architecture == ExecutionArchitecture::Delegated,
+        ));
     }
-    if surface_ids.iter().any(|surface_id| {
-        matches!(
-            surface_id,
-            SurfaceId::PublicApi | SurfaceId::Migration | SurfaceId::ConfigSurface
-        )
-    }) {
-        plan.push(WorkerPlanRecord {
-            worker_kind: WorkerKind::ContractComparer,
-            module_ids: vec![ModuleId::CoreCorrectness],
-            focus_surfaces: surface_ids
-                .iter()
-                .copied()
-                .filter(|surface_id| {
-                    matches!(
-                        surface_id,
-                        SurfaceId::PublicApi | SurfaceId::Migration | SurfaceId::ConfigSurface
-                    )
-                })
-                .collect(),
-            required: true,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        });
-    }
-    if surface_ids.iter().any(|surface_id| {
-        matches!(
-            surface_id,
-            SurfaceId::AuthAccess | SurfaceId::InputValidation | SurfaceId::PrivilegeBoundary
-        )
-    }) {
-        plan.push(WorkerPlanRecord {
-            worker_kind: WorkerKind::ExploitTracer,
-            module_ids: vec![
-                ModuleId::AuthAccess,
-                ModuleId::InputValidation,
-                ModuleId::Privacy,
-            ],
-            focus_surfaces: surface_ids
-                .iter()
-                .copied()
-                .filter(|surface_id| {
-                    matches!(
-                        surface_id,
-                        SurfaceId::AuthAccess
-                            | SurfaceId::InputValidation
-                            | SurfaceId::PrivilegeBoundary
-                    )
-                })
-                .collect(),
-            required: true,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        });
-    }
-    let invariant_focus = surface_ids
-        .iter()
-        .copied()
-        .filter(|surface_id| {
-            matches!(
-                surface_id,
-                SurfaceId::Persistence
-                    | SurfaceId::DataIntegrity
-                    | SurfaceId::Concurrency
-                    | SurfaceId::StateMachine
+    for module_id in selected_modules {
+        let role_id = format!(
+            "domain:{}",
+            toml::Value::try_from(*module_id).map_or_else(
+                |_| "unknown".to_string(),
+                |value| value.to_string().trim_matches('"').to_string()
             )
-        })
-        .collect::<Vec<_>>();
-    if !invariant_focus.is_empty() {
-        plan.push(WorkerPlanRecord {
-            worker_kind: WorkerKind::InvariantChallenger,
-            module_ids: vec![
-                ModuleId::Persistence,
-                ModuleId::DataIntegrity,
-                ModuleId::Concurrency,
-                ModuleId::CoreCorrectness,
-            ],
-            focus_surfaces: invariant_focus,
-            required: true,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        });
+        );
+        let mut claimed_scope = vec![format!(
+            "own domain `{}`",
+            role_id.trim_start_matches("domain:")
+        )];
+        if *module_id == ModuleId::DocsStaleness && staleness_required {
+            claimed_scope.push("treat behavior-facing staleness as required".to_string());
+        }
+        if *module_id == ModuleId::ScopeCreep
+            && !(scope_signals.scope_creep_detected || scope_signals.overengineering_detected)
+        {
+            claimed_scope.push("likely low-signal or out-of-scope".to_string());
+        }
+        plan.push(worker_plan_record(
+            WorkerKind::DomainReviewer,
+            Some(role_id),
+            None,
+            vec![*module_id],
+            surface_ids.clone(),
+            claimed_scope,
+            vec!["do not delegate the same domain investigation again".to_string()],
+            true,
+            architecture != ExecutionArchitecture::Direct,
+        ));
     }
-    if scope_signals.scope_creep_detected || scope_signals.overengineering_detected {
-        plan.push(WorkerPlanRecord {
-            worker_kind: WorkerKind::SimplificationChecker,
-            module_ids: vec![ModuleId::ScopeCreep],
-            focus_surfaces: surface_ids.clone(),
-            required: false,
-            parallelizable: architecture == ExecutionArchitecture::Delegated,
-        });
-    }
-    plan.push(WorkerPlanRecord {
-        worker_kind: WorkerKind::ReleaseRiskAssessor,
-        module_ids: vec![ModuleId::ShipReadiness],
-        focus_surfaces: surface_ids,
-        required: true,
-        parallelizable: false,
-    });
+    plan.push(worker_plan_record(
+        WorkerKind::FinalSynthesizer,
+        Some("final-synthesis".to_string()),
+        None,
+        vec![ModuleId::ShipReadiness],
+        surface_ids,
+        vec!["synthesize descendant reports".to_string()],
+        vec!["do not reopen low-signal duplicate findings".to_string()],
+        true,
+        false,
+    ));
     plan
 }
 
@@ -557,51 +553,20 @@ fn budgeted_worker_plan(
     architecture: ExecutionArchitecture,
     surfaces: &[RiskSurfaceRecord],
     selected_modules: &[ModuleId],
+    languages: &[String],
     scope_signals: ScopeSignals,
     staleness_required: bool,
     max_worker_count: u8,
 ) -> (ExecutionArchitecture, Vec<WorkerPlanRecord>) {
-    let max_worker_count = usize::from(max_worker_count.max(1));
-    let mut final_architecture = architecture;
-    let mut worker_plan = build_worker_plan(
+    let _max_worker_count = max_worker_count;
+    let final_architecture = architecture;
+    let worker_plan = build_worker_plan(
         mode,
         final_architecture,
         surfaces,
         selected_modules,
+        languages,
         scope_signals.clone(),
-        staleness_required,
-    );
-    if worker_plan.len() <= max_worker_count {
-        return (final_architecture, worker_plan);
-    }
-
-    worker_plan.retain(|worker| worker.required);
-    if worker_plan.len() <= max_worker_count {
-        return (final_architecture, worker_plan);
-    }
-
-    if mode == Mode::Applicator && max_worker_count >= 2 {
-        final_architecture = ExecutionArchitecture::Hybrid;
-        worker_plan = build_worker_plan(
-            mode,
-            final_architecture,
-            surfaces,
-            selected_modules,
-            scope_signals.clone(),
-            staleness_required,
-        );
-        if worker_plan.len() <= max_worker_count {
-            return (final_architecture, worker_plan);
-        }
-    }
-
-    final_architecture = ExecutionArchitecture::Direct;
-    worker_plan = build_worker_plan(
-        mode,
-        final_architecture,
-        surfaces,
-        selected_modules,
-        scope_signals,
         staleness_required,
     );
     (final_architecture, worker_plan)
@@ -722,6 +687,7 @@ pub fn build_route_decision(
     );
     let selected_modules =
         canonical_selected_modules(&surface_map.risk_surfaces, &surface_map.suggested_modules);
+    let languages = detect_languages(&surface_map.changed_files);
     let staleness_required = selected_modules.contains(&ModuleId::DocsStaleness);
     let scope_signals = scope_signals_for_modules(
         ScopeSignals::from_changed_files(&surface_map.changed_files),
@@ -732,6 +698,7 @@ pub fn build_route_decision(
         requested_architecture,
         &surface_map.risk_surfaces,
         &selected_modules,
+        &languages,
         scope_signals.clone(),
         staleness_required,
         inputs.max_worker_count,
@@ -808,6 +775,11 @@ pub fn apply_route_revision(
     let mut extra_modules = route.selected_modules.clone();
     extra_modules.extend(revision.added_modules.iter().copied());
     revised.selected_modules = canonical_selected_modules(&revised.risk_surfaces, &extra_modules);
+    let languages = route
+        .worker_plan
+        .iter()
+        .filter_map(|worker| worker.language.clone())
+        .collect::<Vec<_>>();
     let scope_signals = scope_signals_for_modules(
         ScopeSignals::from_changed_files(&[]),
         &revised.selected_modules,
@@ -829,6 +801,7 @@ pub fn apply_route_revision(
         requested_architecture,
         &revised.risk_surfaces,
         &revised.selected_modules,
+        &languages,
         scope_signals.clone(),
         staleness_required,
         route.capability_profile.max_worker_count,
@@ -1081,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_review_composite_includes_all_selected_modules() -> anyhow::Result<()> {
+    fn direct_review_routes_keep_the_full_recursive_reviewer_roster() -> anyhow::Result<()> {
         let mut inputs = inputs();
         inputs.execution_capability = ExecutionCapability::SingleProcess;
         inputs.changed_files = vec!["src/api.rs".to_string(), "docs/api.md".to_string()];
@@ -1105,9 +1078,21 @@ mod tests {
         );
 
         ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
-        ensure!(route.worker_plan.len() == 1);
-        ensure!(route.worker_plan[0].worker_kind == WorkerKind::ReviewComposite);
-        ensure!(route.worker_plan[0].module_ids == route.selected_modules);
+        ensure!(route
+            .worker_plan
+            .first()
+            .is_some_and(|worker| worker.worker_kind == WorkerKind::LanguageDetector));
+        ensure!(route
+            .worker_plan
+            .last()
+            .is_some_and(|worker| worker.worker_kind == WorkerKind::FinalSynthesizer));
+        let domain_workers = route
+            .worker_plan
+            .iter()
+            .filter(|worker| worker.worker_kind == WorkerKind::DomainReviewer)
+            .count();
+        ensure!(domain_workers == ModuleId::all().len());
+        ensure!(route.selected_modules == ModuleId::all().to_vec());
         ensure!(route.selected_modules.contains(&ModuleId::DocsStaleness));
         Ok(())
     }
@@ -1146,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_budget_is_honored_by_route_planning() -> anyhow::Result<()> {
+    fn worker_budget_does_not_shrink_canonical_reviewer_roster() -> anyhow::Result<()> {
         let mut inputs = inputs();
         inputs.max_worker_count = 1;
         let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
@@ -1167,10 +1152,18 @@ mod tests {
             &inputs,
         );
 
+        ensure!(route.resource_budget.max_worker_count == 1);
         ensure!(
-            route.resource_budget.planned_worker_count <= route.resource_budget.max_worker_count
+            route.resource_budget.planned_worker_count > route.resource_budget.max_worker_count
         );
-        ensure!(route.worker_plan.len() <= usize::from(route.resource_budget.max_worker_count));
+        ensure!(
+            route
+                .worker_plan
+                .iter()
+                .filter(|worker| worker.worker_kind == WorkerKind::DomainReviewer)
+                .count()
+                == ModuleId::all().len()
+        );
         Ok(())
     }
 
@@ -1228,7 +1221,11 @@ mod tests {
         ensure!(revised
             .worker_plan
             .iter()
-            .any(|worker| worker.worker_kind == WorkerKind::SurfaceMapper));
+            .any(|worker| worker.worker_kind == WorkerKind::LanguageDetector));
+        ensure!(revised
+            .worker_plan
+            .iter()
+            .any(|worker| worker.worker_kind == WorkerKind::FinalSynthesizer));
         Ok(())
     }
 }

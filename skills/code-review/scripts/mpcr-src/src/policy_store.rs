@@ -251,25 +251,36 @@ fn compose_doc(title: &str, sections: &[String]) -> String {
 pub fn generate_reviewer_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
         store.render(PolicyCategory::Mode, "reviewer", PolicyView::Full)?,
+        "Route first, then use `mpcr protocol dispatch --role <role>` for the current worker instead of loading the whole skill body again. The reviewer roster is language-detector, zero or more language-research workers, one domain-reviewer per canonical module, and final-synthesis.".to_string(),
         "Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.".to_string(),
         store.render(
             PolicyCategory::Worker,
-            "review-composite",
+            "language-detector",
             PolicyView::Checklist,
         )?,
         store.render(
             PolicyCategory::Worker,
-            "invariant-challenger",
+            "language-research",
             PolicyView::Checklist,
         )?,
         store.render(
             PolicyCategory::Worker,
-            "release-risk-assessor",
+            "domain-reviewer",
+            PolicyView::Checklist,
+        )?,
+        store.render(
+            PolicyCategory::Worker,
+            "final-synthesizer",
             PolicyView::Checklist,
         )?,
         store.render(
             PolicyCategory::Module,
             "core-correctness",
+            PolicyView::Checklist,
+        )?,
+        store.render(
+            PolicyCategory::Module,
+            "docs-staleness",
             PolicyView::Checklist,
         )?,
         store.render(
@@ -326,12 +337,11 @@ pub fn generate_fullcycle_fallback(store: &PolicyStore) -> anyhow::Result<String
 /// Generate the routing/orchestrator fallback doc from the structured policy store.
 pub fn generate_orchestrator_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
-        "Use semantic routing first. Load mode second. Load worker and module packs only for the selected route. Load escalation packs only after triggers fire. Load examples only on uncertainty, malformed output, retry, or explicit request.".to_string(),
-        store.render(PolicyCategory::Worker, "surface-mapper", PolicyView::Checklist)?,
-        store.render(PolicyCategory::Worker, "contract-comparer", PolicyView::Checklist)?,
-        store.render(PolicyCategory::Worker, "exploit-tracer", PolicyView::Checklist)?,
-        store.render(PolicyCategory::Worker, "congruence-checker", PolicyView::Checklist)?,
-        store.render(PolicyCategory::Worker, "simplification-checker", PolicyView::Checklist)?,
+        "Use semantic routing first. Keep the orchestrator thin: instantiate the canonical reviewer roster every run, persist session state, and hand each worker only its dispatch prompt plus relevant policy packs. Use `mpcr session reports` for report retrieval and `mpcr session artifacts` for flat artifact inventory.".to_string(),
+        store.render(PolicyCategory::Worker, "language-detector", PolicyView::Checklist)?,
+        store.render(PolicyCategory::Worker, "language-research", PolicyView::Checklist)?,
+        store.render(PolicyCategory::Worker, "domain-reviewer", PolicyView::Checklist)?,
+        store.render(PolicyCategory::Worker, "final-synthesizer", PolicyView::Checklist)?,
     ];
     Ok(compose_doc("Orchestrator Fallback", &sections))
 }
