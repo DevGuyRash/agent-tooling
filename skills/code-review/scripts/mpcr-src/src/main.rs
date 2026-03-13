@@ -630,6 +630,7 @@ fn role_slug_from_spawn_args(
         return format!("domain:{slug}");
     }
     match worker_kind {
+        Some(mpcr::artifacts::WorkerKind::ApplyComposite) => "apply-composite".to_string(),
         Some(mpcr::artifacts::WorkerKind::LanguageDetector) => "language-detector".to_string(),
         Some(mpcr::artifacts::WorkerKind::LanguageResearch) => {
             format!(

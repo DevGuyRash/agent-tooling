@@ -449,6 +449,19 @@ fn build_worker_plan(
             .iter()
             .map(|surface| surface.surface_id)
             .collect::<Vec<_>>();
+        if architecture == ExecutionArchitecture::Direct {
+            return vec![worker_plan_record(
+                WorkerKind::ApplyComposite,
+                Some("apply-composite".to_string()),
+                None,
+                selected_modules.to_vec(),
+                focus_surfaces,
+                Vec::new(),
+                Vec::new(),
+                true,
+                false,
+            )];
+        }
         return vec![
             worker_plan_record(
                 WorkerKind::ApplicatorWorker,
@@ -558,8 +571,11 @@ fn budgeted_worker_plan(
     staleness_required: bool,
     max_worker_count: u8,
 ) -> (ExecutionArchitecture, Vec<WorkerPlanRecord>) {
-    let _max_worker_count = max_worker_count;
-    let final_architecture = architecture;
+    let final_architecture = if mode == Mode::Applicator && max_worker_count < 2 {
+        ExecutionArchitecture::Direct
+    } else {
+        architecture
+    };
     let worker_plan = build_worker_plan(
         mode,
         final_architecture,
@@ -1127,6 +1143,68 @@ mod tests {
             .collect::<Vec<_>>();
         ensure!(route.execution_architecture != ExecutionArchitecture::Direct);
         ensure!(worker_kinds == vec![WorkerKind::ApplicatorWorker, WorkerKind::ApplicatorVerifier]);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_applicator_uses_apply_composite_worker() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::SingleProcess;
+        inputs.changed_files = vec!["src/auth.rs".to_string()];
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Applicator,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
+        ensure!(route.worker_plan.len() == 1);
+        ensure!(route.worker_plan[0].worker_kind == WorkerKind::ApplyComposite);
+        ensure!(route.worker_plan[0].role_id.as_deref() == Some("apply-composite"));
+        Ok(())
+    }
+
+    #[test]
+    fn applicator_budget_one_degrades_to_direct_apply_composite() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.execution_capability = ExecutionCapability::BoundedHelpers;
+        inputs.max_worker_count = 1;
+        inputs.changed_files = vec!["src/auth.rs".to_string()];
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Applicator,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
+        ensure!(route.resource_budget.max_worker_count == 1);
+        ensure!(route.resource_budget.planned_worker_count == 1);
+        ensure!(route.worker_plan.len() == 1);
+        ensure!(route.worker_plan[0].worker_kind == WorkerKind::ApplyComposite);
         Ok(())
     }
 

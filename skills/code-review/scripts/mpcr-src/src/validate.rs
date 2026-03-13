@@ -838,4 +838,48 @@ mod tests {
         ensure!(!summary.errors.is_empty());
         Ok(())
     }
+
+    #[test]
+    fn hard_validation_accepts_direct_apply_composite_route() -> anyhow::Result<()> {
+        let artifact = ArtifactDocument::RouteDecision(RouteDecisionArtifact {
+            header: header(ArtifactKind::RouteDecision)?,
+            mode: Mode::Applicator,
+            execution_architecture: ExecutionArchitecture::Direct,
+            rigor_level: crate::artifacts::RigorLevel::Standard,
+            capability_profile: CapabilityProfile {
+                execution_capability: ExecutionCapability::SingleProcess,
+                max_worker_count: 1,
+                orchestrator_read_budget_lines: 80,
+                orchestrator_read_budget_snippets: 6,
+            },
+            resource_budget: ResourceBudget {
+                planned_worker_count: 1,
+                max_worker_count: 1,
+            },
+            risk_surfaces: vec![RiskSurfaceRecord {
+                surface_id: SurfaceId::AuthAccess,
+                weight: 5,
+                reason: "auth".to_string(),
+                evidence_refs: vec!["src/auth.rs".to_string()],
+                behavior_facing: false,
+            }],
+            selected_modules: vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness],
+            worker_plan: vec![WorkerPlanRecord {
+                worker_kind: WorkerKind::ApplyComposite,
+                role_id: Some("apply-composite".to_string()),
+                language: None,
+                module_ids: vec![ModuleId::CoreCorrectness, ModuleId::ShipReadiness],
+                focus_surfaces: vec![SurfaceId::AuthAccess],
+                claimed_scope: Vec::new(),
+                delegated_scope: Vec::new(),
+                required: true,
+                parallelizable: false,
+            }],
+            heldback_escalations: Vec::new(),
+            stop_conditions: Vec::new(),
+        });
+        let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
+        ensure!(summary.errors.is_empty());
+        Ok(())
+    }
 }

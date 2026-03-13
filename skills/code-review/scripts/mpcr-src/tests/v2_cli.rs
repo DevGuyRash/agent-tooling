@@ -70,9 +70,108 @@ fn protocol_surface_includes_dispatch_and_static_discovery() -> anyhow::Result<(
     ensure!(dispatch_stdout.contains("# Dispatch domain:core-correctness"));
     ensure!(dispatch_stdout.contains("## Operating Rules"));
 
+    let apply_dispatch = run_cmd(&["protocol", "dispatch", "--role", "apply-composite"])?;
+    ensure!(apply_dispatch.status.success());
+    ensure!(String::from_utf8_lossy(&apply_dispatch.stdout).contains("# Dispatch apply-composite"));
+
     let legacy = run_cmd(&["protocol", "reviewer"])?;
     ensure!(!legacy.status.success());
     ensure!(String::from_utf8_lossy(&legacy.stderr).contains("unrecognized subcommand"));
+    Ok(())
+}
+
+#[test]
+fn applicator_route_cli_uses_apply_composite_for_direct_and_budget_limited_routes(
+) -> anyhow::Result<()> {
+    let repo_root = tempdir()?;
+    let date = Date::from_calendar_date(2026, Month::March, 8)?;
+    let session_dir = session_paths(repo_root.path(), date).session_dir;
+    let session_dir_arg = session_dir.to_string_lossy().into_owned();
+
+    let single_process = run_cmd(&[
+        "--json",
+        "route",
+        "--session-dir",
+        &session_dir_arg,
+        "--mode",
+        "applicator",
+        "--target-ref",
+        "refs/heads/main",
+        "--execution-capability",
+        "single_process",
+        "--max-worker-count",
+        "2",
+        "--orchestrator-read-budget-lines",
+        "120",
+        "--orchestrator-read-budget-snippets",
+        "12",
+        "--changed-file",
+        "src/auth.rs",
+    ])?;
+    ensure!(single_process.status.success());
+    let single_value: Value = serde_json::from_slice(&single_process.stdout)?;
+    ensure!(
+        single_value
+            .get("route_decision")
+            .and_then(|route| route.get("execution_architecture"))
+            .and_then(Value::as_str)
+            == Some("direct")
+    );
+    ensure!(single_value
+        .get("route_decision")
+        .and_then(|route| route.get("worker_plan"))
+        .and_then(Value::as_array)
+        .is_some_and(|workers| {
+            workers.len() == 1
+                && workers[0].get("worker_kind").and_then(Value::as_str) == Some("apply-composite")
+                && workers[0].get("role_id").and_then(Value::as_str) == Some("apply-composite")
+        }));
+
+    let budget_limited = run_cmd(&[
+        "--json",
+        "route",
+        "--session-dir",
+        &session_dir_arg,
+        "--mode",
+        "applicator",
+        "--target-ref",
+        "refs/heads/main",
+        "--execution-capability",
+        "bounded_helpers",
+        "--max-worker-count",
+        "1",
+        "--orchestrator-read-budget-lines",
+        "120",
+        "--orchestrator-read-budget-snippets",
+        "12",
+        "--changed-file",
+        "src/auth.rs",
+    ])?;
+    ensure!(budget_limited.status.success());
+    let budget_value: Value = serde_json::from_slice(&budget_limited.stdout)?;
+    ensure!(
+        budget_value
+            .get("route_decision")
+            .and_then(|route| route.get("execution_architecture"))
+            .and_then(Value::as_str)
+            == Some("direct")
+    );
+    ensure!(
+        budget_value
+            .get("route_decision")
+            .and_then(|route| route.get("resource_budget"))
+            .and_then(|budget| budget.get("planned_worker_count"))
+            .and_then(Value::as_u64)
+            == Some(1)
+    );
+    ensure!(budget_value
+        .get("route_decision")
+        .and_then(|route| route.get("worker_plan"))
+        .and_then(Value::as_array)
+        .is_some_and(|workers| {
+            workers.len() == 1
+                && workers[0].get("worker_kind").and_then(Value::as_str) == Some("apply-composite")
+        }));
     Ok(())
 }
 

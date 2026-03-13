@@ -295,6 +295,43 @@ fn nested_agent_dirs_and_recursive_reports_are_materialized() -> anyhow::Result<
 }
 
 #[test]
+fn non_recursive_concatenated_reports_exclude_descendants() -> anyhow::Result<()> {
+    let (_repo_root, _repo_root_path, locator, _session_dir) = new_session_locator()?;
+    let register = register_reviewer(RegisterReviewerParams {
+        session: locator.clone(),
+        target_ref: "refs/heads/main".to_string(),
+        reviewer_id: Some("root0003".to_string()),
+        role: Some("final-synthesis".to_string()),
+        role_kind: None,
+    })?;
+
+    let child = spawn_child_reviewers(SpawnChildReviewersParams {
+        session: locator.clone(),
+        parent_id: register.reviewer_id.clone(),
+        count: 1,
+        role_id: Some("domain:core-correctness".to_string()),
+        worker_kind: Some(WorkerKind::DomainReviewer),
+        domain_id: Some(ModuleId::CoreCorrectness),
+        language: None,
+        module_ids: vec![ModuleId::CoreCorrectness],
+        focus_surfaces: vec![SurfaceId::PublicApi],
+        claimed_scope: vec!["own core-correctness".to_string()],
+        delegated_scope: vec!["do not repeat parent synthesis".to_string()],
+    })?;
+    let child_id = child.child_ids[0].clone();
+
+    let reports = collect_reports(&locator, ReportView::All, false, false, true, true)?;
+    ensure!(reports.reports.len() == 1);
+    ensure!(reports.reports[0].reviewer_id == register.reviewer_id);
+    let concatenated = reports
+        .concatenated_report
+        .ok_or_else(|| anyhow::anyhow!("missing concatenated report"))?;
+    ensure!(concatenated.contains("Agent `root0003`"));
+    ensure!(!concatenated.contains(&format!("Agent `{child_id}`")));
+    Ok(())
+}
+
+#[test]
 fn completing_child_review_updates_authored_report_and_final_report() -> anyhow::Result<()> {
     let (_repo_root, repo_root_path, locator, session_dir) = new_session_locator()?;
     let register = register_reviewer(RegisterReviewerParams {

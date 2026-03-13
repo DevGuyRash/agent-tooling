@@ -128,6 +128,7 @@ fn role_kind_slug(role_kind: &AgentRoleKind) -> String {
         AgentRoleKind::LanguageDetector => "language-detector",
         AgentRoleKind::LanguageResearch => "language-research",
         AgentRoleKind::FinalSynthesis => "final-synthesis",
+        AgentRoleKind::ApplyComposite => "apply-composite",
         AgentRoleKind::ApplicatorWorker => "applicator-worker",
         AgentRoleKind::ApplicatorVerifier => "applicator-verifier",
         AgentRoleKind::Helper => "helper",
@@ -224,6 +225,15 @@ fn normalize_dispatch_role(role: &str) -> anyhow::Result<ResolvedRole> {
             mode: Mode::Reviewer,
             worker_policy_id: "final-synthesizer".to_string(),
             module_ids: vec![module_slug(ModuleId::ShipReadiness)],
+        });
+    }
+
+    if trimmed == "apply-composite" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Applicator,
+            worker_policy_id: trimmed.to_string(),
+            module_ids: Vec::new(),
         });
     }
 
@@ -611,7 +621,12 @@ fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow
     );
     for module_id in &ctx.role.module_ids {
         lines.push(String::new());
-        lines.push(store.render(PolicyCategory::Module, module_id, PolicyView::Checklist)?);
+        let module_view = ctx
+            .loaded_policy_refs
+            .iter()
+            .find(|policy| policy.category == PolicyCategory::Module && policy.id == *module_id)
+            .map_or(PolicyView::Checklist, |policy| policy.view);
+        lines.push(store.render(PolicyCategory::Module, module_id, module_view)?);
     }
 
     Ok(lines.join("\n").trim_end().to_string())
@@ -783,6 +798,25 @@ mod tests {
             .loaded_policy_refs
             .iter()
             .any(|policy| policy.id == "domain-reviewer"));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_supports_apply_composite_role() -> anyhow::Result<()> {
+        let output = dispatch("apply-composite", None, None, PolicyView::Checklist)?;
+        ensure!(output.content.contains("# Dispatch apply-composite"));
+        ensure!(output
+            .loaded_policy_refs
+            .iter()
+            .any(|policy| policy.id == "apply-composite"));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_renders_modules_in_requested_view() -> anyhow::Result<()> {
+        let output = dispatch("domain:core-correctness", None, None, PolicyView::Examples)?;
+        let module_output = module("core-correctness", PolicyView::Examples)?;
+        ensure!(output.content.contains(&module_output.content));
         Ok(())
     }
 

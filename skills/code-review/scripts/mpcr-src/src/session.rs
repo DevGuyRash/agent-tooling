@@ -113,6 +113,8 @@ fn infer_role_kind(role: &str) -> AgentRoleKind {
         AgentRoleKind::LanguageResearch
     } else if role.starts_with("final-synthesis") {
         AgentRoleKind::FinalSynthesis
+    } else if role.starts_with("apply-composite") {
+        AgentRoleKind::ApplyComposite
     } else if role.starts_with("applicator-worker") {
         AgentRoleKind::ApplicatorWorker
     } else if role.starts_with("applicator-verifier") {
@@ -181,6 +183,7 @@ pub enum AgentRoleKind {
     LanguageDetector,
     LanguageResearch,
     FinalSynthesis,
+    ApplyComposite,
     ApplicatorWorker,
     ApplicatorVerifier,
     Helper,
@@ -1502,6 +1505,7 @@ fn render_agent_report(review: &ReviewProcess, artifact: Option<&ArtifactDocumen
             AgentRoleKind::LanguageDetector => "language-detector",
             AgentRoleKind::LanguageResearch => "language-research",
             AgentRoleKind::FinalSynthesis => "final-synthesis",
+            AgentRoleKind::ApplyComposite => "apply-composite",
             AgentRoleKind::ApplicatorWorker => "applicator-worker",
             AgentRoleKind::ApplicatorVerifier => "applicator-verifier",
             AgentRoleKind::Helper => "helper",
@@ -2000,7 +2004,9 @@ fn build_reports_result(
             "# Final Report\n\n- Session: `{}`\n- Target ref: `{}`\n",
             session.session_id, session.target_ref
         )];
-        for review in ordered_reviews_postorder(session) {
+        let mut concatenated_reviews = ordered_reviews(session, traversal_is_recursive);
+        concatenated_reviews.reverse();
+        for review in concatenated_reviews {
             if !review_matches_view(review, view) {
                 continue;
             }
