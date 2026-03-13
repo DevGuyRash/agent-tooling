@@ -1,0 +1,26 @@
+[
+  {
+    "profile": "open-standard",
+    "cue": "relative paths"
+  },
+  {
+    "profile": "claude-skill",
+    "cue": "claude-specific packaging"
+  },
+  {
+    "profile": "codex-skill",
+    "cue": "agents/openai.yaml"
+  },
+  {
+    "profile": "copilot-skill",
+    "cue": "always-on instructions"
+  },
+  {
+    "profile": "internal-house-style",
+    "cue": "local overlays, not universal"
+  },
+  {
+    "profile": "auto",
+    "cue": "avoid false certainty"
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "positive_terms": [
+    "audit",
+    "self-audit",
+    "health-check",
+    "evaluate",
+    "review",
+    "revise",
+    "AGENTS.md adherence"
+  ],
+  "negative_terms": [
+    "router CLI",
+    "large lint taxonomy"
+  ]
+}

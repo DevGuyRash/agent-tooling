@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill Auditor"
+  short_description: "Audit and improve a skill's packaging, triggers, workflow, and verification loop"
+  default_prompt: "Use $skill-auditor to audit a skill's packaging, trigger behavior, task leverage, context design, and verification loop, then produce a concise Skill Improvement Brief with concrete changes and checks."
