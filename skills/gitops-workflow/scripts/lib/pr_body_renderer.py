@@ -103,17 +103,6 @@ def build_overview(*, head: str, base: str, title: str, changed_files: list[str]
     )
 
 
-def build_key_changes(features: list[str], fixes: list[str], changes: list[str]) -> list[str]:
-    bullets: list[str] = []
-    for value in features[:3]:
-        bullets.append(f"- Feature: {value}")
-    for value in fixes[:3]:
-        bullets.append(f"- Fix: {value}")
-    for value in changes[:4]:
-        bullets.append(f"- Change: {value}")
-    return bullets or ["- Review the branch diff; no categorized commit summaries were available."]
-
-
 def build_review_guide(changed_files: list[str]) -> list[str]:
     guide: list[str] = []
     if any("/scripts/" in path or path.startswith("scripts/") for path in changed_files):
