@@ -48,6 +48,10 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
             "  dockerfile: {}\n",
             profile.dockerfile_url.as_deref().unwrap_or("unknown")
         ));
+        out.push_str(&format!(
+            "  repo: {}\n",
+            profile.source_repo_url.as_deref().unwrap_or("unknown")
+        ));
         out.push_str(&format!("  provenance: {}\n", classify_provenance(profile)));
         out.push_str(&format!(
             "digest: {}\n",
@@ -315,7 +319,8 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
 }
 
 fn classify_provenance(profile: &crate::model::ImageProfile) -> &'static str {
-    if profile.runtime.oci.source.is_some()
+    if profile.source_repo_url.is_some()
+        || profile.runtime.oci.source.is_some()
         || profile
             .sources
             .iter()

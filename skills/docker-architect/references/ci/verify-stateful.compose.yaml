@@ -69,7 +69,6 @@ services:
       - /bin/sh
       - -euxc
       - |
-        set -eu
         for path in /mnt/perm-0; do
           mkdir -p "$$path"
           owner="$$(stat -c '%u:%g' "$$path" 2>/dev/null || true)"

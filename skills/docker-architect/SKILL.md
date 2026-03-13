@@ -160,7 +160,7 @@ The executor SHALL NOT report success until every condition below is met:
 - When a validation step is skipped because tooling is unavailable, the architecture output SHALL record the skipped step, the reason, and the residual risk (DA-PROC-3).
 - When Docker is available, Compose mode SHALL treat runtime `verify` as mandatory. Skipping verify requires an explicit note in the output (DA-PROC-2).
 - Ambiguous research results affecting runtime user, healthcheck, or provenance SHALL be treated as blockers requiring resolution, not soft informational notes.
-- After all files, include a brief "Next steps" section with scanning commands.
+- Provenance resolution SHALL distinguish source repository provenance from an exact upstream Dockerfile/build-definition path. Source repository provenance is mandatory; exact Dockerfile path SHOULD be included when deterministically discoverable.
 
 ---
 

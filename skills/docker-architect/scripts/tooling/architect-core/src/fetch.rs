@@ -57,6 +57,7 @@ struct DockerHubMetadata {
     platforms: Vec<Platform>,
     docs_url: Option<String>,
     dockerfile_url: Option<String>,
+    source_repo_url: Option<String>,
     tag_url: String,
     repo_url: String,
 }
@@ -121,6 +122,7 @@ fn fetch_image_profile_with_client(
     let mut platforms: Vec<Platform> = Vec::new();
     let mut docs_url: Option<String> = None;
     let mut dockerfile_url: Option<String> = None;
+    let mut source_repo_url: Option<String> = None;
     let mut runtime = RuntimeProfile::default();
     let mut config_digest_for_profile: Option<String> = None;
 
@@ -132,6 +134,7 @@ fn fetch_image_profile_with_client(
                 }
                 docs_url = hub.docs_url;
                 dockerfile_url = hub.dockerfile_url;
+                source_repo_url = hub.source_repo_url;
                 sources.push(SourceRecord {
                     kind: "docker-hub-api".to_string(),
                     url: hub.tag_url,
@@ -221,7 +224,9 @@ fn fetch_image_profile_with_client(
                     runtime = config.runtime;
                 }
                 if let Some(source) = runtime.oci.source.clone() {
-                    dockerfile_url = Some(source);
+                    if source_repo_url.is_none() {
+                        source_repo_url = Some(source);
+                    }
                     notes.push("source:oci-label".to_string());
                 }
                 sources.push(SourceRecord {
@@ -251,7 +256,7 @@ fn fetch_image_profile_with_client(
     }
     if allow_scrape_fallback
         && parsed.registry == "docker.io"
-        && (digest.is_none() || dockerfile_url.is_none())
+        && (digest.is_none() || source_repo_url.is_none())
     {
         let scrape_url = format!("https://hub.docker.com/r/{}", parsed.repository);
         match scrape_hub_page(client, &parsed.repository, user_agent) {
@@ -259,8 +264,8 @@ fn fetch_image_profile_with_client(
                 if digest.is_none() {
                     digest = scraped_digest.clone();
                 }
-                if dockerfile_url.is_none() {
-                    dockerfile_url = scraped_repo_url;
+                if source_repo_url.is_none() {
+                    source_repo_url = scraped_repo_url;
                 }
                 sources.push(SourceRecord {
                     kind: "html-fallback".to_string(),
@@ -299,7 +304,7 @@ fn fetch_image_profile_with_client(
             client,
             user_agent,
             docs_url.as_deref(),
-            dockerfile_url.as_deref(),
+            source_repo_url.as_deref().or(dockerfile_url.as_deref()),
             &mut researched_config,
             &mut sources,
             &mut notes,
@@ -311,6 +316,7 @@ fn fetch_image_profile_with_client(
         image: parsed.normalized,
         docs_url,
         dockerfile_url,
+        source_repo_url,
         digest,
         config_digest: config_digest_for_profile,
         platforms,
@@ -407,14 +413,15 @@ fn fetch_docker_hub_metadata(
     } else {
         fetch_docker_hub_tag_metadata(client, &tag_url, user_agent)?
     };
-    let dockerfile_url =
+    let source_repo_url =
         fetch_docker_hub_repo_dockerfile_url(client, &repo_url, &parsed.repository, user_agent)?;
 
     Ok(DockerHubMetadata {
         digest,
         platforms,
         docs_url: Some(format!("https://hub.docker.com/r/{}", parsed.repository)),
-        dockerfile_url,
+        dockerfile_url: None,
+        source_repo_url,
         tag_url,
         repo_url,
     })

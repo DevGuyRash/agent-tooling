@@ -850,6 +850,7 @@ mod tests {
             image: "docker.io/library/nginx:1.27".to_string(),
             docs_url: None,
             dockerfile_url: None,
+            source_repo_url: None,
             digest: None,
             config_digest: None,
             platforms: vec![Platform {

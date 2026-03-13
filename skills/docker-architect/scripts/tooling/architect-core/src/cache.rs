@@ -325,6 +325,7 @@ mod tests {
                 image: "docker.io/library/nginx:1.27".to_string(),
                 docs_url: Some("https://hub.docker.com/_/nginx".to_string()),
                 dockerfile_url: None,
+                source_repo_url: None,
                 digest: Some("sha256:123".to_string()),
                 config_digest: Some("sha256:456".to_string()),
                 platforms: vec![Platform {

@@ -17,6 +17,9 @@ pub struct ImageProfile {
     /// URL to source Dockerfile or source repository.
     #[serde(default)]
     pub dockerfile_url: Option<String>,
+    /// URL to the source repository when provenance is known but Dockerfile path is not.
+    #[serde(default)]
+    pub source_repo_url: Option<String>,
     /// Content digest if discovered.
     #[serde(default)]
     pub digest: Option<String>,

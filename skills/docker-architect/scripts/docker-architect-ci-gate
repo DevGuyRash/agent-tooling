@@ -137,6 +137,16 @@ if [ ! -x "${compose_launcher}" ] || [ ! -f "${compose_launcher}" ]; then
   exit 2
 fi
 
+report_file=""
+cleanup_report_file() {
+  if [ -n "${report_file}" ]; then
+    rm -f "${report_file}"
+    report_file=""
+  fi
+}
+
+trap 'cleanup_report_file' EXIT HUP INT TERM
+
 run_live_verify_fixture() {
   fixture_path="$1"
   if [ ! -f "${fixture_path}" ]; then
@@ -154,18 +164,18 @@ run_live_verify_fixture() {
   echo "[docker-architect-ci-gate] running live docker verify with ${fixture_path}"
   if ! "${compose_launcher}" verify "${fixture_path}" --mode compose --output "${report_file}"; then
     cat "${report_file}" >&2 2>/dev/null || true
-    rm -f "${report_file}"
+    cleanup_report_file
     exit 1
   fi
 
   if ! jq -e '.success == true' "${report_file}" >/dev/null 2>&1; then
     echo "error: live docker verify failed for fixture ${fixture_path} (success=false)" >&2
     cat "${report_file}" >&2
-    rm -f "${report_file}"
+    cleanup_report_file
     exit 1
   fi
 
-  rm -f "${report_file}"
+  cleanup_report_file
 }
 
 selected_verify_fixture="${custom_compose_file:-${DOCKER_ARCHITECT_VERIFY_COMPOSE_FILE:-}}"

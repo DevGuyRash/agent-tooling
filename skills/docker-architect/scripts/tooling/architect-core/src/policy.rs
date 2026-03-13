@@ -2085,21 +2085,6 @@ fn add_compose_violation(
     });
 }
 
-fn add_compose_block_violation(
-    violations: &mut Vec<PolicyViolation>,
-    rule: &PolicyRule,
-    service_name: &str,
-    key: &str,
-    reason: String,
-) {
-    violations.push(PolicyViolation {
-        rule_id: rule.id.clone(),
-        severity: RuleSeverity::Block,
-        target: format!("services.{service_name}.{key}"),
-        reason,
-    });
-}
-
 fn is_init_permissions_service_name(service_name: &str) -> bool {
     // Only sidecars that follow the explicit `<service>-init-perms` naming convention
     // are exempt from EnsureKey and RequireNonRootUser checks. Generic `init-*`
@@ -2182,7 +2167,7 @@ fn validate_existing_init_sidecar(
     };
 
     if !service_depends_on_init_sidecar(service, init_name) {
-        add_compose_block_violation(
+        add_compose_violation(
             violations,
             rule,
             service_name,
@@ -2213,7 +2198,7 @@ fn validate_existing_init_sidecar(
         if init_sidecar_field_matches(field, actual, expected) {
             continue;
         }
-        add_compose_block_violation(
+        add_compose_violation(
             violations,
             rule,
             init_name,
@@ -2232,7 +2217,7 @@ fn validate_existing_init_sidecar(
         .get(YamlValue::String("profiles".to_string()))
         .is_some()
     {
-        add_compose_block_violation(
+        add_compose_violation(
             violations,
             rule,
             init_name,
@@ -2275,7 +2260,11 @@ fn depends_on_entry_requires_completion(entry: &YamlValue) -> bool {
         == Some("service_completed_successfully")
 }
 
-fn init_sidecar_field_matches(field: &str, actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+fn init_sidecar_field_matches(
+    field: &str,
+    actual: Option<&YamlValue>,
+    expected: &JsonValue,
+) -> bool {
     match field {
         "cap_drop" | "cap_add" | "security_opt" | "tmpfs" => {
             yaml_unordered_string_list_matches(actual, expected)
@@ -2318,10 +2307,9 @@ fn yaml_ordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonV
         return false;
     };
     let actual_values: Vec<String> = match actual {
-        Some(YamlValue::Sequence(items)) => items
-            .iter()
-            .filter_map(yaml_scalar_to_string)
-            .collect(),
+        Some(YamlValue::Sequence(items)) => {
+            items.iter().filter_map(yaml_scalar_to_string).collect()
+        }
         Some(YamlValue::String(value)) => vec![value.to_string()],
         _ => return false,
     };
@@ -3048,12 +3036,18 @@ fn depends_on_add_yaml_value(
             if let Some(name) = yaml_scalar_to_string(entry) {
                 converted.insert(
                     YamlValue::String(name),
-                    serde_yaml::to_value(JsonValue::Bool(true)).map_err(|error| {
-                        AppError::InvalidInput {
-                            reason: format!(
-                                "failed to convert depends_on sequence to mapping value: {error}"
-                            ),
-                        }
+                    serde_yaml::to_value(JsonValue::Object(
+                        [(
+                            "condition".to_string(),
+                            JsonValue::String("service_started".to_string()),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ))
+                    .map_err(|error| AppError::InvalidInput {
+                        reason: format!(
+                            "failed to convert depends_on sequence to mapping value: {error}"
+                        ),
                     })?,
                 );
             }
@@ -3197,6 +3191,7 @@ mod tests {
                 image: "docker.io/library/nginx:1.27".to_string(),
                 docs_url: None,
                 dockerfile_url: None,
+                source_repo_url: None,
                 digest: Some(
                     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                         .to_string(),
@@ -4565,19 +4560,77 @@ rules:
         let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
         let result =
             evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
-        assert!(result.patch_plan.iter().any(|item| {
-            item.op == "set" && item.path == "services.api-init-perms.image"
-        }));
-        assert!(result.patch_plan.iter().any(|item| {
-            item.op == "set" && item.path == "services.api-init-perms.command"
-        }));
-        assert!(result.patch_plan.iter().any(|item| {
-            item.op == "set" && item.path == "services.api-init-perms.volumes"
-        }));
+        assert!(result
+            .violations
+            .iter()
+            .filter(|item| item.rule_id == "AC-CMP-PERMS-INIT")
+            .all(|item| item.severity == RuleSeverity::Warn));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.image" }));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.command" }));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.volumes" }));
         assert!(!result
             .patch_plan
             .iter()
             .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn depends_on_add_converts_short_syntax_to_valid_long_syntax() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    depends_on:
+      - db
+  db:
+    image: postgres:16-alpine
+"#;
+        let patch_plan = vec![PatchOperation {
+            op: "depends_on_add".to_string(),
+            path: "services.api.depends_on.api-init-perms".to_string(),
+            value: serde_json::Value::Object(
+                [(
+                    "condition".to_string(),
+                    serde_json::Value::String("service_completed_successfully".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            rule_id: "AC-CMP-PERMS-INIT".to_string(),
+        }];
+        let hardened = apply_compose_patch_plan(compose, &patch_plan, DeployMode::Compose)
+            .expect("patch apply works");
+        let reparsed: serde_yaml::Value =
+            serde_yaml::from_str(&hardened).expect("yaml remains valid");
+        let depends_on = reparsed
+            .get("services")
+            .and_then(|services| services.get("api"))
+            .and_then(|service| service.get("depends_on"))
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("depends_on converted to mapping");
+        assert_eq!(
+            depends_on
+                .get(serde_yaml::Value::String("db".to_string()))
+                .and_then(|value| value.get("condition"))
+                .and_then(serde_yaml::Value::as_str),
+            Some("service_started")
+        );
+        assert_eq!(
+            depends_on
+                .get(serde_yaml::Value::String("api-init-perms".to_string()))
+                .and_then(|value| value.get("condition"))
+                .and_then(serde_yaml::Value::as_str),
+            Some("service_completed_successfully")
+        );
     }
 
     #[test]

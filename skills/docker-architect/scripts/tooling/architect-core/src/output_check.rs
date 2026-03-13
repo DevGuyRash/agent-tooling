@@ -19,10 +19,7 @@ pub struct OutputCheckResult {
 /// # Returns
 /// * `Ok(OutputCheckResult)` with validation errors and warnings; empty `errors` means pass.
 /// * `Err(AppError)` when mode is unsupported.
-pub fn validate_output_contract(
-    content: &str,
-    mode: &str,
-) -> Result<OutputCheckResult, AppError> {
+pub fn validate_output_contract(content: &str, mode: &str) -> Result<OutputCheckResult, AppError> {
     let required_sections = match mode {
         "compose" => vec![
             "Requirements",
@@ -116,21 +113,48 @@ pub fn validate_output_contract(
 
     for marker in ["AC-", "IMG-", "RSK-", "O-"] {
         if !content.contains(marker) {
-            result.errors.push(format!("missing marker family: {marker}*"));
+            result
+                .errors
+                .push(format!("missing marker family: {marker}*"));
         }
     }
 
     if mode == "image" {
         let lower = content.to_ascii_lowercase();
+        if !lower.contains("docker-bake.hcl") {
+            result
+                .errors
+                .push("missing required image artifact reference: docker-bake.hcl".to_string());
+        }
         if !(lower.contains("docker-bake.hcl") || lower.contains("docker buildx bake")) {
-            result.warnings.push(
-                "warning: image output is missing bake/buildx release instructions".to_string(),
+            result.errors.push(
+                "missing required image release instructions: bake/buildx guidance".to_string(),
             );
         }
-        if !(lower.contains("sbom") || lower.contains("provenance")) {
-            result.warnings.push(
-                "warning: image output is missing sbom/provenance attestation guidance"
+        if !lower.contains("cosign sign") {
+            result
+                .errors
+                .push("missing required image release instructions: signing guidance".to_string());
+        }
+        if !lower.contains("--attest type=sbom") {
+            result.errors.push(
+                "missing required image release instructions: sbom attestation guidance"
                     .to_string(),
+            );
+        }
+        if !lower.contains("--attest type=provenance,mode=max") {
+            result.errors.push(
+                "missing required image release instructions: provenance attestation guidance"
+                    .to_string(),
+            );
+        }
+    }
+
+    if mode == "compose" || mode == "swarm" {
+        let lower = content.to_ascii_lowercase();
+        if lower.contains("skipped") && !lower.contains("residual risk") {
+            result.errors.push(
+                "skipped validation steps must include a residual risk statement".to_string(),
             );
         }
     }
@@ -424,14 +448,55 @@ IMG-2
 RSK-2
 "#;
         let result = validate_output_contract(doc, "image").expect("validation should succeed");
-        assert!(result.errors.is_empty());
         assert!(result
-            .warnings
+            .errors
+            .iter()
+            .any(|item| item.contains("docker-bake.hcl")));
+        assert!(result
+            .errors
             .iter()
             .any(|item| item.contains("bake/buildx")));
         assert!(result
-            .warnings
+            .errors
             .iter()
-            .any(|item| item.contains("sbom/provenance")));
+            .any(|item| item.contains("sbom attestation")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|item| item.contains("provenance attestation")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|item| item.contains("signing guidance")));
+    }
+
+    #[test]
+    fn validate_output_contract_accepts_complete_image_release_guidance() {
+        let doc = r#"
+# Requirements
+AC-1
+# Mode Applicability Matrix
+O-1
+# Image Research
+IMG-1
+# Unknown Unknowns
+RSK-1
+# Build Overview
+AC-2
+# Build Design Plan
+AC-3
+# Visualization
+O-2
+# Task List
+AC-4
+# Project Layout/Prerequisites
+O-3
+# Generated Files
+IMG-2 includes docker-bake.hcl
+# Operational Guide
+RSK-2 run docker buildx bake release --set *.platform=linux/amd64,linux/arm64 --attest type=sbom --attest type=provenance,mode=max and cosign sign example
+"#;
+        let result = validate_output_contract(doc, "image").expect("validation should succeed");
+        assert!(result.errors.is_empty());
     }
 }

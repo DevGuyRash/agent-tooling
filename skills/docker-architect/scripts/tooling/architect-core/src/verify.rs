@@ -1,9 +1,12 @@
 //! Runtime verification helpers for generated compose outputs.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -101,6 +104,12 @@ struct ComposeReadinessObservation {
     failed_services: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ComposeInvocationContext {
+    compose_file: String,
+    project_name: String,
+}
+
 /// Verify a compose file by running containers, waiting for startup readiness, collecting inspect
 /// facts, and emitting a report.
 /// This is a baseline hardening gate with bounded health waiting for stateful services.
@@ -121,18 +130,14 @@ pub fn verify_compose(
     compose_file: &Path,
     teardown: bool,
 ) -> Result<ComposeVerifyReport, AppError> {
-    run_compose_command(compose_file, &["config", "-q"])?;
-    let up_output = run_compose_output(compose_file, &["up", "-d"])?;
+    let context = compose_invocation_context(compose_file)?;
+    let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
+    run_compose_command(&context, &["config", "-q"])?;
+    let up_output = run_compose_output(&context, &["up", "-d"])?;
     if !up_output.status.success() {
-        let failed_services = collect_failed_services(compose_file);
-        let service_logs_excerpt = collect_compose_logs_excerpt(compose_file);
-        let teardown_attempted = if teardown {
-            let _ = run_compose_command(compose_file, &["down", "--volumes"]);
-            true
-        } else {
-            false
-        };
-        return Ok(ComposeVerifyReport {
+        let failed_services = collect_failed_services(&context);
+        let service_logs_excerpt = collect_compose_logs_excerpt(&context);
+        let report = ComposeVerifyReport {
             mode: "compose".to_string(),
             input: compose_file.display().to_string(),
             services: Vec::new(),
@@ -141,33 +146,36 @@ pub fn verify_compose(
             compose_up_stderr: trim_to_option(String::from_utf8_lossy(&up_output.stderr)),
             failed_services,
             service_logs_excerpt,
-            teardown_attempted,
+            teardown_attempted: false,
+        };
+        return finalize_report_with_optional_teardown(Ok(report), teardown, || {
+            let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
         });
     }
 
-    let readiness = wait_for_compose_readiness(compose_file)?;
-    let mut report = collect_compose_runtime_report(compose_file, false)?;
-    if readiness.status != ComposeReadinessStatus::Ready {
-        report.success = false;
-    }
-    merge_failed_services(&mut report.failed_services, &readiness.failed_services);
-    if !report.success && report.service_logs_excerpt.is_none() {
-        report.service_logs_excerpt = collect_compose_logs_excerpt(compose_file);
-    }
-    if teardown {
-        let _ = run_compose_command(compose_file, &["down", "--volumes"]);
-    }
-    Ok(ComposeVerifyReport {
-        teardown_attempted: teardown,
-        ..report
+    let report_result = (|| {
+        let readiness = wait_for_compose_readiness(&context)?;
+        let mut report = collect_compose_runtime_report(&context, false)?;
+        if readiness.status != ComposeReadinessStatus::Ready {
+            report.success = false;
+        }
+        merge_failed_services(&mut report.failed_services, &readiness.failed_services);
+        if !report.success && report.service_logs_excerpt.is_none() {
+            report.service_logs_excerpt = collect_compose_logs_excerpt(&context);
+        }
+        Ok(report)
+    })();
+
+    finalize_report_with_optional_teardown(report_result, teardown, || {
+        let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
     })
 }
 
 fn collect_compose_runtime_report(
-    compose_file: &Path,
+    context: &ComposeInvocationContext,
     teardown_attempted: bool,
 ) -> Result<ComposeVerifyReport, AppError> {
-    let ps_output = run_compose_command(compose_file, &["ps", "-q"])?;
+    let ps_output = run_compose_command(context, &["ps", "-q"])?;
     let ids: Vec<&str> = ps_output
         .lines()
         .map(str::trim)
@@ -198,7 +206,7 @@ fn collect_compose_runtime_report(
     let success = !services.is_empty() && failed_services.is_empty();
     Ok(ComposeVerifyReport {
         mode: "compose".to_string(),
-        input: compose_file.display().to_string(),
+        input: context.compose_file.clone(),
         services,
         success,
         compose_up_succeeded: true,
@@ -206,7 +214,7 @@ fn collect_compose_runtime_report(
         service_logs_excerpt: if success {
             None
         } else {
-            collect_compose_logs_excerpt(compose_file)
+            collect_compose_logs_excerpt(context)
         },
         failed_services,
         teardown_attempted,
@@ -311,10 +319,10 @@ fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<boo
 }
 
 fn wait_for_compose_readiness(
-    compose_file: &Path,
+    context: &ComposeInvocationContext,
 ) -> Result<ComposeReadinessObservation, AppError> {
     wait_for_compose_readiness_with(DOCKER_HEALTH_WAIT_TIMEOUT, READINESS_POLL_INTERVAL, || {
-        collect_service_readiness_records(compose_file)
+        collect_service_readiness_records(context)
     })
 }
 
@@ -353,9 +361,9 @@ where
 }
 
 fn collect_service_readiness_records(
-    compose_file: &Path,
+    context: &ComposeInvocationContext,
 ) -> Result<Vec<ServiceReadinessRecord>, AppError> {
-    let ps_output = run_compose_command(compose_file, &["ps", "-q"])?;
+    let ps_output = run_compose_command(context, &["ps", "-q"])?;
     let ids: Vec<&str> = ps_output
         .lines()
         .map(str::trim)
@@ -660,15 +668,19 @@ fn is_root_user(user: &str) -> bool {
         || normalized.starts_with("0:")
 }
 
-fn run_compose_command(compose_file: &Path, args: &[&str]) -> Result<String, AppError> {
-    let output = run_compose_output(compose_file, args)?;
+fn run_compose_command(
+    context: &ComposeInvocationContext,
+    args: &[&str],
+) -> Result<String, AppError> {
+    let output = run_compose_output(context, args)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let exit_status = format_exit_status(&output.status);
         return Err(AppError::InvalidInput {
             reason: format!(
-                "docker command failed `compose -f {} {}` (exit {}): {}",
-                compose_file.display(),
+                "docker command failed `compose -p {} -f {} {}` (exit {}): {}",
+                context.project_name,
+                context.compose_file,
                 args.join(" "),
                 exit_status,
                 stderr
@@ -678,15 +690,23 @@ fn run_compose_command(compose_file: &Path, args: &[&str]) -> Result<String, App
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_compose_output(compose_file: &Path, args: &[&str]) -> Result<Output, AppError> {
-    let mut full_args = vec!["compose", "-f"];
-    let compose_file_string = compose_file.display().to_string();
-    full_args.push(&compose_file_string);
+fn run_compose_output(
+    context: &ComposeInvocationContext,
+    args: &[&str],
+) -> Result<Output, AppError> {
+    let mut full_args = vec![
+        "compose",
+        "-p",
+        &context.project_name,
+        "-f",
+        &context.compose_file,
+    ];
     full_args.extend(args.iter().copied());
     run_docker_output(&full_args, DOCKER_VERIFY_TIMEOUT).map_err(|error| AppError::InvalidInput {
         reason: format!(
-            "failed to execute docker command `compose -f {} {}`: {}",
-            compose_file.display(),
+            "failed to execute docker command `compose -p {} -f {} {}`: {}",
+            context.project_name,
+            context.compose_file,
             args.join(" "),
             error
         ),
@@ -765,8 +785,8 @@ fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String>
     }
 }
 
-fn collect_failed_services(compose_file: &Path) -> Vec<String> {
-    let Ok(output) = run_compose_output(compose_file, &["ps", "--all", "--format", "json"]) else {
+fn collect_failed_services(context: &ComposeInvocationContext) -> Vec<String> {
+    let Ok(output) = run_compose_output(context, &["ps", "--all", "--format", "json"]) else {
         return Vec::new();
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -815,8 +835,8 @@ fn parse_failed_services_from_compose_ps(stdout: &str) -> Vec<String> {
     failed.into_iter().collect()
 }
 
-fn collect_compose_logs_excerpt(compose_file: &Path) -> Option<String> {
-    let Ok(output) = run_compose_output(compose_file, &["logs", "--tail=50"]) else {
+fn collect_compose_logs_excerpt(context: &ComposeInvocationContext) -> Option<String> {
+    let Ok(output) = run_compose_output(context, &["logs", "--tail=50"]) else {
         return None;
     };
     let combined = format!(
@@ -841,6 +861,47 @@ fn trim_to_option(value: impl AsRef<str>) -> Option<String> {
     }
 }
 
+fn finalize_report_with_optional_teardown<F>(
+    report_result: Result<ComposeVerifyReport, AppError>,
+    teardown: bool,
+    mut teardown_fn: F,
+) -> Result<ComposeVerifyReport, AppError>
+where
+    F: FnMut(),
+{
+    if teardown {
+        teardown_fn();
+    }
+
+    match report_result {
+        Ok(report) => Ok(ComposeVerifyReport {
+            teardown_attempted: teardown,
+            ..report
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn compose_invocation_context(compose_file: &Path) -> Result<ComposeInvocationContext, AppError> {
+    let compose_file = compose_file
+        .canonicalize()
+        .map_err(|error| AppError::io(compose_file, error.to_string()))?;
+    let compose_file_string = compose_file.display().to_string();
+    let mut hasher = DefaultHasher::new();
+    compose_file_string.hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    let hash = hasher.finish();
+    Ok(ComposeInvocationContext {
+        compose_file: compose_file_string,
+        project_name: format!("docker-architect-{hash:016x}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -851,12 +912,14 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::error::AppError;
+
     use super::{
-        classify_service_readiness, format_exit_status, inspect_record_from_value, is_root_user,
-        logs_contain_error_keywords, parse_failed_services_from_compose_ps,
-        readiness_record_from_value, summarize_compose_readiness, trim_to_option,
-        wait_for_compose_readiness_with, ComposeReadinessStatus, ServiceReadiness,
-        ServiceReadinessRecord,
+        classify_service_readiness, finalize_report_with_optional_teardown, format_exit_status,
+        inspect_record_from_value, is_root_user, logs_contain_error_keywords,
+        parse_failed_services_from_compose_ps, readiness_record_from_value,
+        summarize_compose_readiness, trim_to_option, wait_for_compose_readiness_with,
+        ComposeReadinessStatus, ComposeVerifyReport, ServiceReadiness, ServiceReadinessRecord,
     };
 
     #[test]
@@ -1093,5 +1156,42 @@ mod tests {
         assert!(record.running);
         assert_eq!(record.health_status.as_deref(), Some("healthy"));
         assert!(record.healthcheck_defined);
+    }
+
+    #[test]
+    fn finalize_report_with_optional_teardown_marks_successful_reports() {
+        let mut teardown_called = false;
+        let result = finalize_report_with_optional_teardown(
+            Ok(ComposeVerifyReport {
+                mode: "compose".to_string(),
+                input: "compose.yaml".to_string(),
+                services: Vec::new(),
+                success: true,
+                compose_up_succeeded: true,
+                compose_up_stderr: None,
+                failed_services: Vec::new(),
+                service_logs_excerpt: None,
+                teardown_attempted: false,
+            }),
+            true,
+            || teardown_called = true,
+        )
+        .expect("result should succeed");
+        assert!(teardown_called);
+        assert!(result.teardown_attempted);
+    }
+
+    #[test]
+    fn finalize_report_with_optional_teardown_runs_on_errors() {
+        let mut teardown_called = false;
+        let result = finalize_report_with_optional_teardown(
+            Err(AppError::InvalidInput {
+                reason: "boom".to_string(),
+            }),
+            true,
+            || teardown_called = true,
+        );
+        assert!(teardown_called);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 }
