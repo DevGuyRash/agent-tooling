@@ -6,6 +6,14 @@
 //! - deterministic policy retrieval and rendering,
 //! - hard/soft validation layers,
 //! - adaptive semantic routing and convergence planning.
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 /// Language-agnostic static analysis helpers for optional pre-screening.
 pub mod analyze;

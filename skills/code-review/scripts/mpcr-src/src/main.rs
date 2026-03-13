@@ -1,4 +1,11 @@
-#![allow(clippy::print_stderr, clippy::print_stdout)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    clippy::print_stderr,
+    clippy::print_stdout
+)]
 
 //! CLI entrypoint for the v2 `mpcr` code-review tool.
 

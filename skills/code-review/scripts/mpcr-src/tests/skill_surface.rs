@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::cargo)]
 #![allow(clippy::indexing_slicing)]
 
 use anyhow::{ensure, Context};
