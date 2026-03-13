@@ -145,6 +145,62 @@ class PrTemplateDiscoverCoverageTests(unittest.TestCase):
                 ],
             )
 
+    def test_uses_local_templates_when_default_branch_lookup_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp_path = Path(temp_dir)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            run(["git", "init"], cwd=repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            template_path = repo / ".github" / "pull_request_template.md"
+            template_path.parent.mkdir(parents=True, exist_ok=True)
+            template_path.write_text("# Local Template\n", encoding="utf-8")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"repo\" && \"$2\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    echo 'authentication required' >&2\n"
+                "    exit 1\n"
+                "  fi\n"
+                "  printf 'acme/widget\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo \"unexpected gh invocation: $*\" >&2\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            proc = run(
+                ["bash", str(SCRIPT), "--format", "json"],
+                cwd=repo,
+                env=env,
+            )
+
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["repo"], "acme/widget")
+            self.assertEqual(payload["ref"], "")
+            self.assertEqual(
+                payload["templates"],
+                [
+                    {
+                        "id": "local:.github/pull_request_template.md",
+                        "path": ".github/pull_request_template.md",
+                        "source": "local",
+                    }
+                ],
+            )
+            self.assertIn("authentication required", proc.stderr)
+            self.assertIn("continuing with local PR templates only", proc.stderr)
+
     def test_invalid_repo_slug_is_rejected(self):
         proc = run(
             [

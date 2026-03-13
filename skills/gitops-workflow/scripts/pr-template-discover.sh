@@ -149,6 +149,26 @@ resolve_template_record() {
   die "template id not found: $requested_id"
 }
 
+resolve_default_branch() {
+  local repo="$1"
+  local err_file=""
+  local out=""
+  local err_text=""
+
+  err_file="$(mktemp)"
+  if out="$(gh repo view "$repo" --json defaultBranchRef --jq '.defaultBranchRef.name' 2>"$err_file")"; then
+    rm -f "$err_file"
+    printf '%s' "$out"
+    return 0
+  fi
+
+  err_text="$(tr '\n' ' ' < "$err_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+  rm -f "$err_file"
+  [[ -n "$err_text" ]] || err_text="unknown error"
+  echo "gh repo view failed while resolving default branch for $repo: $err_text" >&2
+  return 1
+}
+
 if [[ -z "$REPO" ]]; then
   if command -v gh >/dev/null 2>&1; then
     REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
@@ -181,9 +201,13 @@ fi
 if [[ -n "$REPO" ]]; then
   IFS=$'\t' read -r OWNER NAME <<< "$(parse_repo "$REPO")"
   require_cmd gh
-  DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)"
-  [[ -n "$DEFAULT_BRANCH" ]] || die "could not resolve default branch for $REPO"
-  collect_remote_templates "$OWNER" "$NAME" "$DEFAULT_BRANCH" "$TMP_LIST"
+  if DEFAULT_BRANCH="$(resolve_default_branch "$REPO")"; then
+    collect_remote_templates "$OWNER" "$NAME" "$DEFAULT_BRANCH" "$TMP_LIST"
+  elif [[ ! -s "$TMP_LIST" ]]; then
+    die "could not resolve default branch for $REPO"
+  else
+    echo "Warning: continuing with local PR templates only for $REPO." >&2
+  fi
 elif [[ ! -s "$TMP_LIST" ]]; then
   die "could not infer repo and no local PR templates were found; pass --repo owner/repo"
 fi

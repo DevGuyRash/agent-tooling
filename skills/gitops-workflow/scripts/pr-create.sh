@@ -290,7 +290,11 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
 
   if [[ "$CREATE" != "true" && -z "$REPO" ]]; then
     LOCAL_TEMPLATES_JSON=""
-    if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --format json 2>/dev/null)"; then
+    LOCAL_TEMPLATES_ERROR="$(mktemp -t pr-template-local-discover.XXXXXX.err)"
+    if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --format json 2>"$LOCAL_TEMPLATES_ERROR")"; then
+      if [[ -s "$LOCAL_TEMPLATES_ERROR" ]]; then
+        cat "$LOCAL_TEMPLATES_ERROR" >&2
+      fi
       if load_selected_template "$LOCAL_TEMPLATES_JSON" "local-only"; then
         :
       elif [[ $? -eq 10 ]]; then
@@ -298,7 +302,13 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
         SELECTED_TEMPLATE_SOURCE=""
         SELECTED_TEMPLATE_CONTENT=""
       fi
+    else
+      LOCAL_DISCOVERY_MESSAGE="$(tr '\n' ' ' < "$LOCAL_TEMPLATES_ERROR" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+      if [[ -n "$LOCAL_DISCOVERY_MESSAGE" ]]; then
+        echo "Warning: local template discovery failed: $LOCAL_DISCOVERY_MESSAGE" >&2
+      fi
     fi
+    rm -f "$LOCAL_TEMPLATES_ERROR"
   fi
 
   if [[ -z "$SELECTED_TEMPLATE_ID" ]]; then
