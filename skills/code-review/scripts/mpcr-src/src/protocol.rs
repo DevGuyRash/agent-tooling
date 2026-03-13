@@ -721,6 +721,7 @@ pub fn dispatch_list() -> Vec<String> {
         "language-detector".to_string(),
         "language-research:<language>".to_string(),
         "final-synthesis".to_string(),
+        "apply-composite".to_string(),
         "applicator-worker".to_string(),
         "applicator-verifier".to_string(),
     ]);

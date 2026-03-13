@@ -51,6 +51,7 @@ fn protocol_surface_includes_dispatch_and_static_discovery() -> anyhow::Result<(
     ensure!(list_stdout.contains("mode reviewer"));
     ensure!(list_stdout.contains("worker review-composite"));
     ensure!(list_stdout.contains("worker domain:core-correctness"));
+    ensure!(list_stdout.contains("worker apply-composite"));
     ensure!(list_stdout.contains("module core-correctness"));
     ensure!(list_stdout.contains("escalation reopen"));
 
