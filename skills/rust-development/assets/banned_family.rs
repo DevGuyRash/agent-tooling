@@ -16,7 +16,8 @@
 // - Fails the test if *non-test* Rust code contains banned-family calls.
 // - Skips test-only code: `#[cfg(test)]` blocks, `mod tests { ... }`, and
 //   test-only directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
-// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable` families.
+// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable`
+//   and `assert` families.
 // - Treats `unsafe impl Send/Sync` as always banned in production code.
 // - Use this together with clippy lints (see clippy-lints.toml) to cover
 //   broader non-idiomatic patterns.
@@ -49,6 +50,9 @@ const BANNED_PREFIXES: &[(&str, MatchKind)] = &[
     ("todo", MatchKind::MacroOrCall),
     ("unimplemented", MatchKind::MacroOrCall),
     ("unreachable", MatchKind::MacroOrCall),
+    ("assert_eq", MatchKind::MacroOnly),
+    ("assert_ne", MatchKind::MacroOnly),
+    ("assert", MatchKind::MacroOnly),
     ("dbg", MatchKind::MacroOnly),
 ];
 
@@ -544,7 +548,15 @@ fn is_ident_char(b: u8) -> bool {
 fn is_invariant_escapable_prefix(prefix: &str) -> bool {
     matches!(
         prefix,
-        "unwrap" | "unwrap_err" | "unwrap_unchecked" | "expect" | "expect_err" | "unreachable"
+        "unwrap"
+            | "unwrap_err"
+            | "unwrap_unchecked"
+            | "expect"
+            | "expect_err"
+            | "unreachable"
+            | "assert"
+            | "assert_eq"
+            | "assert_ne"
     )
 }
 
@@ -1032,6 +1044,22 @@ mod tests {
     }
 
     #[test]
+    fn find_banned_prefix_detects_assert_macro_variants() {
+        assert_eq!(
+            find_banned_prefix("assert!(ready);", "assert", &MatchKind::MacroOnly),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix("assert_eq!(left, right);", "assert_eq", &MatchKind::MacroOnly),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix("assert_ne!(left, right);", "assert_ne", &MatchKind::MacroOnly),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn find_banned_prefix_does_not_match_similar_non_banned_names() {
         assert_eq!(
             find_banned_prefix(
@@ -1043,6 +1071,10 @@ mod tests {
         );
         assert_eq!(
             find_banned_prefix("ctx.expectation()", "expect", &MatchKind::MacroOrCall),
+            None
+        );
+        assert_eq!(
+            find_banned_prefix("debug_assert!(ready);", "assert", &MatchKind::MacroOnly),
             None
         );
     }

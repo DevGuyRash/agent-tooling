@@ -136,7 +136,8 @@ rg '\.expect(_err)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || e
 rg 'panic!\(' --type rust "$@" || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust "$@" && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!()"
 rg 'unreachable!\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
-rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
+# Assert macros outside tests are enforced by the parser-aware banned_family.rs
+# harness so inline #[cfg(test)] modules in src/*.rs are masked correctly.
 rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No exit() outside entrypoints"
 
 # Placeholders
