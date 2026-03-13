@@ -136,9 +136,13 @@ rg '\.expect(_err)?[[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || e
 rg 'panic!\(' --type rust "$@" || echo "✓ No panic!()"
 rg 'unimplemented!\(' --type rust "$@" && echo "ERROR: unimplemented!() found" || echo "✓ No unimplemented!()"
 rg 'unreachable!\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No bare unreachable!()"
-rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
+if find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit | grep -q .; then
+  echo "✓ No assert macros outside tests (delegated to banned_family.rs)"
+else
+  rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
+fi
 # banned_family.rs remains the stricter parser-aware backstop so inline
-# #[cfg(test)] modules in src/*.rs are masked correctly.
+# #[cfg(test)] modules in src/*.rs are masked correctly when installed.
 rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No exit() outside entrypoints"
 
 # Placeholders

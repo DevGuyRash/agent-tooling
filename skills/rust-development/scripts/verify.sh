@@ -508,7 +508,7 @@ echo ""
 echo "Panic-inducing patterns:"
 # NOTE: exclude_tests is path-based and excludes conventional test-only dirs.
 # Keep banned_family.rs as the parser-aware source of truth for cfg(test) masking
-# and assert macros outside tests.
+# and assert macros outside tests whenever the harness is installed.
 # unwrap family: .unwrap(), .unwrap_err(), .unwrap_unchecked() — but NOT .unwrap_or*()
 _search_excluding '\.unwrap(_err|_unchecked)?[[:space:]]*\(' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
 # expect family: .expect(), .expect_err() — but NOT .expectation(...)
@@ -517,7 +517,11 @@ _search_excluding '\.expect(_err)?[[:space:]]*\(' '// INVARIANT:' "no panic-indu
 _search 'panic!\(' "" "no panic!()" "exclude_tests" || true
 _search 'unimplemented!\(' "" "no unimplemented!()" "exclude_tests" || true
 _search_excluding 'unreachable!\(' '// INVARIANT:' "no bare unreachable!()" "exclude_tests" || true
-_search_excluding '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
+if [ -n "$_found_banned" ]; then
+  pass "no assert macros outside tests (delegated to banned_family.rs)"
+else
+  _search_excluding '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
+fi
 # process exit
 _search 'std::process::exit\(' "" "no exit() outside entrypoints" "exclude_tests" "exclude_entrypoints" || true
 

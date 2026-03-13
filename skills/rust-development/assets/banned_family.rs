@@ -691,7 +691,10 @@ fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) ->
     false
 }
 
-fn is_unsafe_impl_send_or_sync_violation(sanitized_line: &str, state: &mut UnsafeImplState) -> bool {
+fn is_unsafe_impl_send_or_sync_violation(
+    sanitized_line: &str,
+    state: &mut UnsafeImplState,
+) -> bool {
     if !contains_unsafe_impl_send_or_sync(sanitized_line, state) {
         return false;
     }
@@ -918,9 +921,8 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
+        MatchKind, compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
         is_cfg_test_attr, resolve_scan_roots, should_skip_file, strip_comments_and_strings,
-        MatchKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1054,11 +1056,19 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            find_banned_prefix("assert_eq!(left, right);", "assert_eq", &MatchKind::MacroOnly),
+            find_banned_prefix(
+                "assert_eq!(left, right);",
+                "assert_eq",
+                &MatchKind::MacroOnly
+            ),
             Some(0)
         );
         assert_eq!(
-            find_banned_prefix("assert_ne!(left, right);", "assert_ne", &MatchKind::MacroOnly),
+            find_banned_prefix(
+                "assert_ne!(left, right);",
+                "assert_ne",
+                &MatchKind::MacroOnly
+            ),
             Some(0)
         );
         assert_eq!(
@@ -1086,7 +1096,11 @@ mod tests {
             None
         );
         assert_eq!(
-            find_banned_prefix("assert_matches!(value, Some(_));", "assert", &MatchKind::MacroOnly),
+            find_banned_prefix(
+                "assert_matches!(value, Some(_));",
+                "assert",
+                &MatchKind::MacroOnly
+            ),
             None
         );
     }
@@ -1138,15 +1152,27 @@ mod tests {
         state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync("impl Send for Worker {}", &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "impl Send for Worker {}",
+            &mut state
+        ));
     }
 
     #[test]
     fn unsafe_impl_send_sync_detection_spans_multiple_lines() {
         let mut state = super::UnsafeImplState::searching();
-        assert!(!super::is_unsafe_impl_send_or_sync_violation("unsafe impl<T>", &mut state));
-        assert!(super::is_unsafe_impl_send_or_sync_violation("Send for Worker<T> {}", &mut state));
-        assert!(!super::is_unsafe_impl_send_or_sync_violation("let keep_scanning = Send;", &mut state));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            "unsafe impl<T>",
+            &mut state
+        ));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            "Send for Worker<T> {}",
+            &mut state
+        ));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            "let keep_scanning = Send;",
+            &mut state
+        ));
     }
 
     #[test]
@@ -1157,9 +1183,18 @@ mod tests {
             &mut state
         ));
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync("unsafe impl<T>", &mut state));
-        assert!(!contains_unsafe_impl_send_or_sync("Service for Worker<T>", &mut state));
-        assert!(!contains_unsafe_impl_send_or_sync("where T: Send + Sync {}", &mut state));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "unsafe impl<T>",
+            &mut state
+        ));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "Service for Worker<T>",
+            &mut state
+        ));
+        assert!(!contains_unsafe_impl_send_or_sync(
+            "where T: Send + Sync {}",
+            &mut state
+        ));
     }
 
     #[test]
@@ -1167,7 +1202,9 @@ mod tests {
         let raw = "unsafe impl Send for Worker {} // SAFETY: still forbidden";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, &mut state
+        ));
     }
 
     #[test]
@@ -1175,7 +1212,9 @@ mod tests {
         let raw = "static DOCS: &str = \"// SAFETY: fake\"; unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, &mut state
+        ));
     }
 
     #[test]
@@ -1183,7 +1222,9 @@ mod tests {
         let raw = "/* // SAFETY: fake */ unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(super::is_unsafe_impl_send_or_sync_violation(&sanitized, &mut state));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, &mut state
+        ));
     }
 
     #[test]
@@ -1191,10 +1232,15 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         let raw_impl_line = "unsafe impl<T> // SAFETY: still forbidden";
         let impl_line = strip_comments_and_strings(raw_impl_line);
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(&impl_line, &mut state));
+        assert!(!super::is_unsafe_impl_send_or_sync_violation(
+            &impl_line, &mut state
+        ));
         assert_eq!(state.phase, super::UnsafeImplPhase::SawUnsafeImpl);
         let raw_send_line = "Send for Worker<T> {}";
-        assert!(super::is_unsafe_impl_send_or_sync_violation(raw_send_line, &mut state));
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            raw_send_line,
+            &mut state
+        ));
     }
 
     #[test]
