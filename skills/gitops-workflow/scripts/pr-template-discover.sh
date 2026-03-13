@@ -193,6 +193,24 @@ else
   : > "$SORTED_LIST"
 fi
 
+if [[ -n "$TEMPLATE_ID" ]]; then
+  RECORD="$(resolve_template_record "$TEMPLATE_ID" "$SORTED_LIST")"
+  IFS=$'\t' read -r SOURCE MATCHED RESOLVED_ID <<< "$RECORD"
+  if [[ "$SOURCE" == "local" ]]; then
+    [[ -n "${LOCAL_ROOT:-}" ]] || die "local template resolution requires a git checkout"
+    cat "$LOCAL_ROOT/$MATCHED"
+    exit 0
+  fi
+  require_cmd jq
+  require_cmd base64
+  TEMPLATE_JSON="$(fetch_file_json "$OWNER" "$NAME" "$DEFAULT_BRANCH" "$MATCHED")"
+  [[ -n "$TEMPLATE_JSON" ]] || die "failed to fetch template content for $MATCHED"
+  ENCODING="$(printf '%s' "$TEMPLATE_JSON" | jq -r '.encoding // empty')"
+  [[ "$ENCODING" == "base64" ]] || die "unexpected template encoding for $MATCHED"
+  printf '%s' "$TEMPLATE_JSON" | jq -r '.content' | tr -d '\n' | decode_base64
+  exit 0
+fi
+
 if [[ "$FORMAT" == "json" ]]; then
   python3 - "$SORTED_LIST" "$REPO" "$DEFAULT_BRANCH" <<'PY'
 import json
@@ -218,24 +236,6 @@ for line in records_path.read_text(encoding="utf-8").splitlines():
     templates.append(entry)
 print(json.dumps({"repo": repo, "ref": ref, "templates": templates}))
 PY
-  exit 0
-fi
-
-if [[ -n "$TEMPLATE_ID" ]]; then
-  RECORD="$(resolve_template_record "$TEMPLATE_ID" "$SORTED_LIST")"
-  IFS=$'\t' read -r SOURCE MATCHED RESOLVED_ID <<< "$RECORD"
-  if [[ "$SOURCE" == "local" ]]; then
-    [[ -n "${LOCAL_ROOT:-}" ]] || die "local template resolution requires a git checkout"
-    cat "$LOCAL_ROOT/$MATCHED"
-    exit 0
-  fi
-  require_cmd jq
-  require_cmd base64
-  TEMPLATE_JSON="$(fetch_file_json "$OWNER" "$NAME" "$DEFAULT_BRANCH" "$MATCHED")"
-  [[ -n "$TEMPLATE_JSON" ]] || die "failed to fetch template content for $MATCHED"
-  ENCODING="$(printf '%s' "$TEMPLATE_JSON" | jq -r '.encoding // empty')"
-  [[ "$ENCODING" == "base64" ]] || die "unexpected template encoding for $MATCHED"
-  printf '%s' "$TEMPLATE_JSON" | jq -r '.content' | tr -d '\n' | decode_base64
   exit 0
 fi
 

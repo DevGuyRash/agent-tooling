@@ -92,6 +92,30 @@ class PrTemplateDiscoverDecodeTests(unittest.TestCase):
 
 
 class PrTemplateDiscoverCoverageTests(unittest.TestCase):
+    def test_template_id_takes_precedence_over_json_listing_for_local_templates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            run(["git", "init"], cwd=repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            template_path = repo / ".github" / "pull_request_template.md"
+            template_path.parent.mkdir(parents=True, exist_ok=True)
+            template_path.write_text("# Local Template\n", encoding="utf-8")
+
+            proc = run(
+                [
+                    "bash",
+                    str(SCRIPT),
+                    "--format",
+                    "json",
+                    "--template-id",
+                    "local:.github/pull_request_template.md",
+                ],
+                cwd=repo,
+            )
+
+            self.assertEqual(proc.stdout, "# Local Template\n")
+
     def test_discovers_local_templates_without_github_cli(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"
