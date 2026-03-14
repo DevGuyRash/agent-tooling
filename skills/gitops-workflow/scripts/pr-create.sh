@@ -161,6 +161,39 @@ resolve_repo() {
   gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true
 }
 
+resolve_checkout_repo() {
+  local remote_url=""
+
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v gh >/dev/null 2>&1; then
+    gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true
+    return 0
+  fi
+
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$remote_url" in
+    git@github.com:*.git)
+      printf '%s\n' "${remote_url#git@github.com:}" | sed 's/\.git$//'
+      return 0
+      ;;
+    git@github.com:*)
+      printf '%s\n' "${remote_url#git@github.com:}"
+      return 0
+      ;;
+    https://github.com/*/*.git)
+      printf '%s\n' "${remote_url#https://github.com/}" | sed 's/\.git$//'
+      return 0
+      ;;
+    https://github.com/*/*)
+      printf '%s\n' "${remote_url#https://github.com/}"
+      return 0
+      ;;
+  esac
+}
+
 select_template_from_json() {
   local requested_id="${1:-}"
   local templates_json="${2:-}"
@@ -215,7 +248,9 @@ load_selected_template() {
   fi
 
   template_fetch_args=(--template-id "$selected_id")
-  if [[ "$discovery_mode" == "repo-aware" && -n "$EFFECTIVE_REPO" ]]; then
+  if [[ "$selected_source" == "local" ]]; then
+    template_fetch_args=(--local-only --template-id "$selected_id")
+  elif [[ "$discovery_mode" == "repo-aware" && -n "$EFFECTIVE_REPO" ]]; then
     template_fetch_args=(--repo "$EFFECTIVE_REPO" --template-id "$selected_id")
   fi
   template_fetch_error="$(mktemp -t pr-template-fetch.XXXXXX.err)"
@@ -269,6 +304,7 @@ EFFECTIVE_REPO="$(resolve_repo)"
 if [[ -n "$EFFECTIVE_REPO" ]]; then
   parse_repo "$EFFECTIVE_REPO" >/dev/null
 fi
+CHECKOUT_REPO="$(resolve_checkout_repo)"
 TEMPLATE_COUNT=0
 SELECTED_TEMPLATE_ID=""
 SELECTED_TEMPLATE_CONTENT=""
@@ -288,10 +324,10 @@ if [[ -x "$PR_TEMPLATE_SCRIPT" ]]; then
     TEMPLATE_DISCOVER_TEXT_ARGS=(--repo "$EFFECTIVE_REPO" --format text)
   fi
 
-  if [[ "$CREATE" != "true" && -z "$REPO" ]]; then
+  if [[ -z "$REPO" || ( -n "$CHECKOUT_REPO" && "$CHECKOUT_REPO" == "$EFFECTIVE_REPO" ) ]]; then
     LOCAL_TEMPLATES_JSON=""
     LOCAL_TEMPLATES_ERROR="$(mktemp -t pr-template-local-discover.XXXXXX.err)"
-    if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --format json 2>"$LOCAL_TEMPLATES_ERROR")"; then
+    if LOCAL_TEMPLATES_JSON="$(bash "$PR_TEMPLATE_SCRIPT" --local-only --format json 2>"$LOCAL_TEMPLATES_ERROR")"; then
       if [[ -s "$LOCAL_TEMPLATES_ERROR" ]]; then
         cat "$LOCAL_TEMPLATES_ERROR" >&2
       fi

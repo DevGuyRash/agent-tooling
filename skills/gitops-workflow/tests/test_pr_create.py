@@ -341,7 +341,7 @@ class PrCreateScriptTests(unittest.TestCase):
             self.assertIn("# Summary", body)
             self.assertNotIn("# Remote Template", body)
 
-    def test_preview_surfaces_local_discovery_warning_and_uses_local_template(self):
+    def test_preview_uses_local_template_without_remote_lookup_when_available(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             repo = tmp_path / "repo"
@@ -398,8 +398,7 @@ class PrCreateScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("authentication required", proc.stderr)
-            self.assertIn("continuing with local PR templates only", proc.stderr)
+            self.assertEqual(proc.stderr, "")
             m = re.search(r"PR body file created:\s*(\S+)", proc.stdout)
             self.assertIsNotNone(m, proc.stdout)
             body = Path(m.group(1)).read_text(encoding="utf-8")
@@ -838,6 +837,174 @@ class PrCreateScriptTests(unittest.TestCase):
             args = gh_args.read_text(encoding="utf-8")
             self.assertIn("pr create", args)
             self.assertNotIn("template selection required before --create", proc.stderr)
+
+    def test_create_uses_local_template_when_repo_content_lookup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            gh_args = tmp_path / "gh-args.txt"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            init_repo(repo)
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+            (repo / ".github").mkdir(parents=True, exist_ok=True)
+            (repo / ".github" / "pull_request_template.md").write_text("# Local Template\n", encoding="utf-8")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    echo \"main\"\n"
+                "  else\n"
+                "    echo \"acme/widget\"\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  endpoint=\"${2:-}\"\n"
+                "  case \"$endpoint\" in\n"
+                "    *\"/labels?per_page=100&page=1\")\n"
+                "      echo '[]'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/*)\n"
+                "      echo 'contents API denied' >&2\n"
+                "      exit 1\n"
+                "      ;;\n"
+                "  esac\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"create\" ]]; then\n"
+                "  echo \"$*\" > \"${GH_ARGS_FILE}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GH_ARGS_FILE"] = str(gh_args)
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--create",
+                    "--force-create",
+                    "--no-labels",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = gh_args.read_text(encoding="utf-8")
+            self.assertIn("pr create", args)
+            m = re.search(r"--body-file ([^ ]+)", args)
+            self.assertIsNotNone(m, args)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("Local PR template source: local:.github/pull_request_template.md", body)
+            self.assertIn("# Local Template", body)
+            self.assertNotIn("contents API denied", proc.stderr)
+
+    def test_create_with_explicit_checkout_repo_uses_local_template_when_remote_lookup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            fake_bin = tmp_path / "bin"
+            gh_args = tmp_path / "gh-args.txt"
+            repo.mkdir(parents=True, exist_ok=True)
+            fake_bin.mkdir(parents=True, exist_ok=True)
+
+            init_repo(repo)
+            commit_file(repo, "README.md", "base\n", "docs: base")
+            run(["git", "checkout", "-b", "feat/demo"], cwd=repo)
+            commit_file(repo, "skills/demo.txt", "change\n", "feat(demo): add sample change")
+            (repo / ".github").mkdir(parents=True, exist_ok=True)
+            (repo / ".github" / "pull_request_template.md").write_text("# Local Template\n", encoding="utf-8")
+
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"repo\" && \"${2:-}\" == \"view\" ]]; then\n"
+                "  if [[ \"$*\" == *\"defaultBranchRef\"* ]]; then\n"
+                "    echo \"main\"\n"
+                "  else\n"
+                "    echo \"acme/widget\"\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"api\" ]]; then\n"
+                "  endpoint=\"${2:-}\"\n"
+                "  case \"$endpoint\" in\n"
+                "    *\"/labels?per_page=100&page=1\")\n"
+                "      echo '[]'\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    repos/acme/widget/contents/*)\n"
+                "      echo 'contents API denied' >&2\n"
+                "      exit 1\n"
+                "      ;;\n"
+                "  esac\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"create\" ]]; then\n"
+                "  echo \"$*\" > \"${GH_ARGS_FILE}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GH_ARGS_FILE"] = str(gh_args)
+
+            proc = run(
+                [
+                    "bash",
+                    str(PR_CREATE_SCRIPT),
+                    "--title",
+                    "feat(demo): add sample change",
+                    "--base",
+                    "main",
+                    "--head",
+                    "feat/demo",
+                    "--repo",
+                    "acme/widget",
+                    "--create",
+                    "--force-create",
+                    "--no-labels",
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = gh_args.read_text(encoding="utf-8")
+            self.assertIn("pr create", args)
+            m = re.search(r"--body-file ([^ ]+)", args)
+            self.assertIsNotNone(m, args)
+            body = Path(m.group(1)).read_text(encoding="utf-8")
+            self.assertIn("Local PR template source: local:.github/pull_request_template.md", body)
+            self.assertIn("# Local Template", body)
+            self.assertNotIn("contents API denied", proc.stderr)
 
     def test_create_aborts_when_remote_template_fetch_fails_after_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:

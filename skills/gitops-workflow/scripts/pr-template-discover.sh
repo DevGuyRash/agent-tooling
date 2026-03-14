@@ -15,6 +15,7 @@ REPO=""
 FORMAT="text"
 TEMPLATE_ID=""
 JSON_RENDERER="$SCRIPT_DIR/lib/pr_template_discover_json.py"
+LOCAL_ONLY="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,11 +34,15 @@ while [[ $# -gt 0 ]]; do
       TEMPLATE_ID="${2:-}"
       shift 2
       ;;
+    --local-only)
+      LOCAL_ONLY="true"
+      shift
+      ;;
     -h|--help)
       cat <<'USAGE'
 Usage:
-  bash scripts/pr-template-discover.sh [--repo owner/repo] [--format text|json]
-  bash scripts/pr-template-discover.sh [--repo owner/repo] --template-id <path>
+  bash scripts/pr-template-discover.sh [--repo owner/repo] [--format text|json] [--local-only]
+  bash scripts/pr-template-discover.sh [--repo owner/repo] --template-id <path> [--local-only]
 USAGE
       exit 0
       ;;
@@ -54,6 +59,10 @@ case "$FORMAT" in
     die "invalid --format '$FORMAT' (expected: text or json)"
     ;;
 esac
+
+if [[ "$LOCAL_ONLY" == "true" && -n "$REPO" ]]; then
+  die "--local-only cannot be combined with --repo"
+fi
 
 collect_local_templates() {
   local root="$1"
@@ -169,7 +178,7 @@ resolve_default_branch() {
   return 1
 }
 
-if [[ -z "$REPO" ]]; then
+if [[ "$LOCAL_ONLY" != "true" && -z "$REPO" ]]; then
   if command -v gh >/dev/null 2>&1; then
     REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
   fi
