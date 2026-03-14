@@ -308,7 +308,11 @@ pub fn validate_repo_relative(path: &Path) -> anyhow::Result<()> {
 /// # Errors
 /// Returns an error when the string is empty, absolute, or contains `..`.
 pub fn validate_repo_relative_str(repo_relative: &str) -> anyhow::Result<()> {
-    let normalized = repo_relative.trim().replace('\\', "/");
+    let normalized = repo_relative.trim();
+    ensure!(
+        !normalized.contains('\\'),
+        "repo-relative path must use `/` separators"
+    );
     validate_repo_relative(Path::new(&normalized))
 }
 
@@ -406,6 +410,16 @@ mod tests {
             .expect_err("traversal resolve should be rejected");
         assert!(
             err.to_string().contains("must not contain `..`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn repo_relative_string_rejects_backslashes() {
+        let err = validate_repo_relative_str(r"agents\deadbeef")
+            .expect_err("backslashes should be rejected");
+        assert!(
+            err.to_string().contains("must use `/` separators"),
             "unexpected error: {err}"
         );
     }
