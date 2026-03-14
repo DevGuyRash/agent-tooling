@@ -1040,10 +1040,10 @@ pub fn validate_session_id(session_id: &str) -> anyhow::Result<()> {
     let valid_len = session_id.len() == 8;
     let valid_chars = session_id
         .chars()
-        .all(|value| value.is_ascii_alphanumeric());
+        .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit());
     anyhow::ensure!(
         valid_len && valid_chars,
-        "error: session_id must be 8 lowercase hex or 8 ASCII alphanumeric characters"
+        "error: session_id must be 8 lowercase alphanumeric characters"
     );
     Ok(())
 }
@@ -1271,6 +1271,7 @@ mod tests {
     #[test]
     fn ids_anchors_and_fingerprints_follow_prd_contracts() -> anyhow::Result<()> {
         validate_session_id("sess0001")?;
+        anyhow::ensure!(validate_session_id("Sess0001").is_err());
         validate_artifact_id("abc123def456")?;
         validate_anchor("src/lib.rs:12")?;
         validate_anchor("src/lib.rs:12-18")?;

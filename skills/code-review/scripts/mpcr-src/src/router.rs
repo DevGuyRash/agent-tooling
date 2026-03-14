@@ -240,10 +240,7 @@ fn modules_for_surface(surface_id: SurfaceId) -> Vec<ModuleId> {
     }
 }
 
-fn canonical_selected_modules(
-    _surfaces: &[RiskSurfaceRecord],
-    extra_modules: &[ModuleId],
-) -> Vec<ModuleId> {
+fn canonical_selected_modules(extra_modules: &[ModuleId]) -> Vec<ModuleId> {
     let mut selected_modules = ModuleId::all().to_vec();
     selected_modules.extend(extra_modules.iter().copied());
     selected_modules.sort_unstable();
@@ -701,8 +698,7 @@ pub fn build_route_decision(
         rigor_level,
         surface_map.risk_surfaces.len(),
     );
-    let selected_modules =
-        canonical_selected_modules(&surface_map.risk_surfaces, &surface_map.suggested_modules);
+    let selected_modules = canonical_selected_modules(&surface_map.suggested_modules);
     let languages = detect_languages(&surface_map.changed_files);
     let staleness_required = selected_modules.contains(&ModuleId::DocsStaleness);
     let scope_signals = scope_signals_for_modules(
@@ -790,7 +786,7 @@ pub fn apply_route_revision(
         .sort_by_key(|surface| surface.surface_id);
     let mut extra_modules = route.selected_modules.clone();
     extra_modules.extend(revision.added_modules.iter().copied());
-    revised.selected_modules = canonical_selected_modules(&revised.risk_surfaces, &extra_modules);
+    revised.selected_modules = canonical_selected_modules(&extra_modules);
     let languages = route
         .worker_plan
         .iter()
