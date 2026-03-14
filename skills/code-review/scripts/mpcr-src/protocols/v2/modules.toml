@@ -1,0 +1,224 @@
+[[policy]]
+id = "core-correctness"
+version = "2026.03.08"
+summary = "Baseline correctness module that always loads for review routing."
+must = ["challenge core behavior invariants", "cover changed control flow"]
+must_not = ["skip changed behavior because another module exists"]
+inputs = ["surface_map", "route_decision"]
+outputs = ["findings", "defended_checks"]
+checks = ["core invariants are covered"]
+stop_when = ["baseline correctness is covered"]
+escalate_when = ["counterexample breaks correctness"]
+anti_patterns = ["duplicate findings across modules"]
+examples = ["Invariant proof around state transitions."]
+schema = ["module_id", "surface_ids", "findings", "defended_checks"]
+
+[[policy]]
+id = "auth-access"
+version = "2026.03.08"
+summary = "Authentication and authorization module."
+must = ["trace identity checks", "trace authorization gates"]
+must_not = ["treat presence of auth middleware as sufficient evidence"]
+inputs = ["auth-access surfaces", "privilege boundaries"]
+outputs = ["findings"]
+checks = ["security scenarios are concrete"]
+stop_when = ["auth/access coverage is complete"]
+escalate_when = ["auth bypass is plausible"]
+anti_patterns = ["assumption-only claims"]
+examples = ["Missing role check on admin path."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "input-validation"
+version = "2026.03.08"
+summary = "Input validation and injection-resistance module."
+must = ["trace untrusted inputs", "check validation before dangerous sinks"]
+must_not = ["assume framework defaults cover custom parsing"]
+inputs = ["input-validation surfaces"]
+outputs = ["findings"]
+checks = ["validation path is explicit"]
+stop_when = ["input boundaries are covered"]
+escalate_when = ["dangerous sink is reachable"]
+anti_patterns = ["naming-based validation assumptions"]
+examples = ["Unchecked CLI flag reaches SQL query builder."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "persistence"
+version = "2026.03.08"
+summary = "Persistence behavior and storage semantics module."
+must = ["check write ordering", "check partial-failure behavior"]
+must_not = ["treat happy-path persistence as enough"]
+inputs = ["persistence surfaces", "migration surfaces"]
+outputs = ["findings", "defended_checks"]
+checks = ["ordering and rollback behavior are explicit"]
+stop_when = ["persistence semantics are covered"]
+escalate_when = ["data loss is plausible"]
+anti_patterns = ["storage-style nits as major risk"]
+examples = ["Write succeeds before index update fails."]
+schema = ["module_id", "surface_ids", "findings", "defended_checks"]
+
+[[policy]]
+id = "data-integrity"
+version = "2026.03.08"
+summary = "Data integrity module for loss, corruption, and versioning risks."
+must = ["challenge round-trip integrity", "challenge mixed-version compatibility where relevant"]
+must_not = ["ignore data shape drift"]
+inputs = ["data-integrity surfaces", "migration surfaces"]
+outputs = ["findings", "defended_checks"]
+checks = ["counterexamples cover corruption or mismatch"]
+stop_when = ["integrity concerns are covered"]
+escalate_when = ["silent corruption is plausible"]
+anti_patterns = ["low-signal format preference"]
+examples = ["Schema rename breaks downgrade compatibility."]
+schema = ["module_id", "surface_ids", "findings", "defended_checks"]
+
+[[policy]]
+id = "concurrency"
+version = "2026.03.08"
+summary = "Concurrency and interleaving safety module."
+must = ["reason about interleavings", "check synchronization boundaries"]
+must_not = ["assume single-threaded behavior without evidence"]
+inputs = ["concurrency surfaces", "state-machine surfaces"]
+outputs = ["findings", "defended_checks"]
+checks = ["race/deadlock scenarios are concrete"]
+stop_when = ["concurrency risks are covered"]
+escalate_when = ["data race or deadlock is plausible"]
+anti_patterns = ["hand-wavy race claims"]
+examples = ["Shared cache mutated without synchronization."]
+schema = ["module_id", "surface_ids", "findings", "defended_checks"]
+
+[[policy]]
+id = "docs-staleness"
+version = "2026.03.08"
+summary = "Behavior-facing documentation and example congruence module."
+must = ["compare docs/examples/comments to actual behavior"]
+must_not = ["treat style edits as behavior-facing drift"]
+inputs = ["behavior-facing artifacts", "docs changes"]
+outputs = ["findings", "residual_risks"]
+checks = ["reopen eligibility is explicit"]
+stop_when = ["staleness status is clear"]
+escalate_when = ["behavior-facing staleness remains"]
+anti_patterns = ["cosmetic doc nits as reopen triggers"]
+examples = ["Runbook references old config key."]
+schema = ["module_id", "surface_ids", "findings", "residual_risks"]
+
+[[policy]]
+id = "operator-guidance"
+version = "2026.03.08"
+summary = "Operator guidance, runbook, deployment, and config instructions module."
+must = ["check guidance against current behavior"]
+must_not = ["assume docs change automatically track code"]
+inputs = ["operator-guidance surfaces", "config surfaces"]
+outputs = ["findings"]
+checks = ["guidance mismatch is actionable"]
+stop_when = ["operator-facing guidance is covered"]
+escalate_when = ["operators could misconfigure or mis-operate the system"]
+anti_patterns = ["suggestion-only prose without behavior linkage"]
+examples = ["Deployment doc omits new required flag."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "performance"
+version = "2026.03.08"
+summary = "Performance hotpath and regression module."
+must = ["check asymptotic changes on hot paths", "check allocation or latency shifts where obvious"]
+must_not = ["complain about speculative perf without a hotpath trigger"]
+inputs = ["performance-hotpath surfaces"]
+outputs = ["findings"]
+checks = ["perf claim is tied to a path or load shape"]
+stop_when = ["hotpath concerns are covered"]
+escalate_when = ["regression is likely user-visible"]
+anti_patterns = ["micro-optimizations without trigger"]
+examples = ["Per-request full table scan added to hot endpoint."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "dependency"
+version = "2026.03.08"
+summary = "Dependency and build-surface module."
+must = ["check lockfile/build surface drift", "check supply-chain relevant changes"]
+must_not = ["treat any version bump as a finding by itself"]
+inputs = ["dependency-build surfaces"]
+outputs = ["findings"]
+checks = ["risk ties to build or runtime effect"]
+stop_when = ["dependency/build risk is covered"]
+escalate_when = ["build or supply-chain drift is risky"]
+anti_patterns = ["version-number commentary without consequence"]
+examples = ["New build step downloads unsigned artifact."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "privacy"
+version = "2026.03.08"
+summary = "Privacy and sensitive-data handling module."
+must = ["check collection, storage, and exposure of sensitive data"]
+must_not = ["assume encryption or masking without evidence"]
+inputs = ["privacy surfaces", "privilege boundaries"]
+outputs = ["findings"]
+checks = ["data exposure path is explicit"]
+stop_when = ["privacy-sensitive paths are covered"]
+escalate_when = ["sensitive data leak is plausible"]
+anti_patterns = ["generic privacy warnings"]
+examples = ["PII logged on error path."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "observability"
+version = "2026.03.08"
+summary = "Logs, metrics, tracing, and diagnosability module."
+must = ["check failures are diagnosable", "check noisy or missing telemetry where triggered"]
+must_not = ["treat absence of new metrics as a finding without a diagnosability gap"]
+inputs = ["observability surfaces"]
+outputs = ["findings"]
+checks = ["diagnostic gap is concrete"]
+stop_when = ["observability coverage is complete"]
+escalate_when = ["failure would be opaque in production"]
+anti_patterns = ["telemetry wish-list items"]
+examples = ["Critical retry loop emits no error context."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "tests"
+version = "2026.03.08"
+summary = "Test coverage module for review gaps."
+must = ["identify missing regression coverage when risk justifies it"]
+must_not = ["treat all untested code as equal risk"]
+inputs = ["test-coverage surfaces", "required-now findings"]
+outputs = ["findings", "residual_risks"]
+checks = ["recommended tests tie to a concrete scenario"]
+stop_when = ["coverage gap is clear"]
+escalate_when = ["high-risk change lacks regression defense"]
+anti_patterns = ["testing commentary detached from risk"]
+examples = ["Major bug fix lacks regression test."]
+schema = ["module_id", "surface_ids", "findings", "residual_risks"]
+
+[[policy]]
+id = "scope-creep"
+version = "2026.03.08"
+summary = "Scope-creep and overengineering module."
+must = ["tie scope-creep concern to changed behavior or maintainability cost"]
+must_not = ["use taste-based judgments as findings"]
+inputs = ["scope signals", "changed_files"]
+outputs = ["findings"]
+checks = ["simplification path is concrete"]
+stop_when = ["scope-creep risk is assessed"]
+escalate_when = ["change scope substantially exceeds routed need"]
+anti_patterns = ["formatting/style comments as scope creep"]
+examples = ["Feature patch rewrites unrelated platform layer."]
+schema = ["module_id", "surface_ids", "findings"]
+
+[[policy]]
+id = "ship-readiness"
+version = "2026.03.08"
+summary = "Ship-readiness synthesis module that always loads."
+must = ["summarize release posture", "count required-now and follow-up items correctly"]
+must_not = ["invent blockers without underlying evidence"]
+inputs = ["child artifacts", "coverage summary"]
+outputs = ["parent_review ship_readiness"]
+checks = ["counts match the artifact body", "blocking items are traceable to evidence"]
+stop_when = ["ship readiness is finalized"]
+escalate_when = ["blocking items remain"]
+anti_patterns = ["duplicating lower-level findings verbatim"]
+examples = ["Do not ship until migration rollback risk is resolved."]
+schema = ["ship_readiness", "required_now", "follow_up"]
