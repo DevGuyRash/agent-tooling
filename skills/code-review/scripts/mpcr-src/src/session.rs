@@ -1,5303 +1,2880 @@
-//! Session file (`_session.toml`) schema and deterministic update operations.
-//!
-//! This module defines the typed representation of the shared session state and provides
-//! read/modify/write helpers that:
-//! - take a session lock (`_session.toml.lock`)
-//! - apply a scoped mutation
-//! - write `_session.toml` via an atomic temp-file replace
-//!
-//! The CLI (`mpcr`) is the intended interface for mutating session state.
+//! Session ledger, recursive agent ledgers, and review/apply operations.
+#![allow(clippy::module_name_repetitions)]
+#![allow(missing_docs)]
 
+use crate::artifacts::{
+    now_rfc3339, parse_artifact_file, validate_session_id, ArtifactDocument, ArtifactKind,
+    DeclineReasonCode, Disposition, ModuleId, Severity, SurfaceId, WorkerKind,
+    LEGACY_REJECTION_MESSAGE, SESSION_SCHEMA_VERSION,
+};
 use crate::id;
 use crate::lock::{self, LockConfig};
-use crate::paths;
-use crate::report_validation::{
-    canonicalize_report_markdown, validate_report_markdown, ReportIdentityExpectation,
-    ReportValidationKind, SeverityExpectation,
-};
+use crate::metrics::{record_artifact, TelemetryLedger};
+use crate::paths::{self, StorageFormat};
+use crate::render::render_artifact_markdown;
+use crate::validate::{validate_artifact_document, ValidationLayer};
 use anyhow::Context;
-use clap::builder::PossibleValue;
 use clap::ValueEnum;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use time::format_description::well_known::Rfc3339;
-use time::{Date, OffsetDateTime};
-use toml::map::Map as TomlMap;
 
-const SESSION_SCHEMA_VERSION: &str = "1.2.0";
-const SESSION_FILE_TOML: &str = "_session.toml";
-const SESSION_FILE_JSON: &str = "_session.json";
+const ACTIVE_ARTIFACT_FORMAT: &str = "mpcr_artifact.v1";
+const AGENT_SCHEMA_VERSION: &str = "mpcr_agent.v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Storage format used for the on-disk session artifact.
-pub enum SessionStorageFormat {
-    /// Canonical persistent format.
-    TomlPrimary,
-    /// Safety fallback used only if TOML read/write cannot complete.
-    JsonFallback,
+fn module_id_text(module_id: ModuleId) -> String {
+    match module_id {
+        ModuleId::CoreCorrectness => "core-correctness",
+        ModuleId::AuthAccess => "auth-access",
+        ModuleId::InputValidation => "input-validation",
+        ModuleId::Persistence => "persistence",
+        ModuleId::DataIntegrity => "data-integrity",
+        ModuleId::Concurrency => "concurrency",
+        ModuleId::DocsStaleness => "docs-staleness",
+        ModuleId::OperatorGuidance => "operator-guidance",
+        ModuleId::Performance => "performance",
+        ModuleId::Dependency => "dependency",
+        ModuleId::Privacy => "privacy",
+        ModuleId::Observability => "observability",
+        ModuleId::Tests => "tests",
+        ModuleId::ScopeCreep => "scope-creep",
+        ModuleId::ShipReadiness => "ship-readiness",
+    }
+    .to_string()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-/// Reviewer-owned status for a single review entry.
-pub enum ReviewerStatus {
-    /// Registered; review not yet started.
-    Initializing,
-    /// Actively reviewing.
+fn severity_text(severity: Severity) -> String {
+    match severity {
+        Severity::Blocker => "blocker",
+        Severity::Major => "major",
+        Severity::Minor => "minor",
+        Severity::Nit => "nit",
+    }
+    .to_string()
+}
+
+fn surface_text(surface: SurfaceId) -> String {
+    match surface {
+        SurfaceId::BehaviorChange => "behavior-change",
+        SurfaceId::PublicApi => "public-api",
+        SurfaceId::AuthAccess => "auth-access",
+        SurfaceId::InputValidation => "input-validation",
+        SurfaceId::PrivilegeBoundary => "privilege-boundary",
+        SurfaceId::Persistence => "persistence",
+        SurfaceId::Migration => "migration",
+        SurfaceId::DataIntegrity => "data-integrity",
+        SurfaceId::Concurrency => "concurrency",
+        SurfaceId::StateMachine => "state-machine",
+        SurfaceId::DocsStaleness => "docs-staleness",
+        SurfaceId::OperatorGuidance => "operator-guidance",
+        SurfaceId::ConfigSurface => "config-surface",
+        SurfaceId::PerformanceHotpath => "performance-hotpath",
+        SurfaceId::DependencyBuild => "dependency-build",
+        SurfaceId::TestCoverage => "test-coverage",
+        SurfaceId::Observability => "observability",
+        SurfaceId::Privacy => "privacy",
+    }
+    .to_string()
+}
+
+fn status_text(status: ReviewProcessStatus) -> String {
+    match status {
+        ReviewProcessStatus::Registered => "registered",
+        ReviewProcessStatus::InProgress => "in-progress",
+        ReviewProcessStatus::Delegating => "delegating",
+        ReviewProcessStatus::WaitingOnChildren => "waiting-on-children",
+        ReviewProcessStatus::Synthesizing => "synthesizing",
+        ReviewProcessStatus::Completed => "completed",
+        ReviewProcessStatus::Cancelled => "cancelled",
+        ReviewProcessStatus::Error => "error",
+        ReviewProcessStatus::Blocked => "blocked",
+    }
+    .to_string()
+}
+
+fn default_review_role() -> String {
+    "domain:unassigned".to_string()
+}
+
+fn default_storage_status() -> StorageStatus {
+    StorageStatus::default()
+}
+
+fn default_role_kind() -> AgentRoleKind {
+    AgentRoleKind::DomainReviewer
+}
+
+fn infer_role_kind(role: &str) -> AgentRoleKind {
+    if role.starts_with("language-detector") {
+        AgentRoleKind::LanguageDetector
+    } else if role.starts_with("language-research:") {
+        AgentRoleKind::LanguageResearch
+    } else if role.starts_with("final-synthesis") {
+        AgentRoleKind::FinalSynthesis
+    } else if role.starts_with("apply-composite") {
+        AgentRoleKind::ApplyComposite
+    } else if role.starts_with("applicator-worker") {
+        AgentRoleKind::ApplicatorWorker
+    } else if role.starts_with("applicator-verifier") {
+        AgentRoleKind::ApplicatorVerifier
+    } else {
+        AgentRoleKind::DomainReviewer
+    }
+}
+
+fn module_ids_for_role(role: &str) -> Vec<ModuleId> {
+    let Some(module_slug) = role.strip_prefix("domain:") else {
+        return Vec::new();
+    };
+    ModuleId::all()
+        .into_iter()
+        .filter(|module_id| module_id_text(*module_id) == module_slug)
+        .collect()
+}
+
+fn review_lineage(
+    session: &SessionLedger,
+    parent_id: Option<&str>,
+    reviewer_id: &str,
+) -> Vec<String> {
+    let mut lineage = if let Some(parent_id) = parent_id {
+        if let Some(parent) = session
+            .reviews
+            .iter()
+            .find(|review| review.reviewer_id == parent_id)
+        {
+            let mut inherited = parent.lineage.clone();
+            if inherited.last().map(String::as_str) != Some(parent.reviewer_id.as_str()) {
+                inherited.push(parent.reviewer_id.clone());
+            }
+            inherited
+        } else {
+            vec![parent_id.to_string()]
+        }
+    } else {
+        Vec::new()
+    };
+    if lineage.last().map(String::as_str) != Some(reviewer_id) {
+        lineage.push(reviewer_id.to_string());
+    }
+    lineage
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactPointer {
+    pub artifact_id: String,
+    pub artifact_kind: ArtifactKind,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toml_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_path: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRoleKind {
+    DomainReviewer,
+    LanguageDetector,
+    LanguageResearch,
+    FinalSynthesis,
+    ApplyComposite,
+    ApplicatorWorker,
+    ApplicatorVerifier,
+    Helper,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageResearchRef {
+    pub language: String,
+    pub agent_id: String,
+    pub report_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageStatus {
+    pub primary_format: StorageFormat,
+    #[serde(default)]
+    pub available_formats: Vec<StorageFormat>,
+    #[serde(default)]
+    pub degraded_warnings: Vec<String>,
+}
+
+impl Default for StorageStatus {
+    fn default() -> Self {
+        Self {
+            primary_format: StorageFormat::Json,
+            available_formats: vec![StorageFormat::Json],
+            degraded_warnings: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentArtifacts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_decision: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_map: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_findings: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_review: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_result: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_result: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub convergence_state: Option<ArtifactPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_revision: Option<ArtifactPointer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewProcessStatus {
+    Registered,
     InProgress,
-    /// Completed with verdict and report.
-    Finished,
-    /// Stopped before completion.
+    Delegating,
+    WaitingOnChildren,
+    Synthesizing,
+    Completed,
     Cancelled,
-    /// Fatal error encountered; details should be captured in notes.
     Error,
-    /// Waiting on an external dependency or intervention.
     Blocked,
 }
 
-impl ReviewerStatus {
-    /// Whether this status is terminal (no further progress is expected).
-    #[must_use]
-    pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Finished | Self::Cancelled | Self::Error)
-    }
-}
-
-impl ValueEnum for ReviewerStatus {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self::Initializing,
-            Self::InProgress,
-            Self::Finished,
-            Self::Cancelled,
-            Self::Error,
-            Self::Blocked,
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        let pv = match self {
-            Self::Initializing => {
-                PossibleValue::new("INITIALIZING").help("Registered; review not yet started")
-            }
-            Self::InProgress => PossibleValue::new("IN_PROGRESS").help("Actively reviewing"),
-            Self::Finished => PossibleValue::new("FINISHED").help("Completed with verdict/report"),
-            Self::Cancelled => PossibleValue::new("CANCELLED").help("Stopped before completion"),
-            Self::Error => PossibleValue::new("ERROR").help("Fatal error; see notes"),
-            Self::Blocked => PossibleValue::new("BLOCKED").help("Waiting on external dependency"),
-        };
-        Some(pv)
-    }
-}
-
-impl std::str::FromStr for ReviewerStatus {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            s if s.eq_ignore_ascii_case("INITIALIZING") => Ok(Self::Initializing),
-            s if s.eq_ignore_ascii_case("IN_PROGRESS") => Ok(Self::InProgress),
-            s if s.eq_ignore_ascii_case("FINISHED") => Ok(Self::Finished),
-            s if s.eq_ignore_ascii_case("CANCELLED") => Ok(Self::Cancelled),
-            s if s.eq_ignore_ascii_case("ERROR") => Ok(Self::Error),
-            s if s.eq_ignore_ascii_case("BLOCKED") => Ok(Self::Blocked),
-            _ => Err(anyhow::anyhow!("invalid ReviewerStatus: {s}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-/// Applicator-owned status for consuming a review entry.
-pub enum InitiatorStatus {
-    /// Review requested; waiting for reviewers to register and progress.
-    Requesting,
-    /// Watching reviews in progress.
-    Observing,
-    /// Completed review received (report read).
-    Received,
-    /// Feedback assessed; deciding what to apply.
-    Reviewed,
-    /// Applying accepted feedback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicatorStatus {
+    Waiting,
+    Reviewing,
     Applying,
-    /// Finished processing the feedback (applied / declined / deferred).
-    Applied,
-    /// Request cancelled.
-    Cancelled,
-}
-
-impl ValueEnum for InitiatorStatus {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self::Requesting,
-            Self::Observing,
-            Self::Received,
-            Self::Reviewed,
-            Self::Applying,
-            Self::Applied,
-            Self::Cancelled,
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        let pv = match self {
-            Self::Requesting => PossibleValue::new("REQUESTING").help("Review requested; waiting"),
-            Self::Observing => PossibleValue::new("OBSERVING").help("Watching reviews in progress"),
-            Self::Received => PossibleValue::new("RECEIVED").help("Completed reviews received"),
-            Self::Reviewed => PossibleValue::new("REVIEWED").help("Feedback read and assessed"),
-            Self::Applying => PossibleValue::new("APPLYING").help("Applying accepted feedback"),
-            Self::Applied => PossibleValue::new("APPLIED").help("Finished processing feedback"),
-            Self::Cancelled => PossibleValue::new("CANCELLED").help("Request cancelled"),
-        };
-        Some(pv)
-    }
-}
-
-impl std::str::FromStr for InitiatorStatus {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            s if s.eq_ignore_ascii_case("REQUESTING") => Ok(Self::Requesting),
-            s if s.eq_ignore_ascii_case("OBSERVING") => Ok(Self::Observing),
-            s if s.eq_ignore_ascii_case("RECEIVED") => Ok(Self::Received),
-            s if s.eq_ignore_ascii_case("REVIEWED") => Ok(Self::Reviewed),
-            s if s.eq_ignore_ascii_case("APPLYING") => Ok(Self::Applying),
-            s if s.eq_ignore_ascii_case("APPLIED") => Ok(Self::Applied),
-            s if s.eq_ignore_ascii_case("CANCELLED") => Ok(Self::Cancelled),
-            _ => Err(anyhow::anyhow!("invalid InitiatorStatus: {s}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-/// Optional progress marker for a reviewer's workflow.
-pub enum ReviewPhase {
-    /// Initial ingestion of context / diff / repository constraints.
-    Ingestion,
-    /// Domain coverage mapping / scoping decisions.
-    DomainCoverage,
-    /// Must-prove theorem generation.
-    TheoremGeneration,
-    /// Adversarial disproof attempts and counterexample search.
-    AdversarialProofs,
-    /// Synthesize findings, mitigations, and residual risk.
-    Synthesis,
-    /// Final report writing phase.
-    ReportWriting,
-    /// Overengineering guard supplemental phase.
-    OverengineeringGuard,
-    /// Complexity analysis supplemental phase.
-    ComplexityAnalysis,
-    /// Ship-readiness assessment supplemental phase.
-    ShipReadiness,
-    /// Review completed (worker self-signaling).
+    Verifying,
     Completed,
+    Blocked,
 }
 
-impl ValueEnum for ReviewPhase {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self::Ingestion,
-            Self::DomainCoverage,
-            Self::TheoremGeneration,
-            Self::AdversarialProofs,
-            Self::Synthesis,
-            Self::ReportWriting,
-            Self::OverengineeringGuard,
-            Self::ComplexityAnalysis,
-            Self::ShipReadiness,
-            Self::Completed,
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        let pv = match self {
-            Self::Ingestion => PossibleValue::new("INGESTION").help("Initial codebase ingestion"),
-            Self::DomainCoverage => {
-                PossibleValue::new("DOMAIN_COVERAGE").help("Domain coverage map / scoping")
-            }
-            Self::TheoremGeneration => {
-                PossibleValue::new("THEOREM_GENERATION").help("Generate must-prove theorems")
-            }
-            Self::AdversarialProofs => PossibleValue::new("ADVERSARIAL_PROOFS")
-                .help("Attempt disproofs / adversarial testing"),
-            Self::Synthesis => {
-                PossibleValue::new("SYNTHESIS").help("Synthesize findings/mitigations")
-            }
-            Self::ReportWriting => {
-                PossibleValue::new("REPORT_WRITING").help("Write the final report")
-            }
-            Self::OverengineeringGuard => {
-                PossibleValue::new("OVERENGINEERING_GUARD").help("Overengineering guard analysis")
-            }
-            Self::ComplexityAnalysis => {
-                PossibleValue::new("COMPLEXITY_ANALYSIS").help("Complexity analysis phase")
-            }
-            Self::ShipReadiness => {
-                PossibleValue::new("SHIP_READINESS").help("Ship-readiness assessment")
-            }
-            Self::Completed => PossibleValue::new("COMPLETED").help("Review completed by worker"),
-        };
-        Some(pv)
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewProcess {
+    pub reviewer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default = "default_review_role")]
+    pub role: String,
+    #[serde(default = "default_role_kind")]
+    pub role_kind: AgentRoleKind,
+    pub status: ReviewProcessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    #[serde(default)]
+    pub agent_dir: String,
+    #[serde(default)]
+    pub agent_ledger_json: String,
+    #[serde(default)]
+    pub agent_ledger_toml: String,
+    #[serde(default)]
+    pub child_ids: Vec<String>,
+    #[serde(default)]
+    pub module_ids: Vec<ModuleId>,
+    #[serde(default)]
+    pub focus_surfaces: Vec<SurfaceId>,
+    #[serde(default)]
+    pub claimed_scope: Vec<String>,
+    #[serde(default)]
+    pub delegated_scope: Vec<String>,
+    #[serde(default)]
+    pub lineage: Vec<String>,
+    #[serde(default)]
+    pub research_refs: Vec<LanguageResearchRef>,
+    #[serde(default = "default_storage_status")]
+    pub storage: StorageStatus,
+    pub opened_at: String,
+    pub updated_at: String,
 }
 
-impl std::str::FromStr for ReviewPhase {
-    type Err = anyhow::Error;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicatorState {
+    pub status: ApplicatorStatus,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_result_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_result_id: Option<String>,
+}
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            s if s.eq_ignore_ascii_case("INGESTION") => Ok(Self::Ingestion),
-            s if s.eq_ignore_ascii_case("DOMAIN_COVERAGE") => Ok(Self::DomainCoverage),
-            s if s.eq_ignore_ascii_case("THEOREM_GENERATION") => Ok(Self::TheoremGeneration),
-            s if s.eq_ignore_ascii_case("ADVERSARIAL_PROOFS") => Ok(Self::AdversarialProofs),
-            s if s.eq_ignore_ascii_case("SYNTHESIS") => Ok(Self::Synthesis),
-            s if s.eq_ignore_ascii_case("REPORT_WRITING") => Ok(Self::ReportWriting),
-            s if s.eq_ignore_ascii_case("OVERENGINEERING_GUARD") => Ok(Self::OverengineeringGuard),
-            s if s.eq_ignore_ascii_case("COMPLEXITY_ANALYSIS") => Ok(Self::ComplexityAnalysis),
-            s if s.eq_ignore_ascii_case("SHIP_READINESS") => Ok(Self::ShipReadiness),
-            s if s.eq_ignore_ascii_case("COMPLETED") => Ok(Self::Completed),
-            _ => Err(anyhow::anyhow!("invalid ReviewPhase: {s}")),
+impl Default for ApplicatorState {
+    fn default() -> Self {
+        Self {
+            status: ApplicatorStatus::Waiting,
+            updated_at: now_rfc3339(),
+            application_result_id: None,
+            verification_result_id: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-/// Final verdict recorded by the reviewer when finishing a review.
-pub enum ReviewVerdict {
-    /// Accept the change as-is.
-    Approve,
-    /// Request changes before merge.
-    RequestChanges,
-    /// Block merge due to unacceptable risk or correctness/security issues.
-    Block,
-}
-
-impl ValueEnum for ReviewVerdict {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Approve, Self::RequestChanges, Self::Block]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        let pv = match self {
-            Self::Approve => PossibleValue::new("APPROVE").help("No changes required"),
-            Self::RequestChanges => {
-                PossibleValue::new("REQUEST_CHANGES").help("Changes required before merge")
-            }
-            Self::Block => PossibleValue::new("BLOCK").help("Cannot merge; must fix"),
-        };
-        Some(pv)
-    }
-}
-
-impl std::str::FromStr for ReviewVerdict {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            s if s.eq_ignore_ascii_case("APPROVE") => Ok(Self::Approve),
-            s if s.eq_ignore_ascii_case("REQUEST_CHANGES") => Ok(Self::RequestChanges),
-            s if s.eq_ignore_ascii_case("BLOCK") => Ok(Self::Block),
-            _ => Err(anyhow::anyhow!("invalid ReviewVerdict: {s}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-/// Author role for a session note.
-pub enum NoteRole {
-    /// Note written by the reviewer.
+#[serde(rename_all = "snake_case")]
+pub enum NoteActorKind {
     Reviewer,
-    /// Note written by the feedback applicator.
     Applicator,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Structured note type for session notes.
-pub enum NoteType {
-    /// Reviewer flag for strict scrutiny of a high-risk area.
-    EscalationTrigger,
-    /// Observation scoped to a particular review domain.
-    DomainObservation,
-    /// Early warning of a likely blocker.
-    BlockerPreview,
-    /// A question requiring response/clarification.
-    Question,
-    /// Handoff context for another reviewer.
-    Handoff,
-    /// Error details for a failure encountered during review coordination.
-    ErrorDetail,
-    /// Applicator note: feedback was applied.
-    Applied,
-    /// Applicator note: feedback was declined (should include reasoning).
-    Declined,
-    /// Applicator note: feedback deferred (should include tracking info).
-    Deferred,
-    /// Applicator note: clarification needed before acting.
-    ClarificationNeeded,
-    /// Applicator note: already addressed elsewhere (should include reference).
-    AlreadyAddressed,
-    /// Applicator note: acknowledged; no action needed.
-    Acknowledged,
-    /// Worker proof packet summary attached to child completion.
-    ProofPacket,
-    /// System note when parent finalization auto-closes unresolved children.
-    AutoClosedByParentFinalize,
+pub struct SessionNote {
+    pub actor_kind: NoteActorKind,
+    pub actor_id: String,
+    pub created_at: String,
+    pub content: String,
 }
 
-impl NoteType {
-    const fn allowed_for_role(&self, role: NoteRole) -> bool {
-        match role {
-            NoteRole::Reviewer => matches!(
-                self,
-                Self::EscalationTrigger
-                    | Self::DomainObservation
-                    | Self::BlockerPreview
-                    | Self::Question
-                    | Self::Handoff
-                    | Self::ErrorDetail
-                    | Self::ProofPacket
-                    | Self::AutoClosedByParentFinalize
-            ),
-            NoteRole::Applicator => matches!(
-                self,
-                Self::ErrorDetail
-                    | Self::Applied
-                    | Self::Declined
-                    | Self::Deferred
-                    | Self::ClarificationNeeded
-                    | Self::AlreadyAddressed
-                    | Self::Acknowledged
-            ),
-        }
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCounters {
+    pub artifact_count: u64,
+    pub rendered_count: u64,
+    pub reviewer_count: u64,
+    pub note_count: u64,
+    pub total_agents: u64,
+    pub active_agents: u64,
+    pub completed_agents: u64,
+    pub report_count: u64,
+    pub research_workers: u64,
+    pub applied_findings: u64,
+    pub declined_findings: u64,
+    pub low_signal_rejections: u64,
+    pub duplicate_rejections: u64,
+    pub reopen_triggers: u64,
+    #[serde(default)]
+    pub severity_totals: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub domain_totals: BTreeMap<String, u64>,
 }
 
-impl ValueEnum for NoteType {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self::EscalationTrigger,
-            Self::DomainObservation,
-            Self::BlockerPreview,
-            Self::Question,
-            Self::Handoff,
-            Self::ErrorDetail,
-            Self::Applied,
-            Self::Declined,
-            Self::Deferred,
-            Self::ClarificationNeeded,
-            Self::AlreadyAddressed,
-            Self::Acknowledged,
-            Self::ProofPacket,
-            Self::AutoClosedByParentFinalize,
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        let pv = match self {
-            Self::EscalationTrigger => PossibleValue::new("escalation_trigger")
-                .help("Flag a high-risk area requiring strict scrutiny"),
-            Self::DomainObservation => PossibleValue::new("domain_observation")
-                .help("Observation scoped to a review domain"),
-            Self::BlockerPreview => {
-                PossibleValue::new("blocker_preview").help("Early warning of a likely blocker")
-            }
-            Self::Question => PossibleValue::new("question").help("Request clarification"),
-            Self::Handoff => PossibleValue::new("handoff").help("Context for another reviewer"),
-            Self::ErrorDetail => {
-                PossibleValue::new("error_detail").help("Error details / debugging info")
-            }
-            Self::Applied => PossibleValue::new("applied").help("Feedback was applied"),
-            Self::Declined => {
-                PossibleValue::new("declined").help("Feedback was declined (include reason)")
-            }
-            Self::Deferred => {
-                PossibleValue::new("deferred").help("Feedback deferred (include tracking)")
-            }
-            Self::ClarificationNeeded => {
-                PossibleValue::new("clarification_needed").help("Request more detail before acting")
-            }
-            Self::AlreadyAddressed => PossibleValue::new("already_addressed")
-                .help("Already handled elsewhere (reference)"),
-            Self::Acknowledged => {
-                PossibleValue::new("acknowledged").help("Read/understood; no action")
-            }
-            Self::ProofPacket => {
-                PossibleValue::new("proof_packet").help("Worker proof packet summary")
-            }
-            Self::AutoClosedByParentFinalize => {
-                PossibleValue::new("auto_closed_by_parent_finalize")
-                    .help("Child auto-closed by parent finalization")
-            }
-        };
-        Some(pv)
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCounters {
+    pub local_artifact_count: u64,
+    pub recursive_artifact_count: u64,
+    pub local_report_count: u64,
+    pub recursive_report_count: u64,
+    pub child_count: u64,
+    pub descendant_count: u64,
+    pub local_findings: u64,
+    pub recursive_findings: u64,
+    pub local_applied_findings: u64,
+    pub recursive_applied_findings: u64,
+    pub local_declined_findings: u64,
+    pub recursive_declined_findings: u64,
+    pub local_low_signal_rejections: u64,
+    pub recursive_low_signal_rejections: u64,
+    pub local_duplicate_rejections: u64,
+    pub recursive_duplicate_rejections: u64,
+    pub local_reopen_triggers: u64,
+    pub recursive_reopen_triggers: u64,
+    pub local_research_ref_count: u64,
+    pub recursive_research_ref_count: u64,
+    #[serde(default)]
+    pub local_severity_totals: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub recursive_severity_totals: BTreeMap<String, u64>,
 }
 
-impl std::str::FromStr for NoteType {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Accept canonical snake_case as written to JSON, and also tolerate screaming snake.
-        match s {
-            s if s.eq_ignore_ascii_case("escalation_trigger")
-                || s.eq_ignore_ascii_case("ESCALATION_TRIGGER") =>
-            {
-                Ok(Self::EscalationTrigger)
-            }
-            s if s.eq_ignore_ascii_case("domain_observation")
-                || s.eq_ignore_ascii_case("DOMAIN_OBSERVATION") =>
-            {
-                Ok(Self::DomainObservation)
-            }
-            s if s.eq_ignore_ascii_case("blocker_preview")
-                || s.eq_ignore_ascii_case("BLOCKER_PREVIEW") =>
-            {
-                Ok(Self::BlockerPreview)
-            }
-            s if s.eq_ignore_ascii_case("question") || s.eq_ignore_ascii_case("QUESTION") => {
-                Ok(Self::Question)
-            }
-            s if s.eq_ignore_ascii_case("handoff") || s.eq_ignore_ascii_case("HANDOFF") => {
-                Ok(Self::Handoff)
-            }
-            s if s.eq_ignore_ascii_case("error_detail")
-                || s.eq_ignore_ascii_case("ERROR_DETAIL") =>
-            {
-                Ok(Self::ErrorDetail)
-            }
-            s if s.eq_ignore_ascii_case("applied") || s.eq_ignore_ascii_case("APPLIED") => {
-                Ok(Self::Applied)
-            }
-            s if s.eq_ignore_ascii_case("declined") || s.eq_ignore_ascii_case("DECLINED") => {
-                Ok(Self::Declined)
-            }
-            s if s.eq_ignore_ascii_case("deferred") || s.eq_ignore_ascii_case("DEFERRED") => {
-                Ok(Self::Deferred)
-            }
-            s if s.eq_ignore_ascii_case("clarification_needed")
-                || s.eq_ignore_ascii_case("CLARIFICATION_NEEDED") =>
-            {
-                Ok(Self::ClarificationNeeded)
-            }
-            s if s.eq_ignore_ascii_case("already_addressed")
-                || s.eq_ignore_ascii_case("ALREADY_ADDRESSED") =>
-            {
-                Ok(Self::AlreadyAddressed)
-            }
-            s if s.eq_ignore_ascii_case("acknowledged")
-                || s.eq_ignore_ascii_case("ACKNOWLEDGED") =>
-            {
-                Ok(Self::Acknowledged)
-            }
-            s if s.eq_ignore_ascii_case("proof_packet")
-                || s.eq_ignore_ascii_case("PROOF_PACKET") =>
-            {
-                Ok(Self::ProofPacket)
-            }
-            s if s.eq_ignore_ascii_case("auto_closed_by_parent_finalize")
-                || s.eq_ignore_ascii_case("AUTO_CLOSED_BY_PARENT_FINALIZE") =>
-            {
-                Ok(Self::AutoClosedByParentFinalize)
-            }
-            _ => Err(anyhow::anyhow!("invalid NoteType: {s}")),
-        }
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvergencePointers {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_artifact_id: Option<String>,
+    pub cycle_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_condition: Option<String>,
+    #[serde(default)]
+    pub terminal_cleanup_consumed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Severity tallies for a review report.
-pub struct SeverityCounts {
-    /// Number of BLOCKER findings.
-    pub blocker: u64,
-    /// Number of MAJOR findings.
-    pub major: u64,
-    /// Number of MINOR findings.
-    pub minor: u64,
-    /// Number of NIT findings.
-    pub nit: u64,
-}
-
-impl SeverityCounts {
-    /// Convenience constructor for a zeroed severity tally.
-    #[must_use]
-    pub const fn zero() -> Self {
-        Self {
-            blocker: 0,
-            major: 0,
-            minor: 0,
-            nit: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// A structured note appended to a review entry's `notes` array.
-pub struct SessionNote {
-    /// Author role of this note (`reviewer` or `applicator`).
-    pub role: NoteRole,
-    /// RFC3339 timestamp (UTC) of when the note was recorded.
-    pub timestamp: String,
-    #[serde(rename = "type")]
-    /// Structured note type.
-    pub note_type: NoteType,
-    /// Arbitrary JSON content (string by default; object/array allowed).
-    pub content: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A single review coordination entry within a [`SessionFile`].
-pub struct ReviewEntry {
-    /// 8-character reviewer id.
-    pub reviewer_id: String,
-    /// 8-character session id (groups reviewers reviewing the same target).
-    pub session_id: String,
-    /// Target reference being reviewed (branch, PR ref, commit, etc).
-    pub target_ref: String,
-    /// Applicator-owned progress state for consuming this review.
-    pub initiator_status: InitiatorStatus,
-    /// Reviewer-owned progress state.
-    pub status: ReviewerStatus,
-    /// Optional parent reviewer id for handoff/chaining.
-    pub parent_id: Option<String>,
-    /// RFC3339 timestamp (UTC) when the reviewer registered this entry.
-    pub started_at: String,
-    /// RFC3339 timestamp (UTC) of the last update to this entry.
-    pub updated_at: String,
-    /// RFC3339 timestamp (UTC) when the review was finalized (if finished).
-    pub finished_at: Option<String>,
-    /// Optional reviewer phase marker.
-    pub current_phase: Option<ReviewPhase>,
-    /// Optional verdict (set when finished).
-    pub verdict: Option<ReviewVerdict>,
-    /// Severity counts extracted from the report.
-    pub counts: SeverityCounts,
-    /// Report path relative to the repo root (set when finished).
-    pub report_file: Option<String>,
-    /// Bidirectional notes between reviewer and applicator.
-    pub notes: Vec<SessionNote>,
-    /// Embedded child review summaries owned by this parent reviewer entry.
-    #[serde(default)]
-    pub child_reviews: Vec<ChildReviewEntry>,
-    /// Unknown fields preserved for forward compatibility.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Embedded summary for a child review entry nested under its parent.
-pub struct ChildReviewEntry {
-    /// 8-character child reviewer id.
-    pub reviewer_id: String,
-    /// 8-character session id.
-    pub session_id: String,
-    /// Target reference being reviewed (branch, PR ref, commit, etc).
-    pub target_ref: String,
-    /// Applicator-owned progress state for consuming this child review.
-    pub initiator_status: InitiatorStatus,
-    /// Reviewer-owned progress state for the child.
-    pub status: ReviewerStatus,
-    /// Parent reviewer id for lineage.
-    pub parent_id: Option<String>,
-    /// RFC3339 timestamp (UTC) when the child was registered.
-    pub started_at: String,
-    /// RFC3339 timestamp (UTC) of the last child update.
-    pub updated_at: String,
-    /// RFC3339 timestamp (UTC) when the child was finalized (if finished).
-    pub finished_at: Option<String>,
-    /// Optional reviewer phase marker.
-    pub current_phase: Option<ReviewPhase>,
-    /// Optional final verdict.
-    pub verdict: Option<ReviewVerdict>,
-    /// Severity counts extracted from the report.
-    pub counts: SeverityCounts,
-    /// Report path relative to the repo root (if finalized).
-    pub report_file: Option<String>,
-    /// Number of notes attached to the child review entry.
-    pub notes_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Top-level in-memory session model.
-pub struct SessionFile {
-    /// Schema version string for the shared session artifact.
+pub struct SessionLedger {
     pub schema_version: String,
-    /// Session date in `YYYY-MM-DD` form.
-    pub session_date: String,
-    /// Canonicalized absolute path to the repo root.
-    pub repo_root: String,
-    /// Unique reviewer ids that have registered.
-    pub reviewers: Vec<String>,
-    /// Review coordination entries.
-    pub reviews: Vec<ReviewEntry>,
-    /// Unknown top-level fields preserved for forward compatibility.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SessionFileDiskJson {
-    pub schema_version: String,
-    #[serde(default)]
-    pub storage_format: Option<SessionStorageFormat>,
+    pub session_id: String,
     pub session_date: String,
     pub repo_root: String,
-    #[serde(default)]
-    pub reviewers: Vec<String>,
-    #[serde(default)]
-    pub reviews: Vec<ReviewEntryDiskJson>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReviewEntryDiskJson {
-    pub reviewer_id: String,
-    pub session_id: String,
     pub target_ref: String,
-    pub initiator_status: InitiatorStatus,
-    pub status: ReviewerStatus,
-    pub parent_id: Option<String>,
-    pub started_at: String,
+    pub created_at: String,
     pub updated_at: String,
-    pub finished_at: Option<String>,
-    pub current_phase: Option<ReviewPhase>,
-    pub verdict: Option<ReviewVerdict>,
-    pub counts: SeverityCounts,
-    pub report_file: Option<String>,
+    pub active_artifact_format: String,
+    #[serde(default = "default_storage_status")]
+    pub storage: StorageStatus,
+    #[serde(default)]
+    pub agents_root: String,
+    #[serde(default)]
+    pub final_report_path: Option<String>,
+    #[serde(default)]
+    pub final_summary_json_path: Option<String>,
+    #[serde(default)]
+    pub final_summary_toml_path: Option<String>,
+    #[serde(default)]
+    pub detected_languages: Vec<String>,
+    #[serde(default)]
+    pub language_research_refs: Vec<LanguageResearchRef>,
+    pub current: CurrentArtifacts,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactPointer>,
+    #[serde(default)]
+    pub reviews: Vec<ReviewProcess>,
+    #[serde(default)]
+    pub applicator: ApplicatorState,
     #[serde(default)]
     pub notes: Vec<SessionNote>,
     #[serde(default)]
-    pub child_reviews: Vec<Self>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    pub counters: SessionCounters,
+    #[serde(default)]
+    pub telemetry: TelemetryLedger,
+    #[serde(default)]
+    pub convergence: ConvergencePointers,
 }
 
-impl ReviewEntryDiskJson {
-    fn from_review_entry(entry: &ReviewEntry) -> Self {
-        Self {
-            reviewer_id: entry.reviewer_id.clone(),
-            session_id: entry.session_id.clone(),
-            target_ref: entry.target_ref.clone(),
-            initiator_status: entry.initiator_status,
-            status: entry.status,
-            parent_id: entry.parent_id.clone(),
-            started_at: entry.started_at.clone(),
-            updated_at: entry.updated_at.clone(),
-            finished_at: entry.finished_at.clone(),
-            current_phase: entry.current_phase,
-            verdict: entry.verdict,
-            counts: entry.counts.clone(),
-            report_file: entry.report_file.clone(),
-            notes: entry.notes.clone(),
-            child_reviews: Vec::new(),
-            extra: entry.extra.clone(),
-        }
-    }
-
-    fn to_review_entry(&self) -> ReviewEntry {
-        ReviewEntry {
-            reviewer_id: self.reviewer_id.clone(),
-            session_id: self.session_id.clone(),
-            target_ref: self.target_ref.clone(),
-            initiator_status: self.initiator_status,
-            status: self.status,
-            parent_id: self.parent_id.clone(),
-            started_at: self.started_at.clone(),
-            updated_at: self.updated_at.clone(),
-            finished_at: self.finished_at.clone(),
-            current_phase: self.current_phase,
-            verdict: self.verdict,
-            counts: self.counts.clone(),
-            report_file: self.report_file.clone(),
-            notes: self.notes.clone(),
-            child_reviews: Vec::new(),
-            extra: self.extra.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SessionNoteToml {
-    pub role: NoteRole,
-    pub timestamp: String,
-    #[serde(rename = "type")]
-    pub note_type: NoteType,
-    pub content: toml::Value,
-}
-
-impl SessionNoteToml {
-    fn from_session_note(note: &SessionNote) -> anyhow::Result<Self> {
-        Ok(Self {
-            role: note.role,
-            timestamp: note.timestamp.clone(),
-            note_type: note.note_type.clone(),
-            content: json_value_to_toml_value(&note.content)?,
-        })
-    }
-
-    fn to_session_note(&self) -> anyhow::Result<SessionNote> {
-        Ok(SessionNote {
-            role: self.role,
-            timestamp: self.timestamp.clone(),
-            note_type: self.note_type.clone(),
-            content: toml_value_to_json_value(&self.content)?,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SessionFileDiskToml {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLedger {
     pub schema_version: String,
-    pub storage_format: SessionStorageFormat,
-    pub session_date: String,
-    pub repo_root: String,
-    #[serde(default)]
-    pub reviewers: Vec<String>,
-    #[serde(default)]
-    pub reviews: Vec<ReviewEntryDiskToml>,
-    #[serde(flatten)]
-    pub extra: TomlMap<String, toml::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReviewEntryDiskToml {
-    pub reviewer_id: String,
     pub session_id: String,
-    pub target_ref: String,
-    pub initiator_status: InitiatorStatus,
-    pub status: ReviewerStatus,
-    pub parent_id: Option<String>,
-    pub started_at: String,
-    pub updated_at: String,
-    pub finished_at: Option<String>,
-    pub current_phase: Option<ReviewPhase>,
-    pub verdict: Option<ReviewVerdict>,
-    pub counts: SeverityCounts,
-    pub report_file: Option<String>,
-    #[serde(default)]
-    pub notes: Vec<SessionNoteToml>,
-    #[serde(default)]
-    pub child_reviews: Vec<Self>,
-    #[serde(flatten)]
-    pub extra: TomlMap<String, toml::Value>,
-}
-
-impl ReviewEntryDiskToml {
-    fn from_review_entry(entry: &ReviewEntry) -> anyhow::Result<Self> {
-        let notes = entry
-            .notes
-            .iter()
-            .map(SessionNoteToml::from_session_note)
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(Self {
-            reviewer_id: entry.reviewer_id.clone(),
-            session_id: entry.session_id.clone(),
-            target_ref: entry.target_ref.clone(),
-            initiator_status: entry.initiator_status,
-            status: entry.status,
-            parent_id: entry.parent_id.clone(),
-            started_at: entry.started_at.clone(),
-            updated_at: entry.updated_at.clone(),
-            finished_at: entry.finished_at.clone(),
-            current_phase: entry.current_phase,
-            verdict: entry.verdict,
-            counts: entry.counts.clone(),
-            report_file: entry.report_file.clone(),
-            notes,
-            child_reviews: Vec::new(),
-            extra: json_map_to_toml_map(&entry.extra)?,
-        })
-    }
-
-    fn to_review_entry(&self) -> anyhow::Result<ReviewEntry> {
-        let notes = self
-            .notes
-            .iter()
-            .map(SessionNoteToml::to_session_note)
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(ReviewEntry {
-            reviewer_id: self.reviewer_id.clone(),
-            session_id: self.session_id.clone(),
-            target_ref: self.target_ref.clone(),
-            initiator_status: self.initiator_status,
-            status: self.status,
-            parent_id: self.parent_id.clone(),
-            started_at: self.started_at.clone(),
-            updated_at: self.updated_at.clone(),
-            finished_at: self.finished_at.clone(),
-            current_phase: self.current_phase,
-            verdict: self.verdict,
-            counts: self.counts.clone(),
-            report_file: self.report_file.clone(),
-            notes,
-            child_reviews: Vec::new(),
-            extra: toml_map_to_json_map(&self.extra)?,
-        })
-    }
-}
-
-fn tagged_scalar_toml(value: &str) -> toml::Value {
-    let mut table = TomlMap::new();
-    table.insert(
-        "__mpcr_json_type".to_string(),
-        toml::Value::String("scalar".to_string()),
-    );
-    table.insert(
-        "__mpcr_json_value".to_string(),
-        toml::Value::String(value.to_string()),
-    );
-    toml::Value::Table(table)
-}
-
-const TAGGED_SCALAR_TYPE_KEY: &str = "__mpcr_json_type";
-const TAGGED_SCALAR_VALUE_KEY: &str = "__mpcr_json_value";
-const TAGGED_SCALAR_ESCAPE_KEY: &str = "__mpcr_json_escape";
-const TAGGED_SCALAR_ESCAPE_VALUE: &str = "object";
-
-fn is_tagged_scalar_table(table: &TomlMap<String, toml::Value>) -> bool {
-    table
-        .get(TAGGED_SCALAR_TYPE_KEY)
-        .is_some_and(|v| matches!(v, toml::Value::String(kind) if kind == "scalar"))
-        && table.get(TAGGED_SCALAR_VALUE_KEY).is_some()
-}
-
-fn is_tagged_scalar_escaped_object(table: &TomlMap<String, toml::Value>) -> bool {
-    is_tagged_scalar_table(table)
-        && table.get(TAGGED_SCALAR_ESCAPE_KEY).is_some_and(|marker| {
-            matches!(
-                marker,
-                toml::Value::String(value) if value == TAGGED_SCALAR_ESCAPE_VALUE
-            )
-        })
-}
-
-fn json_value_to_toml_value(value: &Value) -> anyhow::Result<toml::Value> {
-    match value {
-        Value::Null => Ok(tagged_scalar_toml("null")),
-        Value::Bool(flag) => Ok(toml::Value::Boolean(*flag)),
-        Value::Number(number) => {
-            if let Some(integer) = number.as_i64() {
-                return Ok(toml::Value::Integer(integer));
-            }
-            if let Some(unsigned) = number.as_u64() {
-                if let Ok(integer) = i64::try_from(unsigned) {
-                    return Ok(toml::Value::Integer(integer));
-                }
-                return Ok(tagged_scalar_toml(&format!("u64:{unsigned}")));
-            }
-            let float = number
-                .as_f64()
-                .ok_or_else(|| anyhow::anyhow!("unsupported JSON number representation"))?;
-            Ok(toml::Value::Float(float))
-        }
-        Value::String(text) => Ok(toml::Value::String(text.clone())),
-        Value::Array(items) => Ok(toml::Value::Array(
-            items
-                .iter()
-                .map(json_value_to_toml_value)
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        )),
-        Value::Object(map) => {
-            let mut table = json_map_to_toml_map(map)?;
-            if is_tagged_scalar_table(&table) && table.len() == 2 {
-                table.insert(
-                    TAGGED_SCALAR_ESCAPE_KEY.to_string(),
-                    toml::Value::String(TAGGED_SCALAR_ESCAPE_VALUE.to_string()),
-                );
-            }
-            Ok(toml::Value::Table(table))
-        }
-    }
-}
-
-fn json_map_to_toml_map(
-    map: &serde_json::Map<String, Value>,
-) -> anyhow::Result<TomlMap<String, toml::Value>> {
-    let ordered = map.iter().collect::<BTreeMap<_, _>>();
-    let mut out = TomlMap::new();
-    for (key, value) in ordered {
-        out.insert(key.clone(), json_value_to_toml_value(value)?);
-    }
-    Ok(out)
-}
-
-fn toml_value_to_json_value(value: &toml::Value) -> anyhow::Result<Value> {
-    match value {
-        toml::Value::String(text) => Ok(Value::String(text.clone())),
-        toml::Value::Integer(integer) => Ok(Value::Number((*integer).into())),
-        toml::Value::Float(float) => {
-            let number = serde_json::Number::from_f64(*float)
-                .ok_or_else(|| anyhow::anyhow!("invalid TOML float in dynamic session value"))?;
-            Ok(Value::Number(number))
-        }
-        toml::Value::Boolean(flag) => Ok(Value::Bool(*flag)),
-        toml::Value::Array(items) => Ok(Value::Array(
-            items
-                .iter()
-                .map(toml_value_to_json_value)
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        )),
-        toml::Value::Table(table) => {
-            let escaped_object = is_tagged_scalar_escaped_object(table);
-            if is_tagged_scalar_table(table) && !escaped_object {
-                if let Some(toml::Value::String(encoded)) = table.get(TAGGED_SCALAR_VALUE_KEY) {
-                    if encoded == "null" {
-                        return Ok(Value::Null);
-                    }
-                    if let Some(raw) = encoded.strip_prefix("u64:") {
-                        let parsed = raw
-                            .parse::<u64>()
-                            .context("parse tagged u64 TOML session value")?;
-                        return Ok(Value::Number(parsed.into()));
-                    }
-                }
-            }
-
-            if escaped_object {
-                let mut unescaped = table.clone();
-                unescaped.remove(TAGGED_SCALAR_ESCAPE_KEY);
-                return Ok(Value::Object(toml_map_to_json_map(&unescaped)?));
-            }
-
-            Ok(Value::Object(toml_map_to_json_map(table)?))
-        }
-        toml::Value::Datetime(value) => Err(anyhow::anyhow!(
-            "dynamic TOML datetime values are unsupported in session fields: {value}"
-        )),
-    }
-}
-
-fn toml_map_to_json_map(
-    map: &TomlMap<String, toml::Value>,
-) -> anyhow::Result<serde_json::Map<String, Value>> {
-    let ordered = map.iter().collect::<BTreeMap<_, _>>();
-    let mut out = serde_json::Map::new();
-    for (key, value) in ordered {
-        out.insert(key.clone(), toml_value_to_json_value(value)?);
-    }
-    Ok(out)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Report view selector for filtering review entries.
-pub enum ReportsView {
-    /// Reviews not in a terminal status (`INITIALIZING`, `IN_PROGRESS`, `BLOCKED`).
-    Open,
-    /// Reviews in a terminal status (`FINISHED`, `CANCELLED`, `ERROR`).
-    Closed,
-    /// Reviews actively in progress (`IN_PROGRESS` only).
-    InProgress,
-}
-
-impl ReportsView {
-    fn matches_status(self, status: ReviewerStatus) -> bool {
-        match self {
-            Self::Open => !status.is_terminal(),
-            Self::Closed => status.is_terminal(),
-            Self::InProgress => status == ReviewerStatus::InProgress,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Optional filters applied on top of a [`ReportsView`].
-pub struct ReportsFilters {
-    /// Only include reviews for this target ref.
-    pub target_ref: Option<String>,
-    /// Only include reviews for this session id.
-    pub session_id: Option<String>,
-    /// Only include reviews for this reviewer id.
-    pub reviewer_id: Option<String>,
-    /// Only include reviews with these reviewer-owned statuses.
-    pub reviewer_statuses: Vec<ReviewerStatus>,
-    /// Only include reviews with these initiator-owned statuses.
-    pub initiator_statuses: Vec<InitiatorStatus>,
-    /// Only include reviews with these verdicts.
-    pub verdicts: Vec<ReviewVerdict>,
-    /// Only include reviews with these phase markers.
-    pub phases: Vec<ReviewPhase>,
-    /// Only include reviews that already have a report file.
-    pub only_with_report: bool,
-    /// Only include reviews that contain at least one note.
-    pub only_with_notes: bool,
-}
-
-impl ReportsFilters {
-    fn matches(&self, entry: &ReviewEntry) -> bool {
-        if let Some(ref target_ref) = self.target_ref {
-            if entry.target_ref != target_ref.as_str() {
-                return false;
-            }
-        }
-        if let Some(ref session_id) = self.session_id {
-            if entry.session_id != session_id.as_str() {
-                return false;
-            }
-        }
-        if let Some(ref reviewer_id) = self.reviewer_id {
-            if entry.reviewer_id != reviewer_id.as_str() {
-                return false;
-            }
-        }
-        if !self.reviewer_statuses.is_empty() && !self.reviewer_statuses.contains(&entry.status) {
-            return false;
-        }
-        if !self.initiator_statuses.is_empty()
-            && !self.initiator_statuses.contains(&entry.initiator_status)
-        {
-            return false;
-        }
-        if !self.verdicts.is_empty() {
-            match entry.verdict {
-                Some(verdict) if self.verdicts.contains(&verdict) => {}
-                _ => return false,
-            }
-        }
-        if !self.phases.is_empty() {
-            match entry.current_phase {
-                Some(phase) if self.phases.contains(&phase) => {}
-                _ => return false,
-            }
-        }
-        if self.only_with_report && entry.report_file.is_none() {
-            return false;
-        }
-        if self.only_with_notes && entry.notes.is_empty() {
-            return false;
-        }
-        true
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Options that control the shape of report listings.
-pub struct ReportsOptions {
-    /// Include full notes for each review entry.
-    pub include_notes: bool,
-    /// Include report markdown contents when available.
-    pub include_report_contents: bool,
-    /// Include leaf child reviews in top-level rows (default keeps parent-centric view).
-    pub include_leaf_children: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Summary view of a review entry for reports.
-pub struct ReviewSummary {
-    /// Reviewer id.
     pub reviewer_id: String,
-    /// Session id.
-    pub session_id: String,
-    /// Target reference under review.
-    pub target_ref: String,
-    /// Applicator-owned progress state.
-    pub initiator_status: InitiatorStatus,
-    /// Reviewer-owned progress state.
-    pub status: ReviewerStatus,
-    /// Optional parent reviewer id.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
-    /// When the reviewer registered the entry.
-    pub started_at: String,
-    /// Last update timestamp.
-    pub updated_at: String,
-    /// Finished timestamp (if finalized).
-    pub finished_at: Option<String>,
-    /// Optional review phase marker.
-    pub current_phase: Option<ReviewPhase>,
-    /// Optional final verdict.
-    pub verdict: Option<ReviewVerdict>,
-    /// Severity counts from the report.
-    pub counts: SeverityCounts,
-    /// Report path relative to the repo root (if finalized).
-    pub report_file: Option<String>,
-    /// Report path (if finalized).
+    pub role: String,
+    pub role_kind: AgentRoleKind,
+    pub status: ReviewProcessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    pub agent_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_path: Option<String>,
-    /// Report markdown contents (when requested and available).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub report_contents: Option<String>,
-    /// Report read error (when requested and the file could not be read).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub report_error: Option<String>,
-    /// Number of notes attached to the review entry.
-    pub notes_count: usize,
-    /// Optional full notes (included when requested).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<Vec<SessionNote>>,
-    /// Embedded child review summaries for parent entries.
-    pub child_reviews: Vec<ChildReviewEntry>,
+    #[serde(default)]
+    pub child_ids: Vec<String>,
+    #[serde(default)]
+    pub module_ids: Vec<ModuleId>,
+    #[serde(default)]
+    pub focus_surfaces: Vec<SurfaceId>,
+    #[serde(default)]
+    pub claimed_scope: Vec<String>,
+    #[serde(default)]
+    pub delegated_scope: Vec<String>,
+    #[serde(default)]
+    pub lineage: Vec<String>,
+    #[serde(default)]
+    pub research_refs: Vec<LanguageResearchRef>,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactPointer>,
+    #[serde(default = "default_storage_status")]
+    pub storage: StorageStatus,
+    #[serde(default)]
+    pub counters: AgentCounters,
+    pub opened_at: String,
+    pub updated_at: String,
 }
 
-fn strip_repo_root_best_effort(repo_root: &Path, path: &Path) -> Option<PathBuf> {
-    if let Ok(stripped) = path.strip_prefix(repo_root) {
-        return Some(stripped.to_path_buf());
-    }
-
-    // Handle common cases where `repo_root` is canonicalized but `path` is not (symlinks, etc).
-    let canonical_repo_root = repo_root.canonicalize().ok();
-    let canonical_path = path.canonicalize().ok();
-
-    if let Some(ref canonical_path) = canonical_path {
-        if let Ok(stripped) = canonical_path.strip_prefix(repo_root) {
-            return Some(stripped.to_path_buf());
-        }
-    }
-    if let (Some(ref canonical_path), Some(ref canonical_repo_root)) =
-        (canonical_path, canonical_repo_root)
-    {
-        if let Ok(stripped) = canonical_path.strip_prefix(canonical_repo_root) {
-            return Some(stripped.to_path_buf());
-        }
-    }
-
-    None
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChildrenManifest {
+    #[serde(default)]
+    pub child_ids: Vec<String>,
 }
 
-fn ensure_path_contained(path: &Path, boundary: &Path) -> anyhow::Result<PathBuf> {
-    if let Ok(canonical) = path.canonicalize() {
-        let canonical_boundary = boundary
-            .canonicalize()
-            .ok()
-            .as_deref()
-            .map_or_else(|| boundary.to_path_buf(), Path::to_path_buf);
-        anyhow::ensure!(
-            canonical.starts_with(&canonical_boundary),
-            "path escapes boundary after symlink resolution: {} not under {}",
-            canonical.display(),
-            canonical_boundary.display()
-        );
-        return Ok(canonical);
-    }
-    if let Some(parent) = path.parent() {
-        if let Ok(canonical_parent) = parent.canonicalize() {
-            let canonical_boundary = boundary
-                .canonicalize()
-                .ok()
-                .as_deref()
-                .map_or_else(|| boundary.to_path_buf(), Path::to_path_buf);
-            let canonical = canonical_parent.join(
-                path.file_name()
-                    .map_or_else(|| std::ffi::OsStr::new(""), std::convert::identity),
-            );
-            anyhow::ensure!(
-                canonical.starts_with(&canonical_boundary),
-                "path escapes boundary after symlink resolution: {} not under {}",
-                canonical.display(),
-                canonical_boundary.display()
-            );
-            return Ok(canonical);
-        }
-    }
-    anyhow::ensure!(
-        path.starts_with(boundary),
-        "path escapes boundary: {} not under {}",
-        path.display(),
-        boundary.display()
-    );
-    Ok(path.to_path_buf())
-}
-
-fn resolve_report_file_path(
-    repo_root: &Path,
-    session_dir: &Path,
-    report_file: &str,
-) -> anyhow::Result<PathBuf> {
-    let report_file_path = Path::new(report_file);
-
-    if report_file_path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        anyhow::bail!("report_file must not contain '..' components: {report_file}");
-    }
-
-    if report_file_path.is_absolute() {
-        return ensure_path_contained(report_file_path, repo_root);
-    }
-
-    // New format: `report_file` is a repo-root-relative path like
-    // `.local/reports/code_reviews/YYYY-MM-DD/{...}.md` (preferred for portability across working dirs).
-    if report_file_path.components().count() > 1 {
-        return ensure_path_contained(&repo_root.join(report_file_path), repo_root);
-    }
-
-    // Legacy format: `report_file` is just the filename within the session directory.
-    ensure_path_contained(&session_dir.join(report_file_path), session_dir)
-}
-
-fn upsert_child_review(parent_entry: &mut ReviewEntry, child_entry: &ReviewEntry) {
-    let next = ChildReviewEntry::from_review_entry(child_entry);
-    if let Some(existing) = parent_entry.child_reviews.iter_mut().find(|child| {
-        child.reviewer_id == child_entry.reviewer_id && child.session_id == child_entry.session_id
-    }) {
-        *existing = next;
-        return;
-    }
-    parent_entry.child_reviews.push(next);
-}
-
-type ParentReviewKey = (String, String, String);
-type ChildReviewKey = (String, String);
-type ReviewKey = (String, String);
-
-fn review_key(entry: &ReviewEntry) -> ReviewKey {
-    (entry.reviewer_id.clone(), entry.session_id.clone())
-}
-
-fn choose_newer_entry(existing: &ReviewEntry, candidate: &ReviewEntry) -> bool {
-    if candidate.updated_at > existing.updated_at {
-        return true;
-    }
-    if candidate.updated_at < existing.updated_at {
-        return false;
-    }
-    candidate.notes.len() > existing.notes.len()
-}
-
-fn flatten_reviews_disk_json(
-    entries: &[ReviewEntryDiskJson],
-    flat_reviews: &mut BTreeMap<ReviewKey, ReviewEntry>,
-) {
-    for entry in entries {
-        let candidate = entry.to_review_entry();
-        let key = review_key(&candidate);
-        match flat_reviews.get(&key) {
-            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
-            _ => {
-                flat_reviews.insert(key, candidate);
-            }
-        }
-        flatten_reviews_disk_json(&entry.child_reviews, flat_reviews);
-    }
-}
-
-fn flatten_reviews_disk_toml(
-    entries: &[ReviewEntryDiskToml],
-    flat_reviews: &mut BTreeMap<ReviewKey, ReviewEntry>,
-) -> anyhow::Result<()> {
-    for entry in entries {
-        let candidate = entry.to_review_entry()?;
-        let key = review_key(&candidate);
-        match flat_reviews.get(&key) {
-            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
-            _ => {
-                flat_reviews.insert(key, candidate);
-            }
-        }
-        flatten_reviews_disk_toml(&entry.child_reviews, flat_reviews)?;
-    }
-    Ok(())
-}
-
-fn flatten_session_file_disk_json(session: SessionFileDiskJson) -> SessionFile {
-    let mut flat_reviews: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
-    flatten_reviews_disk_json(&session.reviews, &mut flat_reviews);
-
-    let mut reviewers: BTreeSet<String> = session.reviewers.into_iter().collect();
-    for entry in flat_reviews.values() {
-        reviewers.insert(entry.reviewer_id.clone());
-    }
-
-    let mut flattened = SessionFile {
-        schema_version: session.schema_version,
-        session_date: session.session_date,
-        repo_root: session.repo_root,
-        reviewers: reviewers.into_iter().collect(),
-        reviews: flat_reviews.into_values().collect(),
-        extra: session.extra,
-    };
-    reconcile_parent_child_reviews(&mut flattened);
-    flattened
-}
-
-fn flatten_session_file_disk_toml(session: SessionFileDiskToml) -> anyhow::Result<SessionFile> {
-    let mut flat_reviews: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
-    flatten_reviews_disk_toml(&session.reviews, &mut flat_reviews)?;
-
-    let mut reviewers: BTreeSet<String> = session.reviewers.into_iter().collect();
-    for entry in flat_reviews.values() {
-        reviewers.insert(entry.reviewer_id.clone());
-    }
-
-    let mut flattened = SessionFile {
-        schema_version: session.schema_version,
-        session_date: session.session_date,
-        repo_root: session.repo_root,
-        reviewers: reviewers.into_iter().collect(),
-        reviews: flat_reviews.into_values().collect(),
-        extra: toml_map_to_json_map(&session.extra)?,
-    };
-    reconcile_parent_child_reviews(&mut flattened);
-    Ok(flattened)
-}
-
-fn dedupe_flat_reviews(reviews: &[ReviewEntry]) -> BTreeMap<ReviewKey, ReviewEntry> {
-    let mut by_key: BTreeMap<ReviewKey, ReviewEntry> = BTreeMap::new();
-    for entry in reviews {
-        let mut candidate = entry.clone();
-        candidate.child_reviews = Vec::new();
-        let key = review_key(&candidate);
-        match by_key.get(&key) {
-            Some(existing) if !choose_newer_entry(existing, &candidate) => {}
-            _ => {
-                by_key.insert(key, candidate);
-            }
-        }
-    }
-    by_key
-}
-
-fn build_disk_review_node(
-    key: &ReviewKey,
-    reviews_by_key: &BTreeMap<ReviewKey, ReviewEntry>,
-    children_by_parent: &BTreeMap<ParentReviewKey, Vec<ReviewKey>>,
-    visiting: &mut BTreeSet<ReviewKey>,
-) -> anyhow::Result<ReviewEntryDiskJson> {
-    if !visiting.insert(key.clone()) {
-        return Err(anyhow::anyhow!(
-            "cycle detected while building child review tree"
-        ));
-    }
-
-    let entry = reviews_by_key
-        .get(key)
-        .ok_or_else(|| anyhow::anyhow!("review entry missing while building child review tree"))?;
-    let parent_key = (
-        entry.reviewer_id.clone(),
-        entry.session_id.clone(),
-        entry.target_ref.clone(),
-    );
-
-    let mut child_keys = children_by_parent
-        .get(&parent_key)
-        .cloned()
-        .map_or_else(Vec::new, std::convert::identity);
-    child_keys.sort();
-    child_keys.dedup();
-
-    let mut child_reviews = Vec::with_capacity(child_keys.len());
-    for child_key in child_keys {
-        child_reviews.push(build_disk_review_node(
-            &child_key,
-            reviews_by_key,
-            children_by_parent,
-            visiting,
-        )?);
-    }
-
-    visiting.remove(key);
-
-    let mut node = ReviewEntryDiskJson::from_review_entry(entry);
-    node.child_reviews = child_reviews;
-    Ok(node)
-}
-
-fn build_disk_review_node_toml(
-    key: &ReviewKey,
-    reviews_by_key: &BTreeMap<ReviewKey, ReviewEntry>,
-    children_by_parent: &BTreeMap<ParentReviewKey, Vec<ReviewKey>>,
-    visiting: &mut BTreeSet<ReviewKey>,
-) -> anyhow::Result<ReviewEntryDiskToml> {
-    if !visiting.insert(key.clone()) {
-        return Err(anyhow::anyhow!(
-            "cycle detected while building child review tree"
-        ));
-    }
-
-    let entry = reviews_by_key
-        .get(key)
-        .ok_or_else(|| anyhow::anyhow!("review entry missing while building child review tree"))?;
-    let parent_key = (
-        entry.reviewer_id.clone(),
-        entry.session_id.clone(),
-        entry.target_ref.clone(),
-    );
-
-    let mut child_keys = children_by_parent
-        .get(&parent_key)
-        .cloned()
-        .map_or_else(Vec::new, std::convert::identity);
-    child_keys.sort();
-    child_keys.dedup();
-
-    let mut child_reviews = Vec::with_capacity(child_keys.len());
-    for child_key in child_keys {
-        child_reviews.push(build_disk_review_node_toml(
-            &child_key,
-            reviews_by_key,
-            children_by_parent,
-            visiting,
-        )?);
-    }
-
-    visiting.remove(key);
-
-    let mut node = ReviewEntryDiskToml::from_review_entry(entry)?;
-    node.child_reviews = child_reviews;
-    Ok(node)
-}
-
-fn canonicalize_session_for_write_json(
-    session: &SessionFile,
-) -> anyhow::Result<SessionFileDiskJson> {
-    let reviews_by_key = dedupe_flat_reviews(&session.reviews);
-
-    let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
-    for (child_key, entry) in &reviews_by_key {
-        let Some(parent_id) = entry.parent_id.as_deref() else {
-            continue;
-        };
-        let parent_exists = reviews_by_key.values().any(|candidate| {
-            candidate.reviewer_id == parent_id
-                && candidate.session_id == entry.session_id
-                && candidate.target_ref == entry.target_ref
-        });
-        if !parent_exists {
-            continue;
-        }
-        children_by_parent
-            .entry((
-                parent_id.to_string(),
-                entry.session_id.clone(),
-                entry.target_ref.clone(),
-            ))
-            .or_default()
-            .push(child_key.clone());
-    }
-
-    let mut root_keys = Vec::new();
-    for (key, entry) in &reviews_by_key {
-        let is_root = entry.parent_id.as_deref().is_none_or(|parent_id| {
-            !reviews_by_key.values().any(|candidate| {
-                candidate.reviewer_id == parent_id
-                    && candidate.session_id == entry.session_id
-                    && candidate.target_ref == entry.target_ref
-            })
-        });
-        if is_root {
-            root_keys.push(key.clone());
-        }
-    }
-    root_keys.sort();
-    root_keys.dedup();
-
-    let mut reviews = Vec::with_capacity(root_keys.len());
-    let mut visiting = BTreeSet::new();
-    for key in root_keys {
-        reviews.push(build_disk_review_node(
-            &key,
-            &reviews_by_key,
-            &children_by_parent,
-            &mut visiting,
-        )?);
-    }
-
-    let mut reviewers: BTreeSet<String> = session.reviewers.iter().cloned().collect();
-    for entry in reviews_by_key.values() {
-        reviewers.insert(entry.reviewer_id.clone());
-    }
-
-    Ok(SessionFileDiskJson {
-        schema_version: SESSION_SCHEMA_VERSION.to_string(),
-        storage_format: Some(SessionStorageFormat::JsonFallback),
-        session_date: session.session_date.clone(),
-        repo_root: session.repo_root.clone(),
-        reviewers: reviewers.into_iter().collect(),
-        reviews,
-        extra: session.extra.clone(),
-    })
-}
-
-fn canonicalize_session_for_write_toml(
-    session: &SessionFile,
-) -> anyhow::Result<SessionFileDiskToml> {
-    let reviews_by_key = dedupe_flat_reviews(&session.reviews);
-
-    let mut children_by_parent: BTreeMap<ParentReviewKey, Vec<ReviewKey>> = BTreeMap::new();
-    for (child_key, entry) in &reviews_by_key {
-        let Some(parent_id) = entry.parent_id.as_deref() else {
-            continue;
-        };
-        let parent_exists = reviews_by_key.values().any(|candidate| {
-            candidate.reviewer_id == parent_id
-                && candidate.session_id == entry.session_id
-                && candidate.target_ref == entry.target_ref
-        });
-        if !parent_exists {
-            continue;
-        }
-        children_by_parent
-            .entry((
-                parent_id.to_string(),
-                entry.session_id.clone(),
-                entry.target_ref.clone(),
-            ))
-            .or_default()
-            .push(child_key.clone());
-    }
-
-    let mut root_keys = Vec::new();
-    for (key, entry) in &reviews_by_key {
-        let is_root = entry.parent_id.as_deref().is_none_or(|parent_id| {
-            !reviews_by_key.values().any(|candidate| {
-                candidate.reviewer_id == parent_id
-                    && candidate.session_id == entry.session_id
-                    && candidate.target_ref == entry.target_ref
-            })
-        });
-        if is_root {
-            root_keys.push(key.clone());
-        }
-    }
-    root_keys.sort();
-    root_keys.dedup();
-
-    let mut reviews = Vec::with_capacity(root_keys.len());
-    let mut visiting = BTreeSet::new();
-    for key in root_keys {
-        reviews.push(build_disk_review_node_toml(
-            &key,
-            &reviews_by_key,
-            &children_by_parent,
-            &mut visiting,
-        )?);
-    }
-
-    let mut reviewers: BTreeSet<String> = session.reviewers.iter().cloned().collect();
-    for entry in reviews_by_key.values() {
-        reviewers.insert(entry.reviewer_id.clone());
-    }
-
-    Ok(SessionFileDiskToml {
-        schema_version: SESSION_SCHEMA_VERSION.to_string(),
-        storage_format: SessionStorageFormat::TomlPrimary,
-        session_date: session.session_date.clone(),
-        repo_root: session.repo_root.clone(),
-        reviewers: reviewers.into_iter().collect(),
-        reviews,
-        extra: json_map_to_toml_map(&session.extra)?,
-    })
-}
-
-fn sync_child_review_to_parent(
-    session: &mut SessionFile,
-    reviewer_id: &str,
-    session_id: &str,
-) -> anyhow::Result<()> {
-    let Some(child_index) = session
-        .reviews
-        .iter()
-        .position(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
-    else {
-        return Err(anyhow::anyhow!(
-            "review entry not found for reviewer_id/session_id"
-        ));
-    };
-
-    let child_entry = session
-        .reviews
-        .get(child_index)
-        .ok_or_else(|| anyhow::anyhow!("review entry index invalid"))?
-        .clone();
-    let Some(parent_id) = child_entry.parent_id.as_deref() else {
-        return Ok(());
-    };
-
-    let parent_index = session.reviews.iter().position(|r| {
-        r.reviewer_id == parent_id
-            && r.session_id == child_entry.session_id
-            && r.target_ref == child_entry.target_ref
-    });
-    let Some(parent_index) = parent_index else {
-        return Err(anyhow::anyhow!(
-            "parent review entry not found for child reviewer_id/session_id"
-        ));
-    };
-
-    let parent_entry = session
-        .reviews
-        .get_mut(parent_index)
-        .ok_or_else(|| anyhow::anyhow!("parent review entry index invalid"))?;
-    upsert_child_review(parent_entry, &child_entry);
-    Ok(())
-}
-
-fn reconcile_parent_child_reviews(session: &mut SessionFile) {
-    let mut children_by_parent: BTreeMap<
-        ParentReviewKey,
-        BTreeMap<ChildReviewKey, ChildReviewEntry>,
-    > = BTreeMap::new();
-
-    for entry in &session.reviews {
-        let Some(parent_id) = entry.parent_id.as_deref() else {
-            continue;
-        };
-        let parent_key = (
-            parent_id.to_string(),
-            entry.session_id.clone(),
-            entry.target_ref.clone(),
-        );
-        let child_key = (entry.reviewer_id.clone(), entry.session_id.clone());
-        children_by_parent
-            .entry(parent_key)
-            .or_default()
-            .insert(child_key, ChildReviewEntry::from_review_entry(entry));
-    }
-
-    for entry in &mut session.reviews {
-        let parent_key = (
-            entry.reviewer_id.clone(),
-            entry.session_id.clone(),
-            entry.target_ref.clone(),
-        );
-        entry.child_reviews = children_by_parent
-            .remove(&parent_key)
-            .map_or_else(Vec::new, |children| children.into_values().collect());
-    }
-}
-
-impl ReviewEntry {
-    /// Produce a summarized view suitable for report listings.
-    #[must_use]
-    pub fn summary(
-        &self,
-        repo_root: &Path,
-        session_dir: &Path,
-        options: ReportsOptions,
-    ) -> ReviewSummary {
-        let report_path = self.report_file.as_ref().and_then(|file| {
-            resolve_report_file_path(repo_root, session_dir, file)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        });
-        let notes = if options.include_notes {
-            Some(self.notes.clone())
-        } else {
-            None
-        };
-        let mut report_contents = None;
-        let mut report_error = None;
-        if options.include_report_contents {
-            if let Some(ref file) = self.report_file {
-                match resolve_report_file_path(repo_root, session_dir, file) {
-                    Ok(path) => match fs::read_to_string(&path) {
-                        Ok(contents) => {
-                            report_contents = Some(contents);
-                        }
-                        Err(err) => {
-                            report_error =
-                                Some(format!("read report file {}: {err}", path.display()));
-                        }
-                    },
-                    Err(err) => {
-                        report_error = Some(format!("invalid report path: {err}"));
-                    }
-                }
-            }
-        }
-        ReviewSummary {
-            reviewer_id: self.reviewer_id.clone(),
-            session_id: self.session_id.clone(),
-            target_ref: self.target_ref.clone(),
-            initiator_status: self.initiator_status,
-            status: self.status,
-            parent_id: self.parent_id.clone(),
-            started_at: self.started_at.clone(),
-            updated_at: self.updated_at.clone(),
-            finished_at: self.finished_at.clone(),
-            current_phase: self.current_phase,
-            verdict: self.verdict,
-            counts: self.counts.clone(),
-            report_file: self.report_file.clone(),
-            report_path,
-            report_contents,
-            report_error,
-            notes_count: self.notes.len(),
-            notes,
-            child_reviews: self.child_reviews.clone(),
-        }
-    }
-}
-
-impl ChildReviewEntry {
-    fn from_review_entry(entry: &ReviewEntry) -> Self {
-        Self {
-            reviewer_id: entry.reviewer_id.clone(),
-            session_id: entry.session_id.clone(),
-            target_ref: entry.target_ref.clone(),
-            initiator_status: entry.initiator_status,
-            status: entry.status,
-            parent_id: entry.parent_id.clone(),
-            started_at: entry.started_at.clone(),
-            updated_at: entry.updated_at.clone(),
-            finished_at: entry.finished_at.clone(),
-            current_phase: entry.current_phase,
-            verdict: entry.verdict,
-            counts: entry.counts.clone(),
-            report_file: entry.report_file.clone(),
-            notes_count: entry.notes.len(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Result payload for report listings.
-pub struct ReportsResult {
-    /// Session directory containing the shared session artifact.
-    pub session_dir: String,
-    /// Full path to the active session artifact.
-    pub session_file: String,
-    /// Storage format of the active session artifact.
-    pub session_format: SessionStorageFormat,
-    /// View selector used for this listing.
-    pub view: ReportsView,
-    /// Optional filters applied to the listing.
-    pub filters: ReportsFilters,
-    /// Listing options used for this output.
-    pub options: ReportsOptions,
-    /// Total number of reviews in the session.
-    pub total_reviews: usize,
-    /// Number of reviews matching the view + filters.
-    pub matching_reviews: usize,
-    /// Matching review summaries.
-    pub reviews: Vec<ReviewSummary>,
-}
-
-/// Build a report listing for the given session data.
-///
-/// # Errors
-/// Returns an error if the active session artifact cannot be resolved.
-pub fn collect_reports(
-    session: &SessionFile,
-    locator: &SessionLocator,
-    view: ReportsView,
-    filters: ReportsFilters,
-    options: ReportsOptions,
-) -> anyhow::Result<ReportsResult> {
-    let mut total_reviews = 0usize;
-    let repo_root = Path::new(&session.repo_root);
-    let mut reviews = Vec::new();
-    for entry in &session.reviews {
-        // Reports are parent-centric: hide leaf child rows. Keep roots and non-leaf
-        // child nodes so descendant trees remain visible in multi-level hierarchies.
-        if !options.include_leaf_children
-            && entry.parent_id.is_some()
-            && entry.child_reviews.is_empty()
-        {
-            continue;
-        }
-        total_reviews = total_reviews.saturating_add(1);
-        if !filters.matches(entry) {
-            continue;
-        }
-        if !view.matches_status(entry.status) {
-            continue;
-        }
-        reviews.push(entry.summary(repo_root, locator.session_dir(), options));
-    }
-
-    let resolved = resolved_or_default_session_artifact(locator.session_dir())?;
-    Ok(ReportsResult {
-        session_dir: locator.session_dir().to_string_lossy().to_string(),
-        session_file: resolved.path.to_string_lossy().to_string(),
-        session_format: resolved.format,
-        view,
-        filters,
-        options,
-        total_reviews,
-        matching_reviews: reviews.len(),
-        reviews,
-    })
-}
-
-fn format_ts(now: OffsetDateTime) -> anyhow::Result<String> {
-    now.format(&Rfc3339).context("format RFC3339 timestamp")
-}
-
-fn parse_ts(s: &str) -> anyhow::Result<OffsetDateTime> {
-    OffsetDateTime::parse(s, &Rfc3339).context("parse RFC3339 timestamp")
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPointerManifest {
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactPointer>,
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedSessionArtifact {
-    path: PathBuf,
-    format: SessionStorageFormat,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Public view of the session artifact selected for a session directory.
-pub struct SessionArtifactInfo {
-    /// Full path to the session artifact that should be read or written.
-    pub session_file: String,
-    /// Storage format used by that artifact.
-    pub session_format: SessionStorageFormat,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionJsonFallbackHeader {
-    schema_version: String,
-    storage_format: Option<SessionStorageFormat>,
-}
-
-fn session_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(SESSION_FILE_TOML)
-}
-
-fn json_fallback_session_file_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(SESSION_FILE_JSON)
-}
-
-fn read_json_fallback_header(path: &Path) -> anyhow::Result<SessionJsonFallbackHeader> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("read session fallback {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("parse JSON {}", path.display()))
-}
-
-fn resolve_active_session_artifact(
-    session_dir: &Path,
-) -> anyhow::Result<Option<ResolvedSessionArtifact>> {
-    let primary = session_file_path(session_dir);
-    if primary.exists() {
-        return Ok(Some(ResolvedSessionArtifact {
-            path: primary,
-            format: SessionStorageFormat::TomlPrimary,
-        }));
-    }
-
-    let fallback = json_fallback_session_file_path(session_dir);
-    if !fallback.exists() {
-        return Ok(None);
-    }
-
-    let header = read_json_fallback_header(&fallback)?;
-    if let Some(storage_format) = header.storage_format {
-        if storage_format != SessionStorageFormat::JsonFallback {
-            return Err(anyhow::anyhow!(
-                "unsupported session fallback file {}: storage_format must be `json_fallback`",
-                fallback.display()
-            ));
-        }
-        if header.schema_version != SESSION_SCHEMA_VERSION {
-            return Err(anyhow::anyhow!(
-                "unsupported session fallback file {}: only {} JSON fallback files are supported when storage_format is present",
-                fallback.display(),
-                SESSION_SCHEMA_VERSION
-            ));
-        }
-    }
-
-    Ok(Some(ResolvedSessionArtifact {
-        path: fallback,
-        format: SessionStorageFormat::JsonFallback,
-    }))
-}
-
-fn resolved_or_default_session_artifact(
-    session_dir: &Path,
-) -> anyhow::Result<ResolvedSessionArtifact> {
-    resolve_active_session_artifact(session_dir)?.map_or_else(
-        || {
-            Ok(ResolvedSessionArtifact {
-                path: session_file_path(session_dir),
-                format: SessionStorageFormat::TomlPrimary,
-            })
-        },
-        Ok,
-    )
-}
-
-fn to_session_artifact_info(artifact: &ResolvedSessionArtifact) -> SessionArtifactInfo {
-    SessionArtifactInfo {
-        session_file: artifact.path.to_string_lossy().to_string(),
-        session_format: artifact.format,
-    }
-}
-
-/// Resolve the currently active session artifact, if one exists.
-///
-/// # Errors
-/// Returns an error if a fallback artifact exists but does not match the supported
-/// JSON fallback contract.
-pub fn active_session_artifact(
-    session: &SessionLocator,
-) -> anyhow::Result<Option<SessionArtifactInfo>> {
-    Ok(resolve_active_session_artifact(session.session_dir())?
-        .as_ref()
-        .map(to_session_artifact_info))
-}
-
-/// Resolve the active session artifact, or the canonical TOML path when the session is empty.
-///
-/// # Errors
-/// Returns an error if a fallback artifact exists but does not match the supported
-/// JSON fallback contract.
-pub fn session_artifact_or_default(
-    session: &SessionLocator,
-) -> anyhow::Result<SessionArtifactInfo> {
-    let artifact = resolved_or_default_session_artifact(session.session_dir())?;
-    Ok(to_session_artifact_info(&artifact))
-}
-
-fn read_session_file(session_dir: &Path) -> anyhow::Result<SessionFile> {
-    let Some(resolved) = resolve_active_session_artifact(session_dir)? else {
-        return Err(anyhow::anyhow!(
-            "session file not found in {} (expected {} or {})",
-            session_dir.display(),
-            SESSION_FILE_TOML,
-            SESSION_FILE_JSON
-        ));
-    };
-    let raw = fs::read_to_string(&resolved.path)
-        .with_context(|| format!("read session file {}", resolved.path.display()))?;
-    match resolved.format {
-        SessionStorageFormat::TomlPrimary => {
-            let parsed: SessionFileDiskToml = toml::from_str(&raw)
-                .with_context(|| format!("parse TOML {}", resolved.path.display()))?;
-            flatten_session_file_disk_toml(parsed)
-        }
-        SessionStorageFormat::JsonFallback => {
-            let parsed: SessionFileDiskJson = serde_json::from_str(&raw)
-                .with_context(|| format!("parse JSON {}", resolved.path.display()))?;
-            Ok(flatten_session_file_disk_json(parsed))
-        }
-    }
-}
-
-/// Load and parse the active session artifact for the given session locator.
-///
-/// # Errors
-/// Returns an error if the session file cannot be read or parsed.
-pub fn load_session(session: &SessionLocator) -> anyhow::Result<SessionFile> {
-    read_session_file(session.session_dir())
-}
-
-fn write_session_file_atomic(
-    session_dir: &Path,
-    owner: &str,
-    session: &SessionFile,
-) -> anyhow::Result<()> {
-    fs::create_dir_all(session_dir)
-        .with_context(|| format!("create session dir {}", session_dir.display()))?;
-    let session_file = session_file_path(session_dir);
-    let json_fallback = json_fallback_session_file_path(session_dir);
-    let mut session_to_write = session.clone();
-    reconcile_parent_child_reviews(&mut session_to_write);
-    validate_session_consistency(&session_to_write)?;
-
-    let toml_write_result = (|| -> anyhow::Result<()> {
-        let session_disk = canonicalize_session_for_write_toml(&session_to_write)?;
-        let body = toml::to_string_pretty(&session_disk).context("serialize session TOML")? + "\n";
-        let _: SessionFileDiskToml =
-            toml::from_str(&body).context("round-trip parse session TOML")?;
-        let tmp = session_dir.join(format!("{SESSION_FILE_TOML}.tmp.{owner}"));
-        fs::write(&tmp, body)
-            .with_context(|| format!("write temp session file {}", tmp.display()))?;
-
-        #[cfg(windows)]
-        {
-            if session_file.exists() {
-                fs::remove_file(&session_file).with_context(|| {
-                    format!("remove existing session file {}", session_file.display())
-                })?;
-            }
-        }
-
-        fs::rename(&tmp, &session_file).with_context(|| {
-            format!(
-                "replace session file {} via {}",
-                session_file.display(),
-                tmp.display()
-            )
-        })?;
-        if json_fallback.exists() {
-            fs::remove_file(&json_fallback).with_context(|| {
-                format!("remove stale JSON fallback {}", json_fallback.display())
-            })?;
-        }
-        Ok(())
-    })();
-
-    if toml_write_result.is_err() {
-        let session_disk = canonicalize_session_for_write_json(&session_to_write)?;
-        let body = serde_json::to_string_pretty(&session_disk)
-            .context("serialize session JSON fallback")?
-            + "\n";
-        let _: SessionFileDiskJson =
-            serde_json::from_str(&body).context("round-trip parse session JSON fallback")?;
-        let tmp = session_dir.join(format!("{SESSION_FILE_JSON}.tmp.{owner}"));
-        fs::write(&tmp, body)
-            .with_context(|| format!("write temp session fallback {}", tmp.display()))?;
-
-        #[cfg(windows)]
-        {
-            if json_fallback.exists() {
-                fs::remove_file(&json_fallback).with_context(|| {
-                    format!(
-                        "remove existing session fallback {}",
-                        json_fallback.display()
-                    )
-                })?;
-            }
-        }
-
-        fs::rename(&tmp, &json_fallback).with_context(|| {
-            format!(
-                "replace session fallback {} via {}",
-                json_fallback.display(),
-                tmp.display()
-            )
-        })?;
-        if session_file.exists() {
-            fs::remove_file(&session_file).with_context(|| {
-                format!(
-                    "remove stale primary session file {}",
-                    session_file.display()
-                )
-            })?;
-        }
-        return Ok(());
-    }
-
-    Ok(())
-}
-
-fn validate_finished_entry(entry: &ReviewEntry) -> anyhow::Result<()> {
-    if entry.status != ReviewerStatus::Finished {
-        return Ok(());
-    }
-
-    if entry.report_file.is_none() {
-        return Err(anyhow::anyhow!(
-            "review {}:{} is FINISHED but report_file is missing",
-            entry.reviewer_id,
-            entry.session_id
-        ));
-    }
-    if entry.verdict.is_none() {
-        return Err(anyhow::anyhow!(
-            "review {}:{} is FINISHED but verdict is missing",
-            entry.reviewer_id,
-            entry.session_id
-        ));
-    }
-    if entry.finished_at.is_none() {
-        return Err(anyhow::anyhow!(
-            "review {}:{} is FINISHED but finished_at is missing",
-            entry.reviewer_id,
-            entry.session_id
-        ));
-    }
-    Ok(())
-}
-
-const MAX_EXTRA_KEYS: usize = 32;
-
-fn validate_session_consistency(session: &SessionFile) -> anyhow::Result<()> {
-    if session.extra.len() > MAX_EXTRA_KEYS {
-        return Err(anyhow::anyhow!(
-            "session file has {} unknown top-level fields (max {}); possible data corruption",
-            session.extra.len(),
-            MAX_EXTRA_KEYS,
-        ));
-    }
-    for entry in &session.reviews {
-        validate_finished_entry(entry)?;
-    }
-    Ok(())
-}
-
-fn validate_id8(id8: &str, label: &str) -> anyhow::Result<()> {
-    if id8.len() != 8 {
-        return Err(anyhow::anyhow!("{label} must be 8 characters"));
-    }
-    if !id8.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(anyhow::anyhow!("{label} must be ASCII alphanumeric"));
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-/// A locator for a session directory on disk.
-///
-/// This is primarily a convenience wrapper around a `PathBuf` that standardizes where to
-/// find the canonical session artifact and the lock file.
 pub struct SessionLocator {
-    /// Path to the session directory.
-    pub session_dir: PathBuf,
+    session_dir: PathBuf,
 }
 
 impl SessionLocator {
-    /// Create a new locator from an explicit session directory path.
     #[must_use]
-    pub const fn new(session_dir: PathBuf) -> Self {
+    pub fn from_session_dir(session_dir: PathBuf) -> Self {
         Self { session_dir }
     }
 
-    /// Compute the session directory from `repo_root` and `session_date`.
-    #[must_use]
-    pub fn from_repo_root(repo_root: &Path, session_date: Date) -> Self {
-        let p = paths::session_paths(repo_root, session_date);
-        Self {
-            session_dir: p.session_dir,
-        }
-    }
-
-    /// Borrow the session directory path.
     #[must_use]
     pub fn session_dir(&self) -> &Path {
         &self.session_dir
     }
-
-    /// Compute the canonical TOML session path inside this session directory.
-    #[must_use]
-    pub fn session_file(&self) -> PathBuf {
-        session_file_path(&self.session_dir)
-    }
-}
-
-/// Parameters for [`purge_reviews`].
-pub struct PurgeReviewsParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Trusted repository root used for resolving repo-relative report paths.
-    pub repo_root: PathBuf,
-    /// Only purge reviews matching this reviewer id.
-    pub reviewer_id: Option<String>,
-    /// Only purge reviews matching this session id.
-    pub session_id: Option<String>,
-    /// Only purge reviews matching this target ref.
-    pub target_ref: Option<String>,
-    /// Only purge reviews with these reviewer statuses.
-    pub reviewer_statuses: Vec<ReviewerStatus>,
-    /// Only purge reviews with these initiator statuses.
-    pub initiator_statuses: Vec<InitiatorStatus>,
-    /// Only purge reviews with these verdicts.
-    pub verdicts: Vec<ReviewVerdict>,
-    /// Only purge reviews started at or after this RFC3339 timestamp.
-    pub after: Option<String>,
-    /// Only purge reviews started at or before this RFC3339 timestamp.
-    pub before: Option<String>,
-    /// When true, also purge child entries whose parent matches the filters.
-    pub include_children: bool,
-    /// When true, delete report markdown files from disk.
-    pub delete_report_files: bool,
-    /// When true, only preview what would be purged without modifying anything.
-    pub dry_run: bool,
-}
-
-/// A single purged review entry in the result.
-#[derive(Debug, Clone, Serialize)]
-pub struct PurgedReview {
-    /// Reviewer id of the purged entry.
-    pub reviewer_id: String,
-    /// Session id of the purged entry.
-    pub session_id: String,
-    /// Report file that was (or would be) deleted.
-    pub report_file: Option<String>,
-    /// Whether the report file was actually deleted from disk.
-    pub report_deleted: bool,
-    /// Whether deleting the report file was attempted but failed.
-    pub delete_failed: bool,
-}
-
-/// Result returned by [`purge_reviews`].
-#[derive(Debug, Clone, Serialize)]
-pub struct PurgeReviewsResult {
-    /// Number of review entries that matched all filters.
-    pub matched: usize,
-    /// Number of review entries actually removed (0 in dry-run).
-    pub purged: usize,
-    /// Number of report files deleted from disk (0 in dry-run).
-    pub files_deleted: usize,
-    /// Whether this was a dry-run preview.
-    pub dry_run: bool,
-    /// Individual purged review details.
-    pub reviews: Vec<PurgedReview>,
-}
-
-fn plan_purge_results(
-    session: &SessionFile,
-    purge_ids: &[(String, String)],
-    repo_root: &Path,
-    params: &PurgeReviewsParams,
-) -> (Vec<PurgedReview>, Vec<PathBuf>) {
-    let mut reviews = Vec::with_capacity(purge_ids.len());
-    let mut files_to_delete = Vec::new();
-    for (rid, sid) in purge_ids {
-        let entry = session
-            .reviews
-            .iter()
-            .find(|e| e.reviewer_id == *rid && e.session_id == *sid);
-        let report_file = entry.and_then(|e| e.report_file.clone());
-
-        if !params.dry_run && params.delete_report_files {
-            if let Some(ref rf) = report_file {
-                if let Ok(path) =
-                    resolve_report_file_path(repo_root, params.session.session_dir(), rf)
-                {
-                    if path.exists() {
-                        files_to_delete.push(path);
-                    }
-                }
-            }
-        }
-
-        reviews.push(PurgedReview {
-            reviewer_id: rid.clone(),
-            session_id: sid.clone(),
-            report_file,
-            report_deleted: false,
-            delete_failed: false,
-        });
-    }
-    (reviews, files_to_delete)
-}
-
-fn infer_repo_root_from_session_dir(session_dir: &Path) -> Option<PathBuf> {
-    let canonical_session_dir = session_dir.canonicalize().ok()?;
-    let code_reviews_dir = canonical_session_dir.parent()?;
-    if code_reviews_dir.file_name()? != "code_reviews" {
-        return None;
-    }
-    let reports_dir = code_reviews_dir.parent()?;
-    if reports_dir.file_name()? != "reports" {
-        return None;
-    }
-    let local_dir = reports_dir.parent()?;
-    if local_dir.file_name()? != ".local" {
-        return None;
-    }
-    Some(local_dir.parent()?.to_path_buf())
-}
-
-/// Purge (permanently remove) review entries and optionally their report files.
-///
-/// Matching entries are removed from the session artifact. When `include_children` is true,
-/// child entries whose `parent_id` matches a purged parent are also removed. When
-/// `delete_report_files` is true, report markdown files referenced by purged entries
-/// are deleted from disk.
-///
-/// # Errors
-/// Returns an error if the session cannot be read/written or identifiers are invalid.
-#[allow(clippy::too_many_lines)] // Reason: purge coordinates filtering, child collection, deletion, and atomic session write.
-pub fn purge_reviews(params: &PurgeReviewsParams) -> anyhow::Result<PurgeReviewsResult> {
-    if let Some(ref id) = params.reviewer_id {
-        validate_id8(id, "reviewer_id")?;
-    }
-    if let Some(ref id) = params.session_id {
-        validate_id8(id, "session_id")?;
-    }
-
-    let lock_owner = mpcr_lock_owner();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-    let mut session = read_session_file(params.session.session_dir())?;
-    let repo_root_for_cleanup = infer_repo_root_from_session_dir(params.session.session_dir())
-        .map_or_else(|| params.repo_root.clone(), std::convert::identity);
-    let repo_root = repo_root_for_cleanup.as_path();
-
-    // Determine which top-level entries match the filters.
-    let parsed_after = params
-        .after
-        .as_deref()
-        .map(|s| OffsetDateTime::parse(s, &Rfc3339))
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("invalid --after timestamp: {e}"))?;
-    let parsed_before = params
-        .before
-        .as_deref()
-        .map(|s| OffsetDateTime::parse(s, &Rfc3339))
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("invalid --before timestamp: {e}"))?;
-
-    let mut matched_ids: Vec<ReviewKey> = Vec::new();
-    for entry in &session.reviews {
-        if !entry_matches_purge_filters(entry, params, parsed_after, parsed_before)? {
-            continue;
-        }
-        matched_ids.push((entry.reviewer_id.clone(), entry.session_id.clone()));
-    }
-
-    // When include_children is set, collect descendants using an indexed parent->children map.
-    let mut child_ids: Vec<ReviewKey> = Vec::new();
-    if params.include_children {
-        let mut children_by_parent: HashMap<ReviewKey, Vec<ReviewKey>> = HashMap::new();
-        for entry in &session.reviews {
-            if let Some(parent_id) = &entry.parent_id {
-                let parent_key = (parent_id.clone(), entry.session_id.clone());
-                children_by_parent
-                    .entry(parent_key)
-                    .or_default()
-                    .push((entry.reviewer_id.clone(), entry.session_id.clone()));
-            }
-        }
-
-        let mut queue: VecDeque<ReviewKey> = matched_ids.iter().cloned().collect();
-        let mut visited: HashSet<ReviewKey> = queue.iter().cloned().collect();
-        while let Some(parent_key) = queue.pop_front() {
-            if let Some(children) = children_by_parent.get(&parent_key) {
-                for child_key in children {
-                    if visited.insert(child_key.clone()) {
-                        child_ids.push(child_key.clone());
-                        queue.push_back(child_key.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let all_purge_ids: Vec<ReviewKey> = matched_ids
-        .iter()
-        .chain(child_ids.iter())
-        .cloned()
-        .collect();
-    let all_purge_set: HashSet<ReviewKey> = all_purge_ids.iter().cloned().collect();
-
-    let (mut reviews, files_to_delete) =
-        plan_purge_results(&session, &all_purge_ids, repo_root, params);
-
-    let matched = all_purge_ids.len();
-    let purged;
-    let mut files_deleted = 0usize;
-    if params.dry_run {
-        purged = 0;
-    } else {
-        // Remove matched entries from session.
-        session
-            .reviews
-            .retain(|e| !all_purge_set.contains(&(e.reviewer_id.clone(), e.session_id.clone())));
-
-        // Remove purged children from parent child_reviews arrays.
-        for entry in &mut session.reviews {
-            entry.child_reviews.retain(|c| {
-                !all_purge_set.contains(&(c.reviewer_id.clone(), c.session_id.clone()))
-            });
-        }
-
-        // Remove purged reviewer ids from the reviewers list if they have no remaining entries.
-        session
-            .reviewers
-            .retain(|rid| session.reviews.iter().any(|e| e.reviewer_id == *rid));
-
-        purged = matched;
-        write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
-
-        // Delete report files AFTER the session has been atomically persisted.
-        let mut review_indices_by_path: HashMap<PathBuf, Vec<usize>> = HashMap::new();
-        for (index, review) in reviews.iter().enumerate() {
-            if let Some(path) = review.report_file.as_deref().and_then(|rf| {
-                resolve_report_file_path(repo_root, params.session.session_dir(), rf).ok()
-            }) {
-                review_indices_by_path.entry(path).or_default().push(index);
-            }
-        }
-
-        let unique_files_to_delete: BTreeSet<PathBuf> = files_to_delete.iter().cloned().collect();
-        for path in unique_files_to_delete {
-            let delete_ok = std::fs::remove_file(&path).is_ok();
-            if delete_ok {
-                files_deleted += 1;
-            }
-
-            if let Some(indices) = review_indices_by_path.get(&path) {
-                for index in indices {
-                    if let Some(review) = reviews.get_mut(*index) {
-                        if delete_ok {
-                            review.report_deleted = true;
-                        } else {
-                            review.delete_failed = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(PurgeReviewsResult {
-        matched,
-        purged,
-        files_deleted,
-        dry_run: params.dry_run,
-        reviews,
-    })
-}
-
-fn mpcr_lock_owner() -> String {
-    format!("mpcr_purge_{}", std::process::id())
-}
-
-fn entry_matches_purge_filters(
-    entry: &ReviewEntry,
-    params: &PurgeReviewsParams,
-    parsed_after: Option<OffsetDateTime>,
-    parsed_before: Option<OffsetDateTime>,
-) -> anyhow::Result<bool> {
-    if let Some(ref reviewer_id) = params.reviewer_id {
-        if entry.reviewer_id != *reviewer_id {
-            return Ok(false);
-        }
-    }
-    if let Some(ref session_id) = params.session_id {
-        if entry.session_id != *session_id {
-            return Ok(false);
-        }
-    }
-    if let Some(ref target_ref) = params.target_ref {
-        if entry.target_ref != *target_ref {
-            return Ok(false);
-        }
-    }
-    if !params.reviewer_statuses.is_empty() && !params.reviewer_statuses.contains(&entry.status) {
-        return Ok(false);
-    }
-    if !params.initiator_statuses.is_empty()
-        && !params.initiator_statuses.contains(&entry.initiator_status)
-    {
-        return Ok(false);
-    }
-    if !params.verdicts.is_empty() {
-        match entry.verdict {
-            Some(v) if params.verdicts.contains(&v) => {}
-            _ => return Ok(false),
-        }
-    }
-    if let Some(filter_time) = parsed_after {
-        let entry_time = OffsetDateTime::parse(&entry.started_at, &Rfc3339)
-            .map_err(|e| anyhow::anyhow!("invalid entry started_at: {e}"))?;
-        if entry_time < filter_time {
-            return Ok(false);
-        }
-    }
-    if let Some(filter_time) = parsed_before {
-        let entry_time = OffsetDateTime::parse(&entry.started_at, &Rfc3339)
-            .map_err(|e| anyhow::anyhow!("invalid entry started_at: {e}"))?;
-        if entry_time > filter_time {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use anyhow::{bail, ensure};
-    use serde_json::Value;
-    use std::fs;
-    use tempfile::tempdir;
-    use time::Month;
-
-    fn write_session(session_dir: &Path, session: &SessionFile) -> anyhow::Result<()> {
-        fs::create_dir_all(session_dir)?;
-        let path = session_dir.join("_session.toml");
-        let body = toml::to_string_pretty(&canonicalize_session_for_write_toml(session)?)? + "\n";
-        fs::write(path, body)?;
-        Ok(())
-    }
-
-    fn make_entry() -> ReviewEntry {
-        ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Received,
-            status: ReviewerStatus::Finished,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: Some("2026-01-11T02:00:00Z".to_string()),
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: Some(ReviewVerdict::Approve),
-            counts: SeverityCounts::zero(),
-            report_file: Some(
-                ".local/reports/code_reviews/2026-01-11/12-00-00-000_refs_heads_main_deadbeef.md"
-                    .to_string(),
-            ),
-            notes: vec![SessionNote {
-                role: NoteRole::Reviewer,
-                timestamp: "2026-01-11T01:30:00Z".to_string(),
-                note_type: NoteType::Question,
-                content: Value::String("context".to_string()),
-            }],
-            child_reviews: vec![],
-            extra: serde_json::Map::default(),
-        }
-    }
-
-    fn valid_parent_report(
-        reviewer_id: &str,
-        session_id: &str,
-        target_ref: &str,
-        counts: &SeverityCounts,
-    ) -> String {
-        format!(
-            r#"# Code Review Report
-
-```toml
-schema_version = "proof_packet.v2"
-artifact_kind = "parent_review_report"
-reviewer_id = "{reviewer_id}"
-session_id = "{session_id}"
-target_ref = "{target_ref}"
-verdict = "APPROVE"
-
-[counts]
-blocker = {blocker}
-major = {major}
-minor = {minor}
-nit = {nit}
-
-[ship_readiness]
-verdict = "SHIP"
-confidence_label = "HIGH"
-confidence_score = 90
-
-[[ship_readiness_axes]]
-axis = "Correctness"
-status = "PASS"
-notes = "Validated by reviewer synthesis."
-
-[[ship_readiness_axes]]
-axis = "Safety"
-status = "PASS"
-notes = "No safety regression found."
-
-[[ship_readiness_axes]]
-axis = "Complexity budget"
-status = "PASS"
-notes = "No complexity regression found."
-
-[[ship_readiness_axes]]
-axis = "Test coverage"
-status = "PASS"
-notes = "Coverage is acceptable."
-
-[[ship_readiness_axes]]
-axis = "Acceptance criteria"
-status = "PASS"
-notes = "Acceptance criteria are satisfied."
-
-[[source_packets]]
-reviewer_id = "feedface"
-session_id = "{session_id}"
-artifact_ref = "child:feedface:{session_id}"
-
-[[residual_risks]]
-area = "None"
-gap = "No unresolved risk was identified."
-impact = "Low"
-next_action = "Monitor runtime behavior."
-
-[validation_summary]
-packets_validated = 1
-packets_rejected = 0
-retry_count = 0
-```
-
-## Ship-Readiness
-**Verdict:** SHIP
-
-## Findings
-- None.
-
-## Defended Proofs
-- All critical claims held during disproof attempts.
-
-## Residual Risk
-- None.
-"#,
-            blocker = counts.blocker,
-            major = counts.major,
-            minor = counts.minor,
-            nit = counts.nit
-        )
-    }
-
-    #[test]
-    fn reports_filters_match_status_phase_verdict() -> anyhow::Result<()> {
-        let entry = make_entry();
-        let filters = ReportsFilters {
-            target_ref: None,
-            session_id: None,
-            reviewer_id: None,
-            reviewer_statuses: vec![ReviewerStatus::Finished],
-            initiator_statuses: vec![InitiatorStatus::Received],
-            verdicts: vec![ReviewVerdict::Approve],
-            phases: vec![ReviewPhase::ReportWriting],
-            only_with_report: true,
-            only_with_notes: true,
-        };
-        ensure!(filters.matches(&entry));
-
-        let mismatched = ReportsFilters {
-            target_ref: None,
-            session_id: None,
-            reviewer_id: None,
-            reviewer_statuses: vec![ReviewerStatus::Blocked],
-            initiator_statuses: Vec::new(),
-            verdicts: Vec::new(),
-            phases: Vec::new(),
-            only_with_report: false,
-            only_with_notes: false,
-        };
-        ensure!(!mismatched.matches(&entry));
-
-        Ok(())
-    }
-
-    #[test]
-    fn session_file_deserializes_without_child_reviews() -> anyhow::Result<()> {
-        let raw = r#"{
-  "schema_version": "1.0.0",
-  "session_date": "2026-01-11",
-  "repo_root": "/tmp/repo",
-  "reviewers": ["deadbeef"],
-  "reviews": [
-    {
-      "reviewer_id": "deadbeef",
-      "session_id": "sess0001",
-      "target_ref": "refs/heads/main",
-      "initiator_status": "REQUESTING",
-      "status": "INITIALIZING",
-      "parent_id": null,
-      "started_at": "2026-01-11T00:00:00Z",
-      "updated_at": "2026-01-11T00:00:00Z",
-      "finished_at": null,
-      "current_phase": null,
-      "verdict": null,
-      "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
-      "report_file": null,
-      "notes": []
-    }
-  ]
-}"#;
-        let session: SessionFile = serde_json::from_str(raw)?;
-        ensure!(session.reviews.len() == 1);
-        let review = session
-            .reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("review missing"))?;
-        ensure!(review.child_reviews.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn active_session_artifact_accepts_legacy_json_without_storage_format() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        fs::create_dir_all(&session_dir)?;
-        let legacy_json = r#"{
-  "schema_version": "1.1.0",
-  "session_date": "2026-01-11",
-  "repo_root": "/tmp/repo",
-  "reviewers": ["deadbeef"],
-  "reviews": [
-    {
-      "reviewer_id": "deadbeef",
-      "session_id": "sess0001",
-      "target_ref": "refs/heads/main",
-      "initiator_status": "REQUESTING",
-      "status": "IN_PROGRESS",
-      "parent_id": null,
-      "started_at": "2026-01-11T00:00:00Z",
-      "updated_at": "2026-01-11T00:00:00Z",
-      "finished_at": null,
-      "current_phase": "INGESTION",
-      "verdict": null,
-      "counts": {"blocker":0,"major":0,"minor":0,"nit":0},
-      "report_file": null,
-      "notes": []
-    }
-  ]
-}"#;
-        fs::write(session_dir.join("_session.json"), legacy_json)?;
-        let locator = SessionLocator::new(session_dir);
-
-        let info = active_session_artifact(&locator)?
-            .ok_or_else(|| anyhow::anyhow!("expected active session artifact"))?;
-        ensure!(info.session_format == SessionStorageFormat::JsonFallback);
-        let session = load_session(&locator)?;
-        let review = session
-            .reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("expected one review from legacy JSON fallback"))?;
-        ensure!(review.reviewer_id == "deadbeef");
-        Ok(())
-    }
-
-    #[test]
-    fn active_session_artifact_rejects_non_json_fallback_storage_format() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        fs::create_dir_all(&session_dir)?;
-        let invalid_json = r#"{
-  "schema_version": "1.2.0",
-  "storage_format": "toml_primary",
-  "session_date": "2026-01-11",
-  "repo_root": "/tmp/repo",
-  "reviewers": [],
-  "reviews": []
-}"#;
-        fs::write(session_dir.join("_session.json"), invalid_json)?;
-        let locator = SessionLocator::new(session_dir);
-
-        let Err(err) = active_session_artifact(&locator) else {
-            bail!("expected non-json-fallback storage format to fail");
-        };
-        ensure!(err
-            .to_string()
-            .contains("storage_format must be `json_fallback`"));
-        Ok(())
-    }
-
-    #[test]
-    fn close_child_reviews_updates_parent_embedded_state() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string(), "cafebabe".to_string()],
-            reviews: vec![
-                ReviewEntry {
-                    reviewer_id: "deadbeef".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::InProgress,
-                    parent_id: None,
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: Some(ReviewPhase::Ingestion),
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: Vec::new(),
-                    child_reviews: Vec::new(),
-                    extra: serde_json::Map::default(),
-                },
-                ReviewEntry {
-                    reviewer_id: "cafebabe".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::InProgress,
-                    parent_id: Some("deadbeef".to_string()),
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: Some(ReviewPhase::DomainCoverage),
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: Vec::new(),
-                    child_reviews: Vec::new(),
-                    extra: serde_json::Map::default(),
-                },
-            ],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let result = close_child_reviews(CloseChildReviewsParams {
-            session: SessionLocator::new(session_dir.clone()),
-            parent_reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: None,
-            only_statuses: vec![ReviewerStatus::InProgress],
-            set_status: ReviewerStatus::Cancelled,
-            clear_phase: true,
-            now: OffsetDateTime::now_utc(),
-        })?;
-        ensure!(result.updated_children == 1);
-
-        let parsed = read_session_file(&session_dir)?;
-        let parent = parsed
-            .reviews
-            .iter()
-            .find(|review| review.reviewer_id == "deadbeef")
-            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
-        ensure!(parent.child_reviews.len() == 1);
-        let child = parent
-            .child_reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
-        ensure!(child.status == ReviewerStatus::Cancelled);
-        ensure!(child.current_phase.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn write_session_file_atomic_reconciles_parent_child_reviews() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec![
-                "deadbeef".to_string(),
-                "cafebabe".to_string(),
-                "badc0ffe".to_string(),
-            ],
-            reviews: vec![
-                ReviewEntry {
-                    reviewer_id: "deadbeef".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::InProgress,
-                    parent_id: None,
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: Some(ReviewPhase::Ingestion),
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: Vec::new(),
-                    child_reviews: vec![ChildReviewEntry {
-                        reviewer_id: "badc0ffe".to_string(),
-                        session_id: "sess0001".to_string(),
-                        target_ref: "refs/heads/main".to_string(),
-                        initiator_status: InitiatorStatus::Observing,
-                        status: ReviewerStatus::Blocked,
-                        parent_id: Some("deadbeef".to_string()),
-                        started_at: "2026-01-11T00:00:00Z".to_string(),
-                        updated_at: "2026-01-11T01:00:00Z".to_string(),
-                        finished_at: None,
-                        current_phase: Some(ReviewPhase::Synthesis),
-                        verdict: None,
-                        counts: SeverityCounts::zero(),
-                        report_file: None,
-                        notes_count: 0,
-                    }],
-                    extra: serde_json::Map::default(),
-                },
-                ReviewEntry {
-                    reviewer_id: "cafebabe".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::InProgress,
-                    parent_id: Some("deadbeef".to_string()),
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: Some(ReviewPhase::DomainCoverage),
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: vec![SessionNote {
-                        role: NoteRole::Reviewer,
-                        timestamp: "2026-01-11T01:30:00Z".to_string(),
-                        note_type: NoteType::DomainObservation,
-                        content: Value::String("domain coverage".to_string()),
-                    }],
-                    child_reviews: Vec::new(),
-                    extra: serde_json::Map::default(),
-                },
-            ],
-            extra: serde_json::Map::new(),
-        };
-
-        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
-        let parsed = read_session_file(&session_dir)?;
-        let parent = parsed
-            .reviews
-            .iter()
-            .find(|review| review.reviewer_id == "deadbeef")
-            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
-        ensure!(parent.child_reviews.len() == 1);
-        let child = parent
-            .child_reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
-        ensure!(child.reviewer_id == "cafebabe");
-        ensure!(child.status == ReviewerStatus::InProgress);
-        ensure!(child.current_phase == Some(ReviewPhase::DomainCoverage));
-        ensure!(child.notes_count == 1);
-        Ok(())
-    }
-
-    #[test]
-    fn update_parent_rebuilds_embedded_child_reviews() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string(), "cafebabe".to_string()],
-            reviews: vec![
-                ReviewEntry {
-                    reviewer_id: "deadbeef".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::InProgress,
-                    parent_id: None,
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: Some(ReviewPhase::Ingestion),
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: Vec::new(),
-                    child_reviews: Vec::new(),
-                    extra: serde_json::Map::default(),
-                },
-                ReviewEntry {
-                    reviewer_id: "cafebabe".to_string(),
-                    session_id: "sess0001".to_string(),
-                    target_ref: "refs/heads/main".to_string(),
-                    initiator_status: InitiatorStatus::Requesting,
-                    status: ReviewerStatus::Initializing,
-                    parent_id: Some("deadbeef".to_string()),
-                    started_at: "2026-01-11T00:00:00Z".to_string(),
-                    updated_at: "2026-01-11T01:00:00Z".to_string(),
-                    finished_at: None,
-                    current_phase: None,
-                    verdict: None,
-                    counts: SeverityCounts::zero(),
-                    report_file: None,
-                    notes: Vec::new(),
-                    child_reviews: Vec::new(),
-                    extra: serde_json::Map::default(),
-                },
-            ],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = UpdateReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            status: Some(ReviewerStatus::Blocked),
-            phase: None,
-            now: OffsetDateTime::now_utc(),
-        };
-        update_review(&params)?;
-
-        let parsed = read_session_file(&session_dir)?;
-        let parent = parsed
-            .reviews
-            .iter()
-            .find(|review| review.reviewer_id == "deadbeef")
-            .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
-        ensure!(parent.status == ReviewerStatus::Blocked);
-        ensure!(parent.child_reviews.len() == 1);
-        let child = parent
-            .child_reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("child missing"))?;
-        ensure!(child.reviewer_id == "cafebabe");
-        ensure!(child.status == ReviewerStatus::Initializing);
-        Ok(())
-    }
-
-    #[test]
-    fn register_reviewer_errors_on_target_mismatch() -> anyhow::Result<()> {
-        let repo_root = tempdir()?;
-        let session_dir = tempdir()?;
-        let session_date = Date::from_calendar_date(2026, Month::January, 11)?;
-        let session = SessionLocator::new(session_dir.path().to_path_buf());
-        let now = OffsetDateTime::now_utc();
-
-        register_reviewer(RegisterReviewerParams {
-            repo_root: repo_root.path().to_path_buf(),
-            session_date,
-            session: session.clone(),
-            target_ref: "refs/heads/main".to_string(),
-            reviewer_id: Some("deadbeef".to_string()),
-            session_id: Some("sess0001".to_string()),
-            parent_id: None,
-            now,
-        })?;
-
-        let result = register_reviewer(RegisterReviewerParams {
-            repo_root: repo_root.path().to_path_buf(),
-            session_date,
-            session,
-            target_ref: "refs/heads/other".to_string(),
-            reviewer_id: Some("deadbeef".to_string()),
-            session_id: Some("sess0001".to_string()),
-            parent_id: None,
-            now,
-        });
-        let Err(err) = result else {
-            bail!("mismatched target_ref should fail");
-        };
-        ensure!(err.to_string().contains("target_ref"));
-        Ok(())
-    }
-
-    #[test]
-    fn update_review_missing_entry() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: Vec::new(),
-            reviews: Vec::new(),
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = UpdateReviewParams {
-            session: SessionLocator::new(session_dir),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            status: Some(ReviewerStatus::InProgress),
-            phase: None,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = update_review(&params) else {
-            bail!("missing entry should error");
-        };
-        ensure!(err.to_string().contains("review entry not found"));
-        Ok(())
-    }
-
-    #[test]
-    fn update_review_rejects_finished_without_report_artifacts() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::Synthesis),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = UpdateReviewParams {
-            session: SessionLocator::new(session_dir),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            status: Some(ReviewerStatus::Finished),
-            phase: None,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = update_review(&params) else {
-            bail!("finished without report artifacts should fail");
-        };
-        ensure!(err
-            .to_string()
-            .contains("FINISHED but report_file is missing"));
-        Ok(())
-    }
-
-    #[test]
-    fn update_review_rejects_terminal_status_change() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::Finished,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: Some("2026-01-11T01:30:00Z".to_string()),
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: Some(ReviewVerdict::Approve),
-            counts: SeverityCounts::zero(),
-            report_file: Some("report.md".to_string()),
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = UpdateReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            status: Some(ReviewerStatus::Cancelled),
-            phase: None,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = update_review(&params) else {
-            bail!("terminal-to-terminal mutation should fail");
-        };
-        ensure!(err
-            .to_string()
-            .contains("cannot change terminal review status"));
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed update"))?;
-        ensure!(persisted.status == ReviewerStatus::Finished);
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_review_refuses_overwrite() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::Finished,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: Some("2026-01-11T02:00:00Z".to_string()),
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: Some(ReviewVerdict::Approve),
-            counts: SeverityCounts::zero(),
-            report_file: Some("existing.md".to_string()),
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = FinalizeReviewParams {
-            session: SessionLocator::new(session_dir),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            verdict: ReviewVerdict::Approve,
-            counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::Markdown(valid_parent_report(
-                "deadbeef",
-                "sess0001",
-                "refs/heads/main",
-                &SeverityCounts::zero(),
-            )),
-            validation_kind: ReportValidationKind::ParentReviewReport,
-            copy_input_report: false,
-            auto_close_open_children: true,
-            auto_close_children_status: ReviewerStatus::Cancelled,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = finalize_review(params) else {
-            bail!("should refuse overwrite");
-        };
-        ensure!(err.to_string().contains("report_file already set"));
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_review_allows_same_file_retry_path() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let report_path = session_dir.join(report_file_name(
-            parse_ts("2026-01-11T00:00:00Z")?,
-            "refs/heads/main",
-            "deadbeef",
-        )?);
-        fs::write(
-            &report_path,
-            valid_parent_report(
-                "deadbeef",
-                "sess0001",
-                "refs/heads/main",
-                &SeverityCounts::zero(),
-            ),
-        )?;
-
-        let result = finalize_review(FinalizeReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            verdict: ReviewVerdict::Approve,
-            counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::File(report_path.clone()),
-            validation_kind: ReportValidationKind::ParentReviewReport,
-            copy_input_report: false,
-            auto_close_open_children: true,
-            auto_close_children_status: ReviewerStatus::Cancelled,
-            now: OffsetDateTime::now_utc(),
-        })?;
-
-        ensure!(Path::new(&result.report_path) == report_path);
-        ensure!(report_path.exists(), "same-file report should remain");
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after finalize"))?;
-        ensure!(persisted.status == ReviewerStatus::Finished);
-        ensure!(persisted.report_file.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_review_revalidates_persisted_report_under_lock() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let report_source = dir.path().join("report.md");
-        fs::write(
-            &report_source,
-            valid_parent_report(
-                "deadbeef",
-                "sess0001",
-                "refs/heads/main",
-                &SeverityCounts::zero(),
-            ),
-        )?;
-
-        let held_guard = lock::acquire_lock(&session_dir, "cafebabe", LockConfig::default())?;
-        let session_for_finalize = SessionLocator::new(session_dir.clone());
-        let source_for_finalize = report_source.clone();
-
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
-        let handle = std::thread::spawn(move || {
-            let result = finalize_review(FinalizeReviewParams {
-                session: session_for_finalize,
-                reviewer_id: "deadbeef".to_string(),
-                session_id: "sess0001".to_string(),
-                verdict: ReviewVerdict::Approve,
-                counts: SeverityCounts::zero(),
-                report_input: FinalizeReportInput::File(source_for_finalize),
-                validation_kind: ReportValidationKind::ParentReviewReport,
-                copy_input_report: false,
-                auto_close_open_children: true,
-                auto_close_children_status: ReviewerStatus::Cancelled,
-                now: OffsetDateTime::now_utc(),
-            });
-            let _ = result_tx.send(result.map(|_| ()).map_err(|err| err.to_string()));
-        });
-
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        fs::write(&report_source, "# invalid\n")?;
-        drop(held_guard);
-
-        let finalize_result = result_rx
-            .recv_timeout(std::time::Duration::from_secs(15))
-            .map_err(|err| anyhow::anyhow!("timed out waiting for finalize result: {err}"))?;
-        handle
-            .join()
-            .map_err(|_| anyhow::anyhow!("finalize worker thread panicked"))?;
-
-        let Err(err_text) = finalize_result else {
-            bail!("finalize should fail after source mutation under lock window");
-        };
-        ensure!(err_text.contains("validate report artifact under lock"));
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
-        ensure!(persisted.status == ReviewerStatus::InProgress);
-        ensure!(persisted.report_file.is_none());
-        let expected_report_path = session_dir.join(report_file_name(
-            parse_ts("2026-01-11T00:00:00Z")?,
-            "refs/heads/main",
-            "deadbeef",
-        )?);
-        ensure!(
-            !expected_report_path.exists(),
-            "rolled-back report artifact should not remain at {}",
-            expected_report_path.display()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_review_rejects_identity_mismatch_under_lock() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let mismatched_report = valid_parent_report(
-            "deadbeef",
-            "sess0001",
-            "refs/heads/other",
-            &SeverityCounts::zero(),
-        );
-        let params = FinalizeReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            verdict: ReviewVerdict::Approve,
-            counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::Markdown(mismatched_report),
-            validation_kind: ReportValidationKind::ParentReviewReport,
-            copy_input_report: false,
-            auto_close_open_children: true,
-            auto_close_children_status: ReviewerStatus::Cancelled,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = finalize_review(params) else {
-            bail!("finalize should fail on report identity mismatch");
-        };
-        ensure!(format!("{err:#}").contains("identity_mismatch"));
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
-        ensure!(persisted.status == ReviewerStatus::InProgress);
-        ensure!(persisted.report_file.is_none());
-        let expected_report_path = session_dir.join(report_file_name(
-            parse_ts("2026-01-11T00:00:00Z")?,
-            "refs/heads/main",
-            "deadbeef",
-        )?);
-        ensure!(
-            !expected_report_path.exists(),
-            "rolled-back report artifact should not remain at {}",
-            expected_report_path.display()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_review_restores_moved_source_on_identity_mismatch() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let source_path = dir.path().join("incoming-report.md");
-        let source_report = valid_parent_report(
-            "deadbeef",
-            "sess0001",
-            "refs/heads/other",
-            &SeverityCounts::zero(),
-        );
-        fs::write(&source_path, &source_report)?;
-
-        let params = FinalizeReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            verdict: ReviewVerdict::Approve,
-            counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::File(source_path.clone()),
-            validation_kind: ReportValidationKind::ParentReviewReport,
-            copy_input_report: false,
-            auto_close_open_children: true,
-            auto_close_children_status: ReviewerStatus::Cancelled,
-            now: OffsetDateTime::now_utc(),
-        };
-        let Err(err) = finalize_review(params) else {
-            bail!("finalize should fail on report identity mismatch");
-        };
-        let err_text = format!("{err:#}");
-        ensure!(err_text.contains("validate report artifact under lock"));
-        ensure!(err_text.contains("identity_mismatch"));
-
-        ensure!(
-            source_path.exists(),
-            "source report file should be restored after failed finalize"
-        );
-        ensure!(fs::read_to_string(&source_path)? == source_report);
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after failed finalize"))?;
-        ensure!(persisted.status == ReviewerStatus::InProgress);
-        ensure!(persisted.report_file.is_none());
-        let expected_report_path = session_dir.join(report_file_name(
-            parse_ts("2026-01-11T00:00:00Z")?,
-            "refs/heads/main",
-            "deadbeef",
-        )?);
-        ensure!(
-            !expected_report_path.exists(),
-            "rolled-back report artifact should not remain at {}",
-            expected_report_path.display()
-        );
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn finalize_review_succeeds_when_source_cleanup_fails() -> anyhow::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::InProgress,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: Some(ReviewPhase::ReportWriting),
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let source_dir = dir.path().join("locked-source");
-        fs::create_dir_all(&source_dir)?;
-        let source_path = source_dir.join("incoming-report.md");
-        fs::write(
-            &source_path,
-            valid_parent_report(
-                "deadbeef",
-                "sess0001",
-                "refs/heads/main",
-                &SeverityCounts::zero(),
-            ),
-        )?;
-
-        fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o555))?;
-
-        let result = finalize_review(FinalizeReviewParams {
-            session: SessionLocator::new(session_dir.clone()),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            verdict: ReviewVerdict::Approve,
-            counts: SeverityCounts::zero(),
-            report_input: FinalizeReportInput::File(source_path.clone()),
-            validation_kind: ReportValidationKind::ParentReviewReport,
-            copy_input_report: false,
-            auto_close_open_children: true,
-            auto_close_children_status: ReviewerStatus::Cancelled,
-            now: OffsetDateTime::now_utc(),
-        })?;
-
-        fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o755))?;
-
-        ensure!(Path::new(&result.report_path).exists());
-        ensure!(
-            source_path.exists(),
-            "source should remain when cleanup fails"
-        );
-
-        let parsed = read_session_file(&session_dir)?;
-        let persisted = parsed
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == "deadbeef" && r.session_id == "sess0001")
-            .ok_or_else(|| anyhow::anyhow!("review entry missing after finalize"))?;
-        ensure!(persisted.status == ReviewerStatus::Finished);
-        ensure!(persisted.report_file.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn append_note_rejects_bad_lock_owner() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let entry = ReviewEntry {
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            target_ref: "refs/heads/main".to_string(),
-            initiator_status: InitiatorStatus::Requesting,
-            status: ReviewerStatus::Initializing,
-            parent_id: None,
-            started_at: "2026-01-11T00:00:00Z".to_string(),
-            updated_at: "2026-01-11T01:00:00Z".to_string(),
-            finished_at: None,
-            current_phase: None,
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: Vec::new(),
-            child_reviews: Vec::new(),
-            extra: serde_json::Map::default(),
-        };
-        let session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        write_session(&session_dir, &session)?;
-
-        let params = AppendNoteParams {
-            session: SessionLocator::new(session_dir),
-            reviewer_id: "deadbeef".to_string(),
-            session_id: "sess0001".to_string(),
-            role: NoteRole::Reviewer,
-            note_type: NoteType::Question,
-            content: Value::String("why?".to_string()),
-            now: OffsetDateTime::now_utc(),
-            lock_owner: "bad".to_string(),
-        };
-        let Err(err) = append_note(params) else {
-            bail!("bad lock_owner should error");
-        };
-        ensure!(err.to_string().contains("lock_owner"));
-        Ok(())
-    }
-
-    #[test]
-    fn strip_repo_root_best_effort_strips_exact_prefix() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let repo_root = dir.path().join("repo");
-        let expected = PathBuf::from(".local")
-            .join("reports")
-            .join("code_reviews")
-            .join("2026-01-11")
-            .join("report.md");
-        let report_path = repo_root.join(&expected);
-
-        let Some(parent) = report_path.parent() else {
-            bail!("report_path should have a parent");
-        };
-        fs::create_dir_all(parent)?;
-        fs::write(&report_path, "report")?;
-
-        let Some(actual) = strip_repo_root_best_effort(&repo_root, &report_path) else {
-            bail!("expected Some(..) for exact prefix match");
-        };
-        ensure!(actual == expected);
-        Ok(())
-    }
-
-    #[test]
-    fn strip_repo_root_best_effort_strips_canonicalized_prefix() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let repo_root = dir.path().join("repo");
-        fs::create_dir_all(repo_root.join("subdir"))?;
-
-        let expected = PathBuf::from(".local")
-            .join("reports")
-            .join("code_reviews")
-            .join("2026-01-11")
-            .join("report.md");
-        let report_path = repo_root.join(&expected);
-
-        let Some(parent) = report_path.parent() else {
-            bail!("report_path should have a parent");
-        };
-        fs::create_dir_all(parent)?;
-        fs::write(&report_path, "report")?;
-
-        // Introduce non-canonical `..` components so the initial `strip_prefix` fails,
-        // but canonicalization succeeds.
-        let repo_root_with_dotdot = repo_root.join("subdir").join("..");
-        let Some(actual) = strip_repo_root_best_effort(&repo_root_with_dotdot, &report_path) else {
-            bail!("expected Some(..) via canonicalization fallback");
-        };
-        ensure!(actual == expected);
-        Ok(())
-    }
-
-    #[test]
-    fn strip_repo_root_best_effort_returns_none_for_unrelated_local_root() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let real_repo_root = dir.path().join("repo");
-        let other_root = dir.path().join("other");
-        fs::create_dir_all(&other_root)?;
-
-        let expected = PathBuf::from(".local")
-            .join("reports")
-            .join("code_reviews")
-            .join("2026-01-11")
-            .join("report.md");
-        let report_path = real_repo_root.join(&expected);
-
-        let Some(parent) = report_path.parent() else {
-            bail!("report_path should have a parent");
-        };
-        fs::create_dir_all(parent)?;
-        fs::write(&report_path, "report")?;
-
-        ensure!(strip_repo_root_best_effort(&other_root, &report_path).is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn strip_repo_root_best_effort_returns_none_without_match_or_local() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let repo_root = dir.path().join("repo");
-        fs::create_dir_all(&repo_root)?;
-
-        let report_path = dir.path().join("somewhere").join("report.md");
-        let Some(parent) = report_path.parent() else {
-            bail!("report_path should have a parent");
-        };
-        fs::create_dir_all(parent)?;
-        fs::write(&report_path, "report")?;
-
-        ensure!(strip_repo_root_best_effort(&repo_root, &report_path).is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn infer_repo_root_from_session_dir_extracts_default_layout_root() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let repo_root = dir.path().join("repo");
-        let session_dir = repo_root
-            .join(".local")
-            .join("reports")
-            .join("code_reviews")
-            .join("2026-01-11");
-        fs::create_dir_all(&session_dir)?;
-        let actual = infer_repo_root_from_session_dir(&session_dir)
-            .ok_or_else(|| anyhow::anyhow!("failed to infer repo root"))?;
-        ensure!(actual == repo_root);
-        Ok(())
-    }
-
-    #[test]
-    fn infer_repo_root_from_session_dir_returns_none_for_non_default_layout() -> anyhow::Result<()>
-    {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        fs::create_dir_all(&session_dir)?;
-        ensure!(infer_repo_root_from_session_dir(&session_dir).is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn write_session_file_atomic_preserves_review_unknown_fields() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        fs::create_dir_all(&session_dir)?;
-
-        let raw_session_toml = format!(
-            r#"schema_version = "{SESSION_SCHEMA_VERSION}"
-storage_format = "toml_primary"
-session_date = "2026-01-11"
-repo_root = "{}"
-reviewers = ["deadbeef"]
-
-[[reviews]]
-reviewer_id = "deadbeef"
-session_id = "sess0001"
-target_ref = "refs/heads/main"
-initiator_status = "REQUESTING"
-status = "IN_PROGRESS"
-started_at = "2026-01-11T00:00:00Z"
-updated_at = "2026-01-11T01:00:00Z"
-current_phase = "INGESTION"
-notes = []
-future_extension = {{ token = "abc123" }}
-
-[reviews.counts]
-blocker = 0
-major = 0
-minor = 0
-nit = 0
-"#,
-            dir.path().to_string_lossy()
-        );
-        fs::write(session_dir.join("_session.toml"), raw_session_toml)?;
-
-        let session = read_session_file(&session_dir)?;
-        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
-
-        let written: toml::Value =
-            toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
-        let reviews = written
-            .get("reviews")
-            .and_then(toml::Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("missing reviews"))?;
-        let future_extension = reviews
-            .first()
-            .and_then(|review| review.get("future_extension"))
-            .ok_or_else(|| anyhow::anyhow!("missing review future_extension"))?;
-        ensure!(future_extension.get("token").and_then(toml::Value::as_str) == Some("abc123"));
-        Ok(())
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)] // Reason: validates full JSON/TOML scalar edge-case round-trip in one scenario.
-    fn write_session_file_atomic_round_trips_json_only_scalars_in_toml_primary(
-    ) -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let session_dir = dir.path().join("session");
-        let mut entry = make_entry();
-        entry.status = ReviewerStatus::InProgress;
-        entry.finished_at = None;
-        entry.current_phase = Some(ReviewPhase::Ingestion);
-        entry.verdict = None;
-        entry.report_file = None;
-        entry.extra.insert("json_null".to_string(), Value::Null);
-        entry.extra.insert(
-            "json_u64".to_string(),
-            Value::Number(serde_json::Number::from(u64::MAX)),
-        );
-        entry.extra.insert(
-            "json_nested".to_string(),
-            serde_json::json!({
-                "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
-            }),
-        );
-        entry.extra.insert(
-            "json_reserved_scalar_shape".to_string(),
-            serde_json::json!({
-                "__mpcr_json_type": "scalar",
-                "__mpcr_json_value": "foo"
-            }),
-        );
-        entry.extra.insert(
-            "json_reserved_scalar_shape_null".to_string(),
-            serde_json::json!({
-                "__mpcr_json_type": "scalar",
-                "__mpcr_json_value": "null"
-            }),
-        );
-        entry.extra.insert(
-            "json_user_escape_marker".to_string(),
-            serde_json::json!({
-                "__mpcr_json_escape": "object",
-                "keep": true
-            }),
-        );
-
-        let mut session = SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: "2026-01-11".to_string(),
-            repo_root: dir.path().to_string_lossy().to_string(),
-            reviewers: vec!["deadbeef".to_string()],
-            reviews: vec![entry],
-            extra: serde_json::Map::new(),
-        };
-        session.extra.insert("top_null".to_string(), Value::Null);
-        session.extra.insert(
-            "top_u64".to_string(),
-            Value::Number(serde_json::Number::from(u64::MAX)),
-        );
-
-        write_session_file_atomic(&session_dir, "deadbeef", &session)?;
-
-        let parsed = read_session_file(&session_dir)?;
-        ensure!(parsed.extra.get("top_null") == Some(&Value::Null));
-        ensure!(
-            parsed.extra.get("top_u64") == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
-        );
-
-        let review = parsed
-            .reviews
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("missing review"))?;
-        ensure!(review.extra.get("json_null") == Some(&Value::Null));
-        ensure!(
-            review.extra.get("json_u64")
-                == Some(&Value::Number(serde_json::Number::from(u64::MAX)))
-        );
-        ensure!(
-            review.extra.get("json_nested")
-                == Some(&serde_json::json!({
-                    "items": [null, u64::MAX, {"flag": true, "label": "ok"}]
-                }))
-        );
-        ensure!(
-            review.extra.get("json_reserved_scalar_shape")
-                == Some(&serde_json::json!({
-                    "__mpcr_json_type": "scalar",
-                    "__mpcr_json_value": "foo"
-                }))
-        );
-        ensure!(
-            review.extra.get("json_reserved_scalar_shape_null")
-                == Some(&serde_json::json!({
-                    "__mpcr_json_type": "scalar",
-                    "__mpcr_json_value": "null"
-                }))
-        );
-        ensure!(
-            review.extra.get("json_user_escape_marker")
-                == Some(&serde_json::json!({
-                    "__mpcr_json_escape": "object",
-                    "keep": true
-                }))
-        );
-
-        let written: toml::Value =
-            toml::from_str(&fs::read_to_string(session_dir.join("_session.toml"))?)?;
-        ensure!(
-            written
-                .get("top_null")
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get("__mpcr_json_value"))
-                .and_then(toml::Value::as_str)
-                == Some("null")
-        );
-        ensure!(
-            written
-                .get("top_u64")
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get("__mpcr_json_value"))
-                .and_then(toml::Value::as_str)
-                == Some("u64:18446744073709551615")
-        );
-        ensure!(
-            written
-                .get("reviews")
-                .and_then(toml::Value::as_array)
-                .and_then(|reviews| reviews.first())
-                .and_then(|review| review.get("json_reserved_scalar_shape"))
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
-                .and_then(toml::Value::as_str)
-                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
-        );
-        ensure!(
-            written
-                .get("reviews")
-                .and_then(toml::Value::as_array)
-                .and_then(|reviews| reviews.first())
-                .and_then(|review| review.get("json_user_escape_marker"))
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get(TAGGED_SCALAR_ESCAPE_KEY))
-                .and_then(toml::Value::as_str)
-                == Some(TAGGED_SCALAR_ESCAPE_VALUE)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_rejects_parent_dir_components() -> anyhow::Result<()> {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let err = match resolve_report_file_path(repo, sess, "../../../etc/passwd") {
-            Ok(path) => bail!(
-                "should reject path with '..' components, got {}",
-                path.display()
-            ),
-            Err(err) => err,
-        };
-        let msg = err.to_string();
-        ensure!(
-            msg.contains(".."),
-            "error should mention '..' components: {msg}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_rejects_hidden_parent_dir() -> anyhow::Result<()> {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let err = match resolve_report_file_path(repo, sess, "subdir/../../escape.md") {
-            Ok(path) => bail!(
-                "should reject path with embedded '..' component, got {}",
-                path.display()
-            ),
-            Err(err) => err,
-        };
-        let msg = err.to_string();
-        ensure!(
-            msg.contains(".."),
-            "error should mention '..' components: {msg}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_allows_valid_repo_relative_path() -> anyhow::Result<()> {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let result = resolve_report_file_path(repo, sess, ".local/reports/review.md")?;
-        ensure!(result == PathBuf::from("/repo/.local/reports/review.md"));
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_allows_simple_filename() -> anyhow::Result<()> {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let result = resolve_report_file_path(repo, sess, "report.md")?;
-        ensure!(result == PathBuf::from("/repo/.sessions/s1/report.md"));
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_allows_absolute_path_under_repo_root() -> anyhow::Result<()> {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let result = resolve_report_file_path(repo, sess, "/repo/reports/review.md")?;
-        ensure!(result == PathBuf::from("/repo/reports/review.md"));
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_report_rejects_absolute_path_outside_repo_root() {
-        let repo = Path::new("/repo");
-        let sess = Path::new("/repo/.sessions/s1");
-        let result = resolve_report_file_path(repo, sess, "/tmp/report.md");
-        assert!(
-            result.is_err(),
-            "absolute path outside repo root should be rejected"
-        );
-    }
 }
 
 #[derive(Debug, Clone)]
-/// Parameters for [`register_reviewer`].
 pub struct RegisterReviewerParams {
-    /// Repo root used when creating a brand-new session file (stored as canonical path).
-    pub repo_root: PathBuf,
-    /// Session date used for the `session_date` field (and default path computation).
-    pub session_date: Date,
-    /// Session directory locator.
     pub session: SessionLocator,
-    /// Target ref under review (branch/PR/commit/etc).
     pub target_ref: String,
-    /// Optional override for `reviewer_id` (id8).
     pub reviewer_id: Option<String>,
-    /// Optional override for `session_id` (id8).
-    pub session_id: Option<String>,
-    /// Optional parent reviewer id (id8) for handoff/chaining.
-    pub parent_id: Option<String>,
-    /// Timestamp used for `started_at` / `updated_at`.
-    pub now: OffsetDateTime,
+    pub role: Option<String>,
+    pub role_kind: Option<AgentRoleKind>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-/// Result returned by [`register_reviewer`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RegisterReviewerResult {
-    /// The reviewer id used for the entry (id8).
-    pub reviewer_id: String,
-    /// Optional parent reviewer id (id8) for handoff/chaining.
-    pub parent_id: Option<String>,
-    /// The session id used for the entry (id8).
-    pub session_id: String,
-    /// Session directory as a string.
     pub session_dir: String,
-    /// Session file path as a string.
-    pub session_file: String,
-    /// Storage format used for the session artifact.
-    pub session_format: SessionStorageFormat,
-}
-
-/// Register a reviewer in the session file.
-///
-/// This creates the session directory and `_session.toml` if needed, adds the reviewer to the
-/// `reviewers` list (if missing), and appends a new entry in `reviews` unless one already exists
-/// for the same `(reviewer_id, session_id)`.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, the session cannot be read or written,
-/// or the lock cannot be acquired.
-#[allow(clippy::too_many_lines)]
-pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<RegisterReviewerResult> {
-    let reviewer_id = match params.reviewer_id {
-        Some(reviewer_id) => reviewer_id,
-        None => id::random_id8()?,
-    };
-    validate_id8(&reviewer_id, "reviewer_id")?;
-
-    if let Some(ref parent_id) = params.parent_id {
-        validate_id8(parent_id, "parent_id")?;
-        if parent_id == &reviewer_id {
-            return Err(anyhow::anyhow!("parent_id must not equal reviewer_id"));
-        }
-    }
-
-    fs::create_dir_all(params.session.session_dir()).with_context(|| {
-        format!(
-            "create session dir {}",
-            params.session.session_dir().display()
-        )
-    })?;
-
-    let lock_owner = reviewer_id.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner,
-        LockConfig::default(),
-    )?;
-
-    let mut session = if resolve_active_session_artifact(params.session.session_dir())?.is_some() {
-        read_session_file(params.session.session_dir())?
-    } else {
-        let repo_root = params
-            .repo_root
-            .canonicalize()
-            .with_context(|| format!("canonicalize repo_root {}", params.repo_root.display()))?;
-        SessionFile {
-            schema_version: SESSION_SCHEMA_VERSION.to_string(),
-            session_date: params.session_date.to_string(),
-            repo_root: repo_root.to_string_lossy().to_string(),
-            reviewers: vec![],
-            reviews: vec![],
-            extra: serde_json::Map::new(),
-        }
-    };
-
-    let session_id_was_explicit = params.session_id.is_some();
-
-    let session_id = match params.session_id {
-        Some(session_id) => {
-            validate_id8(&session_id, "session_id")?;
-            session_id
-        }
-        None => {
-            if let Some(ref parent_id) = params.parent_id {
-                // Preserve idempotency for child reviewer registration: if this reviewer already has
-                // an entry for this (target_ref, parent_id), reuse its session_id before inferring
-                // from parent entries.
-                let mut existing_child_session_ids: Vec<&str> = Vec::new();
-                for entry in &session.reviews {
-                    if entry.reviewer_id == reviewer_id
-                        && entry.target_ref == params.target_ref
-                        && entry.parent_id.as_deref() == Some(parent_id.as_str())
-                    {
-                        existing_child_session_ids.push(entry.session_id.as_str());
-                    }
-                }
-                existing_child_session_ids.sort_unstable();
-                existing_child_session_ids.dedup();
-                if existing_child_session_ids.len() == 1 {
-                    let Some(&session_id) = existing_child_session_ids.first() else {
-                        return Err(anyhow::anyhow!(
-                            "internal error: child session_id set unexpectedly empty"
-                        ));
-                    };
-                    session_id.to_string()
-                } else {
-                    if !existing_child_session_ids.is_empty() {
-                        let available = existing_child_session_ids.join(", ");
-                        return Err(anyhow::anyhow!(
-                            "review entry is ambiguous for reviewer_id/parent_id/target_ref; pass --session-id (available session_ids: {available})"
-                        ));
-                    }
-
-                    let mut parent_session_ids: Vec<&str> = Vec::new();
-                    for entry in &session.reviews {
-                        if entry.reviewer_id == parent_id.as_str()
-                            && entry.target_ref == params.target_ref
-                        {
-                            parent_session_ids.push(entry.session_id.as_str());
-                        }
-                    }
-                    parent_session_ids.sort_unstable();
-                    parent_session_ids.dedup();
-
-                    match parent_session_ids.len() {
-                        0 => {
-                            return Err(anyhow::anyhow!(
-                                "parent review entry not found for parent_id/target_ref (run `mpcr reviewer register` for the parent first)"
-                            ));
-                        }
-                        1 => {
-                            let Some(&session_id) = parent_session_ids.first() else {
-                                return Err(anyhow::anyhow!(
-                                    "internal error: parent session_id set unexpectedly empty"
-                                ));
-                            };
-                            session_id.to_string()
-                        }
-                        _ => {
-                            let available = parent_session_ids.join(", ");
-                            return Err(anyhow::anyhow!(
-                                "parent review entry is ambiguous for parent_id/target_ref; pass --session-id (available session_ids: {available})"
-                            ));
-                        }
-                    }
-                }
-            } else {
-                // Join active session if one exists for this target_ref.
-                let active_session = session.reviews.iter().find(|r| {
-                    r.target_ref == params.target_ref
-                        && matches!(
-                            r.status,
-                            ReviewerStatus::Initializing
-                                | ReviewerStatus::InProgress
-                                | ReviewerStatus::Blocked
-                        )
-                });
-                match active_session {
-                    Some(r) => r.session_id.clone(),
-                    None => id::random_id8()?,
-                }
-            }
-        }
-    };
-
-    if let Some(ref parent_id) = params.parent_id {
-        let parent_exists = session.reviews.iter().any(|r| {
-            r.reviewer_id == parent_id.as_str()
-                && r.session_id == session_id
-                && r.target_ref == params.target_ref
-        });
-        if !parent_exists {
-            return Err(anyhow::anyhow!(
-                "parent review entry not found for parent_id/session_id/target_ref (run `mpcr reviewer register` for the parent first)"
-            ));
-        }
-    }
-
-    if let Some(existing_index) = session
-        .reviews
-        .iter()
-        .position(|r| r.reviewer_id == reviewer_id && r.session_id == session_id)
-    {
-        let mut should_sync_parent = false;
-        let existing = session
-            .reviews
-            .get_mut(existing_index)
-            .ok_or_else(|| anyhow::anyhow!("review entry index invalid"))?;
-        let mut changed = false;
-
-        if existing.target_ref != params.target_ref {
-            return Err(anyhow::anyhow!(
-                "review entry already exists for reviewer_id/session_id but target_ref differs"
-            ));
-        }
-
-        if let Some(ref requested_parent_id) = params.parent_id {
-            match existing.parent_id.as_deref() {
-                None => {
-                    existing.parent_id = Some(requested_parent_id.clone());
-                    existing.updated_at = format_ts(params.now)?;
-                    changed = true;
-                    should_sync_parent = true;
-                }
-                Some(existing_parent_id) if existing_parent_id == requested_parent_id.as_str() => {}
-                Some(_) => {
-                    return Err(anyhow::anyhow!(
-                        "review entry already exists for reviewer_id/session_id but parent_id differs"
-                    ));
-                }
-            }
-        }
-
-        let parent_id_for_result = existing.parent_id.clone();
-
-        if !session.reviewers.iter().any(|r| r == &reviewer_id) {
-            session.reviewers.push(reviewer_id.clone());
-            changed = true;
-        }
-        if should_sync_parent {
-            sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
-            changed = true;
-        }
-        if changed {
-            write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
-        }
-        let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
-
-        return Ok(RegisterReviewerResult {
-            reviewer_id,
-            parent_id: parent_id_for_result,
-            session_id,
-            session_dir: params.session.session_dir().to_string_lossy().to_string(),
-            session_file: artifact.path.to_string_lossy().to_string(),
-            session_format: artifact.format,
-        });
-    }
-
-    if session_id_was_explicit {
-        if let Some(existing_target_ref) = session.reviews.iter().find_map(|r| {
-            (r.session_id == session_id && r.target_ref != params.target_ref)
-                .then_some(r.target_ref.as_str())
-        }) {
-            return Err(anyhow::anyhow!(
-                "session_id already exists for a different target_ref (existing={existing_target_ref}, requested={})",
-                params.target_ref
-            ));
-        }
-    }
-
-    let initiator_status = session
-        .reviews
-        .iter()
-        .find(|r| r.target_ref == params.target_ref && r.session_id == session_id.as_str())
-        .map_or(InitiatorStatus::Requesting, |existing| {
-            existing.initiator_status
-        });
-
-    if !session.reviewers.iter().any(|r| r == &reviewer_id) {
-        session.reviewers.push(reviewer_id.clone());
-    }
-
-    let started_at = format_ts(params.now)?;
-    let parent_id_for_result = params.parent_id.clone();
-
-    session.reviews.push(ReviewEntry {
-        reviewer_id: reviewer_id.clone(),
-        session_id: session_id.clone(),
-        target_ref: params.target_ref,
-        initiator_status,
-        status: ReviewerStatus::Initializing,
-        parent_id: params.parent_id,
-        started_at: started_at.clone(),
-        updated_at: started_at,
-        finished_at: None,
-        current_phase: None,
-        verdict: None,
-        counts: SeverityCounts::zero(),
-        report_file: None,
-        notes: vec![],
-        child_reviews: vec![],
-        extra: serde_json::Map::default(),
-    });
-
-    if parent_id_for_result.is_some() {
-        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
-    }
-
-    write_session_file_atomic(params.session.session_dir(), &reviewer_id, &session)?;
-    let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
-
-    Ok(RegisterReviewerResult {
-        reviewer_id,
-        parent_id: parent_id_for_result,
-        session_id,
-        session_dir: params.session.session_dir().to_string_lossy().to_string(),
-        session_file: artifact.path.to_string_lossy().to_string(),
-        session_format: artifact.format,
-    })
+    pub session_id: String,
+    pub reviewer_id: String,
+    pub target_ref: String,
+    pub agent_dir: String,
+    pub agent_ledger_json: String,
+    pub agent_ledger_toml: String,
+    pub session_format_primary: StorageFormat,
 }
 
 #[derive(Debug, Clone)]
-/// Parameters for [`spawn_child_reviewers`].
 pub struct SpawnChildReviewersParams {
-    /// Session directory locator.
     pub session: SessionLocator,
-    /// Target ref under review (branch/PR/commit/etc).
-    pub target_ref: String,
-    /// Session id (id8) that children join.
-    pub session_id: String,
-    /// Parent reviewer id (id8) recorded into each child entry.
-    pub parent_reviewer_id: String,
-    /// Number of child reviewer entries to create.
-    pub count: usize,
-    /// Timestamp used for `started_at` / `updated_at`.
-    pub now: OffsetDateTime,
-}
-
-const MAX_SPAWN_CHILDREN: usize = 32;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// A child reviewer entry spawned by [`spawn_child_reviewers`].
-pub struct SpawnedChildReviewer {
-    /// The child's reviewer id (id8).
-    pub reviewer_id: String,
-    /// The parent reviewer id (id8) recorded on this entry.
     pub parent_id: String,
+    pub count: u8,
+    pub role_id: Option<String>,
+    pub worker_kind: Option<WorkerKind>,
+    pub domain_id: Option<ModuleId>,
+    pub language: Option<String>,
+    pub module_ids: Vec<ModuleId>,
+    pub focus_surfaces: Vec<SurfaceId>,
+    pub claimed_scope: Vec<String>,
+    pub delegated_scope: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Result returned by [`spawn_child_reviewers`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SpawnChildReviewersResult {
-    /// The parent reviewer id used for all spawned children (id8).
-    pub parent_id: String,
-    /// The session id used for all spawned children (id8).
-    pub session_id: String,
-    /// The target ref used for all spawned children.
-    pub target_ref: String,
-    /// Session directory as a string.
-    pub session_dir: String,
-    /// Session file path as a string.
-    pub session_file: String,
-    /// Storage format used for the session artifact.
-    pub session_format: SessionStorageFormat,
-    /// Spawned child reviewer identifiers.
-    pub children: Vec<SpawnedChildReviewer>,
-}
-
-/// Spawn child reviewer entries under a single parent reviewer id.
-///
-/// This is intended for deterministic multi-agent orchestration:
-/// an orchestrator registers first, then spawns child reviewer entries that:
-/// - join the same `session_id` and `target_ref`
-/// - record `parent_id` for lineage
-/// - start in `INITIALIZING` so each child can transition independently
-///
-/// # Errors
-/// Returns an error if the parent entry cannot be found, identifiers are invalid,
-/// the session cannot be read or written, or the lock cannot be acquired.
-#[allow(clippy::too_many_lines)]
-pub fn spawn_child_reviewers(
-    params: SpawnChildReviewersParams,
-) -> anyhow::Result<SpawnChildReviewersResult> {
-    validate_id8(&params.session_id, "session_id")?;
-    validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
-    if params.count == 0 {
-        return Err(anyhow::anyhow!("count must be >= 1"));
-    }
-    if params.count > MAX_SPAWN_CHILDREN {
-        return Err(anyhow::anyhow!("count must be <= {MAX_SPAWN_CHILDREN}"));
-    }
-
-    if resolve_active_session_artifact(params.session.session_dir())?.is_none() {
-        return Err(anyhow::anyhow!(
-            "session file not found: {} (run `mpcr reviewer register` first)",
-            session_file_path(params.session.session_dir()).display()
-        ));
-    }
-
-    let lock_owner = params.parent_reviewer_id.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-
-    let mut session = read_session_file(params.session.session_dir())?;
-
-    let parent_entry = session.reviews.iter().find(|r| {
-        let reviewer_matches = r.reviewer_id == params.parent_reviewer_id;
-        let session_matches = r.session_id == params.session_id;
-        let target_matches = r.target_ref == params.target_ref;
-        reviewer_matches && session_matches && target_matches
-    });
-    let Some(parent_entry) = parent_entry else {
-        return Err(anyhow::anyhow!(
-            "parent review entry not found for reviewer_id/session_id/target_ref (run `mpcr reviewer register` for the parent first)"
-        ));
-    };
-    if parent_entry.status.is_terminal() {
-        return Err(anyhow::anyhow!(
-            "parent review {} is already terminal ({:?}) and cannot spawn new children",
-            params.parent_reviewer_id,
-            parent_entry.status,
-        ));
-    }
-    // Children always start with REQUESTING regardless of parent's initiator_status.
-    // This ensures children are discoverable/actionable by applicators.
-    let initiator_status = InitiatorStatus::Requesting;
-
-    if !session
-        .reviewers
-        .iter()
-        .any(|r| r == params.parent_reviewer_id.as_str())
-    {
-        session.reviewers.push(params.parent_reviewer_id.clone());
-    }
-
-    let mut used_ids: HashSet<String> = session.reviewers.iter().cloned().collect();
-    for entry in &session.reviews {
-        used_ids.insert(entry.reviewer_id.clone());
-    }
-
-    let started_at = format_ts(params.now)?;
-
-    let mut children_ids = Vec::with_capacity(params.count);
-    while children_ids.len() < params.count {
-        let candidate = id::random_id8()?;
-        if used_ids.insert(candidate.clone()) {
-            children_ids.push(candidate);
-        }
-    }
-
-    let mut children = Vec::with_capacity(params.count);
-    let mut child_refs = Vec::with_capacity(params.count);
-    for reviewer_id in children_ids {
-        session.reviewers.push(reviewer_id.clone());
-        session.reviews.push(ReviewEntry {
-            reviewer_id: reviewer_id.clone(),
-            session_id: params.session_id.clone(),
-            target_ref: params.target_ref.clone(),
-            initiator_status,
-            status: ReviewerStatus::Initializing,
-            parent_id: Some(params.parent_reviewer_id.clone()),
-            started_at: started_at.clone(),
-            updated_at: started_at.clone(),
-            finished_at: None,
-            current_phase: None,
-            verdict: None,
-            counts: SeverityCounts::zero(),
-            report_file: None,
-            notes: vec![],
-            child_reviews: vec![],
-            extra: serde_json::Map::default(),
-        });
-        child_refs.push((reviewer_id.clone(), params.session_id.clone()));
-        children.push(SpawnedChildReviewer {
-            reviewer_id,
-            parent_id: params.parent_reviewer_id.clone(),
-        });
-    }
-
-    for (reviewer_id, session_id) in child_refs {
-        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
-    }
-
-    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
-    let artifact = resolved_or_default_session_artifact(params.session.session_dir())?;
-
-    Ok(SpawnChildReviewersResult {
-        parent_id: params.parent_reviewer_id,
-        session_id: params.session_id,
-        target_ref: params.target_ref,
-        session_dir: params.session.session_dir().to_string_lossy().to_string(),
-        session_file: artifact.path.to_string_lossy().to_string(),
-        session_format: artifact.format,
-        children,
-    })
+    pub child_ids: Vec<String>,
+    pub child_agent_dirs: Vec<String>,
+    pub child_agent_ledgers_json: Vec<String>,
+    pub child_agent_ledgers_toml: Vec<String>,
+    pub session_format_primary: StorageFormat,
 }
 
 #[derive(Debug, Clone)]
-/// Parameters for [`update_review`].
-pub struct UpdateReviewParams {
-    /// Session directory locator.
+pub struct CloseChildReviewsParams {
     pub session: SessionLocator,
-    /// Reviewer id for the entry being updated (id8).
-    pub reviewer_id: String,
-    /// Session id for the entry being updated (id8).
-    pub session_id: String,
-    /// If set, update the reviewer-owned `status`.
-    pub status: Option<ReviewerStatus>,
-    /// If set, update `current_phase` (use `Some(None)` to clear).
-    pub phase: Option<Option<ReviewPhase>>,
-    /// Timestamp written to `updated_at`.
-    pub now: OffsetDateTime,
+    pub parent_id: String,
+    pub status: ReviewProcessStatus,
 }
 
-/// Update a review entry's reviewer-owned `status` and/or `current_phase`.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, the session cannot be read or written,
-/// or the lock cannot be acquired.
-pub fn update_review(params: &UpdateReviewParams) -> anyhow::Result<()> {
-    validate_id8(&params.reviewer_id, "reviewer_id")?;
-    validate_id8(&params.session_id, "session_id")?;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CloseChildReviewsResult {
+    pub closed_ids: Vec<String>,
+}
 
-    let lock_owner = params.reviewer_id.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner,
-        LockConfig::default(),
-    )?;
+#[derive(Debug, Clone)]
+pub struct UpdateReviewParams {
+    pub session: SessionLocator,
+    pub reviewer_id: String,
+    pub status: ReviewProcessStatus,
+    pub phase: Option<String>,
+}
 
-    let mut session = read_session_file(params.session.session_dir())?;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateReviewResult {
+    pub reviewer_id: String,
+    pub status: ReviewProcessStatus,
+    pub phase: Option<String>,
+}
 
-    let entry = session
-        .reviews
-        .iter_mut()
-        .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-        .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
+#[derive(Debug, Clone)]
+pub struct AppendReviewerNoteParams {
+    pub session: SessionLocator,
+    pub reviewer_id: String,
+    pub content: String,
+}
 
-    if entry.status.is_terminal() {
-        if let Some(new_status) = params.status {
-            if new_status != entry.status {
-                anyhow::bail!(
-                    "cannot change terminal review status {:?} to {:?}",
-                    entry.status,
-                    new_status
-                );
+#[derive(Debug, Clone)]
+pub struct AppendApplicatorNoteParams {
+    pub session: SessionLocator,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppendNoteResult {
+    pub note_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewerArtifactParams {
+    pub session: SessionLocator,
+    pub reviewer_id: String,
+    pub artifact_file: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplicatorArtifactParams {
+    pub session: SessionLocator,
+    pub artifact_file: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistRouteArtifactsParams {
+    pub session: SessionLocator,
+    pub target_ref: String,
+    pub surface_map: crate::artifacts::SurfaceMapArtifact,
+    pub route_decision: crate::artifacts::RouteDecisionArtifact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PersistRouteArtifactsResult {
+    pub surface_map: PersistArtifactResult,
+    pub route_decision: PersistArtifactResult,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyRouteRevisionParams {
+    pub session: SessionLocator,
+    pub artifact_file: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplyRouteRevisionResult {
+    pub route_revision: PersistArtifactResult,
+    pub route_decision: PersistArtifactResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PersistArtifactResult {
+    pub artifact_id: String,
+    pub artifact_kind: ArtifactKind,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toml_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_path: Option<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetApplicatorStatusParams {
+    pub session: SessionLocator,
+    pub status: ApplicatorStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicatorWaitResult {
+    pub status: ApplicatorStatus,
+    pub parent_review_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_review: Option<ArtifactPointer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportView {
+    All,
+    Open,
+    Closed,
+    InProgress,
+    Final,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReportEntry {
+    pub reviewer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub role: String,
+    pub role_kind: AgentRoleKind,
+    pub status: ReviewProcessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    pub agent_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    pub child_count: usize,
+    #[serde(default)]
+    pub lineage: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub counters: AgentCounters,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_contents: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReportsResult {
+    pub view: ReportView,
+    pub recursive: bool,
+    pub include_leaf_children: bool,
+    #[serde(default)]
+    pub reports: Vec<ReportEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concatenated_report: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_report_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FinalSummary {
+    pub session_id: String,
+    pub target_ref: String,
+    pub total_agents: u64,
+    pub active_agents: u64,
+    pub completed_agents: u64,
+    pub report_count: u64,
+    pub applied_findings: u64,
+    pub declined_findings: u64,
+    pub low_signal_rejections: u64,
+    pub duplicate_rejections: u64,
+    pub reopen_triggers: u64,
+    #[serde(default)]
+    pub severity_totals: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub domain_totals: BTreeMap<String, u64>,
+}
+
+fn derive_repo_root(session_dir: &Path) -> anyhow::Result<PathBuf> {
+    session_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "error: could not derive repo root from {}",
+                session_dir.display()
+            )
+        })
+}
+
+fn derive_session_date(session_dir: &Path) -> anyhow::Result<String> {
+    session_dir
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(|| anyhow::anyhow!("error: invalid session dir {}", session_dir.display()))
+}
+
+fn atomic_write(path: &Path, body: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("error: path {} has no parent", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, body).with_context(|| format!("write {}", temp_path.display()))?;
+    fs::rename(&temp_path, path)
+        .with_context(|| format!("rename {} -> {}", temp_path.display(), path.display()))?;
+    Ok(())
+}
+
+fn read_optional_text(path: &Path) -> anyhow::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(body) => Ok(Some(body)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+fn parse_json<T: DeserializeOwned>(body: &str, label: &str) -> anyhow::Result<T> {
+    serde_json::from_str(body).map_err(|err| anyhow::anyhow!("error: parse {label} JSON: {err}"))
+}
+
+fn parse_toml<T: DeserializeOwned>(body: &str, label: &str) -> anyhow::Result<T> {
+    toml::from_str(body).map_err(|err| anyhow::anyhow!("error: parse {label} TOML: {err}"))
+}
+
+fn to_json_string<T: Serialize>(value: &T, label: &str) -> anyhow::Result<String> {
+    serde_json::to_string_pretty(value)
+        .map_err(|err| anyhow::anyhow!("error: serialize {label} JSON: {err}"))
+}
+
+fn to_toml_string<T: Serialize>(value: &T, label: &str) -> anyhow::Result<String> {
+    toml::to_string_pretty(value)
+        .map_err(|err| anyhow::anyhow!("error: serialize {label} TOML: {err}"))
+}
+
+fn storage_status(
+    primary_format: StorageFormat,
+    json_available: bool,
+    toml_available: bool,
+    degraded_warnings: Vec<String>,
+) -> StorageStatus {
+    let mut available_formats = Vec::new();
+    if json_available {
+        available_formats.push(StorageFormat::Json);
+    }
+    if toml_available {
+        available_formats.push(StorageFormat::Toml);
+    }
+    StorageStatus {
+        primary_format,
+        available_formats,
+        degraded_warnings,
+    }
+}
+
+fn dual_write(
+    json_path: &Path,
+    toml_path: &Path,
+    json_body: &str,
+    toml_body: &str,
+    label: &str,
+) -> anyhow::Result<StorageStatus> {
+    let json_result = atomic_write(json_path, json_body);
+    let toml_result = atomic_write(toml_path, toml_body);
+    match (json_result, toml_result) {
+        (Ok(()), Ok(())) => Ok(storage_status(StorageFormat::Json, true, true, Vec::new())),
+        (Ok(()), Err(toml_err)) => Ok(storage_status(
+            StorageFormat::Json,
+            true,
+            false,
+            vec![format!("{label}: TOML mirror write failed: {toml_err}")],
+        )),
+        (Err(json_err), Ok(())) => {
+            let retry = atomic_write(json_path, json_body);
+            match retry {
+                Ok(()) => Ok(storage_status(
+                    StorageFormat::Json,
+                    true,
+                    true,
+                    vec![format!(
+                        "{label}: JSON primary write failed but recovered after retry: {json_err}"
+                    )],
+                )),
+                Err(retry_err) => Ok(storage_status(
+                    StorageFormat::Toml,
+                    false,
+                    true,
+                    vec![
+                        format!("{label}: JSON primary write failed: {json_err}"),
+                        format!("{label}: JSON retry failed: {retry_err}"),
+                    ],
+                )),
             }
         }
-    }
-
-    if let Some(status) = params.status {
-        entry.status = status;
-    }
-    if let Some(phase) = params.phase {
-        entry.current_phase = phase;
-    }
-    entry.updated_at = format_ts(params.now)?;
-
-    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
-
-    write_session_file_atomic(params.session.session_dir(), &params.reviewer_id, &session)?;
-    Ok(())
-}
-
-fn report_file_name(
-    started_at: OffsetDateTime,
-    target_ref: &str,
-    reviewer_id: &str,
-) -> anyhow::Result<String> {
-    let fmt = time::format_description::parse("[hour]-[minute]-[second]-[subsecond digits:3]")
-        .context("parse time format")?;
-    let prefix = started_at
-        .format(&fmt)
-        .context("format report time prefix")?;
-    let sanitized = paths::sanitize_ref(target_ref);
-    Ok(format!("{prefix}_{sanitized}_{reviewer_id}.md"))
-}
-
-#[derive(Debug, Clone)]
-/// Report source passed to [`finalize_review`].
-pub enum FinalizeReportInput {
-    /// Read report markdown from in-memory content (stdin path in CLI).
-    Markdown(String),
-    /// Move/copy report markdown from an existing file path.
-    File(PathBuf),
-}
-
-#[derive(Debug, Clone)]
-/// Parameters for [`finalize_review`].
-pub struct FinalizeReviewParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Reviewer id for the entry being finalized (id8).
-    pub reviewer_id: String,
-    /// Session id for the entry being finalized (id8).
-    pub session_id: String,
-    /// Verdict to record.
-    pub verdict: ReviewVerdict,
-    /// Severity counts to record.
-    pub counts: SeverityCounts,
-    /// Report input source for finalization.
-    pub report_input: FinalizeReportInput,
-    /// Validation contract for report markdown.
-    pub validation_kind: ReportValidationKind,
-    /// Preserve the input report file when `report_input` is [`FinalizeReportInput::File`].
-    pub copy_input_report: bool,
-    /// Auto-close unresolved child reviews under this reviewer before finalizing.
-    pub auto_close_open_children: bool,
-    /// Status used when auto-closing unresolved children.
-    pub auto_close_children_status: ReviewerStatus,
-    /// Timestamp written to `finished_at` and `updated_at`.
-    pub now: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// Result returned by [`finalize_review`].
-pub struct FinalizeReviewResult {
-    /// Report path relative to the repo root.
-    pub report_file: String,
-    /// Full report path as a string.
-    pub report_path: String,
-}
-
-fn write_markdown_report_file(
-    report_path: &Path,
-    mut report_markdown: String,
-) -> anyhow::Result<()> {
-    if !report_markdown.ends_with('\n') {
-        report_markdown.push('\n');
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(report_path)
-        .with_context(|| format!("create report file {}", report_path.display()))?;
-    f.write_all(report_markdown.as_bytes())
-        .with_context(|| format!("write report file {}", report_path.display()))?;
-    f.flush()
-        .with_context(|| format!("flush report file {}", report_path.display()))?;
-    Ok(())
-}
-
-fn load_report_markdown(report_input: &FinalizeReportInput) -> anyhow::Result<String> {
-    match report_input {
-        FinalizeReportInput::Markdown(markdown) => Ok(markdown.clone()),
-        FinalizeReportInput::File(path) => std::fs::read_to_string(path)
-            .with_context(|| format!("read report input file {}", path.display())),
-    }
-}
-
-fn same_file_path(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-    let a_can = a.canonicalize().ok();
-    let b_can = b.canonicalize().ok();
-    matches!((a_can, b_can), (Some(a_can), Some(b_can)) if a_can == b_can)
-}
-
-fn validate_auto_close_status(status: ReviewerStatus) -> anyhow::Result<()> {
-    match status {
-        ReviewerStatus::Cancelled | ReviewerStatus::Error => Ok(()),
-        _ => Err(anyhow::anyhow!(
-            "auto-close child status must be CANCELLED or ERROR"
+        (Err(json_err), Err(toml_err)) => Err(anyhow::anyhow!(
+            "error: failed to persist {label}; JSON error: {json_err}; TOML error: {toml_err}"
         )),
     }
 }
 
-const fn severity_contract(counts: &SeverityCounts) -> SeverityExpectation {
-    SeverityExpectation {
-        blocker: counts.blocker,
-        major: counts.major,
-        minor: counts.minor,
-        nit: counts.nit,
+fn parse_session_body(body: &str, format: StorageFormat) -> anyhow::Result<SessionLedger> {
+    if body.contains("proof_packet.v2")
+        || body.contains("parent_review_report")
+        || body.contains("schema_version = \"1.")
+        || body.contains("\"schema_version\":\"1.")
+    {
+        return Err(anyhow::anyhow!(LEGACY_REJECTION_MESSAGE));
     }
+    let session: SessionLedger = match format {
+        StorageFormat::Json => parse_json(body, "session ledger")?,
+        StorageFormat::Toml => parse_toml(body, "session ledger")?,
+    };
+    if session.schema_version != SESSION_SCHEMA_VERSION {
+        return Err(anyhow::anyhow!(LEGACY_REJECTION_MESSAGE));
+    }
+    validate_session_id(&session.session_id)?;
+    Ok(session)
 }
 
-/// Finalize a review entry: write the report file and update the session artifact.
-///
-/// The entire operation is performed under a single session lock to prevent
-/// concurrent mutations between read, report write, and session update.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, report files cannot be written,
-/// or the session cannot be read or written.
-#[allow(clippy::too_many_lines)] // Reason: finalize coordinates lock/read/write and child lifecycle in one transactional flow.
-pub fn finalize_review(params: FinalizeReviewParams) -> anyhow::Result<FinalizeReviewResult> {
-    validate_id8(&params.reviewer_id, "reviewer_id")?;
-    validate_id8(&params.session_id, "session_id")?;
-    validate_auto_close_status(params.auto_close_children_status)?;
-    let report_markdown = canonicalize_report_markdown(
-        &load_report_markdown(&params.report_input)?,
-        params.validation_kind,
-    )
-    .context("canonicalize report artifact to TOML-first format")?;
-    validate_report_markdown(
-        &report_markdown,
-        params.validation_kind,
-        Some(severity_contract(&params.counts)),
-        None,
-    )
-    .context("validate report artifact")?;
-
-    // Hold a single lock across read, report write, and session update to
-    // prevent concurrent mutations between steps.
-    let lock_owner = params.reviewer_id.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner,
-        LockConfig::default(),
-    )?;
-
-    // Step 1: read the session file and compute the report filename.
-    let mut session = read_session_file(params.session.session_dir())?;
+fn session_paths_for(session: &SessionLedger) -> anyhow::Result<paths::SessionPaths> {
     let repo_root = PathBuf::from(&session.repo_root);
-    {
-        let entry = session
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-            .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
-        if entry.report_file.is_some() {
-            return Err(anyhow::anyhow!(
-                "report_file already set; refusing to overwrite"
-            ));
-        }
-    }
-    let open_child_ids: Vec<String> = session
-        .reviews
-        .iter()
-        .filter(|child| {
-            child.parent_id.as_deref() == Some(params.reviewer_id.as_str())
-                && child.session_id == params.session_id
-                && !child.status.is_terminal()
-        })
-        .map(|child| child.reviewer_id.clone())
-        .collect();
-    if !open_child_ids.is_empty() && !params.auto_close_open_children {
-        let list = open_child_ids.join(",");
-        return Err(anyhow::anyhow!(
-            "cannot finalize while child reviews are open (run `mpcr reviewer close-children` first): {list}"
-        ));
-    }
-    let (started_at, target_ref) = {
-        let entry = session
-            .reviews
-            .iter()
-            .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-            .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
-        (parse_ts(&entry.started_at)?, entry.target_ref.clone())
-    };
-    let identity_expectation = ReportIdentityExpectation {
-        reviewer_id: params.reviewer_id.clone(),
-        session_id: params.session_id.clone(),
-        target_ref: target_ref.clone(),
-    };
+    let date = time::Date::parse(
+        &session.session_date,
+        &time::format_description::parse("[year]-[month]-[day]")?,
+    )?;
+    Ok(paths::session_paths(&repo_root, date))
+}
 
-    let filename = report_file_name(started_at, &target_ref, &params.reviewer_id)?;
-    let report_path = params.session.session_dir().join(&filename);
-    let mut source_path_to_remove: Option<PathBuf> = None;
-    let mut report_path_created = false;
-
-    // Step 2: write/move report file (still under the lock).
-    match &params.report_input {
-        FinalizeReportInput::Markdown(_) => {
-            write_markdown_report_file(&report_path, report_markdown)?;
-            report_path_created = true;
-        }
-        FinalizeReportInput::File(source_path) => {
-            if !source_path.exists() {
-                return Err(anyhow::anyhow!(
-                    "report input file does not exist: {}",
-                    source_path.display()
-                ));
-            }
-            if !same_file_path(source_path, &report_path) {
-                if report_path.exists() {
-                    return Err(anyhow::anyhow!(
-                        "report file already exists at destination: {}",
-                        report_path.display()
-                    ));
-                }
-                let latest_source_markdown = std::fs::read_to_string(source_path)
-                    .with_context(|| format!("read report input file {}", source_path.display()))?;
-                let canonical_source_markdown =
-                    canonicalize_report_markdown(&latest_source_markdown, params.validation_kind)
-                        .context("canonicalize report input file to TOML-first format")?;
-                write_markdown_report_file(&report_path, canonical_source_markdown)?;
-                report_path_created = true;
-                if !params.copy_input_report {
-                    source_path_to_remove = Some(source_path.clone());
-                }
-            }
-        }
-    }
-
-    let persisted_report_markdown = fs::read_to_string(&report_path)
-        .with_context(|| format!("read persisted report file {}", report_path.display()))?;
-    if let Err(validation_err) = validate_report_markdown(
-        &persisted_report_markdown,
-        params.validation_kind,
-        Some(severity_contract(&params.counts)),
-        Some(&identity_expectation),
-    ) {
-        if report_path_created {
-            fs::remove_file(&report_path).with_context(|| {
-                format!(
-                    "rollback report file after validation failure {}",
-                    report_path.display()
-                )
-            })?;
-        }
-        return Err(validation_err).context("validate report artifact under lock");
-    }
-
-    let report_file = strip_repo_root_best_effort(&repo_root, &report_path)
-        .map_or(filename, |rel| rel.to_string_lossy().to_string());
-
-    // Step 3: update session entry (still under the same lock).
-    if !open_child_ids.is_empty() {
-        let updated_at = format_ts(params.now)?;
-        let note_timestamp = updated_at.clone();
-        let note_content = Value::String(format!(
-            "auto-closed by parent finalize reviewer_id={} session_id={}",
-            params.reviewer_id, params.session_id
-        ));
-        for entry in &mut session.reviews {
-            if entry.parent_id.as_deref() != Some(params.reviewer_id.as_str()) {
-                continue;
-            }
-            if entry.session_id != params.session_id || entry.target_ref != target_ref {
-                continue;
-            }
-            if entry.status.is_terminal() {
-                continue;
-            }
-
-            entry.status = params.auto_close_children_status;
-            entry.current_phase = None;
-            entry.updated_at.clone_from(&updated_at);
-            entry.notes.push(SessionNote {
-                role: NoteRole::Reviewer,
-                timestamp: note_timestamp.clone(),
-                note_type: NoteType::AutoClosedByParentFinalize,
-                content: note_content.clone(),
-            });
-        }
-        for reviewer_id in &open_child_ids {
-            sync_child_review_to_parent(&mut session, reviewer_id, &params.session_id)?;
-        }
-    }
-
-    let entry = session
-        .reviews
-        .iter_mut()
-        .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-        .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
-
-    entry.status = ReviewerStatus::Finished;
-    entry.current_phase = Some(ReviewPhase::ReportWriting);
-    entry.verdict = Some(params.verdict);
-    entry.counts = params.counts;
-    entry.report_file = Some(report_file.clone());
-    entry.finished_at = Some(format_ts(params.now)?);
-    entry.updated_at = format_ts(params.now)?;
-
-    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
-
-    write_session_file_atomic(params.session.session_dir(), &params.reviewer_id, &session)?;
-
-    if let Some(source_path) = source_path_to_remove {
-        let _ = fs::remove_file(&source_path);
-    }
-
-    Ok(FinalizeReviewResult {
-        report_file,
-        report_path: report_path.to_string_lossy().to_string(),
+fn new_session(locator: &SessionLocator, target_ref: &str) -> anyhow::Result<SessionLedger> {
+    let session_id = id::random_id8()?;
+    validate_session_id(&session_id)?;
+    let repo_root = derive_repo_root(locator.session_dir())?;
+    let created_at = now_rfc3339();
+    let session_paths = session_paths_for(&SessionLedger {
+        schema_version: SESSION_SCHEMA_VERSION.to_string(),
+        session_id: session_id.clone(),
+        session_date: derive_session_date(locator.session_dir())?,
+        repo_root: repo_root.to_string_lossy().into_owned(),
+        target_ref: target_ref.to_string(),
+        created_at: created_at.clone(),
+        updated_at: created_at.clone(),
+        active_artifact_format: ACTIVE_ARTIFACT_FORMAT.to_string(),
+        storage: StorageStatus::default(),
+        agents_root: String::new(),
+        final_report_path: None,
+        final_summary_json_path: None,
+        final_summary_toml_path: None,
+        detected_languages: Vec::new(),
+        language_research_refs: Vec::new(),
+        current: CurrentArtifacts::default(),
+        artifacts: Vec::new(),
+        reviews: Vec::new(),
+        applicator: ApplicatorState::default(),
+        notes: Vec::new(),
+        counters: SessionCounters::default(),
+        telemetry: TelemetryLedger::default(),
+        convergence: ConvergencePointers::default(),
+    })?;
+    Ok(SessionLedger {
+        schema_version: SESSION_SCHEMA_VERSION.to_string(),
+        session_id,
+        session_date: derive_session_date(locator.session_dir())?,
+        repo_root: repo_root.to_string_lossy().into_owned(),
+        target_ref: target_ref.to_string(),
+        created_at: created_at.clone(),
+        updated_at: created_at,
+        active_artifact_format: ACTIVE_ARTIFACT_FORMAT.to_string(),
+        storage: storage_status(StorageFormat::Json, true, true, Vec::new()),
+        agents_root: paths::repo_relative_path(&repo_root, &session_paths.agents_dir)?,
+        final_report_path: Some(paths::repo_relative_path(
+            &repo_root,
+            &session_paths.final_report_file,
+        )?),
+        final_summary_json_path: Some(paths::repo_relative_path(
+            &repo_root,
+            &session_paths.final_summary_json_file,
+        )?),
+        final_summary_toml_path: Some(paths::repo_relative_path(
+            &repo_root,
+            &session_paths.final_summary_toml_file,
+        )?),
+        detected_languages: Vec::new(),
+        language_research_refs: Vec::new(),
+        current: CurrentArtifacts::default(),
+        artifacts: Vec::new(),
+        reviews: Vec::new(),
+        applicator: ApplicatorState::default(),
+        notes: Vec::new(),
+        counters: SessionCounters::default(),
+        telemetry: TelemetryLedger::default(),
+        convergence: ConvergencePointers::default(),
     })
 }
 
-#[derive(Debug, Clone)]
-/// Parameters for [`append_note`].
-pub struct AppendNoteParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Reviewer id for the entry being updated (id8).
-    pub reviewer_id: String,
-    /// Session id for the entry being updated (id8).
-    pub session_id: String,
-    /// Author role for the new note.
-    pub role: NoteRole,
-    /// Structured note type.
-    pub note_type: NoteType,
-    /// Note content (string by default; arbitrary JSON allowed).
-    pub content: Value,
-    /// Timestamp written for the note and `updated_at`.
-    pub now: OffsetDateTime,
-    /// Lock owner id8 used while updating the session artifact.
-    pub lock_owner: String,
+fn write_session_file(session: &mut SessionLedger, session_dir: &Path) -> anyhow::Result<()> {
+    session.storage.degraded_warnings.clear();
+    let json_path = paths::session_file(session_dir, StorageFormat::Json);
+    let toml_path = paths::session_file(session_dir, StorageFormat::Toml);
+    let json_body = to_json_string(session, "_session")?;
+    let toml_body = to_toml_string(session, "_session")?;
+    session.storage = dual_write(&json_path, &toml_path, &json_body, &toml_body, "_session")?;
+    let json_body = to_json_string(session, "_session")?;
+    let toml_body = to_toml_string(session, "_session")?;
+    if session
+        .storage
+        .available_formats
+        .contains(&StorageFormat::Json)
+    {
+        atomic_write(&json_path, &json_body)?;
+    }
+    if session
+        .storage
+        .available_formats
+        .contains(&StorageFormat::Toml)
+    {
+        atomic_write(&toml_path, &toml_body)?;
+    }
+    Ok(())
 }
 
-/// Append a note to the `notes` array for a review entry.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, the session cannot be read or written,
-/// or the lock cannot be acquired.
-pub fn append_note(params: AppendNoteParams) -> anyhow::Result<()> {
-    validate_id8(&params.reviewer_id, "reviewer_id")?;
-    validate_id8(&params.session_id, "session_id")?;
-    validate_id8(&params.lock_owner, "lock_owner")?;
-    if !params.note_type.allowed_for_role(params.role) {
-        let note_type_name = serde_json::to_string(&params.note_type).map_or_else(
-            |_| "unknown".to_string(),
-            |raw| raw.trim_matches('"').to_string(),
+fn read_existing_session(locator: &SessionLocator) -> anyhow::Result<Option<SessionLedger>> {
+    let json_path = paths::session_file(locator.session_dir(), StorageFormat::Json);
+    let toml_path = paths::session_file(locator.session_dir(), StorageFormat::Toml);
+    let json_body = read_optional_text(&json_path)?;
+    let toml_body = read_optional_text(&toml_path)?;
+    match (json_body, toml_body) {
+        (None, None) => Ok(None),
+        (Some(body), None) => {
+            let mut session = parse_session_body(&body, StorageFormat::Json)?;
+            session.storage = storage_status(StorageFormat::Json, true, false, Vec::new());
+            Ok(Some(session))
+        }
+        (None, Some(body)) => {
+            let mut session = parse_session_body(&body, StorageFormat::Toml)?;
+            session.storage = storage_status(StorageFormat::Toml, false, true, Vec::new());
+            Ok(Some(session))
+        }
+        (Some(json_body), Some(toml_body)) => {
+            let mut session = parse_session_body(&json_body, StorageFormat::Json)?;
+            let toml_session = parse_session_body(&toml_body, StorageFormat::Toml)?;
+            let mut warnings = Vec::new();
+            if serde_json::to_value(&session)? != serde_json::to_value(&toml_session)? {
+                warnings.push(
+                    "_session: JSON and TOML diverged; JSON was treated as authoritative"
+                        .to_string(),
+                );
+            }
+            session.storage = storage_status(StorageFormat::Json, true, true, warnings);
+            Ok(Some(session))
+        }
+    }
+}
+
+fn resolve_pointer_path(session: &SessionLedger, pointer: &ArtifactPointer) -> Option<PathBuf> {
+    let repo_root = PathBuf::from(&session.repo_root);
+    for candidate in [
+        pointer.json_path.as_deref(),
+        Some(pointer.path.as_str()),
+        pointer.toml_path.as_deref(),
+    ] {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        if candidate.is_empty() {
+            continue;
+        }
+        let Ok(resolved) = paths::resolve_repo_relative(&repo_root, candidate) else {
+            continue;
+        };
+        if resolved.exists() {
+            return Some(resolved);
+        }
+    }
+    None
+}
+
+fn update_language_detection(session: &mut SessionLedger) {
+    let mut languages = HashSet::new();
+    for pointer in &session.artifacts {
+        if pointer.artifact_kind != ArtifactKind::RouteDecision {
+            continue;
+        }
+        let Some(path) = resolve_pointer_path(session, pointer) else {
+            continue;
+        };
+        let Ok(ArtifactDocument::RouteDecision(route)) = parse_artifact_file(&path) else {
+            continue;
+        };
+        for worker in route.worker_plan {
+            if let Some(language) = worker.language {
+                languages.insert(language);
+            }
+        }
+    }
+    let mut detected = languages.into_iter().collect::<Vec<_>>();
+    detected.sort();
+    session.detected_languages = detected;
+}
+
+#[derive(Debug, Clone, Default)]
+struct CounterTally {
+    artifact_count: u64,
+    report_count: u64,
+    findings: u64,
+    applied_findings: u64,
+    declined_findings: u64,
+    low_signal_rejections: u64,
+    duplicate_rejections: u64,
+    reopen_triggers: u64,
+    research_ref_count: u64,
+    severity_totals: BTreeMap<String, u64>,
+}
+
+fn merge_counter_tallies(target: &mut CounterTally, source: &CounterTally) {
+    target.artifact_count += source.artifact_count;
+    target.report_count += source.report_count;
+    target.findings += source.findings;
+    target.applied_findings += source.applied_findings;
+    target.declined_findings += source.declined_findings;
+    target.low_signal_rejections += source.low_signal_rejections;
+    target.duplicate_rejections += source.duplicate_rejections;
+    target.reopen_triggers += source.reopen_triggers;
+    target.research_ref_count += source.research_ref_count;
+    for (severity, count) in &source.severity_totals {
+        *target.severity_totals.entry(severity.clone()).or_insert(0) += count;
+    }
+}
+
+fn counter_tally_from_artifact(document: &ArtifactDocument) -> CounterTally {
+    let mut tally = CounterTally {
+        artifact_count: 1,
+        ..CounterTally::default()
+    };
+    match document {
+        ArtifactDocument::ChildFindings(artifact) => {
+            tally.findings = artifact.findings.len() as u64;
+            for finding in &artifact.findings {
+                *tally
+                    .severity_totals
+                    .entry(severity_text(finding.severity))
+                    .or_insert(0) += 1;
+            }
+        }
+        ArtifactDocument::ApplicationResult(artifact) => {
+            for disposition in &artifact.dispositions {
+                match disposition.disposition {
+                    Disposition::Applied => tally.applied_findings += 1,
+                    Disposition::Declined
+                    | Disposition::Deferred
+                    | Disposition::AlreadyAddressed => {
+                        tally.declined_findings += 1;
+                    }
+                }
+                if matches!(
+                    disposition.decline_reason_code,
+                    Some(
+                        DeclineReasonCode::InvalidAnchor
+                            | DeclineReasonCode::NonReproducible
+                            | DeclineReasonCode::Hallucinated
+                            | DeclineReasonCode::OutOfScope
+                    )
+                ) {
+                    tally.low_signal_rejections += 1;
+                }
+                if disposition.duplicate_reason_code.is_some()
+                    || disposition.decline_reason_code == Some(DeclineReasonCode::Duplicate)
+                    || disposition.duplicate_suspect == Some(true)
+                {
+                    tally.duplicate_rejections += 1;
+                }
+            }
+        }
+        ArtifactDocument::ConvergenceState(artifact) => {
+            tally.reopen_triggers = artifact.reopen_triggers.len() as u64;
+        }
+        ArtifactDocument::ParentReview(_)
+        | ArtifactDocument::VerificationResult(_)
+        | ArtifactDocument::RouteDecision(_)
+        | ArtifactDocument::SurfaceMap(_)
+        | ArtifactDocument::RouteRevision(_) => {}
+    }
+    tally
+}
+
+fn build_artifact_tally_cache(session: &SessionLedger) -> HashMap<String, CounterTally> {
+    let mut tallies = HashMap::new();
+    for pointer in &session.artifacts {
+        let Some(path) = resolve_pointer_path(session, pointer) else {
+            continue;
+        };
+        let Ok(document) = parse_artifact_file(&path) else {
+            continue;
+        };
+        tallies.insert(
+            pointer.artifact_id.clone(),
+            counter_tally_from_artifact(&document),
         );
-        return Err(anyhow::anyhow!(
-            "note_type `{}` is not allowed for role `{}`",
-            note_type_name,
-            match params.role {
-                NoteRole::Reviewer => "reviewer",
-                NoteRole::Applicator => "applicator",
-            }
-        ));
     }
-
-    let lock_owner = params.lock_owner.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-    let mut session = read_session_file(params.session.session_dir())?;
-    let entry = session
-        .reviews
-        .iter_mut()
-        .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-        .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
-
-    entry.notes.push(SessionNote {
-        role: params.role,
-        timestamp: format_ts(params.now)?,
-        note_type: params.note_type,
-        content: params.content,
-    });
-    entry.updated_at = format_ts(params.now)?;
-
-    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
-
-    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
-    Ok(())
+    tallies
 }
 
-#[derive(Debug, Clone)]
-/// Parameters for [`set_initiator_status`].
-pub struct SetInitiatorStatusParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Reviewer id for the entry being updated (id8).
-    pub reviewer_id: String,
-    /// Session id for the entry being updated (id8).
-    pub session_id: String,
-    /// New applicator-owned status to set.
-    pub initiator_status: InitiatorStatus,
-    /// Timestamp written to `updated_at`.
-    pub now: OffsetDateTime,
-    /// Lock owner id8 used while updating the session artifact.
-    pub lock_owner: String,
-}
-
-/// Set the applicator-owned `initiator_status` field for a review entry.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, the session cannot be read or written,
-/// or the lock cannot be acquired.
-pub fn set_initiator_status(params: &SetInitiatorStatusParams) -> anyhow::Result<()> {
-    validate_id8(&params.reviewer_id, "reviewer_id")?;
-    validate_id8(&params.session_id, "session_id")?;
-    validate_id8(&params.lock_owner, "lock_owner")?;
-
-    let lock_owner = params.lock_owner.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-    let mut session = read_session_file(params.session.session_dir())?;
-    let entry = session
-        .reviews
-        .iter_mut()
-        .find(|r| r.reviewer_id == params.reviewer_id && r.session_id == params.session_id)
-        .ok_or_else(|| anyhow::anyhow!("review entry not found for reviewer_id/session_id"))?;
-
-    entry.initiator_status = params.initiator_status;
-    entry.updated_at = format_ts(params.now)?;
-
-    sync_child_review_to_parent(&mut session, &params.reviewer_id, &params.session_id)?;
-
-    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-/// Parameters for [`upsert_session_extra_json`].
-pub struct UpsertSessionExtraJsonParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Extra-field key to upsert at the session top-level.
-    pub key: String,
-    /// JSON value to write under `key`.
-    pub value: Value,
-    /// Lock owner id8 used while updating the session artifact.
-    pub lock_owner: String,
-}
-
-/// Upsert a top-level `SessionFile.extra` JSON field in a lock-protected write.
-///
-/// # Errors
-/// Returns an error if `lock_owner` is invalid, session cannot be read/written, or lock fails.
-pub fn upsert_session_extra_json(params: &UpsertSessionExtraJsonParams) -> anyhow::Result<()> {
-    validate_id8(&params.lock_owner, "lock_owner")?;
-    if params.key.trim().is_empty() {
-        return Err(anyhow::anyhow!("extra key must be non-empty"));
-    }
-
-    let lock_owner = params.lock_owner.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-    let mut session = read_session_file(params.session.session_dir())?;
+fn primary_root_reviewer_id(session: &SessionLedger) -> Option<String> {
     session
-        .extra
-        .insert(params.key.clone(), params.value.clone());
-    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+        .reviews
+        .iter()
+        .filter(|review| review.parent_id.is_none())
+        .min_by(|left, right| {
+            left.opened_at
+                .cmp(&right.opened_at)
+                .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
+        })
+        .map(|review| review.reviewer_id.clone())
+}
+
+fn build_session_overlay_tally(
+    session: &SessionLedger,
+    artifact_tallies: &HashMap<String, CounterTally>,
+) -> CounterTally {
+    let claimed_ids = session
+        .reviews
+        .iter()
+        .filter_map(|review| review.artifact_id.as_deref())
+        .collect::<HashSet<_>>();
+    let mut overlay = CounterTally::default();
+    for pointer in &session.artifacts {
+        if claimed_ids.contains(pointer.artifact_id.as_str()) {
+            continue;
+        }
+        if let Some(tally) = artifact_tallies.get(&pointer.artifact_id) {
+            merge_counter_tallies(&mut overlay, tally);
+        }
+    }
+    overlay
+}
+
+fn build_agent_counter_map(session: &SessionLedger) -> HashMap<String, AgentCounters> {
+    let artifact_tallies = build_artifact_tally_cache(session);
+    let session_overlay = build_session_overlay_tally(session, &artifact_tallies);
+    let primary_root = primary_root_reviewer_id(session);
+    let mut children_by_parent: HashMap<&str, Vec<&ReviewProcess>> = HashMap::new();
+    for review in &session.reviews {
+        if let Some(parent_id) = review.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(review);
+        }
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort_by(|left, right| {
+            left.opened_at
+                .cmp(&right.opened_at)
+                .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
+        });
+    }
+    let mut roots = session
+        .reviews
+        .iter()
+        .filter(|review| review.parent_id.is_none())
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.opened_at
+            .cmp(&right.opened_at)
+            .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
+    });
+
+    fn visit(
+        review: &ReviewProcess,
+        children_by_parent: &HashMap<&str, Vec<&ReviewProcess>>,
+        artifact_tallies: &HashMap<String, CounterTally>,
+        primary_root: Option<&str>,
+        session_overlay: &CounterTally,
+        counters_by_id: &mut HashMap<String, AgentCounters>,
+    ) -> (CounterTally, u64) {
+        let mut local = CounterTally {
+            report_count: u64::from(review.report_path.is_some()),
+            research_ref_count: review.research_refs.len() as u64,
+            ..CounterTally::default()
+        };
+        if let Some(artifact_id) = review.artifact_id.as_deref() {
+            if let Some(tally) = artifact_tallies.get(artifact_id) {
+                merge_counter_tallies(&mut local, tally);
+            }
+        }
+        let mut recursive = local.clone();
+        let mut descendant_count = 0;
+        if let Some(children) = children_by_parent.get(review.reviewer_id.as_str()) {
+            for child in children {
+                let (child_recursive, child_descendants) = visit(
+                    child,
+                    children_by_parent,
+                    artifact_tallies,
+                    primary_root,
+                    session_overlay,
+                    counters_by_id,
+                );
+                merge_counter_tallies(&mut recursive, &child_recursive);
+                descendant_count += 1 + child_descendants;
+            }
+        }
+        if primary_root == Some(review.reviewer_id.as_str()) {
+            merge_counter_tallies(&mut recursive, session_overlay);
+        }
+        counters_by_id.insert(
+            review.reviewer_id.clone(),
+            AgentCounters {
+                local_artifact_count: local.artifact_count,
+                recursive_artifact_count: recursive.artifact_count,
+                local_report_count: local.report_count,
+                recursive_report_count: recursive.report_count,
+                child_count: review.child_ids.len() as u64,
+                descendant_count,
+                local_findings: local.findings,
+                recursive_findings: recursive.findings,
+                local_applied_findings: local.applied_findings,
+                recursive_applied_findings: recursive.applied_findings,
+                local_declined_findings: local.declined_findings,
+                recursive_declined_findings: recursive.declined_findings,
+                local_low_signal_rejections: local.low_signal_rejections,
+                recursive_low_signal_rejections: recursive.low_signal_rejections,
+                local_duplicate_rejections: local.duplicate_rejections,
+                recursive_duplicate_rejections: recursive.duplicate_rejections,
+                local_reopen_triggers: local.reopen_triggers,
+                recursive_reopen_triggers: recursive.reopen_triggers,
+                local_research_ref_count: local.research_ref_count,
+                recursive_research_ref_count: recursive.research_ref_count,
+                local_severity_totals: local.severity_totals.clone(),
+                recursive_severity_totals: recursive.severity_totals.clone(),
+            },
+        );
+        (recursive, descendant_count)
+    }
+
+    let mut counters_by_id = HashMap::new();
+    for root in roots {
+        visit(
+            root,
+            &children_by_parent,
+            &artifact_tallies,
+            primary_root.as_deref(),
+            &session_overlay,
+            &mut counters_by_id,
+        );
+    }
+    counters_by_id
+}
+
+fn recompute_counters(session: &mut SessionLedger) {
+    session.counters.artifact_count = session.artifacts.len() as u64;
+    session.counters.rendered_count = session
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.rendered_path.is_some())
+        .count() as u64;
+    session.counters.reviewer_count = session.reviews.len() as u64;
+    session.counters.note_count = session.notes.len() as u64;
+    session.counters.total_agents = session.reviews.len() as u64;
+    session.counters.active_agents = session
+        .reviews
+        .iter()
+        .filter(|review| {
+            matches!(
+                review.status,
+                ReviewProcessStatus::Registered
+                    | ReviewProcessStatus::InProgress
+                    | ReviewProcessStatus::Delegating
+                    | ReviewProcessStatus::WaitingOnChildren
+                    | ReviewProcessStatus::Synthesizing
+                    | ReviewProcessStatus::Blocked
+            )
+        })
+        .count() as u64;
+    session.counters.completed_agents = session
+        .reviews
+        .iter()
+        .filter(|review| review.status == ReviewProcessStatus::Completed)
+        .count() as u64;
+    session.counters.report_count = session
+        .reviews
+        .iter()
+        .filter(|review| review.report_path.is_some())
+        .count() as u64;
+    session.counters.research_workers = session
+        .reviews
+        .iter()
+        .filter(|review| review.role_kind == AgentRoleKind::LanguageResearch)
+        .count() as u64;
+    session.counters.applied_findings = 0;
+    session.counters.declined_findings = 0;
+    session.counters.low_signal_rejections = 0;
+    session.counters.duplicate_rejections = 0;
+    session.counters.reopen_triggers = 0;
+    session.counters.severity_totals.clear();
+    session.counters.domain_totals.clear();
+
+    for review in &session.reviews {
+        for module_id in &review.module_ids {
+            *session
+                .counters
+                .domain_totals
+                .entry(module_id_text(*module_id))
+                .or_insert(0) += 1;
+        }
+    }
+
+    for pointer in &session.artifacts {
+        let Some(path) = resolve_pointer_path(session, pointer) else {
+            continue;
+        };
+        let Ok(document) = parse_artifact_file(&path) else {
+            continue;
+        };
+        match document {
+            ArtifactDocument::ChildFindings(artifact) => {
+                for finding in artifact.findings {
+                    *session
+                        .counters
+                        .severity_totals
+                        .entry(severity_text(finding.severity))
+                        .or_insert(0) += 1;
+                }
+            }
+            ArtifactDocument::ApplicationResult(artifact) => {
+                for disposition in artifact.dispositions {
+                    match disposition.disposition {
+                        Disposition::Applied => session.counters.applied_findings += 1,
+                        Disposition::Declined
+                        | Disposition::Deferred
+                        | Disposition::AlreadyAddressed => {
+                            session.counters.declined_findings += 1;
+                        }
+                    }
+                    if matches!(
+                        disposition.decline_reason_code,
+                        Some(
+                            DeclineReasonCode::InvalidAnchor
+                                | DeclineReasonCode::NonReproducible
+                                | DeclineReasonCode::Hallucinated
+                                | DeclineReasonCode::OutOfScope
+                        )
+                    ) {
+                        session.counters.low_signal_rejections += 1;
+                    }
+                    if disposition.duplicate_reason_code.is_some()
+                        || disposition.decline_reason_code == Some(DeclineReasonCode::Duplicate)
+                        || disposition.duplicate_suspect == Some(true)
+                    {
+                        session.counters.duplicate_rejections += 1;
+                    }
+                }
+            }
+            ArtifactDocument::ConvergenceState(artifact) => {
+                session.counters.reopen_triggers += artifact.reopen_triggers.len() as u64;
+            }
+            _ => {}
+        }
+    }
+
+    update_language_detection(session);
+}
+
+fn lock_owner() -> String {
+    match id::random_id8() {
+        Ok(owner) => owner,
+        Err(_err) => "lock0001".to_string(),
+    }
+}
+
+fn upsert_current_pointer(current: &mut CurrentArtifacts, pointer: &ArtifactPointer) {
+    match pointer.artifact_kind {
+        ArtifactKind::RouteDecision => current.route_decision = Some(pointer.clone()),
+        ArtifactKind::SurfaceMap => current.surface_map = Some(pointer.clone()),
+        ArtifactKind::ChildFindings => current.child_findings = Some(pointer.clone()),
+        ArtifactKind::ParentReview => current.parent_review = Some(pointer.clone()),
+        ArtifactKind::ApplicationResult => current.application_result = Some(pointer.clone()),
+        ArtifactKind::VerificationResult => current.verification_result = Some(pointer.clone()),
+        ArtifactKind::ConvergenceState => current.convergence_state = Some(pointer.clone()),
+        ArtifactKind::RouteRevision => current.route_revision = Some(pointer.clone()),
+    }
+}
+
+fn ensure_review_paths(
+    repo_root: &Path,
+    session_dir: &Path,
+    review: &mut ReviewProcess,
+    parent_agent_dir: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let agent_dir = if !review.agent_dir.is_empty() {
+        paths::resolve_repo_relative(repo_root, &review.agent_dir)?
+    } else if let Some(parent_agent_dir) = parent_agent_dir {
+        paths::child_agent_dir(parent_agent_dir, &review.reviewer_id)
+    } else {
+        paths::root_agent_dir(session_dir, &review.reviewer_id)
+    };
+    paths::ensure_agent_layout(&agent_dir)?;
+    review.agent_dir = paths::repo_relative_path(repo_root, &agent_dir)?;
+    review.agent_ledger_json = paths::repo_relative_path(
+        repo_root,
+        &paths::agent_ledger_path(&agent_dir, StorageFormat::Json),
+    )?;
+    review.agent_ledger_toml = paths::repo_relative_path(
+        repo_root,
+        &paths::agent_ledger_path(&agent_dir, StorageFormat::Toml),
+    )?;
+    review.report_path = Some(paths::repo_relative_path(
+        repo_root,
+        &paths::agent_report_path(&agent_dir),
+    )?);
+    Ok(agent_dir)
+}
+
+fn artifact_pointer_for_review(
+    session: &SessionLedger,
+    review: &ReviewProcess,
+) -> Option<ArtifactPointer> {
+    review.artifact_id.as_ref().and_then(|artifact_id| {
+        session
+            .artifacts
+            .iter()
+            .find(|pointer| &pointer.artifact_id == artifact_id)
+            .cloned()
+    })
+}
+
+fn push_markdown_section(markdown: &mut String, title: &str, items: &[String], empty: &str) {
+    markdown.push_str(&format!("## {title}\n\n"));
+    if items.is_empty() {
+        markdown.push_str(&format!("- {empty}\n\n"));
+        return;
+    }
+    for item in items {
+        markdown.push_str(&format!("- {item}\n"));
+    }
+    markdown.push('\n');
+}
+
+fn render_agent_report(review: &ReviewProcess, artifact: Option<&ArtifactDocument>) -> String {
+    let mut markdown = String::new();
+    markdown.push_str("# Agent Report\n\n");
+    markdown.push_str(&format!(
+        "- Reviewer: `{}`\n- Role: `{}`\n- Role kind: `{}`\n- Status: `{}`\n\n",
+        review.reviewer_id,
+        review.role,
+        match review.role_kind {
+            AgentRoleKind::DomainReviewer => "domain-reviewer",
+            AgentRoleKind::LanguageDetector => "language-detector",
+            AgentRoleKind::LanguageResearch => "language-research",
+            AgentRoleKind::FinalSynthesis => "final-synthesis",
+            AgentRoleKind::ApplyComposite => "apply-composite",
+            AgentRoleKind::ApplicatorWorker => "applicator-worker",
+            AgentRoleKind::ApplicatorVerifier => "applicator-verifier",
+            AgentRoleKind::Helper => "helper",
+        },
+        status_text(review.status)
+    ));
+    if let Some(phase) = &review.phase {
+        markdown.push_str(&format!("- Phase: `{phase}`\n\n"));
+    }
+    push_markdown_section(
+        &mut markdown,
+        "Scope",
+        &review
+            .module_ids
+            .iter()
+            .map(|module_id| format!("module `{}`", module_id_text(*module_id)))
+            .chain(
+                review
+                    .focus_surfaces
+                    .iter()
+                    .map(|surface| format!("surface `{}`", surface_text(*surface))),
+            )
+            .chain(
+                review
+                    .claimed_scope
+                    .iter()
+                    .map(|scope| format!("claimed scope `{scope}`")),
+            )
+            .chain(
+                review
+                    .delegated_scope
+                    .iter()
+                    .map(|scope| format!("delegated scope `{scope}`")),
+            )
+            .collect::<Vec<_>>(),
+        "scope pending",
+    );
+    push_markdown_section(
+        &mut markdown,
+        "Assumptions",
+        &review
+            .research_refs
+            .iter()
+            .map(|reference| {
+                format!(
+                    "research ref `{}` from `{}`",
+                    reference.language, reference.agent_id
+                )
+            })
+            .collect::<Vec<_>>(),
+        "no explicit assumptions recorded",
+    );
+    match artifact {
+        Some(ArtifactDocument::ChildFindings(child)) => {
+            push_markdown_section(
+                &mut markdown,
+                "Invariants Or Theorems Checked",
+                &child
+                    .defended_checks
+                    .iter()
+                    .map(|check| format!("{}: {}", check.method, check.claim))
+                    .collect::<Vec<_>>(),
+                "no defended checks recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Evidence",
+                &child
+                    .findings
+                    .iter()
+                    .map(|finding| finding.evidence.clone())
+                    .collect::<Vec<_>>(),
+                "no evidence recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Findings",
+                &child
+                    .findings
+                    .iter()
+                    .map(|finding| {
+                        format!(
+                            "[{}] {}: {}",
+                            severity_text(finding.severity),
+                            finding.title,
+                            finding.claim
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                "no findings recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Defended Non-Findings",
+                &child
+                    .defended_checks
+                    .iter()
+                    .map(|check| format!("{}: {}", check.check_id, check.claim))
+                    .collect::<Vec<_>>(),
+                "no defended non-findings recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Residual Risks",
+                &child
+                    .residual_risks
+                    .iter()
+                    .map(|risk| format!("{}: {}", risk.risk_id, risk.summary))
+                    .collect::<Vec<_>>(),
+                "no residual risks recorded",
+            );
+        }
+        Some(ArtifactDocument::ParentReview(parent)) => {
+            push_markdown_section(
+                &mut markdown,
+                "Invariants Or Theorems Checked",
+                &parent
+                    .defended_summary
+                    .iter()
+                    .map(|check| format!("{}: {}", check.check_id, check.claim))
+                    .collect::<Vec<_>>(),
+                "no defended checks recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Findings",
+                &parent
+                    .required_now
+                    .iter()
+                    .chain(parent.follow_up.iter())
+                    .map(|finding| {
+                        format!(
+                            "[{}] {}: {}",
+                            severity_text(finding.severity),
+                            finding.title,
+                            finding.claim
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                "no findings recorded",
+            );
+            push_markdown_section(
+                &mut markdown,
+                "Residual Risks",
+                &parent
+                    .residual_risks
+                    .iter()
+                    .map(|risk| format!("{}: {}", risk.risk_id, risk.summary))
+                    .collect::<Vec<_>>(),
+                "no residual risks recorded",
+            );
+        }
+        Some(other) => {
+            push_markdown_section(
+                &mut markdown,
+                "Evidence",
+                &[format!("artifact kind `{}` persisted", other.kind())],
+                "no artifact finalized yet",
+            );
+        }
+        None => {
+            push_markdown_section(&mut markdown, "Evidence", &[], "no artifact finalized yet");
+        }
+    }
+    push_markdown_section(
+        &mut markdown,
+        "Child Handoffs",
+        &review.child_ids,
+        "no child handoffs recorded",
+    );
+    markdown.push_str("## Push Or Stop Recommendation\n\n- Continue only for high-confidence, actionable evidence; stop on duplicate, low-signal, already-addressed, or out-of-scope concerns.\n");
+    markdown
+}
+
+fn sync_agent_files_with_counters(
+    session: &SessionLedger,
+    review: &ReviewProcess,
+    counters_by_id: &HashMap<String, AgentCounters>,
+) -> anyhow::Result<StorageStatus> {
+    let repo_root = PathBuf::from(&session.repo_root);
+    let session_dir = session_paths_for(session)?.session_dir;
+    let parent_agent_dir = review
+        .parent_id
+        .as_deref()
+        .and_then(|parent_id| {
+            session
+                .reviews
+                .iter()
+                .find(|candidate| candidate.reviewer_id == parent_id)
+        })
+        .map(|parent| paths::resolve_repo_relative(&repo_root, &parent.agent_dir))
+        .transpose()?;
+    let mut review_copy = review.clone();
+    let agent_dir = ensure_review_paths(
+        &repo_root,
+        &session_dir,
+        &mut review_copy,
+        parent_agent_dir.as_deref(),
+    )?;
+    let pointer = artifact_pointer_for_review(session, review);
+    let artifact = pointer
+        .as_ref()
+        .and_then(|pointer| resolve_pointer_path(session, pointer))
+        .map(|path| parse_artifact_file(&path))
+        .transpose()?;
+
+    atomic_write(
+        &paths::agent_report_path(&agent_dir),
+        &render_agent_report(&review_copy, artifact.as_ref()),
+    )?;
+
+    let pointer_manifest = AgentPointerManifest {
+        artifacts: pointer.into_iter().collect(),
+    };
+    let mut ledger = AgentLedger {
+        schema_version: AGENT_SCHEMA_VERSION.to_string(),
+        session_id: session.session_id.clone(),
+        reviewer_id: review_copy.reviewer_id.clone(),
+        parent_id: review_copy.parent_id.clone(),
+        role: review_copy.role.clone(),
+        role_kind: review_copy.role_kind.clone(),
+        status: review_copy.status,
+        phase: review_copy.phase.clone(),
+        agent_dir: review_copy.agent_dir.clone(),
+        report_path: review_copy.report_path.clone(),
+        child_ids: review_copy.child_ids.clone(),
+        module_ids: review_copy.module_ids.clone(),
+        focus_surfaces: review_copy.focus_surfaces.clone(),
+        claimed_scope: review_copy.claimed_scope.clone(),
+        delegated_scope: review_copy.delegated_scope.clone(),
+        lineage: review_copy.lineage.clone(),
+        research_refs: review_copy.research_refs.clone(),
+        artifacts: pointer_manifest.artifacts.clone(),
+        storage: review_copy.storage.clone(),
+        counters: counters_by_id
+            .get(&review_copy.reviewer_id)
+            .map_or_else(AgentCounters::default, Clone::clone),
+        opened_at: review_copy.opened_at.clone(),
+        updated_at: review_copy.updated_at.clone(),
+    };
+    let ledger_json = to_json_string(&ledger, "_agent")?;
+    let ledger_toml = to_toml_string(&ledger, "_agent")?;
+    let storage = dual_write(
+        &paths::agent_ledger_path(&agent_dir, StorageFormat::Json),
+        &paths::agent_ledger_path(&agent_dir, StorageFormat::Toml),
+        &ledger_json,
+        &ledger_toml,
+        "_agent",
+    )?;
+    ledger.storage = storage.clone();
+    atomic_write(
+        &paths::agent_ledger_path(&agent_dir, StorageFormat::Json),
+        &to_json_string(&ledger, "_agent")?,
+    )?;
+    if storage.available_formats.contains(&StorageFormat::Toml) {
+        atomic_write(
+            &paths::agent_ledger_path(&agent_dir, StorageFormat::Toml),
+            &to_toml_string(&ledger, "_agent")?,
+        )?;
+    }
+    atomic_write(
+        &paths::agent_children_path(&agent_dir, StorageFormat::Json),
+        &to_json_string(
+            &AgentChildrenManifest {
+                child_ids: review.child_ids.clone(),
+            },
+            "children",
+        )?,
+    )?;
+    atomic_write(
+        &paths::agent_children_path(&agent_dir, StorageFormat::Toml),
+        &to_toml_string(
+            &AgentChildrenManifest {
+                child_ids: review.child_ids.clone(),
+            },
+            "children",
+        )?,
+    )?;
+    atomic_write(
+        &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Json),
+        &to_json_string(&pointer_manifest, "_artifacts")?,
+    )?;
+    atomic_write(
+        &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Toml),
+        &to_toml_string(&pointer_manifest, "_artifacts")?,
+    )?;
+    Ok(storage)
+}
+
+fn sync_agent_files(
+    session: &SessionLedger,
+    review: &ReviewProcess,
+) -> anyhow::Result<StorageStatus> {
+    let counters_by_id = build_agent_counter_map(session);
+    sync_agent_files_with_counters(session, review, &counters_by_id)
+}
+
+fn refresh_all_agent_files(session: &mut SessionLedger) -> anyhow::Result<()> {
+    let counters_by_id = build_agent_counter_map(session);
+    let ordered_ids = ordered_reviews_postorder(session)
+        .into_iter()
+        .map(|review| review.reviewer_id.clone())
+        .collect::<Vec<_>>();
+    for reviewer_id in ordered_ids {
+        let Some(index) = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == reviewer_id)
+        else {
+            continue;
+        };
+        let storage = {
+            let snapshot = session.reviews[index].clone();
+            sync_agent_files_with_counters(session, &snapshot, &counters_by_id)?
+        };
+        session.reviews[index].storage = storage;
+    }
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-/// Parameters for [`close_child_reviews`].
-pub struct CloseChildReviewsParams {
-    /// Session directory locator.
-    pub session: SessionLocator,
-    /// Parent reviewer id (id8) whose child entries should be updated.
-    pub parent_reviewer_id: String,
-    /// Session id (id8) that children must belong to.
-    pub session_id: String,
-    /// Optional target ref filter.
-    pub target_ref: Option<String>,
-    /// Child statuses eligible for update.
-    pub only_statuses: Vec<ReviewerStatus>,
-    /// Reviewer-owned status to set on matching children.
-    pub set_status: ReviewerStatus,
-    /// Clear child `current_phase` when true.
-    pub clear_phase: bool,
-    /// Timestamp written to `updated_at`.
-    pub now: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Child identifier emitted by [`close_child_reviews`].
-pub struct ClosedChildReview {
-    /// Child reviewer id.
-    pub reviewer_id: String,
-    /// Child session id.
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Result returned by [`close_child_reviews`].
-pub struct CloseChildReviewsResult {
-    /// Parent reviewer id used for the operation.
-    pub parent_id: String,
-    /// Session id used for the operation.
-    pub session_id: String,
-    /// Optional target ref filter used for the operation.
-    pub target_ref: Option<String>,
-    /// Number of child entries matching all filters.
-    pub matching_children: usize,
-    /// Number of child entries updated by this operation.
-    pub updated_children: usize,
-    /// Updated child identifiers.
-    pub children: Vec<ClosedChildReview>,
-}
-
-/// Bulk-close child reviews under a parent reviewer.
-///
-/// # Errors
-/// Returns an error if identifiers are invalid, the parent entry is missing,
-/// or the session cannot be read/written.
-pub fn close_child_reviews(
-    params: CloseChildReviewsParams,
-) -> anyhow::Result<CloseChildReviewsResult> {
-    validate_id8(&params.parent_reviewer_id, "parent_reviewer_id")?;
-    validate_id8(&params.session_id, "session_id")?;
-    validate_auto_close_status(params.set_status)?;
-
-    let lock_owner = params.parent_reviewer_id.clone();
-    let _guard = lock::acquire_lock(
-        params.session.session_dir(),
-        lock_owner.clone(),
-        LockConfig::default(),
-    )?;
-    let mut session = read_session_file(params.session.session_dir())?;
-
-    let parent_reviewer_id = params.parent_reviewer_id.as_str();
-    let session_id = params.session_id.as_str();
-    let parent_exists = session.reviews.iter().any(|entry| {
-        entry.reviewer_id == parent_reviewer_id
-            && entry.session_id == session_id
-            && params
-                .target_ref
-                .as_ref()
-                .is_none_or(|target_ref| entry.target_ref == *target_ref)
+fn ordered_reviews<'a>(session: &'a SessionLedger, recursive: bool) -> Vec<&'a ReviewProcess> {
+    let mut roots = session
+        .reviews
+        .iter()
+        .filter(|review| review.parent_id.is_none())
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.opened_at
+            .cmp(&right.opened_at)
+            .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
     });
-    if !parent_exists {
-        return Err(anyhow::anyhow!(
-            "parent review entry not found for reviewer_id/session_id/target_ref"
-        ));
+    if !recursive {
+        return roots;
     }
-
-    let updated_at = format_ts(params.now)?;
-    let mut matching_children = 0usize;
-    let mut updated_ids = Vec::new();
-
-    for entry in &mut session.reviews {
-        if entry.parent_id.as_deref() != Some(params.parent_reviewer_id.as_str()) {
-            continue;
+    let mut children_by_parent: HashMap<&str, Vec<&ReviewProcess>> = HashMap::new();
+    for review in &session.reviews {
+        if let Some(parent_id) = review.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(review);
         }
-        if entry.session_id != params.session_id {
-            continue;
-        }
-        if let Some(target_ref) = params.target_ref.as_deref() {
-            if entry.target_ref != target_ref {
-                continue;
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort_by(|left, right| {
+            left.opened_at
+                .cmp(&right.opened_at)
+                .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
+        });
+    }
+    fn visit<'a>(
+        review: &'a ReviewProcess,
+        ordered: &mut Vec<&'a ReviewProcess>,
+        children_by_parent: &HashMap<&'a str, Vec<&'a ReviewProcess>>,
+    ) {
+        ordered.push(review);
+        if let Some(children) = children_by_parent.get(review.reviewer_id.as_str()) {
+            for child in children {
+                visit(child, ordered, children_by_parent);
             }
         }
-        if !params.only_statuses.is_empty() && !params.only_statuses.contains(&entry.status) {
-            continue;
-        }
-
-        matching_children += 1;
-
-        let changed = entry.status != params.set_status
-            || (params.clear_phase && entry.current_phase.is_some());
-        if !changed {
-            continue;
-        }
-
-        entry.status = params.set_status;
-        if params.clear_phase {
-            entry.current_phase = None;
-        }
-        entry.updated_at.clone_from(&updated_at);
-        updated_ids.push((entry.reviewer_id.clone(), entry.session_id.clone()));
     }
+    let mut ordered = Vec::new();
+    for root in roots {
+        visit(root, &mut ordered, &children_by_parent);
+    }
+    ordered
+}
 
-    let mut children = Vec::with_capacity(updated_ids.len());
-    for (reviewer_id, session_id) in updated_ids {
-        sync_child_review_to_parent(&mut session, &reviewer_id, &session_id)?;
-        children.push(ClosedChildReview {
-            reviewer_id,
-            session_id,
+fn ordered_reviews_postorder<'a>(session: &'a SessionLedger) -> Vec<&'a ReviewProcess> {
+    let mut roots = session
+        .reviews
+        .iter()
+        .filter(|review| review.parent_id.is_none())
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.opened_at
+            .cmp(&right.opened_at)
+            .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
+    });
+
+    let mut children_by_parent: HashMap<&str, Vec<&ReviewProcess>> = HashMap::new();
+    for review in &session.reviews {
+        if let Some(parent_id) = review.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(review);
+        }
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort_by(|left, right| {
+            left.opened_at
+                .cmp(&right.opened_at)
+                .then_with(|| left.reviewer_id.cmp(&right.reviewer_id))
         });
     }
 
-    write_session_file_atomic(params.session.session_dir(), &lock_owner, &session)?;
+    fn visit<'a>(
+        review: &'a ReviewProcess,
+        ordered: &mut Vec<&'a ReviewProcess>,
+        children_by_parent: &HashMap<&'a str, Vec<&'a ReviewProcess>>,
+    ) {
+        if let Some(children) = children_by_parent.get(review.reviewer_id.as_str()) {
+            for child in children {
+                visit(child, ordered, children_by_parent);
+            }
+        }
+        ordered.push(review);
+    }
 
-    Ok(CloseChildReviewsResult {
-        parent_id: params.parent_reviewer_id,
-        session_id: params.session_id,
-        target_ref: params.target_ref,
-        matching_children,
-        updated_children: children.len(),
-        children,
+    let mut ordered = Vec::new();
+    for root in roots {
+        visit(root, &mut ordered, &children_by_parent);
+    }
+    ordered
+}
+
+fn review_matches_view(review: &ReviewProcess, view: ReportView) -> bool {
+    match view {
+        ReportView::All => true,
+        ReportView::Open => matches!(
+            review.status,
+            ReviewProcessStatus::Registered
+                | ReviewProcessStatus::InProgress
+                | ReviewProcessStatus::Delegating
+                | ReviewProcessStatus::WaitingOnChildren
+                | ReviewProcessStatus::Synthesizing
+                | ReviewProcessStatus::Blocked
+        ),
+        ReportView::Closed => matches!(
+            review.status,
+            ReviewProcessStatus::Completed
+                | ReviewProcessStatus::Cancelled
+                | ReviewProcessStatus::Error
+        ),
+        ReportView::InProgress => matches!(
+            review.status,
+            ReviewProcessStatus::InProgress
+                | ReviewProcessStatus::Delegating
+                | ReviewProcessStatus::WaitingOnChildren
+                | ReviewProcessStatus::Synthesizing
+        ),
+        ReportView::Final => {
+            review.parent_id.is_none() && review.status == ReviewProcessStatus::Completed
+        }
+    }
+}
+
+fn build_reports_result(
+    session: &SessionLedger,
+    view: ReportView,
+    recursive: bool,
+    include_leaf_children: bool,
+    include_report_contents: bool,
+    concatenate: bool,
+) -> anyhow::Result<ReportsResult> {
+    let repo_root = PathBuf::from(&session.repo_root);
+    let counters_by_id = build_agent_counter_map(session);
+    let mut reports = Vec::new();
+    let traversal_is_recursive = recursive || include_leaf_children;
+    for review in ordered_reviews(session, traversal_is_recursive) {
+        if include_leaf_children && !recursive {
+            let keep = review.parent_id.is_none() || review.child_ids.is_empty();
+            if !keep {
+                continue;
+            }
+        }
+        if !review_matches_view(review, view) {
+            continue;
+        }
+        let report_contents = if include_report_contents {
+            review.report_path.as_ref().and_then(|path| {
+                let absolute = paths::resolve_repo_relative(&repo_root, path).ok()?;
+                fs::read_to_string(absolute).ok()
+            })
+        } else {
+            None
+        };
+        reports.push(ReportEntry {
+            reviewer_id: review.reviewer_id.clone(),
+            parent_id: review.parent_id.clone(),
+            role: review.role.clone(),
+            role_kind: review.role_kind.clone(),
+            status: review.status,
+            phase: review.phase.clone(),
+            agent_dir: review.agent_dir.clone(),
+            report_path: review.report_path.clone(),
+            artifact_id: review.artifact_id.clone(),
+            child_count: review.child_ids.len(),
+            lineage: review.lineage.clone(),
+            warnings: review.storage.degraded_warnings.clone(),
+            counters: counters_by_id
+                .get(&review.reviewer_id)
+                .map_or_else(AgentCounters::default, Clone::clone),
+            report_contents,
+        });
+    }
+    let concatenated_report = if concatenate {
+        let mut sections = vec![format!(
+            "# Final Report\n\n- Session: `{}`\n- Target ref: `{}`\n",
+            session.session_id, session.target_ref
+        )];
+        let mut concatenated_reviews = ordered_reviews(session, traversal_is_recursive);
+        concatenated_reviews.reverse();
+        for review in concatenated_reviews {
+            if !review_matches_view(review, view) {
+                continue;
+            }
+            if include_leaf_children && !recursive {
+                let keep = review.parent_id.is_none() || review.child_ids.is_empty();
+                if !keep {
+                    continue;
+                }
+            }
+            if let Some(path) = &review.report_path {
+                let Ok(absolute) = paths::resolve_repo_relative(&repo_root, path) else {
+                    continue;
+                };
+                if let Ok(body) = fs::read_to_string(&absolute) {
+                    sections.push(format!(
+                        "\n---\n\n## Agent `{}`\n\n{}",
+                        review.reviewer_id, body
+                    ));
+                }
+            }
+        }
+        Some(sections.join("\n"))
+    } else {
+        None
+    };
+    Ok(ReportsResult {
+        view,
+        recursive,
+        include_leaf_children,
+        reports,
+        concatenated_report,
+        final_report_path: session.final_report_path.clone(),
     })
+}
+
+fn refresh_final_outputs(session: &mut SessionLedger) -> anyhow::Result<()> {
+    let repo_root = PathBuf::from(&session.repo_root);
+    let session_paths = session_paths_for(session)?;
+    let reports = build_reports_result(session, ReportView::All, true, false, false, true)?;
+    if let Some(report) = &reports.concatenated_report {
+        atomic_write(&session_paths.final_report_file, report)?;
+    }
+    let summary = FinalSummary {
+        session_id: session.session_id.clone(),
+        target_ref: session.target_ref.clone(),
+        total_agents: session.counters.total_agents,
+        active_agents: session.counters.active_agents,
+        completed_agents: session.counters.completed_agents,
+        report_count: session.counters.report_count,
+        applied_findings: session.counters.applied_findings,
+        declined_findings: session.counters.declined_findings,
+        low_signal_rejections: session.counters.low_signal_rejections,
+        duplicate_rejections: session.counters.duplicate_rejections,
+        reopen_triggers: session.counters.reopen_triggers,
+        severity_totals: session.counters.severity_totals.clone(),
+        domain_totals: session.counters.domain_totals.clone(),
+    };
+    dual_write(
+        &session_paths.final_summary_json_file,
+        &session_paths.final_summary_toml_file,
+        &to_json_string(&summary, "final summary")?,
+        &to_toml_string(&summary, "final summary")?,
+        "final_summary",
+    )?;
+    session.final_report_path = Some(paths::repo_relative_path(
+        &repo_root,
+        &session_paths.final_report_file,
+    )?);
+    session.final_summary_json_path = Some(paths::repo_relative_path(
+        &repo_root,
+        &session_paths.final_summary_json_file,
+    )?);
+    session.final_summary_toml_path = Some(paths::repo_relative_path(
+        &repo_root,
+        &session_paths.final_summary_toml_file,
+    )?);
+    Ok(())
+}
+
+fn with_locked_session<T>(
+    locator: &SessionLocator,
+    action: impl FnOnce(&mut SessionLedger) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    paths::ensure_session_layout(locator.session_dir())?;
+    let _guard = lock::acquire_lock(locator.session_dir(), lock_owner(), LockConfig::default())?;
+    let mut session = read_existing_session(locator)?.ok_or_else(|| {
+        anyhow::anyhow!("error: session does not exist yet; run `mpcr reviewer register` first")
+    })?;
+    let result = action(&mut session)?;
+    session.updated_at = now_rfc3339();
+    recompute_counters(&mut session);
+    refresh_all_agent_files(&mut session)?;
+    refresh_final_outputs(&mut session)?;
+    write_session_file(&mut session, locator.session_dir())?;
+    Ok(result)
+}
+
+fn with_target_session<T>(
+    locator: &SessionLocator,
+    target_ref: &str,
+    action: impl FnOnce(&mut SessionLedger) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    paths::ensure_session_layout(locator.session_dir())?;
+    let _guard = lock::acquire_lock(locator.session_dir(), lock_owner(), LockConfig::default())?;
+    let mut session = match read_existing_session(locator)? {
+        Some(session) => {
+            anyhow::ensure!(
+                session.target_ref == target_ref,
+                "error: session target_ref `{}` does not match `{target_ref}`",
+                session.target_ref
+            );
+            session
+        }
+        None => new_session(locator, target_ref)?,
+    };
+    let result = action(&mut session)?;
+    session.updated_at = now_rfc3339();
+    recompute_counters(&mut session);
+    refresh_all_agent_files(&mut session)?;
+    refresh_final_outputs(&mut session)?;
+    write_session_file(&mut session, locator.session_dir())?;
+    Ok(result)
+}
+
+fn create_or_load_session(
+    locator: &SessionLocator,
+    target_ref: &str,
+) -> anyhow::Result<SessionLedger> {
+    paths::ensure_session_layout(locator.session_dir())?;
+    let _guard = lock::acquire_lock(locator.session_dir(), lock_owner(), LockConfig::default())?;
+    let mut session = match read_existing_session(locator)? {
+        Some(session) => session,
+        None => new_session(locator, target_ref)?,
+    };
+    anyhow::ensure!(
+        session.target_ref == target_ref,
+        "error: session target_ref `{}` does not match `{target_ref}`",
+        session.target_ref
+    );
+    session.updated_at = now_rfc3339();
+    recompute_counters(&mut session);
+    refresh_all_agent_files(&mut session)?;
+    refresh_final_outputs(&mut session)?;
+    write_session_file(&mut session, locator.session_dir())?;
+    Ok(session)
+}
+
+fn persist_artifact(
+    session: &mut SessionLedger,
+    session_dir: &Path,
+    artifact: &ArtifactDocument,
+) -> anyhow::Result<PersistArtifactResult> {
+    anyhow::ensure!(
+        artifact.header().session_id == session.session_id,
+        "error: artifact session_id `{}` does not match active session `{}`",
+        artifact.header().session_id,
+        session.session_id
+    );
+    anyhow::ensure!(
+        artifact.header().target_ref == session.target_ref,
+        "error: artifact target_ref `{}` does not match active target `{}`",
+        artifact.header().target_ref,
+        session.target_ref
+    );
+    let hard = validate_artifact_document(artifact, ValidationLayer::Hard, Some(session_dir))?;
+    if !hard.errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "error: hard validation failed: {}",
+            hard.errors.join("; ")
+        ));
+    }
+    let soft = validate_artifact_document(artifact, ValidationLayer::Soft, Some(session_dir))?;
+    let repo_root = PathBuf::from(&session.repo_root);
+    let json_path = paths::artifact_path(
+        session_dir,
+        artifact.kind(),
+        artifact.header().artifact_id.as_str(),
+        StorageFormat::Json,
+    );
+    let toml_path = paths::artifact_path(
+        session_dir,
+        artifact.kind(),
+        artifact.header().artifact_id.as_str(),
+        StorageFormat::Toml,
+    );
+    let artifact_storage = dual_write(
+        &json_path,
+        &toml_path,
+        &artifact.to_json_string()?,
+        &artifact.to_toml_string()?,
+        "artifact",
+    )?;
+    let rendered_path = if artifact.kind().supports_rendered_output() {
+        let path = paths::rendered_path(
+            session_dir,
+            artifact.kind(),
+            artifact.header().artifact_id.as_str(),
+        );
+        atomic_write(&path, &render_artifact_markdown(artifact)?)?;
+        Some(paths::repo_relative_path(&repo_root, &path)?)
+    } else {
+        None
+    };
+    let pointer = ArtifactPointer {
+        artifact_id: artifact.header().artifact_id.clone(),
+        artifact_kind: artifact.kind(),
+        path: match artifact_storage.primary_format {
+            StorageFormat::Json => paths::repo_relative_path(&repo_root, &json_path)?,
+            StorageFormat::Toml => paths::repo_relative_path(&repo_root, &toml_path)?,
+        },
+        json_path: json_path
+            .exists()
+            .then(|| paths::repo_relative_path(&repo_root, &json_path))
+            .transpose()?,
+        toml_path: toml_path
+            .exists()
+            .then(|| paths::repo_relative_path(&repo_root, &toml_path))
+            .transpose()?,
+        rendered_path: rendered_path.clone(),
+        created_at: artifact.header().created_at.clone(),
+    };
+    if let Some(existing) = session
+        .artifacts
+        .iter_mut()
+        .find(|existing| existing.artifact_id == pointer.artifact_id)
+    {
+        *existing = pointer.clone();
+    } else {
+        session.artifacts.push(pointer.clone());
+        session.artifacts.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.artifact_id.cmp(&right.artifact_id))
+        });
+    }
+    upsert_current_pointer(&mut session.current, &pointer);
+    if let ArtifactDocument::ConvergenceState(convergence) = artifact {
+        session.convergence.current_artifact_id = Some(pointer.artifact_id.clone());
+        session.convergence.cycle_index = convergence.cycle_index;
+        session.convergence.stop_condition = Some(convergence.stop_condition.clone());
+    }
+    record_artifact(&mut session.telemetry, artifact);
+    Ok(PersistArtifactResult {
+        artifact_id: pointer.artifact_id,
+        artifact_kind: pointer.artifact_kind,
+        path: pointer.path.clone(),
+        json_path: pointer.json_path.clone(),
+        toml_path: pointer.toml_path.clone(),
+        rendered_path,
+        warnings: soft
+            .warnings
+            .into_iter()
+            .chain(artifact_storage.degraded_warnings)
+            .collect(),
+    })
+}
+
+pub fn load_session(locator: &SessionLocator) -> anyhow::Result<SessionLedger> {
+    read_existing_session(locator)?.ok_or_else(|| {
+        anyhow::anyhow!("error: session does not exist yet; run `mpcr reviewer register` first")
+    })
+}
+
+pub fn ensure_session(locator: &SessionLocator, target_ref: &str) -> anyhow::Result<SessionLedger> {
+    create_or_load_session(locator, target_ref)
+}
+
+pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<RegisterReviewerResult> {
+    let mut registered = None;
+    with_target_session(&params.session, &params.target_ref, |session| {
+        let reviewer_id = params.reviewer_id.clone().map_or_else(id::random_id8, Ok)?;
+        validate_session_id(&reviewer_id)?;
+        let repo_root = PathBuf::from(&session.repo_root);
+        let requested_role = match &params.role {
+            Some(role) => role.clone(),
+            None => default_review_role(),
+        };
+        let requested_role_kind = match params.role_kind {
+            Some(role_kind) => role_kind,
+            None => infer_role_kind(&requested_role),
+        };
+        let position = if let Some(position) = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == reviewer_id)
+        {
+            position
+        } else {
+            let now = now_rfc3339();
+            session.reviews.push(ReviewProcess {
+                reviewer_id: reviewer_id.clone(),
+                parent_id: None,
+                role: requested_role.clone(),
+                role_kind: requested_role_kind,
+                status: ReviewProcessStatus::Registered,
+                phase: None,
+                artifact_id: None,
+                report_path: None,
+                agent_dir: String::new(),
+                agent_ledger_json: String::new(),
+                agent_ledger_toml: String::new(),
+                child_ids: Vec::new(),
+                module_ids: module_ids_for_role(&requested_role),
+                focus_surfaces: Vec::new(),
+                claimed_scope: Vec::new(),
+                delegated_scope: Vec::new(),
+                lineage: review_lineage(session, None, &reviewer_id),
+                research_refs: Vec::new(),
+                storage: StorageStatus::default(),
+                opened_at: now.clone(),
+                updated_at: now,
+            });
+            session.reviews.len() - 1
+        };
+        let agent_dir = {
+            let review = &mut session.reviews[position];
+            ensure_review_paths(&repo_root, params.session.session_dir(), review, None)?
+        };
+        let storage = {
+            let snapshot = session.reviews[position].clone();
+            sync_agent_files(session, &snapshot)?
+        };
+        session.reviews[position].storage = storage;
+        registered = Some(RegisterReviewerResult {
+            session_dir: params.session.session_dir().to_string_lossy().into_owned(),
+            session_id: session.session_id.clone(),
+            reviewer_id: reviewer_id.clone(),
+            target_ref: session.target_ref.clone(),
+            agent_dir: paths::repo_relative_path(&repo_root, &agent_dir)?,
+            agent_ledger_json: session.reviews[position].agent_ledger_json.clone(),
+            agent_ledger_toml: session.reviews[position].agent_ledger_toml.clone(),
+            session_format_primary: session.storage.primary_format,
+        });
+        Ok(())
+    })?;
+    registered.ok_or_else(|| anyhow::anyhow!("error: reviewer registration did not complete"))
+}
+
+pub fn spawn_child_reviewers(
+    params: SpawnChildReviewersParams,
+) -> anyhow::Result<SpawnChildReviewersResult> {
+    let mut result = None;
+    with_locked_session(&params.session, |session| {
+        let repo_root = PathBuf::from(&session.repo_root);
+        let parent_index = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == params.parent_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "error: parent reviewer `{}` was not found",
+                    params.parent_id
+                )
+            })?;
+        let parent_agent_dir = if session.reviews[parent_index].agent_dir.is_empty() {
+            ensure_review_paths(
+                &repo_root,
+                params.session.session_dir(),
+                &mut session.reviews[parent_index],
+                None,
+            )?
+        } else {
+            paths::resolve_repo_relative(&repo_root, &session.reviews[parent_index].agent_dir)?
+        };
+        let parent_role = session.reviews[parent_index].role.clone();
+        let now = now_rfc3339();
+        let mut child_ids = Vec::new();
+        let mut child_agent_dirs = Vec::new();
+        let mut child_agent_ledgers_json = Vec::new();
+        let mut child_agent_ledgers_toml = Vec::new();
+        for _index in 0..params.count {
+            let reviewer_id = id::random_id8()?;
+            let role = params
+                .role_id
+                .clone()
+                .or_else(|| {
+                    params
+                        .domain_id
+                        .map(|domain_id| format!("domain:{}", module_id_text(domain_id)))
+                })
+                .or_else(|| {
+                    params
+                        .language
+                        .as_ref()
+                        .map(|language| match params.worker_kind {
+                            Some(WorkerKind::LanguageDetector) => {
+                                format!("language-detector:{language}")
+                            }
+                            Some(WorkerKind::LanguageResearch) => {
+                                format!("language-research:{language}")
+                            }
+                            _ => format!("language:{language}"),
+                        })
+                })
+                .map_or_else(|| parent_role.clone(), |role| role);
+            session.reviews.push(ReviewProcess {
+                reviewer_id: reviewer_id.clone(),
+                parent_id: Some(params.parent_id.clone()),
+                role: role.clone(),
+                role_kind: infer_role_kind(&role),
+                status: ReviewProcessStatus::Registered,
+                phase: None,
+                artifact_id: None,
+                report_path: None,
+                agent_dir: String::new(),
+                agent_ledger_json: String::new(),
+                agent_ledger_toml: String::new(),
+                child_ids: Vec::new(),
+                module_ids: if params.module_ids.is_empty() {
+                    module_ids_for_role(&role)
+                } else {
+                    params.module_ids.clone()
+                },
+                focus_surfaces: params.focus_surfaces.clone(),
+                claimed_scope: if params.claimed_scope.is_empty() {
+                    vec![format!("parent:{parent_role}")]
+                } else {
+                    params.claimed_scope.clone()
+                },
+                delegated_scope: params.delegated_scope.clone(),
+                lineage: review_lineage(session, Some(&params.parent_id), &reviewer_id),
+                research_refs: session.language_research_refs.clone(),
+                storage: StorageStatus::default(),
+                opened_at: now.clone(),
+                updated_at: now.clone(),
+            });
+            let child_index = session.reviews.len() - 1;
+            let agent_dir = {
+                let review = &mut session.reviews[child_index];
+                ensure_review_paths(
+                    &repo_root,
+                    params.session.session_dir(),
+                    review,
+                    Some(&parent_agent_dir),
+                )?
+            };
+            let storage = {
+                let snapshot = session.reviews[child_index].clone();
+                sync_agent_files(session, &snapshot)?
+            };
+            session.reviews[child_index].storage = storage;
+            session.reviews[parent_index]
+                .child_ids
+                .push(reviewer_id.clone());
+            child_ids.push(reviewer_id);
+            child_agent_dirs.push(paths::repo_relative_path(&repo_root, &agent_dir)?);
+            child_agent_ledgers_json.push(session.reviews[child_index].agent_ledger_json.clone());
+            child_agent_ledgers_toml.push(session.reviews[child_index].agent_ledger_toml.clone());
+        }
+        let parent_storage = {
+            let snapshot = session.reviews[parent_index].clone();
+            sync_agent_files(session, &snapshot)?
+        };
+        session.reviews[parent_index].storage = parent_storage;
+        result = Some(SpawnChildReviewersResult {
+            child_ids,
+            child_agent_dirs,
+            child_agent_ledgers_json,
+            child_agent_ledgers_toml,
+            session_format_primary: session.storage.primary_format,
+        });
+        Ok(())
+    })?;
+    result.ok_or_else(|| anyhow::anyhow!("error: child reviewer spawn did not complete"))
+}
+
+pub fn close_child_reviews(
+    params: CloseChildReviewsParams,
+) -> anyhow::Result<CloseChildReviewsResult> {
+    with_locked_session(&params.session, |session| {
+        let now = now_rfc3339();
+        let mut closed_ids = Vec::new();
+        let parent_index = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == params.parent_id);
+        for index in 0..session.reviews.len() {
+            if session.reviews[index].parent_id.as_deref() != Some(params.parent_id.as_str())
+                || session.reviews[index].status == ReviewProcessStatus::Completed
+            {
+                continue;
+            }
+            session.reviews[index].status = params.status;
+            session.reviews[index].updated_at = now.clone();
+            let storage = {
+                let snapshot = session.reviews[index].clone();
+                sync_agent_files(session, &snapshot)?
+            };
+            session.reviews[index].storage = storage;
+            closed_ids.push(session.reviews[index].reviewer_id.clone());
+        }
+        if let Some(parent_index) = parent_index {
+            let storage = {
+                let snapshot = session.reviews[parent_index].clone();
+                sync_agent_files(session, &snapshot)?
+            };
+            session.reviews[parent_index].storage = storage;
+        }
+        Ok(CloseChildReviewsResult { closed_ids })
+    })
+}
+
+pub fn update_review(params: UpdateReviewParams) -> anyhow::Result<UpdateReviewResult> {
+    with_locked_session(&params.session, |session| {
+        let review = session
+            .reviews
+            .iter_mut()
+            .find(|review| review.reviewer_id == params.reviewer_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
+            })?;
+        review.status = params.status;
+        review.phase = params.phase.clone();
+        review.updated_at = now_rfc3339();
+        let reviewer_id = review.reviewer_id.clone();
+        let storage = {
+            let snapshot = review.clone();
+            sync_agent_files(session, &snapshot)?
+        };
+        let review = session
+            .reviews
+            .iter_mut()
+            .find(|review| review.reviewer_id == reviewer_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
+            })?;
+        review.storage = storage;
+        Ok(UpdateReviewResult {
+            reviewer_id: review.reviewer_id.clone(),
+            status: review.status,
+            phase: review.phase.clone(),
+        })
+    })
+}
+
+pub fn append_reviewer_note(params: AppendReviewerNoteParams) -> anyhow::Result<AppendNoteResult> {
+    with_locked_session(&params.session, |session| {
+        anyhow::ensure!(
+            session
+                .reviews
+                .iter()
+                .any(|review| review.reviewer_id == params.reviewer_id),
+            "error: reviewer `{}` was not found",
+            params.reviewer_id
+        );
+        session.notes.push(SessionNote {
+            actor_kind: NoteActorKind::Reviewer,
+            actor_id: params.reviewer_id.clone(),
+            created_at: now_rfc3339(),
+            content: params.content,
+        });
+        Ok(AppendNoteResult {
+            note_count: session.notes.len(),
+        })
+    })
+}
+
+pub fn append_applicator_note(
+    params: AppendApplicatorNoteParams,
+) -> anyhow::Result<AppendNoteResult> {
+    with_locked_session(&params.session, |session| {
+        session.notes.push(SessionNote {
+            actor_kind: NoteActorKind::Applicator,
+            actor_id: session.session_id.clone(),
+            created_at: now_rfc3339(),
+            content: params.content,
+        });
+        Ok(AppendNoteResult {
+            note_count: session.notes.len(),
+        })
+    })
+}
+
+pub fn complete_child_review(
+    params: ReviewerArtifactParams,
+) -> anyhow::Result<PersistArtifactResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    anyhow::ensure!(
+        artifact.kind() == ArtifactKind::ChildFindings,
+        "error: reviewer complete-child expects a child_findings artifact"
+    );
+    with_locked_session(&params.session, |session| {
+        let review_index = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == params.reviewer_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
+            })?;
+        let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
+        {
+            let review = &mut session.reviews[review_index];
+            review.status = ReviewProcessStatus::Completed;
+            review.phase = Some("child-findings-finalized".to_string());
+            review.artifact_id = Some(result.artifact_id.clone());
+            review.updated_at = now_rfc3339();
+        }
+        let storage = {
+            let snapshot = session.reviews[review_index].clone();
+            sync_agent_files(session, &snapshot)?
+        };
+        session.reviews[review_index].storage = storage;
+        Ok(result)
+    })
+}
+
+pub fn finalize_review(params: ReviewerArtifactParams) -> anyhow::Result<PersistArtifactResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    anyhow::ensure!(
+        artifact.kind() == ArtifactKind::ParentReview,
+        "error: reviewer finalize expects a parent_review artifact"
+    );
+    with_locked_session(&params.session, |session| {
+        let review_index = session
+            .reviews
+            .iter()
+            .position(|review| review.reviewer_id == params.reviewer_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
+            })?;
+        let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
+        {
+            let review = &mut session.reviews[review_index];
+            review.status = ReviewProcessStatus::Completed;
+            review.phase = Some("parent-review-finalized".to_string());
+            review.artifact_id = Some(result.artifact_id.clone());
+            review.updated_at = now_rfc3339();
+        }
+        let storage = {
+            let snapshot = session.reviews[review_index].clone();
+            sync_agent_files(session, &snapshot)?
+        };
+        session.reviews[review_index].storage = storage;
+        Ok(result)
+    })
+}
+
+pub fn set_applicator_status(
+    params: SetApplicatorStatusParams,
+) -> anyhow::Result<ApplicatorStatus> {
+    with_locked_session(&params.session, |session| {
+        session.applicator.status = params.status;
+        session.applicator.updated_at = now_rfc3339();
+        Ok(session.applicator.status)
+    })
+}
+
+pub fn applicator_wait(params: SessionLocator) -> anyhow::Result<ApplicatorWaitResult> {
+    let session = load_session(&params)?;
+    Ok(ApplicatorWaitResult {
+        status: session.applicator.status,
+        parent_review_ready: session.current.parent_review.is_some(),
+        parent_review: session.current.parent_review,
+    })
+}
+
+pub fn finalize_application(
+    params: ApplicatorArtifactParams,
+) -> anyhow::Result<PersistArtifactResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    anyhow::ensure!(
+        artifact.kind() == ArtifactKind::ApplicationResult,
+        "error: applicator finalize expects an application_result artifact"
+    );
+    with_locked_session(&params.session, |session| {
+        let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
+        session.applicator.status = ApplicatorStatus::Verifying;
+        session.applicator.updated_at = now_rfc3339();
+        session.applicator.application_result_id = Some(result.artifact_id.clone());
+        Ok(result)
+    })
+}
+
+pub fn verify_application(
+    params: ApplicatorArtifactParams,
+) -> anyhow::Result<PersistArtifactResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    let verification = match artifact {
+        ArtifactDocument::VerificationResult(verification) => verification,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "error: applicator verify expects a verification_result artifact"
+            ))
+        }
+    };
+    with_locked_session(&params.session, |session| {
+        let result = persist_artifact(
+            session,
+            params.session.session_dir(),
+            &ArtifactDocument::VerificationResult(verification.clone()),
+        )?;
+        session.applicator.status = if verification.failed_items.is_empty() {
+            ApplicatorStatus::Completed
+        } else {
+            ApplicatorStatus::Blocked
+        };
+        session.applicator.updated_at = now_rfc3339();
+        session.applicator.verification_result_id = Some(result.artifact_id.clone());
+        Ok(result)
+    })
+}
+
+pub fn persist_route_artifacts(
+    params: PersistRouteArtifactsParams,
+) -> anyhow::Result<PersistRouteArtifactsResult> {
+    let PersistRouteArtifactsParams {
+        session,
+        target_ref,
+        surface_map,
+        route_decision,
+    } = params;
+    with_target_session(&session, &target_ref, |ledger| {
+        let surface_map = persist_artifact(
+            ledger,
+            session.session_dir(),
+            &ArtifactDocument::SurfaceMap(surface_map.clone()),
+        )?;
+        let route_decision = persist_artifact(
+            ledger,
+            session.session_dir(),
+            &ArtifactDocument::RouteDecision(route_decision.clone()),
+        )?;
+        Ok(PersistRouteArtifactsResult {
+            surface_map,
+            route_decision,
+        })
+    })
+}
+
+pub fn apply_route_revision_artifact(
+    params: ApplyRouteRevisionParams,
+) -> anyhow::Result<ApplyRouteRevisionResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    let route_revision = match artifact {
+        ArtifactDocument::RouteRevision(route_revision) => route_revision,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "error: session apply-route-revision expects a route_revision artifact"
+            ))
+        }
+    };
+    with_locked_session(&params.session, |session| {
+        let current_route = session
+            .current
+            .route_decision
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("error: no current route_decision is persisted"))?;
+        let current_route_path = resolve_pointer_path(session, current_route).ok_or_else(|| {
+            anyhow::anyhow!("error: route_decision pointer could not be resolved")
+        })?;
+        let current_route = match parse_artifact_file(&current_route_path)? {
+            ArtifactDocument::RouteDecision(route) => route,
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "error: current route_decision pointer did not resolve to a route_decision artifact"
+                ))
+            }
+        };
+        let revision_request = crate::router_types::RouteRevisionRequest {
+            discovered_surfaces: route_revision
+                .discovered_surfaces
+                .iter()
+                .map(|surface| surface.surface_id)
+                .collect(),
+            added_modules: route_revision.added_modules.clone(),
+            raise_rigor: route_revision.rigor_change.is_some(),
+            widen_architecture: route_revision.architecture_change.is_some(),
+        };
+        let mut revised_route =
+            crate::router::apply_route_revision(&current_route, &revision_request);
+        revised_route.header = crate::artifacts::ArtifactHeader::new(
+            ArtifactKind::RouteDecision,
+            id::random_hex_id(6)?,
+            session.session_id.clone(),
+            session.target_ref.clone(),
+            crate::artifacts::ProducerKind::Router,
+            now_rfc3339(),
+            current_route.header.confidence_label,
+            current_route.header.confidence_score,
+            crate::router::default_router_policy_refs(&revised_route.selected_modules),
+        )?;
+        let route_revision = persist_artifact(
+            session,
+            params.session.session_dir(),
+            &ArtifactDocument::RouteRevision(route_revision.clone()),
+        )?;
+        let route_decision = persist_artifact(
+            session,
+            params.session.session_dir(),
+            &ArtifactDocument::RouteDecision(revised_route),
+        )?;
+        Ok(ApplyRouteRevisionResult {
+            route_revision,
+            route_decision,
+        })
+    })
+}
+
+pub fn checkpoint_convergence_state(
+    params: ApplicatorArtifactParams,
+) -> anyhow::Result<PersistArtifactResult> {
+    let artifact = parse_artifact_file(&params.artifact_file)?;
+    anyhow::ensure!(
+        artifact.kind() == ArtifactKind::ConvergenceState,
+        "error: fullcycle checkpoint expects a convergence_state artifact"
+    );
+    with_locked_session(&params.session, |session| {
+        let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
+        if let ArtifactDocument::ConvergenceState(convergence) = artifact {
+            if convergence.stop_condition == "terminal_cleanup"
+                && convergence.terminal_cleanup_allowed
+            {
+                session.convergence.terminal_cleanup_consumed = true;
+            }
+        }
+        Ok(result)
+    })
+}
+
+pub fn list_artifacts(session: &SessionLedger, kind: Option<ArtifactKind>) -> Vec<ArtifactPointer> {
+    session
+        .artifacts
+        .iter()
+        .filter(|artifact| kind.is_none_or(|expected| artifact.artifact_kind == expected))
+        .cloned()
+        .collect()
+}
+
+pub fn collect_reports(
+    locator: &SessionLocator,
+    view: ReportView,
+    recursive: bool,
+    include_leaf_children: bool,
+    include_report_contents: bool,
+    concatenate: bool,
+) -> anyhow::Result<ReportsResult> {
+    let session = load_session(locator)?;
+    build_reports_result(
+        &session,
+        view,
+        recursive,
+        include_leaf_children,
+        include_report_contents,
+        concatenate,
+    )
+}
+
+pub fn cleanup_session(locator: &SessionLocator) -> anyhow::Result<PathBuf> {
+    let session = load_session(locator)?;
+    let repo_root = PathBuf::from(session.repo_root);
+    let scratch_dir = paths::scratch_dir(&repo_root);
+    if scratch_dir.exists() {
+        match fs::remove_dir(&scratch_dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("remove scratch dir {}", scratch_dir.display()))
+            }
+        }
+    }
+    Ok(scratch_dir)
 }

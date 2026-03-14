@@ -1,0 +1,44 @@
+[[policy]]
+id = "reviewer"
+version = "2026.03.08"
+summary = "Produce canonical review artifacts from semantic routing and concern-specific worker execution."
+must = ["route by semantic surfaces", "emit machine artifacts first", "render markdown only from artifacts"]
+must_not = ["treat prose as canonical", "route primarily by churn", "store full artifacts in _session.toml"]
+inputs = ["target_ref", "surface_map", "route_decision", "selected policy refs"]
+outputs = ["child_findings", "parent_review"]
+checks = ["load mode checklist after routing", "validate artifacts at hard and soft layers", "preserve evidence-backed findings only"]
+stop_when = ["parent_review finalized", "hard validation fails", "session is legacy v1"]
+escalate_when = ["malformed output", "security risk exceeds baseline route", "route revision raises rigor"]
+anti_patterns = ["domain sprawl without surface evidence", "manual markdown synthesis before machine artifact exists"]
+examples = ["Low-risk docs-only update -> direct + lite + review-composite.", "Auth boundary change -> delegated + forensic + exploit + contract + release-risk coverage."]
+schema = ["mode", "execution_architecture", "rigor_level", "worker_plan", "selected_modules", "loaded_policy_refs"]
+
+[[policy]]
+id = "applicator"
+version = "2026.03.08"
+summary = "Challenge reviewer evidence before applying changes and persist structured dispositions plus verification."
+must = ["verify anchor validity", "verify scenario reproducibility", "record categorical decline and duplicate reasons"]
+must_not = ["mark applied without evidence challenge", "drop verification-needed follow-ups", "invent missing reviewer detail"]
+inputs = ["parent_review", "child_findings", "application_result draft"]
+outputs = ["application_result", "verification_result"]
+checks = ["run hard validation before finalize", "render markdown only from stored artifacts", "persist verification outcomes categorically"]
+stop_when = ["application_result finalized", "verification_result finalized", "hard validation fails"]
+escalate_when = ["finding is hallucinated", "severity is disproportionate", "verification fails"]
+anti_patterns = ["bulk apply without itemized disposition", "using rendered markdown as source of truth"]
+examples = ["Valid finding with repro -> applied + verification_needed.", "Duplicate claim after fix -> declined with duplicate reason."]
+schema = ["source_finding_ids", "dispositions", "modified_files", "verification_needed", "decline_codes"]
+
+[[policy]]
+id = "full-cycle"
+version = "2026.03.08"
+summary = "Preserve severity-bounded reopen and behavior-facing staleness handling across review, apply, and verify cycles."
+must = ["persist convergence_state artifacts", "reopen only for blocker/major/staleness/verification failure/fix regression", "allow one bounded terminal cleanup pass"]
+must_not = ["reopen for minor or nit alone", "depend on v1 proof-packet assumptions", "collapse convergence state into session prose"]
+inputs = ["parent_review", "application_result", "verification_result", "current convergence_state"]
+outputs = ["next convergence_state", "next route focus inputs"]
+checks = ["keep reopen severity floor at major", "keep behavior_staleness_reopens true", "carry only compact pointers in session"]
+stop_when = ["stop_condition is converged", "fresh start is required", "hard validation fails"]
+escalate_when = ["verification fails", "behavior-facing staleness remains", "major findings remain after application"]
+anti_patterns = ["infinite reopen loops", "using minor cleanup to reopen the cycle"]
+examples = ["Only minor cleanup remains -> terminal cleanup allowed.", "Verification failure -> reopen with focused files and surfaces."]
+schema = ["cycle_index", "reopen_threshold", "reopen_triggers", "next_route_inputs", "stop_condition"]

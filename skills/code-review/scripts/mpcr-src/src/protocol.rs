@@ -1,785 +1,846 @@
-//! Embedded protocol data for just-in-time phase guidance.
-//!
-//! Protocol content is compiled into the binary from TOML files in `protocols/`.
-//! The CLI (`mpcr protocol ...`) serves phase-appropriate snippets so that
-//! agents never need to hold the full protocol specification in context.
-#![allow(clippy::implicit_hasher)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::too_many_lines)]
+//! Structured `mpcr protocol ...` retrieval and compatibility dispatch helpers.
 #![allow(missing_docs)]
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::artifacts::{
+    parse_artifact_file, ArtifactDocument, ExecutionArchitecture, Mode, ModuleId, PolicyCategory,
+    PolicyRef, PolicyView, SurfaceId, POLICY_BUNDLE_VERSION,
+};
+use crate::paths;
+use crate::policy_store::{
+    generate_applicator_fallback, generate_fullcycle_fallback, generate_orchestrator_fallback,
+    generate_reviewer_fallback, PolicyListEntry, PolicyStore,
+};
+use crate::session::{
+    load_session, AgentRoleKind, LanguageResearchRef, ReviewProcess, SessionLocator,
+};
+use serde::Serialize;
+use std::fs;
+use std::path::Path;
 
-// ── Embedded TOML sources (compiled in) ──────────────────────────────────────
-
-const REVIEWER_TOML: &str = include_str!("../protocols/reviewer.toml");
-const APPLICATOR_TOML: &str = include_str!("../protocols/applicator.toml");
-const ORCHESTRATOR_TOML: &str = include_str!("../protocols/orchestrator.toml");
-const TEMPLATES_TOML: &str = include_str!("../protocols/templates.toml");
-const DISPATCH_TOML: &str = include_str!("../protocols/dispatch.toml");
-const SESSION_TOML: &str = include_str!("../protocols/session.toml");
-
-const REVIEWER_PHASE_ORDER: &[&str] = &[
-    "INGESTION",
-    "DOMAIN_COVERAGE",
-    "THEOREM_GENERATION",
-    "ADVERSARIAL_PROOFS",
-    "SYNTHESIS",
-    "REPORT_WRITING",
-    "OVERENGINEERING_GUARD",
-    "COMPLEXITY_ANALYSIS",
-    "SHIP_READINESS",
-];
-
-const APPLICATOR_PHASE_ORDER: &[&str] =
-    &["INGESTION", "DISPOSITION", "APPLICATION", "FINALIZATION"];
-
-// ── Deserialization types ────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-/// A single phase entry with title and content guidance.
-pub struct PhaseEntry {
-    /// Human-readable phase title.
-    pub title: String,
-    /// Phase-appropriate guidance text.
-    pub content: String,
-}
-
-#[derive(Debug, Deserialize)]
-/// TOML structure for files with a `[phases.<NAME>]` table.
-struct PhasesFile {
-    phases: HashMap<String, PhaseEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-/// A named section with title and content.
-struct NamedSection {
-    title: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-/// TOML structure for `orchestrator.toml`.
-struct OrchestratorFile {
-    orchestrator: NamedSection,
-    domains: NamedSection,
-    #[serde(default)]
-    fullcycle: Option<NamedSection>,
-    #[serde(default)]
-    invocation_aliases: Option<NamedSection>,
-    #[serde(default)]
-    workflow_selection: Option<NamedSection>,
-    #[serde(default)]
-    quality_gate: Option<NamedSection>,
-    #[serde(default)]
-    change_classification: Option<NamedSection>,
-    #[serde(default)]
-    analyze: Option<NamedSection>,
-    #[serde(default)]
-    scope_mapping: Option<NamedSection>,
-    #[serde(default)]
-    convergence_planning: Option<NamedSection>,
-}
-
-#[derive(Debug, Deserialize)]
-/// TOML structure for `templates.toml`.
-struct TemplatesFile {
-    scales: HashMap<String, NamedSection>,
-}
-
-/// Common sections shared across all dispatch roles.
-#[derive(Debug, Deserialize)]
-struct DispatchCommon {
-    worker_preamble: String,
-    task_steps: String,
-    output_format: String,
-}
-
-/// TOML structure for `dispatch.toml`.
-#[derive(Debug, Deserialize)]
-struct DispatchFile {
-    #[serde(default)]
-    common: Option<DispatchCommon>,
-    roles: HashMap<String, DispatchRole>,
-}
-
-/// A single dispatch role entry. Supports either:
-/// - fully inlined prompt templates (`prompt_template`)
-/// - factored templates (`domain_focus` + common sections)
-#[derive(Debug, Deserialize)]
-struct DispatchRole {
-    title: String,
-    #[serde(default)]
-    prompt_template: Option<String>,
-    #[serde(default)]
-    domain_focus: Option<String>,
-    #[serde(default)]
-    methodology: Option<String>,
-    #[serde(default)]
-    task_override: Option<String>,
-    #[serde(default)]
-    output_override: Option<String>,
-}
-
-// ── Output types ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-/// JSON output for a protocol query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Text protocol response for one static policy lookup.
 pub struct ProtocolOutput {
-    /// Title of the served content.
-    pub title: String,
-    /// The protocol content text.
+    pub category: PolicyCategory,
+    pub id: String,
+    pub view: PolicyView,
     pub content: String,
 }
 
-#[derive(Debug, Serialize)]
-/// JSON output for listing available protocol entries.
-pub struct ProtocolListEntry {
-    /// Protocol category.
-    pub category: String,
-    /// Entry key (phase name, scale, role, or related identifier).
-    pub key: String,
-    /// Human-readable title.
-    pub title: String,
-    /// CLI invocation to retrieve this entry.
-    pub command: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Structured compatibility dispatch response.
+pub struct DispatchOutput {
+    pub role: String,
+    pub view: PolicyView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Mode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_architecture: Option<ExecutionArchitecture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_kind: Option<String>,
+    #[serde(default)]
+    pub module_ids: Vec<String>,
+    #[serde(default)]
+    pub focus_surfaces: Vec<String>,
+    #[serde(default)]
+    pub claimed_scope: Vec<String>,
+    #[serde(default)]
+    pub delegated_scope: Vec<String>,
+    #[serde(default)]
+    pub lineage: Vec<String>,
+    #[serde(default)]
+    pub language_research_refs: Vec<LanguageResearchRef>,
+    #[serde(default)]
+    pub loaded_policy_refs: Vec<PolicyRef>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ProtocolCapabilities {
-    pub schema_version: String,
-    pub protocol_commands: Vec<String>,
-    pub protocol_entry_count: usize,
+#[derive(Debug, Clone)]
+struct ResolvedRole {
+    role: String,
+    mode: Mode,
+    worker_policy_id: String,
+    module_ids: Vec<String>,
 }
 
-// ── Query functions ──────────────────────────────────────────────────────────
-
-/// Retrieve phase guidance for a reviewer phase.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
-pub fn reviewer_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: PhasesFile =
-        toml::from_str(REVIEWER_TOML).map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
-    let key = phase.to_ascii_uppercase();
-    let entry = file
-        .phases
-        .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown reviewer phase: {phase}"))?;
-    Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: entry.content.clone(),
-    })
+#[derive(Debug, Clone)]
+struct RouteContext {
+    mode: Mode,
+    execution_architecture: ExecutionArchitecture,
+    selected_modules: Vec<String>,
+    surfaces: Vec<String>,
 }
 
-/// Retrieve phase guidance for an applicator phase.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
-pub fn applicator_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: PhasesFile = toml::from_str(APPLICATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse applicator.toml: {e}"))?;
-    let key = phase.to_ascii_uppercase();
-    let entry = file
-        .phases
-        .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown applicator phase: {phase}"))?;
-    Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: entry.content.clone(),
-    })
+#[derive(Debug, Clone)]
+struct DispatchContext {
+    role: ResolvedRole,
+    reviewer_id: Option<String>,
+    session_id: Option<String>,
+    target_ref: Option<String>,
+    route: Option<RouteContext>,
+    agent_dir: Option<String>,
+    report_path: Option<String>,
+    role_kind: Option<String>,
+    focus_surfaces: Vec<String>,
+    claimed_scope: Vec<String>,
+    delegated_scope: Vec<String>,
+    lineage: Vec<String>,
+    language_research_refs: Vec<LanguageResearchRef>,
+    loaded_policy_refs: Vec<PolicyRef>,
+    warnings: Vec<String>,
 }
 
-/// Retrieve orchestrator guidance.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed.
-pub fn orchestrator() -> anyhow::Result<ProtocolOutput> {
-    let file: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
-    Ok(ProtocolOutput {
-        title: file.orchestrator.title,
-        content: file.orchestrator.content,
-    })
-}
-
-/// Retrieve the Universal Domains reference table.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed.
-pub fn domains() -> anyhow::Result<ProtocolOutput> {
-    let file: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
-    Ok(ProtocolOutput {
-        title: file.domains.title,
-        content: file.domains.content,
-    })
-}
-
-/// Retrieve full-cycle orchestration guidance.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the section is absent.
-pub fn fullcycle() -> anyhow::Result<ProtocolOutput> {
-    let file: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
-    let section = file
-        .fullcycle
-        .ok_or_else(|| anyhow::anyhow!("fullcycle section not found in orchestrator.toml"))?;
-    Ok(ProtocolOutput {
-        title: section.title,
-        content: section.content,
-    })
-}
-
-/// Retrieve a named optional section from orchestrator.toml.
-fn orchestrator_section(
-    extractor: fn(&OrchestratorFile) -> &Option<NamedSection>,
-    name: &str,
-) -> anyhow::Result<ProtocolOutput> {
-    let file: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
-    let section = extractor(&file)
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("{name} section not found in orchestrator.toml"))?;
-    Ok(ProtocolOutput {
-        title: section.title.clone(),
-        content: section.content.clone(),
-    })
-}
-
-/// Retrieve the invocation aliases reference.
-pub fn invocation_aliases() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.invocation_aliases, "invocation_aliases")
-}
-
-/// Retrieve the workflow selection guidance.
-pub fn workflow_selection() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.workflow_selection, "workflow_selection")
-}
-
-/// Retrieve the quality gate rubric.
-pub fn quality_gate() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.quality_gate, "quality_gate")
-}
-
-/// Retrieve the change classification table.
-pub fn change_classification() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.change_classification, "change_classification")
-}
-
-/// Retrieve the static analysis integration guidance.
-pub fn analyze_guidance() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.analyze, "analyze")
-}
-
-/// Retrieve the scope mapping guidance.
-pub fn scope_mapping() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.scope_mapping, "scope_mapping")
-}
-
-/// Retrieve the convergence planning guidance.
-pub fn convergence_planning() -> anyhow::Result<ProtocolOutput> {
-    orchestrator_section(|f| &f.convergence_planning, "convergence_planning")
-}
-
-/// Retrieve a report template at the given scale.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the scale is not found.
-pub fn report_template(scale: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: TemplatesFile =
-        toml::from_str(TEMPLATES_TOML).map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
-    let key = scale.to_ascii_lowercase();
-    let entry = file
-        .scales
-        .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown template scale: {scale}"))?;
-    Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: entry.content.clone(),
-    })
-}
-
-/// Retrieve a subagent dispatch prompt template for the given role.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the role is not found.
-pub fn dispatch(role: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: DispatchFile =
-        toml::from_str(DISPATCH_TOML).map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
-    let key = role.to_ascii_lowercase().replace('-', "_");
-    let entry = file
-        .roles
-        .get(&key)
-        .ok_or_else(|| {
-            let mut valid: Vec<_> = file.roles.keys().map(|k| k.replace('_', "-")).collect();
-            valid.sort();
-            anyhow::anyhow!(
-                "error: unknown dispatch role \"{role}\"\nhint: valid roles: {}\nhint: run `mpcr protocol dispatch-list`",
-                valid.join(", ")
-            )
-        })?;
-
-    let assembled = if let Some(ref full) = entry.prompt_template {
-        full.clone()
-    } else if let (Some(ref common), Some(ref domain_focus)) = (&file.common, &entry.domain_focus) {
-        let task = match entry.task_override.as_deref() {
-            Some(t) => t,
-            None => &common.task_steps,
-        };
-        let output = match entry.output_override.as_deref() {
-            Some(o) => o,
-            None => &common.output_format,
-        };
-        let methodology_block = entry
-            .methodology
-            .as_deref()
-            .map_or(String::new(), |m| format!("\n## Methodology\n{}\n", m));
-        let mut assembled = format!(
-            "{}\n\n## Domain focus\n{}\n{}\n## Task\n{}\n\n## Output format\n{}",
-            common.worker_preamble, domain_focus, methodology_block, task, output
-        );
-        assembled = assembled.replace("<ROLE_SLUG>", &key.replace('_', "-"));
-        assembled = assembled.replace("<ROLE_TITLE>", &entry.title);
-        assembled
-    } else {
-        return Err(anyhow::anyhow!(
-            "dispatch role {role}: missing both prompt_template and domain_focus+common"
-        ));
-    };
-
-    Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: assembled,
-    })
-}
-
-/// List all available dispatch roles.
-pub fn dispatch_list() -> anyhow::Result<Vec<String>> {
-    let file: DispatchFile =
-        toml::from_str(DISPATCH_TOML).map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
-    let mut roles: Vec<String> = file.roles.keys().map(|k| k.replace('_', "-")).collect();
-    roles.sort();
-    Ok(roles)
-}
-
-/// List all available protocol entries.
-///
-/// # Errors
-/// Returns an error if any embedded TOML cannot be parsed.
-pub fn list_entries() -> anyhow::Result<Vec<ProtocolListEntry>> {
-    let mut entries = Vec::new();
-
-    let reviewer: PhasesFile =
-        toml::from_str(REVIEWER_TOML).map_err(|e| anyhow::anyhow!("parse reviewer.toml: {e}"))?;
-    let mut reviewer_keys: Vec<_> = reviewer.phases.keys().cloned().collect();
-    reviewer_keys.sort();
-    for key in reviewer_keys {
-        if let Some(phase) = reviewer.phases.get(&key) {
-            entries.push(ProtocolListEntry {
-                category: "reviewer".to_string(),
-                key: key.clone(),
-                title: phase.title.clone(),
-                command: format!("mpcr protocol reviewer --phase {key}"),
-            });
-        }
-    }
-
-    let applicator: PhasesFile = toml::from_str(APPLICATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse applicator.toml: {e}"))?;
-    let mut applicator_keys: Vec<_> = applicator.phases.keys().cloned().collect();
-    applicator_keys.sort();
-    for key in applicator_keys {
-        if let Some(phase) = applicator.phases.get(&key) {
-            entries.push(ProtocolListEntry {
-                category: "applicator".to_string(),
-                key: key.clone(),
-                title: phase.title.clone(),
-                command: format!("mpcr protocol applicator --phase {key}"),
-            });
-        }
-    }
-
-    entries.push(ProtocolListEntry {
-        category: "orchestrator".to_string(),
-        key: "orchestrator".to_string(),
-        title: "Multi-Agent Orchestration".to_string(),
-        command: "mpcr protocol orchestrator".to_string(),
-    });
-    entries.push(ProtocolListEntry {
-        category: "orchestrator".to_string(),
-        key: "fullcycle".to_string(),
-        title: "Full-Cycle Convergence".to_string(),
-        command: "mpcr protocol fullcycle".to_string(),
-    });
-    entries.push(ProtocolListEntry {
-        category: "meta".to_string(),
-        key: "capabilities".to_string(),
-        title: "Protocol Capabilities".to_string(),
-        command: "mpcr protocol capabilities".to_string(),
-    });
-    let orchestrator: OrchestratorFile = toml::from_str(ORCHESTRATOR_TOML)
-        .map_err(|e| anyhow::anyhow!("parse orchestrator.toml: {e}"))?;
-    entries.push(ProtocolListEntry {
-        category: "orchestrator".to_string(),
-        key: "domains".to_string(),
-        title: orchestrator.domains.title,
-        command: "mpcr protocol domains".to_string(),
-    });
-    for (key, cmd, section) in [
-        (
-            "invocation-aliases",
-            "mpcr protocol invocation-aliases",
-            &orchestrator.invocation_aliases,
-        ),
-        (
-            "workflow-selection",
-            "mpcr protocol workflow-selection",
-            &orchestrator.workflow_selection,
-        ),
-        (
-            "quality-gate",
-            "mpcr protocol quality-gate",
-            &orchestrator.quality_gate,
-        ),
-        (
-            "change-classification",
-            "mpcr protocol change-classification",
-            &orchestrator.change_classification,
-        ),
-        (
-            "analyze",
-            "mpcr protocol analyze-guidance",
-            &orchestrator.analyze,
-        ),
-        (
-            "scope-mapping",
-            "mpcr protocol scope-mapping",
-            &orchestrator.scope_mapping,
-        ),
-        (
-            "convergence-planning",
-            "mpcr protocol convergence-planning",
-            &orchestrator.convergence_planning,
-        ),
-    ] {
-        if let Some(ref s) = section {
-            entries.push(ProtocolListEntry {
-                category: "orchestrator".to_string(),
-                key: key.to_string(),
-                title: s.title.clone(),
-                command: cmd.to_string(),
-            });
-        }
-    }
-
-    let templates: TemplatesFile =
-        toml::from_str(TEMPLATES_TOML).map_err(|e| anyhow::anyhow!("parse templates.toml: {e}"))?;
-    let mut template_keys: Vec<_> = templates.scales.keys().cloned().collect();
-    template_keys.sort();
-    for key in template_keys {
-        if let Some(scale) = templates.scales.get(&key) {
-            entries.push(ProtocolListEntry {
-                category: "report-template".to_string(),
-                key: key.clone(),
-                title: scale.title.clone(),
-                command: format!("mpcr protocol report-template --scale {key}"),
-            });
-        }
-    }
-
-    let dispatch_file: DispatchFile =
-        toml::from_str(DISPATCH_TOML).map_err(|e| anyhow::anyhow!("parse dispatch.toml: {e}"))?;
-    let mut dispatch_keys: Vec<String> = dispatch_file.roles.keys().cloned().collect();
-    dispatch_keys.sort();
-    for key in dispatch_keys {
-        if let Some(role) = dispatch_file.roles.get(&key) {
-            let cli_key = key.replace('_', "-");
-            entries.push(ProtocolListEntry {
-                category: "dispatch".to_string(),
-                key: cli_key.clone(),
-                title: role.title.clone(),
-                command: format!("mpcr protocol dispatch --role {cli_key}"),
-            });
-        }
-    }
-
-    let session_file: PhasesFile =
-        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
-    let mut session_keys: Vec<_> = session_file.phases.keys().cloned().collect();
-    session_keys.sort();
-    for key in session_keys {
-        if let Some(phase) = session_file.phases.get(&key) {
-            entries.push(ProtocolListEntry {
-                category: "session".to_string(),
-                key: key.clone(),
-                title: phase.title.clone(),
-                command: format!("mpcr protocol session --phase {key}"),
-            });
-        }
-    }
-    Ok(entries)
-}
-
-/// List protocol capability metadata exposed by this binary.
-///
-/// # Errors
-/// Returns an error if embedded protocol TOML cannot be parsed.
-pub fn capabilities() -> anyhow::Result<ProtocolCapabilities> {
-    let entries = list_entries()?;
-    let mut commands = entries
-        .iter()
-        .map(|entry| entry.command.clone())
-        .collect::<Vec<_>>();
-    commands.sort();
-    commands.dedup();
-    Ok(ProtocolCapabilities {
-        schema_version: "protocol_capabilities.v1".to_string(),
-        protocol_commands: commands,
-        protocol_entry_count: entries.len(),
-    })
-}
-
-fn render_doc_section(output: &ProtocolOutput, key: &str) -> String {
-    format!(
-        "## {} (`{key}`)\n\n{}\n",
-        output.title,
-        output.content.trim()
+fn module_slug(module_id: ModuleId) -> String {
+    toml::Value::try_from(module_id).map_or_else(
+        |_| "unknown".to_string(),
+        |value| value.to_string().trim_matches('"').to_string(),
     )
 }
 
-fn render_doc_header(title: &str, body: &str) -> String {
-    format!("# {title}\n\n{body}")
+fn surface_slug(surface_id: SurfaceId) -> String {
+    toml::Value::try_from(surface_id).map_or_else(
+        |_| "unknown".to_string(),
+        |value| value.to_string().trim_matches('"').to_string(),
+    )
 }
 
-/// Render the checked-in fallback markdown for reviewer guidance.
-pub fn reviewer_fallback_doc() -> anyhow::Result<String> {
-    let mut body = String::from(
-        "Primary source: `mpcr protocol reviewer --phase <PHASE>`.\n\n\
-If the CLI is unavailable, use the sections below. They mirror the reviewer protocol phases and supplemental rubrics.\n\n",
-    );
-    for phase in REVIEWER_PHASE_ORDER {
-        let output = reviewer_phase(phase)?;
-        body.push_str(&render_doc_section(&output, phase));
-        body.push('\n');
+fn mode_slug(mode: Mode) -> String {
+    toml::Value::try_from(mode).map_or_else(
+        |_| "reviewer".to_string(),
+        |value| value.to_string().trim_matches('"').to_string(),
+    )
+}
+
+fn role_kind_slug(role_kind: &AgentRoleKind) -> String {
+    match role_kind {
+        AgentRoleKind::DomainReviewer => "domain-reviewer",
+        AgentRoleKind::LanguageDetector => "language-detector",
+        AgentRoleKind::LanguageResearch => "language-research",
+        AgentRoleKind::FinalSynthesis => "final-synthesis",
+        AgentRoleKind::ApplyComposite => "apply-composite",
+        AgentRoleKind::ApplicatorWorker => "applicator-worker",
+        AgentRoleKind::ApplicatorVerifier => "applicator-verifier",
+        AgentRoleKind::Helper => "helper",
     }
-    Ok(render_doc_header("Reviewer Fallback", body.trim_end()))
+    .to_string()
 }
 
-/// Render the checked-in fallback markdown for applicator guidance.
-pub fn applicator_fallback_doc() -> anyhow::Result<String> {
-    let mut body = String::from(
-        "Primary source: `mpcr protocol applicator --phase <PHASE>`.\n\n\
-If the CLI is unavailable, use the sections below. They mirror the applicator protocol phases.\n\n",
-    );
-    for phase in APPLICATOR_PHASE_ORDER {
-        let output = applicator_phase(phase)?;
-        body.push_str(&render_doc_section(&output, phase));
-        body.push('\n');
+fn policy_ref(category: PolicyCategory, id: impl Into<String>, view: PolicyView) -> PolicyRef {
+    PolicyRef {
+        category,
+        id: id.into(),
+        version: POLICY_BUNDLE_VERSION.to_string(),
+        view,
     }
-    Ok(render_doc_header("Applicator Fallback", body.trim_end()))
 }
 
-/// Render the checked-in fallback markdown for orchestrator guidance.
-pub fn orchestrator_fallback_doc() -> anyhow::Result<String> {
-    let sections = [
-        ("ORCHESTRATOR", orchestrator()?),
-        ("INVOCATION_ALIASES", invocation_aliases()?),
-        ("WORKFLOW_SELECTION", workflow_selection()?),
-        ("DOMAINS", domains()?),
-        ("QUALITY_GATE", quality_gate()?),
-        ("CHANGE_CLASSIFICATION", change_classification()?),
-        ("ANALYZE_GUIDANCE", analyze_guidance()?),
-        ("SCOPE_MAPPING", scope_mapping()?),
-        ("CONVERGENCE_PLANNING", convergence_planning()?),
-    ];
-    let mut body = String::from(
-        "Primary source: `mpcr protocol orchestrator` plus the related `mpcr protocol` subcommands listed below.\n\n\
-If the CLI is unavailable, use these sections as the orchestrator reference.\n\n",
-    );
-    for (key, output) in sections {
-        body.push_str(&render_doc_section(&output, key));
-        body.push('\n');
+fn push_section(lines: &mut Vec<String>, title: &str, items: &[String], empty: &str) {
+    lines.push(format!("## {title}"));
+    lines.push(String::new());
+    if items.is_empty() {
+        lines.push(format!("- {empty}"));
+    } else {
+        for item in items {
+            lines.push(format!("- {item}"));
+        }
     }
-    Ok(render_doc_header("Orchestrator Fallback", body.trim_end()))
+    lines.push(String::new());
 }
 
-/// Render the checked-in fallback markdown for full-cycle guidance.
-pub fn fullcycle_fallback_doc() -> anyhow::Result<String> {
-    let output = fullcycle()?;
-    Ok(render_doc_header(
-        "Full-Cycle Fallback",
-        &format!(
-            "Primary source: `mpcr protocol fullcycle`.\n\nIf the CLI is unavailable, use the section below.\n\n{}",
-            render_doc_section(&output, "FULLCYCLE").trim_end()
-        ),
-    ))
+fn normalize_dispatch_role(role: &str) -> anyhow::Result<ResolvedRole> {
+    let trimmed = role.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "error: dispatch role must not be empty"
+    );
+
+    if let Some(module) = trimmed.strip_prefix("domain:") {
+        anyhow::ensure!(
+            ModuleId::all()
+                .into_iter()
+                .any(|candidate| module_slug(candidate) == module),
+            "error: unknown dispatch role `{trimmed}`"
+        );
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: "domain-reviewer".to_string(),
+            module_ids: vec![module.to_string()],
+        });
+    }
+
+    if ModuleId::all()
+        .into_iter()
+        .any(|candidate| module_slug(candidate) == trimmed)
+    {
+        return Ok(ResolvedRole {
+            role: format!("domain:{trimmed}"),
+            mode: Mode::Reviewer,
+            worker_policy_id: "domain-reviewer".to_string(),
+            module_ids: vec![trimmed.to_string()],
+        });
+    }
+
+    if trimmed == "domain-reviewer" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: "domain-reviewer".to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed == "language-detector" || trimmed.starts_with("language-detector:") {
+        return Ok(ResolvedRole {
+            role: "language-detector".to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: "language-detector".to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed.starts_with("language-research:") {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: "language-research".to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed == "final-synthesis" || trimmed == "final-synthesizer" {
+        return Ok(ResolvedRole {
+            role: "final-synthesis".to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: "final-synthesizer".to_string(),
+            module_ids: vec![module_slug(ModuleId::ShipReadiness)],
+        });
+    }
+
+    if trimmed == "apply-composite" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Applicator,
+            worker_policy_id: trimmed.to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed == "applicator-worker" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Applicator,
+            worker_policy_id: trimmed.to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed == "applicator-verifier" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Applicator,
+            worker_policy_id: trimmed.to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    let store = PolicyStore::load()?;
+    if store.get(PolicyCategory::Worker, trimmed).is_ok() {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: trimmed.to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    Err(anyhow::anyhow!("error: unknown dispatch role `{trimmed}`"))
 }
 
-/// Retrieve phase guidance for a session management phase.
-///
-/// # Errors
-/// Returns an error if the embedded TOML cannot be parsed or the phase is not found.
-pub fn session_phase(phase: &str) -> anyhow::Result<ProtocolOutput> {
-    let file: PhasesFile =
-        toml::from_str(SESSION_TOML).map_err(|e| anyhow::anyhow!("parse session.toml: {e}"))?;
-    let key = phase.to_ascii_uppercase();
-    let entry = file
-        .phases
-        .get(&key)
-        .ok_or_else(|| anyhow::anyhow!("unknown session phase: {phase}"))?;
+fn role_matches_request(review: &ReviewProcess, resolved: &ResolvedRole) -> bool {
+    review.role == resolved.role
+        || (resolved.worker_policy_id == "domain-reviewer"
+            && review
+                .module_ids
+                .iter()
+                .any(|module_id| resolved.module_ids.contains(&module_slug(*module_id))))
+        || (resolved.worker_policy_id == "language-detector"
+            && review.role.starts_with("language-detector"))
+        || (resolved.worker_policy_id == "language-research"
+            && review.role.starts_with("language-research:"))
+        || (resolved.worker_policy_id == "final-synthesizer" && review.role == "final-synthesis")
+}
+
+fn route_context_for(locator: &SessionLocator) -> anyhow::Result<Option<RouteContext>> {
+    let session = load_session(locator)?;
+    let Some(pointer) = &session.current.route_decision else {
+        return Ok(None);
+    };
+    let route_path = if let Some(path) = pointer
+        .json_path
+        .as_deref()
+        .or(pointer.toml_path.as_deref())
+        .or(Some(pointer.path.as_str()))
+    {
+        paths::resolve_repo_relative(Path::new(&session.repo_root), path)?
+    } else {
+        return Ok(None);
+    };
+    let route = match parse_artifact_file(&route_path)? {
+        ArtifactDocument::RouteDecision(route) => route,
+        _ => return Ok(None),
+    };
+    Ok(Some(RouteContext {
+        mode: route.mode,
+        execution_architecture: route.execution_architecture,
+        selected_modules: route
+            .selected_modules
+            .iter()
+            .map(|module_id| module_slug(*module_id))
+            .collect(),
+        surfaces: route
+            .risk_surfaces
+            .iter()
+            .map(|surface| surface_slug(surface.surface_id))
+            .collect(),
+    }))
+}
+
+fn dispatch_context(
+    resolved: ResolvedRole,
+    locator: Option<&SessionLocator>,
+    reviewer_id: Option<&str>,
+    view: PolicyView,
+) -> anyhow::Result<DispatchContext> {
+    let mut ctx = DispatchContext {
+        role: resolved,
+        reviewer_id: None,
+        session_id: None,
+        target_ref: None,
+        route: None,
+        agent_dir: None,
+        report_path: None,
+        role_kind: None,
+        focus_surfaces: Vec::new(),
+        claimed_scope: Vec::new(),
+        delegated_scope: Vec::new(),
+        lineage: Vec::new(),
+        language_research_refs: Vec::new(),
+        loaded_policy_refs: Vec::new(),
+        warnings: Vec::new(),
+    };
+
+    let Some(locator) = locator else {
+        anyhow::ensure!(
+            reviewer_id.is_none(),
+            "error: protocol dispatch with --reviewer-id also requires a session locator"
+        );
+        ctx.warnings.push(
+            "dispatch loaded without session context; agent paths, lineage, and routed scope were not resolved"
+                .to_string(),
+        );
+        ctx.loaded_policy_refs.push(policy_ref(
+            PolicyCategory::Mode,
+            mode_slug(ctx.role.mode),
+            view,
+        ));
+        ctx.loaded_policy_refs.push(policy_ref(
+            PolicyCategory::Worker,
+            ctx.role.worker_policy_id.clone(),
+            view,
+        ));
+        for module_id in &ctx.role.module_ids {
+            ctx.loaded_policy_refs.push(policy_ref(
+                PolicyCategory::Module,
+                module_id.clone(),
+                view,
+            ));
+        }
+        return Ok(ctx);
+    };
+
+    let session = load_session(locator)?;
+    ctx.session_id = Some(session.session_id.clone());
+    ctx.target_ref = Some(session.target_ref.clone());
+    ctx.route = route_context_for(locator)?;
+    if let Some(route) = &ctx.route {
+        if ctx.role.mode != Mode::Applicator {
+            ctx.role.mode = route.mode;
+        }
+    }
+
+    let review = if let Some(reviewer_id) = reviewer_id {
+        Some(
+            session
+                .reviews
+                .iter()
+                .find(|review| review.reviewer_id == reviewer_id)
+                .ok_or_else(|| anyhow::anyhow!("error: reviewer `{reviewer_id}` was not found"))?,
+        )
+    } else {
+        let matches = session
+            .reviews
+            .iter()
+            .filter(|review| role_matches_request(review, &ctx.role))
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => None,
+            [review] => Some(*review),
+            _ => {
+                ctx.warnings.push(format!(
+                    "multiple reviewers matched role `{}`; rerun with --reviewer-id to bind the dispatch to one agent directory",
+                    ctx.role.role
+                ));
+                None
+            }
+        }
+    };
+
+    if let Some(review) = review {
+        if !role_matches_request(review, &ctx.role) {
+            return Err(anyhow::anyhow!(
+                "error: reviewer `{}` does not match dispatch role `{}`",
+                review.reviewer_id,
+                ctx.role.role
+            ));
+        }
+        ctx.reviewer_id = Some(review.reviewer_id.clone());
+        ctx.role.role = review.role.clone();
+        ctx.role.module_ids = if review.module_ids.is_empty() {
+            ctx.role.module_ids.clone()
+        } else {
+            review
+                .module_ids
+                .iter()
+                .map(|module_id| module_slug(*module_id))
+                .collect()
+        };
+        ctx.agent_dir = Some(review.agent_dir.clone());
+        ctx.report_path = review.report_path.clone();
+        ctx.role_kind = Some(role_kind_slug(&review.role_kind));
+        ctx.focus_surfaces = review
+            .focus_surfaces
+            .iter()
+            .map(|surface| surface_slug(*surface))
+            .collect();
+        ctx.claimed_scope = review.claimed_scope.clone();
+        ctx.delegated_scope = review.delegated_scope.clone();
+        ctx.lineage = review.lineage.clone();
+        ctx.language_research_refs = review.research_refs.clone();
+    } else {
+        ctx.language_research_refs = session.language_research_refs.clone();
+    }
+
+    if ctx.role.module_ids.is_empty() {
+        if let Some(route) = &ctx.route {
+            ctx.role.module_ids = route.selected_modules.clone();
+        }
+    }
+
+    ctx.loaded_policy_refs
+        .retain(|policy| policy.category != PolicyCategory::Module);
+    for module_id in &ctx.role.module_ids {
+        ctx.loaded_policy_refs
+            .push(policy_ref(PolicyCategory::Module, module_id.clone(), view));
+    }
+
+    if ctx.focus_surfaces.is_empty() {
+        if let Some(route) = &ctx.route {
+            ctx.focus_surfaces = route.surfaces.clone();
+        }
+    }
+
+    ctx.loaded_policy_refs.push(policy_ref(
+        PolicyCategory::Mode,
+        mode_slug(ctx.role.mode),
+        view,
+    ));
+    ctx.loaded_policy_refs.push(policy_ref(
+        PolicyCategory::Worker,
+        ctx.role.worker_policy_id.clone(),
+        view,
+    ));
+    for module_id in &ctx.role.module_ids {
+        ctx.loaded_policy_refs
+            .push(policy_ref(PolicyCategory::Module, module_id.clone(), view));
+    }
+
+    Ok(ctx)
+}
+
+fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow::Result<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("# Dispatch {}", ctx.role.role));
+    lines.push(String::new());
+    lines.push("You SHALL keep the orchestrator thin and execute only the slice assigned in this dispatch.".to_string());
+    lines.push("You SHALL treat machine artifacts as canonical and authored markdown as the required explanatory companion.".to_string());
+    lines.push("You SHALL write your full markdown report to the agent directory resolved below before you finalize machine artifacts.".to_string());
+    lines.push("You SHALL NOT re-read the entire skill body after receiving this dispatch unless the dispatch itself is missing a required contract.".to_string());
+    lines.push(String::new());
+
+    let mut summary_items = vec![format!("role `{}`", ctx.role.role)];
+    summary_items.push(format!("mode `{}`", mode_slug(ctx.role.mode)));
+    if let Some(architecture) = ctx.route.as_ref().map(|route| route.execution_architecture) {
+        summary_items.push(format!(
+            "execution architecture `{}`",
+            toml::Value::try_from(architecture).map_or_else(
+                |_| "unknown".to_string(),
+                |value| value.to_string().trim_matches('"').to_string(),
+            )
+        ));
+    }
+    if let Some(session_id) = &ctx.session_id {
+        summary_items.push(format!("session `{session_id}`"));
+    }
+    if let Some(target_ref) = &ctx.target_ref {
+        summary_items.push(format!("target ref `{target_ref}`"));
+    }
+    if let Some(reviewer_id) = &ctx.reviewer_id {
+        summary_items.push(format!("reviewer `{reviewer_id}`"));
+    }
+    if let Some(role_kind) = &ctx.role_kind {
+        summary_items.push(format!("role kind `{role_kind}`"));
+    }
+    if let Some(agent_dir) = &ctx.agent_dir {
+        summary_items.push(format!("agent dir `{agent_dir}`"));
+    }
+    if let Some(report_path) = &ctx.report_path {
+        summary_items.push(format!("report path `{report_path}`"));
+    }
+    push_section(
+        &mut lines,
+        "Assignment",
+        &summary_items,
+        "assignment context unavailable",
+    );
+
+    push_section(
+        &mut lines,
+        "Scope",
+        &ctx.role
+            .module_ids
+            .iter()
+            .map(|module_id| format!("own module `{module_id}`"))
+            .chain(
+                ctx.focus_surfaces
+                    .iter()
+                    .map(|surface| format!("focus surface `{surface}`")),
+            )
+            .chain(
+                ctx.claimed_scope
+                    .iter()
+                    .map(|scope| format!("claimed scope `{scope}`")),
+            )
+            .chain(
+                ctx.delegated_scope
+                    .iter()
+                    .map(|scope| format!("delegated scope `{scope}`")),
+            )
+            .collect::<Vec<_>>(),
+        "scope was not session-bound",
+    );
+
+    push_section(
+        &mut lines,
+        "Research Refs",
+        &ctx.language_research_refs
+            .iter()
+            .map(|reference| {
+                format!(
+                    "language `{}` via agent `{}` report `{}`",
+                    reference.language, reference.agent_id, reference.report_path
+                )
+            })
+            .collect::<Vec<_>>(),
+        "no persisted language research refs were available",
+    );
+
+    push_section(
+        &mut lines,
+        "Lineage",
+        &ctx.lineage,
+        "lineage was not recorded for this dispatch",
+    );
+
+    push_section(
+        &mut lines,
+        "Loaded Packs",
+        &ctx.loaded_policy_refs
+            .iter()
+            .map(|policy| format!("{} {} {}", policy.category, policy.id, policy.version))
+            .collect::<Vec<_>>(),
+        "no packs were resolved",
+    );
+
+    if !ctx.warnings.is_empty() {
+        push_section(&mut lines, "Warnings", &ctx.warnings, "none");
+    }
+
+    lines.push("## Operating Rules".to_string());
+    lines.push(String::new());
+    lines.push("- Write a full `report.md` under the current agent directory even when the outcome is `OUT_OF_SCOPE`, `LOW_SIGNAL`, or `NO_FINDINGS`.".to_string());
+    lines.push("- Keep `_agent.json`, `_agent.toml`, and child manifests in sync through `mpcr reviewer ...` session mutations rather than ad-hoc file writes.".to_string());
+    lines.push("- When you delegate helper work, claim the parent scope first and pass the child only a new sub-scope so work is not duplicated.".to_string());
+    lines.push("- Stop cleanly on low-signal, duplicate, non-actionable, or already-addressed findings after recording the reason.".to_string());
+    lines.push(String::new());
+
+    lines.push(
+        store.render(
+            PolicyCategory::Mode,
+            &mode_slug(ctx.role.mode),
+            ctx.loaded_policy_refs
+                .iter()
+                .find(|policy| policy.category == PolicyCategory::Mode)
+                .map_or(PolicyView::Checklist, |policy| policy.view),
+        )?,
+    );
+    lines.push(String::new());
+    lines.push(
+        store.render(
+            PolicyCategory::Worker,
+            &ctx.role.worker_policy_id,
+            ctx.loaded_policy_refs
+                .iter()
+                .find(|policy| {
+                    policy.category == PolicyCategory::Worker
+                        && policy.id == ctx.role.worker_policy_id
+                })
+                .map_or(PolicyView::Checklist, |policy| policy.view),
+        )?,
+    );
+    for module_id in &ctx.role.module_ids {
+        lines.push(String::new());
+        let module_view = ctx
+            .loaded_policy_refs
+            .iter()
+            .find(|policy| policy.category == PolicyCategory::Module && policy.id == *module_id)
+            .map_or(PolicyView::Checklist, |policy| policy.view);
+        lines.push(store.render(PolicyCategory::Module, module_id, module_view)?);
+    }
+
+    Ok(lines.join("\n").trim_end().to_string())
+}
+
+/// Return the structured protocol list in stable order.
+pub fn list() -> anyhow::Result<Vec<PolicyListEntry>> {
+    Ok(PolicyStore::load()?.list())
+}
+
+/// Return one static mode policy view.
+pub fn mode(mode: &str, view: PolicyView) -> anyhow::Result<ProtocolOutput> {
+    let store = PolicyStore::load()?;
     Ok(ProtocolOutput {
-        title: entry.title.clone(),
-        content: entry.content.clone(),
+        category: PolicyCategory::Mode,
+        id: mode.to_string(),
+        view,
+        content: store.render(PolicyCategory::Mode, mode, view)?,
     })
+}
+
+/// Return one static worker policy view.
+pub fn worker(kind: &str, view: PolicyView) -> anyhow::Result<ProtocolOutput> {
+    let store = PolicyStore::load()?;
+    Ok(ProtocolOutput {
+        category: PolicyCategory::Worker,
+        id: kind.to_string(),
+        view,
+        content: store.render(PolicyCategory::Worker, kind, view)?,
+    })
+}
+
+/// Return one static module policy view.
+pub fn module(id: &str, view: PolicyView) -> anyhow::Result<ProtocolOutput> {
+    let store = PolicyStore::load()?;
+    Ok(ProtocolOutput {
+        category: PolicyCategory::Module,
+        id: id.to_string(),
+        view,
+        content: store.render(PolicyCategory::Module, id, view)?,
+    })
+}
+
+/// Return one static escalation policy view.
+pub fn escalation(id: &str, view: PolicyView) -> anyhow::Result<ProtocolOutput> {
+    let store = PolicyStore::load()?;
+    Ok(ProtocolOutput {
+        category: PolicyCategory::Escalation,
+        id: id.to_string(),
+        view,
+        content: store.render(PolicyCategory::Escalation, id, view)?,
+    })
+}
+
+pub fn dispatch(
+    role: &str,
+    locator: Option<&SessionLocator>,
+    reviewer_id: Option<&str>,
+    view: PolicyView,
+) -> anyhow::Result<DispatchOutput> {
+    let store = PolicyStore::load()?;
+    let ctx = dispatch_context(normalize_dispatch_role(role)?, locator, reviewer_id, view)?;
+    Ok(DispatchOutput {
+        role: ctx.role.role.clone(),
+        view,
+        reviewer_id: ctx.reviewer_id.clone(),
+        session_id: ctx.session_id.clone(),
+        target_ref: ctx.target_ref.clone(),
+        mode: Some(ctx.role.mode),
+        execution_architecture: ctx.route.as_ref().map(|route| route.execution_architecture),
+        agent_dir: ctx.agent_dir.clone(),
+        report_path: ctx.report_path.clone(),
+        role_kind: ctx.role_kind.clone(),
+        module_ids: ctx.role.module_ids.clone(),
+        focus_surfaces: ctx.focus_surfaces.clone(),
+        claimed_scope: ctx.claimed_scope.clone(),
+        delegated_scope: ctx.delegated_scope.clone(),
+        lineage: ctx.lineage.clone(),
+        language_research_refs: ctx.language_research_refs.clone(),
+        loaded_policy_refs: ctx.loaded_policy_refs.clone(),
+        warnings: ctx.warnings.clone(),
+        content: render_dispatch_content(&ctx, &store)?,
+    })
+}
+
+pub fn dispatch_list() -> Vec<String> {
+    let mut roles = ModuleId::all()
+        .into_iter()
+        .map(|module_id| format!("domain:{}", module_slug(module_id)))
+        .collect::<Vec<_>>();
+    roles.extend([
+        "language-detector".to_string(),
+        "language-research:<language>".to_string(),
+        "final-synthesis".to_string(),
+        "apply-composite".to_string(),
+        "applicator-worker".to_string(),
+        "applicator-verifier".to_string(),
+    ]);
+    roles
+}
+
+/// Generated reviewer fallback doc.
+pub fn reviewer_fallback_doc() -> anyhow::Result<String> {
+    generate_reviewer_fallback(&PolicyStore::load()?)
+}
+
+/// Generated applicator fallback doc.
+pub fn applicator_fallback_doc() -> anyhow::Result<String> {
+    generate_applicator_fallback(&PolicyStore::load()?)
+}
+
+/// Generated full-cycle fallback doc.
+pub fn fullcycle_fallback_doc() -> anyhow::Result<String> {
+    generate_fullcycle_fallback(&PolicyStore::load()?)
+}
+
+/// Generated orchestrator fallback doc.
+pub fn orchestrator_fallback_doc() -> anyhow::Result<String> {
+    generate_orchestrator_fallback(&PolicyStore::load()?)
+}
+
+/// Materialize generated fallback docs under the skill `references/` directory.
+pub fn materialize_fallback_docs(skill_root: &Path) -> anyhow::Result<()> {
+    let references_dir = skill_root.join("references");
+    fs::create_dir_all(&references_dir)?;
+    fs::write(
+        references_dir.join("reviewer-fallback.md"),
+        reviewer_fallback_doc()?,
+    )?;
+    fs::write(
+        references_dir.join("applicator-fallback.md"),
+        applicator_fallback_doc()?,
+    )?;
+    fs::write(
+        references_dir.join("fullcycle-fallback.md"),
+        fullcycle_fallback_doc()?,
+    )?;
+    fs::write(
+        references_dir.join("orchestrator-fallback.md"),
+        orchestrator_fallback_doc()?,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::ensure;
+    use tempfile::tempdir;
 
     #[test]
-    fn reviewer_phases_parse() -> anyhow::Result<()> {
-        let phases = [
-            "INGESTION",
-            "DOMAIN_COVERAGE",
-            "THEOREM_GENERATION",
-            "ADVERSARIAL_PROOFS",
-            "SYNTHESIS",
-            "REPORT_WRITING",
-        ];
-        for phase in phases {
-            let out = reviewer_phase(phase)?;
-            ensure!(!out.title.is_empty(), "empty title for {phase}");
-            ensure!(!out.content.is_empty(), "empty content for {phase}");
-        }
+    fn list_and_lookup_are_available() -> anyhow::Result<()> {
+        let entries = list()?;
+        ensure!(entries.iter().any(|entry| entry.id == "reviewer"));
+        let output = mode("reviewer", PolicyView::Brief)?;
+        ensure!(output.content.contains("reviewer"));
+        let worker_output = worker("review-composite", PolicyView::Checklist)?;
+        ensure!(worker_output.content.contains("## Must"));
         Ok(())
     }
 
     #[test]
-    fn applicator_phases_parse() -> anyhow::Result<()> {
-        let phases = ["INGESTION", "DISPOSITION", "APPLICATION", "FINALIZATION"];
-        for phase in phases {
-            let out = applicator_phase(phase)?;
-            ensure!(!out.title.is_empty(), "empty title for {phase}");
-            ensure!(!out.content.is_empty(), "empty content for {phase}");
-        }
+    fn dispatch_supports_domain_roles_without_session_context() -> anyhow::Result<()> {
+        let output = dispatch("domain:core-correctness", None, None, PolicyView::Checklist)?;
+        ensure!(output
+            .content
+            .contains("# Dispatch domain:core-correctness"));
+        ensure!(output.content.contains("## Operating Rules"));
+        ensure!(output
+            .loaded_policy_refs
+            .iter()
+            .any(|policy| policy.id == "domain-reviewer"));
         Ok(())
     }
 
     #[test]
-    fn orchestrator_parses() -> anyhow::Result<()> {
-        let out = orchestrator()?;
-        ensure!(!out.content.is_empty());
+    fn dispatch_supports_apply_composite_role() -> anyhow::Result<()> {
+        let output = dispatch("apply-composite", None, None, PolicyView::Checklist)?;
+        ensure!(output.content.contains("# Dispatch apply-composite"));
+        ensure!(output
+            .loaded_policy_refs
+            .iter()
+            .any(|policy| policy.id == "apply-composite"));
         Ok(())
     }
 
     #[test]
-    fn domains_parses() -> anyhow::Result<()> {
-        let out = domains()?;
-        ensure!(out.content.contains("Architecture"));
-        ensure!(out.content.contains("Security"));
-        ensure!(out.content.contains("Staleness"));
+    fn dispatch_renders_modules_in_requested_view() -> anyhow::Result<()> {
+        let output = dispatch("domain:core-correctness", None, None, PolicyView::Examples)?;
+        let module_output = module("core-correctness", PolicyView::Examples)?;
+        ensure!(output.content.contains(&module_output.content));
         Ok(())
     }
 
     #[test]
-    fn report_templates_parse() -> anyhow::Result<()> {
-        for scale in ["compact", "standard", "full"] {
-            let out = report_template(scale)?;
-            ensure!(!out.content.is_empty(), "empty template for {scale}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn dispatch_templates_parse() -> anyhow::Result<()> {
-        let roles = [
-            "architecture_critic",
-            "contract_guardian",
-            "data_integrity_prover",
-            "error_path_tracer",
-            "security_adversary",
-            "concurrency_prover",
-            "performance_profiler",
-            "observability_oncall",
-            "test_strategist",
-            "docs_consumer",
-            "dependency_auditor",
-            "supply_chain_auditor",
-            "auth_access_prover",
-            "crypto_secrets_auditor",
-            "injection_hunter",
-            "infra_runtime_auditor",
-            "data_privacy_guardian",
-            "domain_specialist",
-            "fresh_eyes",
-            "holistic_integrator",
-            "applicator_worker",
-            "applicator_verifier",
-            "complexity_analyst",
-            "overengineering_guard",
-            "ship_readiness_assessor",
-            "scope_creep_reviewer",
-            "scope_mapper_reviewer",
-            "scope_mapper_applicator",
-            "convergence_planner",
-            "staleness_auditor",
-        ];
-        for role in roles {
-            let out = dispatch(role)?;
-            ensure!(!out.content.is_empty(), "empty dispatch for {role}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn list_entries_returns_all() -> anyhow::Result<()> {
-        let entries = list_entries()?;
-        // Includes reviewer/applicator/session phases plus orchestrator sections, templates, and dispatch roles.
-        ensure!(
-            entries.len() >= 40,
-            "expected >= 37 entries, got {}",
-            entries.len()
-        );
-        for entry in entries.iter().filter(|e| e.category == "dispatch") {
-            ensure!(
-                !entry.key.contains('_'),
-                "dispatch key should be canonical hyphenated slug: {}",
-                entry.key
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn fullcycle_parses() -> anyhow::Result<()> {
-        let out = fullcycle()?;
-        ensure!(out.content.contains("Convergence"));
-        ensure!(out.content.contains("fresh subagents"));
-        Ok(())
-    }
-
-    #[test]
-    fn unknown_phase_errors() -> anyhow::Result<()> {
-        ensure!(reviewer_phase("NONEXISTENT").is_err());
-        ensure!(applicator_phase("NONEXISTENT").is_err());
-        ensure!(report_template("NONEXISTENT").is_err());
-        ensure!(dispatch("NONEXISTENT").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn fallback_docs_render() -> anyhow::Result<()> {
-        ensure!(!reviewer_fallback_doc()?.is_empty());
-        ensure!(!applicator_fallback_doc()?.is_empty());
-        ensure!(!orchestrator_fallback_doc()?.is_empty());
-        ensure!(!fullcycle_fallback_doc()?.is_empty());
+    fn materialize_fallback_docs_writes_generated_files() -> anyhow::Result<()> {
+        let skill_root = tempdir()?;
+        materialize_fallback_docs(skill_root.path())?;
+        ensure!(skill_root
+            .path()
+            .join("references/reviewer-fallback.md")
+            .exists());
+        ensure!(skill_root
+            .path()
+            .join("references/applicator-fallback.md")
+            .exists());
+        ensure!(skill_root
+            .path()
+            .join("references/fullcycle-fallback.md")
+            .exists());
+        ensure!(skill_root
+            .path()
+            .join("references/orchestrator-fallback.md")
+            .exists());
         Ok(())
     }
 }

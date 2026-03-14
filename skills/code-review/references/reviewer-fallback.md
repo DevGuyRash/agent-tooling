@@ -1,267 +1,218 @@
 # Reviewer Fallback
 
-Primary source: `mpcr protocol reviewer --phase <PHASE>`.
+# reviewer
+version: 2026.03.08
+Produce canonical review artifacts from semantic routing and concern-specific worker execution.
+
+## Must
+- route by semantic surfaces
+- emit machine artifacts first
+- render markdown only from artifacts
+
+## Must Not
+- treat prose as canonical
+- route primarily by churn
+- store full artifacts in _session.toml
+
+## Inputs
+- target_ref
+- surface_map
+- route_decision
+- selected policy refs
+
+## Outputs
+- child_findings
+- parent_review
+
+## Checks
+- load mode checklist after routing
+- validate artifacts at hard and soft layers
+- preserve evidence-backed findings only
+
+## Stop When
+- parent_review finalized
+- hard validation fails
+- session is legacy v1
+
+## Escalate When
+- malformed output
+- security risk exceeds baseline route
+- route revision raises rigor
+
+## Anti Patterns
+- domain sprawl without surface evidence
+- manual markdown synthesis before machine artifact exists
+
+## Examples
+- Low-risk docs-only update -> direct + lite + review-composite.
+- Auth boundary change -> delegated + forensic + exploit + contract + release-risk coverage.
+
+## Schema
+- mode
+- execution_architecture
+- rigor_level
+- worker_plan
+- selected_modules
+- loaded_policy_refs
+
+Route first, then use `mpcr protocol dispatch --role <role>` for the current worker instead of loading the whole skill body again. The reviewer roster is language-detector, zero or more language-research workers, one domain-reviewer per canonical module, and final-synthesis.
+
+Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.
+
+# language-detector
+version: 2026.03.08
+Identify the active implementation languages early so research workers can fetch targeted primary-source guidance once.
+
+## Must
+- derive languages from changed files and relevant interfaces
+- normalize languages to stable slugs
+- avoid speculative language guesses when evidence is absent
+
+## Must Not
+- emit product findings in place of language classification
+- trigger duplicate language research for the same language without new evidence
+
+## Checks
+- every detected language has a concrete file or interface signal
+- unknown files do not block known-language handoff
+
+## Stop When
+- the language roster is stable enough for research fan-out
+
+## Escalate When
+- the change cannot be safely reviewed without resolving an unknown generated or embedded language
+
+# language-research
+version: 2026.03.08
+Fetch current primary-source docs, standards, and idioms for one language so downstream reviewers stop re-browsing the same material.
+
+## Must
+- use primary sources first
+- capture the sources and key idioms in the authored report
+- limit research to guidance relevant to the changed language and routed domains
+
+## Must Not
+- restate generic review doctrine instead of language-specific guidance
+- repeat research already cached for the same language without a new need
+
+## Checks
+- sources are current and language-native
+- guidance maps back to routed review concerns
+
+## Stop When
+- downstream workers have enough language-specific guidance to proceed without re-browsing
 
-If the CLI is unavailable, use the sections below. They mirror the reviewer protocol phases and supplemental rubrics.
+## Escalate When
+- no trustworthy primary source can be established for a critical language feature
 
-## Ingestion (`INGESTION`)
+# domain-reviewer
+version: 2026.03.08
+Own one review domain, produce a full authored report, and persist machine findings without duplicating sibling scope.
 
-You SHALL read the diff and surrounding context. You SHALL produce a change inventory:
-- Files touched, approximate churn, change intent (why).
-- Contract surfaces affected: APIs, schemas, CLI args, config, DB migrations.
-- 1-3 depth targets: highest-risk code areas.
-- Repo conventions, lints, CI constraints.
+## Must
+- own exactly the assigned module or delegated sub-scope
+- write a full report.md even for no-findings or low-signal outcomes
+- challenge findings for anchor quality, realism, duplication, and actionability before escalating them
 
-You SHALL resolve context autonomously:
-- WHEN a git hosting CLI is available (e.g., `gh`, `glab`), you SHALL check for associated PRs/MRs.
-- You SHALL derive acceptance criteria from PR/MR description, commits, or diff. Mark [Assumed] if inferred.
-- You SHALL NOT ask the user for context you can discover programmatically.
-- You MAY spawn explorer subagents for context gathering if your assigned scope is large.
-- You SHALL dispatch `scope-mapper-reviewer` early and ingest its Scope Map packet before domain scoping.
+## Must Not
+- re-run language research already provided by upstream workers
+- re-open already-addressed or low-signal claims
+- delegate the same investigation slice twice
 
-You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --status IN_PROGRESS --phase INGESTION`
+## Checks
+- claimed_scope and delegated_scope stay disjoint
+- defended non-findings are documented
+- residual risks explain why work stops or escalates
 
-## Domain Coverage (`DOMAIN_COVERAGE`)
+## Stop When
+- the assigned module has a complete report and finalized child_findings
+- the assigned scope is out-of-scope or low-signal and that result is documented
 
-You SHALL classify your assigned domain for the change.
+## Escalate When
+- new evidence implies a different routed domain must be delegated
+- a major or blocker finding survives challenge
 
-IF you are a specialist with ONE assigned domain:
-- You SHALL determine if your domain is In-scope or Out-of-scope for this change.
-- IF In-scope: proceed to Theorem Generation.
-- IF Out-of-scope: state why in your Proof Packet and produce a minimal packet with the same machine-readable schema and zeroed counts.
-- IF your domain is Scope creep, you SHALL classify each candidate finding as In-scope, Scope-creep, or Deferred-by-scope.
+# final-synthesizer
+version: 2026.03.08
+Concatenate descendant reports, preserve recursive counts, and surface only challenged high-signal findings in the parent synthesis.
 
-IF you are a generalist (fresh-eyes, holistic-integrator):
-- You SHALL classify all seed domains plus any you discover.
-- For each: In-scope (generate theorems), Out-of-scope (state why), or Unknown (note gap).
-- You SHALL mark at least 3 domains as In-scope for changes classified as Medium or Large by `mpcr protocol change-classification`.
+## Must
+- walk descendant reports in stable order
+- preserve recursive counts from machine artifacts
+- filter out low-signal, duplicate, non-actionable, and already-addressed claims
 
-You SHALL produce a Domain Ledger in your output — a machine-parseable table:
+## Must Not
+- invent new evidence
+- duplicate leaf findings as fresh discoveries
+- reopen loops for weak or already-resolved items
 
-| Domain | Scope | Theorems | Disproofs | Findings | Defended |
-|--------|-------|----------|-----------|----------|----------|
-| <name> | In-scope / Out-of-scope | N | N | N | N |
+## Checks
+- final counts match descendant artifacts
+- concatenation order is stable
+- push-or-stop recommendation is evidence-backed
 
-The Ledger starts with Scope filled in; counts are updated as you progress.
+## Stop When
+- the final synthesis and recursive counts are internally consistent
 
-You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase DOMAIN_COVERAGE`
+## Escalate When
+- a surviving blocker or major finding requires reopen
 
-## Theorem Generation (`THEOREM_GENERATION`)
+# core-correctness
+version: 2026.03.08
+Baseline correctness module that always loads for review routing.
 
-For each In-scope domain, you SHALL generate must-prove theorems:
-- Concrete, falsifiable claims referencing specific code locations (file:line).
-- You SHALL prioritize depth targets. At least 2 theorems per In-scope domain.
-- Theorems SHALL be disprovable — you SHALL NOT write truisms like "the code compiles."
-- Each theorem SHALL reference a concrete `file:line` and a specific invariant.
+## Must
+- challenge core behavior invariants
+- cover changed control flow
 
-Anti-laziness rules:
-- A theorem that merely restates the function signature is NOT acceptable.
-- A theorem that claims "the function does what it says" is NOT acceptable.
-- Theorems SHALL make claims about BEHAVIOR under specific conditions.
+## Must Not
+- skip changed behavior because another module exists
 
-You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase THEOREM_GENERATION`
+## Checks
+- core invariants are covered
 
-## Adversarial Proofs (`ADVERSARIAL_PROOFS`)
+## Stop When
+- baseline correctness is covered
 
-For each theorem, you SHALL attempt concrete disproof:
-1. Construct a SPECIFIC scenario/input that would violate the theorem.
-2. Trace the code path with that input. Record outcome:
-   - DEFENDED: disproof failed; code handles it correctly.
-   - FINDING: disproof succeeded; classify severity.
+## Escalate When
+- counterexample breaks correctness
 
-Severity: BLOCKER (must fix) > MAJOR (should fix) > MINOR (improvement) > NIT (style).
+# docs-staleness
+version: 2026.03.08
+Behavior-facing documentation and example congruence module.
 
-### Critical-issue escalation
+## Must
+- compare docs/examples/comments to actual behavior
 
-WHEN your domain involves security, data integrity, authentication, cryptography, injection, or privacy:
-- You SHALL apply a HIGHER disproof standard: at least 3 disproof attempts per theorem (not 1).
-- For each attempt, you SHALL vary the attack vector:
-  1. **Direct exploitation**: the simplest, most obvious attack against the claim.
-  2. **Indirect/chained exploitation**: an attack that combines multiple steps or leverages a different entry point.
-  3. **Edge-case/boundary exploitation**: malformed input, race conditions, integer limits, encoding tricks, null bytes, Unicode normalization, or protocol-level manipulation.
-- BLOCKER findings in security-adjacent domains SHALL include:
-  - A concrete proof-of-concept scenario (specific input bytes/sequence, not abstract descriptions).
-  - The precise code path traced from entry to impact.
-  - Impact assessment: what an attacker gains (data exfiltration, privilege escalation, remote execution, or denial of service).
-  - Exploitability rating: trivial (no auth needed), moderate (requires specific preconditions), hard (requires chained conditions).
+## Must Not
+- treat style edits as behavior-facing drift
 
-### Grounding requirements for ALL findings
+## Checks
+- reopen eligibility is explicit
 
-Every finding you produce SHALL meet ALL of these criteria:
-1. **Anchor exists**: The `file:line` you reference SHALL exist in the current codebase. You SHALL verify this by reading the file.
-2. **Scenario is concrete**: You SHALL provide specific input values, not abstract descriptions like "a malicious input."
-3. **Code path is traced**: You SHALL describe the exact sequence of function calls from entry point to the vulnerable/buggy line.
-4. **Impact is stated**: You SHALL describe what goes wrong (crash, data loss, security breach, wrong output), not just "this could be a problem."
-5. **Fix is actionable**: Your recommendation SHALL be implementable without further research by the applicator.
+## Stop When
+- staleness status is clear
 
-WHEN a finding fails ANY of these criteria, it is NOT a valid finding. Do NOT include it.
+## Escalate When
+- behavior-facing staleness remains
 
-### Anti-laziness rules
+# ship-readiness
+version: 2026.03.08
+Ship-readiness synthesis module that always loads.
 
-- "I reviewed the code and it looks fine" is NOT a valid disproof attempt.
-- You SHALL describe the SPECIFIC input, sequence, or condition you tested.
-- You SHALL trace at least the critical path through the code for each disproof.
-- WHEN your disproof fails, you SHALL explain WHY the code correctly handles the scenario.
-- "This function could be vulnerable to X" is NOT a finding — show the concrete path or do not report it.
-- Generic findings (e.g., "consider adding input validation") WITHOUT a concrete exploit scenario SHALL be NIT at most.
+## Must
+- summarize release posture
+- count required-now and follow-up items correctly
 
-### Scope containment rules
-
-- Findings SHALL be anchored in changed files or the direct blast radius needed to validate the change contract.
-- Pre-existing cleanup, speculative architecture polish, and repo-wide improvement ideas that are not required to ship this change SHALL be reported only as follow-up opportunities (MINOR/NIT).
-- You SHALL NOT escalate a follow-up-only observation above MINOR unless the current change introduced or materially worsened it.
-
-### Saturation rules
+## Must Not
+- invent blockers without underlying evidence
 
-Saturation rule: you SHALL stop when 3 consecutive disproof attempts fail to find new issues.
-EXCEPTION: for security-adjacent domains, saturation requires 5 consecutive failures (higher bar for critical domains).
+## Checks
+- counts match the artifact body
+- blocking items are traceable to evidence
 
-WHEN tests exist that are relevant to your findings, you SHALL run them to validate your proofs.
+## Stop When
+- ship readiness is finalized
 
-You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase ADVERSARIAL_PROOFS`
-
-## Synthesis (`SYNTHESIS`)
-
-You SHALL compile findings into your Proof Packet.
-
-You SHALL build the machine-readable packet first:
-- Canonical format: one fenced `toml` block.
-- Fallback format: one fenced `json` block only when TOML is impossible.
-- You SHALL NOT emit `yaml` or `yml`.
-- You SHALL include `coverage`, `domain_ledger`, `theorems`, `disproof_attempts`, `findings`, `defended_proofs`, and `residual_risks`.
-- You SHALL include confidence label + confidence score for the overall verdict, every finding, and every defended proof.
-
-For each FINDING:
-- Severity, title, anchor (file:line), claim, disproof scenario, evidence, recommendation, verification plan.
-- ALL fields are REQUIRED. A finding without an anchor is not a finding.
-
-For each DEFENDED theorem:
-- Anchor (file:line), theorem statement, disproof attempt (specific scenario), evidence, confidence (HIGH/MEDIUM/LOW).
-- "Reviewed and found no issues" is NOT a valid defended proof. You SHALL describe what you tried.
-
-You SHALL update your Domain Ledger with final counts.
-You SHALL identify residual risk: areas where coverage was insufficient or Unknown.
-- You SHALL include scope rationale for any deferred-by-scope recommendations.
-- In the human-readable report, you SHALL separate findings into:
-  - Required now: BLOCKER, MAJOR, and behavior-facing staleness that must be addressed in this patch.
-  - Follow-up opportunities: MINOR/NIT improvements, scope-contained polish, and pre-existing cleanup that do not reopen the workflow by themselves.
-
-You SHALL run: `mpcr reviewer update --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --phase SYNTHESIS`
-
-## Report Writing (`REPORT_WRITING`)
-
-You SHALL produce the final review report.
-
-Before writing the report, you SHALL pull supplemental rubrics using explicit pulls:
-- Run `mpcr protocol reviewer --phase OVERENGINEERING_GUARD` and apply its smell tests during findings review.
-- Run `mpcr protocol reviewer --phase COMPLEXITY_ANALYSIS` and include Big-O verdicts for flagged code paths.
-- Run `mpcr protocol reviewer --phase SHIP_READINESS` and place the ship-readiness verdict at the top of the report.
-
-Choose template scale based on change size:
-- Run `mpcr protocol report-template --scale compact` for small changes (<100 lines, single concern).
-- Run `mpcr protocol report-template --scale standard` for medium changes.
-- Run `mpcr protocol report-template --scale full` for large/high-risk changes.
-
-You SHALL fill in the template with findings from Synthesis.
-You SHALL keep Required-now items ahead of Follow-up Opportunities in the human-readable report.
-WHEN only MINOR/NIT items remain, you MAY still return `SHIP`; those items belong under Follow-up Opportunities unless the user explicitly requested polish-now.
-You SHALL include the Domain Ledger in your report.
-You SHALL NOT invent findings that were not produced during Adversarial Proofs.
-You SHALL validate the finished markdown artifact before submit:
-- Worker proof packet: `mpcr reviewer validate-report --kind child-proof-packet --blocker N --major N --minor N --nit N --report-file <PROOF_PACKET_FILE>`
-- Parent synthesized report: `mpcr reviewer validate-report --kind parent-review-report --blocker N --major N --minor N --nit N --report-file <PARENT_REPORT_FILE>`
-
-You SHALL finalize via mpcr:
-```
-mpcr reviewer finalize --session-dir <DIR> --reviewer-id <ID8> --session-id <ID8> --verdict APPROVE|REQUEST_CHANGES|BLOCK --blocker N --major N --minor N --nit N --report-file /path/to/report.md
-```
-
-Finalize artifact rules:
-- WHEN `--report-file` is provided, mpcr moves that file into the canonical session report path by default.
-- IF you must keep the source file, you SHALL pass `--copy-report-input`.
-- IF `--report-file` is omitted, you SHALL pipe markdown via stdin.
-- Parent finalize auto-closes unresolved child reviews by default (status `CANCELLED`).
-- IF you want finalize to fail when open children exist, you SHALL pass `--no-auto-close-children`.
-
-You SHALL NOT skip finalization. The review is incomplete until `mpcr reviewer finalize` succeeds.
-
-Artifact cleanup:
-- AFTER finalize succeeds, you SHALL delete `.local/tmp/` if it exists:
-  - POSIX: `rm -rf .local/tmp/`
-  - PowerShell: `Remove-Item -Force -Recurse .local/tmp/ -ErrorAction SilentlyContinue`
-- You SHALL NOT leave report drafts, dispatch prompts, or packet files in the worktree.
-
-## Overengineering Guardrails (`OVERENGINEERING_GUARD`)
-
-You SHALL apply these overengineering smell tests when reviewing DOMAIN_COVERAGE and THEOREM_GENERATION artifacts.
-
-## Smell tests (any YES -> flag as FINDING)
-1. Abstraction without a second consumer: is there an interface/trait/base-class used by exactly one implementation?
-2. Speculative generality: does the code parameterize behavior that the current change never varies?
-3. Premature framework: does the code introduce a plugin system, registry, or factory for <= 2 concrete cases?
-4. Config-driven complexity: are there config knobs that no caller currently sets to non-default values?
-5. Indirection depth: does a call path cross > 3 abstraction boundaries to reach the actual work?
-
-## How to use
-- For each In-scope domain theorem, cross-check against the smell tests above.
-- WHEN a smell test fires, create a FINDING (MINOR for single smell, MAJOR when >= 2 co-occur on the same code path).
-- The recommendation SHALL always include a concrete simplification (inline the function, remove the trait, collapse the layers).
-- You SHALL NOT flag established patterns the codebase already relies on -- only NEW abstractions introduced by this change.
-- You SHALL cross-check extraction proposals from `COMPLEXITY_ANALYSIS`; accept only proposals with concrete cohesion/testability gains.
-
-## Big-O Complexity Rubric (`COMPLEXITY_ANALYSIS`)
-
-You SHALL evaluate algorithmic complexity during ADVERSARIAL_PROOFS for code paths that process collections, loops, or recursive structures.
-
-## Evaluation dimensions
-
-### Time complexity
-- Identify the asymptotic time complexity of each hot path or newly introduced loop/recursion.
-- WHEN complexity is O(n^2) or worse for input sizes that can realistically exceed 100 elements, flag it.
-- Check for hidden quadratic behavior: nested iteration, repeated linear scans, string concatenation in loops.
-
-### Space complexity
-- Check for unbounded allocations: growing buffers, caches without eviction, accumulator patterns without limits.
-- WHEN an allocation scales with untrusted input size, flag it unless a bound is enforced.
-
-### Data structure fitness
-- Verify the chosen data structure matches the access pattern (e.g., Vec for random-access vs sequential scan, HashMap vs BTreeMap for ordered iteration).
-- WHEN a simpler or more cache-friendly structure achieves the same correctness, recommend the alternative.
-
-### Algorithm choice
-- Check for known-better algorithms: linear search where binary search applies, bubble/insertion sort on large inputs, brute-force where memoization or DP is obvious.
-- WHEN a standard-library or well-known algorithm exists for the task, prefer it over hand-rolled logic.
-
-### Decomposition opportunities
-- Identify long mixed-responsibility blocks that can be extracted into helper functions with clear contracts.
-- Identify module boundary opportunities when a file mixes unrelated concerns or has unstable dependency direction.
-- Propose extraction only when it lowers cognitive load, improves testability, or isolates risk-critical behavior.
-- Avoid extraction churn that adds indirection without measurable payoff.
-
-## Severity mapping
-- BLOCKER: unbounded O(n^2)+ on untrusted input in a hot path (DoS vector).
-- MAJOR: O(n^2)+ on bounded but realistically large input (> 1000 elements), or unbounded allocation without cap.
-- MINOR: suboptimal structure/algorithm with measurable but non-critical impact.
-- NIT: micro-optimization opportunity with negligible real-world effect.
-
-## Ship-Readiness Rubric (`SHIP_READINESS`)
-
-You SHALL evaluate ship-readiness during SYNTHESIS and include the verdict in the report.
-
-## Verdict (pick ONE)
-- **SHIP**: no BLOCKER, no MAJOR, and no behavior-facing staleness that blocks shipped behavior or operator guidance. MINOR/NIT follow-up opportunities MAY remain.
-- **SHIP_WITH_FIXES**: bounded must-fix-now items remain in this patch (typically MAJOR findings or behavior-facing staleness with a concrete fix path). List only required-now fixes.
-- **DO_NOT_SHIP**: BLOCKER findings or unbounded release risk remain. List blocking items.
-
-## Evaluation matrix
-
-| Axis | PASS | CONDITIONAL | FAIL |
-|------|------|-------------|------|
-| Correctness | No BLOCKER/MAJOR findings affecting shipped behavior | Required-now fixes are bounded and clear | Unbounded correctness risk remains |
-| Safety | No security/data-integrity BLOCKER/MAJOR findings | Safety issues are bounded and fixable now | Unmitigated safety flaw |
-| Complexity budget | No required-now overengineering or hot-path regressions | Follow-up cleanup remains but is non-blocking | Architectural complexity blocks safe shipment |
-| Test coverage | New code has tests; existing tests pass | Missing edge coverage is tracked as follow-up | Required-now behavior lacks credible verification |
-| Acceptance criteria | All required-now criteria are met | Only follow-up polish remains | Critical acceptance criteria are unmet |
-
-## Placement
-Place the ship-readiness verdict as the FIRST section of the report, immediately after the metadata header.
+## Escalate When
+- blocking items remain

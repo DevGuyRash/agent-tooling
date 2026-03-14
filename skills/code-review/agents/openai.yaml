@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Recursive machine-first code review, application, and full-cycle convergence with mpcr"
+  default_prompt: "Use $code-review to route first with `mpcr route`, keep the orchestrator thin, and use `mpcr protocol dispatch --role <role> --session-dir <path> [--reviewer-id <id>]` for worker-specific prompts. Persist canonical artifacts, keep authored per-agent `report.md` files in nested agent directories, validate with hard and soft layers, use `mpcr session reports` for recursive report retrieval, `mpcr session artifacts` for flat artifact inventory, and drive `mpcr reviewer`, `mpcr applicator`, `mpcr fullcycle`, and `mpcr session metrics` through the CLI."

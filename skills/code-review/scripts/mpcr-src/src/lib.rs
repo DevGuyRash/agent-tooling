@@ -1,24 +1,45 @@
-//! `mpcr` is a small internal library backing the `mpcr` CLI binary.
+//! `mpcr` v2 is a machine-first coordination library for the `code-review` skill.
 //!
-//! It provides deterministic primitives for coordinating code review sessions:
-//! - ID generation for reviewer/session/lock identifiers
-//! - A file-based lock for `_session.toml`
-//! - Helpers for computing session paths and writing report files
-//! - Typed read/modify/write operations on `_session.toml`
+//! The crate centers on:
+//! - structured, canonical v2 artifacts,
+//! - compact session ledgers that store only references,
+//! - deterministic policy retrieval and rendering,
+//! - hard/soft validation layers,
+//! - adaptive semantic routing and convergence planning.
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
-/// Language-agnostic static analysis checks for code review workers.
+/// Language-agnostic static analysis helpers for optional pre-screening.
 pub mod analyze;
-/// Deterministic full-cycle planning/telemetry helpers.
+/// Canonical v2 artifact contracts, enums, and identity helpers.
+pub mod artifacts;
+/// Convergence-state planning for the full-cycle workflow.
 pub mod fullcycle_plan;
 /// Random identifier generation (id8 / hex).
 pub mod id;
 /// File-based lock for coordinating `_session.toml` writers.
 pub mod lock;
-/// Path helpers for session directories and report filenames.
+/// Telemetry aggregation utilities.
+pub mod metrics;
+/// Session and artifact path helpers.
 pub mod paths;
-/// Embedded protocol data for just-in-time phase guidance.
+/// Structured policy store loader and view rendering.
+pub mod policy_store;
+/// Static `mpcr protocol ...` retrieval surface built on the policy store.
 pub mod protocol;
-/// Deterministic validation for review report artifacts.
-pub mod report_validation;
-/// Session file (`_session.toml`) schema and update operations.
+/// Deterministic markdown rendering from machine artifacts.
+pub mod render;
+/// Adaptive semantic routing and route revision handling.
+pub mod router;
+/// Shared routing types separated from artifact persistence.
+pub mod router_types;
+/// Compact v2 session ledger and reviewer/applicator operations.
 pub mod session;
+/// Hard/soft artifact validation.
+pub mod validate;
