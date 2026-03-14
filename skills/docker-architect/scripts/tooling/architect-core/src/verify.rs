@@ -17,6 +17,7 @@ use crate::error::AppError;
 const DOCKER_VERIFY_TIMEOUT: Duration = Duration::from_secs(45);
 const DOCKER_LOGS_TIMEOUT: Duration = Duration::from_secs(20);
 const DOCKER_HEALTH_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const DOCKER_HEALTH_WAIT_GRACE: Duration = Duration::from_secs(5);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -81,6 +82,10 @@ struct ServiceReadinessRecord {
     running: bool,
     health_status: Option<String>,
     healthcheck_defined: bool,
+    healthcheck_interval: Option<Duration>,
+    healthcheck_timeout: Option<Duration>,
+    healthcheck_retries: Option<u32>,
+    healthcheck_start_period: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,8 +128,8 @@ struct ComposeInvocationContext {
 /// * `Err(AppError)` when docker commands or inspect parsing fail.
 ///
 /// # Behavior Notes
-/// * Runs `docker compose up -d` and waits up to 60 seconds for services with healthchecks to
-///   report `healthy`.
+/// * Runs `docker compose up -d` and waits at least 60 seconds, extending the readiness window
+///   to cover configured healthcheck budgets for stateful services.
 /// * Services without healthchecks are considered ready once they are running.
 pub fn verify_compose(
     compose_file: &Path,
@@ -327,7 +332,7 @@ fn wait_for_compose_readiness(
 }
 
 fn wait_for_compose_readiness_with<F>(
-    timeout: Duration,
+    base_timeout: Duration,
     poll_interval: Duration,
     mut fetch: F,
 ) -> Result<ComposeReadinessObservation, AppError>
@@ -349,7 +354,9 @@ where
             ComposeReadinessStatus::TimedOut => {}
         }
 
+        let timeout = readiness_timeout_for_services(base_timeout, &services);
         if start.elapsed() >= timeout {
+            let failed_services = pending_services(&services);
             return Ok(ComposeReadinessObservation {
                 status: ComposeReadinessStatus::TimedOut,
                 services,
@@ -405,6 +412,25 @@ fn readiness_record_from_value(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     let healthcheck_defined = item.pointer("/Config/Healthcheck").is_some();
+    let healthcheck_interval = item
+        .pointer("/Config/Healthcheck/Interval")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
+    let healthcheck_timeout = item
+        .pointer("/Config/Healthcheck/Timeout")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
+    let healthcheck_retries = item
+        .pointer("/Config/Healthcheck/Retries")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let healthcheck_start_period = item
+        .pointer("/Config/Healthcheck/StartPeriod")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
 
     Some(ServiceReadinessRecord {
         service,
@@ -412,6 +438,10 @@ fn readiness_record_from_value(
         running,
         health_status,
         healthcheck_defined,
+        healthcheck_interval,
+        healthcheck_timeout,
+        healthcheck_retries,
+        healthcheck_start_period,
     })
 }
 
@@ -446,6 +476,43 @@ fn summarize_compose_readiness(
     }
 
     (ComposeReadinessStatus::Ready, Vec::new())
+}
+
+fn readiness_timeout_for_services(
+    base_timeout: Duration,
+    services: &[ServiceReadinessRecord],
+) -> Duration {
+    services
+        .iter()
+        .filter_map(service_health_budget)
+        .max()
+        .map(|budget| base_timeout.max(budget))
+        .unwrap_or(base_timeout)
+}
+
+fn service_health_budget(service: &ServiceReadinessRecord) -> Option<Duration> {
+    if !service.healthcheck_defined {
+        return None;
+    }
+
+    let start_period = service.healthcheck_start_period.unwrap_or_default();
+    let interval = service.healthcheck_interval.unwrap_or_default();
+    let timeout = service.healthcheck_timeout.unwrap_or_default();
+    let retries = service.healthcheck_retries.unwrap_or_default().saturating_add(1);
+    Some(
+        start_period
+            .saturating_add(interval.saturating_mul(retries))
+            .saturating_add(timeout)
+            .saturating_add(DOCKER_HEALTH_WAIT_GRACE),
+    )
+}
+
+fn pending_services(services: &[ServiceReadinessRecord]) -> Vec<String> {
+    services
+        .iter()
+        .filter(|service| classify_service_readiness(service) == ServiceReadiness::Pending)
+        .map(|service| service.service.clone())
+        .collect()
 }
 
 fn classify_service_readiness(service: &ServiceReadinessRecord) -> ServiceReadiness {
@@ -918,7 +985,8 @@ mod tests {
         classify_service_readiness, finalize_report_with_optional_teardown, format_exit_status,
         inspect_record_from_value, is_root_user, logs_contain_error_keywords,
         parse_failed_services_from_compose_ps, readiness_record_from_value,
-        summarize_compose_readiness, trim_to_option, wait_for_compose_readiness_with,
+        readiness_timeout_for_services, summarize_compose_readiness, trim_to_option,
+        wait_for_compose_readiness_with,
         ComposeReadinessStatus, ComposeVerifyReport, ServiceReadiness, ServiceReadinessRecord,
     };
 
@@ -1047,6 +1115,10 @@ mod tests {
             running: true,
             health_status: Some("healthy".to_string()),
             healthcheck_defined: true,
+            healthcheck_interval: None,
+            healthcheck_timeout: None,
+            healthcheck_retries: None,
+            healthcheck_start_period: None,
         };
         assert_eq!(classify_service_readiness(&ready), ServiceReadiness::Ready);
 
@@ -1078,6 +1150,10 @@ mod tests {
                 running: true,
                 health_status: Some("healthy".to_string()),
                 healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
             },
             ServiceReadinessRecord {
                 service: "db".to_string(),
@@ -1085,6 +1161,10 @@ mod tests {
                 running: false,
                 health_status: Some("starting".to_string()),
                 healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
             },
         ];
         let (status, failed) = summarize_compose_readiness(&records);
@@ -1094,19 +1174,23 @@ mod tests {
 
     #[test]
     fn wait_for_compose_readiness_with_times_out_for_pending_health() {
-        let mut snapshots = VecDeque::from([vec![ServiceReadinessRecord {
-            service: "db".to_string(),
-            container_id: "abc".to_string(),
-            running: true,
-            health_status: Some("starting".to_string()),
-            healthcheck_defined: true,
-        }]]);
-        let observation = wait_for_compose_readiness_with(Duration::ZERO, Duration::ZERO, || {
-            Ok(snapshots.pop_front().unwrap_or_default())
-        })
-        .expect("wait should succeed");
+        let observation =
+            wait_for_compose_readiness_with(Duration::ZERO, Duration::from_millis(10), || {
+                Ok(vec![ServiceReadinessRecord {
+                    service: "db".to_string(),
+                    container_id: "abc".to_string(),
+                    running: true,
+                    health_status: Some("starting".to_string()),
+                    healthcheck_defined: true,
+                    healthcheck_interval: None,
+                    healthcheck_timeout: None,
+                    healthcheck_retries: None,
+                    healthcheck_start_period: None,
+                }])
+            })
+            .expect("wait should succeed");
         assert_eq!(observation.status, ComposeReadinessStatus::TimedOut);
-        assert!(observation.failed_services.is_empty());
+        assert_eq!(observation.failed_services, vec!["db".to_string()]);
     }
 
     #[test]
@@ -1118,6 +1202,10 @@ mod tests {
                 running: true,
                 health_status: Some("starting".to_string()),
                 healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
             }],
             vec![ServiceReadinessRecord {
                 service: "db".to_string(),
@@ -1125,6 +1213,10 @@ mod tests {
                 running: true,
                 health_status: Some("healthy".to_string()),
                 healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
             }],
         ]);
         let observation =
@@ -1156,6 +1248,26 @@ mod tests {
         assert!(record.running);
         assert_eq!(record.health_status.as_deref(), Some("healthy"));
         assert!(record.healthcheck_defined);
+        assert_eq!(record.healthcheck_retries, None);
+    }
+
+    #[test]
+    fn readiness_timeout_for_services_honors_healthcheck_budget() {
+        let timeout = readiness_timeout_for_services(
+            Duration::from_secs(60),
+            &[ServiceReadinessRecord {
+                service: "db".to_string(),
+                container_id: "abc".to_string(),
+                running: true,
+                health_status: Some("starting".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: Some(Duration::from_secs(5)),
+                healthcheck_timeout: Some(Duration::from_secs(3)),
+                healthcheck_retries: Some(10),
+                healthcheck_start_period: Some(Duration::from_secs(40)),
+            }],
+        );
+        assert_eq!(timeout, Duration::from_secs(103));
     }
 
     #[test]
