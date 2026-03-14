@@ -2857,8 +2857,15 @@ pub fn cleanup_session(locator: &SessionLocator) -> anyhow::Result<PathBuf> {
     let repo_root = PathBuf::from(session.repo_root);
     let scratch_dir = paths::scratch_dir(&repo_root);
     if scratch_dir.exists() {
-        fs::remove_dir_all(&scratch_dir)
-            .with_context(|| format!("remove scratch dir {}", scratch_dir.display()))?;
+        match fs::remove_dir(&scratch_dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("remove scratch dir {}", scratch_dir.display()))
+            }
+        }
     }
     Ok(scratch_dir)
 }

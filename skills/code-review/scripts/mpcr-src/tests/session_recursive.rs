@@ -10,9 +10,10 @@ use mpcr::artifacts::{
 };
 use mpcr::paths::{self, session_paths, StorageFormat};
 use mpcr::session::{
-    collect_reports, complete_child_review, load_session, register_reviewer, spawn_child_reviewers,
-    update_review, RegisterReviewerParams, ReportView, ReviewProcessStatus, ReviewerArtifactParams,
-    SessionLedger, SessionLocator, SpawnChildReviewersParams, UpdateReviewParams,
+    cleanup_session, collect_reports, complete_child_review, load_session, register_reviewer,
+    spawn_child_reviewers, update_review, RegisterReviewerParams, ReportView, ReviewProcessStatus,
+    ReviewerArtifactParams, SessionLedger, SessionLocator, SpawnChildReviewersParams,
+    UpdateReviewParams,
 };
 use serde_json::Value;
 use std::fs;
@@ -291,6 +292,29 @@ fn nested_agent_dirs_and_recursive_reports_are_materialized() -> anyhow::Result<
     ensure!(grandchild_ledger["counters"]["descendant_count"].as_u64() == Some(0));
     ensure!(grandchild_ledger["counters"]["local_report_count"].as_u64() == Some(1));
     ensure!(grandchild_ledger["counters"]["recursive_report_count"].as_u64() == Some(1));
+    Ok(())
+}
+
+#[test]
+fn cleanup_session_preserves_shared_nonempty_scratch_root() -> anyhow::Result<()> {
+    let (_repo_root, repo_root_path, locator, _session_dir) = new_session_locator()?;
+    register_reviewer(RegisterReviewerParams {
+        session: locator.clone(),
+        target_ref: "refs/heads/main".to_string(),
+        reviewer_id: Some("clean001".to_string()),
+        role: None,
+        role_kind: None,
+    })?;
+
+    let scratch_dir = paths::scratch_dir(&repo_root_path);
+    fs::create_dir_all(&scratch_dir)?;
+    fs::write(scratch_dir.join("other-session.tmp"), "keep me")?;
+
+    let cleaned = cleanup_session(&locator)?;
+
+    ensure!(cleaned == scratch_dir);
+    ensure!(scratch_dir.exists());
+    ensure!(scratch_dir.join("other-session.tmp").exists());
     Ok(())
 }
 

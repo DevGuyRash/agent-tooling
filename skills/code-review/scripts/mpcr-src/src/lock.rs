@@ -41,7 +41,7 @@ impl Default for LockConfig {
 /// When dropped, this best-effort releases the canonical or compatibility lock file
 /// only if it still contains the same owner identifier.
 pub struct LockGuard {
-    lock_file: Option<PathBuf>,
+    lock_files: Vec<PathBuf>,
     owner: String,
 }
 
@@ -91,25 +91,26 @@ impl LockGuard {
     }
 
     fn release_inner(&mut self) -> anyhow::Result<()> {
-        let Some(lock_file) = self.lock_file.take() else {
+        if self.lock_files.is_empty() {
             return Ok(());
-        };
-
-        let owner = match read_lock_owner_and_pid(&lock_file) {
-            Ok((owner, _pid)) => owner,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err).context("read lock file owner"),
-        };
-
-        if owner == self.owner {
-            match fs::remove_file(&lock_file) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(err).context("remove lock file"),
-            }
-        } else {
-            Ok(())
         }
+
+        for lock_file in std::mem::take(&mut self.lock_files).into_iter().rev() {
+            let owner = match read_lock_owner_and_pid(&lock_file) {
+                Ok((owner, _pid)) => owner,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err).context("read lock file owner"),
+            };
+
+            if owner == self.owner {
+                match fs::remove_file(&lock_file) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err).context("remove lock file"),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Refresh the lock file mtime as a heartbeat signal.
@@ -117,7 +118,7 @@ impl LockGuard {
     /// # Errors
     /// Returns an error if the lock file exists and cannot be opened, written, or flushed.
     pub fn touch_lock(&self) -> anyhow::Result<()> {
-        if let Some(ref lock_file) = self.lock_file {
+        for lock_file in &self.lock_files {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -156,15 +157,22 @@ pub fn lock_file_path(dir: &Path) -> PathBuf {
 /// # Errors
 /// Returns an error if a matching lock file exists but cannot be read or removed.
 pub fn release_lock(dir: &Path, owner: impl Into<String>) -> anyhow::Result<()> {
-    let owner = owner.into();
-    for path in compatibility_lock_paths(dir) {
-        let mut guard = LockGuard {
-            lock_file: Some(path),
-            owner: owner.clone(),
-        };
-        guard.release_inner()?;
-    }
-    Ok(())
+    let mut guard = LockGuard {
+        lock_files: compatibility_lock_paths(dir),
+        owner: owner.into(),
+    };
+    guard.release_inner()
+}
+
+fn write_lock_metadata(lock_file: &Path, owner: &str) -> anyhow::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_file)
+        .with_context(|| format!("create lock file {}", lock_file.display()))?;
+    writeln!(file, "{owner}").context("write lock owner")?;
+    writeln!(file, "pid:{}", std::process::id()).context("write lock owner pid")?;
+    file.flush().context("flush lock owner")
 }
 
 /// Attempt to remove a stale lock file if its modification time exceeds
@@ -204,13 +212,6 @@ fn try_remove_stale_lock(lock_file: &Path, stale_after_secs: u64) -> bool {
     fs::remove_file(lock_file).is_ok()
 }
 
-fn conflicting_lock_paths(dir: &Path, canonical: &Path) -> Vec<PathBuf> {
-    compatibility_lock_paths(dir)
-        .into_iter()
-        .filter(|path| path != canonical && path.exists())
-        .collect()
-}
-
 /// Acquire the canonical lock and return a guard that releases it on drop.
 ///
 /// If the canonical or compatibility lock file already exists, this retries up to
@@ -224,58 +225,59 @@ pub fn acquire_lock(
     cfg: LockConfig,
 ) -> anyhow::Result<LockGuard> {
     let owner = owner.into();
-    let lock_file = lock_file_path(dir);
+    let lock_paths = compatibility_lock_paths(dir);
     let mut attempt: usize = 0;
     let mut wait_ms: u64 = INITIAL_BACKOFF_MS;
 
     loop {
+        let mut acquired = Vec::with_capacity(lock_paths.len());
         let mut blocked = false;
-        for path in conflicting_lock_paths(dir, &lock_file) {
-            if attempt == 0 && try_remove_stale_lock(&path, cfg.stale_after_secs) {
-                continue;
+
+        for path in &lock_paths {
+            match write_lock_metadata(path, &owner) {
+                Ok(()) => acquired.push(path.clone()),
+                Err(err)
+                    if err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists) =>
+                {
+                    if attempt == 0 && try_remove_stale_lock(path, cfg.stale_after_secs) {
+                        blocked = true;
+                        break;
+                    }
+                    blocked = true;
+                    break;
+                }
+                Err(err) => {
+                    let mut cleanup = LockGuard {
+                        lock_files: acquired,
+                        owner: owner.clone(),
+                    };
+                    cleanup.release_inner()?;
+                    return Err(err);
+                }
             }
-            blocked = true;
-        }
-        if blocked {
-            if attempt >= cfg.max_retries {
-                return Err(anyhow::anyhow!("LOCK_TIMEOUT"));
-            }
-            sleep(Duration::from_millis(wait_ms));
-            attempt = attempt.saturating_add(1);
-            wait_ms = (wait_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
-            continue;
         }
 
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_file)
-        {
-            Ok(mut file) => {
-                writeln!(file, "{owner}").context("write lock owner")?;
-                writeln!(file, "pid:{}", std::process::id()).context("write lock owner pid")?;
-                file.flush().context("flush lock owner")?;
-                return Ok(LockGuard {
-                    lock_file: Some(lock_file),
-                    owner,
-                });
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                if attempt == 0 && try_remove_stale_lock(&lock_file, cfg.stale_after_secs) {
-                    continue;
-                }
-                if attempt >= cfg.max_retries {
-                    return Err(anyhow::anyhow!("LOCK_TIMEOUT"));
-                }
-                sleep(Duration::from_millis(wait_ms));
-                attempt = attempt.saturating_add(1);
-                wait_ms = (wait_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
-            }
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("create lock file {}", lock_file.display()))
-            }
+        if acquired.len() == lock_paths.len() {
+            return Ok(LockGuard {
+                lock_files: acquired,
+                owner,
+            });
         }
+
+        let mut cleanup = LockGuard {
+            lock_files: acquired,
+            owner: owner.clone(),
+        };
+        cleanup.release_inner()?;
+
+        if !blocked || attempt >= cfg.max_retries {
+            return Err(anyhow::anyhow!("LOCK_TIMEOUT"));
+        }
+        sleep(Duration::from_millis(wait_ms));
+        attempt = attempt.saturating_add(1);
+        wait_ms = (wait_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
     }
 }
 
@@ -313,6 +315,40 @@ mod tests {
         )
         .expect_err("compatibility lock should block acquisition");
         ensure!(err.to_string().contains("LOCK_TIMEOUT"));
+        Ok(())
+    }
+
+    #[test]
+    fn acquire_holds_canonical_and_compatibility_lock_files() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let dir = temp.path();
+
+        let guard = acquire_lock(
+            dir,
+            "owner1234",
+            LockConfig {
+                max_retries: 0,
+                stale_after_secs: u64::MAX,
+            },
+        )?;
+
+        for path in compatibility_lock_paths(dir) {
+            ensure!(
+                path.exists(),
+                "expected lock file {} to exist",
+                path.display()
+            );
+        }
+
+        drop(guard);
+
+        for path in compatibility_lock_paths(dir) {
+            ensure!(
+                !path.exists(),
+                "expected lock file {} to be released",
+                path.display()
+            );
+        }
         Ok(())
     }
 }
