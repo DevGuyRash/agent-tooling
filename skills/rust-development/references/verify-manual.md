@@ -150,14 +150,15 @@ found_banned=$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/t
 if [ -n "$found_banned" ] \
   && grep -qF '("assert_eq", MatchKind::MacroOnly),' "$found_banned" \
   && grep -qF '("assert_ne", MatchKind::MacroOnly),' "$found_banned" \
-  && grep -qF '("assert", MatchKind::MacroOnly),' "$found_banned"; then
+  && grep -qF '("assert", MatchKind::MacroOnly),' "$found_banned" \
+  && [ "${VERIFY_RUN_TESTS:-true}" = "true" ]; then
   echo "✓ No assert macros outside tests (delegated to banned_family.rs)"
 else
   rg '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' --type rust "$@" | rg -v '// INVARIANT:' || echo "✓ No assert macros outside tests"
 fi
 # banned_family.rs remains the stricter parser-aware backstop so inline
 # #[cfg(test)] modules in src/*.rs are masked correctly when the installed
-# harness includes assert-family coverage.
+# harness includes assert-family coverage and the test phase will run.
 rg 'std::process::exit\(' --type rust "$@" -g '!**/src/main.rs' -g '!**/src/bin/*.rs' || echo "✓ No exit() outside entrypoints"
 
 # Placeholders
@@ -234,6 +235,18 @@ def strip_comments_and_strings(source: str) -> str:
     in_string = False
     in_char = False
     raw_hashes = None
+
+    def is_lifetime_start(idx: int) -> bool:
+        if idx + 1 >= len(source):
+            return False
+        next_ch = source[idx + 1]
+        if not (next_ch.isalpha() or next_ch == "_"):
+            return False
+        j = idx + 2
+        while j < len(source) and (source[j].isalnum() or source[j] == "_"):
+            j += 1
+        return not (j < len(source) and source[j] == "'")
+
     while i < len(source):
         ch = source[i]
         nxt = source[i + 1] if i + 1 < len(source) else "\0"
@@ -293,10 +306,13 @@ def strip_comments_and_strings(source: str) -> str:
             if ch == "\\":
                 i += 2
                 continue
+            if ch == "\n":
+                in_char = False
+                out.append(ch)
+                i += 1
+                continue
             if ch == "'":
                 in_char = False
-            if ch == "\n":
-                out.append(ch)
             i += 1
             continue
 
@@ -321,6 +337,10 @@ def strip_comments_and_strings(source: str) -> str:
             i += 1
             continue
         if ch == "'":
+            if is_lifetime_start(i):
+                out.append(ch)
+                i += 1
+                continue
             in_char = True
             i += 1
             continue

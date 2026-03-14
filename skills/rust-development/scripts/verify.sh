@@ -171,6 +171,11 @@ _banned_family_supports_assert_macros() {
     grep -qF '("assert", MatchKind::MacroOnly),' "$_harness_path"
 }
 
+_can_delegate_assert_checks_to_banned_family() {
+  [ "${VERIFY_RUN_TESTS:-true}" = "true" ] || return 1
+  _banned_family_supports_assert_macros "$1"
+}
+
 _has_candidate_rust_files() {
   skip_tests="${1:-}"
   skip_entry="${2:-}"
@@ -388,10 +393,14 @@ _install_ok=1
 # Check 1: banned_family.rs test harness
 _found_banned="$(find . -name 'banned_family.rs' -path '*/tests/*' -not -path '*/target/*' -print -quit 2>/dev/null || true)"
 _found_banned_assert_capable=0
+_delegate_assert_checks=0
 if [ -n "$_found_banned" ]; then
   if _banned_family_supports_assert_macros "$_found_banned"; then
     pass "banned_family.rs installed with assert coverage: $_found_banned"
     _found_banned_assert_capable=1
+    if _can_delegate_assert_checks_to_banned_family "$_found_banned"; then
+      _delegate_assert_checks=1
+    fi
   else
     warn "banned_family.rs lacks assert coverage: $_found_banned (re-run scaffold.sh --banned-test)"
     _install_ok=0
@@ -524,7 +533,7 @@ echo "Panic-inducing patterns:"
 # NOTE: exclude_tests is path-based and excludes conventional test-only dirs.
 # Keep banned_family.rs as the parser-aware source of truth for cfg(test) masking
 # and assert macros outside tests only when the installed harness includes
-# assert-family coverage.
+# assert-family coverage and Phase 2.4 test execution is enabled.
 # unwrap family: .unwrap(), .unwrap_err(), .unwrap_unchecked() — but NOT .unwrap_or*()
 _search_excluding '\.unwrap(_err|_unchecked)?[[:space:]]*\(' '// INVARIANT:' "no panic-inducing unwrap family" "exclude_tests" || true
 # expect family: .expect(), .expect_err() — but NOT .expectation(...)
@@ -533,7 +542,7 @@ _search_excluding '\.expect(_err)?[[:space:]]*\(' '// INVARIANT:' "no panic-indu
 _search 'panic!\(' "" "no panic!()" "exclude_tests" || true
 _search 'unimplemented!\(' "" "no unimplemented!()" "exclude_tests" || true
 _search_excluding 'unreachable!\(' '// INVARIANT:' "no bare unreachable!()" "exclude_tests" || true
-if [ "$_found_banned_assert_capable" -eq 1 ]; then
+if [ "$_delegate_assert_checks" -eq 1 ]; then
   pass "no assert macros outside tests (delegated to banned_family.rs)"
 else
   _search_excluding '(^|[^[:alnum:]_])assert(_eq|_ne)?![[:space:]]*\(' '// INVARIANT:' "no assert macros outside tests" "exclude_tests" || true
@@ -651,6 +660,21 @@ echo "Unsafe code:"
           raw_hash_count = 0
           return 0
         }
+        function is_ident_char(c) {
+          return c ~ /[[:alnum:]_]/
+        }
+        function is_lifetime_start(line, pos,    nextc, j, after) {
+          nextc = substr(line, pos + 1, 1)
+          if (nextc !~ /[[:alpha:]_]/) {
+            return 0
+          }
+          j = pos + 2
+          while (j <= length(line) && is_ident_char(substr(line, j, 1))) {
+            j++
+          }
+          after = substr(line, j, 1)
+          return after != "'\''"
+        }
         BEGIN {
           in_block_comment = 0
           in_double = 0
@@ -761,6 +785,11 @@ echo "Unsafe code:"
               continue
             }
             if (c == "'\''") {
+              if (is_lifetime_start(line, i)) {
+                _scan_code = _scan_code c
+                i++
+                continue
+              }
               in_single = 1
               i++
               continue
@@ -768,6 +797,10 @@ echo "Unsafe code:"
 
             _scan_code = _scan_code c
             i++
+          }
+          if (in_single) {
+            in_single = 0
+            escaped = 0
           }
           if (_scan_code ~ /(^|[^[:alnum:]_#])unsafe([^[:alnum:]_]|$)/) {
             printf "%s:%d:%s\n", FILENAME, NR, line

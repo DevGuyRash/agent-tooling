@@ -805,6 +805,9 @@ fn strip_comments_and_strings(source: &str) -> String {
                 continue;
             }
             push_placeholder(&mut out, b);
+            if b == b'\n' {
+                in_char = false;
+            }
             if b == b'\'' {
                 in_char = false;
             }
@@ -885,29 +888,11 @@ fn is_lifetime_start(bytes: &[u8], quote_idx: usize) -> bool {
     if !(next.is_ascii_alphabetic() || next == b'_') {
         return false;
     }
-    if quote_idx + 2 < bytes.len() && bytes[quote_idx + 2] == b'\'' {
-        // Character literal like `'x'`.
-        return false;
+    let mut idx = quote_idx + 2;
+    while idx < bytes.len() && is_ident_char(bytes[idx]) {
+        idx += 1;
     }
-    let Some(prev) = prev_non_whitespace_byte(bytes, quote_idx) else {
-        return false;
-    };
-    matches!(prev, b'&' | b'<' | b',' | b'(' | b':' | b'+' | b'>' | b'=')
-}
-
-fn prev_non_whitespace_byte(bytes: &[u8], end_idx: usize) -> Option<u8> {
-    if end_idx == 0 {
-        return None;
-    }
-    let mut idx = end_idx;
-    while idx > 0 {
-        idx -= 1;
-        let b = bytes[idx];
-        if !b.is_ascii_whitespace() {
-            return Some(b);
-        }
-    }
-    None
+    bytes.get(idx).copied() != Some(b'\'')
 }
 
 fn push_placeholder(out: &mut Vec<u8>, b: u8) {
@@ -921,8 +906,9 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MatchKind, compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
+        compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
         is_cfg_test_attr, resolve_scan_roots, should_skip_file, strip_comments_and_strings,
+        MatchKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1023,6 +1009,20 @@ mod tests {
         let source = "fn conn() -> &'static str { value.unwrap() }";
         let sanitized = strip_comments_and_strings(source);
         assert!(sanitized.contains("value.unwrap()"));
+    }
+
+    #[test]
+    fn multiline_lifetime_bounds_do_not_mask_following_code() {
+        let source = "fn borrow<'a, 'b>()\nwhere\n    'a: 'b,\n{\n    value.unwrap();\n}";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(sanitized.contains("value.unwrap();"));
+    }
+
+    #[test]
+    fn unterminated_char_literal_does_not_mask_following_lines() {
+        let source = "let broken = 'x;\nunsafe { touch(); }\n";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(sanitized.contains("unsafe { touch(); }"));
     }
 
     #[test]
