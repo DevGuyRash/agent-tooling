@@ -1025,7 +1025,9 @@ fn resolve_pointer_path(session: &SessionLedger, pointer: &ArtifactPointer) -> O
         if candidate.is_empty() {
             continue;
         }
-        let resolved = paths::resolve_repo_relative(&repo_root, candidate);
+        let Ok(resolved) = paths::resolve_repo_relative(&repo_root, candidate) else {
+            continue;
+        };
         if resolved.exists() {
             return Some(resolved);
         }
@@ -1445,7 +1447,7 @@ fn ensure_review_paths(
     parent_agent_dir: Option<&Path>,
 ) -> anyhow::Result<PathBuf> {
     let agent_dir = if !review.agent_dir.is_empty() {
-        paths::resolve_repo_relative(repo_root, &review.agent_dir)
+        paths::resolve_repo_relative(repo_root, &review.agent_dir)?
     } else if let Some(parent_agent_dir) = parent_agent_dir {
         paths::child_agent_dir(parent_agent_dir, &review.reviewer_id)
     } else {
@@ -1687,13 +1689,17 @@ fn sync_agent_files_with_counters(
 ) -> anyhow::Result<StorageStatus> {
     let repo_root = PathBuf::from(&session.repo_root);
     let session_dir = session_paths_for(session)?.session_dir;
-    let parent_agent_dir = review.parent_id.as_deref().and_then(|parent_id| {
-        session
-            .reviews
-            .iter()
-            .find(|candidate| candidate.reviewer_id == parent_id)
-            .map(|parent| paths::resolve_repo_relative(&repo_root, &parent.agent_dir))
-    });
+    let parent_agent_dir = review
+        .parent_id
+        .as_deref()
+        .and_then(|parent_id| {
+            session
+                .reviews
+                .iter()
+                .find(|candidate| candidate.reviewer_id == parent_id)
+        })
+        .map(|parent| paths::resolve_repo_relative(&repo_root, &parent.agent_dir))
+        .transpose()?;
     let mut review_copy = review.clone();
     let agent_dir = ensure_review_paths(
         &repo_root,
@@ -1975,7 +1981,8 @@ fn build_reports_result(
         }
         let report_contents = if include_report_contents {
             review.report_path.as_ref().and_then(|path| {
-                fs::read_to_string(paths::resolve_repo_relative(&repo_root, path)).ok()
+                let absolute = paths::resolve_repo_relative(&repo_root, path).ok()?;
+                fs::read_to_string(absolute).ok()
             })
         } else {
             None
@@ -2017,7 +2024,9 @@ fn build_reports_result(
                 }
             }
             if let Some(path) = &review.report_path {
-                let absolute = paths::resolve_repo_relative(&repo_root, path);
+                let Ok(absolute) = paths::resolve_repo_relative(&repo_root, path) else {
+                    continue;
+                };
                 if let Ok(body) = fs::read_to_string(&absolute) {
                     sections.push(format!(
                         "\n---\n\n## Agent `{}`\n\n{}",
@@ -2367,7 +2376,7 @@ pub fn spawn_child_reviewers(
                 None,
             )?
         } else {
-            paths::resolve_repo_relative(&repo_root, &session.reviews[parent_index].agent_dir)
+            paths::resolve_repo_relative(&repo_root, &session.reviews[parent_index].agent_dir)?
         };
         let parent_role = session.reviews[parent_index].role.clone();
         let now = now_rfc3339();

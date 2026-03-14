@@ -50,13 +50,8 @@ fn validate_header(header: &ArtifactHeader, expected_kind: ArtifactKind) -> anyh
 
 fn validate_repo_paths(paths: &[String], errors: &mut Vec<String>) {
     for path in paths {
-        if path.contains('\\') {
-            errors.push(format!(
-                "repo-relative path `{path}` must use `/` separators"
-            ));
-        }
-        if path.trim().is_empty() {
-            errors.push("repo-relative path must not be empty".to_string());
+        if let Err(err) = crate::paths::validate_repo_relative_str(path) {
+            errors.push(format!("repo-relative path `{path}` is invalid: {err}"));
         }
     }
 }
@@ -880,6 +875,92 @@ mod tests {
         });
         let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
         ensure!(summary.errors.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_rejects_repo_path_traversal() -> anyhow::Result<()> {
+        let selected_modules = canonical_review_modules();
+        let mut worker_plan = vec![WorkerPlanRecord {
+            worker_kind: WorkerKind::LanguageDetector,
+            role_id: Some("language-detector".to_string()),
+            language: None,
+            module_ids: Vec::new(),
+            focus_surfaces: vec![SurfaceId::AuthAccess],
+            claimed_scope: vec!["infer changed-file languages".to_string()],
+            delegated_scope: Vec::new(),
+            required: true,
+            parallelizable: false,
+        }];
+        for module_id in &selected_modules {
+            worker_plan.push(WorkerPlanRecord {
+                worker_kind: WorkerKind::DomainReviewer,
+                role_id: Some(format!(
+                    "domain:{}",
+                    toml::Value::try_from(*module_id).map_or_else(
+                        |_| "unknown".to_string(),
+                        |value| value.to_string().trim_matches('"').to_string()
+                    )
+                )),
+                language: None,
+                module_ids: vec![*module_id],
+                focus_surfaces: vec![SurfaceId::AuthAccess],
+                claimed_scope: vec!["own assigned domain".to_string()],
+                delegated_scope: vec![
+                    "do not delegate the same domain investigation again".to_string()
+                ],
+                required: true,
+                parallelizable: false,
+            });
+        }
+        worker_plan.push(WorkerPlanRecord {
+            worker_kind: WorkerKind::FinalSynthesizer,
+            role_id: Some("final-synthesis".to_string()),
+            language: None,
+            module_ids: vec![ModuleId::ShipReadiness],
+            focus_surfaces: vec![SurfaceId::AuthAccess],
+            claimed_scope: vec!["synthesize descendant reports".to_string()],
+            delegated_scope: vec!["do not reopen low-signal duplicate findings".to_string()],
+            required: true,
+            parallelizable: false,
+        });
+
+        let artifact = ArtifactDocument::RouteDecision(RouteDecisionArtifact {
+            header: header(ArtifactKind::RouteDecision)?,
+            mode: Mode::Reviewer,
+            execution_architecture: ExecutionArchitecture::Hybrid,
+            rigor_level: crate::artifacts::RigorLevel::Standard,
+            capability_profile: CapabilityProfile {
+                execution_capability: ExecutionCapability::BoundedHelpers,
+                max_worker_count: 4,
+                orchestrator_read_budget_lines: 120,
+                orchestrator_read_budget_snippets: 8,
+            },
+            resource_budget: ResourceBudget {
+                planned_worker_count: 4,
+                max_worker_count: 4,
+            },
+            risk_surfaces: vec![RiskSurfaceRecord {
+                surface_id: SurfaceId::AuthAccess,
+                weight: 5,
+                reason: "auth".to_string(),
+                evidence_refs: vec!["../../tmp/pwn".to_string()],
+                behavior_facing: false,
+            }],
+            selected_modules,
+            worker_plan,
+            heldback_escalations: Vec::new(),
+            stop_conditions: Vec::new(),
+        });
+        let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
+        ensure!(
+            summary
+                .errors
+                .iter()
+                .any(|error| error.contains("must not contain `..`")),
+            "expected traversal validation error, got {:?}",
+            summary.errors
+        );
         Ok(())
     }
 }

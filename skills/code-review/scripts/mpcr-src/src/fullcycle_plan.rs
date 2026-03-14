@@ -29,7 +29,7 @@ fn policy_refs() -> Vec<PolicyRef> {
     ]
 }
 
-fn resolve_artifact_path(session: &SessionLedger, repo_relative: &str) -> PathBuf {
+fn resolve_artifact_path(session: &SessionLedger, repo_relative: &str) -> anyhow::Result<PathBuf> {
     let repo_root = PathBuf::from(&session.repo_root);
     paths::resolve_repo_relative(&repo_root, repo_relative)
 }
@@ -40,7 +40,10 @@ fn load_current_artifact(
 ) -> anyhow::Result<Option<ArtifactDocument>> {
     pointer
         .as_ref()
-        .map(|pointer| parse_artifact_file(&resolve_artifact_path(session, &pointer.path)))
+        .map(|pointer| {
+            let path = resolve_artifact_path(session, &pointer.path)?;
+            parse_artifact_file(&path)
+        })
         .transpose()
 }
 
@@ -237,7 +240,8 @@ pub fn load_state(locator: &SessionLocator) -> anyhow::Result<Option<Convergence
     let Some(ref pointer) = session.current.convergence_state else {
         return Ok(None);
     };
-    match parse_artifact_file(&resolve_artifact_path(&session, &pointer.path))? {
+    let path = resolve_artifact_path(&session, &pointer.path)?;
+    match parse_artifact_file(&path)? {
         ArtifactDocument::ConvergenceState(state) => Ok(Some(state)),
         _ => Ok(None),
     }

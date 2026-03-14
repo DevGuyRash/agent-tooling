@@ -1,9 +1,9 @@
 //! Path helpers for the canonical session layout.
 
 use crate::artifacts::ArtifactKind;
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use time::Date;
 
 const REPORTS_ROOT: &str = ".local/reports/code_reviews";
@@ -260,6 +260,7 @@ pub fn repo_relative_path(repo_root: &Path, path: &Path) -> anyhow::Result<Strin
             repo_root.display()
         )
     })?;
+    validate_repo_relative(relative)?;
     Ok(normalize_repo_relative(relative))
 }
 
@@ -267,15 +268,57 @@ pub fn repo_relative_path(repo_root: &Path, path: &Path) -> anyhow::Result<Strin
 #[must_use]
 pub fn normalize_repo_relative(path: &Path) -> String {
     path.components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .filter_map(|component| match component {
+            Component::CurDir => None,
+            _ => Some(component.as_os_str().to_string_lossy().into_owned()),
+        })
         .collect::<Vec<_>>()
         .join("/")
 }
 
+/// Validate that `path` is a normalized repo-relative path without traversal.
+///
+/// # Errors
+/// Returns an error when the path is empty, absolute, or contains `..`.
+pub fn validate_repo_relative(path: &Path) -> anyhow::Result<()> {
+    ensure!(
+        !path.as_os_str().is_empty(),
+        "repo-relative path must not be empty"
+    );
+    ensure!(
+        !path.is_absolute(),
+        "repo-relative path must not be absolute"
+    );
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                anyhow::bail!("repo-relative path must not contain `..` traversal");
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("repo-relative path must not be absolute");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate a repo-relative string before resolving it against `repo_root`.
+///
+/// # Errors
+/// Returns an error when the string is empty, absolute, or contains `..`.
+pub fn validate_repo_relative_str(repo_relative: &str) -> anyhow::Result<()> {
+    let normalized = repo_relative.trim().replace('\\', "/");
+    validate_repo_relative(Path::new(&normalized))
+}
+
 /// Resolve a repo-relative path against `repo_root`.
-#[must_use]
-pub fn resolve_repo_relative(repo_root: &Path, repo_relative: &str) -> PathBuf {
-    repo_root.join(repo_relative.replace('\\', "/"))
+///
+/// # Errors
+/// Returns an error when `repo_relative` is empty, absolute, or contains `..`.
+pub fn resolve_repo_relative(repo_root: &Path, repo_relative: &str) -> anyhow::Result<PathBuf> {
+    validate_repo_relative_str(repo_relative)?;
+    Ok(repo_root.join(repo_relative.replace('\\', "/")))
 }
 
 #[cfg(test)]
@@ -341,9 +384,29 @@ mod tests {
                 == paths.session_dir.join("agents/deadbeef/children/cafebabe")
         );
         ensure!(scratch_dir(root) == root.join(".local/tmp/code-review"));
-        ensure!(
-            normalize_repo_relative(Path::new("./a/b/../c")) == "./a/b/../c".replace('\\', "/")
-        );
+        ensure!(normalize_repo_relative(Path::new("./a/b/c")) == "a/b/c");
+        validate_repo_relative(Path::new("agents/deadbeef"))?;
+        validate_repo_relative_str("agents/deadbeef")?;
+        ensure!(resolve_repo_relative(root, "agents/deadbeef")? == root.join("agents/deadbeef"));
         Ok(())
+    }
+
+    #[test]
+    fn repo_relative_helpers_reject_traversal() {
+        let root = Path::new("/repo/root");
+        let escaped = root.join("../../tmp/pwn");
+
+        let err = repo_relative_path(root, &escaped).expect_err("traversal should be rejected");
+        assert!(
+            err.to_string().contains("must not contain `..`"),
+            "unexpected error: {err}"
+        );
+
+        let err = resolve_repo_relative(root, "../../tmp/pwn")
+            .expect_err("traversal resolve should be rejected");
+        assert!(
+            err.to_string().contains("must not contain `..`"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -293,7 +293,7 @@ fn route_context_for(locator: &SessionLocator) -> anyhow::Result<Option<RouteCon
         .or(pointer.toml_path.as_deref())
         .or(Some(pointer.path.as_str()))
     {
-        paths::resolve_repo_relative(Path::new(&session.repo_root), path)
+        paths::resolve_repo_relative(Path::new(&session.repo_root), path)?
     } else {
         return Ok(None);
     };
