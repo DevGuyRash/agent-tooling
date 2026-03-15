@@ -29,7 +29,9 @@
 ## 1. Compatibility and Precedence
 
 - You SHALL treat existing repository conventions — layout, naming, tooling, lint settings, CI rules, runtime choices — as authoritative.
+- You SHALL resolve repository compatibility before applying house-style defaults.
 - WHEN this document conflicts with an explicit repository rule THEN you SHALL follow the repository rule.
+- You SHALL apply this precedence order: repository conventions and direct user instructions first, hard safety/correctness gates second, house-style defaults third.
 - You SHALL keep changes scoped to the task.
 - You SHALL NOT perform incidental refactors such as mass renames or formatting churn UNLESS required for correctness or testability.
 - WHEN a new pattern is introduced THEN you SHALL apply it consistently within the touched area.
@@ -48,6 +50,7 @@
 - You SHALL NOT use any pattern listed in `references/banned-patterns.md` in non-test code.
 - WHEN a banned pattern has a specific escape hatch (for example `// INVARIANT:`) THEN you SHALL use that specific escape hatch.
 - WHEN no pattern-specific escape hatch exists and the pattern is intentionally kept THEN you SHALL add `// ALLOW: <reason>` on the same line.
+- Unsafe constructs are not eligible for `// ALLOW:` or `// SAFETY:` escape hatches under this skill.
 
 ## 4. Required Idioms
 
@@ -245,8 +248,11 @@
 
 ## 20. Unsafe Code and FFI
 
-- You SHALL avoid `unsafe` by default.
-- WHEN `unsafe` is required THEN you SHALL add a `// SAFETY:` comment explaining the invariants, keep the `unsafe` block minimal, provide a safe wrapper API, and add tests covering the unsafe behavior.
+- This skill treats unsafe code and FFI as out of profile by default.
+- You SHALL NOT introduce or expand `unsafe` blocks, `unsafe fn`, `unsafe trait`, `unsafe impl`, manual `Send`/`Sync` claims, raw-pointer manipulation, or FFI surfaces under this skill's default workflow.
+- WHEN the task requires unsafe or FFI, or the touched area depends on unsafe invariants, THEN you SHALL stop treating this as a default workflow and follow explicit repository and user direction instead.
+- `// SAFETY:` comments MAY document existing repository-owned unsafe code that you must read or minimally touch, but they are NOT an escape hatch for introducing or keeping new unsafe code under this skill.
+- Unsafe constructs are NOT eligible for same-line `// ALLOW:` exceptions in this skill.
 
 ## 21. Security
 

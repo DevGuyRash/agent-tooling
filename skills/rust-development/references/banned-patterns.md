@@ -16,8 +16,9 @@ WHEN no pattern-specific escape hatch exists and the pattern must remain THEN yo
 5. [Public API anti-patterns](#public-api-anti-patterns)
 6. [Import anti-patterns](#import-anti-patterns)
 7. [Debug and logging artifacts](#debug-and-logging-artifacts)
-8. [Security](#security)
-9. [Meta](#meta)
+8. [Resource safety](#resource-safety)
+9. [Unsafe and security](#unsafe-and-security)
+10. [Meta](#meta)
 
 ---
 
@@ -35,6 +36,7 @@ The `// INVARIANT:` escape hatch applies only when the comment appears on the sa
 | `unimplemented!()` in non-test code | Placeholder | Implement or delete |
 | `todo!()` outside tests after Phase 0 | Placeholder | Implement before Phase 2; scan MUST be empty |
 | `unreachable!()` without same-line `// INVARIANT:` | Risky assumption | Refactor or add same-line `// INVARIANT:` comment |
+| `assert!()` / `assert_eq!()` / `assert_ne!()` outside tests without same-line `// INVARIANT:` | Production panic path | Return `Result` or use `debug_assert!` with an invariant comment |
 | `std::process::exit()` outside entrypoints | Hidden control flow | Return `Result`, map exit codes at boundary |
 
 WHEN using `.expect()` with an invariant THEN you SHALL prefer `.expect("descriptive message")` over `.unwrap()`.
@@ -50,6 +52,7 @@ WHEN using `.expect()` with an invariant THEN you SHALL prefer `.expect("descrip
 | `.iter().count()` with no filter/map | O(n) | `.len()` |
 | `.iter().next()` on slice/`Vec` without same-line `// ALLOW: non-slice-next` for non-slice collections | Verbose | `.first()`, or annotate a justified non-slice use with same-line `// ALLOW: non-slice-next` |
 | `for i in 0..x.len()` | Often non-idiomatic | Iterators/enumerate; add `// ALLOW:` only if indexing required |
+| `.len() == 0` / `.len() != 0` | Verbose | `.is_empty()` / `!x.is_empty()` |
 | `if x == true` / `if x == false` | Verbose | `if x` / `if !x` |
 | `if x != true` / `if x != false` | Verbose | `if !x` / `if x` |
 
@@ -57,7 +60,7 @@ WHEN using `.expect()` with an invariant THEN you SHALL prefer `.expect("descrip
 
 | Pattern | Reason | Fix |
 |---|---|---|
-| `format!("{}", x)` when `x` is `&str`/`String` | Unnecessary alloc | `x` or `x.to_string()` |
+| `format!("{}", x)` when direct use or `.to_string()` suffices | Unnecessary alloc | Use `x` directly or `x.to_string()` |
 | `String::from("")` / `"".to_string()` | Unnecessary alloc | `String::new()` |
 
 ## Parameter anti-patterns
@@ -92,11 +95,22 @@ WHEN using `.expect()` with an invariant THEN you SHALL prefer `.expect("descrip
 | `println!()` / `eprintln!()` for logging | Unstructured | tracing/log crate or remove |
 | `static mut` | Unsound global mutability | `OnceLock`/`LazyLock` + safe sync |
 
-## Security
+## Resource safety
 
 | Pattern | Reason | Fix |
 |---|---|---|
-| `unsafe impl Send` / `unsafe impl Sync` | Easy to get wrong | Avoid; if required add `// SAFETY:` and tests |
+| `mem::forget(...)` without same-line `// ALLOW:` | Easy to leak resources or break drop guarantees | Refactor ownership/lifetime flow or justify the exceptional case explicitly |
+| `Box::leak(...)` without same-line `// ALLOW:` | Permanent allocation / lifetime escape | Refactor ownership or justify the exceptional case explicitly |
+
+## Unsafe and security
+
+Unsafe constructs are hard out-of-profile failures for this skill.
+`// SAFETY:` and `// ALLOW:` do NOT permit them under this skill's default workflow.
+
+| Pattern | Reason | Fix |
+|---|---|---|
+| `unsafe { ... }`, `unsafe fn`, `unsafe trait`, or `unsafe impl` in non-test code | Out of profile for this skill | Refactor to safe Rust, or stop and get explicit repo/user direction |
+| `unsafe impl Send` / `unsafe impl Sync` in non-test code | Out of profile and easy to get wrong | Refactor to safe Rust, or stop and get explicit repo/user direction |
 | `Command::new("sh").arg("-c")` (or `bash`, `cmd /C`) | Shell injection | Build argv explicitly |
 
 ## Meta

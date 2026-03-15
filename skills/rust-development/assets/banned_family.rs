@@ -14,9 +14,12 @@
 //
 // What it does:
 // - Fails the test if *non-test* Rust code contains banned-family calls.
-// - Skips test-only code: `#[cfg(test)]` blocks, `mod tests { ... }`, and
-//   test-only directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
-// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable` families.
+// - Skips test-only code: `#[cfg(test)]` blocks, test-annotated items such as
+//   `#[test]` / `#[tokio::test]`, `mod tests { ... }`, and test-only
+//   directories (`tests/`, `test/`, `benches/`, `examples/`, `fixtures/`).
+// - Honors same-line `// INVARIANT:` escapes for `unwrap`/`expect`/`unreachable`
+//   and `assert` families.
+// - Treats `unsafe impl Send/Sync` as always banned in production code.
 // - Use this together with clippy lints (see clippy-lints.toml) to cover
 //   broader non-idiomatic patterns.
 //
@@ -24,6 +27,8 @@
 // - Always scans the workspace root; also scans `crates/` if it exists.
 // - You can override scan roots via env var: BANNED_FAMILY_ROOTS="src,crates,apps"
 //   (comma-separated, relative to workspace root).
+// - When `git` is available inside a repository, file discovery honors
+//   `.gitignore`/exclude rules via `git ls-files --exclude-standard`.
 //
 // Usage:
 // - Run: `cargo test -p <crate> --test banned_family --locked`
@@ -32,6 +37,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 enum MatchKind {
     MacroOrCall,
@@ -48,6 +54,9 @@ const BANNED_PREFIXES: &[(&str, MatchKind)] = &[
     ("todo", MatchKind::MacroOrCall),
     ("unimplemented", MatchKind::MacroOrCall),
     ("unreachable", MatchKind::MacroOrCall),
+    ("assert_eq", MatchKind::MacroOnly),
+    ("assert_ne", MatchKind::MacroOnly),
+    ("assert", MatchKind::MacroOnly),
     ("dbg", MatchKind::MacroOnly),
 ];
 
@@ -98,7 +107,7 @@ fn banned_family_is_absent_in_production_code() {
                         ));
                     }
                 }
-                if is_unsafe_impl_send_or_sync_violation(line, raw_line, &mut unsafe_impl_state) {
+                if is_unsafe_impl_send_or_sync_violation(line, &mut unsafe_impl_state) {
                     violations.push(format!(
                         "{}:{}:1: banned `unsafe impl Send/Sync`",
                         path.display(),
@@ -181,6 +190,10 @@ fn resolve_scan_roots(root: &Path) -> Vec<PathBuf> {
 }
 
 fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
+    if let Some(files) = collect_git_rust_files(root) {
+        return files;
+    }
+
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let mut visited_dirs = HashSet::new();
@@ -237,6 +250,46 @@ fn collect_rust_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn collect_git_rust_files(root: &Path) -> Option<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .arg("ls-files")
+        .arg("-z")
+        .arg("--cached")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .arg("--")
+        .arg("*.rs")
+        .arg(":(glob)**/*.rs")
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut files = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_path in output.stdout.split(|byte| *byte == 0) {
+        if raw_path.is_empty() {
+            continue;
+        }
+        let relative = PathBuf::from(String::from_utf8_lossy(raw_path).into_owned());
+        let path = root.join(relative);
+        if !path.is_file() {
+            continue;
+        }
+        if should_skip_dir(&path) || should_skip_file(&path) {
+            continue;
+        }
+        let canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen.insert(canonical) {
+            files.push(path);
+        }
+    }
+    files.sort_unstable();
+    Some(files)
+}
+
 fn should_skip_dir(path: &Path) -> bool {
     path.components().any(|component| {
         let name = component.as_os_str().to_string_lossy();
@@ -282,40 +335,159 @@ fn is_test_only_component(name: &str) -> bool {
     )
 }
 
-fn is_cfg_test_attr(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some(inner) = trimmed.strip_prefix("#[cfg(") else {
-        return false;
-    };
-    let Some(end_idx) = inner.find(")]") else {
-        return false;
-    };
-    has_non_negated_test_token(&inner[..end_idx])
+#[derive(Default)]
+struct AttrScanState {
+    paren_depth: usize,
+    bracket_depth: usize,
+    brace_depth: usize,
+    in_string: bool,
+    in_char: bool,
+    escaped: bool,
+    raw_hashes: Option<usize>,
 }
 
-fn parse_cfg_test_attribute_at(lines: &[&str], start_idx: usize) -> Option<(String, usize)> {
-    let trimmed = lines[start_idx].trim();
-    let mut remainder = trimmed.strip_prefix("#[cfg(")?;
-    let mut expr = String::new();
+fn raw_string_start(segment: &str) -> Option<(usize, usize)> {
+    let bytes = segment.as_bytes();
+    let mut idx = match bytes.first().copied()? {
+        b'r' => 1,
+        b'b' if bytes.get(1).copied() == Some(b'r') => 2,
+        _ => return None,
+    };
+
+    let mut hash_count = 0usize;
+    while bytes.get(idx).copied() == Some(b'#') {
+        hash_count += 1;
+        idx += 1;
+    }
+
+    if bytes.get(idx).copied() != Some(b'"') {
+        return None;
+    }
+
+    Some((idx + 1, hash_count))
+}
+
+fn raw_string_end_len(segment: &str, hash_count: usize) -> Option<usize> {
+    let bytes = segment.as_bytes();
+    if bytes.first().copied() != Some(b'"') {
+        return None;
+    }
+
+    for offset in 0..hash_count {
+        if bytes.get(offset + 1).copied() != Some(b'#') {
+            return None;
+        }
+    }
+
+    Some(hash_count + 1)
+}
+
+fn find_top_level_attr_closing_bracket(segment: &str, state: &mut AttrScanState) -> Option<usize> {
+    let mut iter = segment.char_indices().peekable();
+    while let Some((idx, ch)) = iter.next() {
+        if let Some(hash_count) = state.raw_hashes {
+            if let Some(end_len) = raw_string_end_len(&segment[idx..], hash_count) {
+                state.raw_hashes = None;
+                for _ in 1..end_len {
+                    iter.next();
+                }
+            }
+            continue;
+        }
+
+        if state.in_string {
+            if state.escaped {
+                state.escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => state.escaped = true,
+                '"' => state.in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        if state.in_char {
+            if state.escaped {
+                state.escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => state.escaped = true,
+                '\'' => state.in_char = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            'r' | 'b' => {
+                if let Some((start_len, hash_count)) = raw_string_start(&segment[idx..]) {
+                    state.raw_hashes = Some(hash_count);
+                    for _ in 1..start_len {
+                        iter.next();
+                    }
+                }
+            }
+            '"' => state.in_string = true,
+            '\'' => state.in_char = true,
+            '(' => state.paren_depth += 1,
+            ')' => {
+                if state.paren_depth > 0 {
+                    state.paren_depth -= 1;
+                }
+            }
+            '[' => state.bracket_depth += 1,
+            ']' => {
+                if state.paren_depth == 0 && state.brace_depth == 0 && state.bracket_depth == 0 {
+                    return Some(idx);
+                }
+                if state.bracket_depth > 0 {
+                    state.bracket_depth -= 1;
+                }
+            }
+            '{' => state.brace_depth += 1,
+            '}' => {
+                if state.brace_depth > 0 {
+                    state.brace_depth -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_outer_attribute_at(
+    lines: &[&str],
+    start_idx: usize,
+    initial_remainder: &str,
+) -> Option<(String, usize, String)> {
+    let mut remainder = initial_remainder.strip_prefix("#[")?;
+    let mut attr = String::new();
     let mut idx = start_idx;
+    let mut scan_state = AttrScanState::default();
+
     loop {
-        if let Some(end_idx) = remainder.find(")]") {
+        if let Some(end_idx) = find_top_level_attr_closing_bracket(remainder, &mut scan_state) {
             let before_end = remainder[..end_idx].trim();
             if !before_end.is_empty() {
-                if !expr.is_empty() {
-                    expr.push(' ');
+                if !attr.is_empty() {
+                    attr.push(' ');
                 }
-                expr.push_str(before_end);
+                attr.push_str(before_end);
             }
-            return Some((expr, idx));
+            let trailing = remainder[end_idx + 1..].trim_start().to_string();
+            return Some((attr, idx, trailing));
         }
 
         let chunk = remainder.trim();
         if !chunk.is_empty() {
-            if !expr.is_empty() {
-                expr.push(' ');
+            if !attr.is_empty() {
+                attr.push(' ');
             }
-            expr.push_str(chunk);
+            attr.push_str(chunk);
         }
 
         idx += 1;
@@ -323,6 +495,69 @@ fn parse_cfg_test_attribute_at(lines: &[&str], start_idx: usize) -> Option<(Stri
             return None;
         }
         remainder = lines[idx].trim();
+    }
+}
+
+fn parse_cfg_test_attribute_at(
+    lines: &[&str],
+    start_idx: usize,
+) -> Option<(String, usize, String)> {
+    let mut idx = start_idx;
+    let mut remainder = lines[start_idx].trim().to_string();
+
+    loop {
+        let (attr, attr_end_idx, trailing) =
+            parse_outer_attribute_at(lines, idx, remainder.as_str())?;
+        let attr_name = attr
+            .split_once('(')
+            .map(|(name, _)| name)
+            .unwrap_or(attr.as_str());
+        if attr_name.trim() == "cfg" {
+            if let Some((_, expr)) = attr.split_once('(') {
+                let cfg_expr = expr.trim_end().trim_end_matches(')').trim().to_string();
+                return Some((cfg_expr, attr_end_idx, trailing));
+            }
+            return None;
+        }
+        remainder = trailing.trim_start().to_string();
+        if !remainder.starts_with("#[") {
+            return None;
+        }
+        idx = attr_end_idx;
+    }
+}
+
+fn parse_test_item_attribute_at(
+    lines: &[&str],
+    start_idx: usize,
+) -> Option<(String, usize, String)> {
+    let mut idx = start_idx;
+    let mut remainder = lines[start_idx].trim().to_string();
+
+    loop {
+        let (attr, attr_end_idx, trailing) =
+            parse_outer_attribute_at(lines, idx, remainder.as_str())?;
+        if attr.is_empty() {
+            return None;
+        }
+        let attr_name = attr
+            .split_once('(')
+            .map(|(name, _)| name)
+            .unwrap_or(attr.as_str());
+        let is_test_attr = attr_name
+            .trim()
+            .rsplit("::")
+            .next()
+            .map(|terminal| terminal == "test")
+            .unwrap_or(false);
+        if is_test_attr {
+            return Some((attr, attr_end_idx, trailing));
+        }
+        remainder = trailing.trim_start().to_string();
+        if !remainder.starts_with("#[") {
+            return None;
+        }
+        idx = attr_end_idx;
     }
 }
 
@@ -391,6 +626,18 @@ fn has_non_negated_test_token(expr: &str) -> bool {
     false
 }
 
+fn is_cfg_test_attr(line: &str) -> bool {
+    let single = [line];
+    parse_cfg_test_attribute_at(&single, 0)
+        .map(|(expr, _, _)| has_non_negated_test_token(&expr))
+        .unwrap_or(false)
+}
+
+fn is_test_item_attr(line: &str) -> bool {
+    let single = [line];
+    parse_test_item_attribute_at(&single, 0).is_some()
+}
+
 fn is_tests_module_decl(line: &str) -> bool {
     let trimmed = line.trim_start();
     const TEST_MODULE_PREFIXES: &[&str] = &["mod tests", "pub mod tests", "pub(crate) mod tests"];
@@ -440,80 +687,96 @@ fn cfg_annotated_item_state(line: &str) -> CfgAnnotatedItemState {
     CfgAnnotatedItemState::Pending
 }
 
+fn cfg_attr_state_from_trailing(trailing: &str) -> CfgAnnotatedItemState {
+    let trimmed = trailing.trim();
+    if trimmed.is_empty() {
+        CfgAnnotatedItemState::Pending
+    } else {
+        cfg_annotated_item_state(trimmed)
+    }
+}
+
+fn attribute_stack_start(lines: &[&str], idx: usize) -> usize {
+    let mut start = idx;
+    while start > 0 {
+        let prev = lines[start - 1].trim();
+        if !prev.starts_with("#[") {
+            break;
+        }
+        start -= 1;
+    }
+    start
+}
+
 fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool> {
     let mut mask = vec![false; lines.len()];
-    let mut pending_cfg_test = false;
-    let mut in_cfg_test_block = false;
-    let mut cfg_test_depth: i32 = 0;
+    let mut pending_test_item = false;
+    let mut in_test_item_block = false;
+    let mut test_item_depth: i32 = 0;
 
     let mut idx = 0usize;
     while idx < lines.len() {
         let line = lines[idx];
-        if in_cfg_test_block {
+        if in_test_item_block {
             mask[idx] = true;
-            cfg_test_depth += brace_delta(sanitized_lines[idx]);
-            if cfg_test_depth <= 0 {
-                in_cfg_test_block = false;
-                cfg_test_depth = 0;
+            test_item_depth += brace_delta(sanitized_lines[idx]);
+            if test_item_depth <= 0 {
+                in_test_item_block = false;
+                test_item_depth = 0;
             }
             idx += 1;
             continue;
         }
 
-        if pending_cfg_test {
+        if pending_test_item {
             mask[idx] = true;
             let trimmed = line.trim();
             // Keep pending state across blank lines and stacked attributes until
-            // the cfg(test)-annotated item (module/use/type/etc.) is observed.
+            // the test-only item (module/use/type/function/etc.) is observed.
             if trimmed.is_empty() || trimmed.starts_with("#[") {
                 idx += 1;
                 continue;
             }
             match cfg_annotated_item_state(sanitized_lines[idx]) {
                 CfgAnnotatedItemState::Block(delta) => {
-                    in_cfg_test_block = true;
-                    cfg_test_depth = delta;
-                    pending_cfg_test = false;
+                    in_test_item_block = true;
+                    test_item_depth = delta;
+                    pending_test_item = false;
                 }
                 CfgAnnotatedItemState::Complete => {
-                    pending_cfg_test = false;
+                    pending_test_item = false;
                 }
                 CfgAnnotatedItemState::Pending => {
-                    pending_cfg_test = true;
+                    pending_test_item = true;
                 }
             }
             idx += 1;
             continue;
         }
 
-        if let Some((expr, attr_end_idx)) = parse_cfg_test_attribute_at(lines, idx) {
+        if let Some((expr, attr_end_idx, trailing)) = parse_cfg_test_attribute_at(lines, idx) {
             if has_non_negated_test_token(&expr) {
-                for item in mask.iter_mut().take(attr_end_idx + 1).skip(idx) {
+                let attr_start_idx = attribute_stack_start(lines, idx);
+                for item in mask.iter_mut().take(attr_end_idx + 1).skip(attr_start_idx) {
                     *item = true;
                 }
                 let delta = brace_delta(sanitized_lines[attr_end_idx]);
-                let has_trailing_item = sanitized_lines[attr_end_idx]
-                    .split_once(")]")
-                    .map(|(_, trailing)| !trailing.trim().is_empty())
-                    .unwrap_or(false);
                 if delta != 0 {
-                    in_cfg_test_block = true;
-                    cfg_test_depth = delta;
-                    pending_cfg_test = false;
-                } else if !has_trailing_item {
-                    pending_cfg_test = true;
-                } else if let Some((_, trailing)) = sanitized_lines[attr_end_idx].split_once(")]") {
-                    match cfg_annotated_item_state(trailing) {
+                    in_test_item_block = true;
+                    test_item_depth = delta;
+                    pending_test_item = false;
+                } else {
+                    match cfg_attr_state_from_trailing(&trailing) {
                         CfgAnnotatedItemState::Block(inner_delta) => {
-                            in_cfg_test_block = true;
-                            cfg_test_depth = inner_delta;
-                            pending_cfg_test = false;
+                            in_test_item_block = true;
+                            test_item_depth = inner_delta;
+                            pending_test_item = false;
                         }
                         CfgAnnotatedItemState::Complete => {
-                            pending_cfg_test = false;
+                            pending_test_item = false;
                         }
                         CfgAnnotatedItemState::Pending => {
-                            pending_cfg_test = true;
+                            pending_test_item = true;
                         }
                     }
                 }
@@ -522,12 +785,34 @@ fn compute_test_line_mask(lines: &[&str], sanitized_lines: &[&str]) -> Vec<bool>
             }
         }
 
+        if let Some((_, attr_end_idx, trailing)) = parse_test_item_attribute_at(lines, idx) {
+            let attr_start_idx = attribute_stack_start(lines, idx);
+            for item in mask.iter_mut().take(attr_end_idx + 1).skip(attr_start_idx) {
+                *item = true;
+            }
+            match cfg_attr_state_from_trailing(&trailing) {
+                CfgAnnotatedItemState::Block(delta) => {
+                    in_test_item_block = true;
+                    test_item_depth = delta;
+                    pending_test_item = false;
+                }
+                CfgAnnotatedItemState::Complete => {
+                    pending_test_item = false;
+                }
+                CfgAnnotatedItemState::Pending => {
+                    pending_test_item = true;
+                }
+            }
+            idx = attr_end_idx + 1;
+            continue;
+        }
+
         if is_tests_module_decl(line) {
             mask[idx] = true;
             let delta = brace_delta(sanitized_lines[idx]);
             if delta != 0 {
-                in_cfg_test_block = true;
-                cfg_test_depth = delta;
+                in_test_item_block = true;
+                test_item_depth = delta;
             }
         }
         idx += 1;
@@ -543,7 +828,15 @@ fn is_ident_char(b: u8) -> bool {
 fn is_invariant_escapable_prefix(prefix: &str) -> bool {
     matches!(
         prefix,
-        "unwrap" | "unwrap_err" | "unwrap_unchecked" | "expect" | "expect_err" | "unreachable"
+        "unwrap"
+            | "unwrap_err"
+            | "unwrap_unchecked"
+            | "expect"
+            | "expect_err"
+            | "unreachable"
+            | "assert"
+            | "assert_eq"
+            | "assert_ne"
     )
 }
 
@@ -563,6 +856,10 @@ fn find_banned_prefix(line: &str, prefix: &str, kind: &MatchKind) -> Option<usiz
             }
             match kind {
                 MatchKind::MacroOnly => {
+                    if j != i + prefix_bytes.len() {
+                        i += 1;
+                        continue;
+                    }
                     let mut k = j;
                     while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                         k += 1;
@@ -608,8 +905,6 @@ struct UnsafeImplState {
     phase: UnsafeImplPhase,
     // Only meaningful when `phase == SawUnsafeImpl`.
     impl_generic_depth: usize,
-    // Escape marker discovered on `unsafe impl` line before `Send`/`Sync` appears.
-    impl_escape_pending: bool,
 }
 
 impl UnsafeImplState {
@@ -617,7 +912,6 @@ impl UnsafeImplState {
         Self {
             phase: UnsafeImplPhase::Searching,
             impl_generic_depth: 0,
-            impl_escape_pending: false,
         }
     }
 
@@ -625,23 +919,11 @@ impl UnsafeImplState {
         self.phase = phase;
         if phase != UnsafeImplPhase::SawUnsafeImpl {
             self.impl_generic_depth = 0;
-            self.impl_escape_pending = false;
         }
-    }
-
-    fn take_pending_escape(&mut self) -> bool {
-        let pending = self.impl_escape_pending;
-        self.impl_escape_pending = false;
-        pending
     }
 }
 
-fn contains_unsafe_impl_send_or_sync(
-    line: &str,
-    raw_line: &str,
-    state: &mut UnsafeImplState,
-) -> bool {
-    let has_escape_marker = has_unsafe_impl_escape(raw_line);
+fn contains_unsafe_impl_send_or_sync(line: &str, state: &mut UnsafeImplState) -> bool {
     let mut i = 0;
     let bytes = line.as_bytes();
     while i < bytes.len() {
@@ -655,12 +937,7 @@ fn contains_unsafe_impl_send_or_sync(
             let token = &line[start..i];
             let next_phase = match (state.phase, token) {
                 (_, "unsafe") => UnsafeImplPhase::SawUnsafe,
-                (UnsafeImplPhase::SawUnsafe, "impl") => {
-                    if has_escape_marker {
-                        state.impl_escape_pending = true;
-                    }
-                    UnsafeImplPhase::SawUnsafeImpl
-                }
+                (UnsafeImplPhase::SawUnsafe, "impl") => UnsafeImplPhase::SawUnsafeImpl,
                 (UnsafeImplPhase::SawUnsafeImpl, "for") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "where") => UnsafeImplPhase::Searching,
                 (UnsafeImplPhase::SawUnsafeImpl, "Send" | "Sync")
@@ -696,128 +973,13 @@ fn contains_unsafe_impl_send_or_sync(
 
 fn is_unsafe_impl_send_or_sync_violation(
     sanitized_line: &str,
-    raw_line: &str,
     state: &mut UnsafeImplState,
 ) -> bool {
-    if !contains_unsafe_impl_send_or_sync(sanitized_line, raw_line, state) {
+    if !contains_unsafe_impl_send_or_sync(sanitized_line, state) {
         return false;
     }
-    let escaped_on_current_line = has_unsafe_impl_escape(raw_line);
-    let escaped_on_impl_line = state.take_pending_escape();
     state.set_phase(UnsafeImplPhase::Searching);
-    !escaped_on_current_line && !escaped_on_impl_line
-}
-
-fn has_unsafe_impl_escape(raw_line: &str) -> bool {
-    let bytes = raw_line.as_bytes();
-    let mut i = 0usize;
-    let mut in_string = false;
-    let mut in_char = false;
-    let mut raw_hashes: Option<usize> = None;
-    let mut block_comment_depth = 0usize;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        let next = bytes.get(i + 1).copied().unwrap_or(b'\0');
-
-        if let Some(hashes) = raw_hashes {
-            if b == b'"' {
-                if hashes == 0 {
-                    raw_hashes = None;
-                    i += 1;
-                    continue;
-                }
-                let mut matched = 0usize;
-                let mut j = i + 1;
-                while matched < hashes && j < bytes.len() && bytes[j] == b'#' {
-                    matched += 1;
-                    j += 1;
-                }
-                if matched == hashes {
-                    raw_hashes = None;
-                    i = j;
-                    continue;
-                }
-            }
-            i += 1;
-            continue;
-        }
-
-        if block_comment_depth > 0 {
-            if b == b'/' && next == b'*' {
-                block_comment_depth += 1;
-                i += 2;
-                continue;
-            }
-            if b == b'*' && next == b'/' {
-                block_comment_depth -= 1;
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            if b == b'\\' {
-                i += usize::from(i + 1 < bytes.len()) + 1;
-            } else {
-                if b == b'"' {
-                    in_string = false;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        if in_char {
-            if b == b'\\' {
-                i += usize::from(i + 1 < bytes.len()) + 1;
-            } else {
-                if b == b'\'' {
-                    in_char = false;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        if b == b'/' && next == b'/' {
-            let comment = &raw_line[i..];
-            return comment.contains("// ALLOW:") || comment.contains("// SAFETY:");
-        }
-        if b == b'/' && next == b'*' {
-            block_comment_depth = 1;
-            i += 2;
-            continue;
-        }
-
-        if b == b'r' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j] == b'#' {
-                j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b'"' {
-                raw_hashes = Some(j - (i + 1));
-                i = j + 1;
-                continue;
-            }
-        }
-
-        if b == b'"' {
-            in_string = true;
-            i += 1;
-            continue;
-        }
-        if b == b'\'' {
-            in_char = true;
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-
-    false
+    true
 }
 
 fn strip_comments_and_strings(source: &str) -> String {
@@ -923,6 +1085,9 @@ fn strip_comments_and_strings(source: &str) -> String {
                 continue;
             }
             push_placeholder(&mut out, b);
+            if b == b'\n' {
+                in_char = false;
+            }
             if b == b'\'' {
                 in_char = false;
             }
@@ -1003,29 +1168,11 @@ fn is_lifetime_start(bytes: &[u8], quote_idx: usize) -> bool {
     if !(next.is_ascii_alphabetic() || next == b'_') {
         return false;
     }
-    if quote_idx + 2 < bytes.len() && bytes[quote_idx + 2] == b'\'' {
-        // Character literal like `'x'`.
-        return false;
+    let mut idx = quote_idx + 2;
+    while idx < bytes.len() && is_ident_char(bytes[idx]) {
+        idx += 1;
     }
-    let Some(prev) = prev_non_whitespace_byte(bytes, quote_idx) else {
-        return false;
-    };
-    matches!(prev, b'&' | b'<' | b',' | b'(' | b':' | b'+' | b'>' | b'=')
-}
-
-fn prev_non_whitespace_byte(bytes: &[u8], end_idx: usize) -> Option<u8> {
-    if end_idx == 0 {
-        return None;
-    }
-    let mut idx = end_idx;
-    while idx > 0 {
-        idx -= 1;
-        let b = bytes[idx];
-        if !b.is_ascii_whitespace() {
-            return Some(b);
-        }
-    }
-    None
+    bytes.get(idx).copied() != Some(b'\'')
 }
 
 fn push_placeholder(out: &mut Vec<u8>, b: u8) {
@@ -1039,12 +1186,14 @@ fn push_placeholder(out: &mut Vec<u8>, b: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_test_line_mask, contains_unsafe_impl_send_or_sync, find_banned_prefix,
-        is_cfg_test_attr, resolve_scan_roots, should_skip_file, strip_comments_and_strings,
-        MatchKind,
+        collect_rust_files, compute_test_line_mask, contains_unsafe_impl_send_or_sync,
+        find_banned_prefix, is_cfg_test_attr, is_test_item_attr, parse_cfg_test_attribute_at,
+        parse_test_item_attribute_at, resolve_scan_roots, should_skip_file,
+        strip_comments_and_strings, MatchKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -1094,6 +1243,154 @@ mod tests {
     }
 
     #[test]
+    fn bare_test_attribute_masks_only_annotated_item() {
+        let lines = vec![
+            "#[test]",
+            "fn helper() {",
+            "    assert_eq!(2 + 2, 4);",
+            "    unsafe { touch(); }",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, false]);
+    }
+
+    #[test]
+    fn stacked_attributes_above_test_item_are_masked() {
+        let lines = vec![
+            "#[allow(dead_code)]",
+            "#[test]",
+            "fn helper()",
+            "{",
+            "    assert_eq!(left, right);",
+            "}",
+            "fn prod() { assert_eq!(left, right); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, true, false]);
+    }
+
+    #[test]
+    fn same_line_stacked_test_attribute_is_masked() {
+        let lines = vec![
+            "#[allow(dead_code)] #[test] fn helper() {",
+            "    panic!(\"only in tests\");",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, false]);
+    }
+
+    #[test]
+    fn multiline_non_test_attribute_with_trailing_test_attribute_is_detected() {
+        let lines = vec!["#[doc = concat(", "    \"helper\"", ")] #[test]"];
+        assert_eq!(
+            parse_test_item_attribute_at(&lines, 0),
+            Some((
+                "test".to_string(),
+                2,
+                String::new(),
+            ))
+        );
+    }
+
+    #[test]
+    fn multiline_non_test_attribute_with_trailing_test_attribute_is_masked() {
+        let lines = vec![
+            "#[doc = concat(",
+            "    \"helper\"",
+            ")] #[test]",
+            "fn helper() {",
+            "    panic!(\"only in tests\");",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, true, false]);
+    }
+
+    #[test]
+    fn path_qualified_test_attribute_masks_only_annotated_item() {
+        let lines = vec![
+            "#[tokio::test(flavor = \"current_thread\")]",
+            "async fn helper() {",
+            "    dbg ! (42);",
+            "}",
+            "fn prod() { dbg ! (42); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, false]);
+    }
+
+    #[test]
+    fn bare_and_path_qualified_test_attributes_are_detected() {
+        assert!(is_test_item_attr("#[test]"));
+        assert!(is_test_item_attr("#[tokio::test]"));
+        assert!(is_test_item_attr(
+            "#[tokio::test(flavor = \"current_thread\")]"
+        ));
+        assert!(!is_test_item_attr("#[cfg(test)]"));
+        assert!(!is_test_item_attr("#[test_case]"));
+    }
+
+    #[test]
+    fn multiline_path_qualified_test_attribute_is_detected() {
+        let lines = vec!["#[tokio::test(", "    flavor = \"current_thread\"", ")]"];
+        assert_eq!(
+            parse_test_item_attribute_at(&lines, 0),
+            Some((
+                "tokio::test( flavor = \"current_thread\" )".to_string(),
+                2,
+                String::new(),
+            ))
+        );
+    }
+
+    #[test]
+    fn multiline_path_qualified_test_attribute_masks_only_annotated_item() {
+        let lines = vec![
+            "#[tokio::test(",
+            "    flavor = \"current_thread\"",
+            ")]",
+            "async fn helper() {",
+            "    dbg ! (42);",
+            "    unsafe { touch(); }",
+            "}",
+            "fn prod() { dbg ! (42); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, true, true, false]);
+    }
+
+    #[test]
+    fn test_attribute_with_inner_array_masks_only_annotated_item() {
+        let lines = vec![
+            "#[cases::test(cases = [1, 2])]",
+            "fn helper() {",
+            "    assert_eq!(left, right);",
+            "}",
+            "fn prod() { assert_eq!(left, right); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, false]);
+    }
+
+    #[test]
+    fn test_attribute_with_raw_string_masks_only_annotated_item() {
+        let lines = vec![
+            "#[tokio::test(name = r#\"case ] one\"#)]",
+            "async fn helper() {",
+            "    dbg ! (42);",
+            "}",
+            "fn prod() { dbg ! (42); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, false]);
+    }
+
+    #[test]
     fn multiline_cfg_test_attribute_masks_only_test_item() {
         let lines = vec![
             "#[cfg(",
@@ -1138,10 +1435,71 @@ mod tests {
     }
 
     #[test]
+    fn same_line_stacked_cfg_test_attribute_is_masked() {
+        let lines = vec![
+            "#[allow(dead_code)] #[cfg(test)] fn helper() {",
+            "    panic!(\"only in tests\");",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, false]);
+    }
+
+    #[test]
+    fn same_line_stacked_cfg_test_attr_is_detected() {
+        assert!(is_cfg_test_attr(
+            "#[allow(dead_code)] #[cfg(test)] fn helper() {}"
+        ));
+    }
+
+    #[test]
+    fn multiline_non_test_attribute_with_trailing_cfg_test_attribute_is_detected() {
+        let lines = vec!["#[doc = concat(", "    \"helper\"", ")] #[cfg(test)]"];
+        assert_eq!(
+            parse_cfg_test_attribute_at(&lines, 0),
+            Some((
+                "test".to_string(),
+                2,
+                String::new(),
+            ))
+        );
+    }
+
+    #[test]
+    fn multiline_non_test_attribute_with_trailing_cfg_test_attribute_is_masked() {
+        let lines = vec![
+            "#[doc = concat(",
+            "    \"helper\"",
+            ")] #[cfg(test)]",
+            "fn helper() {",
+            "    panic!(\"only in tests\");",
+            "}",
+            "fn prod() { panic!(\"should be scanned\"); }",
+        ];
+        let mask = compute_test_line_mask(&lines, &lines);
+        assert_eq!(mask, vec![true, true, true, true, true, true, false]);
+    }
+
+    #[test]
     fn lifetime_annotations_do_not_mask_following_code() {
         let source = "fn conn() -> &'static str { value.unwrap() }";
         let sanitized = strip_comments_and_strings(source);
         assert!(sanitized.contains("value.unwrap()"));
+    }
+
+    #[test]
+    fn multiline_lifetime_bounds_do_not_mask_following_code() {
+        let source = "fn borrow<'a, 'b>()\nwhere\n    'a: 'b,\n{\n    value.unwrap();\n}";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(sanitized.contains("value.unwrap();"));
+    }
+
+    #[test]
+    fn unterminated_char_literal_does_not_mask_following_lines() {
+        let source = "let broken = 'x;\nunsafe { touch(); }\n";
+        let sanitized = strip_comments_and_strings(source);
+        assert!(sanitized.contains("unsafe { touch(); }"));
     }
 
     #[test]
@@ -1169,6 +1527,46 @@ mod tests {
     }
 
     #[test]
+    fn find_banned_prefix_detects_assert_macro_variants() {
+        assert_eq!(
+            find_banned_prefix("assert!(ready);", "assert", &MatchKind::MacroOnly),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix(
+                "assert_eq!(left, right);",
+                "assert_eq",
+                &MatchKind::MacroOnly
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix(
+                "assert_ne!(left, right);",
+                "assert_ne",
+                &MatchKind::MacroOnly
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix("assert_eq!(left, right);", "assert", &MatchKind::MacroOnly),
+            None
+        );
+        assert_eq!(
+            find_banned_prefix(
+                "assert_eq ! (left, right);",
+                "assert_eq",
+                &MatchKind::MacroOnly
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            find_banned_prefix("dbg ! (value);", "dbg", &MatchKind::MacroOnly),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn find_banned_prefix_does_not_match_similar_non_banned_names() {
         assert_eq!(
             find_banned_prefix(
@@ -1182,6 +1580,18 @@ mod tests {
             find_banned_prefix("ctx.expectation()", "expect", &MatchKind::MacroOrCall),
             None
         );
+        assert_eq!(
+            find_banned_prefix("debug_assert!(ready);", "assert", &MatchKind::MacroOnly),
+            None
+        );
+        assert_eq!(
+            find_banned_prefix(
+                "assert_matches!(value, Some(_));",
+                "assert",
+                &MatchKind::MacroOnly
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1189,6 +1599,72 @@ mod tests {
         assert!(should_skip_file(Path::new("src/tests/helpers.rs")));
         assert!(should_skip_file(Path::new("crates/api/fixtures/setup.rs")));
         assert!(!should_skip_file(Path::new("src/testing.rs")));
+    }
+
+    #[test]
+    fn collect_rust_files_respects_gitignored_generated_dirs() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let root = unique_temp_dir("gitignore-scan");
+        fs::create_dir_all(root.join("src")).expect("create src dir");
+        fs::create_dir_all(root.join(".generated")).expect("create ignored dir");
+        fs::write(root.join("src/lib.rs"), "pub fn live() {}").expect("write src file");
+        fs::write(
+            root.join(".generated/ghost.rs"),
+            "pub fn ghost() { todo!(); }",
+        )
+        .expect("write ignored file");
+        fs::write(root.join(".gitignore"), ".generated/\n").expect("write gitignore");
+
+        let init_status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&root)
+            .status()
+            .expect("run git init");
+        assert!(init_status.success(), "git init should succeed");
+
+        let files = collect_rust_files(&root);
+        assert_eq!(files, vec![root.join("src/lib.rs")]);
+
+        fs::remove_dir_all(&root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn collect_rust_files_skips_deleted_tracked_git_paths() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let root = unique_temp_dir("git-deleted-scan");
+        fs::create_dir_all(root.join("src")).expect("create src dir");
+        fs::write(root.join("src/live.rs"), "pub fn live() {}").expect("write live file");
+        fs::write(root.join("src/deleted.rs"), "pub fn deleted() {}").expect("write deleted file");
+
+        let init_status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&root)
+            .status()
+            .expect("run git init");
+        assert!(init_status.success(), "git init should succeed");
+
+        let add_status = Command::new("git")
+            .arg("add")
+            .arg("src/deleted.rs")
+            .current_dir(&root)
+            .status()
+            .expect("track deleted candidate");
+        assert!(add_status.success(), "git add should succeed");
+
+        fs::remove_file(root.join("src/deleted.rs")).expect("delete tracked file");
+
+        let files = collect_rust_files(&root);
+        assert_eq!(files, vec![root.join("src/live.rs")]);
+
+        fs::remove_dir_all(&root).expect("cleanup temp workspace");
     }
 
     #[test]
@@ -1220,25 +1696,18 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl Send for Worker {}",
-            "unsafe impl Send for Worker {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
         assert!(contains_unsafe_impl_send_or_sync(
             "unsafe impl<T> Sync for Cache<T> {}",
-            "unsafe impl<T> Sync for Cache<T> {}",
             &mut state
         ));
         let sanitized = strip_comments_and_strings("let msg = \"unsafe impl Send\";");
         state = super::UnsafeImplState::searching();
-        assert!(!contains_unsafe_impl_send_or_sync(
-            &sanitized,
-            "let msg = \"unsafe impl Send\";",
-            &mut state
-        ));
+        assert!(!contains_unsafe_impl_send_or_sync(&sanitized, &mut state));
         state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
-            "impl Send for Worker {}",
             "impl Send for Worker {}",
             &mut state
         ));
@@ -1249,16 +1718,13 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(!super::is_unsafe_impl_send_or_sync_violation(
             "unsafe impl<T>",
-            "unsafe impl<T>",
             &mut state
         ));
         assert!(super::is_unsafe_impl_send_or_sync_violation(
             "Send for Worker<T> {}",
-            "Send for Worker<T> {}",
             &mut state
         ));
         assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            "let keep_scanning = Send;",
             "let keep_scanning = Send;",
             &mut state
         ));
@@ -1269,85 +1735,64 @@ mod tests {
         let mut state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
-            "unsafe impl<T: Send + Sync> Service for Worker<T> {}",
             &mut state
         ));
         state = super::UnsafeImplState::searching();
         assert!(!contains_unsafe_impl_send_or_sync(
             "unsafe impl<T>",
-            "unsafe impl<T>",
             &mut state
         ));
         assert!(!contains_unsafe_impl_send_or_sync(
             "Service for Worker<T>",
-            "Service for Worker<T>",
             &mut state
         ));
         assert!(!contains_unsafe_impl_send_or_sync(
-            "where T: Send + Sync {}",
             "where T: Send + Sync {}",
             &mut state
         ));
     }
 
     #[test]
-    fn unsafe_impl_send_sync_escape_hatches_are_detected() {
-        assert!(super::has_unsafe_impl_escape(
-            "unsafe impl Send for Worker {} // SAFETY: bounded by internal runtime invariants"
-        ));
-        assert!(super::has_unsafe_impl_escape(
-            "unsafe impl Sync for Cache {} // ALLOW: required for compatibility"
-        ));
-        assert!(!super::has_unsafe_impl_escape(
-            "unsafe impl Send for Worker {}"
-        ));
-    }
-
-    #[test]
-    fn unsafe_impl_escape_on_same_line_is_not_a_violation() {
-        let raw = "unsafe impl Send for Worker {} // SAFETY: bounded by runtime invariants";
+    fn unsafe_impl_comments_do_not_create_exceptions() {
+        let raw = "unsafe impl Send for Worker {} // SAFETY: still forbidden";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
+            &sanitized, &mut state
         ));
     }
 
     #[test]
-    fn unsafe_impl_escape_ignores_string_literal_markers() {
+    fn unsafe_impl_comment_markers_in_strings_still_fail() {
         let raw = "static DOCS: &str = \"// SAFETY: fake\"; unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
         assert!(super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
+            &sanitized, &mut state
         ));
     }
 
     #[test]
-    fn unsafe_impl_escape_ignores_block_comment_markers() {
+    fn unsafe_impl_comment_markers_in_block_comments_still_fail() {
         let raw = "/* // SAFETY: fake */ unsafe impl Send for Worker {}";
         let sanitized = strip_comments_and_strings(raw);
         let mut state = super::UnsafeImplState::searching();
         assert!(super::is_unsafe_impl_send_or_sync_violation(
-            &sanitized, raw, &mut state
+            &sanitized, &mut state
         ));
     }
 
     #[test]
-    fn unsafe_impl_escape_on_impl_line_applies_to_multiline_send() {
+    fn unsafe_impl_multiline_sequences_remain_violations_even_with_comments() {
         let mut state = super::UnsafeImplState::searching();
-        let raw_impl_line = "unsafe impl<T> // SAFETY: marker applies to the impl";
+        let raw_impl_line = "unsafe impl<T> // SAFETY: still forbidden";
         let impl_line = strip_comments_and_strings(raw_impl_line);
         assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            &impl_line,
-            raw_impl_line,
-            &mut state
+            &impl_line, &mut state
         ));
         assert_eq!(state.phase, super::UnsafeImplPhase::SawUnsafeImpl);
-        assert!(state.impl_escape_pending);
         let raw_send_line = "Send for Worker<T> {}";
-        assert!(!super::is_unsafe_impl_send_or_sync_violation(
-            raw_send_line,
+        assert!(super::is_unsafe_impl_send_or_sync_violation(
             raw_send_line,
             &mut state
         ));
