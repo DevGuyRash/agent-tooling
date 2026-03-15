@@ -281,15 +281,15 @@ See:
    - Draft default: `bash "$SKILL_ROOT/scripts/pr-create.sh" --title "<title>" --create --force-create --repo <owner/repo> --label <label>`
    - Explicit non-draft: add `--ready`
    - If repo has labels, pass labels explicitly via repeatable `--label` or explicit `--no-labels`.
-   - If repo has multiple remote PR templates, pass `--template-id <path>` before `--create`.
+   - If multiple local/remote PR templates are discovered, pass `--template-id <id>` before `--create`.
 
 Optional helper:
 
-- `scripts/pr-create.sh` (uses remote repository PR template content when available; otherwise generates a deterministic PR body from git history; PR creation requires explicit `--create --force-create`, creates **draft** by default, and requires explicit labels when labels exist)
+- `scripts/pr-create.sh` (prefers local checkout PR templates, then remote repository templates, and augments the selected template with generated reviewer context; otherwise renders the skill fallback PR template; PR creation requires explicit `--create --force-create`, creates **draft** by default, and requires explicit labels when labels exist)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-create.sh"`
 - `scripts/pr-labels-list.sh` (deterministically list available labels before create)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-labels-list.sh"`
-- `scripts/pr-template-discover.sh` (discover/extract remote PR templates; `--template-id` required for multi-template repos before `--create`)
+- `scripts/pr-template-discover.sh` (discover/extract local checkout PR templates first, then remote PR templates when repo context is available; `--template-id` required for multi-template repos before `--create`)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-template-discover.sh"`
 - `scripts/pr-mark-ready.sh` (strict deterministic draft->ready transition after checks/threads pass)
   - Resolve as: `"$SKILL_ROOT/scripts/pr-mark-ready.sh"`
@@ -458,10 +458,10 @@ See:
 - [references/GH_CLI_SNIPPETS.md](references/GH_CLI_SNIPPETS.md)
 
 Template resolution policy for PR creation:
-- Prefer remote repository PR templates when discoverable.
+- Prefer local checkout PR templates when present; otherwise use remote repository PR templates when discoverable.
 - Discovery includes single-file templates in `.github/`, repo root, and `docs/` (both `pull_request_template.md` and `PULL_REQUEST_TEMPLATE.md`) and multi-template directories in `.github/PULL_REQUEST_TEMPLATE/`, `PULL_REQUEST_TEMPLATE/`, and `docs/PULL_REQUEST_TEMPLATE/`.
-- If multiple remote templates exist, `pr-create.sh --create` requires explicit `--template-id`.
-- If no remote templates exist, default deterministic skill PR body generation is used.
+- If multiple discovered templates exist, `pr-create.sh --create` requires explicit `--template-id`.
+- If no repo template exists, the skill fallback PR template is rendered with generated reviewer context.
 
 ---
 

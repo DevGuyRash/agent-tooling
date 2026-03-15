@@ -1,31 +1,32 @@
 # Summary
 
-<!-- 1–3 sentences: what this PR does, why it matters -->
+<!-- 1-3 sentences on what changed and why it matters to reviewers/users -->
+<!-- SUMMARY_PLACEHOLDER -->
 
 # Changes
 
-- <!-- bullet list of changes -->
+<!-- Concise, non-duplicative change list grouped by type -->
+<!-- CHANGES_PLACEHOLDER -->
+
+# Review Focus
+
+<!-- REVIEW_FOCUS_PLACEHOLDER -->
 
 # Testing
 
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] Manual testing
+- [ ] Automated tests run
+- [ ] Manual verification run
+- [ ] Not run yet
 
-Describe how you tested:
+Describe any commands, environments, or screenshots/logs worth checking:
 
 ```bash
-# commands run
+<!-- TEST_COMMANDS_PLACEHOLDER -->
 ```
 
-# Risk
+# Risks / rollout
 
-- Breaking changes? **Yes/No**
-- Rollback plan (if risky): <!-- short -->
-
-# Screenshots / logs (optional)
-
-<!-- paste images/log excerpts if user-facing -->
+<!-- RISK_PLACEHOLDER -->
 
 # Refs
 
@@ -39,6 +40,7 @@ If related but not closing:
 - Related to #123
 - Part of #123
 -->
+<!-- REFS_PLACEHOLDER -->
 
 # Reviewers / bots
 
@@ -52,3 +54,5 @@ Defaults:
 @codex review
 /gemini review
 -->
+@codex review
+/gemini review

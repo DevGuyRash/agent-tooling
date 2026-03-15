@@ -59,12 +59,13 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
   - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" --repo <owner/repo>`
 - [ ] Remote PR templates discovered before create:
   - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>`
+- [ ] Local checkout PR templates checked before remote fallbacks when working in a repo checkout.
 - [ ] If creating PR via script, draft is default unless `--ready` is explicitly passed.
 - [ ] PR body includes:
+  - reviewer context
   - summary
-  - what changed
   - how tested
-  - breaking changes (if any)
+  - risk/rollback notes
   - refs/issues (closing keywords if appropriate)
 - [ ] bots/reviewers are tagged per repo conventions (at end of PR body)
 
