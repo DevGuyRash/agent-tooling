@@ -528,6 +528,34 @@ wait "$LOCK_OWNER_PID" 2>/dev/null || true
 rm -f "$LOCK_WAIT_LOCK_DIR/pid"
 rmdir "$LOCK_WAIT_LOCK_DIR"
 
+LOCK_RECOVERY_BASE_DIR=$(mktemp -d "/tmp/agent-friction-lock-recovery.XXXXXX")
+eval "$(FRICTION_BASE_DIR="$LOCK_RECOVERY_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-id stale-lock-recovery \
+  --task-summary "Stale lock dirs without a live pid should be recovered" \
+  --agent orchestrator \
+  --skill-path "$ROOT")"
+
+LOCK_RECOVERY_TASK_DIR=$FRICTION_TASK_DIR
+LOCK_RECOVERY_LOCK_DIR=$LOCK_RECOVERY_TASK_DIR/.build-index.lock
+mkdir -p "$LOCK_RECOVERY_LOCK_DIR"
+set +e
+timeout 5 "$ROOT/scripts/build-index.sh" --task-dir "$LOCK_RECOVERY_TASK_DIR" >/dev/null 2>&1
+LOCK_RECOVERY_RC=$?
+set -e
+[ "$LOCK_RECOVERY_RC" -eq 0 ]
+[ ! -d "$LOCK_RECOVERY_LOCK_DIR" ]
+[ -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
+
+mkdir -p "$LOCK_RECOVERY_LOCK_DIR"
+printf '%s\n' 'not-a-pid' >"$LOCK_RECOVERY_LOCK_DIR/pid"
+set +e
+timeout 5 "$ROOT/scripts/build-index.sh" --task-dir "$LOCK_RECOVERY_TASK_DIR" >/dev/null 2>&1
+LOCK_RECOVERY_INVALID_RC=$?
+set -e
+[ "$LOCK_RECOVERY_INVALID_RC" -eq 0 ]
+[ ! -d "$LOCK_RECOVERY_LOCK_DIR" ]
+[ -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
+
 grep -q '^\*\*Task summary:\*\*$' "$MULTILINE_INDEX"
 grep -q '^> Multiline task summary$' "$MULTILINE_INDEX"
 grep -q '^> second line$' "$MULTILINE_INDEX"

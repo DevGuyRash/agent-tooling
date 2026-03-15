@@ -54,20 +54,53 @@ cleanup() {
 }
 
 acquire_lock() {
+  missing_pid_retries=0
+  invalid_pid_retries=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
-    if [ -f "$lock_dir/pid" ]; then
-      lock_pid=$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)
-      case "$lock_pid" in
-        ''|*[!0-9]*) ;;
-        *)
-          if ! kill -0 "$lock_pid" 2>/dev/null; then
-            rm -f "$lock_dir/pid" 2>/dev/null || true
-            rmdir "$lock_dir" 2>/dev/null || true
-            continue
-          fi
-          ;;
-      esac
+    if [ ! -f "$lock_dir/pid" ]; then
+      missing_pid_retries=$((missing_pid_retries + 1))
+      invalid_pid_retries=0
+      if [ "$missing_pid_retries" -ge 2 ]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+        missing_pid_retries=0
+        continue
+      fi
+      sleep 1
+      continue
     fi
+
+    lock_pid=$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)
+    case "$lock_pid" in
+      '')
+        missing_pid_retries=$((missing_pid_retries + 1))
+        invalid_pid_retries=0
+        if [ "$missing_pid_retries" -ge 2 ]; then
+          rm -f "$lock_dir/pid" 2>/dev/null || true
+          rmdir "$lock_dir" 2>/dev/null || true
+          missing_pid_retries=0
+          continue
+        fi
+        ;;
+      *[!0-9]*)
+        invalid_pid_retries=$((invalid_pid_retries + 1))
+        missing_pid_retries=0
+        if [ "$invalid_pid_retries" -ge 2 ]; then
+          rm -f "$lock_dir/pid" 2>/dev/null || true
+          rmdir "$lock_dir" 2>/dev/null || true
+          invalid_pid_retries=0
+          continue
+        fi
+        ;;
+      *)
+        missing_pid_retries=0
+        invalid_pid_retries=0
+        if ! kill -0 "$lock_pid" 2>/dev/null; then
+          rm -f "$lock_dir/pid" 2>/dev/null || true
+          rmdir "$lock_dir" 2>/dev/null || true
+          continue
+        fi
+        ;;
+    esac
     sleep 1
   done
   lock_acquired=1
