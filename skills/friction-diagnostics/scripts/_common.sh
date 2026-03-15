@@ -9,7 +9,7 @@ lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-sha256_short() {
+short_hash() {
   input=$1
   if command -v sha256sum >/dev/null 2>&1; then
     printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 8)}'
@@ -57,7 +57,7 @@ bounded_slugify() {
     return 0
   fi
 
-  hash=$(sha256_short "$slug")
+  hash=$(short_hash "$slug")
   suffix="-$hash"
   suffix_length=$(printf '%s' "$suffix" | wc -c | tr -d ' ')
   prefix_limit=$((limit - suffix_length))

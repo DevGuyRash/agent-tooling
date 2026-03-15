@@ -32,6 +32,7 @@ done
 index_file=$task_dir/INDEX.md
 session_file=$task_dir/SESSION.txt
 lock_dir=$task_dir/.build-index.lock
+lock_acquired=0
 log_list_file=
 category_counts_file=
 log_counts_file=
@@ -46,7 +47,7 @@ cleanup() {
     ${category_counts_file:+"$category_counts_file"} \
     ${log_counts_file:+"$log_counts_file"} \
     ${index_tmp_file:+"$index_tmp_file"}
-  if [ -n "${lock_dir-}" ]; then
+  if [ "${lock_acquired:-0}" -eq 1 ] && [ -n "${lock_dir-}" ]; then
     rm -f "$lock_dir/pid" 2>/dev/null || true
     rmdir "$lock_dir" 2>/dev/null || true
   fi
@@ -69,6 +70,7 @@ acquire_lock() {
     fi
     sleep 1
   done
+  lock_acquired=1
   printf '%s\n' "$$" >"$lock_dir/pid"
 }
 

@@ -7,13 +7,14 @@ AUTO_ID_BASE_DIR=
 FAKE_DATE_DIR=
 SPACE_BASE_DIR=
 CONCURRENT_BASE_DIR=
+LOCK_WAIT_BASE_DIR=
 FAIL_BASE_DIR=
 FAIL_FAKE_BIN=
 FAIL_INIT_STDOUT=
 FAIL_INIT_STDERR=
 FAIL_REPORT_STDOUT=
 FAIL_REPORT_STDERR=
-trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}"' EXIT INT TERM
+trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}"' EXIT INT TERM
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -43,14 +44,16 @@ ORCH_INDEX=$FRICTION_INDEX_FILE
 AUTO_ID_BASE_DIR=$(mktemp -d "/tmp/agent-friction-auto-id.XXXXXX")
 FAKE_DATE_DIR=$(mktemp -d "/tmp/agent-friction-date.XXXXXX")
 NAME_MAX_VALUE=$(getconf NAME_MAX "$AUTO_ID_BASE_DIR" 2>/dev/null || printf '%s\n' 255)
-printf '%s\n' '#!/bin/sh' >"$FAKE_DATE_DIR/date"
-printf '%s\n' 'case "$1" in' >>"$FAKE_DATE_DIR/date"
-printf '%s\n' "  '+%Y-%m-%d') printf '%s\n' '2026-03-14' ;;" >>"$FAKE_DATE_DIR/date"
-printf '%s\n' "  '+%H-%M-%S') printf '%s\n' '17-00-00' ;;" >>"$FAKE_DATE_DIR/date"
-printf '%s\n' "  '+%Y-%m-%d %H:%M:%S %Z') printf '%s\n' '2026-03-14 17:00:00 UTC' ;;" >>"$FAKE_DATE_DIR/date"
-printf '%s\n' "  '+%Y%m%d-%H%M%S') printf '%s\n' '20260314-170000' ;;" >>"$FAKE_DATE_DIR/date"
-printf '%s\n' '  *) /bin/date "$@" ;;' >>"$FAKE_DATE_DIR/date"
-printf '%s\n' 'esac' >>"$FAKE_DATE_DIR/date"
+{
+  printf '%s\n' '#!/bin/sh'
+  printf '%s\n' "case \"\$1\" in"
+  printf '%s\n' "  '+%Y-%m-%d') printf '%s\n' '2026-03-14' ;;"
+  printf '%s\n' "  '+%H-%M-%S') printf '%s\n' '17-00-00' ;;"
+  printf '%s\n' "  '+%Y-%m-%d %H:%M:%S %Z') printf '%s\n' '2026-03-14 17:00:00 UTC' ;;"
+  printf '%s\n' "  '+%Y%m%d-%H%M%S') printf '%s\n' '20260314-170000' ;;"
+  printf '%s\n' "  *) /bin/date \"\$@\" ;;"
+  printf '%s\n' 'esac'
+} >"$FAKE_DATE_DIR/date"
 chmod +x "$FAKE_DATE_DIR/date"
 
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -474,8 +477,8 @@ grep -q '\*\*Entries:\*\* 4' "$ORCH_INDEX"
 grep -q -- "- \`skill/name-resolution/blocked\` - 2" "$ORCH_INDEX"
 grep -q 'mcp/timeout/blocked' "$ORCH_INDEX"
 grep -q 'external-service/other/blocked' "$ORCH_INDEX"
-SKILL_CATEGORY_LINE=$(grep -n -- '- `skill/name-resolution/blocked` - 2' "$ORCH_INDEX" | cut -d: -f1)
-MCP_CATEGORY_LINE=$(grep -n -- '- `mcp/timeout/blocked` - 1' "$ORCH_INDEX" | cut -d: -f1)
+SKILL_CATEGORY_LINE=$(grep -n -- "- \`skill/name-resolution/blocked\` - 2" "$ORCH_INDEX" | cut -d: -f1)
+MCP_CATEGORY_LINE=$(grep -n -- "- \`mcp/timeout/blocked\` - 1" "$ORCH_INDEX" | cut -d: -f1)
 [ -n "$SKILL_CATEGORY_LINE" ]
 [ -n "$MCP_CATEGORY_LINE" ]
 [ "$SKILL_CATEGORY_LINE" -lt "$MCP_CATEGORY_LINE" ]
@@ -497,6 +500,34 @@ CONCURRENT_SUBAGENT_LINE=$(grep -n 'subagent-parallel' "$CONCURRENT_INDEX" | cut
 [ -n "$CONCURRENT_ORCH_LINE" ]
 [ -n "$CONCURRENT_SUBAGENT_LINE" ]
 [ "$CONCURRENT_ORCH_LINE" -lt "$CONCURRENT_SUBAGENT_LINE" ]
+
+LOCK_WAIT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-lock-wait.XXXXXX")
+eval "$(FRICTION_BASE_DIR="$LOCK_WAIT_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-id interrupted-lock-wait \
+  --task-summary "Interrupted waiter should not remove another process lock" \
+  --agent orchestrator \
+  --skill-path "$ROOT")"
+
+LOCK_WAIT_TASK_DIR=$FRICTION_TASK_DIR
+LOCK_WAIT_LOCK_DIR=$LOCK_WAIT_TASK_DIR/.build-index.lock
+mkdir -p "$LOCK_WAIT_LOCK_DIR"
+sleep 30 &
+LOCK_OWNER_PID=$!
+printf '%s\n' "$LOCK_OWNER_PID" >"$LOCK_WAIT_LOCK_DIR/pid"
+
+set +e
+timeout --signal=TERM 1 "$ROOT/scripts/build-index.sh" --task-dir "$LOCK_WAIT_TASK_DIR" >/dev/null 2>&1
+LOCK_WAIT_RC=$?
+set -e
+
+[ "$LOCK_WAIT_RC" -ne 0 ]
+[ -d "$LOCK_WAIT_LOCK_DIR" ]
+[ "$(cat "$LOCK_WAIT_LOCK_DIR/pid")" = "$LOCK_OWNER_PID" ]
+kill "$LOCK_OWNER_PID"
+wait "$LOCK_OWNER_PID" 2>/dev/null || true
+rm -f "$LOCK_WAIT_LOCK_DIR/pid"
+rmdir "$LOCK_WAIT_LOCK_DIR"
+
 grep -q '^\*\*Task summary:\*\*$' "$MULTILINE_INDEX"
 grep -q '^> Multiline task summary$' "$MULTILINE_INDEX"
 grep -q '^> second line$' "$MULTILINE_INDEX"

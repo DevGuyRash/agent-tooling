@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/_common.sh"
 
@@ -95,7 +95,7 @@ case "$text" in
   *"timed out"*|*"timeout"*|*"deadline exceeded"*) mode=timeout ;;
   *"traceback"*|*"stacktrace"*|*"stack backtrace"*|*"panic"*|*"segmentation fault"*|*"crash"*|*"exception"*) mode=crash ;;
   *"json"*|*"yaml"*|*"schema"*|*"parse error"*|*"type mismatch"*|*"deserialize"*|*"serialize"*|*"shape mismatch"*) mode=schema ;;
-  *"validation"*|*"invalid"*|*"required"*|*"assertion failed"*|*"failed validation"*) mode=validation ;;
+  *"validation"*|*"invalid"*|*"required"*|*"assertion failed"*) mode=validation ;;
   *"wrong output"*|*"unexpected output"*|*"output mismatch"*|*"did not match"*|*"rendered incorrectly"*|*"misleading output"*) mode=output-mismatch ;;
   *"flaky"*|*"sometimes"*|*"intermittent"*|*"nondetermin"*|*"non-determin"*) mode=nondeterminism ;;
   *"slow"*|*"performance"*|*"hang"*|*"thrash"*|*"looped"*|*"repeated retries"*) mode=performance ;;
