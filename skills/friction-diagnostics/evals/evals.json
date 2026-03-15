@@ -1,0 +1,23 @@
+{
+  "skill_name": "friction-diagnostics",
+  "evals": [
+    {
+      "id": "eval-init-and-report",
+      "prompt": "Initialize a friction log for a top-level task, record one skill-related failure entry, and leave behind INDEX.md.",
+      "expected_output": "A task directory under the temp root containing SESSION.txt, one markdown log file, and INDEX.md. The log file contains a structured entry with category, source, action, expected outcome, actual outcome, and interpretation.",
+      "files": []
+    },
+    {
+      "id": "eval-subagent-reuse",
+      "prompt": "Reuse an existing task id for a subagent and record a second friction file in the same task directory.",
+      "expected_output": "A second timestamped markdown log file exists in the same task directory, and INDEX.md reports two log files.",
+      "files": []
+    },
+    {
+      "id": "eval-negative-control",
+      "prompt": "Encounter a pure user-project bug with no agent-system contribution.",
+      "expected_output": "No new friction entry is written for that event.",
+      "files": []
+    }
+  ]
+}

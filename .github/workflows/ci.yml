@@ -257,6 +257,28 @@ jobs:
               f.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
           PY
 
+  friction-diagnostics-smoke:
+    name: Friction diagnostics smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+            script: skills/friction-diagnostics/tests/smoke-posix.sh
+          - os: windows-latest
+            shell: powershell
+            script: skills/friction-diagnostics/tests/smoke-powershell.ps1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run friction diagnostics smoke test
+        shell: ${{ matrix.shell }}
+        run: ${{ matrix.script }}
+
   rust:
     name: Rust (fmt, clippy, test)
     needs: detect-rust
