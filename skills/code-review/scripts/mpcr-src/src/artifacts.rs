@@ -23,15 +23,24 @@ pub const LEGACY_REJECTION_MESSAGE: &str =
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 /// Canonical artifact kinds used by the v2 system.
 pub enum ArtifactKind {
+    #[value(alias = "route-decision")]
     RouteDecision,
+    #[value(alias = "surface-map")]
     SurfaceMap,
+    #[value(alias = "child-findings")]
     ChildFindings,
+    #[value(alias = "parent-review")]
     ParentReview,
+    #[value(alias = "application-result")]
     ApplicationResult,
+    #[value(alias = "verification-result")]
     VerificationResult,
+    #[value(alias = "convergence-state")]
     ConvergenceState,
+    #[value(alias = "route-revision")]
     RouteRevision,
 }
 
@@ -1036,16 +1045,32 @@ pub fn parse_artifact_json_str(body: &str) -> anyhow::Result<ArtifactDocument> {
 ///
 /// # Errors
 /// Returns an error if the identifier is invalid.
-pub fn validate_session_id(session_id: &str) -> anyhow::Result<()> {
-    let valid_len = session_id.len() == 8;
-    let valid_chars = session_id
+fn validate_compact_id(field_name: &str, value: &str) -> anyhow::Result<()> {
+    let valid_len = value.len() == 8;
+    let valid_chars = value
         .chars()
-        .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit());
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit());
     anyhow::ensure!(
         valid_len && valid_chars,
-        "error: session_id must be 8 lowercase alphanumeric characters"
+        "error: {field_name} must be 8 lowercase alphanumeric characters"
     );
     Ok(())
+}
+
+/// Validate the v2 `session_id` format.
+///
+/// # Errors
+/// Returns an error if the identifier is invalid.
+pub fn validate_session_id(session_id: &str) -> anyhow::Result<()> {
+    validate_compact_id("session_id", session_id)
+}
+
+/// Validate the v2 `reviewer_id` format.
+///
+/// # Errors
+/// Returns an error if the identifier is invalid.
+pub fn validate_reviewer_id(reviewer_id: &str) -> anyhow::Result<()> {
+    validate_compact_id("reviewer_id", reviewer_id)
 }
 
 /// Validate the v2 `artifact_id` format.

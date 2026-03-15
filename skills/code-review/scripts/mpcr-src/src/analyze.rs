@@ -125,11 +125,8 @@ pub fn run_all(files: &HashMap<String, String>) -> anyhow::Result<AnalysisReport
     let mut findings = Vec::new();
     let mut total_lines = 0usize;
 
-    let mut file_entries: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(path, content)| (path.as_str(), content.as_str()))
-        .collect();
-    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+    let file_entries = analysis_file_entries(files);
+    let files_scanned = file_entries.len();
 
     for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
@@ -162,7 +159,7 @@ pub fn run_all(files: &HashMap<String, String>) -> anyhow::Result<AnalysisReport
         .collect();
 
     Ok(AnalysisReport {
-        files_scanned: files.len(),
+        files_scanned,
         total_lines,
         findings,
         duplicate_blocks,
@@ -206,11 +203,7 @@ fn run_line_check(
     check_name: &str,
 ) -> anyhow::Result<Vec<AnalysisFinding>> {
     let mut findings = Vec::new();
-    let mut file_entries: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(path, content)| (path.as_str(), content.as_str()))
-        .collect();
-    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+    let file_entries = analysis_file_entries(files);
 
     for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
@@ -290,7 +283,7 @@ pub fn available_checks() -> Vec<(&'static str, &'static str)> {
             "dead-code",
             "Detect dead code markers (#[dead_code], #if 0, and if False)",
         ),
-        ("todos", "Surface TODO/FIXME/HACK/XXX/SAFETY annotations"),
+        ("todos", "Surface TODO/FIXME/HACK/XXX annotations"),
         (
             "long-functions",
             "Flag functions/methods exceeding 60 lines",
@@ -302,7 +295,7 @@ pub fn available_checks() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "duplicates",
-            "Find duplicate text blocks (≥4 lines) across files",
+            "Find duplicate text blocks (≥5 lines) across files",
         ),
         (
             "complexity",
@@ -315,25 +308,22 @@ pub fn available_checks() -> Vec<(&'static str, &'static str)> {
 
 /// Detect language-agnostic dead code markers.
 fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
-    let markers = [
+    let code_markers = [
         "#[cfg(never)]",
-        "// DEAD CODE",
-        "/* DEAD CODE",
         "#if 0",
         "if False:",
         "if (false)",
         "if false {",
-        "// unused",
-        "# unused",
-        "// deprecated",
-        "// @deprecated",
-        "/* @deprecated",
-        "/// @deprecated",
     ];
     let mut pending_attr_start: Option<usize> = None;
     let mut attr_buffer = String::new();
+    let mut lex_state = AnalysisLexState::default();
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim().to_ascii_lowercase();
+        let in_multiline_string = matches!(
+            lex_state.quote_state,
+            Some(QuoteState::TripleSingle | QuoteState::TripleDouble)
+        );
         if let Some(attr_start) = pending_attr_start {
             attr_buffer.push(' ');
             attr_buffer.push_str(&trimmed);
@@ -353,10 +343,9 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
             }
             continue;
         }
-        if is_probable_string_literal_line(line) {
-            continue;
-        }
-        let lower_line = line.to_ascii_lowercase();
+        let sanitized_line = sanitize_analysis_line(line, &mut lex_state);
+        let sanitized_trimmed = sanitized_line.trim();
+        let sanitized_lower = sanitized_trimmed.to_ascii_lowercase();
         if has_rust_dead_code_allow_attribute(&trimmed) {
             out.push(AnalysisFinding {
                 check: "dead-code-marker".to_string(),
@@ -372,12 +361,27 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
             attr_buffer.clone_from(&trimmed);
             continue;
         }
-        for marker in &markers {
+
+        if let Some(payload) = comment_payload(path, line) {
+            let normalized_payload = trim_comment_label_prefix(payload).to_ascii_lowercase();
+            if normalized_payload.starts_with("dead code")
+                || normalized_payload.starts_with("unused")
+                || (!in_multiline_string && normalized_payload.starts_with("if 0"))
+            {
+                out.push(AnalysisFinding {
+                    check: "dead-code-marker".to_string(),
+                    file: path.to_string(),
+                    line: idx + 1,
+                    excerpt: truncate_line(line, 100),
+                    detail: format!("Matched dead-code pattern: {}", payload.trim()),
+                });
+                continue;
+            }
+        }
+
+        for marker in &code_markers {
             let marker_lower = marker.to_ascii_lowercase();
-            if trimmed.contains(&marker_lower) {
-                if is_marker_inside_quotes(&lower_line, &marker_lower) {
-                    continue;
-                }
+            if sanitized_lower.contains(&marker_lower) {
                 out.push(AnalysisFinding {
                     check: "dead-code-marker".to_string(),
                     file: path.to_string(),
@@ -391,39 +395,37 @@ fn check_dead_code_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisFin
     }
 }
 
-/// Surface TODO/FIXME/HACK/XXX/SAFETY comments.
+/// Surface TODO/FIXME/HACK/XXX comments.
 fn check_todo_fixme(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) {
-    let tags = ["TODO", "FIXME", "HACK", "XXX", "SAFETY"];
+    let tags = ["TODO", "FIXME", "HACK", "XXX"];
     for (idx, line) in lines.iter().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let upper = line.to_ascii_uppercase();
         let lower = line.to_ascii_lowercase();
+        let Some(payload) = comment_payload(path, line) else {
+            continue;
+        };
+        let normalized_payload = trim_comment_label_prefix(payload);
+        let normalized_upper = normalized_payload.to_ascii_uppercase();
         for tag in &tags {
-            if !upper.contains(tag) {
+            if !normalized_upper.starts_with(tag) {
                 continue;
             }
             if is_marker_inside_quotes(&lower, &tag.to_ascii_lowercase()) {
                 continue;
             }
-            if !is_tag_word_boundary(&upper, tag) {
+            if !is_payload_tag_boundary(&normalized_upper, tag) {
                 continue;
             }
-            let comment_start = find_comment_start(line);
-            if let Some(cstart) = comment_start {
-                let comment_region = &line[cstart..].to_ascii_uppercase();
-                if comment_region.contains(tag) && is_tag_word_boundary(comment_region, tag) {
-                    out.push(AnalysisFinding {
-                        check: "todo-fixme".to_string(),
-                        file: path.to_string(),
-                        line: idx + 1,
-                        excerpt: truncate_line(line, 100),
-                        detail: format!("{tag} annotation found"),
-                    });
-                    break;
-                }
-            }
+            out.push(AnalysisFinding {
+                check: "todo-fixme".to_string(),
+                file: path.to_string(),
+                line: idx + 1,
+                excerpt: truncate_line(line, 100),
+                detail: format!("{tag} annotation found"),
+            });
+            break;
         }
     }
 }
@@ -453,6 +455,9 @@ fn check_long_lines(lines: &[&str], path: &str, out: &mut Vec<AnalysisFinding>) 
     let mut count = 0u32;
     let mut first_overflow_line: Option<usize> = None;
     for (idx, line) in lines.iter().enumerate() {
+        if is_comment_ruler_line(path, line) {
+            continue;
+        }
         if line.len() > threshold {
             count += 1;
             if count <= 5 {
@@ -532,16 +537,12 @@ fn check_unreachable_markers(lines: &[&str], path: &str, out: &mut Vec<AnalysisF
 
 // ── Cross-file checks ────────────────────────────────────────────────────────
 
-/// Find duplicate text blocks (≥4 consecutive lines) across files.
+/// Find duplicate text blocks (≥5 consecutive lines) across files.
 pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBlock> {
-    let min_block = 4;
+    let min_block = 5;
     let mut fingerprints: BTreeMap<u64, Vec<DuplicateLocation>> = BTreeMap::new();
 
-    let mut file_entries: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(path, content)| (path.as_str(), content.as_str()))
-        .collect();
-    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+    let file_entries = analysis_file_entries(files);
 
     for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
@@ -549,6 +550,9 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
             continue;
         }
         for start in 0..=lines.len().saturating_sub(min_block) {
+            if block_is_comment_only(path, &lines[start..start + min_block]) {
+                continue;
+            }
             let block: Vec<&str> = lines[start..start + min_block]
                 .iter()
                 .map(|l| l.trim())
@@ -613,11 +617,7 @@ pub fn find_duplicate_blocks(files: &HashMap<String, String>) -> Vec<DuplicateBl
 pub fn find_complexity_hotspots(files: &HashMap<String, String>) -> Vec<ComplexityHotspot> {
     let mut hotspots = Vec::new();
 
-    let mut file_entries: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(path, content)| (path.as_str(), content.as_str()))
-        .collect();
-    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+    let file_entries = analysis_file_entries(files);
 
     for (path, content) in file_entries {
         let lines: Vec<&str> = content.lines().collect();
@@ -679,9 +679,7 @@ impl ActiveFunctionScope {
 }
 
 fn collect_function_scope_metrics(lines: &[&str]) -> Vec<FunctionScopeMetrics> {
-    let branch_patterns = [
-        "if ", "else ", "elif ", "else if", "match ", "case ", "switch ",
-    ];
+    let branch_patterns = ["else if", "elif", "match", "case", "switch", "if", "else"];
 
     let mut completed = Vec::new();
     let mut stack: Vec<ActiveFunctionScope> = Vec::new();
@@ -742,9 +740,10 @@ fn collect_function_scope_metrics(lines: &[&str]) -> Vec<FunctionScopeMetrics> {
             if relative > frame.max_nesting {
                 frame.max_nesting = relative;
             }
+            let sanitized_lower = sanitized_trimmed.to_ascii_lowercase();
             if branch_patterns
                 .iter()
-                .any(|p| sanitized_trimmed.starts_with(p) || sanitized_trimmed.contains(p))
+                .any(|pattern| contains_keyword_pattern(&sanitized_lower, pattern))
             {
                 frame.branch_count += 1;
             }
@@ -790,6 +789,147 @@ fn maybe_push_hotspot(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn analysis_file_entries<'a>(files: &'a HashMap<String, String>) -> Vec<(&'a str, &'a str)> {
+    let mut file_entries: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .filter(|(path, content)| !should_skip_file_for_analysis(path, content))
+        .collect();
+    file_entries.sort_by(|a, b| a.0.cmp(b.0));
+    file_entries
+}
+
+fn block_is_comment_only(path: &str, lines: &[&str]) -> bool {
+    let mut saw_non_empty = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        saw_non_empty = true;
+        if comment_payload(path, line).is_none() {
+            return false;
+        }
+    }
+    saw_non_empty
+}
+
+fn should_skip_file_for_analysis(path: &str, content: &str) -> bool {
+    let lower_path = path.to_ascii_lowercase();
+    let file_name = lower_path
+        .rsplit('/')
+        .next()
+        .map_or(lower_path.as_str(), |value| value);
+    if is_lockfile_name(file_name) || path_has_vendor_segment(&lower_path) {
+        return true;
+    }
+    if path_looks_generated(&lower_path)
+        || content_looks_generated(content)
+        || path_looks_minified(&lower_path)
+        || content_looks_minified(content)
+    {
+        return true;
+    }
+    false
+}
+
+fn path_has_vendor_segment(path: &str) -> bool {
+    path.split('/').any(|segment| {
+        matches!(
+            segment,
+            "node_modules"
+                | "vendor"
+                | "third_party"
+                | "third-party"
+                | ".yarn"
+                | ".pnpm"
+                | "target"
+                | "coverage"
+        )
+    })
+}
+
+fn is_lockfile_name(file_name: &str) -> bool {
+    matches!(
+        file_name,
+        "cargo.lock"
+            | "package-lock.json"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "pnpm-lock.yml"
+            | "bun.lockb"
+            | "composer.lock"
+            | "gemfile.lock"
+            | "poetry.lock"
+            | "pipfile.lock"
+            | "podfile.lock"
+    )
+}
+
+fn path_looks_generated(path: &str) -> bool {
+    path.contains("/generated/")
+        || path.contains("/gen/")
+        || path.contains(".generated.")
+        || path.contains(".gen.")
+        || path.ends_with(".pb.go")
+        || path.ends_with("_pb2.py")
+        || path.ends_with(".designer.cs")
+}
+
+fn content_looks_generated(content: &str) -> bool {
+    content
+        .lines()
+        .take(5)
+        .map(|line| line.to_ascii_lowercase())
+        .any(|line| {
+            (line.contains("generated") || line.contains("auto-generated"))
+                && (line.contains("do not edit") || line.contains("automatically"))
+        })
+}
+
+fn path_looks_minified(path: &str) -> bool {
+    path.ends_with(".min.js")
+        || path.ends_with(".min.css")
+        || path.ends_with(".bundle.js")
+        || path.ends_with(".bundle.css")
+}
+
+fn content_looks_minified(content: &str) -> bool {
+    let line_count = content.lines().count();
+    if line_count == 0 || line_count > 3 {
+        return false;
+    }
+    let longest_line = content.lines().map(str::len).max().map_or(0, |len| len);
+    if longest_line < 600 {
+        return false;
+    }
+    let whitespace = content.chars().filter(|ch| ch.is_whitespace()).count();
+    let punctuation = content
+        .chars()
+        .filter(|ch| matches!(ch, '{' | '}' | ';' | ',' | '(' | ')' | '[' | ']'))
+        .count();
+    whitespace * 20 < content.len() && punctuation > 20
+}
+
+fn contains_keyword_pattern(line: &str, pattern: &str) -> bool {
+    let mut start = 0usize;
+    while let Some(pos) = line[start..].find(pattern) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0 || !is_identifier_byte(line.as_bytes()[abs_pos - 1]);
+        let after_pos = abs_pos + pattern.len();
+        let after_ok = after_pos >= line.len() || !is_identifier_byte(line.as_bytes()[after_pos]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+    }
+    false
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
 
 fn truncate_line(line: &str, max: usize) -> String {
     let trimmed = line.trim();
@@ -1231,26 +1371,64 @@ fn strip_trailing_line_comment(line: &str) -> &str {
     line
 }
 
-fn is_tag_word_boundary(haystack: &str, tag: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = haystack[start..].find(tag) {
-        let abs_pos = start + pos;
-        let before_ok = abs_pos == 0
-            || !haystack.as_bytes()[abs_pos - 1].is_ascii_alphanumeric()
-                && haystack.as_bytes()[abs_pos - 1] != b'_';
-        let after_pos = abs_pos + tag.len();
-        let after_ok = after_pos >= haystack.len()
-            || !haystack.as_bytes()[after_pos].is_ascii_alphanumeric()
-                && haystack.as_bytes()[after_pos] != b'_';
-        if before_ok && after_ok {
-            return true;
+fn comment_payload<'a>(path: &str, line: &'a str) -> Option<&'a str> {
+    let start = find_comment_start(path, line)?;
+    let mut payload = line[start..].trim_start();
+    for leader in ["///", "//!", "//", "/*", "<!--", "#", "*"] {
+        if payload.starts_with(leader) {
+            payload = &payload[leader.len()..];
+            break;
         }
-        start = abs_pos + 1;
     }
-    false
+    Some(payload.trim_start())
 }
 
-fn find_comment_start(line: &str) -> Option<usize> {
+fn trim_comment_label_prefix(payload: &str) -> &str {
+    payload.trim_start_matches(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '*' | '/' | '#' | '!' | '-' | '>' | '[' | ']' | '(' | ')'
+            )
+    })
+}
+
+fn is_payload_tag_boundary(payload: &str, tag: &str) -> bool {
+    let after_pos = tag.len();
+    after_pos >= payload.len()
+        || payload.as_bytes()[after_pos].is_ascii_whitespace()
+        || matches!(
+            payload.as_bytes()[after_pos],
+            b':' | b'-' | b'(' | b')' | b'!' | b'['
+        )
+}
+
+fn is_comment_ruler_line(path: &str, line: &str) -> bool {
+    let Some(payload) = comment_payload(path, line) else {
+        return false;
+    };
+    if payload.is_empty() {
+        return false;
+    }
+
+    let ruler_count = payload
+        .chars()
+        .filter(|ch| matches!(ch, '-' | '=' | '_' | '~' | '─' | '━' | '═'))
+        .count();
+    let alnum_count = payload.chars().filter(|ch| ch.is_alphanumeric()).count();
+    let word_count = payload
+        .split_whitespace()
+        .filter(|part| part.chars().any(|ch| ch.is_alphanumeric()))
+        .count();
+
+    ruler_count >= 8 && alnum_count <= 32 && word_count <= 4
+}
+
+fn supports_inline_hash_comments(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".py")
+}
+
+fn find_comment_start(path: &str, line: &str) -> Option<usize> {
     let mut in_quote: Option<char> = None;
     let mut escaped = false;
     let bytes = line.as_bytes();
@@ -1286,7 +1464,12 @@ fn find_comment_start(line: &str) -> Option<usize> {
         if ch == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
             return Some(i);
         }
-        if ch == b'#' && !(i + 1 < len && bytes[i + 1] == b'[') {
+        if ch == b'#'
+            && !(i + 1 < len && bytes[i + 1] == b'[')
+            && (supports_inline_hash_comments(path)
+                || i == 0
+                || bytes[i - 1].is_ascii_whitespace())
+        {
             return Some(i);
         }
         if ch == b'*' && i == line.len() - line.trim_start().len() {
@@ -1412,7 +1595,7 @@ mod tests {
     #[test]
     fn duplicate_block_detection() {
         let mut files = HashMap::new();
-        let block = "line one\nline two\nline three\nline four\n";
+        let block = "line one\nline two\nline three\nline four\nline five\n";
         files.insert("a.rs".to_string(), block.to_string());
         files.insert("b.rs".to_string(), block.to_string());
         let report = run_all(&files).expect("analysis failed");
@@ -1508,6 +1691,43 @@ mod tests {
     }
 
     #[test]
+    fn dead_code_marker_ignores_deprecation_comments() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "/// @deprecated use `new_api` instead\npub fn old_api() {}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker"),
+            "deprecation comments should not be treated as dead-code markers"
+        );
+    }
+
+    #[test]
+    fn dead_code_marker_ignores_docstring_markers() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.py".to_string(),
+            "def helper():\n    \"\"\"\n    #if 0\n    still docs\n    \"\"\"\n    return 1\n"
+                .to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.check != "dead-code-marker"),
+            "docstring content should not be treated as dead-code markers"
+        );
+    }
+
+    #[test]
     fn unreachable_marker_in_single_quoted_literal_is_ignored() {
         let mut files = HashMap::new();
         files.insert(
@@ -1596,7 +1816,7 @@ mod tests {
     #[test]
     fn run_check_output_returns_duplicates_variant() {
         let mut files = HashMap::new();
-        let block = "line one\nline two\nline three\nline four\n";
+        let block = "line one\nline two\nline three\nline four\nline five\n";
         files.insert("a.rs".to_string(), block.to_string());
         files.insert("b.rs".to_string(), block.to_string());
 
@@ -1621,7 +1841,7 @@ mod tests {
     #[test]
     fn run_check_supports_duplicates_with_blank_lines() {
         let mut files = HashMap::new();
-        let block = "line one\nline two\n\nline four\n";
+        let block = "line one\nline two\n\nline four\nline five\n";
         files.insert("a.rs".to_string(), block.to_string());
         files.insert("b.rs".to_string(), block.to_string());
 
@@ -1636,6 +1856,143 @@ mod tests {
                 .any(|f| f.file == "a.rs" || f.file == "b.rs"),
             "expected duplicate findings to point at duplicate file locations"
         );
+    }
+
+    #[test]
+    fn duplicate_check_ignores_four_line_blocks() {
+        let mut files = HashMap::new();
+        let block = "line one\nline two\nline three\nline four\n";
+        files.insert("a.rs".to_string(), block.to_string());
+        files.insert("b.rs".to_string(), block.to_string());
+
+        let findings = run_check(&files, "duplicates").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "four-line duplicate blocks should stay below the reporting threshold"
+        );
+    }
+
+    #[test]
+    fn duplicate_check_ignores_comment_only_headers() {
+        let mut files = HashMap::new();
+        let block = [
+            "// Copyright 2026 Example Corp",
+            "// Licensed under the Apache License, Version 2.0",
+            "// you may not use this file except in compliance with the License",
+            "// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0",
+            "// Unless required by applicable law or agreed to in writing",
+        ]
+        .join("\n");
+        files.insert("a.rs".to_string(), format!("{block}\nfn a() {{}}\n"));
+        files.insert("b.rs".to_string(), format!("{block}\nfn b() {{}}\n"));
+
+        let findings = run_check(&files, "duplicates").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "comment-only boilerplate headers should not be reported as duplicates"
+        );
+    }
+
+    #[test]
+    fn todo_check_ignores_descriptive_doc_comments() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "/// Surface TODO/FIXME/HACK/XXX comments.\n/// Detect unreachable/panic/todo! markers in code.\n".to_string(),
+        );
+
+        let findings = run_check(&files, "todos").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "descriptive doc comments should not be treated as actionable TODO markers"
+        );
+    }
+
+    #[test]
+    fn todo_check_ignores_rust_safety_comments() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "unsafe fn helper(ptr: *const i32) {\n    // SAFETY: ptr is checked by the caller.\n    let _ = *ptr;\n}\n".to_string(),
+        );
+
+        let findings = run_check(&files, "todos").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "Rust SAFETY justification comments should not be treated as TODO findings"
+        );
+    }
+
+    #[test]
+    fn long_lines_ignore_comment_rulers() {
+        let mut files = HashMap::new();
+        files.insert(
+            "sample.rs".to_string(),
+            "// ── Section Heading ───────────────────────────────────────────────────────────────────────────────────────────────────────────────\n".to_string(),
+        );
+
+        let findings = run_check(&files, "long-lines").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "decorative ruler comments should not be reported as long-line findings"
+        );
+    }
+
+    #[test]
+    fn analysis_skips_lockfiles_and_vendor_paths() {
+        let mut files = HashMap::new();
+        files.insert(
+            "Cargo.lock".to_string(),
+            "# TODO: lockfile noise\n[[package]]\nname = \"demo\"\n".to_string(),
+        );
+        files.insert(
+            "vendor/pkg/index.js".to_string(),
+            "// TODO: vendored noise\nfunction vendored() {}\n".to_string(),
+        );
+        files.insert(
+            "src/lib.rs".to_string(),
+            "// TODO: real work item\nfn live_code() {}\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert_eq!(
+            report.files_scanned, 1,
+            "only the source file should be analyzed"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.file == "src/lib.rs"),
+            "lockfiles and vendor paths should be skipped"
+        );
+    }
+
+    #[test]
+    fn analysis_skips_generated_files() {
+        let mut files = HashMap::new();
+        files.insert(
+            "src/generated/api.rs".to_string(),
+            "// Code generated automatically. DO NOT EDIT.\n// TODO: generated noise\n".to_string(),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert_eq!(report.files_scanned, 0);
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn analysis_skips_minified_assets() {
+        let mut files = HashMap::new();
+        files.insert(
+            "web/app.min.js".to_string(),
+            format!("function a(){{{}}}", "x=1;".repeat(400)),
+        );
+
+        let report = run_all(&files).expect("analysis failed");
+        assert_eq!(report.files_scanned, 0);
+        assert!(report.findings.is_empty());
+        assert!(report.duplicate_blocks.is_empty());
     }
 
     #[test]
@@ -2086,6 +2443,23 @@ mod tests {
     }
 
     #[test]
+    fn complexity_ignores_case_substrings_inside_identifiers() {
+        let mut files = HashMap::new();
+        let mut src = String::from("fn helper() {\n");
+        for i in 0..11 {
+            src.push_str(&format!("    let auth_case_{i} = {i};\n"));
+        }
+        src.push_str("}\n");
+        files.insert("sample.rs".to_string(), src);
+
+        let findings = run_check(&files, "complexity").expect("analysis failed");
+        assert!(
+            findings.is_empty(),
+            "identifier substrings such as auth_case should not count as branch keywords"
+        );
+    }
+
+    #[test]
     fn long_line_overflow_summary_uses_positive_line_number() {
         let mut files = HashMap::new();
         let mut src = String::new();
@@ -2158,6 +2532,37 @@ mod tests {
         assert!(
             report.findings.iter().any(|f| f.check == "todo-fixme"),
             "TODO in inline comment should be detected"
+        );
+    }
+
+    #[test]
+    fn todo_in_python_inline_hash_comment_is_detected_without_spacing() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.py".to_string(),
+            "x = 1# TODO: tighten\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "todo-fixme" && f.line == 1),
+            "TODO in Python inline # comment should be detected"
+        );
+    }
+
+    #[test]
+    fn dead_code_marker_in_python_inline_hash_comment_is_detected_without_spacing() {
+        let mut files = HashMap::new();
+        files.insert("test.py".to_string(), "flag = 0#if 0\n".to_string());
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.check == "dead-code-marker" && f.line == 1),
+            "Python inline #if 0 should be treated as a dead-code marker"
         );
     }
 
@@ -2362,6 +2767,20 @@ mod tests {
                 .iter()
                 .any(|f| f.check == "todo-fixme" && f.line == 1),
             "TODO in trailing comment after raw string literal should be detected"
+        );
+    }
+
+    #[test]
+    fn todo_after_inline_hash_in_rust_source_is_ignored() {
+        let mut files = HashMap::new();
+        files.insert(
+            "test.rs".to_string(),
+            "let value = 1# TODO: not a Rust comment\n".to_string(),
+        );
+        let report = run_all(&files).expect("analysis failed");
+        assert!(
+            report.findings.iter().all(|f| f.check != "todo-fixme"),
+            "inline # should not become a comment in Rust files"
         );
     }
 

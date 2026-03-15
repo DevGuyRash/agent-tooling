@@ -3,9 +3,9 @@
 #![allow(missing_docs)]
 
 use crate::artifacts::{
-    now_rfc3339, parse_artifact_file, validate_session_id, ArtifactDocument, ArtifactKind,
-    DeclineReasonCode, Disposition, ModuleId, Severity, SurfaceId, WorkerKind,
-    LEGACY_REJECTION_MESSAGE, SESSION_SCHEMA_VERSION,
+    now_rfc3339, parse_artifact_file, validate_reviewer_id, validate_session_id, ArtifactDocument,
+    ArtifactKind, DeclineReasonCode, Disposition, Mode, ModuleId, ProducerKind, Severity,
+    SurfaceId, WorkerKind, LEGACY_REJECTION_MESSAGE, SESSION_SCHEMA_VERSION,
 };
 use crate::id;
 use crate::lock::{self, LockConfig};
@@ -17,7 +17,7 @@ use anyhow::Context;
 use clap::ValueEnum;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -94,8 +94,52 @@ fn status_text(status: ReviewProcessStatus) -> String {
     .to_string()
 }
 
+fn worker_kind_text(worker_kind: WorkerKind) -> &'static str {
+    match worker_kind {
+        WorkerKind::ReviewComposite => "review-composite",
+        WorkerKind::ApplyComposite => "apply-composite",
+        WorkerKind::DomainReviewer => "domain-reviewer",
+        WorkerKind::SurfaceMapper => "surface-mapper",
+        WorkerKind::LanguageDetector => "language-detector",
+        WorkerKind::LanguageResearch => "language-research",
+        WorkerKind::InvariantChallenger => "invariant-challenger",
+        WorkerKind::ExploitTracer => "exploit-tracer",
+        WorkerKind::ContractComparer => "contract-comparer",
+        WorkerKind::CongruenceChecker => "congruence-checker",
+        WorkerKind::SimplificationChecker => "simplification-checker",
+        WorkerKind::ReleaseRiskAssessor => "release-risk-assessor",
+        WorkerKind::FinalSynthesizer => "final-synthesizer",
+        WorkerKind::ApplicatorWorker => "applicator-worker",
+        WorkerKind::ApplicatorVerifier => "applicator-verifier",
+    }
+}
+
+fn producer_kind_text(producer_kind: ProducerKind) -> &'static str {
+    match producer_kind {
+        ProducerKind::Router => "router",
+        ProducerKind::ConvergencePlanner => "convergence-planner",
+        ProducerKind::Renderer => "renderer",
+        ProducerKind::Validator => "validator",
+        ProducerKind::ReviewComposite => "review-composite",
+        ProducerKind::ApplyComposite => "apply-composite",
+        ProducerKind::DomainReviewer => "domain-reviewer",
+        ProducerKind::SurfaceMapper => "surface-mapper",
+        ProducerKind::LanguageDetector => "language-detector",
+        ProducerKind::LanguageResearch => "language-research",
+        ProducerKind::InvariantChallenger => "invariant-challenger",
+        ProducerKind::ExploitTracer => "exploit-tracer",
+        ProducerKind::ContractComparer => "contract-comparer",
+        ProducerKind::CongruenceChecker => "congruence-checker",
+        ProducerKind::SimplificationChecker => "simplification-checker",
+        ProducerKind::ReleaseRiskAssessor => "release-risk-assessor",
+        ProducerKind::FinalSynthesizer => "final-synthesizer",
+        ProducerKind::ApplicatorWorker => "applicator-worker",
+        ProducerKind::ApplicatorVerifier => "applicator-verifier",
+    }
+}
+
 fn default_review_role() -> String {
-    "domain:unassigned".to_string()
+    "orchestrator-root".to_string()
 }
 
 fn default_storage_status() -> StorageStatus {
@@ -103,7 +147,7 @@ fn default_storage_status() -> StorageStatus {
 }
 
 fn default_role_kind() -> AgentRoleKind {
-    AgentRoleKind::DomainReviewer
+    AgentRoleKind::Helper
 }
 
 fn infer_role_kind(role: &str) -> AgentRoleKind {
@@ -111,7 +155,7 @@ fn infer_role_kind(role: &str) -> AgentRoleKind {
         AgentRoleKind::LanguageDetector
     } else if role.starts_with("language-research:") {
         AgentRoleKind::LanguageResearch
-    } else if role.starts_with("final-synthesis") {
+    } else if role.starts_with("final-synthesis") || role.starts_with("final-synthesizer") {
         AgentRoleKind::FinalSynthesis
     } else if role.starts_with("apply-composite") {
         AgentRoleKind::ApplyComposite
@@ -119,9 +163,60 @@ fn infer_role_kind(role: &str) -> AgentRoleKind {
         AgentRoleKind::ApplicatorWorker
     } else if role.starts_with("applicator-verifier") {
         AgentRoleKind::ApplicatorVerifier
+    } else if role == "orchestrator-root" {
+        AgentRoleKind::Helper
     } else {
         AgentRoleKind::DomainReviewer
     }
+}
+
+fn validate_role_slug(role: &str) -> anyhow::Result<()> {
+    let trimmed = role.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "error: role must not be empty");
+    anyhow::ensure!(
+        trimmed == role,
+        "error: role `{role}` must not have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !role.chars().any(char::is_whitespace),
+        "error: role `{role}` must be a single role slug without whitespace"
+    );
+    Ok(())
+}
+
+fn infer_worker_kind(role: &str, role_kind: AgentRoleKind) -> Option<WorkerKind> {
+    match role {
+        "review-composite" => Some(WorkerKind::ReviewComposite),
+        "apply-composite" => Some(WorkerKind::ApplyComposite),
+        "surface-mapper" => Some(WorkerKind::SurfaceMapper),
+        "invariant-challenger" => Some(WorkerKind::InvariantChallenger),
+        "exploit-tracer" => Some(WorkerKind::ExploitTracer),
+        "contract-comparer" => Some(WorkerKind::ContractComparer),
+        "congruence-checker" => Some(WorkerKind::CongruenceChecker),
+        "simplification-checker" => Some(WorkerKind::SimplificationChecker),
+        "release-risk-assessor" => Some(WorkerKind::ReleaseRiskAssessor),
+        "applicator-worker" => Some(WorkerKind::ApplicatorWorker),
+        "applicator-verifier" => Some(WorkerKind::ApplicatorVerifier),
+        "final-synthesis" | "final-synthesizer" => Some(WorkerKind::FinalSynthesizer),
+        _ => match role_kind {
+            AgentRoleKind::DomainReviewer => role
+                .starts_with("domain:")
+                .then_some(WorkerKind::DomainReviewer),
+            AgentRoleKind::LanguageDetector => Some(WorkerKind::LanguageDetector),
+            AgentRoleKind::LanguageResearch => Some(WorkerKind::LanguageResearch),
+            AgentRoleKind::FinalSynthesis => Some(WorkerKind::FinalSynthesizer),
+            AgentRoleKind::ApplyComposite => Some(WorkerKind::ApplyComposite),
+            AgentRoleKind::ApplicatorWorker => Some(WorkerKind::ApplicatorWorker),
+            AgentRoleKind::ApplicatorVerifier => Some(WorkerKind::ApplicatorVerifier),
+            AgentRoleKind::Helper => None,
+        },
+    }
+}
+
+fn review_worker_kind(review: &ReviewProcess) -> Option<WorkerKind> {
+    review
+        .worker_kind
+        .or_else(|| infer_worker_kind(&review.role, review.role_kind))
 }
 
 fn module_ids_for_role(role: &str) -> Vec<ModuleId> {
@@ -176,7 +271,7 @@ pub struct ArtifactPointer {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRoleKind {
     DomainReviewer,
@@ -269,6 +364,8 @@ pub struct ReviewProcess {
     pub role: String,
     #[serde(default = "default_role_kind")]
     pub role_kind: AgentRoleKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_kind: Option<WorkerKind>,
     pub status: ReviewProcessStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
@@ -621,6 +718,7 @@ pub struct PersistRouteArtifactsParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PersistRouteArtifactsResult {
+    pub session_dir: String,
     pub surface_map: PersistArtifactResult,
     pub route_decision: PersistArtifactResult,
 }
@@ -664,6 +762,14 @@ pub struct ApplicatorWaitResult {
     pub parent_review_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_review: Option<ArtifactPointer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CleanupSessionResult {
+    pub session_dir: String,
+    pub scratch_dir: String,
+    pub removed_session_dir: bool,
+    pub removed_scratch_dir: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -735,25 +841,58 @@ pub struct FinalSummary {
 }
 
 fn derive_repo_root(session_dir: &Path) -> anyhow::Result<PathBuf> {
-    session_dir
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "error: could not derive repo root from {}",
-                session_dir.display()
-            )
-        })
+    let code_reviews_dir = session_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
+            session_dir.display()
+        )
+    })?;
+    let reports_dir = code_reviews_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
+            session_dir.display()
+        )
+    })?;
+    let local_dir = reports_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
+            session_dir.display()
+        )
+    })?;
+    let repo_root = local_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
+            session_dir.display()
+        )
+    })?;
+
+    anyhow::ensure!(
+        code_reviews_dir.file_name().and_then(|name| name.to_str()) == Some("code_reviews")
+            && reports_dir.file_name().and_then(|name| name.to_str()) == Some("reports")
+            && local_dir.file_name().and_then(|name| name.to_str()) == Some(".local"),
+        "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
+        session_dir.display()
+    );
+
+    Ok(repo_root.to_path_buf())
 }
 
 fn derive_session_date(session_dir: &Path) -> anyhow::Result<String> {
-    session_dir
+    let session_date = session_dir
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
-        .ok_or_else(|| anyhow::anyhow!("error: invalid session dir {}", session_dir.display()))
+        .ok_or_else(|| anyhow::anyhow!("error: invalid session dir {}", session_dir.display()))?;
+    time::Date::parse(
+        &session_date,
+        &time::format_description::parse("[year]-[month]-[day]")?,
+    )
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "error: explicit --session-dir must use a `<yyyy-mm-dd>` leaf directory; got {}",
+            session_dir.display()
+        )
+    })?;
+    Ok(session_date)
 }
 
 fn atomic_write(path: &Path, body: &str) -> anyhow::Result<()> {
@@ -1678,7 +1817,7 @@ fn render_agent_report(review: &ReviewProcess, artifact: Option<&ArtifactDocumen
         &review.child_ids,
         "no child handoffs recorded",
     );
-    markdown.push_str("## Push Or Stop Recommendation\n\n- Continue only for high-confidence, actionable evidence; stop on duplicate, low-signal, already-addressed, or out-of-scope concerns.\n");
+    markdown.push_str("## Push Or Stop Recommendation\n\n- Keep driving the cycle until blocker, major, behavior-staleness, and verification-failure triggers are either fixed or explicitly declined; stop on duplicate, low-signal, already-addressed, or out-of-scope concerns.\n");
     markdown
 }
 
@@ -2011,9 +2150,7 @@ fn build_reports_result(
             "# Final Report\n\n- Session: `{}`\n- Target ref: `{}`\n",
             session.session_id, session.target_ref
         )];
-        let mut concatenated_reviews = ordered_reviews(session, traversal_is_recursive);
-        concatenated_reviews.reverse();
-        for review in concatenated_reviews {
+        for review in ordered_reviews(session, traversal_is_recursive) {
             if !review_matches_view(review, view) {
                 continue;
             }
@@ -2028,9 +2165,10 @@ fn build_reports_result(
                     continue;
                 };
                 if let Ok(body) = fs::read_to_string(&absolute) {
+                    let embedded_body = render_embedded_agent_report(&body);
                     sections.push(format!(
                         "\n---\n\n## Agent `{}`\n\n{}",
-                        review.reviewer_id, body
+                        review.reviewer_id, embedded_body
                     ));
                 }
             }
@@ -2047,6 +2185,34 @@ fn build_reports_result(
         concatenated_report,
         final_report_path: session.final_report_path.clone(),
     })
+}
+
+fn render_embedded_agent_report(body: &str) -> String {
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if let Some(demoted) = demote_atx_heading(line, 2) {
+            lines.push(demoted);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if body.ends_with('\n') {
+        lines.push(String::new());
+    }
+    lines.join("\n")
+}
+
+fn demote_atx_heading(line: &str, levels: usize) -> Option<String> {
+    let heading_width = line.bytes().take_while(|byte| *byte == b'#').count();
+    if heading_width == 0 || heading_width > 6 {
+        return None;
+    }
+    let remainder = &line[heading_width..];
+    if !remainder.is_empty() && !remainder.starts_with([' ', '\t']) {
+        return None;
+    }
+    let embedded_width = usize::min(heading_width + levels, 6);
+    Some(format!("{}{}", "#".repeat(embedded_width), remainder))
 }
 
 fn refresh_final_outputs(session: &mut SessionLedger) -> anyhow::Result<()> {
@@ -2282,15 +2448,16 @@ pub fn ensure_session(locator: &SessionLocator, target_ref: &str) -> anyhow::Res
 }
 
 pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<RegisterReviewerResult> {
+    let reviewer_id = params.reviewer_id.clone().map_or_else(id::random_id8, Ok)?;
+    validate_reviewer_id(&reviewer_id)?;
     let mut registered = None;
     with_target_session(&params.session, &params.target_ref, |session| {
-        let reviewer_id = params.reviewer_id.clone().map_or_else(id::random_id8, Ok)?;
-        validate_session_id(&reviewer_id)?;
         let repo_root = PathBuf::from(&session.repo_root);
         let requested_role = match &params.role {
             Some(role) => role.clone(),
             None => default_review_role(),
         };
+        validate_role_slug(&requested_role)?;
         let requested_role_kind = match params.role_kind {
             Some(role_kind) => role_kind,
             None => infer_role_kind(&requested_role),
@@ -2308,6 +2475,7 @@ pub fn register_reviewer(params: RegisterReviewerParams) -> anyhow::Result<Regis
                 parent_id: None,
                 role: requested_role.clone(),
                 role_kind: requested_role_kind,
+                worker_kind: None,
                 status: ReviewProcessStatus::Registered,
                 phase: None,
                 artifact_id: None,
@@ -2409,11 +2577,13 @@ pub fn spawn_child_reviewers(
                         })
                 })
                 .map_or_else(|| parent_role.clone(), |role| role);
+            validate_role_slug(&role)?;
             session.reviews.push(ReviewProcess {
                 reviewer_id: reviewer_id.clone(),
                 parent_id: Some(params.parent_id.clone()),
                 role: role.clone(),
                 role_kind: infer_role_kind(&role),
+                worker_kind: params.worker_kind,
                 status: ReviewProcessStatus::Registered,
                 phase: None,
                 artifact_id: None,
@@ -2603,6 +2773,14 @@ pub fn complete_child_review(
             .ok_or_else(|| {
                 anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
             })?;
+        let ArtifactDocument::ChildFindings(child_findings) = &artifact else {
+            return Err(anyhow::anyhow!(
+                "error: reviewer complete-child expected a child_findings artifact after kind validation"
+            ));
+        };
+        ensure_child_artifact_matches_review(&session.reviews[review_index], child_findings)?;
+        let reviewer_id = session.reviews[review_index].reviewer_id.clone();
+        ensure_descendant_reviews_closed(session, &reviewer_id, ArtifactKind::ChildFindings)?;
         let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
         {
             let review = &mut session.reviews[review_index];
@@ -2620,6 +2798,323 @@ pub fn complete_child_review(
     })
 }
 
+fn collect_open_descendant_reviews<'a>(
+    session: &'a SessionLedger,
+    reviewer_id: &str,
+    open: &mut Vec<&'a ReviewProcess>,
+) {
+    let mut child_ids = session
+        .reviews
+        .iter()
+        .filter(|review| review.parent_id.as_deref() == Some(reviewer_id))
+        .map(|review| review.reviewer_id.as_str())
+        .collect::<Vec<_>>();
+    child_ids.sort_unstable();
+    for child_id in child_ids {
+        if let Some(child) = session
+            .reviews
+            .iter()
+            .find(|review| review.reviewer_id == child_id)
+        {
+            if child.status != ReviewProcessStatus::Completed {
+                open.push(child);
+            }
+            collect_open_descendant_reviews(session, child_id, open);
+        }
+    }
+}
+
+fn ensure_child_artifact_matches_review(
+    review: &ReviewProcess,
+    artifact: &crate::artifacts::ChildFindingsArtifact,
+) -> anyhow::Result<()> {
+    let actual_role = artifact.role_id.as_deref().unwrap_or("<missing>");
+    anyhow::ensure!(
+        artifact.role_id.as_deref() == Some(review.role.as_str()),
+        "error: child_findings role_id `{actual_role}` did not match registered reviewer role `{}`",
+        review.role
+    );
+
+    if let Some(expected_worker_kind) = review_worker_kind(review) {
+        anyhow::ensure!(
+            artifact.worker_kind == expected_worker_kind,
+            "error: child_findings worker_kind `{}` did not match registered reviewer worker_kind `{}`",
+            worker_kind_text(artifact.worker_kind),
+            worker_kind_text(expected_worker_kind)
+        );
+        anyhow::ensure!(
+            artifact.header.producer_kind == ProducerKind::from_worker(expected_worker_kind),
+            "error: child_findings producer_kind `{}` did not match reviewer worker_kind `{}`",
+            producer_kind_text(artifact.header.producer_kind),
+            worker_kind_text(expected_worker_kind)
+        );
+    }
+
+    let expected_modules = review.module_ids.iter().copied().collect::<BTreeSet<_>>();
+    let actual_modules = artifact.module_ids.iter().copied().collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        actual_modules == expected_modules,
+        "error: child_findings module_ids {:?} did not match registered reviewer module_ids {:?}",
+        actual_modules
+            .iter()
+            .copied()
+            .map(module_id_text)
+            .collect::<Vec<_>>(),
+        expected_modules
+            .iter()
+            .copied()
+            .map(module_id_text)
+            .collect::<Vec<_>>()
+    );
+
+    if !review.claimed_scope.is_empty() {
+        anyhow::ensure!(
+            !artifact.claimed_scope.is_empty(),
+            "error: child_findings must record claimed_scope for reviewer `{}`",
+            review.reviewer_id
+        );
+    }
+    if !review.delegated_scope.is_empty() {
+        anyhow::ensure!(
+            !artifact.delegated_scope.is_empty(),
+            "error: child_findings must record delegated_scope for reviewer `{}`",
+            review.reviewer_id
+        );
+    }
+
+    if let Some(expected_language) = review
+        .role
+        .strip_prefix("language-research:")
+        .or_else(|| review.role.strip_prefix("language-detector:"))
+    {
+        anyhow::ensure!(
+            artifact.language.as_deref() == Some(expected_language),
+            "error: child_findings language `{}` did not match registered reviewer language `{expected_language}`",
+            artifact.language.as_deref().unwrap_or("<missing>")
+        );
+    }
+    Ok(())
+}
+
+fn latest_review_route_decision(
+    session: &SessionLedger,
+) -> anyhow::Result<Option<crate::artifacts::RouteDecisionArtifact>> {
+    for pointer in session.artifacts.iter().rev() {
+        if pointer.artifact_kind != ArtifactKind::RouteDecision {
+            continue;
+        }
+        let Some(path) = resolve_pointer_path(session, pointer) else {
+            continue;
+        };
+        let ArtifactDocument::RouteDecision(route) = parse_artifact_file(&path)? else {
+            continue;
+        };
+        if matches!(route.mode, Mode::Reviewer | Mode::FullCycle) {
+            return Ok(Some(route));
+        }
+    }
+    Ok(None)
+}
+
+fn unordered_matches<T>(left: &[T], right: &[T]) -> bool
+where
+    T: Copy + Ord,
+{
+    left.iter().copied().collect::<BTreeSet<_>>() == right.iter().copied().collect::<BTreeSet<_>>()
+}
+
+fn unordered_string_matches(left: &[String], right: &[String]) -> bool {
+    left.iter().map(String::as_str).collect::<BTreeSet<_>>()
+        == right.iter().map(String::as_str).collect::<BTreeSet<_>>()
+}
+
+pub fn review_matches_worker_plan(
+    review: &ReviewProcess,
+    worker: &crate::artifacts::WorkerPlanRecord,
+) -> bool {
+    review.role == worker.role_id.as_deref().unwrap_or_default()
+        && review_worker_kind(review) == Some(worker.worker_kind)
+        && unordered_matches(&review.module_ids, &worker.module_ids)
+        && unordered_matches(&review.focus_surfaces, &worker.focus_surfaces)
+        && unordered_string_matches(&review.claimed_scope, &worker.claimed_scope)
+        && unordered_string_matches(&review.delegated_scope, &worker.delegated_scope)
+}
+
+fn ensure_required_routed_workers_spawned(
+    session: &SessionLedger,
+    reviewer_id: &str,
+) -> anyhow::Result<()> {
+    let Some(review) = session
+        .reviews
+        .iter()
+        .find(|review| review.reviewer_id == reviewer_id)
+    else {
+        return Ok(());
+    };
+    if review.parent_id.is_some() {
+        return Ok(());
+    }
+    let Some(route) = latest_review_route_decision(session)? else {
+        return Ok(());
+    };
+
+    let missing_roles = route
+        .worker_plan
+        .iter()
+        .filter(|worker| worker.required)
+        .filter(|worker| {
+            !session.reviews.iter().any(|candidate| {
+                candidate.parent_id.as_deref() == Some(reviewer_id)
+                    && candidate.status != ReviewProcessStatus::Cancelled
+                    && review_matches_worker_plan(candidate, worker)
+            })
+        })
+        .filter_map(|worker| worker.role_id.as_deref())
+        .collect::<Vec<_>>();
+    if missing_roles.is_empty() {
+        return Ok(());
+    }
+
+    let preview = missing_roles
+        .iter()
+        .take(3)
+        .map(|role_id| format!("`{role_id}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = missing_roles.len().saturating_sub(3);
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    anyhow::bail!(
+        "error: reviewer `{}` cannot finalize parent_review before every required routed worker is spawned: missing {}{}\nhint: materialize each required route_decision.worker_plan entry with reviewer spawn-children before synthesis",
+        reviewer_id,
+        preview,
+        suffix
+    );
+}
+
+fn ensure_required_routed_workers_completed(
+    session: &SessionLedger,
+    reviewer_id: &str,
+) -> anyhow::Result<()> {
+    let Some(review) = session
+        .reviews
+        .iter()
+        .find(|review| review.reviewer_id == reviewer_id)
+    else {
+        return Ok(());
+    };
+    if review.parent_id.is_some() {
+        return Ok(());
+    }
+    let Some(route) = latest_review_route_decision(session)? else {
+        return Ok(());
+    };
+
+    let mut unfinished_roles = Vec::new();
+    for worker in route.worker_plan.iter().filter(|worker| worker.required) {
+        let role_id = worker.role_id.as_deref().unwrap_or("<missing>");
+        let candidates = session
+            .reviews
+            .iter()
+            .filter(|candidate| {
+                candidate.parent_id.as_deref() == Some(reviewer_id)
+                    && review_matches_worker_plan(candidate, worker)
+            })
+            .collect::<Vec<_>>();
+        if candidates.iter().any(|candidate| {
+            candidate.status == ReviewProcessStatus::Completed && candidate.artifact_id.is_some()
+        }) {
+            continue;
+        }
+        let status_summary = candidates
+            .iter()
+            .map(|candidate| {
+                format!(
+                    "{}{}",
+                    status_text(candidate.status),
+                    if candidate.artifact_id.is_some() {
+                        ""
+                    } else {
+                        ", no artifact"
+                    }
+                )
+            })
+            .collect::<Vec<_>>();
+        let detail = if status_summary.is_empty() {
+            "not spawned".to_string()
+        } else {
+            status_summary.join(" | ")
+        };
+        unfinished_roles.push(format!("`{role_id}` ({detail})"));
+    }
+
+    if unfinished_roles.is_empty() {
+        return Ok(());
+    }
+
+    let preview = unfinished_roles
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = unfinished_roles.len().saturating_sub(3);
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    anyhow::bail!(
+        "error: reviewer `{}` cannot finalize parent_review before every required routed worker is completed: {}{}\nhint: every spawned route_decision.worker_plan entry must finish as a completed child_findings artifact; cancelled or artifact-free children do not satisfy synthesis gating",
+        reviewer_id,
+        preview,
+        suffix
+    );
+}
+
+fn ensure_descendant_reviews_closed(
+    session: &SessionLedger,
+    reviewer_id: &str,
+    artifact_kind: ArtifactKind,
+) -> anyhow::Result<()> {
+    let mut open_descendants = Vec::new();
+    collect_open_descendant_reviews(session, reviewer_id, &mut open_descendants);
+    if open_descendants.is_empty() {
+        return Ok(());
+    }
+
+    let artifact_kind = artifact_kind.to_string();
+    let preview = open_descendants
+        .iter()
+        .take(3)
+        .map(|review| {
+            format!(
+                "`{}` ({}, {})",
+                review.reviewer_id,
+                review.role,
+                status_text(review.status)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = open_descendants.len().saturating_sub(3);
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    anyhow::bail!(
+        "error: reviewer `{}` cannot finalize {} while descendant reviewers remain open: {}{}\nhint: finalize or categorically close every spawned child before parent synthesis",
+        reviewer_id,
+        artifact_kind,
+        preview,
+        suffix
+    );
+}
+
 pub fn finalize_review(params: ReviewerArtifactParams) -> anyhow::Result<PersistArtifactResult> {
     let artifact = parse_artifact_file(&params.artifact_file)?;
     anyhow::ensure!(
@@ -2634,6 +3129,10 @@ pub fn finalize_review(params: ReviewerArtifactParams) -> anyhow::Result<Persist
             .ok_or_else(|| {
                 anyhow::anyhow!("error: reviewer `{}` was not found", params.reviewer_id)
             })?;
+        let reviewer_id = session.reviews[review_index].reviewer_id.clone();
+        ensure_required_routed_workers_spawned(session, &reviewer_id)?;
+        ensure_required_routed_workers_completed(session, &reviewer_id)?;
+        ensure_descendant_reviews_closed(session, &reviewer_id, ArtifactKind::ParentReview)?;
         let result = persist_artifact(session, params.session.session_dir(), &artifact)?;
         {
             let review = &mut session.reviews[review_index];
@@ -2700,20 +3199,70 @@ pub fn verify_application(
         }
     };
     with_locked_session(&params.session, |session| {
+        let application_pointer = session.current.application_result.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "error: applicator verify requires a finalized application_result first"
+            )
+        })?;
+        let application_path =
+            resolve_pointer_path(session, application_pointer).ok_or_else(|| {
+                anyhow::anyhow!("error: current application_result pointer could not be resolved")
+            })?;
+        let application_result = match parse_artifact_file(&application_path)? {
+            ArtifactDocument::ApplicationResult(application_result) => application_result,
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "error: current application_result pointer did not resolve to an application_result artifact"
+                ))
+            }
+        };
+        ensure_verification_matches_application(&application_result, &verification)?;
         let result = persist_artifact(
             session,
             params.session.session_dir(),
             &ArtifactDocument::VerificationResult(verification.clone()),
         )?;
-        session.applicator.status = if verification.failed_items.is_empty() {
-            ApplicatorStatus::Completed
-        } else {
-            ApplicatorStatus::Blocked
-        };
+        session.applicator.status =
+            if verification.failed_items.is_empty() && verification.partial_items.is_empty() {
+                ApplicatorStatus::Completed
+            } else {
+                ApplicatorStatus::Blocked
+            };
         session.applicator.updated_at = now_rfc3339();
         session.applicator.verification_result_id = Some(result.artifact_id.clone());
         Ok(result)
     })
+}
+
+fn ensure_verification_matches_application(
+    application_result: &crate::artifacts::ApplicationResultArtifact,
+    verification_result: &crate::artifacts::VerificationResultArtifact,
+) -> anyhow::Result<()> {
+    let expected_ids = application_result
+        .verification_needed
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let actual_ids = verification_result
+        .verified_items
+        .iter()
+        .chain(&verification_result.failed_items)
+        .chain(&verification_result.partial_items)
+        .map(|item| item.finding_id.clone())
+        .collect::<Vec<_>>();
+    let unique_actual_ids = actual_ids.iter().cloned().collect::<BTreeSet<_>>();
+
+    anyhow::ensure!(
+        unique_actual_ids.len() == actual_ids.len(),
+        "error: verification_result finding_ids must be unique across verified_items, failed_items, and partial_items"
+    );
+    anyhow::ensure!(
+        unique_actual_ids == expected_ids,
+        "error: verification_result finding_ids {:?} did not match application_result.verification_needed {:?}",
+        unique_actual_ids.into_iter().collect::<Vec<_>>(),
+        expected_ids.into_iter().collect::<Vec<_>>()
+    );
+    Ok(())
 }
 
 pub fn persist_route_artifacts(
@@ -2737,6 +3286,7 @@ pub fn persist_route_artifacts(
             &ArtifactDocument::RouteDecision(route_decision.clone()),
         )?;
         Ok(PersistRouteArtifactsResult {
+            session_dir: session.session_dir().to_string_lossy().into_owned(),
             surface_map,
             route_decision,
         })
@@ -2861,13 +3411,21 @@ pub fn collect_reports(
     )
 }
 
-pub fn cleanup_session(locator: &SessionLocator) -> anyhow::Result<PathBuf> {
-    let session = load_session(locator)?;
-    let repo_root = PathBuf::from(session.repo_root);
+pub fn cleanup_session(locator: &SessionLocator) -> anyhow::Result<CleanupSessionResult> {
+    let session_dir = locator.session_dir();
+    let repo_root = derive_repo_root(session_dir)?;
     let scratch_dir = paths::scratch_dir(&repo_root);
+    let removed_session_dir = if session_dir.exists() {
+        fs::remove_dir_all(&session_dir)
+            .with_context(|| format!("remove session dir {}", session_dir.display()))?;
+        true
+    } else {
+        false
+    };
+    let mut removed_scratch_dir = false;
     if scratch_dir.exists() {
         match fs::remove_dir(&scratch_dir) {
-            Ok(()) => {}
+            Ok(()) => removed_scratch_dir = true,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
             Err(err) => {
@@ -2876,5 +3434,10 @@ pub fn cleanup_session(locator: &SessionLocator) -> anyhow::Result<PathBuf> {
             }
         }
     }
-    Ok(scratch_dir)
+    Ok(CleanupSessionResult {
+        session_dir: session_dir.to_string_lossy().into_owned(),
+        scratch_dir: scratch_dir.to_string_lossy().into_owned(),
+        removed_session_dir,
+        removed_scratch_dir,
+    })
 }

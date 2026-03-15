@@ -13,6 +13,7 @@ use mpcr::artifacts::{
 };
 use mpcr::paths::session_paths;
 use serde_json::Value;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -138,7 +139,7 @@ fn child_findings_doc(
             ArtifactKind::ChildFindings,
             artifact_id,
             session_id,
-            ProducerKind::LanguageResearch,
+            ProducerKind::DomainReviewer,
             "reviewer",
         )?,
         worker_kind: WorkerKind::DomainReviewer,
@@ -176,7 +177,7 @@ fn language_research_doc(
             ArtifactKind::ChildFindings,
             artifact_id,
             session_id,
-            ProducerKind::DomainReviewer,
+            ProducerKind::LanguageResearch,
             "reviewer",
         )?,
         worker_kind: WorkerKind::LanguageResearch,
@@ -191,6 +192,238 @@ fn language_research_doc(
         residual_risks: Vec::new(),
         route_revision_refs: Vec::new(),
     }))
+}
+
+fn producer_for_worker(worker_kind: WorkerKind) -> ProducerKind {
+    match worker_kind {
+        WorkerKind::DomainReviewer => ProducerKind::DomainReviewer,
+        WorkerKind::LanguageDetector => ProducerKind::LanguageDetector,
+        WorkerKind::LanguageResearch => ProducerKind::LanguageResearch,
+        WorkerKind::FinalSynthesizer => ProducerKind::FinalSynthesizer,
+        WorkerKind::ReviewComposite => ProducerKind::ReviewComposite,
+        WorkerKind::ApplyComposite => ProducerKind::ApplyComposite,
+        WorkerKind::ApplicatorWorker => ProducerKind::ApplicatorWorker,
+        WorkerKind::ApplicatorVerifier => ProducerKind::ApplicatorVerifier,
+        WorkerKind::SurfaceMapper => ProducerKind::SurfaceMapper,
+        WorkerKind::InvariantChallenger => ProducerKind::InvariantChallenger,
+        WorkerKind::ExploitTracer => ProducerKind::ExploitTracer,
+        WorkerKind::ContractComparer => ProducerKind::ContractComparer,
+        WorkerKind::CongruenceChecker => ProducerKind::CongruenceChecker,
+        WorkerKind::SimplificationChecker => ProducerKind::SimplificationChecker,
+        WorkerKind::ReleaseRiskAssessor => ProducerKind::ReleaseRiskAssessor,
+    }
+}
+
+fn no_findings_child_doc(
+    session_id: &str,
+    artifact_id: &str,
+    role_id: &str,
+    worker_kind: WorkerKind,
+    language: Option<String>,
+    module_ids: Vec<ModuleId>,
+    claimed_scope: Vec<String>,
+    delegated_scope: Vec<String>,
+) -> anyhow::Result<ArtifactDocument> {
+    let research_refs = language.iter().cloned().collect::<Vec<_>>();
+    Ok(ArtifactDocument::ChildFindings(ChildFindingsArtifact {
+        header: header(
+            ArtifactKind::ChildFindings,
+            artifact_id,
+            session_id,
+            producer_for_worker(worker_kind),
+            "reviewer",
+        )?,
+        worker_kind,
+        role_id: Some(role_id.to_string()),
+        language,
+        module_ids,
+        claimed_scope,
+        delegated_scope,
+        research_refs,
+        findings: Vec::new(),
+        defended_checks: Vec::new(),
+        residual_risks: Vec::new(),
+        route_revision_refs: Vec::new(),
+    }))
+}
+
+fn spawn_routed_worker(
+    session_dir_arg: &str,
+    parent_id: &str,
+    worker: &Value,
+) -> anyhow::Result<String> {
+    let role_id = worker["role_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing role_id"))?;
+    let worker_kind = worker["worker_kind"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing worker_kind"))?;
+    let mut args = vec![
+        "--json".to_string(),
+        "reviewer".to_string(),
+        "spawn-children".to_string(),
+        "--session-dir".to_string(),
+        session_dir_arg.to_string(),
+        "--parent-id".to_string(),
+        parent_id.to_string(),
+        "--count".to_string(),
+        "1".to_string(),
+        "--role-id".to_string(),
+        role_id.to_string(),
+        "--worker-kind".to_string(),
+        worker_kind.to_string(),
+    ];
+    if let Some(language) = worker["language"].as_str() {
+        args.push("--language".to_string());
+        args.push(language.to_string());
+    }
+    if worker_kind == "domain-reviewer" {
+        if let Some(domain_id) = worker["module_ids"].as_array().and_then(|ids| ids.first()) {
+            args.push("--domain-id".to_string());
+            args.push(
+                domain_id
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing domain id"))?
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(module_ids) = worker["module_ids"].as_array() {
+        for module_id in module_ids {
+            args.push("--module-id".to_string());
+            args.push(
+                module_id
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing module id"))?
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(focus_surfaces) = worker["focus_surfaces"].as_array() {
+        for surface in focus_surfaces {
+            args.push("--focus-surface".to_string());
+            args.push(
+                surface
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing focus surface"))?
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(claimed_scope) = worker["claimed_scope"].as_array() {
+        for claim in claimed_scope {
+            args.push("--claimed-scope".to_string());
+            args.push(
+                claim
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing claimed scope"))?
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(delegated_scope) = worker["delegated_scope"].as_array() {
+        for delegated in delegated_scope {
+            args.push("--delegated-scope".to_string());
+            args.push(
+                delegated
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing delegated scope"))?
+                    .to_string(),
+            );
+        }
+    }
+    let spawn = run_json(&args)?;
+    spawn["child_ids"]
+        .as_array()
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("missing child id"))
+}
+
+fn materialize_routed_workers(
+    route: &Value,
+    session_dir: &Path,
+    session_dir_arg: &str,
+    session_id: &str,
+    root_id: &str,
+    exempt_roles: &[&str],
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let exempt = exempt_roles.iter().copied().collect::<HashSet<_>>();
+    let worker_plan = route["route_decision"]["worker_plan"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing worker plan"))?;
+    let mut child_ids = BTreeMap::new();
+    for (index, worker) in worker_plan.iter().enumerate() {
+        let role_id = worker["role_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing role id"))?;
+        let child_id = spawn_routed_worker(session_dir_arg, root_id, worker)?;
+        child_ids.insert(role_id.to_string(), child_id.clone());
+        if exempt.contains(role_id) {
+            continue;
+        }
+
+        let worker_kind: WorkerKind = serde_json::from_value(worker["worker_kind"].clone())?;
+        let language = worker["language"].as_str().map(ToOwned::to_owned);
+        let module_ids = worker["module_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|value| serde_json::from_value(value.clone()))
+            .collect::<Result<Vec<ModuleId>, _>>()?;
+        let claimed_scope = worker["claimed_scope"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let delegated_scope = worker["delegated_scope"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let artifact_id = format!("{:012x}", index + 1);
+        let doc = no_findings_child_doc(
+            session_id,
+            &artifact_id,
+            role_id,
+            worker_kind,
+            language,
+            module_ids,
+            claimed_scope,
+            delegated_scope,
+        )?;
+        let slug = role_id.replace(':', "-");
+        let artifact_file = session_dir.join(format!("auto-{slug}.toml"));
+        write_doc(&artifact_file, &doc)?;
+        run_ok(&vec![
+            "validate".to_string(),
+            "--artifact-file".to_string(),
+            artifact_file.to_string_lossy().into_owned(),
+            "--kind".to_string(),
+            "child-findings".to_string(),
+            "--layer".to_string(),
+            "hard".to_string(),
+            "--session-dir".to_string(),
+            session_dir_arg.to_string(),
+        ])?;
+        run_ok(&vec![
+            "--json".to_string(),
+            "reviewer".to_string(),
+            "complete-child".to_string(),
+            "--session-dir".to_string(),
+            session_dir_arg.to_string(),
+            "--reviewer-id".to_string(),
+            child_id,
+            "--artifact-file".to_string(),
+            artifact_file.to_string_lossy().into_owned(),
+        ])?;
+    }
+    Ok(child_ids)
 }
 
 fn parent_review_doc(
@@ -443,37 +676,18 @@ fn establish_review_fixture(route_mode: &str) -> anyhow::Result<ReviewFixture> {
         "coordinating-review".to_string(),
     ])?;
 
-    let spawn = run_json(&vec![
-        "--json".to_string(),
-        "reviewer".to_string(),
-        "spawn-children".to_string(),
-        "--session-dir".to_string(),
-        session_dir_arg.clone(),
-        "--parent-id".to_string(),
-        root_id.clone(),
-        "--count".to_string(),
-        "1".to_string(),
-        "--role-id".to_string(),
-        "domain:core-correctness".to_string(),
-        "--worker-kind".to_string(),
-        "domain-reviewer".to_string(),
-        "--domain-id".to_string(),
-        "core-correctness".to_string(),
-        "--module-id".to_string(),
-        "core-correctness".to_string(),
-        "--focus-surface".to_string(),
-        "public-api".to_string(),
-        "--claimed-scope".to_string(),
-        "own core-correctness investigation".to_string(),
-        "--delegated-scope".to_string(),
-        "do not repeat parent synthesis".to_string(),
-    ])?;
-    let child_id = spawn["child_ids"]
-        .as_array()
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing child id"))?
-        .to_string();
+    let child_ids = materialize_routed_workers(
+        &route,
+        &session_dir,
+        &session_dir_arg,
+        &session_id,
+        &root_id,
+        &["domain:core-correctness"],
+    )?;
+    let child_id = child_ids
+        .get("domain:core-correctness")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing child id"))?;
 
     Ok(ReviewFixture {
         _repo_root: repo_root,
@@ -672,6 +886,16 @@ fn reviewer_e2e_cli_builds_recursive_report_tree() -> anyhow::Result<()> {
     ensure!(reports["concatenated_report"]
         .as_str()
         .is_some_and(|body| body.contains(&fixture.root_id) && body.contains(&fixture.child_id)));
+    let concatenated = reports["concatenated_report"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing concatenated report body"))?;
+    let root_pos = concatenated
+        .find(&format!("Agent `{}`", fixture.root_id))
+        .ok_or_else(|| anyhow::anyhow!("missing root agent heading"))?;
+    let child_pos = concatenated
+        .find(&format!("Agent `{}`", fixture.child_id))
+        .ok_or_else(|| anyhow::anyhow!("missing child agent heading"))?;
+    ensure!(root_pos < child_pos);
     let child_report_entry = reports["reports"]
         .as_array()
         .and_then(|reports| {
@@ -691,7 +915,6 @@ fn reviewer_e2e_cli_builds_recursive_report_tree() -> anyhow::Result<()> {
         })
         .ok_or_else(|| anyhow::anyhow!("missing root report entry"))?;
     ensure!(root_report_entry["counters"]["recursive_findings"].as_u64() == Some(1));
-    ensure!(root_report_entry["counters"]["recursive_report_count"].as_u64() == Some(2));
 
     let artifacts = run_json(&vec![
         "--json".to_string(),
@@ -720,10 +943,22 @@ fn reviewer_e2e_cli_builds_recursive_report_tree() -> anyhow::Result<()> {
     let final_report = fs::read_to_string(fixture.repo_root_path.join(final_report_path))?;
     ensure!(final_report.contains(&format!("Agent `{}`", fixture.root_id)));
     ensure!(final_report.contains(&format!("Agent `{}`", fixture.child_id)));
-    ensure!(session["counters"]["total_agents"].as_u64() == Some(2));
-    ensure!(session["counters"]["completed_agents"].as_u64() == Some(2));
-    ensure!(session["counters"]["report_count"].as_u64() == Some(2));
-    ensure!(session["counters"]["artifact_count"].as_u64() == Some(4));
+    let root_final_pos = final_report
+        .find(&format!("Agent `{}`", fixture.root_id))
+        .ok_or_else(|| anyhow::anyhow!("missing root final-report heading"))?;
+    let child_final_pos = final_report
+        .find(&format!("Agent `{}`", fixture.child_id))
+        .ok_or_else(|| anyhow::anyhow!("missing child final-report heading"))?;
+    ensure!(root_final_pos < child_final_pos);
+    let total_agents = session["reviews"]
+        .as_array()
+        .map_or(0_u64, |reviews| reviews.len() as u64);
+    ensure!(session["counters"]["total_agents"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["completed_agents"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["report_count"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["artifact_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 4));
     let root_ledger_path = session["reviews"]
         .as_array()
         .and_then(|reviews| {
@@ -779,10 +1014,12 @@ fn reviewer_e2e_cli_builds_recursive_report_tree() -> anyhow::Result<()> {
         root_ledger["counters"]["recursive_artifact_count"].as_u64()
             == session["counters"]["artifact_count"].as_u64()
     );
-    ensure!(root_ledger["counters"]["child_count"].as_u64() == Some(1));
-    ensure!(root_ledger["counters"]["descendant_count"].as_u64() == Some(1));
+    ensure!(root_ledger["counters"]["child_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 2));
+    ensure!(root_ledger["counters"]["descendant_count"].as_u64() == Some(total_agents - 1));
     ensure!(root_ledger["counters"]["local_report_count"].as_u64() == Some(1));
-    ensure!(root_ledger["counters"]["recursive_report_count"].as_u64() == Some(2));
+    ensure!(root_ledger["counters"]["recursive_report_count"].as_u64() == Some(total_agents));
     ensure!(root_ledger["counters"]["local_findings"].as_u64() == Some(0));
     ensure!(root_ledger["counters"]["recursive_findings"].as_u64() == Some(1));
     ensure!(root_ledger["counters"]["recursive_severity_totals"]["major"].as_u64() == Some(1));
@@ -792,9 +1029,9 @@ fn reviewer_e2e_cli_builds_recursive_report_tree() -> anyhow::Result<()> {
     let final_summary: Value = serde_json::from_str(&fs::read_to_string(
         fixture.repo_root_path.join(final_summary_json),
     )?)?;
-    ensure!(final_summary["total_agents"].as_u64() == Some(2));
-    ensure!(final_summary["completed_agents"].as_u64() == Some(2));
-    ensure!(final_summary["report_count"].as_u64() == Some(2));
+    ensure!(final_summary["total_agents"].as_u64() == Some(total_agents));
+    ensure!(final_summary["completed_agents"].as_u64() == Some(total_agents));
+    ensure!(final_summary["report_count"].as_u64() == Some(total_agents));
     Ok(())
 }
 
@@ -863,67 +1100,22 @@ fn recursive_fanout_fanin_e2e_cli_updates_nested_ledgers() -> anyhow::Result<()>
         "coordinating-multi-branch-review".to_string(),
     ])?;
 
-    let domain_spawn = run_json(&vec![
-        "--json".to_string(),
-        "reviewer".to_string(),
-        "spawn-children".to_string(),
-        "--session-dir".to_string(),
-        session_dir_arg.clone(),
-        "--parent-id".to_string(),
-        root_id.clone(),
-        "--count".to_string(),
-        "1".to_string(),
-        "--role-id".to_string(),
-        "domain:core-correctness".to_string(),
-        "--worker-kind".to_string(),
-        "domain-reviewer".to_string(),
-        "--domain-id".to_string(),
-        "core-correctness".to_string(),
-        "--module-id".to_string(),
-        "core-correctness".to_string(),
-        "--focus-surface".to_string(),
-        "public-api".to_string(),
-        "--claimed-scope".to_string(),
-        "own boundary investigation".to_string(),
-        "--delegated-scope".to_string(),
-        "do not repeat root synthesis".to_string(),
-    ])?;
-    let domain_child_id = domain_spawn["child_ids"]
-        .as_array()
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing domain child id"))?
-        .to_string();
-
-    let research_spawn = run_json(&vec![
-        "--json".to_string(),
-        "reviewer".to_string(),
-        "spawn-children".to_string(),
-        "--session-dir".to_string(),
-        session_dir_arg.clone(),
-        "--parent-id".to_string(),
-        root_id.clone(),
-        "--count".to_string(),
-        "1".to_string(),
-        "--role-id".to_string(),
-        "language-research:rust".to_string(),
-        "--worker-kind".to_string(),
-        "language-research".to_string(),
-        "--language".to_string(),
-        "rust".to_string(),
-        "--focus-surface".to_string(),
-        "public-api".to_string(),
-        "--claimed-scope".to_string(),
-        "collect rust guidance for this review".to_string(),
-        "--delegated-scope".to_string(),
-        "do not repeat root synthesis".to_string(),
-    ])?;
-    let research_child_id = research_spawn["child_ids"]
-        .as_array()
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing research child id"))?
-        .to_string();
+    let child_ids = materialize_routed_workers(
+        &route,
+        &session_dir,
+        &session_dir_arg,
+        &session_id,
+        &root_id,
+        &["domain:core-correctness", "language-research:rust"],
+    )?;
+    let domain_child_id = child_ids
+        .get("domain:core-correctness")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing domain child id"))?;
+    let research_child_id = child_ids
+        .get("language-research:rust")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing research child id"))?;
 
     let grandchild_spawn = run_json(&vec![
         "--json".to_string(),
@@ -1157,7 +1349,7 @@ fn recursive_fanout_fanin_e2e_cli_updates_nested_ledgers() -> anyhow::Result<()>
     ])?;
     ensure!(reports["reports"]
         .as_array()
-        .is_some_and(|reports| reports.len() == 4));
+        .is_some_and(|reports| reports.len() >= 4));
     ensure!(reports["concatenated_report"].as_str().is_some_and(|body| {
         body.contains(&root_id)
             && body.contains(&domain_child_id)
@@ -1172,10 +1364,15 @@ fn recursive_fanout_fanin_e2e_cli_updates_nested_ledgers() -> anyhow::Result<()>
         "--session-dir".to_string(),
         session_dir_arg.clone(),
     ])?;
-    ensure!(session["counters"]["total_agents"].as_u64() == Some(4));
-    ensure!(session["counters"]["completed_agents"].as_u64() == Some(4));
-    ensure!(session["counters"]["report_count"].as_u64() == Some(4));
-    ensure!(session["counters"]["artifact_count"].as_u64() == Some(6));
+    let total_agents = session["reviews"]
+        .as_array()
+        .map_or(0_u64, |reviews| reviews.len() as u64);
+    ensure!(session["counters"]["total_agents"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["completed_agents"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["report_count"].as_u64() == Some(total_agents));
+    ensure!(session["counters"]["artifact_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 6));
     ensure!(session["counters"]["severity_totals"]["major"].as_u64() == Some(1));
 
     let root_ledger_path = session["reviews"]
@@ -1217,10 +1414,15 @@ fn recursive_fanout_fanin_e2e_cli_updates_nested_ledgers() -> anyhow::Result<()>
 
     let root_ledger: Value =
         serde_json::from_str(&fs::read_to_string(repo_root_path.join(root_ledger_path))?)?;
-    ensure!(root_ledger["counters"]["child_count"].as_u64() == Some(2));
-    ensure!(root_ledger["counters"]["descendant_count"].as_u64() == Some(3));
-    ensure!(root_ledger["counters"]["recursive_artifact_count"].as_u64() == Some(6));
-    ensure!(root_ledger["counters"]["recursive_report_count"].as_u64() == Some(4));
+    ensure!(root_ledger["counters"]["child_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 2));
+    ensure!(root_ledger["counters"]["descendant_count"].as_u64() == Some(total_agents - 1));
+    ensure!(
+        root_ledger["counters"]["recursive_artifact_count"].as_u64()
+            == session["counters"]["artifact_count"].as_u64()
+    );
+    ensure!(root_ledger["counters"]["recursive_report_count"].as_u64() == Some(total_agents));
     ensure!(root_ledger["counters"]["recursive_findings"].as_u64() == Some(1));
 
     let domain_ledger: Value = serde_json::from_str(&fs::read_to_string(
@@ -1280,9 +1482,9 @@ fn recursive_fanout_fanin_e2e_cli_updates_nested_ledgers() -> anyhow::Result<()>
     let final_summary: Value = serde_json::from_str(&fs::read_to_string(
         repo_root_path.join(final_summary_json),
     )?)?;
-    ensure!(final_summary["total_agents"].as_u64() == Some(4));
-    ensure!(final_summary["completed_agents"].as_u64() == Some(4));
-    ensure!(final_summary["report_count"].as_u64() == Some(4));
+    ensure!(final_summary["total_agents"].as_u64() == Some(total_agents));
+    ensure!(final_summary["completed_agents"].as_u64() == Some(total_agents));
+    ensure!(final_summary["report_count"].as_u64() == Some(total_agents));
 
     drop(repo_root);
     Ok(())
@@ -1308,7 +1510,9 @@ fn applicator_e2e_cli_persists_application_and_verification() -> anyhow::Result<
     ensure!(session["applicator"]["verification_result_id"]
         .as_str()
         .is_some());
-    ensure!(session["counters"]["artifact_count"].as_u64() == Some(6));
+    ensure!(session["counters"]["artifact_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 6));
     ensure!(session["counters"]["applied_findings"].as_u64() == Some(1));
     ensure!(session["counters"]["declined_findings"].as_u64() == Some(0));
     let root_ledger_path = session["reviews"]
@@ -1436,7 +1640,9 @@ fn fullcycle_e2e_cli_plans_checkpoints_and_loads_state() -> anyhow::Result<()> {
         "--session-dir".to_string(),
         fixture.session_dir_arg.clone(),
     ])?;
-    ensure!(session["counters"]["artifact_count"].as_u64() == Some(7));
+    ensure!(session["counters"]["artifact_count"]
+        .as_u64()
+        .is_some_and(|count| count >= 7));
     ensure!(session["counters"]["reopen_triggers"].as_u64() == Some(3));
     let root_ledger_path = session["reviews"]
         .as_array()
@@ -1476,5 +1682,37 @@ fn fullcycle_e2e_cli_plans_checkpoints_and_loads_state() -> anyhow::Result<()> {
         fixture.repo_root_path.join(final_summary_json),
     )?)?;
     ensure!(final_summary["reopen_triggers"].as_u64() == Some(3));
+    Ok(())
+}
+
+#[test]
+fn fullcycle_plan_output_honors_json_extension() -> anyhow::Result<()> {
+    let fixture = establish_review_fixture("full-cycle")?;
+    finalize_review_via_cli(&fixture)?;
+    drive_applicator_via_cli(&fixture, false)?;
+
+    let plan_file = fixture.session_dir.join("convergence-state.json");
+    run_ok(&vec![
+        "--json".to_string(),
+        "fullcycle".to_string(),
+        "plan".to_string(),
+        "--session-dir".to_string(),
+        fixture.session_dir_arg.clone(),
+        "--output".to_string(),
+        plan_file.to_string_lossy().into_owned(),
+    ])?;
+    let written = fs::read_to_string(&plan_file)?;
+    ensure!(written.trim_start().starts_with('{'));
+
+    let checkpoint = run_json(&vec![
+        "--json".to_string(),
+        "fullcycle".to_string(),
+        "checkpoint".to_string(),
+        "--session-dir".to_string(),
+        fixture.session_dir_arg.clone(),
+        "--artifact-file".to_string(),
+        plan_file.to_string_lossy().into_owned(),
+    ])?;
+    ensure!(checkpoint["artifact_kind"].as_str() == Some("convergence_state"));
     Ok(())
 }
