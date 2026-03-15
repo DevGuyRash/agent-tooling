@@ -344,6 +344,7 @@ services:
     healthcheck:
       <<: *healthcheck_defaults
       test: ["CMD-SHELL", "pg_isready -U postgres"]
+      start_period: 40s
     depends_on:
       db-init-perms:
         condition: service_completed_successfully
@@ -364,14 +365,12 @@ services:
       - |
         set -eu
         for path in /mnt/perm-0; do
-          mkdir -p "$path"
-          owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"
-          if [ "$owner" != "1000:1000" ]; then chown -R 1000:1000 "$path"; fi
+          mkdir -p "$$path"
+          owner="$$(stat -c '%u:%g' "$$path" 2>/dev/null || true)"
+          if [ "$$owner" != "1000:1000" ]; then chown -R 1000:1000 "$$path"; fi
         done
     volumes:
       - app-data:/mnt/perm-0
-    profiles:
-      - init
 
   db-init-perms:
     <<: [*hardening_core, *init_permissions_core, *resource_defaults_compose]
@@ -386,14 +385,12 @@ services:
       - |
         set -eu
         for path in /mnt/perm-0; do
-          mkdir -p "$path"
-          owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"
-          if [ "$owner" != "999:999" ]; then chown -R 999:999 "$path"; fi
+          mkdir -p "$$path"
+          owner="$$(stat -c '%u:%g' "$$path" 2>/dev/null || true)"
+          if [ "$$owner" != "999:999" ]; then chown -R 999:999 "$$path"; fi
         done
     volumes:
       - db-data:/mnt/perm-0
-    profiles:
-      - init
 
 volumes:
   app-data:
@@ -418,10 +415,12 @@ networks:
   rules, so inherited values from anchors are evaluated the same as explicit keys.
 - **Resource limits**: Use `cpus`, `mem_limit`, `pids_limit` (Compose v2 flat keys), not
   `deploy.resources.limits` (which requires Swarm mode or `--compatibility`).
-- **Init sidecars**: Run once before first deployment with
-  `docker compose --profile init up app-init-perms db-init-perms`. The `profiles: [init]`
-  keeps them out of normal `docker compose up`. Uses conditional `chown` with `stat` check
-  to avoid unnecessary filesystem writes.
+- **Init sidecars**: The `app-init-perms` and `db-init-perms` services run on every
+  `docker compose up`, check current ownership with `stat`, conditionally `chown` if
+  needed, and exit immediately. No manual profile activation is required. The conditional
+  check avoids unnecessary filesystem writes on subsequent starts. These sidecars are
+  referenced via `depends_on: { *-init-perms: { condition: service_completed_successfully } }`
+  to guarantee volume ownership is correct before the main service starts.
 - **Secrets**: Replace `file:` source with `external: true` for production (pre-created secrets).
 - **Digest pinning**: Replace `image: myapp:latest` with `image: myapp@sha256:...` before
   production deployment.

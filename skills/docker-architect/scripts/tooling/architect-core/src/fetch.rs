@@ -57,6 +57,7 @@ struct DockerHubMetadata {
     platforms: Vec<Platform>,
     docs_url: Option<String>,
     dockerfile_url: Option<String>,
+    source_repo_url: Option<String>,
     tag_url: String,
     repo_url: String,
 }
@@ -121,6 +122,7 @@ fn fetch_image_profile_with_client(
     let mut platforms: Vec<Platform> = Vec::new();
     let mut docs_url: Option<String> = None;
     let mut dockerfile_url: Option<String> = None;
+    let mut source_repo_url: Option<String> = None;
     let mut runtime = RuntimeProfile::default();
     let mut config_digest_for_profile: Option<String> = None;
 
@@ -132,6 +134,7 @@ fn fetch_image_profile_with_client(
                 }
                 docs_url = hub.docs_url;
                 dockerfile_url = hub.dockerfile_url;
+                source_repo_url = hub.source_repo_url;
                 sources.push(SourceRecord {
                     kind: "docker-hub-api".to_string(),
                     url: hub.tag_url,
@@ -210,7 +213,7 @@ fn fetch_image_profile_with_client(
     }
 
     if let Some(config_digest) = registry_config_digest {
-        match fetch_config_blob_details(client, &parsed, &config_digest, user_agent) {
+        match fetch_config_blob_details(&parsed, &config_digest, user_agent) {
             Ok(config) => {
                 if platforms.is_empty() {
                     if let Some(platform) = config.platform {
@@ -219,6 +222,12 @@ fn fetch_image_profile_with_client(
                 }
                 if runtime_profile_has_data(&config.runtime) {
                     runtime = config.runtime;
+                }
+                if let Some(source) = runtime.oci.source.clone() {
+                    if source_repo_url.is_none() {
+                        source_repo_url = Some(source);
+                    }
+                    notes.push("source:oci-label".to_string());
                 }
                 sources.push(SourceRecord {
                     kind: "registry-v2-config".to_string(),
@@ -245,10 +254,9 @@ fn fetch_image_profile_with_client(
             }
         }
     }
-
     if allow_scrape_fallback
         && parsed.registry == "docker.io"
-        && (digest.is_none() || dockerfile_url.is_none())
+        && (digest.is_none() || source_repo_url.is_none())
     {
         let scrape_url = format!("https://hub.docker.com/r/{}", parsed.repository);
         match scrape_hub_page(client, &parsed.repository, user_agent) {
@@ -256,8 +264,8 @@ fn fetch_image_profile_with_client(
                 if digest.is_none() {
                     digest = scraped_digest.clone();
                 }
-                if dockerfile_url.is_none() {
-                    dockerfile_url = scraped_repo_url;
+                if source_repo_url.is_none() {
+                    source_repo_url = scraped_repo_url;
                 }
                 sources.push(SourceRecord {
                     kind: "html-fallback".to_string(),
@@ -296,7 +304,7 @@ fn fetch_image_profile_with_client(
             client,
             user_agent,
             docs_url.as_deref(),
-            dockerfile_url.as_deref(),
+            source_repo_url.as_deref().or(dockerfile_url.as_deref()),
             &mut researched_config,
             &mut sources,
             &mut notes,
@@ -308,6 +316,7 @@ fn fetch_image_profile_with_client(
         image: parsed.normalized,
         docs_url,
         dockerfile_url,
+        source_repo_url,
         digest,
         config_digest: config_digest_for_profile,
         platforms,
@@ -363,6 +372,16 @@ fn build_http_client() -> Result<Client, AppError> {
         })
 }
 
+fn build_blob_http_client() -> Result<Client, AppError> {
+    Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|error| AppError::InvalidInput {
+            reason: format!("failed to build blob http client: {error}"),
+        })
+}
+
 /// Normalize an image reference into a fully-qualified deterministic form.
 ///
 /// # Arguments
@@ -394,13 +413,15 @@ fn fetch_docker_hub_metadata(
     } else {
         fetch_docker_hub_tag_metadata(client, &tag_url, user_agent)?
     };
-    let dockerfile_url = fetch_docker_hub_repo_dockerfile_url(client, &repo_url, user_agent)?;
+    let source_repo_url =
+        fetch_docker_hub_repo_dockerfile_url(client, &repo_url, &parsed.repository, user_agent)?;
 
     Ok(DockerHubMetadata {
         digest,
         platforms,
         docs_url: Some(format!("https://hub.docker.com/r/{}", parsed.repository)),
-        dockerfile_url,
+        dockerfile_url: None,
+        source_repo_url,
         tag_url,
         repo_url,
     })
@@ -453,6 +474,7 @@ fn fetch_docker_hub_tag_metadata(
 fn fetch_docker_hub_repo_dockerfile_url(
     client: &Client,
     repo_url: &str,
+    image_repository: &str,
     user_agent: &str,
 ) -> Result<Option<String>, AppError> {
     let repo_response = client
@@ -477,7 +499,7 @@ fn fetch_docker_hub_repo_dockerfile_url(
     Ok(repo_payload
         .full_description
         .as_deref()
-        .and_then(extract_github_url))
+        .and_then(|description| extract_github_url(description, image_repository)))
 }
 
 fn infer_docs_url(parsed: &ParsedImageRef) -> Option<String> {
@@ -642,18 +664,18 @@ fn fetch_manifest_config_digest(
 }
 
 fn fetch_config_blob_details(
-    client: &Client,
     parsed: &ParsedImageRef,
     config_digest: &str,
     user_agent: &str,
 ) -> Result<ConfigBlobDetails, AppError> {
+    let blob_client = build_blob_http_client()?;
     let registry_host = registry_api_host(&parsed.registry);
     let blob_url = format!(
         "https://{registry_host}/v2/{}/blobs/{config_digest}",
         parsed.repository
     );
     let response = request_registry_with_auth(
-        client,
+        &blob_client,
         &blob_url,
         &parsed.repository,
         &registry_host,
@@ -948,17 +970,41 @@ fn scrape_hub_page(
         .find(&body)
         .map(|match_| match_.as_str().to_string());
 
-    let github_url = extract_github_url(&body);
+    let github_url = extract_github_url(&body, repository);
 
     Ok((digest, github_url))
 }
 
-fn extract_github_url(text: &str) -> Option<String> {
+fn extract_github_url(text: &str, image_repository: &str) -> Option<String> {
     let regex = match Regex::new(r"https://github.com/[A-Za-z0-9._/-]+") {
         Ok(value) => value,
         Err(_) => return None,
     };
-    regex.find(text).map(|match_| match_.as_str().to_string())
+    let matched = regex
+        .find_iter(text)
+        .map(|match_| match_.as_str())
+        .find(|candidate| github_url_matches_image_repository(candidate, image_repository))
+        .map(ToOwned::to_owned);
+    matched
+}
+
+fn github_url_matches_image_repository(url: &str, image_repository: &str) -> bool {
+    let Some((owner, repository)) = parse_github_owner_repo(url) else {
+        return false;
+    };
+
+    let image_tokens = image_repository_tokens(image_repository);
+    let github_tokens = image_repository_tokens(&format!("{owner}/{repository}"));
+    !image_tokens.is_disjoint(&github_tokens)
+}
+
+fn image_repository_tokens(value: &str) -> BTreeSet<String> {
+    value
+        .split('/')
+        .flat_map(|segment| segment.split(['-', '_', '.']))
+        .map(|segment| segment.trim().to_ascii_lowercase())
+        .filter(|segment| !segment.is_empty() && segment != "library")
+        .collect()
 }
 
 fn enrich_researched_env_from_docs(
@@ -1564,10 +1610,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_docs_request, docs_scan_candidates, extract_platform_from_config_payload,
-        extract_recommended_env_from_docs, extract_runtime_profile_from_config_payload,
-        infer_docs_url, is_digest_reference, normalize_image_reference, parse_auth_challenge,
-        parse_github_owner_repo, parse_image_reference, registry_api_host, validate_realm_url,
+        build_docs_request, docs_scan_candidates, extract_github_url,
+        extract_platform_from_config_payload, extract_recommended_env_from_docs,
+        extract_runtime_profile_from_config_payload, infer_docs_url, is_digest_reference,
+        normalize_image_reference, parse_auth_challenge, parse_github_owner_repo,
+        parse_image_reference, registry_api_host, validate_realm_url,
     };
 
     #[test]
@@ -1770,6 +1817,33 @@ mod tests {
             .expect("github repo url should parse");
         assert_eq!(parsed.0, "example");
         assert_eq!(parsed.1, "project");
+    }
+
+    #[test]
+    fn extract_github_url_prefers_repository_matching_image_name() {
+        let body = r#"
+See docs at https://github.com/localtunnel/localtunnel and source at
+https://github.com/n8n-io/n8n for build details.
+"#;
+        let extracted = extract_github_url(body, "n8nio/n8n");
+        assert_eq!(extracted.as_deref(), Some("https://github.com/n8n-io/n8n"));
+    }
+
+    #[test]
+    fn extract_github_url_rejects_unrelated_repository_links() {
+        let body = "See companion project https://github.com/localtunnel/localtunnel for setup.";
+        let extracted = extract_github_url(body, "n8nio/n8n");
+        assert_eq!(extracted, None);
+    }
+
+    #[test]
+    fn extract_github_url_accepts_valid_docker_hub_repo_aliases() {
+        let body = "Source: https://github.com/prometheus/prometheus";
+        let extracted = extract_github_url(body, "prom/prometheus");
+        assert_eq!(
+            extracted.as_deref(),
+            Some("https://github.com/prometheus/prometheus")
+        );
     }
 
     #[test]

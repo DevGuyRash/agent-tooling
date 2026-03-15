@@ -2,10 +2,10 @@
 name: docker-architect
 description: >-
   Generate hardened, production-ready Docker architecture including Dockerfiles,
-  docker-compose stacks, and Swarm deploy configs. Use when the task involves:
+  Compose stacks, and Swarm deploy configs. Use when the task involves:
   (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing
   an application (Python, Node.js, Rust, Go, Nginx, or custom stacks),
-  (3) Creating or modifying docker-compose.yaml or Docker Swarm deployments,
+  (3) Creating or modifying compose.yaml or Docker Swarm deployments,
   (4) Hardening container security (non-root users, read-only filesystems,
   resource limits, secrets management), (5) Adding healthchecks to containers,
   (6) Setting up CI/CD container scanning with hadolint, trivy, or docker scout,
@@ -38,7 +38,7 @@ Generate hardened, production-ready Docker architecture across two workflows:
 Activate this skill when the user asks to:
 
 - Write a Dockerfile or containerize an application
-- Create a docker-compose.yaml or docker-compose stack
+- Create a compose.yaml or Compose stack
 - Set up a Docker Swarm deployment
 - Harden or secure an existing Dockerfile or compose file
 - Add healthchecks to containers
@@ -106,7 +106,7 @@ Every generated compose or stack file shall satisfy:
 | 12 | (behavioral)       | Use YAML anchors (`x-defaults: &`) for shared hardening. |
 | 13 | (behavioral)       | Define explicit `networks:` (no default bridge). |
 | 14 | (behavioral)       | Use `depends_on: { svc: { condition: service_healthy } }`. |
-| 15 | (behavioral)       | Use `profiles:` for optional services (init, debug). |
+| 15 | (behavioral)       | Use `profiles:` only for optional services (debug, admin jobs), never for required `*-init-perms` sidecars. |
 | 16 | AC-SWM-RESTART     | Swarm: `deploy.restart_policy.condition: on-failure`. |
 
 Rows marked `(behavioral)` are enforced by LLM output review only and are not checked by `policy-check`.
@@ -120,10 +120,47 @@ Rows marked `(behavioral)` are enforced by LLM output review only and are not ch
 
 ### 4. Response format
 
+#### 4.1 Compose mode
+
+- **Deliverables:** `architecture.md`, `compose.yaml`.
 - Emit each file as a fenced code block labeled with its relative path.
-- Emit order: `.dockerignore` → `Dockerfile` → `docker-compose.yaml`.
-- Include inline comments referencing rule IDs (e.g., `# AC-DF-USER`).
+- Emit order: `.dockerignore` (if applicable) → `compose.yaml`.
+- Include inline comments referencing rule IDs (e.g., `# AC-CMP-USER`).
+- **Required gates:** `policy-check`, `output-check`, `docker compose config -q`, `verify` (when Docker is available).
+- Init-sidecar conformance is required for all `*-init-perms` services: must match the canonical contract (user `0:0`, cap_drop ALL, cap_add CHOWN+FOWNER, security_opt no-new-privileges, read_only true, network_mode none, restart no, no `profiles:` key).
 - After all files, include a brief "Next steps" section with scanning commands.
+
+#### 4.2 Swarm mode
+
+- **Deliverables:** `architecture.md`, `docker-stack.yaml`.
+- Emit each file as a fenced code block labeled with its relative path.
+- Include inline comments referencing rule IDs (e.g., `# AC-SWM-RESTART`).
+- **Required gates:** `policy-check`, `output-check`.
+- Ownership-bootstrap section required for non-root stateful services with named volumes.
+- **Prohibited patterns:** `depends_on`, init-perms sidecars, flat resource keys (`cpus`, `mem_limit`, `pids_limit`), `profiles:`.
+- Use `deploy.resources.limits` for resource constraints, `deploy.restart_policy` for restart behavior.
+- After all files, include a brief "Next steps" section with deploy commands.
+
+#### 4.3 Image mode
+
+- **Deliverables:** `.dockerignore`, `Dockerfile`, `docker-bake.hcl`, `architecture.md`.
+- Emit each file as a fenced code block labeled with its relative path.
+- Emit order: `.dockerignore` → `Dockerfile` → `docker-bake.hcl`.
+- Include inline comments referencing rule IDs (e.g., `# AC-DF-USER`).
+- **Required gates:** `policy-check`, `output-check`.
+- `docker-bake.hcl` must include `default` and `release` targets with multi-platform support.
+- Release instructions must include attestation flags (`--attest type=sbom`, `--attest type=provenance,mode=max`) and signing guidance.
+- After all files, include a brief "Next steps" section with build and scanning commands.
+
+### 5. Delivery Checklist
+
+The executor SHALL NOT report success until every condition below is met:
+
+- Every required gate for the active mode (per sections 4.1–4.3) has passed, OR is explicitly skipped with a documented reason and residual risk statement in the architecture output.
+- When a validation step is skipped because tooling is unavailable, the architecture output SHALL record the skipped step, the reason, and the residual risk (DA-PROC-3).
+- When Docker is available, Compose mode SHALL treat runtime `verify` as mandatory. Skipping verify requires an explicit note in the output (DA-PROC-2).
+- Ambiguous research results affecting runtime user, healthcheck, or provenance SHALL be treated as blockers requiring resolution, not soft informational notes.
+- Provenance resolution SHALL distinguish source repository provenance from an exact upstream Dockerfile/build-definition path. Source repository provenance is mandatory; exact Dockerfile path SHOULD be included when deterministically discoverable.
 
 ---
 
@@ -227,8 +264,9 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-
 ### CI gate
 
 - `docker-architect-ci-gate` runs deterministic fixture-based golden tests.
-- Live verify is opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1`.
-- Live verify defaults to `references/ci/verify.compose.yaml`.
+- Compose-mode executor output still treats `verify` as mandatory whenever Docker is available for the current task.
+- Repository CI keeps live verify opt-in via `DOCKER_ARCHITECT_ENABLE_VERIFY=1` (or local `--verify`) so non-Docker environments can still run deterministic golden tests.
+- When live verify is enabled without an override, the gate runs both `references/ci/verify.compose.yaml` and `references/ci/verify-stateful.compose.yaml`.
 
 ---
 
@@ -237,10 +275,14 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-
 | File | Purpose |
 |------|---------|
 | `references/fallback-templates.md` | Hardened Dockerfile + Compose templates |
+| `references/fallback-templates-swarm.md` | Hardened Swarm stack template |
+| `references/fallback-templates-bake.md` | docker-bake.hcl template (Image mode) |
 | `references/dockerignore-templates.md` | .dockerignore templates by language |
 | `references/scanning.md` | Scanner install, usage, CI pipeline order |
 | `references/protocol-compose.md` | Compose workflow protocol |
+| `references/protocol-swarm.md` | Swarm workflow protocol |
 | `references/output-contract-compose.md` | Compose output contract |
+| `references/output-contract-swarm.md` | Swarm output contract |
 | `references/protocol-image.md` | Image workflow protocol |
 | `references/output-contract-image.md` | Image output contract |
 | `references/cache/image-profiles.json` | Cached image metadata |
@@ -253,3 +295,4 @@ DOCKER_ARCHITECT_ENABLE_VERIFY=1 <skills-file-root>/scripts/docker-architect-ci-
 | `references/compose-defaults/defaults.v1.yaml` | Compose anchor defaults |
 | `references/image-knowledge/knowledge.v1.yaml` | Image knowledge base |
 | `references/ci/verify.compose.yaml` | CI verify fixture |
+| `references/ci/verify-stateful.compose.yaml` | CI stateful verify fixture |

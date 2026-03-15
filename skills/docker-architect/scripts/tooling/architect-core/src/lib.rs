@@ -29,6 +29,7 @@ pub mod policy;
 pub mod probe;
 pub mod render;
 pub mod verify;
+pub mod yaml_merge;
 
 use crate::cli::Command;
 use crate::error::AppError;
@@ -200,13 +201,23 @@ pub fn run(command: Command, variant: SkillVariant) -> Result<String, AppError> 
                 MAX_GENERAL_TEXT_INPUT_BYTES,
                 "output-check input file",
             )?;
-            let errors = output_check::validate_output_contract(&content, &args.mode)?;
-            if errors.is_empty() {
-                return Ok("ok: output contract passed".to_string());
+            let result = output_check::validate_output_contract(&content, &args.mode)?;
+            if result.errors.is_empty() {
+                if result.warnings.is_empty() {
+                    return Ok("ok: output contract passed".to_string());
+                }
+
+                let mut output = String::from("output contract warnings:\n");
+                for issue in result.warnings {
+                    output.push_str("- ");
+                    output.push_str(&issue);
+                    output.push('\n');
+                }
+                return Ok(output);
             }
 
             let mut output = String::from("output contract violations:\n");
-            for issue in errors {
+            for issue in result.errors {
                 output.push_str("- ");
                 output.push_str(&issue);
                 output.push('\n');

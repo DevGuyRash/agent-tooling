@@ -49,6 +49,11 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
             profile.dockerfile_url.as_deref().unwrap_or("unknown")
         ));
         out.push_str(&format!(
+            "  repo: {}\n",
+            profile.source_repo_url.as_deref().unwrap_or("unknown")
+        ));
+        out.push_str(&format!("  provenance: {}\n", classify_provenance(profile)));
+        out.push_str(&format!(
             "digest: {}\n",
             profile.digest.as_deref().unwrap_or("unknown")
         ));
@@ -311,6 +316,35 @@ pub fn render_markdown(cache: &CachedProfiles) -> String {
         cache.unresolved_references.len()
     ));
     out
+}
+
+fn classify_provenance(profile: &crate::model::ImageProfile) -> &'static str {
+    if profile.source_repo_url.is_some()
+        || profile.runtime.oci.source.is_some()
+        || profile
+            .sources
+            .iter()
+            .any(|source| source.kind == "registry-v2-config" && source.status == "ok")
+    {
+        return "deterministic";
+    }
+
+    if profile.researched_config.runtime_uid.is_some()
+        || profile.researched_config.runtime_gid.is_some()
+        || !profile.researched_config.recommended_env.is_empty()
+        || !profile.researched_config.required_mounts.is_empty()
+        || !profile.researched_config.security_notes.is_empty()
+        || profile.researched_config.preferred_healthcheck.is_some()
+        || profile.researched_config.preferred_gpu_driver.is_some()
+        || !profile
+            .researched_config
+            .preferred_gpu_capabilities
+            .is_empty()
+    {
+        return "curated";
+    }
+
+    "ambiguous"
 }
 
 /// Render cached profiles as pretty JSON.

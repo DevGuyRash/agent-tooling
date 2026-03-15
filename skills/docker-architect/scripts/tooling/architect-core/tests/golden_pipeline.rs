@@ -634,6 +634,49 @@ fn golden_cases() -> Vec<GoldenCase> {
             expected_hardened: "tests/golden/compose_bind_mount_skip/expected.hardened.yaml",
             expected_anchored: "tests/golden/compose_bind_mount_skip/expected.anchored.yaml",
         },
+        GoldenCase {
+            name: "compose_malformed_init_sidecar",
+            input: "tests/golden/compose_malformed_init_sidecar/input.compose.yaml",
+            cache_dir: "tests/golden/compose_malformed_init_sidecar/cache",
+            policy: "policy-compose-enforcing.yaml",
+            mode: DeployMode::Compose,
+            expected_violation_substrings: &[
+                "init-perms sidecar field `image` does not match the canonical contract",
+                "init-perms sidecar field `command` does not match the canonical contract",
+                "init-perms sidecar field `volumes` does not match the canonical contract",
+                "init-perms sidecar field `cap_add` does not match the canonical contract",
+                "required init-perms sidecar must not be gated behind profiles",
+                "init-perms sidecar field `restart` does not match the canonical contract",
+            ],
+            expected_violation_rule_ids: &[
+                "AC-CMP-DIGEST",
+                "AC-CMP-DIGEST",
+                "AC-CMP-HEALTH",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-PERMS-INIT",
+                "AC-CMP-RESOURCES",
+                "AC-CMP-RESOURCES",
+                "AC-CMP-RESOURCES",
+                "AC-CMP-RESTART",
+                "AC-CMP-WRITABLE",
+                "AC-CMP-WRITABLE",
+                "AC-CMP-WRITABLE",
+            ],
+            required_patch_ops: &["remove", "set"],
+            forbidden_patch_ops: &["inject_service", "depends_on_add"],
+            expected_warn_rule_ids: &[],
+            allowed_remaining_violation_rule_ids: &[],
+            expected_patch_plan:
+                "tests/golden/compose_malformed_init_sidecar/expected.patch-plan.json",
+            expected_hardened:
+                "tests/golden/compose_malformed_init_sidecar/expected.hardened.yaml",
+            expected_anchored:
+                "tests/golden/compose_malformed_init_sidecar/expected.anchored.yaml",
+        },
     ]
 }
 

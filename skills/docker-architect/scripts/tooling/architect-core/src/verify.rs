@@ -1,8 +1,12 @@
 //! Runtime verification helpers for generated compose outputs.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -12,7 +16,10 @@ use crate::error::AppError;
 
 const DOCKER_VERIFY_TIMEOUT: Duration = Duration::from_secs(45);
 const DOCKER_LOGS_TIMEOUT: Duration = Duration::from_secs(20);
+const DOCKER_HEALTH_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const DOCKER_HEALTH_WAIT_GRACE: Duration = Duration::from_secs(5);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Verification report for compose runtime checks.
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +32,16 @@ pub struct ComposeVerifyReport {
     pub services: Vec<ServiceVerifyRecord>,
     /// Whether all required checks passed.
     pub success: bool,
+    /// Whether `docker compose up -d` completed successfully.
+    pub compose_up_succeeded: bool,
+    /// Captured stderr from `docker compose up -d` when startup failed.
+    pub compose_up_stderr: Option<String>,
+    /// Best-effort list of services that did not reach a healthy running state.
+    pub failed_services: Vec<String>,
+    /// Recent compose log output captured during startup failure.
+    pub service_logs_excerpt: Option<String>,
+    /// Whether teardown was attempted.
+    pub teardown_attempted: bool,
 }
 
 /// Verification details for one resolved container/service.
@@ -58,8 +75,49 @@ pub struct ServiceVerifyRecord {
     pub baseline_pass: bool,
 }
 
-/// Verify a compose file by running containers, collecting inspect facts, and emitting a report.
-/// This is a baseline hardening gate, not a readiness waiter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServiceReadinessRecord {
+    service: String,
+    container_id: String,
+    running: bool,
+    health_status: Option<String>,
+    healthcheck_defined: bool,
+    healthcheck_interval: Option<Duration>,
+    healthcheck_timeout: Option<Duration>,
+    healthcheck_retries: Option<u32>,
+    healthcheck_start_period: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ServiceReadiness {
+    Ready,
+    Pending,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ComposeReadinessStatus {
+    Ready,
+    TimedOut,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeReadinessObservation {
+    status: ComposeReadinessStatus,
+    services: Vec<ServiceReadinessRecord>,
+    failed_services: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ComposeInvocationContext {
+    compose_file: String,
+    project_name: String,
+}
+
+/// Verify a compose file by running containers, waiting for startup readiness, collecting inspect
+/// facts, and emitting a report.
+/// This is a baseline hardening gate with bounded health waiting for stateful services.
 ///
 /// # Arguments
 /// * `compose_file` - Compose yaml file path.
@@ -70,24 +128,59 @@ pub struct ServiceVerifyRecord {
 /// * `Err(AppError)` when docker commands or inspect parsing fail.
 ///
 /// # Behavior Notes
-/// * Runs `docker compose up -d` and immediately inspects current state.
-/// * Does not wait/poll for health transitions; services with healthchecks may still be `starting`.
+/// * Runs `docker compose up -d` and waits at least 60 seconds, extending the readiness window
+///   to cover configured healthcheck budgets for stateful services.
+/// * Services without healthchecks are considered ready once they are running.
 pub fn verify_compose(
     compose_file: &Path,
     teardown: bool,
 ) -> Result<ComposeVerifyReport, AppError> {
-    run_compose_command(compose_file, &["config", "-q"])?;
-    run_compose_command(compose_file, &["up", "-d"])?;
-
-    let verify_result = collect_compose_runtime_report(compose_file);
-    if teardown {
-        let _ = run_compose_command(compose_file, &["down", "--volumes"]);
+    let context = compose_invocation_context(compose_file)?;
+    let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
+    run_compose_command(&context, &["config", "-q"])?;
+    let up_output = run_compose_output(&context, &["up", "-d"])?;
+    if !up_output.status.success() {
+        let failed_services = collect_failed_services(&context);
+        let service_logs_excerpt = collect_compose_logs_excerpt(&context);
+        let report = ComposeVerifyReport {
+            mode: "compose".to_string(),
+            input: compose_file.display().to_string(),
+            services: Vec::new(),
+            success: false,
+            compose_up_succeeded: false,
+            compose_up_stderr: trim_to_option(String::from_utf8_lossy(&up_output.stderr)),
+            failed_services,
+            service_logs_excerpt,
+            teardown_attempted: false,
+        };
+        return finalize_report_with_optional_teardown(Ok(report), teardown, || {
+            let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
+        });
     }
-    verify_result
+
+    let report_result = (|| {
+        let readiness = wait_for_compose_readiness(&context)?;
+        let mut report = collect_compose_runtime_report(&context, false)?;
+        if readiness.status != ComposeReadinessStatus::Ready {
+            report.success = false;
+        }
+        merge_failed_services(&mut report.failed_services, &readiness.failed_services);
+        if !report.success && report.service_logs_excerpt.is_none() {
+            report.service_logs_excerpt = collect_compose_logs_excerpt(&context);
+        }
+        Ok(report)
+    })();
+
+    finalize_report_with_optional_teardown(report_result, teardown, || {
+        let _ = run_compose_command(&context, &["down", "--volumes", "--remove-orphans"]);
+    })
 }
 
-fn collect_compose_runtime_report(compose_file: &Path) -> Result<ComposeVerifyReport, AppError> {
-    let ps_output = run_compose_command(compose_file, &["ps", "-q"])?;
+fn collect_compose_runtime_report(
+    context: &ComposeInvocationContext,
+    teardown_attempted: bool,
+) -> Result<ComposeVerifyReport, AppError> {
+    let ps_output = run_compose_command(context, &["ps", "-q"])?;
     let ids: Vec<&str> = ps_output
         .lines()
         .map(str::trim)
@@ -108,12 +201,28 @@ fn collect_compose_runtime_report(compose_file: &Path) -> Result<ComposeVerifyRe
         services.push(record);
     }
     services.sort_by(|left, right| left.service.cmp(&right.service));
-    let success = !services.is_empty() && services.iter().all(|service| service.baseline_pass);
+    let mut failed_services: Vec<String> = services
+        .iter()
+        .filter(|service| !service.baseline_pass)
+        .map(|service| service.service.clone())
+        .collect();
+    failed_services.sort();
+    failed_services.dedup();
+    let success = !services.is_empty() && failed_services.is_empty();
     Ok(ComposeVerifyReport {
         mode: "compose".to_string(),
-        input: compose_file.display().to_string(),
+        input: context.compose_file.clone(),
         services,
         success,
+        compose_up_succeeded: true,
+        compose_up_stderr: None,
+        service_logs_excerpt: if success {
+            None
+        } else {
+            collect_compose_logs_excerpt(context)
+        },
+        failed_services,
+        teardown_attempted,
     })
 }
 
@@ -214,8 +323,226 @@ fn scan_container_logs_for_errors(container_id: &str, tail: usize) -> Result<boo
     Ok(logs_contain_error_keywords(&format!("{stdout}\n{stderr}")))
 }
 
+fn wait_for_compose_readiness(
+    context: &ComposeInvocationContext,
+) -> Result<ComposeReadinessObservation, AppError> {
+    wait_for_compose_readiness_with(DOCKER_HEALTH_WAIT_TIMEOUT, READINESS_POLL_INTERVAL, || {
+        collect_service_readiness_records(context)
+    })
+}
+
+fn wait_for_compose_readiness_with<F>(
+    base_timeout: Duration,
+    poll_interval: Duration,
+    mut fetch: F,
+) -> Result<ComposeReadinessObservation, AppError>
+where
+    F: FnMut() -> Result<Vec<ServiceReadinessRecord>, AppError>,
+{
+    let start = Instant::now();
+    loop {
+        let services = fetch()?;
+        let (status, failed_services) = summarize_compose_readiness(&services);
+        match status {
+            ComposeReadinessStatus::Ready | ComposeReadinessStatus::Failed => {
+                return Ok(ComposeReadinessObservation {
+                    status,
+                    services,
+                    failed_services,
+                });
+            }
+            ComposeReadinessStatus::TimedOut => {}
+        }
+
+        let timeout = readiness_timeout_for_services(base_timeout, &services);
+        if start.elapsed() >= timeout {
+            let failed_services = pending_services(&services);
+            return Ok(ComposeReadinessObservation {
+                status: ComposeReadinessStatus::TimedOut,
+                services,
+                failed_services,
+            });
+        }
+        thread::sleep(poll_interval);
+    }
+}
+
+fn collect_service_readiness_records(
+    context: &ComposeInvocationContext,
+) -> Result<Vec<ServiceReadinessRecord>, AppError> {
+    let ps_output = run_compose_command(context, &["ps", "-q"])?;
+    let ids: Vec<&str> = ps_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    let mut services = Vec::new();
+    for id in ids {
+        let inspect = run_docker_command(&["inspect", id])?;
+        let value: Value =
+            serde_json::from_str(&inspect).map_err(|error| AppError::InvalidInput {
+                reason: format!("failed to parse docker inspect output: {error}"),
+            })?;
+        let Some(record) = readiness_record_from_value(id, &value) else {
+            continue;
+        };
+        services.push(record);
+    }
+    services.sort_by(|left, right| left.service.cmp(&right.service));
+    Ok(services)
+}
+
+fn readiness_record_from_value(
+    container_id: &str,
+    value: &Value,
+) -> Option<ServiceReadinessRecord> {
+    let item = value.as_array()?.first()?;
+    let service = item
+        .pointer("/Config/Labels/com.docker.compose.service")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let running = item
+        .pointer("/State/Running")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let health_status = item
+        .pointer("/State/Health/Status")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let healthcheck_defined = item.pointer("/Config/Healthcheck").is_some();
+    let healthcheck_interval = item
+        .pointer("/Config/Healthcheck/Interval")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
+    let healthcheck_timeout = item
+        .pointer("/Config/Healthcheck/Timeout")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
+    let healthcheck_retries = item
+        .pointer("/Config/Healthcheck/Retries")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let healthcheck_start_period = item
+        .pointer("/Config/Healthcheck/StartPeriod")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .map(Duration::from_nanos);
+
+    Some(ServiceReadinessRecord {
+        service,
+        container_id: container_id.to_string(),
+        running,
+        health_status,
+        healthcheck_defined,
+        healthcheck_interval,
+        healthcheck_timeout,
+        healthcheck_retries,
+        healthcheck_start_period,
+    })
+}
+
+fn summarize_compose_readiness(
+    services: &[ServiceReadinessRecord],
+) -> (ComposeReadinessStatus, Vec<String>) {
+    if services.is_empty() {
+        return (ComposeReadinessStatus::TimedOut, Vec::new());
+    }
+
+    let mut pending = false;
+    let mut failed_services = BTreeSet::new();
+    for service in services {
+        match classify_service_readiness(service) {
+            ServiceReadiness::Ready => {}
+            ServiceReadiness::Pending => pending = true,
+            ServiceReadiness::Failed => {
+                failed_services.insert(service.service.clone());
+            }
+        }
+    }
+
+    if !failed_services.is_empty() {
+        return (
+            ComposeReadinessStatus::Failed,
+            failed_services.into_iter().collect(),
+        );
+    }
+
+    if pending {
+        return (ComposeReadinessStatus::TimedOut, Vec::new());
+    }
+
+    (ComposeReadinessStatus::Ready, Vec::new())
+}
+
+fn readiness_timeout_for_services(
+    base_timeout: Duration,
+    services: &[ServiceReadinessRecord],
+) -> Duration {
+    services
+        .iter()
+        .filter_map(service_health_budget)
+        .max()
+        .map(|budget| base_timeout.max(budget))
+        .unwrap_or(base_timeout)
+}
+
+fn service_health_budget(service: &ServiceReadinessRecord) -> Option<Duration> {
+    if !service.healthcheck_defined {
+        return None;
+    }
+
+    let start_period = service.healthcheck_start_period.unwrap_or_default();
+    let interval = service.healthcheck_interval.unwrap_or_default();
+    let timeout = service.healthcheck_timeout.unwrap_or_default();
+    let retries = service
+        .healthcheck_retries
+        .unwrap_or_default()
+        .saturating_add(1);
+    Some(
+        start_period
+            .saturating_add(interval.saturating_mul(retries))
+            .saturating_add(timeout)
+            .saturating_add(DOCKER_HEALTH_WAIT_GRACE),
+    )
+}
+
+fn pending_services(services: &[ServiceReadinessRecord]) -> Vec<String> {
+    services
+        .iter()
+        .filter(|service| classify_service_readiness(service) == ServiceReadiness::Pending)
+        .map(|service| service.service.clone())
+        .collect()
+}
+
+fn classify_service_readiness(service: &ServiceReadinessRecord) -> ServiceReadiness {
+    if !service.running {
+        return ServiceReadiness::Failed;
+    }
+    if !service.healthcheck_defined {
+        return ServiceReadiness::Ready;
+    }
+
+    match service.health_status.as_deref() {
+        Some("healthy") => ServiceReadiness::Ready,
+        Some("unhealthy") => ServiceReadiness::Failed,
+        Some("starting") | None => ServiceReadiness::Pending,
+        Some(_) => ServiceReadiness::Pending,
+    }
+}
+
+fn merge_failed_services(target: &mut Vec<String>, source: &[String]) {
+    target.extend(source.iter().cloned());
+    target.sort();
+    target.dedup();
+}
+
 fn logs_contain_error_keywords(logs: &str) -> bool {
-    let lower = logs.to_ascii_lowercase();
+    let filtered = filter_known_benign_log_lines(logs);
+    let lower = filtered.to_ascii_lowercase();
     if [
         "panic",
         "fatal",
@@ -237,6 +564,21 @@ fn logs_contain_error_keywords(logs: &str) -> bool {
             || line_has_logfmt_error_level(trimmed)
             || trimmed.contains("] error")
     })
+}
+
+fn filter_known_benign_log_lines(logs: &str) -> String {
+    logs.lines()
+        .filter(|line| !is_known_benign_postgres_bootstrap_line(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_known_benign_postgres_bootstrap_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("fatal:  the database system is starting up")
+        || lower.contains("fatal: the database system is starting up")
+        || lower.contains("fatal:  the database system is shutting down")
+        || lower.contains("fatal: the database system is shutting down")
 }
 
 fn line_contains_bracketed_error_token(line: &str) -> bool {
@@ -396,12 +738,49 @@ fn is_root_user(user: &str) -> bool {
         || normalized.starts_with("0:")
 }
 
-fn run_compose_command(compose_file: &Path, args: &[&str]) -> Result<String, AppError> {
-    let mut full_args = vec!["compose", "-f"];
-    let compose_file_string = compose_file.display().to_string();
-    full_args.push(&compose_file_string);
+fn run_compose_command(
+    context: &ComposeInvocationContext,
+    args: &[&str],
+) -> Result<String, AppError> {
+    let output = run_compose_output(context, args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let exit_status = format_exit_status(&output.status);
+        return Err(AppError::InvalidInput {
+            reason: format!(
+                "docker command failed `compose -p {} -f {} {}` (exit {}): {}",
+                context.project_name,
+                context.compose_file,
+                args.join(" "),
+                exit_status,
+                stderr
+            ),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_compose_output(
+    context: &ComposeInvocationContext,
+    args: &[&str],
+) -> Result<Output, AppError> {
+    let mut full_args = vec![
+        "compose",
+        "-p",
+        &context.project_name,
+        "-f",
+        &context.compose_file,
+    ];
     full_args.extend(args.iter().copied());
-    run_docker_command(&full_args)
+    run_docker_output(&full_args, DOCKER_VERIFY_TIMEOUT).map_err(|error| AppError::InvalidInput {
+        reason: format!(
+            "failed to execute docker command `compose -p {} -f {} {}`: {}",
+            context.project_name,
+            context.compose_file,
+            args.join(" "),
+            error
+        ),
+    })
 }
 
 fn run_docker_command(args: &[&str]) -> Result<String, AppError> {
@@ -476,15 +855,142 @@ fn run_docker_output(args: &[&str], timeout: Duration) -> Result<Output, String>
     }
 }
 
+fn collect_failed_services(context: &ComposeInvocationContext) -> Vec<String> {
+    let Ok(output) = run_compose_output(context, &["ps", "--all", "--format", "json"]) else {
+        return Vec::new();
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_failed_services_from_compose_ps(&stdout)
+}
+
+fn parse_failed_services_from_compose_ps(stdout: &str) -> Vec<String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut failed = std::collections::BTreeSet::new();
+    let rows = if trimmed.starts_with('[') {
+        serde_json::from_str::<Vec<Value>>(trimmed).unwrap_or_default()
+    } else {
+        trimmed
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect()
+    };
+
+    for row in rows {
+        let service = row
+            .get("Service")
+            .or_else(|| row.get("Name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let state = row
+            .get("State")
+            .or_else(|| row.get("Status"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if service.is_empty() {
+            continue;
+        }
+        if ["exited", "dead", "created", "restarting", "removing"]
+            .iter()
+            .any(|status| state.contains(status))
+        {
+            failed.insert(service.to_string());
+        }
+    }
+
+    failed.into_iter().collect()
+}
+
+fn collect_compose_logs_excerpt(context: &ComposeInvocationContext) -> Option<String> {
+    let Ok(output) = run_compose_output(context, &["logs", "--tail=50"]) else {
+        return None;
+    };
+    let combined = format!(
+        "{}{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        if output.stdout.is_empty() || output.stderr.is_empty() {
+            ""
+        } else {
+            "\n"
+        },
+        String::from_utf8_lossy(&output.stderr)
+    );
+    trim_to_option(combined)
+}
+
+fn trim_to_option(value: impl AsRef<str>) -> Option<String> {
+    let trimmed = value.as_ref().trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn finalize_report_with_optional_teardown<F>(
+    report_result: Result<ComposeVerifyReport, AppError>,
+    teardown: bool,
+    mut teardown_fn: F,
+) -> Result<ComposeVerifyReport, AppError>
+where
+    F: FnMut(),
+{
+    if teardown {
+        teardown_fn();
+    }
+
+    match report_result {
+        Ok(report) => Ok(ComposeVerifyReport {
+            teardown_attempted: teardown,
+            ..report
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn compose_invocation_context(compose_file: &Path) -> Result<ComposeInvocationContext, AppError> {
+    let compose_file = compose_file
+        .canonicalize()
+        .map_err(|error| AppError::io(compose_file, error.to_string()))?;
+    let compose_file_string = compose_file.display().to_string();
+    let mut hasher = DefaultHasher::new();
+    compose_file_string.hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    let hash = hasher.finish();
+    Ok(ComposeInvocationContext {
+        compose_file: compose_file_string,
+        project_name: format!("docker-architect-{hash:016x}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::time::Duration;
+
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
 
     use serde_json::json;
 
+    use crate::error::AppError;
+
     use super::{
-        format_exit_status, inspect_record_from_value, is_root_user, logs_contain_error_keywords,
+        classify_service_readiness, finalize_report_with_optional_teardown, format_exit_status,
+        inspect_record_from_value, is_root_user, logs_contain_error_keywords,
+        parse_failed_services_from_compose_ps, readiness_record_from_value,
+        readiness_timeout_for_services, summarize_compose_readiness, trim_to_option,
+        wait_for_compose_readiness_with, ComposeReadinessStatus, ComposeVerifyReport,
+        ServiceReadiness, ServiceReadinessRecord,
     };
 
     #[test]
@@ -568,6 +1074,18 @@ mod tests {
         assert!(!logs_contain_error_keywords("errors found: 0"));
         assert!(!logs_contain_error_keywords("healthy: 0 errors found"));
         assert!(!logs_contain_error_keywords("ready and healthy"));
+        assert!(!logs_contain_error_keywords(
+            "postgres: FATAL:  the database system is shutting down"
+        ));
+        assert!(!logs_contain_error_keywords(
+            "postgres: FATAL: the database system is starting up"
+        ));
+        assert!(logs_contain_error_keywords(
+            "postgres: FATAL:  role \"citest\" does not exist"
+        ));
+        assert!(logs_contain_error_keywords(
+            "chmod: /var/run/postgresql: Operation not permitted"
+        ));
     }
 
     #[cfg(unix)]
@@ -575,5 +1093,220 @@ mod tests {
     fn format_exit_status_reports_signal_termination() {
         let status = std::process::ExitStatus::from_raw(9);
         assert_eq!(format_exit_status(&status), "signal 9");
+    }
+
+    #[test]
+    fn parse_failed_services_from_compose_ps_accepts_json_lines() {
+        let stdout = r#"{"Service":"api","State":"exited"}
+{"Service":"worker","State":"running"}
+{"Service":"db","State":"restarting"}"#;
+        let failed = parse_failed_services_from_compose_ps(stdout);
+        assert_eq!(failed, vec!["api".to_string(), "db".to_string()]);
+    }
+
+    #[test]
+    fn trim_to_option_discards_blank_strings() {
+        assert_eq!(trim_to_option("   "), None);
+        assert_eq!(trim_to_option(" stderr "), Some("stderr".to_string()));
+    }
+
+    #[test]
+    fn classify_service_readiness_handles_health_states() {
+        let ready = ServiceReadinessRecord {
+            service: "db".to_string(),
+            container_id: "abc".to_string(),
+            running: true,
+            health_status: Some("healthy".to_string()),
+            healthcheck_defined: true,
+            healthcheck_interval: None,
+            healthcheck_timeout: None,
+            healthcheck_retries: None,
+            healthcheck_start_period: None,
+        };
+        assert_eq!(classify_service_readiness(&ready), ServiceReadiness::Ready);
+
+        let pending = ServiceReadinessRecord {
+            health_status: Some("starting".to_string()),
+            ..ready.clone()
+        };
+        assert_eq!(
+            classify_service_readiness(&pending),
+            ServiceReadiness::Pending
+        );
+
+        let failed = ServiceReadinessRecord {
+            health_status: Some("unhealthy".to_string()),
+            ..ready
+        };
+        assert_eq!(
+            classify_service_readiness(&failed),
+            ServiceReadiness::Failed
+        );
+    }
+
+    #[test]
+    fn summarize_compose_readiness_reports_failed_services() {
+        let records = vec![
+            ServiceReadinessRecord {
+                service: "api".to_string(),
+                container_id: "1".to_string(),
+                running: true,
+                health_status: Some("healthy".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
+            },
+            ServiceReadinessRecord {
+                service: "db".to_string(),
+                container_id: "2".to_string(),
+                running: false,
+                health_status: Some("starting".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
+            },
+        ];
+        let (status, failed) = summarize_compose_readiness(&records);
+        assert_eq!(status, ComposeReadinessStatus::Failed);
+        assert_eq!(failed, vec!["db".to_string()]);
+    }
+
+    #[test]
+    fn wait_for_compose_readiness_with_times_out_for_pending_health() {
+        let observation =
+            wait_for_compose_readiness_with(Duration::ZERO, Duration::from_millis(10), || {
+                Ok(vec![ServiceReadinessRecord {
+                    service: "db".to_string(),
+                    container_id: "abc".to_string(),
+                    running: true,
+                    health_status: Some("starting".to_string()),
+                    healthcheck_defined: true,
+                    healthcheck_interval: None,
+                    healthcheck_timeout: None,
+                    healthcheck_retries: None,
+                    healthcheck_start_period: None,
+                }])
+            })
+            .expect("wait should succeed");
+        assert_eq!(observation.status, ComposeReadinessStatus::TimedOut);
+        assert_eq!(observation.failed_services, vec!["db".to_string()]);
+    }
+
+    #[test]
+    fn wait_for_compose_readiness_with_returns_ready_after_transition() {
+        let mut snapshots = VecDeque::from([
+            vec![ServiceReadinessRecord {
+                service: "db".to_string(),
+                container_id: "abc".to_string(),
+                running: true,
+                health_status: Some("starting".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
+            }],
+            vec![ServiceReadinessRecord {
+                service: "db".to_string(),
+                container_id: "abc".to_string(),
+                running: true,
+                health_status: Some("healthy".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: None,
+                healthcheck_timeout: None,
+                healthcheck_retries: None,
+                healthcheck_start_period: None,
+            }],
+        ]);
+        let observation =
+            wait_for_compose_readiness_with(Duration::from_secs(1), Duration::ZERO, || {
+                Ok(snapshots.pop_front().unwrap_or_default())
+            })
+            .expect("wait should succeed");
+        assert_eq!(observation.status, ComposeReadinessStatus::Ready);
+    }
+
+    #[test]
+    fn readiness_record_from_value_reads_health_fields() {
+        let payload = json!([
+          {
+            "Config": {
+              "Labels": { "com.docker.compose.service": "db" },
+              "Healthcheck": { "Test": ["CMD", "true"] }
+            },
+            "State": {
+              "Running": true,
+              "Health": { "Status": "healthy" }
+            }
+          }
+        ]);
+        let record =
+            readiness_record_from_value("container-id", &payload).expect("record should parse");
+        assert_eq!(record.service, "db");
+        assert_eq!(record.container_id, "container-id");
+        assert!(record.running);
+        assert_eq!(record.health_status.as_deref(), Some("healthy"));
+        assert!(record.healthcheck_defined);
+        assert_eq!(record.healthcheck_retries, None);
+    }
+
+    #[test]
+    fn readiness_timeout_for_services_honors_healthcheck_budget() {
+        let timeout = readiness_timeout_for_services(
+            Duration::from_secs(60),
+            &[ServiceReadinessRecord {
+                service: "db".to_string(),
+                container_id: "abc".to_string(),
+                running: true,
+                health_status: Some("starting".to_string()),
+                healthcheck_defined: true,
+                healthcheck_interval: Some(Duration::from_secs(5)),
+                healthcheck_timeout: Some(Duration::from_secs(3)),
+                healthcheck_retries: Some(10),
+                healthcheck_start_period: Some(Duration::from_secs(40)),
+            }],
+        );
+        assert_eq!(timeout, Duration::from_secs(103));
+    }
+
+    #[test]
+    fn finalize_report_with_optional_teardown_marks_successful_reports() {
+        let mut teardown_called = false;
+        let result = finalize_report_with_optional_teardown(
+            Ok(ComposeVerifyReport {
+                mode: "compose".to_string(),
+                input: "compose.yaml".to_string(),
+                services: Vec::new(),
+                success: true,
+                compose_up_succeeded: true,
+                compose_up_stderr: None,
+                failed_services: Vec::new(),
+                service_logs_excerpt: None,
+                teardown_attempted: false,
+            }),
+            true,
+            || teardown_called = true,
+        )
+        .expect("result should succeed");
+        assert!(teardown_called);
+        assert!(result.teardown_attempted);
+    }
+
+    #[test]
+    fn finalize_report_with_optional_teardown_runs_on_errors() {
+        let mut teardown_called = false;
+        let result = finalize_report_with_optional_teardown(
+            Err(AppError::InvalidInput {
+                reason: "boom".to_string(),
+            }),
+            true,
+            || teardown_called = true,
+        );
+        assert!(teardown_called);
+        assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 }

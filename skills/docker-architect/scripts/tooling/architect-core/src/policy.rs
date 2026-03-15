@@ -13,10 +13,22 @@ use crate::dockerfile::ParsedDockerfile;
 use crate::error::AppError;
 use crate::fetch::normalize_image_reference;
 use crate::heuristics::{self, DeployMode};
-use crate::model::{CachedProfiles, ImageProfile};
+use crate::model::{resolved_runtime_user_for_profile, CachedProfiles, ImageProfile};
 use crate::read_utf8_file_with_size_limit;
-
-const MAX_YAML_MERGE_DEPTH: u8 = 128;
+use crate::yaml_merge::{materialize_yaml_merge_keys, MAX_YAML_MERGE_DEPTH};
+const INIT_PERMISSIONS_REQUIRED_FIELDS: [&str; 11] = [
+    "image",
+    "command",
+    "volumes",
+    "user",
+    "cap_drop",
+    "cap_add",
+    "security_opt",
+    "read_only",
+    "tmpfs",
+    "network_mode",
+    "restart",
+];
 
 /// Supported policy domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,7 +246,6 @@ impl PolicyEvaluation {
 
 const MAX_YAML_PATH_SEGMENTS: usize = 64;
 const MAX_YAML_PATH_INDEX: usize = 4096;
-const YAML_MERGE_KEY: &str = "<<";
 pub(crate) const MAX_POLICY_PACK_BYTES: u64 = 1_048_576;
 // Dockerfile patch paths are domain-specific sentinels emitted for human-guidance
 // patch plans. They are not YAML/compose paths and must be rejected by compose
@@ -1572,86 +1583,20 @@ fn get_services_mapping(document: &YamlValue) -> Result<&Mapping, AppError> {
         })
 }
 
-fn materialize_yaml_merge_keys(value: &mut YamlValue, depth_remaining: u8) -> Result<(), AppError> {
-    if depth_remaining == 0 {
-        return Err(AppError::InvalidInput {
-            reason: "compose yaml nesting depth exceeded".to_string(),
-        });
-    }
-    let next_depth = depth_remaining - 1;
-
-    match value {
-        YamlValue::Mapping(mapping) => {
-            let merge_key = YamlValue::String(YAML_MERGE_KEY.to_string());
-            let merge_value = mapping.remove(&merge_key);
-
-            for child in mapping.values_mut() {
-                materialize_yaml_merge_keys(child, next_depth)?;
-            }
-
-            let Some(mut merge_value) = merge_value else {
-                return Ok(());
-            };
-
-            materialize_yaml_merge_keys(&mut merge_value, next_depth)?;
-            let source_mappings = parse_yaml_merge_sources(merge_value)?;
-            let mut merged = Mapping::new();
-
-            // YAML merge precedence keeps earlier sequence entries authoritative.
-            for source in source_mappings.into_iter().rev() {
-                for (key, source_value) in source {
-                    merged.insert(key, source_value);
-                }
-            }
-
-            for (key, explicit_value) in std::mem::take(mapping) {
-                merged.insert(key, explicit_value);
-            }
-            *mapping = merged;
-            Ok(())
-        }
-        YamlValue::Sequence(items) => {
-            for item in items {
-                materialize_yaml_merge_keys(item, next_depth)?;
-            }
-            Ok(())
-        }
-        YamlValue::Tagged(tagged) => materialize_yaml_merge_keys(&mut tagged.value, next_depth),
-        _ => Ok(()),
-    }
-}
-
-fn parse_yaml_merge_sources(merge_value: YamlValue) -> Result<Vec<Mapping>, AppError> {
-    match merge_value {
-        YamlValue::Mapping(mapping) => Ok(vec![mapping]),
-        YamlValue::Sequence(items) => {
-            let mut mappings = Vec::new();
-            for item in items {
-                match item {
-                    YamlValue::Mapping(mapping) => mappings.push(mapping),
-                    _ => {
-                        return Err(AppError::InvalidInput {
-                            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
-                                .to_string(),
-                        });
-                    }
-                }
-            }
-            Ok(mappings)
-        }
-        _ => Err(AppError::InvalidInput {
-            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
-                .to_string(),
-        }),
-    }
-}
-
 struct ServiceRuleContext<'a> {
     service_name: &'a str,
     service: &'a Mapping,
     services: &'a Mapping,
     cache: &'a CachedProfiles,
     active_mode: DeployMode,
+}
+
+struct ExistingInitSidecarContext<'a> {
+    service_name: &'a str,
+    init_name: &'a str,
+    service: &'a Mapping,
+    existing_sidecar: &'a Mapping,
+    canonical_service_body: &'a JsonValue,
 }
 
 fn evaluate_rule_for_service(
@@ -1853,9 +1798,12 @@ fn evaluate_rule_for_service(
                 }
                 return Ok(());
             }
-            if service_has_permission_init_sidecar(service_name, service, services) {
-                return Ok(());
-            }
+
+            let init_name = format!("{service_name}-init-perms");
+            let existing_init_sidecar = services
+                .get(YamlValue::String(init_name.clone()))
+                .and_then(YamlValue::as_mapping);
+
             for target in heuristics::bind_mount_targets(service) {
                 add_compose_violation(
                     violations,
@@ -1867,8 +1815,41 @@ fn evaluate_rule_for_service(
                     ),
                 );
             }
+
             let synthesized =
                 heuristics::ensure_volume_permissions(service_name, service, service_profile)?;
+            let requires_init_sidecar =
+                synthesized.iter().any(|patch| patch.op == "inject_service");
+            if !requires_init_sidecar {
+                return Ok(());
+            }
+
+            let canonical_service_body = synthesized
+                .iter()
+                .find(|patch| {
+                    patch.op == "inject_service" && patch.path == format!("services.{init_name}")
+                })
+                .map(|patch| &patch.value);
+
+            if let Some(existing_sidecar) = existing_init_sidecar {
+                let Some(canonical_service_body) = canonical_service_body else {
+                    return Ok(());
+                };
+                validate_existing_init_sidecar(
+                    violations,
+                    patches,
+                    rule,
+                    ExistingInitSidecarContext {
+                        service_name,
+                        init_name: &init_name,
+                        service,
+                        existing_sidecar,
+                        canonical_service_body,
+                    },
+                )?;
+                return Ok(());
+            }
+
             for patch in synthesized {
                 add_compose_violation(
                     violations,
@@ -2092,32 +2073,188 @@ fn validate_companion_file_key(key: &str, rule_id: &str) -> Result<(), AppError>
     Ok(())
 }
 
-fn service_has_permission_init_sidecar(
-    service_name: &str,
-    service: &Mapping,
-    services: &Mapping,
-) -> bool {
-    let init_name = format!("{service_name}-init-perms");
-    let init_service_exists = services
-        .get(YamlValue::String(init_name.clone()))
-        .and_then(YamlValue::as_mapping)
-        .is_some();
-    if !init_service_exists {
-        return false;
+fn validate_existing_init_sidecar(
+    violations: &mut Vec<PolicyViolation>,
+    patches: &mut Vec<PatchOperation>,
+    rule: &PolicyRule,
+    context: ExistingInitSidecarContext<'_>,
+) -> Result<(), AppError> {
+    let ExistingInitSidecarContext {
+        service_name,
+        init_name,
+        service,
+        existing_sidecar,
+        canonical_service_body,
+    } = context;
+    let Some(canonical_sidecar) = canonical_service_body.as_object() else {
+        return Ok(());
+    };
+
+    if !service_depends_on_init_sidecar(service, init_name) {
+        add_compose_violation(
+            violations,
+            rule,
+            service_name,
+            "depends_on",
+            "service requires init sidecar dependency wiring for deterministic startup ordering"
+                .to_string(),
+        );
+        patches.push(PatchOperation {
+            op: "depends_on_add".to_string(),
+            path: format!("services.{service_name}.depends_on.{init_name}"),
+            value: JsonValue::Object(
+                [(
+                    "condition".to_string(),
+                    JsonValue::String("service_completed_successfully".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            rule_id: rule.id.clone(),
+        });
     }
 
+    for field in INIT_PERMISSIONS_REQUIRED_FIELDS {
+        let Some(expected) = canonical_sidecar.get(field) else {
+            continue;
+        };
+        let actual = existing_sidecar.get(YamlValue::String(field.to_string()));
+        if init_sidecar_field_matches(field, actual, expected) {
+            continue;
+        }
+        add_compose_violation(
+            violations,
+            rule,
+            init_name,
+            field,
+            format!("init-perms sidecar field `{field}` does not match the canonical contract"),
+        );
+        patches.push(PatchOperation {
+            op: "set".to_string(),
+            path: format!("services.{init_name}.{field}"),
+            value: expected.clone(),
+            rule_id: rule.id.clone(),
+        });
+    }
+
+    if existing_sidecar
+        .get(YamlValue::String("profiles".to_string()))
+        .is_some()
+    {
+        add_compose_violation(
+            violations,
+            rule,
+            init_name,
+            "profiles",
+            "required init-perms sidecar must not be gated behind profiles".to_string(),
+        );
+        patches.push(PatchOperation {
+            op: "remove".to_string(),
+            path: format!("services.{init_name}.profiles"),
+            value: JsonValue::Null,
+            rule_id: rule.id.clone(),
+        });
+    }
+
+    Ok(())
+}
+
+fn service_depends_on_init_sidecar(service: &Mapping, init_name: &str) -> bool {
     let Some(depends_on) = service.get(YamlValue::String("depends_on".to_string())) else {
         return false;
     };
 
     match depends_on {
-        YamlValue::Mapping(map) => map.get(YamlValue::String(init_name.clone())).is_some(),
-        YamlValue::Sequence(items) => items
-            .iter()
-            .filter_map(YamlValue::as_str)
-            .any(|item| item == init_name.as_str()),
+        YamlValue::Mapping(map) => map
+            .get(YamlValue::String(init_name.to_string()))
+            .is_some_and(depends_on_entry_requires_completion),
         _ => false,
     }
+}
+
+fn depends_on_entry_requires_completion(entry: &YamlValue) -> bool {
+    let Some(mapping) = entry.as_mapping() else {
+        return false;
+    };
+
+    mapping
+        .get(YamlValue::String("condition".to_string()))
+        .and_then(yaml_scalar_to_string)
+        .as_deref()
+        == Some("service_completed_successfully")
+}
+
+fn init_sidecar_field_matches(
+    field: &str,
+    actual: Option<&YamlValue>,
+    expected: &JsonValue,
+) -> bool {
+    match field {
+        "cap_drop" | "cap_add" | "security_opt" | "tmpfs" => {
+            yaml_unordered_string_list_matches(actual, expected)
+        }
+        "command" | "volumes" => yaml_ordered_string_list_matches(actual, expected),
+        _ => match expected {
+            JsonValue::Bool(value) => actual.and_then(YamlValue::as_bool) == Some(*value),
+            JsonValue::String(value) => match actual {
+                Some(actual) => {
+                    yaml_scalar_to_string(actual).as_deref() == Some(value)
+                        || (field == "restart"
+                            && yaml_bool_matches_restart_string(actual, value.as_str()))
+                }
+                None => false,
+            },
+            _ => actual
+                .and_then(|value| serde_json::to_value(value).ok())
+                .is_some_and(|value| value == *expected),
+        },
+    }
+}
+
+fn yaml_bool_matches_restart_string(actual: &YamlValue, expected: &str) -> bool {
+    matches!(
+        (actual.as_bool(), expected),
+        (Some(false), "no") | (Some(true), "yes")
+    )
+}
+
+fn yaml_unordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    let Some(expected_items) = expected.as_array() else {
+        return false;
+    };
+    let actual_values = match actual {
+        Some(YamlValue::Sequence(items)) => items
+            .iter()
+            .filter_map(yaml_scalar_to_string)
+            .collect::<BTreeSet<_>>(),
+        Some(YamlValue::String(value)) => [value.to_string()].into_iter().collect(),
+        _ => return false,
+    };
+    let expected_values: BTreeSet<String> = expected_items
+        .iter()
+        .filter_map(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    actual_values == expected_values
+}
+
+fn yaml_ordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
+    let Some(expected_items) = expected.as_array() else {
+        return false;
+    };
+    let actual_values: Vec<String> = match actual {
+        Some(YamlValue::Sequence(items)) => {
+            items.iter().filter_map(yaml_scalar_to_string).collect()
+        }
+        Some(YamlValue::String(value)) => vec![value.to_string()],
+        _ => return false,
+    };
+    let expected_values: Vec<String> = expected_items
+        .iter()
+        .filter_map(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    actual_values == expected_values
 }
 
 fn get_service_key<'a>(service: &'a Mapping, key: &str) -> Option<&'a YamlValue> {
@@ -2379,15 +2516,15 @@ fn lookup_runtime_user_for_image(cache: &CachedProfiles, image: &str) -> Option<
             .split_once('@')
             .map(|(head, _)| head)
             .unwrap_or(normalized_profile.as_str());
-        let Some(user) = &profile.runtime.user else {
+        let Some(user) = resolved_runtime_user_for_profile(profile) else {
             continue;
         };
         if normalized_profile == normalized {
-            exact_candidates.insert(profile.id.clone(), user.clone());
+            exact_candidates.insert(profile.id.clone(), user);
             continue;
         }
         if normalized_base == profile_base {
-            base_candidates.insert(profile.id.clone(), user.clone());
+            base_candidates.insert(profile.id.clone(), user);
         }
     }
     exact_candidates
@@ -2835,12 +2972,18 @@ fn depends_on_add_yaml_value(
             if let Some(name) = yaml_scalar_to_string(entry) {
                 converted.insert(
                     YamlValue::String(name),
-                    serde_yaml::to_value(JsonValue::Bool(true)).map_err(|error| {
-                        AppError::InvalidInput {
-                            reason: format!(
-                                "failed to convert depends_on sequence to mapping value: {error}"
-                            ),
-                        }
+                    serde_yaml::to_value(JsonValue::Object(
+                        [(
+                            "condition".to_string(),
+                            JsonValue::String("service_started".to_string()),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ))
+                    .map_err(|error| AppError::InvalidInput {
+                        reason: format!(
+                            "failed to convert depends_on sequence to mapping value: {error}"
+                        ),
                     })?,
                 );
             }
@@ -2984,6 +3127,7 @@ mod tests {
                 image: "docker.io/library/nginx:1.27".to_string(),
                 docs_url: None,
                 dockerfile_url: None,
+                source_repo_url: None,
                 digest: Some(
                     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                         .to_string(),
@@ -4142,6 +4286,80 @@ rules:
     }
 
     #[test]
+    fn evaluate_compose_policy_uses_curated_runtime_identity_for_non_root_user_patch() {
+        let compose = r#"
+services:
+  db:
+    image: postgres:16.4-alpine
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+"#;
+        let mut cache = base_cache();
+        cache.profiles[0].image = "docker.io/library/postgres:16.4-alpine".to_string();
+        cache.profiles[0].runtime.user = None;
+        cache.profiles[0].researched_config.runtime_uid = Some(999);
+        cache.profiles[0].researched_config.runtime_gid = Some(999);
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|patch| patch.path == "services.db.user" && patch.value == json!("999:999")));
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.db.user"
+                && item.reason.contains("using non-root image runtime user")
+        }));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_does_not_patch_unknown_runtime_user_sentinel() {
+        let compose = r#"
+services:
+  db:
+    image: postgres:16.4-alpine
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+"#;
+        let mut cache = base_cache();
+        cache.profiles[0].image = "docker.io/library/postgres:16.4-alpine".to_string();
+        cache.profiles[0].runtime.user = Some("unknown".to_string());
+        cache.profiles[0].researched_config.runtime_uid = None;
+        cache.profiles[0].researched_config.runtime_gid = None;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|patch| patch.path == "services.db.user"));
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.db.user"
+                && item.reason.contains(
+                    "image runtime user unknown; derivative image or explicit exception required",
+                )
+        }));
+    }
+
+    #[test]
     fn evaluate_compose_policy_skips_reinjecting_existing_init_perms_sidecar() {
         let compose = r#"
 services:
@@ -4188,6 +4406,276 @@ rules:
             .patch_plan
             .iter()
             .any(|item| item.op == "depends_on_add"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_skips_init_sidecar_for_short_syntax_read_only_nocopy_volume() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app:ro,nocopy
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "depends_on_add"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_list_form_init_sidecar_dependency() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      - api-init-perms
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    command:
+      - /bin/sh
+      - -euxc
+      - set -eu; for path in /mnt/perm-0; do mkdir -p "$path"; owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"; if [ "$owner" != "101:101" ]; then chown -R 101:101 "$path"; fi; done
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.api.depends_on"
+                && item.reason.contains("deterministic startup ordering")
+        }));
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "depends_on_add" && item.path == "services.api.depends_on.api-init-perms"
+        }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_non_blocking_init_sidecar_dependency_condition() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      api-init-perms:
+        condition: service_started
+  api-init-perms:
+    image: docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805
+    command:
+      - /bin/sh
+      - -euxc
+      - set -eu; for path in /mnt/perm-0; do mkdir -p "$path"; owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"; if [ "$owner" != "101:101" ]; then chown -R 101:101 "$path"; fi; done
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.patch_plan.iter().any(|item| {
+            item.op == "depends_on_add" && item.path == "services.api.depends_on.api-init-perms"
+        }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_repairs_existing_init_sidecar_functional_contract() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app
+    depends_on:
+      api-init-perms:
+        condition: service_completed_successfully
+  api-init-perms:
+    image: docker.io/library/busybox:1.36
+    command:
+      - /bin/sh
+      - -c
+      - echo wrong
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/wrong/path
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result
+            .violations
+            .iter()
+            .filter(|item| item.rule_id == "AC-CMP-PERMS-INIT")
+            .all(|item| item.severity == RuleSeverity::Warn));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.image" }));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.command" }));
+        assert!(result
+            .patch_plan
+            .iter()
+            .any(|item| { item.op == "set" && item.path == "services.api-init-perms.volumes" }));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+    }
+
+    #[test]
+    fn depends_on_add_converts_short_syntax_to_valid_long_syntax() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    depends_on:
+      - db
+  db:
+    image: postgres:16-alpine
+"#;
+        let patch_plan = vec![PatchOperation {
+            op: "depends_on_add".to_string(),
+            path: "services.api.depends_on.api-init-perms".to_string(),
+            value: serde_json::Value::Object(
+                [(
+                    "condition".to_string(),
+                    serde_json::Value::String("service_completed_successfully".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            rule_id: "AC-CMP-PERMS-INIT".to_string(),
+        }];
+        let hardened = apply_compose_patch_plan(compose, &patch_plan, DeployMode::Compose)
+            .expect("patch apply works");
+        let reparsed: serde_yaml::Value =
+            serde_yaml::from_str(&hardened).expect("yaml remains valid");
+        let depends_on = reparsed
+            .get("services")
+            .and_then(|services| services.get("api"))
+            .and_then(|service| service.get("depends_on"))
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("depends_on converted to mapping");
+        assert_eq!(
+            depends_on
+                .get(serde_yaml::Value::String("db".to_string()))
+                .and_then(|value| value.get("condition"))
+                .and_then(serde_yaml::Value::as_str),
+            Some("service_started")
+        );
+        assert_eq!(
+            depends_on
+                .get(serde_yaml::Value::String("api-init-perms".to_string()))
+                .and_then(|value| value.get("condition"))
+                .and_then(serde_yaml::Value::as_str),
+            Some("service_completed_successfully")
+        );
     }
 
     #[test]
@@ -4840,6 +5328,33 @@ services:
   api-init-perms:
     image: alpine:3.20
     restart: no
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_accepts_boolean_restart_no_for_init_perms_sidecar() {
+        let compose = r#"
+services:
+  api-init-perms:
+    image: alpine:3.20
+    restart: false
 "#;
         let policy_yaml = r#"
 version: 1

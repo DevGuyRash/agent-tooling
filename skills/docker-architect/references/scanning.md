@@ -85,8 +85,8 @@ trivy image myapp:latest
 # Scan a Dockerfile (config scanning)
 trivy config Dockerfile
 
-# Scan a docker-compose file
-trivy config docker-compose.yaml
+# Scan a Compose file
+trivy config compose.yaml
 
 # Scan with severity filter
 trivy image --severity HIGH,CRITICAL myapp:latest
@@ -148,16 +148,16 @@ Always validate compose files before deployment:
 
 ```bash
 # Syntax + schema validation (prints resolved config or errors)
-docker compose -f docker-compose.yaml config
+docker compose -f compose.yaml config
 
 # Quiet mode — exit code only (for CI)
-docker compose -f docker-compose.yaml config -q
+docker compose -f compose.yaml config -q
 
 # Validate with specific profiles
-docker compose -f docker-compose.yaml --profile production config
+docker compose -f compose.yaml --profile production config
 
 # Validate multiple compose files (override chain)
-docker compose -f docker-compose.yaml -f docker-compose.prod.yaml config
+docker compose -f compose.yaml -f compose.override.yaml config
 ```
 
 ---
@@ -170,7 +170,7 @@ Run scanning stages in this order for fastest feedback:
 1. hadolint Dockerfile                          # ~1s  — syntax + best practices
 2. docker compose config -q                     # ~1s  — compose schema validation
 3. trivy config Dockerfile                      # ~3s  — Dockerfile misconfig scan
-4. trivy config docker-compose.yaml             # ~3s  — compose misconfig scan
+4. trivy config compose.yaml                    # ~3s  — compose misconfig scan
 5. docker build -t myapp:ci .                   # build the image
 6. trivy image --exit-code 1 \
      --severity HIGH,CRITICAL myapp:ci          # ~30s — image vulnerability scan
