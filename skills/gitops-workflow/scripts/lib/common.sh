@@ -99,3 +99,43 @@ parse_repo() {
   fi
   printf '%s\t%s\n' "$owner" "$name"
 }
+
+resolve_checkout_repo_slug() {
+  local repo=""
+  local remote_url=""
+  local repo_path=""
+
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v gh >/dev/null 2>&1; then
+    repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
+    if [[ -n "$repo" ]]; then
+      printf '%s\n' "$repo"
+      return 0
+    fi
+  fi
+
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [[ "$remote_url" =~ ^https://([^/@]+(:[^/@]*)?@)?github\.com/(.+)$ ]]; then
+    repo_path="${BASH_REMATCH[3]%.git}"
+    if [[ "$repo_path" =~ ^[^/]+/[^/]+$ ]]; then
+      printf '%s\n' "$repo_path"
+      return 0
+    fi
+  fi
+
+  case "$remote_url" in
+    git@github.com:*)
+      repo_path="${remote_url#git@github.com:}"
+      printf '%s\n' "${repo_path%.git}"
+      return 0
+      ;;
+    ssh://git@github.com/*/*)
+      repo_path="${remote_url#ssh://git@github.com/}"
+      printf '%s\n' "${repo_path%.git}"
+      return 0
+      ;;
+  esac
+}
