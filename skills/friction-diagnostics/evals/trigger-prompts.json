@@ -1,0 +1,65 @@
+{
+  "skill_name": "friction-diagnostics",
+  "queries": [
+    {
+      "id": "trigger-01",
+      "should_trigger": true,
+      "query": "Please keep a durable log of every MCP, tool, and instruction friction we hit during this debugging run."
+    },
+    {
+      "id": "trigger-02",
+      "should_trigger": true,
+      "query": "Capture agent frictions in /tmp so another agent can repair them later."
+    },
+    {
+      "id": "trigger-03",
+      "should_trigger": true,
+      "query": "I want a structured markdown report of every ambiguity, server mismatch, and workflow breakdown you encounter."
+    },
+    {
+      "id": "trigger-04",
+      "should_trigger": true,
+      "query": "Document what the skill told you to do, what you tried, and why it broke."
+    },
+    {
+      "id": "trigger-05",
+      "should_trigger": true,
+      "query": "Set up a temp-directory friction log for this multi-agent run."
+    },
+    {
+      "id": "trigger-06",
+      "should_trigger": true,
+      "query": "Don't just fix issues as you go \u2014 record the diagnostic frictions in a durable log."
+    },
+    {
+      "id": "negative-01",
+      "should_trigger": false,
+      "query": "Fix this Python traceback in my app."
+    },
+    {
+      "id": "negative-02",
+      "should_trigger": false,
+      "query": "Summarize why the tests failed."
+    },
+    {
+      "id": "negative-03",
+      "should_trigger": false,
+      "query": "Refactor this function and add comments."
+    },
+    {
+      "id": "negative-04",
+      "should_trigger": false,
+      "query": "Review this pull request for security problems."
+    },
+    {
+      "id": "negative-05",
+      "should_trigger": false,
+      "query": "Investigate the build and fix whatever is broken."
+    },
+    {
+      "id": "negative-06",
+      "should_trigger": false,
+      "query": "Explain what MCP is."
+    }
+  ]
+}
