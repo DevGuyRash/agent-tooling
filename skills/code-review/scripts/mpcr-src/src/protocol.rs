@@ -519,15 +519,11 @@ fn dispatch_context(
         ctx.role.worker_policy_id.clone(),
         view,
     ));
-    for module_id in &ctx.role.module_ids {
-        ctx.loaded_policy_refs
-            .push(policy_ref(PolicyCategory::Module, module_id.clone(), view));
-    }
 
     Ok(ctx)
 }
 
-fn render_dispatch_content(ctx: &DispatchContext) -> String {
+fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow::Result<String> {
     let mut lines = Vec::new();
     let has_report_destination = ctx.agent_dir.is_some() || ctx.report_path.is_some();
     lines.push(format!("# Dispatch {}", ctx.role.role));
@@ -659,6 +655,52 @@ fn render_dispatch_content(ctx: &DispatchContext) -> String {
     lines.push("- Record the categorical reason, then stop only after the finding is explicitly closed as low-signal, duplicate, non-actionable, or already-addressed.".to_string());
     lines.push(String::new());
 
+    lines.push(demote_markdown_headings(
+        store
+            .render(
+                PolicyCategory::Mode,
+                &mode_slug(ctx.role.mode),
+                ctx.loaded_policy_refs
+                    .iter()
+                    .find(|policy| policy.category == PolicyCategory::Mode)
+                    .map_or(PolicyView::Checklist, |policy| policy.view),
+            )?
+            .as_str(),
+        1,
+    ));
+    lines.push(String::new());
+    lines.push(demote_markdown_headings(
+        store
+            .render(
+                PolicyCategory::Worker,
+                &ctx.role.worker_policy_id,
+                ctx.loaded_policy_refs
+                    .iter()
+                    .find(|policy| {
+                        policy.category == PolicyCategory::Worker
+                            && policy.id == ctx.role.worker_policy_id
+                    })
+                    .map_or(PolicyView::Checklist, |policy| policy.view),
+            )?
+            .as_str(),
+        1,
+    ));
+    for module_id in &ctx.role.module_ids {
+        lines.push(String::new());
+        let module_view = ctx
+            .loaded_policy_refs
+            .iter()
+            .find(|policy| policy.category == PolicyCategory::Module && policy.id == *module_id)
+            .map_or(PolicyView::Checklist, |policy| policy.view);
+        lines.push(demote_markdown_headings(
+            store
+                .render(PolicyCategory::Module, module_id, module_view)?
+                .as_str(),
+            1,
+        ));
+    }
+    lines.push(String::new());
+
     lines.push("## Referenced Pack Lookups".to_string());
     lines.push(String::new());
     if ctx.loaded_policy_refs.is_empty() {
@@ -677,7 +719,35 @@ fn render_dispatch_content(ctx: &DispatchContext) -> String {
     }
     lines.push(String::new());
 
-    lines.join("\n").trim_end().to_string()
+    Ok(lines.join("\n").trim_end().to_string())
+}
+
+fn demote_markdown_headings(body: &str, levels: usize) -> String {
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if let Some(demoted) = demote_atx_heading(line, levels) {
+            lines.push(demoted);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+fn demote_atx_heading(line: &str, levels: usize) -> Option<String> {
+    let heading_width = line.bytes().take_while(|byte| *byte == b'#').count();
+    if heading_width == 0 || heading_width > 6 {
+        return None;
+    }
+    let remainder = &line[heading_width..];
+    if !remainder.is_empty() && !remainder.starts_with([' ', '\t']) {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        "#".repeat(usize::min(heading_width + levels, 6)),
+        remainder
+    ))
 }
 
 /// Return the structured protocol list in stable order.
@@ -735,6 +805,7 @@ pub fn dispatch(
     reviewer_id: Option<&str>,
     view: PolicyView,
 ) -> anyhow::Result<DispatchOutput> {
+    let store = PolicyStore::load()?;
     let ctx = dispatch_context(normalize_dispatch_role(role)?, locator, reviewer_id, view)?;
     Ok(DispatchOutput {
         role: ctx.role.role.clone(),
@@ -755,7 +826,7 @@ pub fn dispatch(
         language_research_refs: ctx.language_research_refs.clone(),
         loaded_policy_refs: ctx.loaded_policy_refs.clone(),
         warnings: ctx.warnings.clone(),
-        content: render_dispatch_content(&ctx),
+        content: render_dispatch_content(&ctx, &store)?,
     })
 }
 
@@ -763,9 +834,9 @@ pub fn dispatch_list() -> Vec<String> {
     let mut roles = vec!["orchestrator-root".to_string()];
     roles.extend(
         ModuleId::all()
-        .into_iter()
-        .map(|module_id| format!("domain:{}", module_slug(module_id)))
-        .collect::<Vec<_>>(),
+            .into_iter()
+            .map(|module_id| format!("domain:{}", module_slug(module_id)))
+            .collect::<Vec<_>>(),
     );
     roles.extend([
         "language-detector".to_string(),
@@ -955,6 +1026,24 @@ mod tests {
     }
 
     #[test]
+    fn session_bound_dispatch_does_not_duplicate_route_module_refs() -> anyhow::Result<()> {
+        let (_repo_root, locator) = routed_session_locator()?;
+        let output = dispatch(
+            "apply-composite",
+            Some(&locator),
+            None,
+            PolicyView::Checklist,
+        )?;
+        let module_policy_count = output
+            .loaded_policy_refs
+            .iter()
+            .filter(|policy| policy.category == PolicyCategory::Module)
+            .count();
+        ensure!(module_policy_count == output.module_ids.len());
+        Ok(())
+    }
+
+    #[test]
     fn applicator_worker_dispatch_without_session_omits_agent_dir_requirements(
     ) -> anyhow::Result<()> {
         let output = dispatch("applicator-worker", None, None, PolicyView::Checklist)?;
@@ -978,10 +1067,9 @@ mod tests {
         ensure!(output
             .content
             .contains("`mpcr protocol module --id core-correctness --view examples`"));
-        ensure!(!output.content.contains("\n## reviewer\n"));
-        ensure!(!output.content.contains("\n## domain-reviewer\n"));
-        ensure!(!output.content.contains("\n## core-correctness\n"));
-        ensure!(output.content.lines().count() < 80);
+        ensure!(output.content.contains("\n## reviewer\n"));
+        ensure!(output.content.contains("\n## domain-reviewer\n"));
+        ensure!(output.content.contains("\n## core-correctness\n"));
         Ok(())
     }
 

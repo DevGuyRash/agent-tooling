@@ -1466,9 +1466,7 @@ fn find_comment_start(path: &str, line: &str) -> Option<usize> {
         }
         if ch == b'#'
             && !(i + 1 < len && bytes[i + 1] == b'[')
-            && (supports_inline_hash_comments(path)
-                || i == 0
-                || bytes[i - 1].is_ascii_whitespace())
+            && (supports_inline_hash_comments(path) || i == 0 || bytes[i - 1].is_ascii_whitespace())
         {
             return Some(i);
         }
@@ -2538,10 +2536,7 @@ mod tests {
     #[test]
     fn todo_in_python_inline_hash_comment_is_detected_without_spacing() {
         let mut files = HashMap::new();
-        files.insert(
-            "test.py".to_string(),
-            "x = 1# TODO: tighten\n".to_string(),
-        );
+        files.insert("test.py".to_string(), "x = 1# TODO: tighten\n".to_string());
         let report = run_all(&files).expect("analysis failed");
         assert!(
             report

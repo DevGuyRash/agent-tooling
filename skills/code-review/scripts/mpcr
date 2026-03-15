@@ -96,7 +96,7 @@ build_is_stale() {
   if [ "${src_dir}/Cargo.toml" -nt "${stamp}" ] || [ "${src_dir}/Cargo.lock" -nt "${stamp}" ]; then
     return 0
   fi
-  if find "${src_dir}/src" "${src_dir}/protocols" -type f -newer "${stamp}" -print -quit 2>/dev/null | grep -q .; then
+  if find "${src_dir}/src" "${src_dir}/tests" "${src_dir}/protocols" -type f -newer "${stamp}" -print -quit 2>/dev/null | grep -q .; then
     return 0
   fi
   return 1

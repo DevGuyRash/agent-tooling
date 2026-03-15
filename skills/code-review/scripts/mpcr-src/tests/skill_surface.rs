@@ -398,6 +398,17 @@ fn shipped_wrapper_help_builds_and_runs() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn shipped_wrappers_watch_test_dirs_for_stale_builds() -> anyhow::Result<()> {
+    let root = skill_root()?;
+    let sh_wrapper = read(&root, "scripts/mpcr")?;
+    ensure!(sh_wrapper.contains("\"${src_dir}/tests\""));
+
+    let ps_wrapper = read(&root, "scripts/mpcr.ps1")?;
+    ensure!(ps_wrapper.contains("@('src', 'tests', 'protocols')"));
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn shipped_wrapper_recovers_from_stale_build_lock() -> anyhow::Result<()> {

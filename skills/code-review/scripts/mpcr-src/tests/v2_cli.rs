@@ -3,11 +3,11 @@
 
 use anyhow::{ensure, Context};
 use mpcr::artifacts::{
-    now_rfc3339, parse_artifact_file, ApplicationResultArtifact, ArtifactDocument,
-    ArtifactHeader, ArtifactKind, ConfidenceLabel, CoverageSummary, Disposition,
-    DispositionRecord, ModuleId, ParentReviewArtifact, PolicyCategory, PolicyRef, PolicyView,
-    ProducerKind, ReviewVerdict, ShipReadinessSummary, ShipReadinessVerdict, SurfaceId,
-    VerificationItemRecord, VerificationStatus,
+    now_rfc3339, parse_artifact_file, ApplicationResultArtifact, ArtifactDocument, ArtifactHeader,
+    ArtifactKind, ConfidenceLabel, CoverageSummary, Disposition, DispositionRecord, ModuleId,
+    ParentReviewArtifact, PolicyCategory, PolicyRef, PolicyView, ProducerKind, ReviewVerdict,
+    ShipReadinessSummary, ShipReadinessVerdict, SurfaceId, VerificationItemRecord,
+    VerificationStatus,
 };
 use mpcr::paths::session_paths;
 use mpcr::router::{build_route_revision, default_router_policy_refs};
@@ -166,7 +166,9 @@ fn protocol_surface_includes_dispatch_and_static_discovery() -> anyhow::Result<(
     ensure!(
         dispatch_stdout.contains("`mpcr protocol module --id core-correctness --view checklist`")
     );
-    ensure!(!dispatch_stdout.contains("\n## reviewer\n"));
+    ensure!(dispatch_stdout.contains("\n## reviewer\n"));
+    ensure!(dispatch_stdout.contains("\n## domain-reviewer\n"));
+    ensure!(dispatch_stdout.contains("\n## core-correctness\n"));
 
     let root_dispatch = run_cmd(&["protocol", "dispatch", "--role", "orchestrator-root"])?;
     ensure!(root_dispatch.status.success());
@@ -575,7 +577,7 @@ fn reviewer_spawn_routed_materializes_missing_route_workers() -> anyhow::Result<
         .is_some_and(|items| items.len() == planned_count));
     ensure!(spawn_json["skipped_existing_roles"]
         .as_array()
-        .is_some_and(|items| items.is_empty()));
+        .is_some_and(Vec::is_empty));
     ensure!(spawn_json["spawned"].as_array().is_some_and(|items| {
         items
             .iter()
@@ -596,9 +598,7 @@ fn reviewer_spawn_routed_materializes_missing_route_workers() -> anyhow::Result<
     ])?;
     ensure!(second.status.success());
     let second_json: Value = serde_json::from_slice(&second.stdout)?;
-    ensure!(second_json["spawned"]
-        .as_array()
-        .is_some_and(|items| items.is_empty()));
+    ensure!(second_json["spawned"].as_array().is_some_and(Vec::is_empty));
     ensure!(second_json["skipped_existing_roles"]
         .as_array()
         .is_some_and(|items| items.len() == planned_count));
@@ -606,7 +606,8 @@ fn reviewer_spawn_routed_materializes_missing_route_workers() -> anyhow::Result<
 }
 
 #[test]
-fn reviewer_spawn_routed_respawns_workers_after_route_revision_scope_change() -> anyhow::Result<()> {
+fn reviewer_spawn_routed_respawns_workers_after_route_revision_scope_change() -> anyhow::Result<()>
+{
     let repo_root = tempdir()?;
     let date = Date::from_calendar_date(2026, Month::March, 8)?;
     let session_dir = session_paths(repo_root.path(), date).session_dir;
@@ -703,7 +704,7 @@ fn reviewer_spawn_routed_respawns_workers_after_route_revision_scope_change() ->
         .is_some_and(|items| items.len() == planned_count));
     ensure!(second_json["skipped_existing_roles"]
         .as_array()
-        .is_some_and(|items| items.is_empty()));
+        .is_some_and(Vec::is_empty));
     Ok(())
 }
 

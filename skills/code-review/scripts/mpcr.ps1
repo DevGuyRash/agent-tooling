@@ -38,7 +38,7 @@ function Test-MpcrBuildNeedsRefresh {
             return $true
         }
     }
-    foreach ($dir in @('src', 'protocols')) {
+    foreach ($dir in @('src', 'tests', 'protocols')) {
         $full = Join-Path $SrcDir $dir
         if (Test-Path $full) {
             $newer = Get-ChildItem -Path $full -Recurse -File |

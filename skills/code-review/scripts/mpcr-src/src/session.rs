@@ -841,37 +841,24 @@ pub struct FinalSummary {
 }
 
 fn derive_repo_root(session_dir: &Path) -> anyhow::Result<PathBuf> {
-    let code_reviews_dir = session_dir.parent().ok_or_else(|| {
+    let invalid_session_dir_error = || {
         anyhow::anyhow!(
             "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
             session_dir.display()
         )
-    })?;
-    let reports_dir = code_reviews_dir.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
-            session_dir.display()
-        )
-    })?;
-    let local_dir = reports_dir.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
-            session_dir.display()
-        )
-    })?;
-    let repo_root = local_dir.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
-            session_dir.display()
-        )
-    })?;
+    };
+    let code_reviews_dir = session_dir.parent().ok_or_else(invalid_session_dir_error)?;
+    let reports_dir = code_reviews_dir
+        .parent()
+        .ok_or_else(invalid_session_dir_error)?;
+    let local_dir = reports_dir.parent().ok_or_else(invalid_session_dir_error)?;
+    let repo_root = local_dir.parent().ok_or_else(invalid_session_dir_error)?;
 
     anyhow::ensure!(
         code_reviews_dir.file_name().and_then(|name| name.to_str()) == Some("code_reviews")
             && reports_dir.file_name().and_then(|name| name.to_str()) == Some("reports")
             && local_dir.file_name().and_then(|name| name.to_str()) == Some(".local"),
-        "error: explicit --session-dir must end in `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`; got {}",
-        session_dir.display()
+        invalid_session_dir_error()
     );
 
     Ok(repo_root.to_path_buf())

@@ -29,13 +29,12 @@ use mpcr::session::{
     append_applicator_note, append_reviewer_note, applicator_wait, apply_route_revision_artifact,
     checkpoint_convergence_state, cleanup_session, close_child_reviews, collect_reports,
     complete_child_review, ensure_session, finalize_application, finalize_review, list_artifacts,
-    load_session, persist_route_artifacts, register_reviewer, set_applicator_status,
-    review_matches_worker_plan, spawn_child_reviewers, update_review, AppendApplicatorNoteParams,
-    AppendReviewerNoteParams, ApplicatorArtifactParams, ApplicatorStatus,
-    ApplyRouteRevisionParams, CloseChildReviewsParams, PersistRouteArtifactsParams,
-    RegisterReviewerParams, ReportView, ReportsResult, ReviewProcessStatus,
-    ReviewerArtifactParams, SessionLocator, SetApplicatorStatusParams,
-    SpawnChildReviewersParams, UpdateReviewParams,
+    load_session, persist_route_artifacts, register_reviewer, review_matches_worker_plan,
+    set_applicator_status, spawn_child_reviewers, update_review, AppendApplicatorNoteParams,
+    AppendReviewerNoteParams, ApplicatorArtifactParams, ApplicatorStatus, ApplyRouteRevisionParams,
+    CloseChildReviewsParams, PersistRouteArtifactsParams, RegisterReviewerParams, ReportView,
+    ReportsResult, ReviewProcessStatus, ReviewerArtifactParams, SessionLocator,
+    SetApplicatorStatusParams, SpawnChildReviewersParams, UpdateReviewParams,
 };
 use mpcr::validate::{validate_artifact_file, ValidationLayer};
 use serde::Serialize;
@@ -835,17 +834,37 @@ fn spawn_routed_children(
             delegated_scope: worker.delegated_scope.clone(),
         })?;
         session_format_primary = result.session_format_primary;
+        let reviewer_id = result.child_ids.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("error: spawn-routed did not return a child reviewer")
+        })?;
+        let agent_dir = result.child_agent_dirs.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("error: spawn-routed did not return a child agent directory")
+        })?;
+        let agent_ledger_json = result
+            .child_agent_ledgers_json
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: spawn-routed did not return child JSON ledger")
+            })?;
+        let agent_ledger_toml = result
+            .child_agent_ledgers_toml
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: spawn-routed did not return child TOML ledger")
+            })?;
         spawned.push(SpawnedRoutedChild {
-            reviewer_id: result.child_ids[0].clone(),
+            reviewer_id,
             role_id: role_id.clone(),
             worker_kind: worker.worker_kind,
             module_ids: worker.module_ids.clone(),
             focus_surfaces: worker.focus_surfaces.clone(),
             claimed_scope: worker.claimed_scope.clone(),
             delegated_scope: worker.delegated_scope.clone(),
-            agent_dir: result.child_agent_dirs[0].clone(),
-            agent_ledger_json: result.child_agent_ledgers_json[0].clone(),
-            agent_ledger_toml: result.child_agent_ledgers_toml[0].clone(),
+            agent_dir,
+            agent_ledger_json,
+            agent_ledger_toml,
         });
     }
 

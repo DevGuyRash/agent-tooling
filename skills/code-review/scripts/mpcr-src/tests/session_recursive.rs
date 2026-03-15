@@ -7,25 +7,32 @@ use mpcr::artifacts::{
     ApplicationResultArtifact, ArtifactDocument, ArtifactHeader, ArtifactKind,
     ChildFindingsArtifact, ConfidenceLabel, CoverageSummary, Disposition, DispositionRecord,
     ExecutionCapability, ModuleId, ParentReviewArtifact, PolicyCategory, PolicyRef, PolicyView,
-    ProducerKind, ReviewVerdict, RouteDecisionArtifact, ShipReadinessSummary,
-    ShipReadinessVerdict, SurfaceId, VerificationItemRecord, VerificationResultArtifact,
-    VerificationStatus, WorkerKind, WorkerPlanRecord,
+    ProducerKind, ReviewVerdict, RouteDecisionArtifact, ShipReadinessSummary, ShipReadinessVerdict,
+    SurfaceId, VerificationItemRecord, VerificationResultArtifact, VerificationStatus, WorkerKind,
+    WorkerPlanRecord,
 };
 use mpcr::paths::{self, session_paths, StorageFormat};
 use mpcr::router::{build_route_decision, build_surface_map, default_router_policy_refs};
 use mpcr::router_types::RouteInputs;
 use mpcr::session::{
     cleanup_session, collect_reports, complete_child_review, finalize_application, finalize_review,
-    load_session, persist_route_artifacts, register_reviewer, spawn_child_reviewers,
-    update_review, verify_application, ApplicatorArtifactParams, PersistRouteArtifactsParams,
-    RegisterReviewerParams, ReportView, ReviewProcessStatus, ReviewerArtifactParams,
-    SessionLedger, SessionLocator, SpawnChildReviewersParams, UpdateReviewParams,
+    load_session, persist_route_artifacts, register_reviewer, spawn_child_reviewers, update_review,
+    verify_application, ApplicatorArtifactParams, PersistRouteArtifactsParams,
+    RegisterReviewerParams, ReportView, ReviewProcessStatus, ReviewerArtifactParams, SessionLedger,
+    SessionLocator, SpawnChildReviewersParams, UpdateReviewParams,
 };
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use time::{Date, Month};
+
+fn expect_error<T>(result: anyhow::Result<T>, context: &str) -> anyhow::Result<anyhow::Error> {
+    match result {
+        Ok(_) => Err(anyhow::anyhow!("{context}")),
+        Err(err) => Ok(err),
+    }
+}
 
 fn reviewer_header(
     kind: ArtifactKind,
@@ -154,7 +161,10 @@ fn persist_reviewer_route(
     changed_files: &[&str],
 ) -> anyhow::Result<RouteDecisionArtifact> {
     let inputs = RouteInputs {
-        changed_files: changed_files.iter().map(|file| (*file).to_string()).collect(),
+        changed_files: changed_files
+            .iter()
+            .map(|file| (*file).to_string())
+            .collect(),
         public_interfaces: Vec::new(),
         behavior_facing_artifacts: Vec::new(),
         execution_capability: ExecutionCapability::SingleProcess,
@@ -653,12 +663,14 @@ fn complete_child_review_rejects_open_descendant_reviewers() -> anyhow::Result<(
     let child_artifact = minimal_child_findings(&register.session_id, "abc123def456")?;
     let child_artifact_file = session_dir.join("child-findings-open-descendant.toml");
     fs::write(&child_artifact_file, child_artifact.to_toml_string()?)?;
-    let err = complete_child_review(ReviewerArtifactParams {
-        session: locator,
-        reviewer_id: child_id,
-        artifact_file: child_artifact_file,
-    })
-    .expect_err("complete_child_review should reject open descendants");
+    let err = expect_error(
+        complete_child_review(ReviewerArtifactParams {
+            session: locator,
+            reviewer_id: child_id,
+            artifact_file: child_artifact_file,
+        }),
+        "complete_child_review should reject open descendants",
+    )?;
     let err_text = format!("{err:#}");
     ensure!(err_text.contains("cannot finalize child_findings"));
     ensure!(err_text.contains(&grandchild_id));
@@ -711,12 +723,14 @@ fn complete_child_review_rejects_mismatched_registered_worker_contract() -> anyh
     });
     let artifact_file = session_dir.join("child-findings-mismatched-contract.toml");
     fs::write(&artifact_file, mismatched.to_toml_string()?)?;
-    let err = complete_child_review(ReviewerArtifactParams {
-        session: locator,
-        reviewer_id: child.child_ids[0].clone(),
-        artifact_file,
-    })
-    .expect_err("complete_child_review should reject a mismatched worker contract");
+    let err = expect_error(
+        complete_child_review(ReviewerArtifactParams {
+            session: locator,
+            reviewer_id: child.child_ids[0].clone(),
+            artifact_file,
+        }),
+        "complete_child_review should reject a mismatched worker contract",
+    )?;
     let err_text = format!("{err:#}");
     ensure!(err_text.contains("did not match registered reviewer"));
     Ok(())
@@ -775,12 +789,14 @@ fn finalize_review_rejects_open_descendant_reviewers() -> anyhow::Result<()> {
     let parent_artifact = minimal_parent_review(&register.session_id, "cde345fab678")?;
     let parent_artifact_file = session_dir.join("parent-review-open-child.toml");
     fs::write(&parent_artifact_file, parent_artifact.to_toml_string()?)?;
-    let err = finalize_review(ReviewerArtifactParams {
-        session: locator,
-        reviewer_id: register.reviewer_id,
-        artifact_file: parent_artifact_file,
-    })
-    .expect_err("finalize_review should reject open descendants");
+    let err = expect_error(
+        finalize_review(ReviewerArtifactParams {
+            session: locator,
+            reviewer_id: register.reviewer_id,
+            artifact_file: parent_artifact_file,
+        }),
+        "finalize_review should reject open descendants",
+    )?;
     let err_text = format!("{err:#}");
     ensure!(err_text.contains("cannot finalize parent_review"));
     ensure!(err_text.contains(&open_child_id));
@@ -823,12 +839,14 @@ fn finalize_review_rejects_cancelled_descendant_reviewers() -> anyhow::Result<()
     let parent_artifact = minimal_parent_review(&register.session_id, "cfe456abd789")?;
     let parent_artifact_file = session_dir.join("parent-review-cancelled-child.toml");
     fs::write(&parent_artifact_file, parent_artifact.to_toml_string()?)?;
-    let err = finalize_review(ReviewerArtifactParams {
-        session: locator,
-        reviewer_id: register.reviewer_id,
-        artifact_file: parent_artifact_file,
-    })
-    .expect_err("finalize_review should reject cancelled descendants");
+    let err = expect_error(
+        finalize_review(ReviewerArtifactParams {
+            session: locator,
+            reviewer_id: register.reviewer_id,
+            artifact_file: parent_artifact_file,
+        }),
+        "finalize_review should reject cancelled descendants",
+    )?;
     let err_text = format!("{err:#}");
     ensure!(err_text.contains("cannot finalize parent_review"));
     ensure!(err_text.contains(&child_id));
@@ -874,7 +892,8 @@ fn finalize_review_requires_child_matching_latest_route_contract() -> anyhow::Re
     })?;
     let stale_child_id = stale_child.child_ids[0].clone();
 
-    let child_artifact = child_findings_for_worker(&register.session_id, "ccd234efa567", &initial_worker)?;
+    let child_artifact =
+        child_findings_for_worker(&register.session_id, "ccd234efa567", &initial_worker)?;
     let child_artifact_file = session_dir.join("child-findings-stale-contract.toml");
     fs::write(&child_artifact_file, child_artifact.to_toml_string()?)?;
     complete_child_review(ReviewerArtifactParams {
@@ -907,8 +926,11 @@ fn finalize_review_requires_child_matching_latest_route_contract() -> anyhow::Re
             claimed_scope: worker.claimed_scope.clone(),
             delegated_scope: worker.delegated_scope.clone(),
         })?;
-        let artifact =
-            child_findings_for_worker(&register.session_id, &format!("{:012x}", 0xabc000 + index), worker)?;
+        let artifact = child_findings_for_worker(
+            &register.session_id,
+            &format!("{:012x}", 0xabc000 + index),
+            worker,
+        )?;
         let artifact_file = session_dir.join(format!("child-findings-revised-{index}.toml"));
         fs::write(&artifact_file, artifact.to_toml_string()?)?;
         complete_child_review(ReviewerArtifactParams {
@@ -921,12 +943,14 @@ fn finalize_review_requires_child_matching_latest_route_contract() -> anyhow::Re
     let parent_artifact = minimal_parent_review(&register.session_id, "dde345fab678")?;
     let parent_artifact_file = session_dir.join("parent-review-stale-contract.toml");
     fs::write(&parent_artifact_file, parent_artifact.to_toml_string()?)?;
-    let err = finalize_review(ReviewerArtifactParams {
-        session: locator.clone(),
-        reviewer_id: register.reviewer_id.clone(),
-        artifact_file: parent_artifact_file.clone(),
-    })
-    .expect_err("finalize_review should reject stale routed child assignments");
+    let err = expect_error(
+        finalize_review(ReviewerArtifactParams {
+            session: locator.clone(),
+            reviewer_id: register.reviewer_id.clone(),
+            artifact_file: parent_artifact_file.clone(),
+        }),
+        "finalize_review should reject stale routed child assignments",
+    )?;
     let err_text = format!("{err:#}");
     ensure!(err_text.contains("cannot finalize parent_review before every required routed worker"));
     ensure!(err_text.contains("domain:core-correctness"));
@@ -1031,8 +1055,11 @@ fn finalize_review_keeps_open_stale_children_blocking_parent_close() -> anyhow::
             claimed_scope: worker.claimed_scope.clone(),
             delegated_scope: worker.delegated_scope.clone(),
         })?;
-        let artifact =
-            child_findings_for_worker(&register.session_id, &format!("{:012x}", 0xdef000 + index), worker)?;
+        let artifact = child_findings_for_worker(
+            &register.session_id,
+            &format!("{:012x}", 0xdef000 + index),
+            worker,
+        )?;
         let artifact_file = session_dir.join(format!("child-findings-open-stale-{index}.toml"));
         fs::write(&artifact_file, artifact.to_toml_string()?)?;
         complete_child_review(ReviewerArtifactParams {
@@ -1045,14 +1072,18 @@ fn finalize_review_keeps_open_stale_children_blocking_parent_close() -> anyhow::
     let parent_artifact = minimal_parent_review(&register.session_id, "def678cab901")?;
     let parent_artifact_file = session_dir.join("parent-review-open-stale.toml");
     fs::write(&parent_artifact_file, parent_artifact.to_toml_string()?)?;
-    let err = finalize_review(ReviewerArtifactParams {
-        session: locator,
-        reviewer_id: register.reviewer_id,
-        artifact_file: parent_artifact_file,
-    })
-    .expect_err("finalize_review should still reject open stale descendants");
+    let err = expect_error(
+        finalize_review(ReviewerArtifactParams {
+            session: locator,
+            reviewer_id: register.reviewer_id,
+            artifact_file: parent_artifact_file,
+        }),
+        "finalize_review should still reject open stale descendants",
+    )?;
     let err_text = format!("{err:#}");
-    ensure!(err_text.contains("cannot finalize parent_review while descendant reviewers remain open"));
+    ensure!(
+        err_text.contains("cannot finalize parent_review while descendant reviewers remain open")
+    );
     ensure!(err_text.contains(&stale_child_id));
     Ok(())
 }
@@ -1068,20 +1099,22 @@ fn spawn_child_reviewers_rejects_multi_role_strings() -> anyhow::Result<()> {
         role_kind: None,
     })?;
 
-    let err = spawn_child_reviewers(SpawnChildReviewersParams {
-        session: locator,
-        parent_id: register.reviewer_id,
-        count: 1,
-        role_id: Some("language-detector domain:core-correctness".to_string()),
-        worker_kind: None,
-        domain_id: None,
-        language: None,
-        module_ids: Vec::new(),
-        focus_surfaces: Vec::new(),
-        claimed_scope: Vec::new(),
-        delegated_scope: Vec::new(),
-    })
-    .expect_err("expected whitespace role to be rejected");
+    let err = expect_error(
+        spawn_child_reviewers(SpawnChildReviewersParams {
+            session: locator,
+            parent_id: register.reviewer_id,
+            count: 1,
+            role_id: Some("language-detector domain:core-correctness".to_string()),
+            worker_kind: None,
+            domain_id: None,
+            language: None,
+            module_ids: Vec::new(),
+            focus_surfaces: Vec::new(),
+            claimed_scope: Vec::new(),
+            delegated_scope: Vec::new(),
+        }),
+        "expected whitespace role to be rejected",
+    )?;
 
     ensure!(err.to_string().contains("single role slug"));
     Ok(())
@@ -1116,11 +1149,13 @@ fn verify_application_requires_matching_application_result() -> anyhow::Result<(
     });
     let verification_only_file = session_dir.join("verification-only.toml");
     fs::write(&verification_only_file, verification_only.to_toml_string()?)?;
-    let err = verify_application(ApplicatorArtifactParams {
-        session: locator.clone(),
-        artifact_file: verification_only_file,
-    })
-    .expect_err("verify_application should require a finalized application_result");
+    let err = expect_error(
+        verify_application(ApplicatorArtifactParams {
+            session: locator.clone(),
+            artifact_file: verification_only_file,
+        }),
+        "verify_application should require a finalized application_result",
+    )?;
     ensure!(err
         .to_string()
         .contains("requires a finalized application_result"));
@@ -1176,11 +1211,13 @@ fn verify_application_requires_matching_application_result() -> anyhow::Result<(
         });
     let mismatched_file = session_dir.join("verification-mismatched.toml");
     fs::write(&mismatched_file, mismatched_verification.to_toml_string()?)?;
-    let err = verify_application(ApplicatorArtifactParams {
-        session: locator,
-        artifact_file: mismatched_file,
-    })
-    .expect_err("verify_application should reject finding ids outside application_result");
+    let err = expect_error(
+        verify_application(ApplicatorArtifactParams {
+            session: locator,
+            artifact_file: mismatched_file,
+        }),
+        "verify_application should reject finding ids outside application_result",
+    )?;
     ensure!(err
         .to_string()
         .contains("did not match application_result.verification_needed"));
