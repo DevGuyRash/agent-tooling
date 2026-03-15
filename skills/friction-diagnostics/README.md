@@ -87,8 +87,8 @@ INIT_OUTPUT="$(sh "$SKILL_ROOT/scripts/init-log.sh" \
 
 eval "$INIT_OUTPUT"
 
-LOG_FILE=$(printf '%s\n' "$INIT_OUTPUT" | sed -n "s/^FRICTION_LOG_FILE='\\(.*\\)'$/\\1/p")
-TASK_DIR=$(printf '%s\n' "$INIT_OUTPUT" | sed -n "s/^FRICTION_TASK_DIR='\\(.*\\)'$/\\1/p")
+LOG_FILE=$FRICTION_LOG_FILE
+TASK_DIR=$FRICTION_TASK_DIR
 
 sh "$SKILL_ROOT/scripts/report-friction.sh" \
   --log-file "$LOG_FILE" \

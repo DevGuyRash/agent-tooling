@@ -2,11 +2,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+. "$root/scripts/_Common.ps1"
 $baseDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-smoke-{0}" -f [System.Guid]::NewGuid().ToString('N'))
 $taskId = 'smoke-task'
 $taskSummary = "PowerShell multiline summary`nsecond line"
 
 try {
+    if ((Get-ShortSha256 'abc') -ne 'ba7816bf') { throw 'Get-ShortSha256 should return the first 8 hex chars of the SHA256 digest' }
+
     & "$root/scripts/init-log.ps1" `
         -BaseDir $baseDir `
         -TaskId $taskId `

@@ -14,7 +14,9 @@ FAIL_INIT_STDOUT=
 FAIL_INIT_STDERR=
 FAIL_REPORT_STDOUT=
 FAIL_REPORT_STDERR=
-trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}"' EXIT INT TERM
+NO_HASH_STDOUT=
+NO_HASH_STDERR=
+trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -258,6 +260,18 @@ set -e
 [ ! -f "$FAIL_TASK_DIR/INDEX.md" ]
 grep -q '## Entry 1: Forced index rebuild failure' "$FAIL_INIT_LOG"
 "$ROOT/scripts/build-index.sh" --task-dir "$FAIL_TASK_DIR" >/dev/null
+
+NO_HASH_STDOUT=$(mktemp /tmp/friction-no-hash-stdout.XXXXXX)
+NO_HASH_STDERR=$(mktemp /tmp/friction-no-hash-stderr.XXXXXX)
+
+set +e
+PATH='' /bin/sh -c '. "$1"; short_hash "abc"' _ "$ROOT/scripts/_common.sh" >"$NO_HASH_STDOUT" 2>"$NO_HASH_STDERR"
+NO_HASH_RC=$?
+set -e
+
+[ "$NO_HASH_RC" -ne 0 ]
+[ ! -s "$NO_HASH_STDOUT" ]
+grep -q 'short_hash: no suitable hash command found (sha256sum, shasum, openssl)' "$NO_HASH_STDERR"
 [ -f "$FAIL_TASK_DIR/INDEX.md" ]
 grep -q '\*\*Entries:\*\* 1' "$FAIL_TASK_DIR/INDEX.md"
 grep -q '\*\*Log files:\*\* 1' "$FAIL_TASK_DIR/INDEX.md"

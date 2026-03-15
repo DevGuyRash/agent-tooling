@@ -18,7 +18,7 @@ short_hash() {
   elif command -v openssl >/dev/null 2>&1; then
     printf '%s' "$input" | openssl dgst -sha256 | sed 's/^.*= //' | cut -c1-8
   else
-    printf '%s' "$input" | cksum | awk '{printf "%08x\n", $1}'
+    die "short_hash: no suitable hash command found (sha256sum, shasum, openssl)"
   fi
 }
 

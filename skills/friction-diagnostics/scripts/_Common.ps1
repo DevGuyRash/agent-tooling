@@ -12,7 +12,13 @@ function Get-Slug {
 function Get-ShortSha256 {
     param([string]$Text)
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-    $hashBytes = [System.Security.Cryptography.SHA256]::HashData($bytes)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash($bytes)
+    }
+    finally {
+        $sha256.Dispose()
+    }
     return -join ($hashBytes[0..3] | ForEach-Object { $_.ToString('x2') })
 }
 
