@@ -127,20 +127,14 @@ resolve_checkout_repo_slug() {
   fi
 
   case "$remote_url" in
-    git@github.com:*.git)
-      printf '%s\n' "${remote_url#git@github.com:}" | sed 's/\.git$//'
-      return 0
-      ;;
     git@github.com:*)
-      printf '%s\n' "${remote_url#git@github.com:}"
-      return 0
-      ;;
-    ssh://git@github.com/*/*.git)
-      printf '%s\n' "${remote_url#ssh://git@github.com/}" | sed 's/\.git$//'
+      repo_path="${remote_url#git@github.com:}"
+      printf '%s\n' "${repo_path%.git}"
       return 0
       ;;
     ssh://git@github.com/*/*)
-      printf '%s\n' "${remote_url#ssh://git@github.com/}"
+      repo_path="${remote_url#ssh://git@github.com/}"
+      printf '%s\n' "${repo_path%.git}"
       return 0
       ;;
   esac
