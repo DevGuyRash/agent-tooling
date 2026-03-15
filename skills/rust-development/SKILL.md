@@ -348,6 +348,7 @@ You SHALL run the verification script:
 <skills-file-root>/scripts/verify.sh [--dir <path>]
 ```
 
+You SHOULD have `python3` installed before Phase 2 so the parser-aware banned-family checks can run with full coverage.
 WHEN `verify.sh` is unavailable THEN you SHALL run the checks from `references/verify-manual.md`.
 The scripted and manual paths SHALL enforce the same documented banned-pattern inventory plus installation, build, lint, and test checks.
 You SHALL paste the output of all Phase 2 commands as evidence.
@@ -366,6 +367,9 @@ You SHALL output the block below as evidence. You SHALL NOT skip this block.
 - `.github/scripts/detect_rust_workspaces.py`, `.github/scripts/verify.sh`, and `.github/scripts/workspace-members.sh` are present.
 - Clippy lint config is present in the root `Cargo.toml`.
 - All workspace member crates inherit lints via `[lints] workspace = true`.
+
+IF `python3` is unavailable THEN the parser-aware subset of banned-family checks is not fully verifiable; `verify.sh` SHALL warn and skip those checks rather than using brittle regex-based approximations.
+WHEN `rg` or `git` is available THEN the verifier uses them to honor ignored Rust paths during file discovery; otherwise it falls back to a best-effort recursive walk.
 
 IF installation checks report missing artifacts THEN you SHALL run `scaffold.sh --all` first.
 IF any checks fail THEN you SHALL fix the issues and re-run verification.
