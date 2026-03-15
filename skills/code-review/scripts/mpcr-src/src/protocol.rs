@@ -655,6 +655,8 @@ fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow
     lines.push("- Record the categorical reason, then stop only after the finding is explicitly closed as low-signal, duplicate, non-actionable, or already-addressed.".to_string());
     lines.push(String::new());
 
+    lines.push("## Embedded Pack Contents".to_string());
+    lines.push(String::new());
     lines.push(demote_markdown_headings(
         store
             .render(
@@ -990,6 +992,7 @@ mod tests {
         ensure!(output
             .content
             .contains("The orchestrator routes, challenges, and synthesizes"));
+        ensure!(output.content.contains("## Embedded Pack Contents"));
         ensure!(output
             .loaded_policy_refs
             .iter()
@@ -1067,6 +1070,7 @@ mod tests {
         ensure!(output
             .content
             .contains("`mpcr protocol module --id core-correctness --view examples`"));
+        ensure!(output.content.contains("## Embedded Pack Contents"));
         ensure!(output.content.contains("\n## reviewer\n"));
         ensure!(output.content.contains("\n## domain-reviewer\n"));
         ensure!(output.content.contains("\n## core-correctness\n"));

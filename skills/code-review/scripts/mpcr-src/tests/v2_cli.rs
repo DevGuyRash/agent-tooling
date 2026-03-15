@@ -158,6 +158,7 @@ fn protocol_surface_includes_dispatch_and_static_discovery() -> anyhow::Result<(
     let dispatch_stdout = String::from_utf8_lossy(&dispatch.stdout);
     ensure!(dispatch_stdout.contains("# Dispatch domain:core-correctness"));
     ensure!(dispatch_stdout.contains("## Operating Rules"));
+    ensure!(dispatch_stdout.contains("## Embedded Pack Contents"));
     ensure!(dispatch_stdout.contains("## Referenced Pack Lookups"));
     ensure!(dispatch_stdout.contains("`mpcr protocol mode --mode reviewer --view checklist`"));
     ensure!(
