@@ -29,12 +29,12 @@ use mpcr::session::{
     append_applicator_note, append_reviewer_note, applicator_wait, apply_route_revision_artifact,
     checkpoint_convergence_state, cleanup_session, close_child_reviews, collect_reports,
     complete_child_review, ensure_session, finalize_application, finalize_review, list_artifacts,
-    load_session, persist_route_artifacts, register_reviewer, set_applicator_status,
-    spawn_child_reviewers, update_review, AppendApplicatorNoteParams, AppendReviewerNoteParams,
-    ApplicatorArtifactParams, ApplicatorStatus, ApplyRouteRevisionParams, CloseChildReviewsParams,
-    PersistRouteArtifactsParams, RegisterReviewerParams, ReportView, ReportsResult,
-    ReviewProcessStatus, ReviewerArtifactParams, SessionLocator, SetApplicatorStatusParams,
-    SpawnChildReviewersParams, UpdateReviewParams,
+    load_session, persist_route_artifacts, register_reviewer, review_matches_worker_plan,
+    set_applicator_status, spawn_child_reviewers, update_review, AppendApplicatorNoteParams,
+    AppendReviewerNoteParams, ApplicatorArtifactParams, ApplicatorStatus, ApplyRouteRevisionParams,
+    CloseChildReviewsParams, PersistRouteArtifactsParams, RegisterReviewerParams, ReportView,
+    ReportsResult, ReviewProcessStatus, ReviewerArtifactParams, SessionLocator,
+    SetApplicatorStatusParams, SpawnChildReviewersParams, UpdateReviewParams,
 };
 use mpcr::validate::{validate_artifact_file, ValidationLayer};
 use serde::Serialize;
@@ -136,7 +136,11 @@ enum SessionCommands {
         session: SessionDirArgs,
         #[arg(long, value_enum, default_value_t = ReportView::All)]
         view: ReportView,
-        #[arg(long, default_value_t = false)]
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Include descendant reviewer entries instead of only the root summary rows"
+        )]
         recursive: bool,
         #[arg(long, default_value_t = false)]
         include_report_contents: bool,
@@ -148,7 +152,10 @@ enum SessionCommands {
     Artifacts {
         #[command(flatten)]
         session: SessionDirArgs,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Filter by canonical artifact kind; accepts snake_case values and kebab-case aliases such as parent_review or parent-review"
+        )]
         kind: Option<ArtifactKind>,
     },
     Cleanup {
@@ -172,9 +179,15 @@ enum ReviewerCommands {
     Register {
         #[command(flatten)]
         session: SessionDirArgs,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Opaque target-ref string for this session; branch name, commit SHA, or literal HEAD all work as long as you reuse the exact same string when resuming the same review. This creates only the root orchestration anchor; routed worker roles are spawned separately."
+        )]
         target_ref: String,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Optional reviewer ID override; must be 8 lowercase alphanumeric characters"
+        )]
         reviewer_id: Option<String>,
     },
     SpawnChildren {
@@ -184,7 +197,10 @@ enum ReviewerCommands {
         parent_id: String,
         #[arg(long)]
         count: u8,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Single dispatch role slug for this child spawn. Use `reviewer spawn-routed` to materialize the whole current routed roster."
+        )]
         role_id: Option<String>,
         #[arg(long, value_enum)]
         worker_kind: Option<mpcr::artifacts::WorkerKind>,
@@ -201,12 +217,23 @@ enum ReviewerCommands {
         #[arg(long)]
         delegated_scope: Vec<String>,
     },
+    SpawnRouted {
+        #[command(flatten)]
+        session: SessionDirArgs,
+        #[arg(long)]
+        parent_id: String,
+    },
     CloseChildren {
         #[command(flatten)]
         session: SessionDirArgs,
         #[arg(long)]
         parent_id: String,
-        #[arg(long, value_enum, default_value_t = ReviewProcessStatus::Cancelled)]
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = ReviewProcessStatus::Cancelled,
+            help = "Administrative status for direct children; cancelled descendants do not satisfy finalize gates"
+        )]
         set_status: ReviewProcessStatus,
     },
     Update {
@@ -335,11 +362,18 @@ enum RenderFormat {
 struct ValidateArgs {
     #[arg(long)]
     artifact_file: PathBuf,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        help = "Canonical artifact kind; accepts stored snake_case values and kebab-case aliases such as convergence_state or convergence-state"
+    )]
     kind: ArtifactKind,
     #[arg(long, value_enum)]
     layer: ValidationLayer,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Session root directory; required when the artifact file is outside the canonical stored-artifact tree"
+    )]
     session_dir: Option<PathBuf>,
 }
 
@@ -348,7 +382,10 @@ enum FullcycleCommands {
     Plan {
         #[command(flatten)]
         session: SessionDirArgs,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Optional preview output path. `.json` writes JSON; other extensions write TOML. Paths are resolved from the current working directory and plan does not persist state until checkpoint."
+        )]
         output: Option<PathBuf>,
     },
     State {
@@ -378,11 +415,20 @@ enum AnalyzeCommands {
 
 #[derive(Args, Clone)]
 struct SessionDirArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Session root directory. Use the canonical `<repo>/.local/reports/code_reviews/YYYY-MM-DD` leaf itself, not an ad hoc child path. Each repo/date leaf can hold only one target-ref string."
+    )]
     session_dir: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Repository root used to derive the canonical session root under .local/reports/code_reviews/YYYY-MM-DD; pair with --date to pick an unused repo/date leaf for a fresh session"
+    )]
     repo_root: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Session date in YYYY-MM-DD; combines with --repo-root to form the canonical session root. Use another date or clean up the stale canonical leaf if that date is already occupied by a different target-ref."
+    )]
     date: Option<String>,
 }
 
@@ -398,7 +444,10 @@ struct RouteArgs {
     session: SessionDirArgs,
     #[arg(long, value_enum)]
     mode: Mode,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Opaque target-ref string for this session; branch name, commit SHA, or literal HEAD all work as long as you reuse the exact same string when resuming the same review"
+    )]
     target_ref: String,
     #[arg(long, value_enum)]
     execution_capability: ExecutionCapability,
@@ -420,10 +469,39 @@ struct RouteArgs {
 
 #[derive(Debug, Clone, Serialize)]
 struct RouteCommandOutput {
+    session_dir: String,
     surface_map: mpcr::artifacts::SurfaceMapArtifact,
     route_decision: mpcr::artifacts::RouteDecisionArtifact,
     #[serde(skip_serializing_if = "Option::is_none")]
     persisted: Option<mpcr::session::PersistRouteArtifactsResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SpawnedRoutedChild {
+    reviewer_id: String,
+    role_id: String,
+    worker_kind: mpcr::artifacts::WorkerKind,
+    #[serde(default)]
+    module_ids: Vec<mpcr::artifacts::ModuleId>,
+    #[serde(default)]
+    focus_surfaces: Vec<mpcr::artifacts::SurfaceId>,
+    #[serde(default)]
+    claimed_scope: Vec<String>,
+    #[serde(default)]
+    delegated_scope: Vec<String>,
+    agent_dir: String,
+    agent_ledger_json: String,
+    agent_ledger_toml: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SpawnRoutedChildrenOutput {
+    session_dir: String,
+    parent_id: String,
+    spawned: Vec<SpawnedRoutedChild>,
+    #[serde(default)]
+    skipped_existing_roles: Vec<String>,
+    session_format_primary: mpcr::paths::StorageFormat,
 }
 
 fn date_format() -> anyhow::Result<Vec<time::format_description::FormatItem<'static>>> {
@@ -445,12 +523,24 @@ fn discover_repo_root() -> anyhow::Result<PathBuf> {
     std::env::current_dir().context("resolve current working directory")
 }
 
+fn absolutize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()
+            .context("resolve current working directory")?
+            .join(path))
+    }
+}
+
 fn resolve_session_locator(args: &SessionDirArgs) -> anyhow::Result<SessionLocator> {
     if let Some(session_dir) = &args.session_dir {
-        return Ok(SessionLocator::from_session_dir(session_dir.clone()));
+        return Ok(SessionLocator::from_session_dir(absolutize_path(
+            session_dir,
+        )?));
     }
     let repo_root = match &args.repo_root {
-        Some(repo_root) => repo_root.clone(),
+        Some(repo_root) => absolutize_path(repo_root)?,
         None => discover_repo_root()?,
     };
     let session_date = match &args.date {
@@ -483,6 +573,22 @@ fn emit_text_or_json<T: Serialize>(
         println!("{}", render_text()?);
         Ok(())
     }
+}
+
+fn write_structured_output<T: Serialize>(
+    output: &PathBuf,
+    value: &T,
+    toml_fallback: &str,
+) -> anyhow::Result<()> {
+    let extension = output
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    let body = match extension.as_deref() {
+        Some("json") => serde_json::to_vec_pretty(value)?,
+        _ => toml_fallback.as_bytes().to_vec(),
+    };
+    fs::write(output, body).with_context(|| format!("write {}", output.display()))
 }
 
 fn read_files(files: &[PathBuf]) -> anyhow::Result<HashMap<String, String>> {
@@ -544,13 +650,23 @@ fn format_reports_output(reports: &ReportsResult) -> String {
     )];
 
     for report in &reports.reports {
+        let depth = report.lineage.len().saturating_sub(1);
+        let prefix = if depth == 0 {
+            String::new()
+        } else {
+            format!("{}- ", "  ".repeat(depth))
+        };
         let mut line = format!(
-            "{} {} {} {}",
+            "{}{} {} {} {}",
+            prefix,
             report.reviewer_id,
             review_status_text(report.status),
             report.role,
             report.agent_dir
         );
+        if let Some(parent_id) = &report.parent_id {
+            line.push_str(&format!(" parent={parent_id}"));
+        }
         if let Some(report_path) = &report.report_path {
             line.push_str(&format!(" report={report_path}"));
         }
@@ -645,7 +761,148 @@ fn role_slug_from_spawn_args(
     }
 }
 
+fn load_current_route_decision(
+    locator: &SessionLocator,
+) -> anyhow::Result<mpcr::artifacts::RouteDecisionArtifact> {
+    let ledger = load_session(locator)?;
+    let pointer = ledger.current.route_decision.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "error: no current route_decision is persisted; run `mpcr route --persist ...` first"
+        )
+    })?;
+    let repo_root = PathBuf::from(&ledger.repo_root);
+    let artifact_path = paths::resolve_repo_relative(&repo_root, &pointer.path)?;
+    match parse_artifact_file(&artifact_path)? {
+        ArtifactDocument::RouteDecision(route_decision) => Ok(route_decision),
+        _ => Err(anyhow::anyhow!(
+            "error: current route_decision pointer did not resolve to a route_decision artifact"
+        )),
+    }
+}
+
+fn spawn_routed_children(
+    locator: &SessionLocator,
+    parent_id: &str,
+) -> anyhow::Result<SpawnRoutedChildrenOutput> {
+    let ledger = load_session(locator)?;
+    let route_decision = load_current_route_decision(locator)?;
+    anyhow::ensure!(
+        matches!(route_decision.mode, Mode::Reviewer | Mode::FullCycle),
+        "error: reviewer spawn-routed requires a reviewer or full-cycle route_decision"
+    );
+    let parent_review = ledger
+        .reviews
+        .iter()
+        .find(|review| review.reviewer_id == parent_id)
+        .ok_or_else(|| anyhow::anyhow!("error: parent reviewer `{parent_id}` was not found"))?;
+    anyhow::ensure!(
+        parent_review.parent_id.is_none(),
+        "error: reviewer spawn-routed requires a root reviewer parent_id; `{parent_id}` is a child reviewer under `{}`",
+        parent_review
+            .parent_id
+            .as_deref()
+            .map_or("unknown", |parent| parent)
+    );
+
+    let mut spawned = Vec::new();
+    let mut skipped_existing_roles = Vec::new();
+    let mut session_format_primary = ledger.storage.primary_format;
+    for worker in route_decision.worker_plan {
+        let role_id = worker.role_id.clone().ok_or_else(|| {
+            anyhow::anyhow!("error: routed worker is missing role_id and cannot be spawned")
+        })?;
+        let already_spawned = ledger.reviews.iter().any(|review| {
+            review.parent_id.as_deref() == Some(parent_id)
+                && review.status != ReviewProcessStatus::Cancelled
+                && review_matches_worker_plan(review, &worker)
+        });
+        if already_spawned {
+            skipped_existing_roles.push(role_id);
+            continue;
+        }
+        let result = spawn_child_reviewers(SpawnChildReviewersParams {
+            session: locator.clone(),
+            parent_id: parent_id.to_string(),
+            count: 1,
+            role_id: Some(role_id.clone()),
+            worker_kind: Some(worker.worker_kind),
+            domain_id: None,
+            language: worker.language.clone(),
+            module_ids: worker.module_ids.clone(),
+            focus_surfaces: worker.focus_surfaces.clone(),
+            claimed_scope: worker.claimed_scope.clone(),
+            delegated_scope: worker.delegated_scope.clone(),
+        })?;
+        session_format_primary = result.session_format_primary;
+        let reviewer_id = result.child_ids.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("error: spawn-routed did not return a child reviewer")
+        })?;
+        let agent_dir = result.child_agent_dirs.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("error: spawn-routed did not return a child agent directory")
+        })?;
+        let agent_ledger_json = result
+            .child_agent_ledgers_json
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: spawn-routed did not return child JSON ledger")
+            })?;
+        let agent_ledger_toml = result
+            .child_agent_ledgers_toml
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                anyhow::anyhow!("error: spawn-routed did not return child TOML ledger")
+            })?;
+        spawned.push(SpawnedRoutedChild {
+            reviewer_id,
+            role_id: role_id.clone(),
+            worker_kind: worker.worker_kind,
+            module_ids: worker.module_ids.clone(),
+            focus_surfaces: worker.focus_surfaces.clone(),
+            claimed_scope: worker.claimed_scope.clone(),
+            delegated_scope: worker.delegated_scope.clone(),
+            agent_dir,
+            agent_ledger_json,
+            agent_ledger_toml,
+        });
+    }
+
+    Ok(SpawnRoutedChildrenOutput {
+        session_dir: locator.session_dir().to_string_lossy().into_owned(),
+        parent_id: parent_id.to_string(),
+        spawned,
+        skipped_existing_roles,
+        session_format_primary,
+    })
+}
+
+fn format_spawn_routed_children_output(output: &SpawnRoutedChildrenOutput) -> String {
+    let mut lines = vec![format!(
+        "session_dir={} parent_id={} spawned={} skipped={}",
+        output.session_dir,
+        output.parent_id,
+        output.spawned.len(),
+        output.skipped_existing_roles.len()
+    )];
+    for child in &output.spawned {
+        lines.push(format!(
+            "{} {} {}",
+            child.reviewer_id, child.role_id, child.agent_dir
+        ));
+    }
+    if !output.skipped_existing_roles.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "skipped_existing_roles {}",
+            output.skipped_existing_roles.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
 fn build_route_output(
+    session_dir: &str,
     mode: Mode,
     target_ref: &str,
     session_id: &str,
@@ -682,6 +939,7 @@ fn build_route_output(
         inputs,
     );
     Ok(RouteCommandOutput {
+        session_dir: session_dir.to_string(),
         surface_map,
         route_decision,
         persisted: None,
@@ -710,7 +968,21 @@ fn hint_for_error(text: &str) -> Option<String> {
         return Some("run `mpcr protocol list` to discover valid mode, worker, module, escalation, and dispatch ids".to_string());
     }
     if text.contains("session does not exist yet") {
-        return Some("initialize the session with `mpcr reviewer register --target-ref <ref> --session-dir <path>`".to_string());
+        return Some("initialize the session with `mpcr reviewer register --target-ref <same-ref> --session-dir <persisted.session_dir>` or reuse the same `--repo-root <path> --date <yyyy-mm-dd>` pair you routed with".to_string());
+    }
+    if text.contains("session target_ref") && text.contains("does not match") {
+        return Some(
+            "reuse the same exact target-ref string for this canonical session leaf. Each `<repo>/.local/reports/code_reviews/YYYY-MM-DD` leaf can hold only one target-ref, so clean that leaf or choose another date before starting a different review target."
+                .to_string(),
+        );
+    }
+    if text.contains("explicit --session-dir must end in")
+        || text.contains("explicit --session-dir must use a `<yyyy-mm-dd>` leaf directory")
+    {
+        return Some(
+            "prefer `--repo-root <path> --date <yyyy-mm-dd>` or use the canonical path `<repo-root>/.local/reports/code_reviews/<yyyy-mm-dd>`"
+                .to_string(),
+        );
     }
     if text.contains("was not found in the session") || text.contains("was not found") {
         return Some("inspect the active reviewer tree with `mpcr session reports --recursive --session-dir <path>`".to_string());
@@ -766,7 +1038,14 @@ fn run() -> anyhow::Result<()> {
             } else {
                 id::random_id8()?
             };
-            let mut output = build_route_output(args.mode, &args.target_ref, &session_id, &inputs)?;
+            let session_dir = locator.session_dir().to_string_lossy().into_owned();
+            let mut output = build_route_output(
+                &session_dir,
+                args.mode,
+                &args.target_ref,
+                &session_id,
+                &inputs,
+            )?;
             if args.persist {
                 let persisted = persist_route_artifacts(PersistRouteArtifactsParams {
                     session: locator,
@@ -871,13 +1150,10 @@ fn run() -> anyhow::Result<()> {
             }
             SessionCommands::Cleanup { session } => {
                 let locator = resolve_session_locator(&session)?;
-                let scratch_dir = cleanup_session(&locator)?;
-                emit_text_or_json(
-                    json,
-                    json_pretty,
-                    &serde_json::json!({ "scratch_dir": scratch_dir }),
-                    || Ok(format!("removed {}", scratch_dir.display())),
-                )?;
+                let cleanup = cleanup_session(&locator)?;
+                emit_text_or_json(json, json_pretty, &cleanup, || {
+                    Ok(format!("removed {}", cleanup.session_dir))
+                })?;
             }
             SessionCommands::Metrics { session } => {
                 let locator = resolve_session_locator(&session)?;
@@ -938,6 +1214,10 @@ fn run() -> anyhow::Result<()> {
                     domain_id,
                     language.as_deref(),
                 );
+                anyhow::ensure!(
+                    !role.chars().any(char::is_whitespace),
+                    "error: role-id must be a single dispatch slug without whitespace; got `{role}`"
+                );
                 let result = spawn_child_reviewers(SpawnChildReviewersParams {
                     session: locator,
                     parent_id,
@@ -953,6 +1233,13 @@ fn run() -> anyhow::Result<()> {
                 })?;
                 emit_text_or_json(json, json_pretty, &result, || {
                     Ok(toml::to_string_pretty(&result)?)
+                })?;
+            }
+            ReviewerCommands::SpawnRouted { session, parent_id } => {
+                let locator = resolve_session_locator(&session)?;
+                let result = spawn_routed_children(&locator, &parent_id)?;
+                emit_text_or_json(json, json_pretty, &result, || {
+                    Ok(format_spawn_routed_children_output(&result))
                 })?;
             }
             ReviewerCommands::CloseChildren {
@@ -1214,8 +1501,7 @@ fn run() -> anyhow::Result<()> {
                 let document = ArtifactDocument::ConvergenceState(plan.clone());
                 let toml_output = document.to_toml_string()?;
                 if let Some(output) = output {
-                    fs::write(&output, toml_output.as_bytes())
-                        .with_context(|| format!("write {}", output.display()))?;
+                    write_structured_output(&output, &plan, &toml_output)?;
                 }
                 emit_text_or_json(json, json_pretty, &plan, || Ok(toml_output))?;
             }

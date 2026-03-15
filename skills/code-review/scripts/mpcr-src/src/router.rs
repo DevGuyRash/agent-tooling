@@ -397,12 +397,10 @@ fn determine_architecture(
             }
         }
         crate::artifacts::ExecutionCapability::ParallelSubagents => {
-            if rigor == RigorLevel::Lite && surface_count <= 2 {
+            if rigor == RigorLevel::Lite && surface_count <= 1 {
                 ExecutionArchitecture::Direct
-            } else if rigor == RigorLevel::Forensic || surface_count >= 3 {
-                ExecutionArchitecture::Delegated
             } else {
-                ExecutionArchitecture::Hybrid
+                ExecutionArchitecture::Delegated
             }
         }
     }
@@ -1106,6 +1104,67 @@ mod tests {
         ensure!(domain_workers == ModuleId::all().len());
         ensure!(route.selected_modules == ModuleId::all().to_vec());
         ensure!(route.selected_modules.contains(&ModuleId::DocsStaleness));
+        Ok(())
+    }
+
+    #[test]
+    fn parallel_subagents_keep_tiny_lite_routes_direct() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.changed_files = vec!["tests/unit/foo_test.rs".to_string()];
+        inputs.public_interfaces = Vec::new();
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+
+        ensure!(route.rigor_level == RigorLevel::Lite);
+        ensure!(route.execution_architecture == ExecutionArchitecture::Direct);
+        Ok(())
+    }
+
+    #[test]
+    fn parallel_subagents_delegate_non_tiny_routes() -> anyhow::Result<()> {
+        let mut inputs = inputs();
+        inputs.changed_files = vec!["docs/api.md".to_string()];
+        inputs.public_interfaces = vec!["docs/api.md".to_string()];
+        let surface_map = build_surface_map(header(ArtifactKind::SurfaceMap)?, &inputs);
+        let route = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "def456abc123".to_string(),
+                "sess0001".to_string(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:01Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Applicator,
+            &surface_map,
+            &inputs,
+        );
+
+        let worker_kinds = route
+            .worker_plan
+            .iter()
+            .map(|worker| worker.worker_kind)
+            .collect::<Vec<_>>();
+        ensure!(route.execution_architecture == ExecutionArchitecture::Delegated);
+        ensure!(worker_kinds == vec![WorkerKind::ApplicatorWorker, WorkerKind::ApplicatorVerifier]);
         Ok(())
     }
 

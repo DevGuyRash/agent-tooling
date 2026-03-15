@@ -241,18 +241,46 @@ impl PolicyStore {
 fn compose_doc(title: &str, sections: &[String]) -> String {
     let mut lines = vec![format!("# {title}"), String::new()];
     for section in sections {
-        lines.push(section.clone());
+        lines.push(demote_markdown_headings(section, 1));
         lines.push(String::new());
     }
     lines.join("\n").trim_end().to_string()
+}
+
+fn demote_markdown_headings(body: &str, levels: usize) -> String {
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if let Some(demoted) = demote_atx_heading(line, levels) {
+            lines.push(demoted);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+fn demote_atx_heading(line: &str, levels: usize) -> Option<String> {
+    let heading_width = line.bytes().take_while(|byte| *byte == b'#').count();
+    if heading_width == 0 || heading_width > 6 {
+        return None;
+    }
+    let remainder = &line[heading_width..];
+    if !remainder.is_empty() && !remainder.starts_with([' ', '\t']) {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        "#".repeat(usize::min(heading_width + levels, 6)),
+        remainder
+    ))
 }
 
 /// Generate the reviewer fallback doc from the structured policy store.
 pub fn generate_reviewer_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
         store.render(PolicyCategory::Mode, "reviewer", PolicyView::Full)?,
-        "Route first, then use `mpcr protocol dispatch --role <role>` for the current worker instead of loading the whole skill body again. The reviewer roster is language-detector, zero or more language-research workers, one domain-reviewer per canonical module, and final-synthesis.".to_string(),
-        "Canonical artifact examples for manual reviewer flows live at `<skills-file-root>/references/reviewer-artifact-examples.md` with machine-valid TOML under `<skills-file-root>/references/examples/`.".to_string(),
+        "Route first. Treat `target-ref` as an opaque session key: branch name, commit SHA, or literal `HEAD` all work as long as every later command reuses the exact same string. For a fresh isolated session, prefer an unused canonical date leaf via `--repo-root <path> --date <yyyy-mm-dd>`; one canonical date leaf holds one session, so pick another date or clean up the stale leaf if that path already belongs to a different `target-ref`. For an existing session, reuse the exact persisted `session_dir` and the same `target-ref` string instead of inventing a new path. Register one root reviewer ledger as the orchestration anchor with `mpcr reviewer register --target-ref <same-exact-ref> --session-dir <persisted.session_dir>`, prefer `mpcr reviewer spawn-routed --parent-id <root-reviewer-id> --session-dir <persisted.session_dir>` to materialize every missing routed worker from `route_decision.worker_plan`, and fall back to `mpcr reviewer spawn-children` only for targeted manual replay. Use the current worker's `reviewer_id` for session-bound prompts, not the root anchor. The reviewer roster is language-detector, zero or more language-research workers, one domain-reviewer per canonical module, and the `final-synthesis` dispatch role (`final-synthesizer` worker policy). Use `mpcr session cleanup --session-dir <path>` to discard a stale canonical session leaf before reruns.".to_string(),
+        "Manual reviewer artifact examples are indexed in SKILL.md, and machine-valid TOML scaffolds live under `<skills-file-root>/references/examples/`.".to_string(),
         store.render(
             PolicyCategory::Worker,
             "language-detector",
@@ -323,6 +351,7 @@ pub fn generate_applicator_fallback(store: &PolicyStore) -> anyhow::Result<Strin
 /// Generate the full-cycle fallback doc from the structured policy store.
 pub fn generate_fullcycle_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
+        "Use `mpcr fullcycle plan --output <path>` as a preview only. The output path is resolved from the current working directory, `.json` writes JSON, other extensions write TOML, and `mpcr fullcycle checkpoint --artifact-file <path>` is the step that persists the chosen convergence state for `mpcr fullcycle state`. Run convergence planning only after the session has finalized a current `parent_review`; `application_result` and `verification_result` add more convergence signal once the applicator phase has run. Use `mpcr session cleanup --session-dir <path>` before rerouting a discarded canonical full-cycle session.".to_string(),
         store.render(PolicyCategory::Mode, "full-cycle", PolicyView::Full)?,
         store.render(PolicyCategory::Escalation, "reopen", PolicyView::Checklist)?,
         store.render(
@@ -337,7 +366,7 @@ pub fn generate_fullcycle_fallback(store: &PolicyStore) -> anyhow::Result<String
 /// Generate the routing/orchestrator fallback doc from the structured policy store.
 pub fn generate_orchestrator_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
-        "Use semantic routing first. Keep the orchestrator thin: instantiate the canonical reviewer roster every run, persist session state, and hand each worker only its dispatch prompt plus relevant policy packs. Use `mpcr session reports` for report retrieval and `mpcr session artifacts` for flat artifact inventory.".to_string(),
+        "Use semantic routing first. Treat `target-ref` as an opaque session key: branch name, commit SHA, or literal `HEAD` all work as long as every later command reuses the exact same string. For a fresh isolated session, prefer an unused canonical date leaf via `--repo-root <path> --date <yyyy-mm-dd>`; one canonical date leaf holds one session, so pick another date or clean up the stale leaf if that path already belongs to a different `target-ref`. For an existing session, reuse the exact persisted `session_dir` and the same `target-ref` string instead of pointing `--session-dir` at an ad hoc directory. Keep the orchestrator thin: persist session state, capture the resolved `session_dir`, register one root reviewer ledger for reviewer/full-cycle runs with `mpcr reviewer register --target-ref <same-exact-ref> --session-dir <persisted.session_dir>`, prefer `mpcr reviewer spawn-routed --parent-id <root-reviewer-id> --session-dir <persisted.session_dir>` to materialize the routed reviewer roster, and hand each worker only its dispatch prompt plus relevant policy packs. Use the spawned worker reviewer ID for bound dispatch, not the root anchor. Use `mpcr session reports --recursive` for descendant report retrieval, `mpcr session artifacts` for flat artifact inventory, and `mpcr session cleanup --session-dir <path>` to discard a stale canonical session leaf before reruns.".to_string(),
         store.render(PolicyCategory::Worker, "language-detector", PolicyView::Checklist)?,
         store.render(PolicyCategory::Worker, "language-research", PolicyView::Checklist)?,
         store.render(PolicyCategory::Worker, "domain-reviewer", PolicyView::Checklist)?,
@@ -367,6 +396,16 @@ mod tests {
             ensure!(!rendered.is_empty());
         }
         ensure!(store.list().iter().any(|entry| entry.id == "full-cycle"));
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_docs_demote_embedded_policy_headings() -> anyhow::Result<()> {
+        let store = PolicyStore::load()?;
+        let reviewer = generate_reviewer_fallback(&store)?;
+        ensure!(reviewer.starts_with("# Reviewer Fallback\n\n## reviewer\n"));
+        ensure!(reviewer.contains("\n### Must\n"));
+        ensure!(!reviewer.contains("\n# reviewer\n"));
         Ok(())
     }
 }

@@ -4,6 +4,11 @@ Use these canonical examples when you need to hand-author reviewer-mode artifact
 before running `mpcr validate`, `mpcr reviewer complete-child`, or
 `mpcr reviewer finalize`.
 
+These are session-bound routed examples, not legacy composite placeholders. The
+child example uses `domain-reviewer` with explicit `role_id`, `claimed_scope`,
+`delegated_scope`, and finding signal metadata that convergence and reopen
+logic rely on.
+
 - Child findings example: `<skills-file-root>/references/examples/reviewer-child-findings.toml`
 - Parent review example: `<skills-file-root>/references/examples/reviewer-parent-review.toml`
 

@@ -145,6 +145,21 @@ fn policy_ref(category: PolicyCategory, id: impl Into<String>, view: PolicyView)
     }
 }
 
+fn role_inherits_route_modules(role: &ResolvedRole) -> bool {
+    matches!(
+        role.worker_policy_id.as_str(),
+        "domain-reviewer" | "apply-composite" | "applicator-worker" | "applicator-verifier"
+    )
+}
+
+fn module_scope_label(worker_policy_id: &str) -> &'static str {
+    match worker_policy_id {
+        "domain-reviewer" => "own module",
+        "final-synthesizer" => "synthesis module",
+        _ => "module context",
+    }
+}
+
 fn push_section(lines: &mut Vec<String>, title: &str, items: &[String], empty: &str) {
     lines.push(format!("## {title}"));
     lines.push(String::new());
@@ -156,6 +171,30 @@ fn push_section(lines: &mut Vec<String>, title: &str, items: &[String], empty: &
         }
     }
     lines.push(String::new());
+}
+
+fn policy_view_slug(view: PolicyView) -> &'static str {
+    match view {
+        PolicyView::Brief => "brief",
+        PolicyView::Checklist => "checklist",
+        PolicyView::Schema => "schema",
+        PolicyView::Examples => "examples",
+        PolicyView::Full => "full",
+    }
+}
+
+fn policy_lookup_command(policy: &PolicyRef) -> String {
+    let (subcommand, selector_flag) = match policy.category {
+        PolicyCategory::Mode => ("mode", "--mode"),
+        PolicyCategory::Worker => ("worker", "--kind"),
+        PolicyCategory::Module => ("module", "--id"),
+        PolicyCategory::Escalation => ("escalation", "--id"),
+    };
+    format!(
+        "`mpcr protocol {subcommand} {selector_flag} {} --view {}`",
+        policy.id,
+        policy_view_slug(policy.view),
+    )
 }
 
 fn normalize_dispatch_role(role: &str) -> anyhow::Result<ResolvedRole> {
@@ -197,6 +236,15 @@ fn normalize_dispatch_role(role: &str) -> anyhow::Result<ResolvedRole> {
             role: trimmed.to_string(),
             mode: Mode::Reviewer,
             worker_policy_id: "domain-reviewer".to_string(),
+            module_ids: Vec::new(),
+        });
+    }
+
+    if trimmed == "orchestrator-root" {
+        return Ok(ResolvedRole {
+            role: trimmed.to_string(),
+            mode: Mode::Reviewer,
+            worker_policy_id: trimmed.to_string(),
             module_ids: Vec::new(),
         });
     }
@@ -442,7 +490,7 @@ fn dispatch_context(
         ctx.language_research_refs = session.language_research_refs.clone();
     }
 
-    if ctx.role.module_ids.is_empty() {
+    if ctx.role.module_ids.is_empty() && role_inherits_route_modules(&ctx.role) {
         if let Some(route) = &ctx.route {
             ctx.role.module_ids = route.selected_modules.clone();
         }
@@ -471,21 +519,22 @@ fn dispatch_context(
         ctx.role.worker_policy_id.clone(),
         view,
     ));
-    for module_id in &ctx.role.module_ids {
-        ctx.loaded_policy_refs
-            .push(policy_ref(PolicyCategory::Module, module_id.clone(), view));
-    }
 
     Ok(ctx)
 }
 
 fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow::Result<String> {
     let mut lines = Vec::new();
+    let has_report_destination = ctx.agent_dir.is_some() || ctx.report_path.is_some();
     lines.push(format!("# Dispatch {}", ctx.role.role));
     lines.push(String::new());
     lines.push("You SHALL keep the orchestrator thin and execute only the slice assigned in this dispatch.".to_string());
     lines.push("You SHALL treat machine artifacts as canonical and authored markdown as the required explanatory companion.".to_string());
-    lines.push("You SHALL write your full markdown report to the agent directory resolved below before you finalize machine artifacts.".to_string());
+    if has_report_destination {
+        lines.push("You SHALL write your full markdown report to the agent directory resolved below before you finalize machine artifacts.".to_string());
+    } else {
+        lines.push("You SHALL finalize machine artifacts through the session workflow and only author companion markdown after a session-bound step gives you an explicit `agent dir` or `report path`.".to_string());
+    }
     lines.push("You SHALL NOT re-read the entire skill body after receiving this dispatch unless the dispatch itself is missing a required contract.".to_string());
     lines.push(String::new());
 
@@ -531,7 +580,12 @@ fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow
         &ctx.role
             .module_ids
             .iter()
-            .map(|module_id| format!("own module `{module_id}`"))
+            .map(|module_id| {
+                format!(
+                    "{} `{module_id}`",
+                    module_scope_label(&ctx.role.worker_policy_id)
+                )
+            })
             .chain(
                 ctx.focus_surfaces
                     .iter()
@@ -589,36 +643,50 @@ fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow
 
     lines.push("## Operating Rules".to_string());
     lines.push(String::new());
-    lines.push("- Write a full `report.md` under the current agent directory even when the outcome is `OUT_OF_SCOPE`, `LOW_SIGNAL`, or `NO_FINDINGS`.".to_string());
-    lines.push("- Keep `_agent.json`, `_agent.toml`, and child manifests in sync through `mpcr reviewer ...` session mutations rather than ad-hoc file writes.".to_string());
+    if has_report_destination {
+        lines.push("- Ensure a full `report.md` exists under the current agent directory even when the outcome is `OUT_OF_SCOPE`, `LOW_SIGNAL`, or `NO_FINDINGS`; `mpcr reviewer complete-child` and `mpcr reviewer finalize` will render it from the stored artifact when you do not author one separately.".to_string());
+    } else {
+        lines.push("- This dispatch does not bind an `agent dir` or `report path`. Finalize the required machine artifacts through the session workflow first, then author companion markdown only if a later session-bound step materializes a concrete report destination.".to_string());
+    }
+    lines.push("- Keep every surviving finding tied to at least one repo-relative `path:line` or `path:start-end` anchor. When PR threads, API docs, specs, or web sources matter, cite them in `report.md` and tie them back to anchored repo evidence instead of putting them in `findings[].anchors`.".to_string());
+    lines.push("- Keep `_session.*`, `_agent.*`, and child manifests in sync through `mpcr ...` session mutations rather than ad-hoc file writes.".to_string());
+    lines.push("- Use routed workers for code, PR, API-doc, and web exploration. The orchestrator routes, challenges, and synthesizes; it does not absorb sibling first-hand investigation.".to_string());
     lines.push("- When you delegate helper work, claim the parent scope first and pass the child only a new sub-scope so work is not duplicated.".to_string());
-    lines.push("- Stop cleanly on low-signal, duplicate, non-actionable, or already-addressed findings after recording the reason.".to_string());
+    lines.push("- Record the categorical reason, then stop only after the finding is explicitly closed as low-signal, duplicate, non-actionable, or already-addressed.".to_string());
     lines.push(String::new());
 
-    lines.push(
-        store.render(
-            PolicyCategory::Mode,
-            &mode_slug(ctx.role.mode),
-            ctx.loaded_policy_refs
-                .iter()
-                .find(|policy| policy.category == PolicyCategory::Mode)
-                .map_or(PolicyView::Checklist, |policy| policy.view),
-        )?,
-    );
+    lines.push("## Embedded Pack Contents".to_string());
     lines.push(String::new());
-    lines.push(
-        store.render(
-            PolicyCategory::Worker,
-            &ctx.role.worker_policy_id,
-            ctx.loaded_policy_refs
-                .iter()
-                .find(|policy| {
-                    policy.category == PolicyCategory::Worker
-                        && policy.id == ctx.role.worker_policy_id
-                })
-                .map_or(PolicyView::Checklist, |policy| policy.view),
-        )?,
-    );
+    lines.push(demote_markdown_headings(
+        store
+            .render(
+                PolicyCategory::Mode,
+                &mode_slug(ctx.role.mode),
+                ctx.loaded_policy_refs
+                    .iter()
+                    .find(|policy| policy.category == PolicyCategory::Mode)
+                    .map_or(PolicyView::Checklist, |policy| policy.view),
+            )?
+            .as_str(),
+        1,
+    ));
+    lines.push(String::new());
+    lines.push(demote_markdown_headings(
+        store
+            .render(
+                PolicyCategory::Worker,
+                &ctx.role.worker_policy_id,
+                ctx.loaded_policy_refs
+                    .iter()
+                    .find(|policy| {
+                        policy.category == PolicyCategory::Worker
+                            && policy.id == ctx.role.worker_policy_id
+                    })
+                    .map_or(PolicyView::Checklist, |policy| policy.view),
+            )?
+            .as_str(),
+        1,
+    ));
     for module_id in &ctx.role.module_ids {
         lines.push(String::new());
         let module_view = ctx
@@ -626,10 +694,62 @@ fn render_dispatch_content(ctx: &DispatchContext, store: &PolicyStore) -> anyhow
             .iter()
             .find(|policy| policy.category == PolicyCategory::Module && policy.id == *module_id)
             .map_or(PolicyView::Checklist, |policy| policy.view);
-        lines.push(store.render(PolicyCategory::Module, module_id, module_view)?);
+        lines.push(demote_markdown_headings(
+            store
+                .render(PolicyCategory::Module, module_id, module_view)?
+                .as_str(),
+            1,
+        ));
     }
+    lines.push(String::new());
+
+    lines.push("## Referenced Pack Lookups".to_string());
+    lines.push(String::new());
+    if ctx.loaded_policy_refs.is_empty() {
+        lines.push("- no referenced packs were resolved".to_string());
+    } else {
+        lines.push("- Load only the pack you need next; do not re-read the entire skill body or unrelated policy packs.".to_string());
+        for policy in &ctx.loaded_policy_refs {
+            lines.push(format!(
+                "- {} {} {} via {}",
+                policy.category,
+                policy.id,
+                policy.version,
+                policy_lookup_command(policy),
+            ));
+        }
+    }
+    lines.push(String::new());
 
     Ok(lines.join("\n").trim_end().to_string())
+}
+
+fn demote_markdown_headings(body: &str, levels: usize) -> String {
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if let Some(demoted) = demote_atx_heading(line, levels) {
+            lines.push(demoted);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+fn demote_atx_heading(line: &str, levels: usize) -> Option<String> {
+    let heading_width = line.bytes().take_while(|byte| *byte == b'#').count();
+    if heading_width == 0 || heading_width > 6 {
+        return None;
+    }
+    let remainder = &line[heading_width..];
+    if !remainder.is_empty() && !remainder.starts_with([' ', '\t']) {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        "#".repeat(usize::min(heading_width + levels, 6)),
+        remainder
+    ))
 }
 
 /// Return the structured protocol list in stable order.
@@ -713,10 +833,13 @@ pub fn dispatch(
 }
 
 pub fn dispatch_list() -> Vec<String> {
-    let mut roles = ModuleId::all()
-        .into_iter()
-        .map(|module_id| format!("domain:{}", module_slug(module_id)))
-        .collect::<Vec<_>>();
+    let mut roles = vec!["orchestrator-root".to_string()];
+    roles.extend(
+        ModuleId::all()
+            .into_iter()
+            .map(|module_id| format!("domain:{}", module_slug(module_id)))
+            .collect::<Vec<_>>(),
+    );
     roles.extend([
         "language-detector".to_string(),
         "language-research:<language>".to_string(),
@@ -774,8 +897,77 @@ pub fn materialize_fallback_docs(skill_root: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifacts::{
+        ArtifactHeader, ArtifactKind, ExecutionCapability, PolicyCategory, PolicyRef, PolicyView,
+        ProducerKind,
+    };
+    use crate::paths::session_paths;
+    use crate::router::{build_route_decision, build_surface_map, default_router_policy_refs};
+    use crate::router_types::RouteInputs;
+    use crate::session::{ensure_session, persist_route_artifacts, PersistRouteArtifactsParams};
     use anyhow::ensure;
     use tempfile::tempdir;
+    use time::{Date, Month};
+
+    fn routed_session_locator() -> anyhow::Result<(tempfile::TempDir, SessionLocator)> {
+        let repo_root = tempdir()?;
+        let date = Date::from_calendar_date(2026, Month::March, 8)?;
+        let session_dir = session_paths(repo_root.path(), date).session_dir;
+        let locator = SessionLocator::from_session_dir(session_dir);
+        let session_id = ensure_session(&locator, "refs/heads/main")?.session_id;
+        let inputs = RouteInputs {
+            changed_files: vec!["src/api.rs".to_string(), "docs/api.md".to_string()],
+            public_interfaces: Vec::new(),
+            behavior_facing_artifacts: vec!["docs/api.md".to_string()],
+            execution_capability: ExecutionCapability::ParallelSubagents,
+            max_worker_count: 4,
+            orchestrator_read_budget_lines: 120,
+            orchestrator_read_budget_snippets: 12,
+            history_signals: Default::default(),
+        };
+        let surface_map = build_surface_map(
+            ArtifactHeader::new(
+                ArtifactKind::SurfaceMap,
+                "abc123def456".to_string(),
+                session_id.clone(),
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:00Z".to_string(),
+                crate::artifacts::ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Worker,
+                    id: "surface-mapper".to_string(),
+                    version: POLICY_BUNDLE_VERSION.to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            &inputs,
+        );
+        let route_decision = build_route_decision(
+            ArtifactHeader::new(
+                ArtifactKind::RouteDecision,
+                "fedcba654321".to_string(),
+                session_id,
+                "refs/heads/main".to_string(),
+                ProducerKind::Router,
+                "2026-03-08T00:00:00Z".to_string(),
+                crate::artifacts::ConfidenceLabel::High,
+                90,
+                default_router_policy_refs(&surface_map.suggested_modules),
+            )?,
+            Mode::Reviewer,
+            &surface_map,
+            &inputs,
+        );
+        persist_route_artifacts(PersistRouteArtifactsParams {
+            session: locator.clone(),
+            target_ref: "refs/heads/main".to_string(),
+            surface_map,
+            route_decision,
+        })?;
+        Ok((repo_root, locator))
+    }
 
     #[test]
     fn list_and_lookup_are_available() -> anyhow::Result<()> {
@@ -795,10 +987,33 @@ mod tests {
             .content
             .contains("# Dispatch domain:core-correctness"));
         ensure!(output.content.contains("## Operating Rules"));
+        ensure!(output.content.contains("## Referenced Pack Lookups"));
+        ensure!(output.content.contains("findings[].anchors"));
+        ensure!(output
+            .content
+            .contains("The orchestrator routes, challenges, and synthesizes"));
+        ensure!(output.content.contains("## Embedded Pack Contents"));
         ensure!(output
             .loaded_policy_refs
             .iter()
             .any(|policy| policy.id == "domain-reviewer"));
+        ensure!(output
+            .content
+            .contains("`mpcr protocol worker --kind domain-reviewer --view checklist`"));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_supports_orchestrator_root_without_session_context() -> anyhow::Result<()> {
+        let output = dispatch("orchestrator-root", None, None, PolicyView::Checklist)?;
+        ensure!(output.content.contains("# Dispatch orchestrator-root"));
+        ensure!(output
+            .loaded_policy_refs
+            .iter()
+            .any(|policy| policy.id == "orchestrator-root"));
+        ensure!(output
+            .content
+            .contains("worker orchestrator-root 2026.03.08"));
         Ok(())
     }
 
@@ -814,10 +1029,70 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_renders_modules_in_requested_view() -> anyhow::Result<()> {
+    fn session_bound_dispatch_does_not_duplicate_route_module_refs() -> anyhow::Result<()> {
+        let (_repo_root, locator) = routed_session_locator()?;
+        let output = dispatch(
+            "apply-composite",
+            Some(&locator),
+            None,
+            PolicyView::Checklist,
+        )?;
+        let module_policy_count = output
+            .loaded_policy_refs
+            .iter()
+            .filter(|policy| policy.category == PolicyCategory::Module)
+            .count();
+        ensure!(module_policy_count == output.module_ids.len());
+        Ok(())
+    }
+
+    #[test]
+    fn applicator_worker_dispatch_without_session_omits_agent_dir_requirements(
+    ) -> anyhow::Result<()> {
+        let output = dispatch("applicator-worker", None, None, PolicyView::Checklist)?;
+        ensure!(!output.content.contains("agent directory resolved below"));
+        ensure!(!output.content.contains("current agent directory"));
+        ensure!(output
+            .content
+            .contains("does not bind an `agent dir` or `report path`"));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_references_lookups_in_requested_view() -> anyhow::Result<()> {
         let output = dispatch("domain:core-correctness", None, None, PolicyView::Examples)?;
-        let module_output = module("core-correctness", PolicyView::Examples)?;
-        ensure!(output.content.contains(&module_output.content));
+        ensure!(output
+            .content
+            .contains("`mpcr protocol mode --mode reviewer --view examples`"));
+        ensure!(output
+            .content
+            .contains("`mpcr protocol worker --kind domain-reviewer --view examples`"));
+        ensure!(output
+            .content
+            .contains("`mpcr protocol module --id core-correctness --view examples`"));
+        ensure!(output.content.contains("## Embedded Pack Contents"));
+        ensure!(output.content.contains("\n## reviewer\n"));
+        ensure!(output.content.contains("\n## domain-reviewer\n"));
+        ensure!(output.content.contains("\n## core-correctness\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn language_detector_dispatch_does_not_inherit_route_modules_without_bound_review(
+    ) -> anyhow::Result<()> {
+        let (_repo_root, locator) = routed_session_locator()?;
+        let output = dispatch(
+            "language-detector",
+            Some(&locator),
+            None,
+            PolicyView::Checklist,
+        )?;
+        ensure!(output.module_ids.is_empty());
+        ensure!(!output.content.contains("own module `"));
+        ensure!(
+            output.content.contains("- scope was not session-bound")
+                || output.content.contains("- focus surface `")
+        );
         Ok(())
     }
 

@@ -5,11 +5,14 @@ use crate::artifacts::{
     parse_artifact_file, validate_anchor, validate_artifact_id, validate_confidence,
     validate_created_at, validate_finding_identity, validate_session_id, ApplicationResultArtifact,
     ArtifactDocument, ArtifactHeader, ArtifactKind, ChildFindingsArtifact,
-    ConvergenceStateArtifact, CoverageSummary, FindingRecord, ModuleId, ParentReviewArtifact,
-    RouteDecisionArtifact, RouteRevisionArtifact, SurfaceMapArtifact, VerificationResultArtifact,
+    ConvergenceStateArtifact, CoverageSummary, Disposition, FindingRecord, ModuleId,
+    ParentReviewArtifact, RouteDecisionArtifact, RouteRevisionArtifact, Severity,
+    SurfaceMapArtifact, VerificationResultArtifact,
 };
 use crate::render::render_artifact_markdown;
+use crate::session::{load_session, SessionLocator};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
@@ -85,6 +88,224 @@ fn validate_findings(findings: &[FindingRecord], errors: &mut Vec<String>) {
     for finding in findings {
         if let Err(err) = validate_finding_identity(finding) {
             errors.push(err.to_string());
+        }
+    }
+}
+
+fn soft_validate_findings(findings: &[FindingRecord], warnings: &mut Vec<String>) {
+    for finding in findings {
+        if !matches!(
+            finding.severity,
+            crate::artifacts::Severity::Blocker | crate::artifacts::Severity::Major
+        ) {
+            continue;
+        }
+        if finding.evidence_strength.is_none() {
+            warnings.push(format!(
+                "high-severity finding `{}` is missing evidence_strength",
+                finding.finding_id
+            ));
+        }
+        if finding.false_positive_risk.is_none() {
+            warnings.push(format!(
+                "high-severity finding `{}` is missing false_positive_risk",
+                finding.finding_id
+            ));
+        }
+        if finding.actionable.is_none() {
+            warnings.push(format!(
+                "high-severity finding `{}` is missing actionable",
+                finding.finding_id
+            ));
+        }
+        if finding.duplicate_suspect == Some(true) {
+            warnings.push(format!(
+                "high-severity finding `{}` is marked duplicate_suspect=true",
+                finding.finding_id
+            ));
+        }
+        if finding.false_positive_risk == Some(crate::artifacts::ConfidenceLabel::High) {
+            warnings.push(format!(
+                "high-severity finding `{}` carries false_positive_risk=high",
+                finding.finding_id
+            ));
+        }
+        if finding.evidence_strength == Some(crate::artifacts::ConfidenceLabel::Low) {
+            warnings.push(format!(
+                "high-severity finding `{}` carries evidence_strength=low",
+                finding.finding_id
+            ));
+        }
+    }
+}
+
+fn current_parent_review_findings(
+    session_dir: &Path,
+) -> anyhow::Result<BTreeMap<String, FindingRecord>> {
+    let locator = SessionLocator::from_session_dir(session_dir.to_path_buf());
+    let session = load_session(&locator)?;
+    let Some(pointer) = session.current.parent_review.as_ref() else {
+        return Ok(BTreeMap::new());
+    };
+    let repo_root = std::path::PathBuf::from(&session.repo_root);
+    let mut resolved = None;
+    for candidate in [
+        pointer.json_path.as_deref(),
+        Some(pointer.path.as_str()),
+        pointer.toml_path.as_deref(),
+    ] {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let Ok(path) = crate::paths::resolve_repo_relative(&repo_root, candidate) else {
+            continue;
+        };
+        if path.exists() {
+            resolved = Some(path);
+            break;
+        }
+    }
+    let Some(path) = resolved else {
+        return Ok(BTreeMap::new());
+    };
+    let ArtifactDocument::ParentReview(parent_review) = parse_artifact_file(&path)? else {
+        return Ok(BTreeMap::new());
+    };
+    let mut findings = BTreeMap::new();
+    for finding in parent_review
+        .required_now
+        .into_iter()
+        .chain(parent_review.follow_up.into_iter())
+    {
+        findings.insert(finding.finding_id.clone(), finding);
+    }
+    Ok(findings)
+}
+
+fn soft_validate_application_result(
+    artifact: &ApplicationResultArtifact,
+    session_dir: Option<&Path>,
+    warnings: &mut Vec<String>,
+) {
+    let disposition_ids = artifact
+        .dispositions
+        .iter()
+        .map(|disposition| disposition.finding_id.as_str())
+        .collect::<Vec<_>>();
+    let unique_disposition_ids = disposition_ids.iter().copied().collect::<BTreeSet<_>>();
+    if unique_disposition_ids.len() != disposition_ids.len() {
+        warnings.push(
+            "application_result contains duplicate disposition finding_id values".to_string(),
+        );
+    }
+
+    let source_ids = artifact
+        .source_finding_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let missing = source_ids
+        .iter()
+        .filter(|finding_id| !unique_disposition_ids.contains(**finding_id))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        warnings.push(format!(
+            "application_result is missing dispositions for source findings: {}",
+            missing.join(", ")
+        ));
+    }
+
+    for disposition in &artifact.dispositions {
+        if disposition.detail.trim().len() < 12 {
+            warnings.push(format!(
+                "disposition `{}` detail is too terse to explain the decision",
+                disposition.finding_id
+            ));
+        }
+        if matches!(
+            disposition.disposition,
+            Disposition::Declined | Disposition::AlreadyAddressed
+        ) && disposition.decline_reason_code.is_none()
+        {
+            warnings.push(format!(
+                "disposition `{}` is `{}` but decline_reason_code is missing",
+                disposition.finding_id,
+                toml::Value::try_from(disposition.disposition)
+                    .map_or_else(|_| "unknown".to_string(), |value| value.to_string())
+                    .trim_matches('"')
+            ));
+        }
+        if (disposition.duplicate_suspect == Some(true)
+            || disposition.decline_reason_code
+                == Some(crate::artifacts::DeclineReasonCode::Duplicate))
+            && disposition.duplicate_reason_code.is_none()
+        {
+            warnings.push(format!(
+                "disposition `{}` suggests a duplicate outcome but duplicate_reason_code is missing",
+                disposition.finding_id
+            ));
+        }
+        if disposition.verification_needed && disposition.stop_recommendation.is_none() {
+            warnings.push(format!(
+                "disposition `{}` requires verification but stop_recommendation is missing",
+                disposition.finding_id
+            ));
+        }
+        if disposition.disposition == Disposition::Applied && disposition.tracking_ref.is_none() {
+            warnings.push(format!(
+                "applied disposition `{}` is missing tracking_ref",
+                disposition.finding_id
+            ));
+        }
+    }
+
+    let Some(session_dir) = session_dir else {
+        return;
+    };
+    let Ok(parent_findings) = current_parent_review_findings(session_dir) else {
+        return;
+    };
+    for disposition in &artifact.dispositions {
+        let Some(source) = parent_findings.get(&disposition.finding_id) else {
+            continue;
+        };
+        if !matches!(source.severity, Severity::Blocker | Severity::Major) {
+            continue;
+        }
+        if disposition.evidence_strength.is_none() {
+            warnings.push(format!(
+                "high-severity source finding `{}` is missing disposition evidence_strength",
+                disposition.finding_id
+            ));
+        }
+        if disposition.false_positive_risk.is_none() {
+            warnings.push(format!(
+                "high-severity source finding `{}` is missing disposition false_positive_risk",
+                disposition.finding_id
+            ));
+        }
+        if disposition.duplicate_suspect.is_none() {
+            warnings.push(format!(
+                "high-severity source finding `{}` is missing disposition duplicate_suspect",
+                disposition.finding_id
+            ));
+        }
+        if disposition.stop_recommendation.is_none() {
+            warnings.push(format!(
+                "high-severity source finding `{}` is missing disposition stop_recommendation",
+                disposition.finding_id
+            ));
+        }
+        if matches!(
+            disposition.disposition,
+            Disposition::Declined | Disposition::AlreadyAddressed
+        ) && disposition.detail.trim().split_whitespace().count() < 4
+        {
+            warnings.push(format!(
+                "high-severity source finding `{}` has a decline/already-addressed detail that is too thin",
+                disposition.finding_id
+            ));
         }
     }
 }
@@ -384,11 +605,49 @@ fn validate_application_result(artifact: &ApplicationResultArtifact, errors: &mu
                 .to_string(),
         );
     }
+    let disposition_ids = artifact
+        .dispositions
+        .iter()
+        .map(|disposition| disposition.finding_id.clone())
+        .collect::<Vec<_>>();
+    let unique_disposition_ids = disposition_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if unique_disposition_ids.len() != disposition_ids.len() {
+        errors.push("dispositions must not contain duplicate finding_id values".to_string());
+    }
+    let source_ids = artifact
+        .source_finding_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if source_ids != unique_disposition_ids {
+        errors.push(
+            "source_finding_ids must match the finding_id values present in dispositions"
+                .to_string(),
+        );
+    }
 }
 
-fn validate_verification_result(artifact: &VerificationResultArtifact, errors: &mut Vec<String>) {
+fn validate_verification_result(
+    artifact: &VerificationResultArtifact,
+    session_dir: Option<&Path>,
+    errors: &mut Vec<String>,
+) {
     if let Err(err) = validate_header(&artifact.header, ArtifactKind::VerificationResult) {
         errors.push(err.to_string());
+    }
+    let verification_ids = artifact
+        .verified_items
+        .iter()
+        .chain(&artifact.failed_items)
+        .chain(&artifact.partial_items)
+        .map(|item| item.finding_id.clone())
+        .collect::<Vec<_>>();
+    let unique_verification_ids = verification_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if unique_verification_ids.len() != verification_ids.len() {
+        errors.push(
+            "verification_result finding_ids must be unique across verified_items, failed_items, and partial_items"
+                .to_string(),
+        );
     }
     for item in &artifact.verified_items {
         if item.status != crate::artifacts::VerificationStatus::Yes {
@@ -414,6 +673,134 @@ fn validate_verification_result(artifact: &VerificationResultArtifact, errors: &
             ));
         }
     }
+    if let Some(session_dir) = session_dir {
+        match load_session(&SessionLocator::from_session_dir(session_dir.to_path_buf())) {
+            Ok(session) => {
+                let expected_ids = match resolve_application_verification_ids(
+                    &session,
+                    session_dir,
+                    &unique_verification_ids,
+                ) {
+                    Ok(expected_ids) => expected_ids,
+                    Err(err) => {
+                        errors.push(err);
+                        return;
+                    }
+                };
+                if unique_verification_ids != expected_ids {
+                    errors.push(format!(
+                        "verification_result finding_ids {:?} did not match application_result.verification_needed {:?}",
+                        unique_verification_ids.into_iter().collect::<Vec<_>>(),
+                        expected_ids.into_iter().collect::<Vec<_>>()
+                    ));
+                }
+            }
+            Err(err) => {
+                errors.push(format!(
+                    "session-aware verification validation failed: {err}"
+                ));
+            }
+        }
+    }
+}
+
+fn resolve_application_verification_ids(
+    _session: &crate::session::SessionLedger,
+    session_dir: &Path,
+    verification_ids: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
+    let Some(current_pointer) = _session.current.application_result.as_ref() else {
+        return Err(
+            "verification_result requires a finalized application_result in the session store"
+                .to_string(),
+        );
+    };
+
+    let current_result = load_application_result_by_pointer(session_dir, current_pointer)
+        .map_err(|err| format!("current application_result pointer could not be parsed: {err}"))?;
+    let current_ids = verification_needed_ids(&current_result);
+    if &current_ids == verification_ids {
+        return Ok(current_ids);
+    }
+
+    let mut matched_ids = None;
+    let mut saw_application_result = false;
+    let mut application_result_count = 0usize;
+    for pointer in &_session.artifacts {
+        if pointer.artifact_kind != ArtifactKind::ApplicationResult {
+            continue;
+        }
+        saw_application_result = true;
+        application_result_count += 1;
+        let application_result =
+            load_application_result_by_pointer(session_dir, pointer).map_err(|err| {
+                format!(
+                    "application_result artifact `{}` could not be parsed: {err}",
+                    pointer.artifact_id
+                )
+            })?;
+        let candidate_ids = verification_needed_ids(&application_result);
+        if &candidate_ids != verification_ids {
+            continue;
+        }
+        match &matched_ids {
+            Some(existing) if existing != &candidate_ids => {}
+            _ => matched_ids = Some(candidate_ids),
+        }
+    }
+
+    if let Some(matched_ids) = matched_ids {
+        Ok(matched_ids)
+    } else if application_result_count <= 1 {
+        Err(format!(
+            "verification_result finding_ids {:?} did not match application_result.verification_needed {:?}",
+            verification_ids.iter().cloned().collect::<Vec<_>>(),
+            current_ids.into_iter().collect::<Vec<_>>()
+        ))
+    } else if saw_application_result {
+        Err(format!(
+            "verification_result finding_ids {:?} did not match any application_result.verification_needed in the session store",
+            verification_ids.iter().cloned().collect::<Vec<_>>()
+        ))
+    } else {
+        Err(
+            "verification_result requires a finalized application_result in the session store"
+                .to_string(),
+        )
+    }
+}
+
+fn load_application_result_by_pointer(
+    session_dir: &Path,
+    pointer: &crate::session::ArtifactPointer,
+) -> anyhow::Result<ApplicationResultArtifact> {
+    let application_path = crate::paths::existing_artifact_path(
+        session_dir,
+        ArtifactKind::ApplicationResult,
+        &pointer.artifact_id,
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "artifact `{}` was not found in the session store",
+            pointer.artifact_id
+        )
+    })?;
+
+    match parse_artifact_file(&application_path)? {
+        ArtifactDocument::ApplicationResult(application_result) => Ok(application_result),
+        _ => Err(anyhow::anyhow!(
+            "artifact `{}` did not resolve to an application_result artifact",
+            pointer.artifact_id
+        )),
+    }
+}
+
+fn verification_needed_ids(application_result: &ApplicationResultArtifact) -> BTreeSet<String> {
+    application_result
+        .verification_needed
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
 }
 
 fn validate_convergence_state(
@@ -476,7 +863,11 @@ fn check_heading_order(markdown: &str, headings: &[&str], warnings: &mut Vec<Str
     }
 }
 
-fn soft_validate_document(artifact: &ArtifactDocument, warnings: &mut Vec<String>) {
+fn soft_validate_document(
+    artifact: &ArtifactDocument,
+    session_dir: Option<&Path>,
+    warnings: &mut Vec<String>,
+) {
     let markdown = match render_artifact_markdown(artifact) {
         Ok(markdown) => markdown,
         Err(err) => {
@@ -485,7 +876,12 @@ fn soft_validate_document(artifact: &ArtifactDocument, warnings: &mut Vec<String
         }
     };
     match artifact {
+        ArtifactDocument::ChildFindings(child_findings) => {
+            soft_validate_findings(&child_findings.findings, warnings);
+        }
         ArtifactDocument::ParentReview(parent_review) => {
+            soft_validate_findings(&parent_review.required_now, warnings);
+            soft_validate_findings(&parent_review.follow_up, warnings);
             check_heading_order(
                 &markdown,
                 &[
@@ -504,7 +900,8 @@ fn soft_validate_document(artifact: &ArtifactDocument, warnings: &mut Vec<String
                 warnings.push("coverage_summary.changed_files is empty".to_string());
             }
         }
-        ArtifactDocument::ApplicationResult(_) => {
+        ArtifactDocument::ApplicationResult(application_result) => {
+            soft_validate_application_result(application_result, session_dir, warnings);
             check_heading_order(
                 &markdown,
                 &[
@@ -564,7 +961,7 @@ pub fn validate_artifact_document(
                 validate_application_result(artifact, &mut errors)
             }
             ArtifactDocument::VerificationResult(artifact) => {
-                validate_verification_result(artifact, &mut errors)
+                validate_verification_result(artifact, session_dir, &mut errors)
             }
             ArtifactDocument::ConvergenceState(artifact) => {
                 validate_convergence_state(artifact, session_dir, &mut errors)
@@ -573,7 +970,7 @@ pub fn validate_artifact_document(
                 validate_route_revision(artifact, session_dir, &mut errors)
             }
         },
-        ValidationLayer::Soft => soft_validate_document(artifact, &mut warnings),
+        ValidationLayer::Soft => soft_validate_document(artifact, session_dir, &mut warnings),
     }
     Ok(ValidationSummary {
         artifact_kind: artifact.kind(),
@@ -612,12 +1009,21 @@ pub fn validate_artifact_file(
 mod tests {
     use super::*;
     use crate::artifacts::{
-        ArtifactHeader, ArtifactKind, CapabilityProfile, ConfidenceLabel, CoverageSummary,
+        compute_anchor_cluster, compute_fingerprint, ArtifactHeader, ArtifactKind,
+        CapabilityProfile, ConfidenceLabel, CoverageSummary, Disposition, DispositionRecord,
         ExecutionArchitecture, ExecutionCapability, Mode, PolicyCategory, PolicyRef, PolicyView,
         ProducerKind, ResourceBudget, ReviewVerdict, RiskSurfaceRecord, ShipReadinessSummary,
         ShipReadinessVerdict, SurfaceId, WorkerKind, WorkerPlanRecord,
     };
+    use crate::paths::session_paths;
+    use crate::session::{
+        finalize_application, finalize_review, register_reviewer, ApplicatorArtifactParams,
+        RegisterReviewerParams, ReviewerArtifactParams, SessionLocator,
+    };
     use anyhow::ensure;
+    use std::fs;
+    use tempfile::tempdir;
+    use time::{Date, Month};
 
     fn header(kind: ArtifactKind) -> anyhow::Result<ArtifactHeader> {
         ArtifactHeader::new(
@@ -774,6 +1180,520 @@ mod tests {
         let summary = validate_artifact_document(&artifact, ValidationLayer::Soft, None)?;
         ensure!(summary.errors.is_empty());
         ensure!(!summary.warnings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn soft_validation_warns_for_low_signal_major_findings() -> anyhow::Result<()> {
+        let artifact = ArtifactDocument::ParentReview(ParentReviewArtifact {
+            header: header(ArtifactKind::ParentReview)?,
+            source_artifact_ids: Vec::new(),
+            final_verdict: ReviewVerdict::RequestChanges,
+            ship_readiness: ShipReadinessSummary {
+                verdict: ShipReadinessVerdict::ShipWithFixes,
+                axes: Vec::new(),
+                blocking_items: vec!["major issue".to_string()],
+                required_now_count: 1,
+                follow_up_count: 0,
+            },
+            required_now: vec![FindingRecord {
+                finding_id: "F300".to_string(),
+                module_id: ModuleId::CoreCorrectness,
+                surface_ids: vec![SurfaceId::PublicApi],
+                severity: crate::artifacts::Severity::Major,
+                title: "major issue".to_string(),
+                claim: "major issue remains".to_string(),
+                scenario: "major issue reproduced".to_string(),
+                evidence: "major issue evidence".to_string(),
+                recommendation: "fix it".to_string(),
+                verification: "rerun tests".to_string(),
+                anchors: vec!["src/lib.rs:30".to_string()],
+                symbol_hint: None,
+                anchor_cluster: "src/lib.rs".to_string(),
+                fingerprint: "fp300".to_string(),
+                reopen_eligible: true,
+                confidence_label: ConfidenceLabel::High,
+                confidence_score: 90,
+                evidence_strength: Some(ConfidenceLabel::Low),
+                false_positive_risk: Some(ConfidenceLabel::High),
+                actionable: None,
+                duplicate_suspect: Some(true),
+            }],
+            follow_up: Vec::new(),
+            defended_summary: Vec::new(),
+            residual_risks: Vec::new(),
+            coverage_summary: CoverageSummary {
+                changed_files: vec!["src/lib.rs".to_string()],
+                surfaces_covered: vec![SurfaceId::PublicApi],
+                modules_loaded: vec![ModuleId::CoreCorrectness],
+                tests_run: Vec::new(),
+                tests_not_run_reason: Some("not run".to_string()),
+                limitations: Vec::new(),
+            },
+        });
+        let summary = validate_artifact_document(&artifact, ValidationLayer::Soft, None)?;
+        ensure!(summary.errors.is_empty());
+        ensure!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("false_positive_risk=high")));
+        ensure!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duplicate_suspect=true")));
+        ensure!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("evidence_strength=low")));
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_rejects_application_result_mismatched_dispositions() -> anyhow::Result<()> {
+        let artifact = ArtifactDocument::ApplicationResult(ApplicationResultArtifact {
+            header: header(ArtifactKind::ApplicationResult)?,
+            source_finding_ids: vec!["F001".to_string(), "F002".to_string()],
+            dispositions: vec![DispositionRecord {
+                finding_id: "F001".to_string(),
+                disposition: Disposition::Applied,
+                decline_reason_code: None,
+                duplicate_reason_code: None,
+                detail: "applied the fix with tests".to_string(),
+                tracking_ref: Some("apply-001".to_string()),
+                verification_needed: true,
+                evidence_strength: Some(ConfidenceLabel::High),
+                false_positive_risk: Some(ConfidenceLabel::Low),
+                duplicate_suspect: Some(false),
+                stop_recommendation: Some("continue_to_verification".to_string()),
+            }],
+            modified_files: vec!["src/lib.rs".to_string()],
+            verification_needed: vec!["F001".to_string()],
+            decline_codes: Vec::new(),
+        });
+        let summary = validate_artifact_document(&artifact, ValidationLayer::Hard, None)?;
+        ensure!(summary
+            .errors
+            .iter()
+            .any(|error| error.contains("source_finding_ids must match")));
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_rejects_verification_result_without_application_result() -> anyhow::Result<()>
+    {
+        let repo_root = tempdir()?;
+        let date = Date::from_calendar_date(2026, Month::March, 8)?;
+        let session_dir = session_paths(repo_root.path(), date).session_dir;
+        fs::create_dir_all(&session_dir)?;
+        let locator = SessionLocator::from_session_dir(session_dir.clone());
+        let registered = register_reviewer(RegisterReviewerParams {
+            session: locator,
+            target_ref: "refs/heads/main".to_string(),
+            reviewer_id: Some("root0008".to_string()),
+            role: Some("final-synthesis".to_string()),
+            role_kind: None,
+        })?;
+
+        let artifact = ArtifactDocument::VerificationResult(VerificationResultArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::VerificationResult,
+                "abc001def234".to_string(),
+                registered.session_id,
+                "refs/heads/main".to_string(),
+                ProducerKind::ApplicatorVerifier,
+                "2026-03-08T00:00:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "applicator".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            verified_items: vec![crate::artifacts::VerificationItemRecord {
+                finding_id: "F001".to_string(),
+                status: crate::artifacts::VerificationStatus::Yes,
+                notes: "verified".to_string(),
+            }],
+            failed_items: Vec::new(),
+            partial_items: Vec::new(),
+            residual_risks: Vec::new(),
+        });
+        let summary =
+            validate_artifact_document(&artifact, ValidationLayer::Hard, Some(&session_dir))?;
+        ensure!(summary
+            .errors
+            .iter()
+            .any(|error| error.contains("requires a finalized application_result")));
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_rejects_verification_result_ids_outside_application_result(
+    ) -> anyhow::Result<()> {
+        let repo_root = tempdir()?;
+        let date = Date::from_calendar_date(2026, Month::March, 8)?;
+        let session_dir = session_paths(repo_root.path(), date).session_dir;
+        fs::create_dir_all(&session_dir)?;
+        let locator = SessionLocator::from_session_dir(session_dir.clone());
+        let registered = register_reviewer(RegisterReviewerParams {
+            session: locator.clone(),
+            target_ref: "refs/heads/main".to_string(),
+            reviewer_id: Some("root0009".to_string()),
+            role: Some("final-synthesis".to_string()),
+            role_kind: None,
+        })?;
+
+        let application_result = ArtifactDocument::ApplicationResult(ApplicationResultArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::ApplicationResult,
+                "abc001abc234".to_string(),
+                registered.session_id.clone(),
+                "refs/heads/main".to_string(),
+                ProducerKind::ApplicatorWorker,
+                "2026-03-08T00:00:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "applicator".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            source_finding_ids: vec!["F001".to_string()],
+            dispositions: vec![DispositionRecord {
+                finding_id: "F001".to_string(),
+                disposition: Disposition::Applied,
+                decline_reason_code: None,
+                duplicate_reason_code: None,
+                detail: "applied".to_string(),
+                tracking_ref: Some("apply-001".to_string()),
+                verification_needed: true,
+                evidence_strength: Some(ConfidenceLabel::High),
+                false_positive_risk: Some(ConfidenceLabel::Low),
+                duplicate_suspect: Some(false),
+                stop_recommendation: Some("continue_to_verification".to_string()),
+            }],
+            modified_files: vec!["src/lib.rs".to_string()],
+            verification_needed: vec!["F001".to_string()],
+            decline_codes: Vec::new(),
+        });
+        let application_file = session_dir.join("application_result.toml");
+        fs::write(&application_file, application_result.to_toml_string()?)?;
+        finalize_application(ApplicatorArtifactParams {
+            session: locator,
+            artifact_file: application_file,
+        })?;
+
+        let verification_result =
+            ArtifactDocument::VerificationResult(VerificationResultArtifact {
+                header: ArtifactHeader::new(
+                    ArtifactKind::VerificationResult,
+                    "abc002def345".to_string(),
+                    registered.session_id,
+                    "refs/heads/main".to_string(),
+                    ProducerKind::ApplicatorVerifier,
+                    "2026-03-08T00:00:00Z".to_string(),
+                    ConfidenceLabel::High,
+                    90,
+                    vec![PolicyRef {
+                        category: PolicyCategory::Mode,
+                        id: "applicator".to_string(),
+                        version: "2026.03.08".to_string(),
+                        view: PolicyView::Checklist,
+                    }],
+                )?,
+                verified_items: vec![crate::artifacts::VerificationItemRecord {
+                    finding_id: "F999".to_string(),
+                    status: crate::artifacts::VerificationStatus::Yes,
+                    notes: "verified".to_string(),
+                }],
+                failed_items: Vec::new(),
+                partial_items: Vec::new(),
+                residual_risks: Vec::new(),
+            });
+        let summary = validate_artifact_document(
+            &verification_result,
+            ValidationLayer::Hard,
+            Some(&session_dir),
+        )?;
+        ensure!(summary
+            .errors
+            .iter()
+            .any(|error| error.contains("did not match application_result.verification_needed")));
+        Ok(())
+    }
+
+    #[test]
+    fn hard_validation_matches_verification_result_to_historical_application_cycle(
+    ) -> anyhow::Result<()> {
+        let repo_root = tempdir()?;
+        let date = Date::from_calendar_date(2026, Month::March, 8)?;
+        let session_dir = session_paths(repo_root.path(), date).session_dir;
+        fs::create_dir_all(&session_dir)?;
+        let locator = SessionLocator::from_session_dir(session_dir.clone());
+        let registered = register_reviewer(RegisterReviewerParams {
+            session: locator.clone(),
+            target_ref: "refs/heads/main".to_string(),
+            reviewer_id: Some("root0010".to_string()),
+            role: Some("final-synthesis".to_string()),
+            role_kind: None,
+        })?;
+
+        let application_one = ArtifactDocument::ApplicationResult(ApplicationResultArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::ApplicationResult,
+                "abc010abc234".to_string(),
+                registered.session_id.clone(),
+                "refs/heads/main".to_string(),
+                ProducerKind::ApplicatorWorker,
+                "2026-03-08T00:00:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "applicator".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            source_finding_ids: vec!["F001".to_string()],
+            dispositions: vec![DispositionRecord {
+                finding_id: "F001".to_string(),
+                disposition: Disposition::Applied,
+                decline_reason_code: None,
+                duplicate_reason_code: None,
+                detail: "applied".to_string(),
+                tracking_ref: Some("apply-001".to_string()),
+                verification_needed: true,
+                evidence_strength: Some(ConfidenceLabel::High),
+                false_positive_risk: Some(ConfidenceLabel::Low),
+                duplicate_suspect: Some(false),
+                stop_recommendation: Some("continue_to_verification".to_string()),
+            }],
+            modified_files: vec!["src/lib.rs".to_string()],
+            verification_needed: vec!["F001".to_string()],
+            decline_codes: Vec::new(),
+        });
+        let application_one_file = session_dir.join("application_result_one.toml");
+        fs::write(&application_one_file, application_one.to_toml_string()?)?;
+        finalize_application(ApplicatorArtifactParams {
+            session: locator.clone(),
+            artifact_file: application_one_file,
+        })?;
+
+        let verification_one = ArtifactDocument::VerificationResult(VerificationResultArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::VerificationResult,
+                "abc011def345".to_string(),
+                registered.session_id.clone(),
+                "refs/heads/main".to_string(),
+                ProducerKind::ApplicatorVerifier,
+                "2026-03-08T00:01:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "applicator".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            verified_items: vec![crate::artifacts::VerificationItemRecord {
+                finding_id: "F001".to_string(),
+                status: crate::artifacts::VerificationStatus::Yes,
+                notes: "verified".to_string(),
+            }],
+            failed_items: Vec::new(),
+            partial_items: Vec::new(),
+            residual_risks: Vec::new(),
+        });
+        let verification_one_file = session_dir.join("verification_result_one.toml");
+        fs::write(&verification_one_file, verification_one.to_toml_string()?)?;
+        let verification_one_path = verification_one_file.clone();
+        crate::session::verify_application(ApplicatorArtifactParams {
+            session: locator.clone(),
+            artifact_file: verification_one_file,
+        })?;
+
+        let application_two = ArtifactDocument::ApplicationResult(ApplicationResultArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::ApplicationResult,
+                "abc012abc456".to_string(),
+                registered.session_id,
+                "refs/heads/main".to_string(),
+                ProducerKind::ApplicatorWorker,
+                "2026-03-08T00:02:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "applicator".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            source_finding_ids: vec!["F002".to_string()],
+            dispositions: vec![DispositionRecord {
+                finding_id: "F002".to_string(),
+                disposition: Disposition::Applied,
+                decline_reason_code: None,
+                duplicate_reason_code: None,
+                detail: "applied".to_string(),
+                tracking_ref: Some("apply-002".to_string()),
+                verification_needed: true,
+                evidence_strength: Some(ConfidenceLabel::High),
+                false_positive_risk: Some(ConfidenceLabel::Low),
+                duplicate_suspect: Some(false),
+                stop_recommendation: Some("continue_to_verification".to_string()),
+            }],
+            modified_files: vec!["src/lib.rs".to_string()],
+            verification_needed: vec!["F002".to_string()],
+            decline_codes: Vec::new(),
+        });
+        let application_two_file = session_dir.join("application_result_two.toml");
+        fs::write(&application_two_file, application_two.to_toml_string()?)?;
+        finalize_application(ApplicatorArtifactParams {
+            session: locator,
+            artifact_file: application_two_file,
+        })?;
+
+        let summary = validate_artifact_file(
+            &verification_one_path,
+            ArtifactKind::VerificationResult,
+            ValidationLayer::Hard,
+            Some(&session_dir),
+        )?;
+        ensure!(summary.errors.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn soft_validation_warns_for_high_severity_application_disposition_metadata(
+    ) -> anyhow::Result<()> {
+        let repo_root = tempdir()?;
+        let date = Date::from_calendar_date(2026, Month::March, 8)?;
+        let session_dir = session_paths(repo_root.path(), date).session_dir;
+        fs::create_dir_all(&session_dir)?;
+        let locator = SessionLocator::from_session_dir(session_dir.clone());
+        let registered = register_reviewer(RegisterReviewerParams {
+            session: locator.clone(),
+            target_ref: "refs/heads/main".to_string(),
+            reviewer_id: Some("root0007".to_string()),
+            role: Some("final-synthesis".to_string()),
+            role_kind: None,
+        })?;
+
+        let finding_anchors = vec!["src/lib.rs:30".to_string()];
+        let anchor_cluster = compute_anchor_cluster(&finding_anchors, None)?;
+        let fingerprint = compute_fingerprint(
+            "major issue remains",
+            ModuleId::CoreCorrectness,
+            &[SurfaceId::PublicApi],
+            &anchor_cluster,
+        );
+
+        let parent_review = ArtifactDocument::ParentReview(ParentReviewArtifact {
+            header: ArtifactHeader::new(
+                ArtifactKind::ParentReview,
+                "def456abc789".to_string(),
+                registered.session_id.clone(),
+                "refs/heads/main".to_string(),
+                ProducerKind::FinalSynthesizer,
+                "2026-03-08T00:00:00Z".to_string(),
+                ConfidenceLabel::High,
+                90,
+                vec![PolicyRef {
+                    category: PolicyCategory::Mode,
+                    id: "reviewer".to_string(),
+                    version: "2026.03.08".to_string(),
+                    view: PolicyView::Checklist,
+                }],
+            )?,
+            source_artifact_ids: Vec::new(),
+            final_verdict: ReviewVerdict::RequestChanges,
+            ship_readiness: ShipReadinessSummary {
+                verdict: ShipReadinessVerdict::ShipWithFixes,
+                axes: vec!["correctness".to_string()],
+                blocking_items: vec!["major issue".to_string()],
+                required_now_count: 1,
+                follow_up_count: 0,
+            },
+            required_now: vec![FindingRecord {
+                finding_id: "F900".to_string(),
+                module_id: ModuleId::CoreCorrectness,
+                surface_ids: vec![SurfaceId::PublicApi],
+                severity: Severity::Major,
+                title: "major issue".to_string(),
+                claim: "major issue remains".to_string(),
+                scenario: "major issue reproduced".to_string(),
+                evidence: "major issue evidence".to_string(),
+                recommendation: "fix it".to_string(),
+                verification: "rerun tests".to_string(),
+                anchors: finding_anchors,
+                symbol_hint: None,
+                anchor_cluster,
+                fingerprint,
+                reopen_eligible: true,
+                confidence_label: ConfidenceLabel::High,
+                confidence_score: 90,
+                evidence_strength: Some(ConfidenceLabel::High),
+                false_positive_risk: Some(ConfidenceLabel::Low),
+                actionable: Some(true),
+                duplicate_suspect: Some(false),
+            }],
+            follow_up: Vec::new(),
+            defended_summary: Vec::new(),
+            residual_risks: Vec::new(),
+            coverage_summary: CoverageSummary {
+                changed_files: vec!["src/lib.rs".to_string()],
+                surfaces_covered: vec![SurfaceId::PublicApi],
+                modules_loaded: vec![ModuleId::CoreCorrectness],
+                tests_run: Vec::new(),
+                tests_not_run_reason: Some("not run".to_string()),
+                limitations: Vec::new(),
+            },
+        });
+        let parent_file = session_dir.join("parent_review.toml");
+        fs::write(&parent_file, parent_review.to_toml_string()?)?;
+        finalize_review(ReviewerArtifactParams {
+            session: locator.clone(),
+            reviewer_id: "root0007".to_string(),
+            artifact_file: parent_file,
+        })?;
+
+        let artifact = ArtifactDocument::ApplicationResult(ApplicationResultArtifact {
+            header: header(ArtifactKind::ApplicationResult)?,
+            source_finding_ids: vec!["F900".to_string()],
+            dispositions: vec![DispositionRecord {
+                finding_id: "F900".to_string(),
+                disposition: Disposition::Declined,
+                decline_reason_code: Some(crate::artifacts::DeclineReasonCode::NonReproducible),
+                duplicate_reason_code: None,
+                detail: "not repro".to_string(),
+                tracking_ref: None,
+                verification_needed: false,
+                evidence_strength: None,
+                false_positive_risk: None,
+                duplicate_suspect: None,
+                stop_recommendation: None,
+            }],
+            modified_files: Vec::new(),
+            verification_needed: Vec::new(),
+            decline_codes: vec![crate::artifacts::DeclineReasonCode::NonReproducible],
+        });
+        let summary =
+            validate_artifact_document(&artifact, ValidationLayer::Soft, Some(&session_dir))?;
+        ensure!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("missing disposition evidence_strength")));
+        ensure!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("detail that is too thin")));
         Ok(())
     }
 

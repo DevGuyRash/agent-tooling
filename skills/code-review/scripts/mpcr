@@ -30,28 +30,130 @@ fi
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
 src_dir="${script_dir}/mpcr-src"
 bin="${src_dir}/target/release/mpcr"
+stamp="${src_dir}/target/release/.mpcr-build-stamp"
+build_lock="${src_dir}/target/release/.mpcr-build.lock"
+build_lock_pid_file="${build_lock}/pid"
+build_lock_stale_after_seconds=5
+build_lock_wait_timeout_seconds=600
+
+now_epoch() {
+  date +%s
+}
+
+lock_mtime_epoch() {
+  if stat -c %Y "${build_lock}" >/dev/null 2>&1; then
+    stat -c %Y "${build_lock}"
+    return 0
+  fi
+  if stat -f %m "${build_lock}" >/dev/null 2>&1; then
+    stat -f %m "${build_lock}"
+    return 0
+  fi
+  return 1
+}
+
+read_build_lock_owner_pid() {
+  if [ ! -f "${build_lock_pid_file}" ]; then
+    return 1
+  fi
+  pid="$(tr -cd '0-9' < "${build_lock_pid_file}" 2>/dev/null || true)"
+  [ -n "${pid}" ] || return 1
+  printf '%s\n' "${pid}"
+}
+
+build_lock_owner_alive() {
+  pid="$(read_build_lock_owner_pid 2>/dev/null || true)"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null
+}
+
+build_lock_is_stale() {
+  [ -d "${build_lock}" ] || return 1
+  lock_mtime="$(lock_mtime_epoch 2>/dev/null || true)"
+  [ -n "${lock_mtime}" ] || return 1
+  age="$(( $(now_epoch) - lock_mtime ))"
+  [ "${age}" -ge "${build_lock_stale_after_seconds}" ] || return 1
+  build_lock_owner_alive && return 1
+  return 0
+}
+
+remove_build_lock() {
+  rm -f -- "${build_lock_pid_file}" 2>/dev/null || true
+  rmdir "${build_lock}" 2>/dev/null || rm -rf -- "${build_lock}" 2>/dev/null || true
+}
+
+write_build_lock_metadata() {
+  printf '%s\n' "$$" > "${build_lock_pid_file}"
+}
+
+build_is_stale() {
+  if [ ! -x "${bin}" ]; then
+    return 0
+  fi
+  if [ ! -f "${stamp}" ]; then
+    return 0
+  fi
+  if [ "${src_dir}/Cargo.toml" -nt "${stamp}" ] || [ "${src_dir}/Cargo.lock" -nt "${stamp}" ]; then
+    return 0
+  fi
+  if find "${src_dir}/src" "${src_dir}/tests" "${src_dir}/protocols" -type f -newer "${stamp}" -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  return 1
+}
 
 if [ ! -f "${src_dir}/Cargo.lock" ]; then
   echo "error: missing ${src_dir}/Cargo.lock (skill is expected to be shipped with a lockfile)" >&2
   exit 2
 fi
 
-needs_build=0
-if [ ! -x "${bin}" ]; then
-  needs_build=1
-elif [ "${src_dir}/Cargo.toml" -nt "${bin}" ] || [ "${src_dir}/Cargo.lock" -nt "${bin}" ]; then
-  needs_build=1
-elif find "${src_dir}/src" "${src_dir}/tests" "${src_dir}/protocols" -type f -newer "${bin}" -print -quit 2>/dev/null | grep -q .; then
-  needs_build=1
+needs_build=1
+if ! build_is_stale; then
+  needs_build=0
 fi
 
 if [ "${needs_build}" -eq 1 ]; then
+  mkdir -p -- "$(dirname -- "${build_lock}")"
+  lock_wait_started="$(now_epoch)"
+  while ! mkdir "${build_lock}" 2>/dev/null; do
+    if ! build_is_stale; then
+      needs_build=0
+      break
+    fi
+    if build_lock_is_stale; then
+      remove_build_lock
+      continue
+    fi
+    if [ "$(( $(now_epoch) - lock_wait_started ))" -ge "${build_lock_wait_timeout_seconds}" ]; then
+      echo "error: timed out waiting for ${build_lock}; remove the stale lock or retry after the active build completes" >&2
+      exit 124
+    fi
+    sleep 0.1
+  done
+fi
+
+cleanup_build_lock() {
+  remove_build_lock
+}
+
+if [ "${needs_build}" -eq 1 ]; then
+  write_build_lock_metadata
+  trap cleanup_build_lock EXIT INT TERM
   if ! command -v cargo >/dev/null 2>&1; then
     echo "error: mpcr is not built and 'cargo' was not found in PATH" >&2
     echo "hint: install a Rust toolchain (rustc + cargo) to build ${src_dir}" >&2
     exit 127
   fi
-  cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release
+  cargo build --manifest-path "${src_dir}/Cargo.toml" --locked --release --quiet
+  mkdir -p -- "$(dirname -- "${stamp}")"
+  touch "${stamp}"
+  cleanup_build_lock
+  trap - EXIT INT TERM
+fi
+
+if [ ! -x "${bin}" ]; then
+  echo "error: failed to build ${bin}" >&2
+  exit 127
 fi
 
 # Suppress pagers in non-interactive (agent) sessions.
