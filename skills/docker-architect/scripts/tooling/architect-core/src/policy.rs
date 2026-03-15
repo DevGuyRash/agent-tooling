@@ -2212,11 +2212,10 @@ fn init_sidecar_field_matches(
 }
 
 fn yaml_bool_matches_restart_string(actual: &YamlValue, expected: &str) -> bool {
-    match (actual.as_bool(), expected) {
-        (Some(false), "no") => true,
-        (Some(true), "yes") => true,
-        _ => false,
-    }
+    matches!(
+        (actual.as_bool(), expected),
+        (Some(false), "no") | (Some(true), "yes")
+    )
 }
 
 fn yaml_unordered_string_list_matches(actual: Option<&YamlValue>, expected: &JsonValue) -> bool {
