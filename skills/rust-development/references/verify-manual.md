@@ -728,6 +728,9 @@ rg '"".to_string\(\)' --type rust "$@" || echo "✓ No \"\".to_string()"
 rg 'mem::forget\(' --type rust "$@" | rg -v '// ALLOW:' || echo "✓ No mem::forget() without justification"
 rg 'Box::leak\(' --type rust "$@" | rg -v '// ALLOW:' || echo "✓ No Box::leak() without justification"
 
+# Unsafe code
+parser_aware_banned_scan '(^|[^[:alnum:]_#])unsafe([^[:alnum:]_]|$)' "" "✓ No unsafe code in non-test files" "ERROR: unsafe code found in non-test files"
+
 # Meta
 rg 'TODO' --type rust "$@" | rg -v '#[0-9]+' | rg -v 'https?://' || echo "✓ No orphan TODOs"
 # The generated installed tests/banned_family.rs harness carries a justified
@@ -738,203 +741,11 @@ rg '#\[allow\(' --type rust "$@" \
   | rg -v '// Reason:' || echo "✓ All #[allow] justified"
 ```
 
-For unsafe code, use this parser-aware scan so comments and string literals do not create false positives. Prefer `python3` plus ignore-aware file discovery (`rg --files` or `git ls-files --exclude-standard`) for full coverage:
+The inline-test-sensitive banned-family subset (`unwrap*`, `expect*`, `panic!`, `unimplemented!`, `unreachable!`, `todo!`, `assert*`, `dbg!`, and `unsafe`) SHALL continue to use the parser-aware helper above because line-based grep fallbacks cannot mask inline `#[cfg(test)]` blocks or test-annotated items in `src/*.rs` correctly.
+
+WHEN `rg` is unavailable THEN you SHALL use these `find` + `grep` fallbacks only for the remaining checks that do not need inline test masking:
 
 ```bash
-unsafe_candidates="$(mktemp "${TMPDIR:-/tmp}/rust-verify-manual-unsafe.XXXXXX")"
-if command -v rg >/dev/null 2>&1; then
-  rg --files --hidden -0 -g '*.rs' >"$unsafe_candidates"
-elif command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git ls-files -z --cached --others --exclude-standard -- '*.rs' ':(glob)**/*.rs' >"$unsafe_candidates"
-else
-  find . -name '*.rs' -not -path '*/target/*' -print0 >"$unsafe_candidates"
-fi
-
-if VERIFY_CANDIDATES_FILE="$unsafe_candidates" python3 - <<'PY'
-from pathlib import Path
-import os
-import re
-import sys
-
-SKIP_DIRS = {"target", "test", "tests", "testdata", "bench", "benches", "example", "examples", "fixture", "fixtures"}
-TOKEN = re.compile(r"(^|[^A-Za-z0-9_#])unsafe([^A-Za-z0-9_]|$)")
-violations = []
-candidates_file = os.environ["VERIFY_CANDIDATES_FILE"]
-
-def should_skip(path: Path) -> bool:
-    if path.name == "tests.rs" or path.name.endswith("_test.rs"):
-        return True
-    return any(part in SKIP_DIRS for part in path.parts)
-
-def load_candidate_paths(filename: str):
-    payload = Path(filename).read_bytes()
-    seen = set()
-    paths = []
-    for raw_path in payload.split(b"\0"):
-        if not raw_path:
-            continue
-        decoded = raw_path.decode("utf-8", errors="surrogateescape")
-        if decoded in seen:
-            continue
-        seen.add(decoded)
-        path = Path(decoded)
-        if not path.is_file():
-            continue
-        paths.append(path)
-    return sorted(paths)
-
-def strip_comments_and_strings(source: str) -> str:
-    out = []
-    i = 0
-    block_depth = 0
-    in_line_comment = False
-    in_string = False
-    in_char = False
-    raw_hashes = None
-
-    def is_lifetime_start(idx: int) -> bool:
-        if idx + 1 >= len(source):
-            return False
-        next_ch = source[idx + 1]
-        if not (next_ch.isalpha() or next_ch == "_"):
-            return False
-        j = idx + 2
-        while j < len(source) and (source[j].isalnum() or source[j] == "_"):
-            j += 1
-        return not (j < len(source) and source[j] == "'")
-
-    while i < len(source):
-        ch = source[i]
-        nxt = source[i + 1] if i + 1 < len(source) else "\0"
-
-        if in_line_comment:
-            if ch == "\n":
-                in_line_comment = False
-                out.append(ch)
-            i += 1
-            continue
-
-        if block_depth:
-            if ch == "/" and nxt == "*":
-                block_depth += 1
-                i += 2
-                continue
-            if ch == "*" and nxt == "/":
-                block_depth -= 1
-                i += 2
-                continue
-            if ch == "\n":
-                out.append(ch)
-            i += 1
-            continue
-
-        if raw_hashes is not None:
-            if ch == '"':
-                if raw_hashes == 0:
-                    raw_hashes = None
-                else:
-                    matched = 0
-                    j = i + 1
-                    while matched < raw_hashes and j < len(source) and source[j] == "#":
-                        matched += 1
-                        j += 1
-                    if matched == raw_hashes:
-                        raw_hashes = None
-                        i = j
-                        continue
-            if ch == "\n":
-                out.append(ch)
-            i += 1
-            continue
-
-        if in_string:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == '"':
-                in_string = False
-            if ch == "\n":
-                out.append(ch)
-            i += 1
-            continue
-
-        if in_char:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == "\n":
-                in_char = False
-                out.append(ch)
-                i += 1
-                continue
-            if ch == "'":
-                in_char = False
-            i += 1
-            continue
-
-        if ch == "/" and nxt == "/":
-            in_line_comment = True
-            i += 2
-            continue
-        if ch == "/" and nxt == "*":
-            block_depth = 1
-            i += 2
-            continue
-        if ch == "r":
-            j = i + 1
-            while j < len(source) and source[j] == "#":
-                j += 1
-            if j < len(source) and source[j] == '"':
-                raw_hashes = j - (i + 1)
-                i = j + 1
-                continue
-        if ch == '"':
-            in_string = True
-            i += 1
-            continue
-        if ch == "'":
-            if is_lifetime_start(i):
-                out.append(ch)
-                i += 1
-                continue
-            in_char = True
-            i += 1
-            continue
-
-        out.append(ch)
-        i += 1
-
-    return "".join(out)
-
-for path in load_candidate_paths(candidates_file):
-    if should_skip(path):
-        continue
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError:
-        continue
-    sanitized = strip_comments_and_strings(source)
-    for line_no, (raw_line, sanitized_line) in enumerate(zip(source.splitlines(), sanitized.splitlines()), start=1):
-        if TOKEN.search(sanitized_line):
-            violations.append(f"{path}:{line_no}:{raw_line}")
-
-if violations:
-    print("ERROR: unsafe code found in non-test files")
-    for line in violations[:5]:
-        print(line)
-    raise SystemExit(1)
-PY
-then
-  echo "✓ No unsafe code in non-test files"
-fi
-rm -f -- "$unsafe_candidates"
-```
-
-WHEN `rg` is unavailable THEN you SHALL use these grep fallbacks.
-For the inline-test-sensitive banned-family subset (`unwrap*`, `expect*`, `panic!`, `unimplemented!`, `unreachable!`, `todo!`, `assert*`, `dbg!`, and `unsafe`), you SHALL continue using the parser-aware `python3` scan above because grep-style fallbacks cannot mask inline `#[cfg(test)]` blocks or test-annotated items in `src/*.rs` correctly:
-
-```bash
-# Reuse the parser-aware python helper block above for those checks.
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE '\.len\(\)[[:space:]]*(==|!=)[[:space:]]*0' {} + || echo "✓"
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE 'format![[:space:]]*\([[:space:]]*"\{\}"[[:space:]]*,[[:space:]]*' {} + || echo "✓"
 find . -name '*.rs' -not -path '*/target/*' -not -path '*/test/*' -not -path '*/tests/*' -not -path '*/testdata/*' -not -path '*/bench/*' -not -path '*/benches/*' -not -path '*/example/*' -not -path '*/examples/*' -not -path '*/fixture/*' -not -path '*/fixtures/*' -not -name '*_test.rs' -not -name 'tests.rs' -exec grep -nE 'mem::forget\(' {} + | grep -v '// ALLOW:' || echo "✓"
