@@ -13,10 +13,9 @@ use crate::dockerfile::ParsedDockerfile;
 use crate::error::AppError;
 use crate::fetch::normalize_image_reference;
 use crate::heuristics::{self, DeployMode};
-use crate::model::{CachedProfiles, ImageProfile};
+use crate::model::{resolved_runtime_user_for_profile, CachedProfiles, ImageProfile};
 use crate::read_utf8_file_with_size_limit;
-
-const MAX_YAML_MERGE_DEPTH: u8 = 128;
+use crate::yaml_merge::{materialize_yaml_merge_keys, MAX_YAML_MERGE_DEPTH};
 const INIT_PERMISSIONS_REQUIRED_FIELDS: [&str; 11] = [
     "image",
     "command",
@@ -247,7 +246,6 @@ impl PolicyEvaluation {
 
 const MAX_YAML_PATH_SEGMENTS: usize = 64;
 const MAX_YAML_PATH_INDEX: usize = 4096;
-const YAML_MERGE_KEY: &str = "<<";
 pub(crate) const MAX_POLICY_PACK_BYTES: u64 = 1_048_576;
 // Dockerfile patch paths are domain-specific sentinels emitted for human-guidance
 // patch plans. They are not YAML/compose paths and must be rejected by compose
@@ -1585,80 +1583,6 @@ fn get_services_mapping(document: &YamlValue) -> Result<&Mapping, AppError> {
         })
 }
 
-fn materialize_yaml_merge_keys(value: &mut YamlValue, depth_remaining: u8) -> Result<(), AppError> {
-    if depth_remaining == 0 {
-        return Err(AppError::InvalidInput {
-            reason: "compose yaml nesting depth exceeded".to_string(),
-        });
-    }
-    let next_depth = depth_remaining - 1;
-
-    match value {
-        YamlValue::Mapping(mapping) => {
-            let merge_key = YamlValue::String(YAML_MERGE_KEY.to_string());
-            let merge_value = mapping.remove(&merge_key);
-
-            for child in mapping.values_mut() {
-                materialize_yaml_merge_keys(child, next_depth)?;
-            }
-
-            let Some(mut merge_value) = merge_value else {
-                return Ok(());
-            };
-
-            materialize_yaml_merge_keys(&mut merge_value, next_depth)?;
-            let source_mappings = parse_yaml_merge_sources(merge_value)?;
-            let mut merged = Mapping::new();
-
-            // YAML merge precedence keeps earlier sequence entries authoritative.
-            for source in source_mappings.into_iter().rev() {
-                for (key, source_value) in source {
-                    merged.insert(key, source_value);
-                }
-            }
-
-            for (key, explicit_value) in std::mem::take(mapping) {
-                merged.insert(key, explicit_value);
-            }
-            *mapping = merged;
-            Ok(())
-        }
-        YamlValue::Sequence(items) => {
-            for item in items {
-                materialize_yaml_merge_keys(item, next_depth)?;
-            }
-            Ok(())
-        }
-        YamlValue::Tagged(tagged) => materialize_yaml_merge_keys(&mut tagged.value, next_depth),
-        _ => Ok(()),
-    }
-}
-
-fn parse_yaml_merge_sources(merge_value: YamlValue) -> Result<Vec<Mapping>, AppError> {
-    match merge_value {
-        YamlValue::Mapping(mapping) => Ok(vec![mapping]),
-        YamlValue::Sequence(items) => {
-            let mut mappings = Vec::new();
-            for item in items {
-                match item {
-                    YamlValue::Mapping(mapping) => mappings.push(mapping),
-                    _ => {
-                        return Err(AppError::InvalidInput {
-                            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
-                                .to_string(),
-                        });
-                    }
-                }
-            }
-            Ok(mappings)
-        }
-        _ => Err(AppError::InvalidInput {
-            reason: "compose merge key `<<` must reference a mapping or sequence of mappings"
-                .to_string(),
-        }),
-    }
-}
-
 struct ServiceRuleContext<'a> {
     service_name: &'a str,
     service: &'a Mapping,
@@ -2272,13 +2196,26 @@ fn init_sidecar_field_matches(
         "command" | "volumes" => yaml_ordered_string_list_matches(actual, expected),
         _ => match expected {
             JsonValue::Bool(value) => actual.and_then(YamlValue::as_bool) == Some(*value),
-            JsonValue::String(value) => {
-                actual.and_then(yaml_scalar_to_string).as_deref() == Some(value)
-            }
+            JsonValue::String(value) => match actual {
+                Some(actual) => {
+                    yaml_scalar_to_string(actual).as_deref() == Some(value)
+                        || (field == "restart"
+                            && yaml_bool_matches_restart_string(actual, value.as_str()))
+                }
+                None => false,
+            },
             _ => actual
                 .and_then(|value| serde_json::to_value(value).ok())
                 .is_some_and(|value| value == *expected),
         },
+    }
+}
+
+fn yaml_bool_matches_restart_string(actual: &YamlValue, expected: &str) -> bool {
+    match (actual.as_bool(), expected) {
+        (Some(false), "no") => true,
+        (Some(true), "yes") => true,
+        _ => false,
     }
 }
 
@@ -2595,23 +2532,6 @@ fn lookup_runtime_user_for_image(cache: &CachedProfiles, image: &str) -> Option<
         .into_values()
         .next()
         .or_else(|| base_candidates.into_values().next())
-}
-
-fn resolved_runtime_user_for_profile(profile: &ImageProfile) -> Option<String> {
-    if let Some(user) = profile.runtime.user.as_deref().map(str::trim) {
-        if !user.is_empty() {
-            return Some(user.to_string());
-        }
-    }
-
-    match (
-        profile.researched_config.runtime_uid,
-        profile.researched_config.runtime_gid,
-    ) {
-        (Some(uid), Some(gid)) => Some(format!("{uid}:{gid}")),
-        (Some(uid), None) => Some(uid.to_string()),
-        (None, Some(_)) | (None, None) => None,
-    }
 }
 
 fn lookup_profile_for_service<'a>(
@@ -4391,8 +4311,7 @@ rules:
         cache.profiles[0].researched_config.runtime_gid = Some(999);
 
         let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
-        let result =
-            evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        let result = evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
         assert!(result
             .patch_plan
             .iter()
@@ -4400,6 +4319,44 @@ rules:
         assert!(result.violations.iter().any(|item| {
             item.target == "services.db.user"
                 && item.reason.contains("using non-root image runtime user")
+        }));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_does_not_patch_unknown_runtime_user_sentinel() {
+        let compose = r#"
+services:
+  db:
+    image: postgres:16.4-alpine
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-USER
+    severity: warn
+    action: require_non_root_user
+    target: service.*
+    key: user
+"#;
+        let mut cache = base_cache();
+        cache.profiles[0].image = "docker.io/library/postgres:16.4-alpine".to_string();
+        cache.profiles[0].runtime.user = Some("unknown".to_string());
+        cache.profiles[0].researched_config.runtime_uid = None;
+        cache.profiles[0].researched_config.runtime_gid = None;
+
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result = evaluate_compose_policy(compose, &cache, &policy).expect("evaluation works");
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|patch| patch.path == "services.db.user"));
+        assert!(result.violations.iter().any(|item| {
+            item.target == "services.db.user"
+                && item.reason.contains(
+                    "image runtime user unknown; derivative image or explicit exception required",
+                )
         }));
     }
 
@@ -4426,6 +4383,41 @@ services:
     restart: "no"
     volumes:
       - app_data:/mnt/perm-0
+volumes:
+  app_data: {}
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-PERMS-INIT
+    severity: warn
+    action: ensure_volume_permissions
+    target: service.*
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "inject_service"));
+        assert!(!result
+            .patch_plan
+            .iter()
+            .any(|item| item.op == "depends_on_add"));
+    }
+
+    #[test]
+    fn evaluate_compose_policy_skips_init_sidecar_for_short_syntax_read_only_nocopy_volume() {
+        let compose = r#"
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    volumes:
+      - app_data:/var/cache/app:ro,nocopy
 volumes:
   app_data: {}
 "#;
@@ -5337,6 +5329,33 @@ services:
   api-init-perms:
     image: alpine:3.20
     restart: no
+"#;
+        let policy_yaml = r#"
+version: 1
+domain: compose
+strictness: balanced
+rules:
+  - id: AC-CMP-RESTART
+    severity: warn
+    action: ensure_key
+    target: service.*
+    key: restart
+    value: unless-stopped
+"#;
+        let policy = parse_policy_pack(policy_yaml).expect("policy should parse");
+        let result =
+            evaluate_compose_policy(compose, &base_cache(), &policy).expect("evaluation works");
+        assert!(result.violations.is_empty());
+        assert!(result.patch_plan.is_empty());
+    }
+
+    #[test]
+    fn evaluate_compose_policy_accepts_boolean_restart_no_for_init_perms_sidecar() {
+        let compose = r#"
+services:
+  api-init-perms:
+    image: alpine:3.20
+    restart: false
 "#;
         let policy_yaml = r#"
 version: 1

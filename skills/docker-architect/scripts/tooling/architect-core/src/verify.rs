@@ -498,7 +498,10 @@ fn service_health_budget(service: &ServiceReadinessRecord) -> Option<Duration> {
     let start_period = service.healthcheck_start_period.unwrap_or_default();
     let interval = service.healthcheck_interval.unwrap_or_default();
     let timeout = service.healthcheck_timeout.unwrap_or_default();
-    let retries = service.healthcheck_retries.unwrap_or_default().saturating_add(1);
+    let retries = service
+        .healthcheck_retries
+        .unwrap_or_default()
+        .saturating_add(1);
     Some(
         start_period
             .saturating_add(interval.saturating_mul(retries))
@@ -986,8 +989,8 @@ mod tests {
         inspect_record_from_value, is_root_user, logs_contain_error_keywords,
         parse_failed_services_from_compose_ps, readiness_record_from_value,
         readiness_timeout_for_services, summarize_compose_readiness, trim_to_option,
-        wait_for_compose_readiness_with,
-        ComposeReadinessStatus, ComposeVerifyReport, ServiceReadiness, ServiceReadinessRecord,
+        wait_for_compose_readiness_with, ComposeReadinessStatus, ComposeVerifyReport,
+        ServiceReadiness, ServiceReadinessRecord,
     };
 
     #[test]

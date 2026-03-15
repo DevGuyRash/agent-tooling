@@ -1,7 +1,7 @@
 //! Validation routines for strictness gates.
 
 use crate::error::AppError;
-use crate::model::CachedProfiles;
+use crate::model::{resolved_runtime_user_for_profile, CachedProfiles};
 
 /// Validate cached profiles for a strictness level.
 ///
@@ -133,8 +133,7 @@ fn runtime_user_is_unresolved(user: &Option<String>) -> bool {
 fn runtime_identity_is_unresolved(profile: &crate::model::ImageProfile) -> bool {
     runtime_identity_resolution_is_required(profile)
         && runtime_user_is_unresolved(&profile.runtime.user)
-        && profile.researched_config.runtime_uid.is_none()
-        && profile.researched_config.runtime_gid.is_none()
+        && resolved_runtime_user_for_profile(profile).is_none()
 }
 
 fn runtime_identity_resolution_is_required(profile: &crate::model::ImageProfile) -> bool {
@@ -346,6 +345,63 @@ mod tests {
 
         let result = validate_cache(&cache, "balanced");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn balanced_rejects_gid_only_runtime_identity_hint() {
+        let mut profile = base_profile("docker.io/library/nginx:1.27");
+        profile.runtime.user = None;
+        profile.runtime.exposed_ports = vec!["80/tcp".to_string()];
+        profile.researched_config.runtime_uid = None;
+        profile.researched_config.runtime_gid = Some(1000);
+        let cache = CachedProfiles {
+            schema_version: 1,
+            profiles: vec![profile],
+            unresolved_references: Vec::new(),
+        };
+
+        let result = validate_cache(&cache, "balanced");
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::InvalidInput { .. })
+        ));
+    }
+
+    #[test]
+    fn balanced_allows_uid_only_runtime_identity_hint() {
+        let mut profile = base_profile("docker.io/library/nginx:1.27");
+        profile.runtime.user = None;
+        profile.runtime.exposed_ports = vec!["80/tcp".to_string()];
+        profile.researched_config.runtime_uid = Some(1000);
+        profile.researched_config.runtime_gid = None;
+        let cache = CachedProfiles {
+            schema_version: 1,
+            profiles: vec![profile],
+            unresolved_references: Vec::new(),
+        };
+
+        let result = validate_cache(&cache, "balanced");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn balanced_treats_unknown_runtime_user_as_unresolved() {
+        let mut profile = base_profile("docker.io/library/nginx:1.27");
+        profile.runtime.user = Some("unknown".to_string());
+        profile.runtime.exposed_ports = vec!["80/tcp".to_string()];
+        profile.researched_config.runtime_uid = None;
+        profile.researched_config.runtime_gid = None;
+        let cache = CachedProfiles {
+            schema_version: 1,
+            profiles: vec![profile],
+            unresolved_references: Vec::new(),
+        };
+
+        let result = validate_cache(&cache, "balanced");
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::InvalidInput { .. })
+        ));
     }
 
     #[test]

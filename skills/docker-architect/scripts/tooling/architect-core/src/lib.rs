@@ -29,6 +29,7 @@ pub mod policy;
 pub mod probe;
 pub mod render;
 pub mod verify;
+pub mod yaml_merge;
 
 use crate::cli::Command;
 use crate::error::AppError;

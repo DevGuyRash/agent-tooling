@@ -1837,6 +1837,16 @@ https://github.com/n8n-io/n8n for build details.
     }
 
     #[test]
+    fn extract_github_url_accepts_valid_docker_hub_repo_aliases() {
+        let body = "Source: https://github.com/prometheus/prometheus";
+        let extracted = extract_github_url(body, "prom/prometheus");
+        assert_eq!(
+            extracted.as_deref(),
+            Some("https://github.com/prometheus/prometheus")
+        );
+    }
+
+    #[test]
     fn docs_scan_candidates_prefers_github_readme_api() {
         let candidates = docs_scan_candidates(
             Some("https://hub.docker.com/r/library/postgres"),

@@ -17,11 +17,10 @@ Required major sections:
 8. Task List
 9. Directory/Prerequisites
 10. Configuration Files
-11. Ownership Bootstrap
-12. Operational Guide
+11. Operational Guide
 
 Always emit in order and only open the file-emission section after preconditions are satisfied.
 Major sections must use H1 headings (`# Section Name`); lower heading levels are ignored by contract validation.
 Policy artifacts (`policy-check` and `policy-plan`) must be machine-readable and deterministic.
-The "Ownership Bootstrap" section must document the pre-deploy `docker run --rm` chown commands for every non-root stateful service with named volumes.
+Include an "Ownership Bootstrap" section when the stack contains non-root stateful services with named volumes. That section must document the pre-deploy `docker run --rm` chown commands for each such volume.
 Validate with: `<skills-file-root>/scripts/docker-architect-compose output-check <output.md> --mode swarm`.

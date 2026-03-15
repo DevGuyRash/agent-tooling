@@ -60,6 +60,15 @@ pub fn bind_mount_targets(service: &Mapping) -> Vec<String> {
     targets
 }
 
+/// Return whether a service uses at least one writable named volume.
+pub(crate) fn service_uses_writable_named_volume(service: &Mapping) -> bool {
+    collect_service_volume_targets(service)
+        .into_iter()
+        .any(|mount| {
+            mount.kind == VolumeMountKind::NamedVolume && mount.source.is_some() && !mount.read_only
+        })
+}
+
 /// Synthesize a deterministic init sidecar and dependency wiring for writable volumes.
 pub fn ensure_volume_permissions(
     service_name: &str,
@@ -77,7 +86,9 @@ pub fn ensure_volume_permissions(
     let mounts: Vec<VolumeMount> = collect_service_volume_targets(service)
         .into_iter()
         .filter(|mount| {
-            mount.kind == VolumeMountKind::NamedVolume && mount.source.as_deref().is_some()
+            mount.kind == VolumeMountKind::NamedVolume
+                && mount.source.as_deref().is_some()
+                && !mount.read_only
         })
         .collect();
     if mounts.is_empty() {
@@ -505,6 +516,9 @@ fn collect_service_volume_targets(service: &Mapping) -> Vec<VolumeMount> {
             source,
             target,
             kind,
+            read_only: map
+                .get(YamlValue::String("read_only".to_string()))
+                .is_some_and(yaml_value_is_true),
         });
     }
 
@@ -513,9 +527,13 @@ fn collect_service_volume_targets(service: &Mapping) -> Vec<VolumeMount> {
             .cmp(&right.target)
             .then(left.kind.cmp(&right.kind))
             .then(left.source.cmp(&right.source))
+            .then(left.read_only.cmp(&right.read_only))
     });
     mounts.dedup_by(|left, right| {
-        left.source == right.source && left.target == right.target && left.kind == right.kind
+        left.source == right.source
+            && left.target == right.target
+            && left.kind == right.kind
+            && left.read_only == right.read_only
     });
     mounts
 }
@@ -539,6 +557,7 @@ fn parse_volume_spec(spec: &str) -> Option<VolumeMount> {
             source: None,
             target,
             kind: VolumeMountKind::AnonymousVolume,
+            read_only: false,
         });
     }
 
@@ -554,6 +573,7 @@ fn parse_volume_spec(spec: &str) -> Option<VolumeMount> {
     } else {
         VolumeMountKind::NamedVolume
     };
+    let read_only = parse_short_syntax_access_mode(parts.iter().skip(2).copied());
     Some(VolumeMount {
         source: if source.is_empty() {
             None
@@ -562,7 +582,29 @@ fn parse_volume_spec(spec: &str) -> Option<VolumeMount> {
         },
         target,
         kind,
+        read_only,
     })
+}
+
+fn parse_short_syntax_access_mode<'a>(parts: impl Iterator<Item = &'a str>) -> bool {
+    let mut read_only = false;
+
+    for token in parts
+        .flat_map(|part| part.split(','))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        if token == "ro" {
+            read_only = true;
+            continue;
+        }
+        if token == "rw" {
+            read_only = false;
+            continue;
+        }
+    }
+
+    read_only
 }
 
 fn collect_service_tmpfs_targets(service: &Mapping) -> std::collections::BTreeSet<String> {
@@ -807,6 +849,15 @@ fn yaml_scalar_to_string(value: &YamlValue) -> Option<String> {
     }
 }
 
+fn yaml_value_is_true(value: &YamlValue) -> bool {
+    match value {
+        YamlValue::Bool(true) => true,
+        YamlValue::String(text) => text.trim().eq_ignore_ascii_case("true"),
+        YamlValue::Number(number) => number.as_i64() == Some(1),
+        _ => false,
+    }
+}
+
 fn is_root_user(user: &str) -> bool {
     let normalized = user.trim().to_ascii_lowercase();
     normalized.is_empty()
@@ -821,6 +872,7 @@ struct VolumeMount {
     source: Option<String>,
     target: String,
     kind: VolumeMountKind,
+    read_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -877,6 +929,65 @@ mod tests {
             parse_volume_spec("uploads:/var/lib/app/uploads:rw").expect("volume spec should parse");
         assert_eq!(mount.source.as_deref(), Some("uploads"));
         assert_eq!(mount.target, "/var/lib/app/uploads");
+        assert!(!mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_marks_read_only_named_volume() {
+        let mount = parse_volume_spec("certs:/certs:ro").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("certs"));
+        assert_eq!(mount.target, "/certs");
+        assert!(mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_marks_read_only_named_volume_with_selinux_flag() {
+        let mount = parse_volume_spec("certs:/certs:ro,z").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("certs"));
+        assert_eq!(mount.target, "/certs");
+        assert!(mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_keeps_read_only_with_nocopy_token() {
+        let mount = parse_volume_spec("cache:/cache:ro,nocopy").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("cache"));
+        assert_eq!(mount.target, "/cache");
+        assert!(mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_keeps_read_only_with_tolerated_extra_token() {
+        let mount =
+            parse_volume_spec("cache:/cache:ro,delegated").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("cache"));
+        assert_eq!(mount.target, "/cache");
+        assert!(mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_last_access_token_wins() {
+        let read_only = parse_volume_spec("cache:/cache:rw,ro").expect("volume spec should parse");
+        assert!(read_only.read_only);
+
+        let writable = parse_volume_spec("cache:/cache:ro,rw").expect("volume spec should parse");
+        assert!(!writable.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_ignores_non_access_tokens_without_enabling_read_only() {
+        let mount = parse_volume_spec("cache:/cache:nocopy").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("cache"));
+        assert_eq!(mount.target, "/cache");
+        assert!(!mount.read_only);
+    }
+
+    #[test]
+    fn parse_volume_spec_requires_lowercase_access_tokens() {
+        let mount = parse_volume_spec("cache:/cache:RO,nocopy").expect("volume spec should parse");
+        assert_eq!(mount.source.as_deref(), Some("cache"));
+        assert_eq!(mount.target, "/cache");
+        assert!(!mount.read_only);
     }
 
     #[test]
@@ -978,6 +1089,78 @@ volumes:
             .expect("service value should be a mapping");
         let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
         assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn ensure_volume_permissions_skips_read_only_named_volumes() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - certs:/certs:ro
+  - type: volume
+    source: shared-assets
+    target: /assets
+    read_only: true
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
+        assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn ensure_volume_permissions_skips_read_only_named_volumes_with_short_syntax_flags() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - certs:/certs:ro,z
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
+        assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn ensure_volume_permissions_skips_read_only_named_volumes_with_nocopy_flag() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - certs:/certs:ro,nocopy
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
+        assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn ensure_volume_permissions_treats_last_short_syntax_access_token_as_authoritative() {
+        let service: YamlValue = serde_yaml::from_str(
+            r#"
+user: "1000:1000"
+volumes:
+  - data:/data:ro,rw
+"#,
+        )
+        .expect("yaml should parse");
+        let mapping = service
+            .as_mapping()
+            .expect("service value should be a mapping");
+        let patches = ensure_volume_permissions("api", mapping, None).expect("heuristic runs");
+        assert!(patches.iter().any(|patch| patch.op == "inject_service"));
     }
 
     #[test]

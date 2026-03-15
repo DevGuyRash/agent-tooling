@@ -231,3 +231,25 @@ pub struct CachedProfiles {
     #[serde(default)]
     pub unresolved_references: Vec<String>,
 }
+
+/// Resolve the runtime user for a profile using image config first, then curated UID/GID hints.
+pub(crate) fn resolved_runtime_user_for_profile(profile: &ImageProfile) -> Option<String> {
+    if let Some(user) = profile.runtime.user.as_deref().map(str::trim) {
+        if runtime_user_value_is_resolved(user) {
+            return Some(user.to_string());
+        }
+    }
+
+    match (
+        profile.researched_config.runtime_uid,
+        profile.researched_config.runtime_gid,
+    ) {
+        (Some(uid), Some(gid)) => Some(format!("{uid}:{gid}")),
+        (Some(uid), None) => Some(uid.to_string()),
+        (None, Some(_)) | (None, None) => None,
+    }
+}
+
+fn runtime_user_value_is_resolved(user: &str) -> bool {
+    !user.is_empty() && !user.eq_ignore_ascii_case("unknown")
+}
