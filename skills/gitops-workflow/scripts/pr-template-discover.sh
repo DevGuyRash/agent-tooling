@@ -196,8 +196,8 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   LOCAL_ROOT="$(git rev-parse --show-toplevel)"
   if [[ -z "$REPO" ]]; then
     USE_LOCAL_TEMPLATES="true"
-  elif command -v gh >/dev/null 2>&1; then
-    CHECKOUT_REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
+  else
+    CHECKOUT_REPO="$(resolve_checkout_repo_slug)"
     if [[ -n "$CHECKOUT_REPO" && "$CHECKOUT_REPO" == "$REPO" ]]; then
       USE_LOCAL_TEMPLATES="true"
     fi
