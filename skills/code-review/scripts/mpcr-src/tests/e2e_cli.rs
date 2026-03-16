@@ -126,6 +126,7 @@ fn major_finding(finding_id: &str) -> anyhow::Result<FindingRecord> {
         false_positive_risk: Some(ConfidenceLabel::Low),
         actionable: Some(true),
         duplicate_suspect: Some(false),
+        severity_rationale: None,
     })
 }
 

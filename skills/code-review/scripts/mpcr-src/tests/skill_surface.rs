@@ -96,7 +96,12 @@ fn skill_router_restores_dispatch_and_recursive_reports() -> anyhow::Result<()> 
     ensure!(skill_md.contains("same `target-ref` string"));
     ensure!(skill_md.contains("literal `HEAD`"));
     ensure!(skill_md.contains("current worker's `reviewer_id`"));
+    ensure!(skill_md.contains("orchestrator-root"));
     ensure!(skill_md.contains("Prefer `parallel_subagents` whenever helpers are available"));
+    ensure!(skill_md.contains("3-voter legitimacy gate"));
+    ensure!(skill_md.contains("2-of-3 `legitimate` votes"));
+    ensure!(skill_md.contains("mpcr reviewer note"));
+    ensure!(skill_md.contains("mpcr applicator note"));
     ensure!(skill_md.contains("findings[].anchors"));
     ensure!(skill_md.contains("_session.json"));
     ensure!(skill_md.contains("mpcr session reports --recursive"));
@@ -130,6 +135,9 @@ fn openai_manifest_matches_recursive_surface() -> anyhow::Result<()> {
     ensure!(manifest.contains("literal `HEAD`"));
     ensure!(manifest.contains("mpcr reviewer spawn-routed"));
     ensure!(manifest.contains("mpcr reviewer spawn-children"));
+    ensure!(manifest.contains("orchestrator-root"));
+    ensure!(manifest.contains("3-voter legitimacy gate"));
+    ensure!(manifest.contains("2-of-3 legitimate votes"));
     ensure!(manifest.contains("mpcr applicator"));
     ensure!(manifest.contains("mpcr fullcycle"));
     ensure!(manifest.contains("preferring `parallel_subagents` whenever helpers are available"));

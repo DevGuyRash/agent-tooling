@@ -74,3 +74,15 @@ evidence = "The guard still returns before any `remainingStock[...] = ...` assig
 anchors = ["src/orders.js:10-14"]
 confidence_label = "high"
 confidence_score = 86
+
+[[defended_checks]]
+check_id = "C002"
+module_id = "core-correctness"
+surface_ids = ["behavior-change"]
+method = "input-boundary-analysis"
+claim = "Negative quantity values in reserveItems do not cause underflow or crash — Python-style slice semantics do not apply in JS, and the guard rejects non-positive quantities before mutation."
+attempted_counterexample = "Called reserveItems with quantity: -1. The early guard `if (item.quantity <= 0)` rejects before any stock mutation. Also tested quantity: 0 — same guard fires."
+evidence = "src/orders.js:8 contains `if (item.quantity <= 0) return { success: false, error: 'invalid quantity' }` which fires before line 16."
+anchors = ["src/orders.js:8-9"]
+confidence_label = "high"
+confidence_score = 84

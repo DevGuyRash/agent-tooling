@@ -581,6 +581,8 @@ pub struct FindingRecord {
     pub actionable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duplicate_suspect: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1346,6 +1348,7 @@ mod tests {
             false_positive_risk: Some(ConfidenceLabel::Low),
             actionable: Some(true),
             duplicate_suspect: Some(false),
+            severity_rationale: None,
         };
         validate_finding_identity(&finding)?;
 

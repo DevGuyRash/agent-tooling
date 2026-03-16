@@ -5,18 +5,19 @@ This shows how findings move through application and verification.
 ```mermaid
 flowchart TD
     A[parent_review / source findings] --> B[Applicator review]
-    B --> C[Evidence challenge]
-    C --> D{Disposition}
-    D -->|applied| E[application_result]
-    D -->|declined| E
-    D -->|deferred| E
-    D -->|already_addressed| E
-    E --> F[mpcr applicator finalize]
-    F --> G[Applicator status = verifying]
-    G --> H[verification_result]
-    H --> I{Failed items?}
-    I -->|no| J[Applicator status = completed]
-    I -->|yes| K[Applicator status = blocked]
+    B --> C[3-voter legitimacy gate]
+    C --> D[Evidence challenge]
+    D --> E{Disposition}
+    E -->|applied| F[application_result]
+    E -->|declined| F
+    E -->|deferred| F
+    E -->|already_addressed| F
+    F --> G[mpcr applicator finalize]
+    G --> H[Applicator status = verifying]
+    H --> I[verification_result]
+    I --> J{Failed items?}
+    J -->|no| K[Applicator status = completed]
+    J -->|yes| L[Applicator status = blocked]
 ```
 
 ```mermaid

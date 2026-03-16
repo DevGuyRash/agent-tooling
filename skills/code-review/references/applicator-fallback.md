@@ -8,6 +8,7 @@ Challenge reviewer evidence before applying changes and persist structured dispo
 - verify anchor validity
 - verify scenario reproducibility
 - challenge both sides of the claim: the introducing precondition and the downstream effect or closure path
+- run a tight 3-voter legitimacy gate on each candidate finding before code changes begin
 - decline findings that no longer have repo anchors or cited supporting evidence
 - decline findings when later guards, normalization, rollback, dedupe, retries, or caller handling already neutralize the claimed issue
 - drive every routed finding to applied or categorical decline
@@ -34,6 +35,7 @@ Challenge reviewer evidence before applying changes and persist structured dispo
 - verify exactly the finding_ids recorded in application_result.verification_needed
 - accepted findings stay traceable to repo anchors and cited report evidence
 - accepted findings still survive introduction-side and closure-side challenge after the current code is inspected end-to-end
+- only findings with a recorded 2-of-3 legitimacy vote proceed to edits; rejected ones are declined or noted as false positives
 
 ### Stop When
 - every routed finding has a categorical disposition and verification_result is finalized
@@ -66,6 +68,7 @@ Single-worker direct application that challenges evidence, records dispositions,
 ### Must
 - challenge anchor, scenario, severity, hallucination, duplication, and downstream neutralization
 - trace the introducing condition and the downstream effect or closure path before accepting a claim
+- before code edits, run the same 3-voter legitimacy gate or confirm the orchestrator already recorded a 2-of-3 vote
 - drive every routed finding to applied or categorical decline
 - decline claims that lose repo anchors or cited report evidence
 - emit application_result then verification_result
@@ -79,6 +82,7 @@ Single-worker direct application that challenges evidence, records dispositions,
 - verification buckets are consistent
 - accepted findings remain traceable to repo anchors and cited report evidence
 - accepted findings still survive introduction-side and closure-side challenge after the current code is inspected end-to-end
+- edits start only for findings with a recorded 2-of-3 legitimacy vote
 
 ### Stop When
 - every routed finding has a categorical disposition and verification_result is finalized
@@ -93,6 +97,7 @@ Apply accepted findings after evidence challenge and record structured dispositi
 ### Must
 - record one disposition per finding
 - challenge the introducing condition and the downstream effect or closure path before accepting a finding
+- confirm the candidate finding already cleared the 3-voter legitimacy gate before editing files
 - capture modified files
 - carry verification-needed findings forward
 
@@ -105,6 +110,7 @@ Apply accepted findings after evidence challenge and record structured dispositi
 - decline codes are categorical
 - accepted items remain traceable to anchored reviewer evidence
 - accepted items still survive later guards, normalization, rollback, dedupe, retries, or caller handling in the current code
+- edits start only after a recorded 2-of-3 legitimacy vote
 
 ### Stop When
 - application_result is emitted

@@ -1014,6 +1014,7 @@ mod tests {
         ensure!(output
             .content
             .contains("worker orchestrator-root 2026.03.08"));
+        ensure!(output.content.contains("2-of-3 legitimacy vote"));
         Ok(())
     }
 
@@ -1025,6 +1026,7 @@ mod tests {
             .loaded_policy_refs
             .iter()
             .any(|policy| policy.id == "apply-composite"));
+        ensure!(output.content.contains("3-voter legitimacy gate"));
         Ok(())
     }
 

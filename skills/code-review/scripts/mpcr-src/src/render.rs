@@ -75,6 +75,9 @@ fn push_findings(markdown: &mut String, heading: &str, findings: &[FindingRecord
             finding.anchors.join(", "),
             finding.fingerprint
         ));
+        if let Some(rationale) = &finding.severity_rationale {
+            markdown.push_str(&format!("- Severity rationale: {rationale}\n\n"));
+        }
     }
 }
 

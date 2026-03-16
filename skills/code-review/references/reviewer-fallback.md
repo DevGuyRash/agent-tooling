@@ -10,6 +10,7 @@ Produce canonical review artifacts from semantic routing and concern-specific wo
 - register one root reviewer ledger and then spawn every required routed worker before synthesis
 - keep first-hand exploration in routed workers rather than the orchestrator
 - challenge each surviving reviewer claim end-to-end before escalation: prove the introducing condition and the downstream effect or closure path
+- run a tight 3-voter legitimacy gate on each candidate finding before it enters parent_review
 - render markdown only from artifacts
 
 ### Must Not
@@ -34,6 +35,7 @@ Produce canonical review artifacts from semantic routing and concern-specific wo
 - preserve evidence-backed findings only
 - surviving findings keep repo anchors and cited supporting sources
 - surviving findings still prove both the introducing condition and the downstream effect or closure path before escalation
+- candidate findings that survive into parent_review have a recorded 2-of-3 legitimacy vote with a compact call-chain packet
 
 ### Stop When
 - every required worker is finalized or categorically closed and parent_review is finalized
@@ -127,6 +129,8 @@ Own one review domain, produce a full authored report, and persist machine findi
 - challenge findings for anchor quality, realism, duplication, actionability, and counterevidence before escalating them
 - cite API docs, web sources, or PR evidence in report.md when they materially inform the claim
 - either finalize child_findings or record a categorical no-finding outcome before stopping
+- record at least one defended non-finding when the domain has findings — an attack surface or invariant explicitly checked and confirmed clean, with the reasoning that rules it out
+- write report.md as a coherent narrative with concrete exploit or failure paths, not as a disconnected bullet list
 
 ### Must Not
 - re-run language research already provided by upstream workers
@@ -139,7 +143,7 @@ Own one review domain, produce a full authored report, and persist machine findi
 - surviving findings keep repo anchors and any external sources are cited in report.md
 - surviving findings name both the enabling condition and the downstream effect or closure path
 - counterevidence from later guards, normalization, rollback, dedupe, retries, or caller behavior is ruled out or documented before escalation
-- defended non-findings are documented
+- defended non-findings are documented and non-empty when findings exist
 - residual risks explain why work stops or escalates
 
 ### Stop When
@@ -159,18 +163,25 @@ Worker policy for the `final-synthesis` dispatch role: concatenate descendant re
 - preserve recursive counts from machine artifacts
 - filter out low-signal, duplicate, non-actionable, and already-addressed claims
 - keep only findings that still have repo anchors and cited supporting sources where external context mattered
+- surface only findings that already cleared the 2-of-3 legitimacy gate or explicitly hand them back to the orchestrator for that gate
 - emit an explicit next action: stop, apply, or reopen
+- trace cross-domain compound risk chains — findings that interact to amplify risk SHALL be connected in the synthesis narrative, not listed in isolation
+- record a severity rationale when child workers assigned different severities to the same underlying defect
+- produce a specific push-or-stop recommendation naming blocking findings by ID and stating the concrete ship decision — the recommendation SHALL NOT be generic boilerplate
 
 ### Must Not
 - invent new evidence
 - duplicate leaf findings as fresh discoveries
 - reopen loops for weak or already-resolved items
+- emit a generic push-or-stop recommendation that does not reference specific finding IDs
 
 ### Checks
 - final counts match descendant artifacts
 - concatenation order is stable
 - push-or-stop recommendation is evidence-backed
 - surviving items remain traceable to descendant anchors or cited sources
+- surviving items retain a recorded legitimacy vote or explicit orchestrator handoff
+- compositional risk chains are traced for findings that interact across domains
 
 ### Stop When
 - the final synthesis is internally consistent and the next action is explicit

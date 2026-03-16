@@ -35,6 +35,7 @@ Preserve severity-bounded reopen and behavior-facing staleness handling across r
 - carry only compact pointers in session
 - reopen reasons remain traceable to anchored findings or verification evidence
 - reopen reasons still survive both introduction-side and closure-side challenge instead of repeating a claim already neutralized downstream
+- reopen inputs inherit only findings that already survived reviewer/applicator legitimacy gates
 
 ### Stop When
 - stop_condition is converged

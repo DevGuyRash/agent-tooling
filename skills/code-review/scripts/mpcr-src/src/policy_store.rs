@@ -367,6 +367,11 @@ pub fn generate_fullcycle_fallback(store: &PolicyStore) -> anyhow::Result<String
 pub fn generate_orchestrator_fallback(store: &PolicyStore) -> anyhow::Result<String> {
     let sections = vec![
         "Use semantic routing first. Treat `target-ref` as an opaque session key: branch name, commit SHA, or literal `HEAD` all work as long as every later command reuses the exact same string. For a fresh isolated session, prefer an unused canonical date leaf via `--repo-root <path> --date <yyyy-mm-dd>`; one canonical date leaf holds one session, so pick another date or clean up the stale leaf if that path already belongs to a different `target-ref`. For an existing session, reuse the exact persisted `session_dir` and the same `target-ref` string instead of pointing `--session-dir` at an ad hoc directory. Keep the orchestrator thin: persist session state, capture the resolved `session_dir`, register one root reviewer ledger for reviewer/full-cycle runs with `mpcr reviewer register --target-ref <same-exact-ref> --session-dir <persisted.session_dir>`, prefer `mpcr reviewer spawn-routed --parent-id <root-reviewer-id> --session-dir <persisted.session_dir>` to materialize the routed reviewer roster, and hand each worker only its dispatch prompt plus relevant policy packs. Use the spawned worker reviewer ID for bound dispatch, not the root anchor. Use `mpcr session reports --recursive` for descendant report retrieval, `mpcr session artifacts` for flat artifact inventory, and `mpcr session cleanup --session-dir <path>` to discard a stale canonical session leaf before reruns.".to_string(),
+        store.render(
+            PolicyCategory::Worker,
+            "orchestrator-root",
+            PolicyView::Checklist,
+        )?,
         store.render(PolicyCategory::Worker, "language-detector", PolicyView::Checklist)?,
         store.render(PolicyCategory::Worker, "language-research", PolicyView::Checklist)?,
         store.render(PolicyCategory::Worker, "domain-reviewer", PolicyView::Checklist)?,

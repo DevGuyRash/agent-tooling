@@ -48,7 +48,7 @@ axes = ["correctness", "docs"]
 blocking_items = [
   "Quantity handling under-reserves stock",
 ]
-required_now_count = 1
+required_now_count = 2
 follow_up_count = 0
 
 [coverage_summary]
@@ -57,7 +57,7 @@ surfaces_covered = ["behavior-change", "docs-staleness", "public-api"]
 modules_loaded = ["core-correctness", "docs-staleness", "ship-readiness"]
 tests_run = []
 tests_not_run_reason = "No automated tests were provided in the sample repository."
-limitations = []
+limitations = ["Static analysis only; no test suite executed", "No dynamic taint analysis performed"]
 
 [[required_now]]
 finding_id = "F001"
@@ -82,6 +82,30 @@ false_positive_risk = "low"
 actionable = true
 duplicate_suspect = false
 
+[[required_now]]
+finding_id = "F002"
+module_id = "docs-staleness"
+surface_ids = ["docs-staleness"]
+severity = "minor"
+severity_rationale = "Child worker assessed as major due to user-visible stale example, but the README is internal-only and the stale snippet does not mislead callers into unsafe usage. Downgraded to minor."
+title = "README response example omits the quantity field added by the reservation fix"
+claim = "The README example response body still shows the pre-fix shape without the `reserved_quantity` field, so integrators following the example will not expect or handle the new field."
+scenario = "An integrator copies the README example into a client stub and omits `reserved_quantity` parsing. The client silently drops the field."
+evidence = "README.md:34-41 shows `{ success: true, remaining: 4 }` without the `reserved_quantity` key that the fixed `reserveItems` now returns."
+recommendation = "Update the README example to include `reserved_quantity` in the response shape and add a changelog note."
+verification = "Confirm README.md example matches the actual `reserveItems` return shape after the fix is merged."
+anchors = ["README.md:34-41"]
+symbol_hint = "reserveItems"
+anchor_cluster = "README.md#reserveItems"
+fingerprint = "46540ab07e35bd26"
+reopen_eligible = true
+confidence_label = "high"
+confidence_score = 88
+evidence_strength = "high"
+false_positive_risk = "low"
+actionable = true
+duplicate_suspect = false
+
 [[defended_summary]]
 check_id = "C001"
 module_id = "core-correctness"
@@ -93,6 +117,18 @@ evidence = "The guard still returns before any `remainingStock[...] = ...` assig
 anchors = ["src/orders.js:10-14"]
 confidence_label = "high"
 confidence_score = 86
+
+[[defended_summary]]
+check_id = "C002"
+module_id = "docs-staleness"
+surface_ids = ["docs-staleness"]
+method = "input-boundary-analysis"
+claim = "Checked whether the stale README example could cause callers to send malformed requests. The example is output-shape only; no request construction depends on it."
+attempted_counterexample = "Searched for client code or test fixtures that import the README snippet as a request template. None found."
+evidence = "README.md:34-41 documents response shape only. No request-building code references this section."
+anchors = ["README.md:34-41"]
+confidence_label = "high"
+confidence_score = 82
 
 [[residual_risks]]
 risk_id = "R301"

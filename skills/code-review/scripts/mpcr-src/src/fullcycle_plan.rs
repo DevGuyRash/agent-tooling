@@ -353,6 +353,7 @@ mod tests {
             false_positive_risk: Some(ConfidenceLabel::Low),
             actionable: Some(true),
             duplicate_suspect: Some(false),
+            severity_rationale: None,
         })
     }
 
@@ -391,6 +392,7 @@ mod tests {
             false_positive_risk,
             actionable,
             duplicate_suspect,
+            severity_rationale: None,
         })
     }
 
