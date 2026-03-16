@@ -8,6 +8,8 @@ FAKE_DATE_DIR=
 SPACE_BASE_DIR=
 CONCURRENT_BASE_DIR=
 LOCK_WAIT_BASE_DIR=
+LOCK_RECOVERY_BASE_DIR=
+MULTILINE_BASE_DIR=
 FAIL_BASE_DIR=
 FAIL_FAKE_BIN=
 FAIL_INIT_STDOUT=
@@ -16,7 +18,7 @@ FAIL_REPORT_STDOUT=
 FAIL_REPORT_STDERR=
 NO_HASH_STDOUT=
 NO_HASH_STDERR=
-trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
+trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${LOCK_RECOVERY_BASE_DIR:-}" "${MULTILINE_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -239,7 +241,7 @@ FAIL_TASK_DIR=$FAIL_BASE_DIR/failing-smoke-task
 FAIL_INIT_LOG=$(find "$FAIL_TASK_DIR" -type f -name '*.md' ! -name 'INDEX.md' | sort | head -n 1)
 [ -n "$FAIL_INIT_LOG" ]
 [ -f "$FAIL_INIT_LOG" ]
-grep -q '^# Friction Log: failing-smoke-task$' "$FAIL_INIT_LOG"
+grep -q '^# Friction Evidence Log: failing-smoke-task$' "$FAIL_INIT_LOG"
 
 set +e
 PATH="$FAIL_FAKE_BIN:$PATH" "$ROOT/scripts/report-friction.sh" \
@@ -258,7 +260,7 @@ set -e
 [ "$FAIL_REPORT_RC" -ne 0 ]
 [ ! -s "$FAIL_REPORT_STDOUT" ]
 [ ! -f "$FAIL_TASK_DIR/INDEX.md" ]
-grep -q '## Entry 1: Forced index rebuild failure' "$FAIL_INIT_LOG"
+grep -q '## Event 1: Forced index rebuild failure' "$FAIL_INIT_LOG"
 "$ROOT/scripts/build-index.sh" --task-dir "$FAIL_TASK_DIR" >/dev/null
 
 NO_HASH_STDOUT=$(mktemp /tmp/friction-no-hash-stdout.XXXXXX)
@@ -315,12 +317,27 @@ if grep -q '^FRICTION_TASK_SUMMARY=' "$FRICTION_TASK_DIR/SESSION.txt"; then
   printf '%s\n' 'smoke-posix: SESSION.txt still contains inline task summary' >&2
   exit 1
 fi
-[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 5 ]
+[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 14 ]
 grep -qx 'FRICTION_BASE_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_ID=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_SUMMARY_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_INDEX_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_TASK_DESCRIPTOR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_TASK_JSON=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_EVENTS_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_INCIDENTS_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_STORAGE_MODE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_CAPTURE_MODE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_PRIVACY_TIER=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_EXPORT_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_SANITIZED_EXPORT=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+
+[ -f "$FRICTION_TASK_DIR/task.json" ]
+[ -f "$FRICTION_TASK_DIR/events.jsonl" ]
+[ -f "$FRICTION_TASK_DIR/incidents.json" ]
+[ -d "$FRICTION_TASK_DIR/exports" ]
+[ -f "$FRICTION_TASK_DIR/TASK_DESCRIPTOR.json" ]
 
 SKILL_SURFACE_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --instruction-source 'SKILL.md:12' \
@@ -341,7 +358,7 @@ RATE_LIMIT_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --interpretation 'The 403 would normally look auth-related, but the body and headers show quota exhaustion.')
 printf '%s\n' "$RATE_LIMIT_OUTPUT" | grep -qx 'surface=external-service'
 printf '%s\n' "$RATE_LIMIT_OUTPUT" | grep -qx 'mode=other'
-printf '%s\n' "$RATE_LIMIT_OUTPUT" | grep -qx 'impact=blocked'
+printf '%s\n' "$RATE_LIMIT_OUTPUT" | grep -qx 'run_effect=blocked'
 
 CONTEXT_LOSS_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --instruction-source 'Orchestrator handoff message' \
@@ -352,7 +369,8 @@ CONTEXT_LOSS_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --interpretation 'The subagent lacked context it needed to continue from the prior step.')
 printf '%s\n' "$CONTEXT_LOSS_OUTPUT" | grep -qx 'surface=workflow'
 printf '%s\n' "$CONTEXT_LOSS_OUTPUT" | grep -qx 'mode=context-loss'
-printf '%s\n' "$CONTEXT_LOSS_OUTPUT" | grep -qx 'impact=confusing'
+printf '%s\n' "$CONTEXT_LOSS_OUTPUT" | grep -qx 'run_effect=blocked'
+printf '%s\n' "$CONTEXT_LOSS_OUTPUT" | grep -qx 'guidance_quality=clear'
 
 MISSING_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --instruction-source 'scripts/build.sh' \
@@ -362,7 +380,7 @@ MISSING_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --actual-outcome 'The manifest file was missing, so the step could not continue.' \
   --interpretation 'The expected artifact was absent and blocked the next step.')
 printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'mode=missing'
-printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'impact=blocked'
+printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'run_effect=blocked'
 
 "$ROOT/scripts/report-friction.sh" \
   --log-file "$FRICTION_LOG_FILE" \
@@ -472,15 +490,15 @@ wait "$pid_two"
 [ -f "$CONCURRENT_LOG_TWO" ]
 [ -f "$CONCURRENT_INDEX" ]
 
-grep -q '## Entry 1: Dispatch role slug mismatch' "$ORCH_LOG"
-grep -q '\*\*Category:\*\* skill/name-resolution/blocked' "$ORCH_LOG"
-grep -q '## Entry 1: MCP call timed out' "$SUB_LOG"
-grep -q '\*\*Category:\*\* mcp/timeout/blocked' "$SUB_LOG"
-grep -q '## Entry 2: Second dispatch role slug mismatch' "$SUB_LOG"
-grep -q '\*\*Category:\*\* skill/name-resolution/blocked' "$SUB_LOG"
-grep -q '## Entry 3: Rate limit is not auth' "$SUB_LOG"
-grep -q '\*\*Category:\*\* external-service/other/blocked' "$SUB_LOG"
-grep -q '\*\*Tags:\*\* external-service,other,blocked,token,api,rate-limit' "$SUB_LOG"
+grep -q '## Event 1: Dispatch role slug mismatch' "$ORCH_LOG"
+grep -q '\*\*Derived category:\*\* skill/name-resolution/blocked' "$ORCH_LOG"
+grep -q '## Event 2: MCP call timed out' "$SUB_LOG"
+grep -q '\*\*Derived category:\*\* mcp/timeout/blocked' "$SUB_LOG"
+grep -q '## Event 3: Second dispatch role slug mismatch' "$SUB_LOG"
+grep -q '\*\*Derived category:\*\* skill/name-resolution/blocked' "$SUB_LOG"
+grep -q '## Event 4: Rate limit is not auth' "$SUB_LOG"
+grep -q '\*\*Derived category:\*\* external-service/other/blocked' "$SUB_LOG"
+grep -q '\*\*Tags:\*\* external-service,other,blocked,clear,token,api,rate-limit' "$SUB_LOG"
 if grep -q '\*\*Tags:\*\* .*auth' "$SUB_LOG"; then
   printf '%s\n' 'smoke-posix: stale auth tag survived override' >&2
   exit 1
@@ -589,5 +607,279 @@ then
   printf '%s\n' 'smoke-posix: concurrent rebuild left temporary files behind' >&2
   exit 1
 fi
+
+# ── E2E: Multi-agent investigation with threshold capture ───────────
+#
+# Scenario: An orchestrator investigates CI build failures.
+# - Orch init with threshold capture + shared privacy (realistic production config)
+# - Orch hits a missing script → blocked, goes through threshold
+# - Orch delegates to a subagent for container inspection
+# - Sub re-inits same task-id (must not wipe orch events)
+# - Sub encounters an MCP tool gap → workaround applied
+# - Sub hits a rate limit with a leaked token → sanitized, legacy --impact flag
+# - Sub logs a low-severity event → threshold skips it
+# - Sub forces a low-severity event through → --force overrides threshold
+# - Orch rebuilds INDEX.md
+# - Final: verify the entire task directory tells a coherent story
+
+E2E_BASE=$(mktemp -d "/tmp/agent-friction-e2e.XXXXXX")
+
+# ── Step 1: Orchestrator initializes the task ──────────────────────
+eval "$(FRICTION_BASE_DIR="$E2E_BASE" "$ROOT/scripts/init-log.sh" \
+  --task-id ci-investigation \
+  --task-summary "Investigate CI build failures in staging pipeline" \
+  --agent orchestrator \
+  --skill-path "$ROOT" \
+  --storage-mode artifact \
+  --capture-mode threshold \
+  --privacy-tier shared)"
+
+E2E_ORCH_LOG=$FRICTION_LOG_FILE
+E2E_TASK_DIR=$FRICTION_TASK_DIR
+E2E_INDEX=$FRICTION_INDEX_FILE
+
+# All v2 artifacts should exist after init.
+[ -d "$E2E_TASK_DIR/exports" ]
+[ -f "$E2E_TASK_DIR/task.json" ]
+[ -f "$E2E_TASK_DIR/events.jsonl" ]
+[ -f "$E2E_TASK_DIR/incidents.json" ]
+[ -f "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
+grep -q '"storage_mode":"artifact"' "$E2E_TASK_DIR/task.json"
+grep -q '\*\*Schema version:\*\* 2.0.0' "$E2E_ORCH_LOG"
+grep -q '# Friction Evidence Log: ci-investigation' "$E2E_ORCH_LOG"
+grep -q '\*\*Capture mode:\*\* threshold' "$E2E_ORCH_LOG"
+grep -q '\*\*Privacy tier:\*\* shared' "$E2E_ORCH_LOG"
+
+# ── Step 2: Orch reports a blocked missing-script event ────────────
+# Blocked events must survive threshold capture mode (first-time but blocked).
+"$ROOT/scripts/report-friction.sh" \
+  --log-file "$E2E_ORCH_LOG" \
+  --title "Referenced CI check script does not exist" \
+  --instruction-source "AGENTS.md:18" \
+  --instruction-text "Run scripts/ci-check.sh to see the current build status." \
+  --action-taken "Searched for the script with find and grep." \
+  --expected-outcome "The script exists and produces build status output." \
+  --actual-outcome "scripts/ci-check.sh was not found. The scripts/ directory contains only build.sh and test.sh." \
+  --interpretation "AGENTS.md references a script that does not exist in the repository."
+
+# Event must be recorded (blocked survives threshold).
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
+grep -q '## Event 1: Referenced CI check script does not exist' "$E2E_ORCH_LOG"
+grep -q '\*\*Derived category:\*\* instructions/missing/blocked' "$E2E_ORCH_LOG"
+grep -q '\*\*Guidance quality:\*\*' "$E2E_ORCH_LOG"
+grep -q '\*\*Incident:\*\* inc-' "$E2E_ORCH_LOG"
+grep -q '\*\*Confidence:\*\*' "$E2E_ORCH_LOG"
+grep -q '\*\*Evidence type:\*\*' "$E2E_ORCH_LOG"
+
+# ── Step 3: Subagent re-inits the same task ────────────────────────
+E2E_ORCH_EVENT_COUNT=$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')
+
+eval "$(FRICTION_BASE_DIR="$E2E_BASE" "$ROOT/scripts/init-log.sh" \
+  --task-id ci-investigation \
+  --task-summary "Investigate CI build failures in staging pipeline" \
+  --agent subagent \
+  --role container-inspection \
+  --skill-path "$ROOT" \
+  --storage-mode artifact \
+  --capture-mode threshold \
+  --privacy-tier shared)"
+
+E2E_SUB_LOG=$FRICTION_LOG_FILE
+
+# Subagent init must NOT wipe the orchestrator's events.
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq "$E2E_ORCH_EVENT_COUNT" ]
+# task.json must not be overwritten (still from first init).
+grep -q '"task_id":"ci-investigation"' "$E2E_TASK_DIR/task.json"
+# But a new log file should exist for the subagent.
+[ "$E2E_SUB_LOG" != "$E2E_ORCH_LOG" ]
+[ -f "$E2E_SUB_LOG" ]
+grep -q '# Friction Evidence Log: ci-investigation' "$E2E_SUB_LOG"
+
+# ── Step 4: Sub reports an MCP tool gap with workaround ────────────
+"$ROOT/scripts/report-friction.sh" \
+  --log-file "$E2E_SUB_LOG" \
+  --title "MCP docker_inspect omits healthcheck data" \
+  --instruction-source "MCP tool description for docker_inspect" \
+  --instruction-text "Inspect a running container and return its full configuration." \
+  --action-taken "Called docker_inspect with container ID abc123." \
+  --expected-outcome "Response includes healthcheck configuration as part of full container config." \
+  --actual-outcome "Response contained 14 top-level keys but no healthcheck field." \
+  --interpretation "The tool returns a subset without documenting which fields are included." \
+  --workaround-used true \
+  --workaround-note "Ran docker inspect directly via CLI" \
+  --retries-lost 2 \
+  --minutes-lost 8
+
+# Global numbering: this is Event 2 (orch had Event 1).
+grep -q '## Event 2: MCP docker_inspect omits healthcheck data' "$E2E_SUB_LOG"
+grep -q '\*\*Status:\*\* mitigated' "$E2E_SUB_LOG"
+grep -q '\*\*Workaround used:\*\* true' "$E2E_SUB_LOG"
+grep -q '\*\*Workaround note:\*\* Ran docker inspect directly via CLI' "$E2E_SUB_LOG"
+grep -q '\*\*Retries lost:\*\* 2' "$E2E_SUB_LOG"
+grep -q '\*\*Minutes lost:\*\* 8' "$E2E_SUB_LOG"
+
+# events.jsonl grows.
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 2 ]
+grep -q '"workaround_used":true' "$E2E_TASK_DIR/events.jsonl"
+grep -q '"incident_status":"mitigated"' "$E2E_TASK_DIR/events.jsonl"
+
+# ── Step 5: Sub reports rate limit with leaked token (sanitization) ─
+"$ROOT/scripts/report-friction.sh" \
+  --log-file "$E2E_SUB_LOG" \
+  --title "GitHub API rate limit" \
+  --instruction-source "CI pipeline step fetch-pr-status" \
+  --instruction-text "Query the GitHub API for PR merge status." \
+  --action-taken "Called GET /repos/org/repo/pulls/142 with Bearer ghp_leakedtoken1234567890abcdef12345678." \
+  --expected-outcome "A 200 response with the PR status object." \
+  --actual-outcome "HTTP 403 with rate limit exceeded. Token was ghp_anotherleak1234567890abcdef1234." \
+  --interpretation "The 403 is quota exhaustion, not auth failure." \
+  --surface "external-service" \
+  --mode "other" \
+  --impact "blocked"
+
+# Secrets must be redacted in markdown.
+if grep -q 'ghp_leakedtoken' "$E2E_SUB_LOG"; then
+  printf '%s\n' 'smoke-posix: e2e: GitHub token not redacted in sub log (action)' >&2
+  exit 1
+fi
+if grep -q 'ghp_anotherleak' "$E2E_SUB_LOG"; then
+  printf '%s\n' 'smoke-posix: e2e: GitHub token not redacted in sub log (outcome)' >&2
+  exit 1
+fi
+grep -q '\[REDACTED_GITHUB_TOKEN\]' "$E2E_SUB_LOG"
+
+# Secrets must not leak into events.jsonl either.
+if grep -q 'ghp_leakedtoken' "$E2E_TASK_DIR/events.jsonl"; then
+  printf '%s\n' 'smoke-posix: e2e: GitHub token leaked into events.jsonl' >&2
+  exit 1
+fi
+grep -q '"redaction_applied":true' "$E2E_TASK_DIR/events.jsonl"
+
+# Legacy --impact blocked → run_effect=blocked in the derived category.
+grep -q '\*\*Derived category:\*\* external-service/other/blocked' "$E2E_SUB_LOG"
+
+# ── Step 6: Sub encounters a trivial issue → threshold skips it ────
+"$ROOT/scripts/report-friction.sh" \
+  --log-file "$E2E_SUB_LOG" \
+  --title "Minor log noise from verbose output" \
+  --instruction-source "Container log stream" \
+  --instruction-text "Stream container logs for the build step." \
+  --action-taken "Streamed logs and noticed extra debug lines." \
+  --expected-outcome "Clean log output." \
+  --actual-outcome "Extra debug lines but run continued normally." \
+  --interpretation "Not meaningful friction, just noisy output." \
+  --run-effect "continued" \
+  --guidance-quality "clear"
+
+# Threshold mode: first-time, not blocked, not misleading, no workaround,
+# <5 min lost, 0 retries → silently skipped. Event count must not grow.
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 3 ]
+# Log must not have Event 4 (the skipped one).
+if grep -q 'Minor log noise from verbose output' "$E2E_SUB_LOG"; then
+  printf '%s\n' 'smoke-posix: e2e: threshold mode should have skipped the low-severity event' >&2
+  exit 1
+fi
+
+# ── Step 7: Sub forces a low-severity event through ────────────────
+"$ROOT/scripts/report-friction.sh" \
+  --log-file "$E2E_SUB_LOG" \
+  --title "Forced: container image uses outdated base" \
+  --instruction-source "Dockerfile:1" \
+  --instruction-text "FROM ubuntu:22.04" \
+  --action-taken "Noticed the base image is outdated." \
+  --expected-outcome "Current LTS base image." \
+  --actual-outcome "Image is two releases behind but build succeeded." \
+  --interpretation "Recording for later remediation even though run continued." \
+  --run-effect "continued" \
+  --guidance-quality "clear" \
+  --force
+
+# --force overrides threshold → event recorded.
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 4 ]
+# This is Event 4 (3 real + 1 forced; the skipped one left no trace).
+grep -q '## Event 4: Forced: container image uses outdated base' "$E2E_SUB_LOG"
+
+# ── Step 8: Orchestrator rebuilds index ────────────────────────────
+"$ROOT/scripts/build-index.sh" --task-dir "$E2E_TASK_DIR" >/dev/null
+
+# ── Step 9: Verify the task directory tells a coherent story ───────
+
+# --- File inventory ---
+[ -f "$E2E_INDEX" ]
+[ -f "$E2E_ORCH_LOG" ]
+[ -f "$E2E_SUB_LOG" ]
+[ -f "$E2E_TASK_DIR/task.json" ]
+[ -f "$E2E_TASK_DIR/events.jsonl" ]
+[ -f "$E2E_TASK_DIR/incidents.json" ]
+[ -f "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
+[ -f "$E2E_TASK_DIR/SESSION.txt" ]
+[ -f "$E2E_TASK_DIR/TASK_SUMMARY.txt" ]
+[ -d "$E2E_TASK_DIR/exports" ]
+
+# --- INDEX.md is accurate ---
+grep -q '\*\*Entries:\*\* 4' "$E2E_INDEX"
+grep -q '\*\*Log files:\*\* 2' "$E2E_INDEX"
+grep -q 'instructions/missing/blocked' "$E2E_INDEX"
+grep -q 'external-service/other/blocked' "$E2E_INDEX"
+grep -q 'orchestrator' "$E2E_INDEX"
+grep -q 'subagent-container-inspection' "$E2E_INDEX"
+
+# --- events.jsonl: 4 lines, each structurally valid ---
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 4 ]
+# Validate required fields exist on every line (file-level grep, no per-line forks).
+E2E_EV_LINES=$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')
+[ "$(grep -c '"schema_version":"2.0.0"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"taxonomy_version":"2.0.0"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"event_id":"evt-' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"incident_id":"inc-' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"fingerprint"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"derived_category"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"run_effect"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"guidance_quality"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"privacy_tier":"shared"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+
+# --- Global numbering is sequential: evt-0001 through evt-0004 ---
+head -1 "$E2E_TASK_DIR/events.jsonl" | grep -q '"event_id":"evt-0001"'
+sed -n '2p' "$E2E_TASK_DIR/events.jsonl" | grep -q '"event_id":"evt-0002"'
+sed -n '3p' "$E2E_TASK_DIR/events.jsonl" | grep -q '"event_id":"evt-0003"'
+sed -n '4p' "$E2E_TASK_DIR/events.jsonl" | grep -q '"event_id":"evt-0004"'
+
+# --- Orch log has exactly Event 1, sub log has Events 2-4 ---
+grep -q '## Event 1:' "$E2E_ORCH_LOG"
+if grep -q '## Event 2:' "$E2E_ORCH_LOG"; then
+  printf '%s\n' 'smoke-posix: e2e: orch log has events that belong to the subagent' >&2
+  exit 1
+fi
+grep -q '## Event 2:' "$E2E_SUB_LOG"
+grep -q '## Event 3:' "$E2E_SUB_LOG"
+grep -q '## Event 4:' "$E2E_SUB_LOG"
+
+# --- incidents.json is populated (not a stale skeleton) ---
+E2E_INC_FILE=$E2E_TASK_DIR/incidents.json
+grep -q '"event_count":4' "$E2E_INC_FILE"
+grep -q '"incident_count":' "$E2E_INC_FILE"
+# Must have at least one incident entry in the array.
+grep -q '"incident_id":"inc-' "$E2E_INC_FILE"
+grep -q '"derived_category"' "$E2E_INC_FILE"
+grep -q '"status"' "$E2E_INC_FILE"
+# incident_count must be > 0.
+E2E_INC_COUNT=$(sed -n 's/.*"incident_count":\([0-9][0-9]*\).*/\1/p' "$E2E_INC_FILE")
+[ "$E2E_INC_COUNT" -gt 0 ]
+
+# --- SESSION.txt carries all 14 v2 keys ---
+[ "$(wc -l <"$E2E_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 14 ]
+grep -qx 'FRICTION_STORAGE_MODE=artifact' "$E2E_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_CAPTURE_MODE=threshold' "$E2E_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_PRIVACY_TIER=shared' "$E2E_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_EVENTS_FILE=.*events.jsonl' "$E2E_TASK_DIR/SESSION.txt"
+
+# --- Legacy --impact mapping (via the rate-limit entry) ---
+# --impact blocked → run_effect=blocked preserved through the full pipeline.
+sed -n '3p' "$E2E_TASK_DIR/events.jsonl" | grep -q '"run_effect":"blocked"'
+
+# --- Taxonomy version flows end-to-end ---
+printf '%s\n' "$SKILL_SURFACE_OUTPUT" | grep -qx 'taxonomy_version=2.0.0'
+
+rm -rf "$E2E_BASE"
 
 printf '%s\n' 'smoke-posix: ok'

@@ -6,7 +6,7 @@ param(
 if ($Help) {
 @"
 Usage:
-  scripts/build-index.ps1 -TaskDir $env:FRICTION_TASK_DIR
+  scripts/build-index.ps1 -TaskDir `$env:FRICTION_TASK_DIR
 "@
     exit 0
 }
@@ -67,7 +67,7 @@ function Acquire-IndexLock {
 
 Acquire-IndexLock
 try {
-    $generated = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
+    $generated = [System.DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
     $taskSummary = ""
     if (Test-Path $sessionFile) {
         $sessionLines = Get-Content $sessionFile
@@ -79,21 +79,31 @@ try {
         }
     }
 
+    $eventsJsonl = Join-Path $TaskDir 'events.jsonl'
     $logFiles = Get-ChildItem -Path $TaskDir -Recurse -Filter '*.md' -File | Where-Object { $_.Name -ne 'INDEX.md' } | Sort-Object FullName
     $logFileCount = $logFiles.Count
     $totalEntries = 0
-    $categoryCounts = @{}
 
+    if (Test-Path $eventsJsonl) {
+        $totalEntries = @([System.IO.File]::ReadAllLines($eventsJsonl) | Where-Object { $_ }).Count
+    }
+    if ($totalEntries -eq 0) {
+        foreach ($file in $logFiles) {
+            $content = Get-Content -Path $file.FullName -Raw
+            $totalEntries += ([regex]::Matches($content, '^## Event \d+:', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
+        }
+    }
+
+    $categoryCounts = @{}
     $logLines = @()
     foreach ($file in $logFiles) {
         $content = Get-Content -Path $file.FullName -Raw
-        $entryCount = ([regex]::Matches($content, '^## Entry \d+:', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
-        $totalEntries += $entryCount
+        $entryCount = ([regex]::Matches($content, '^## Event \d+:', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
         $relativePath = $file.FullName.Substring($TaskDir.Length).TrimStart('\','/')
         $logLines += [PSCustomObject]@{ Count = $entryCount; Path = $relativePath }
 
         foreach ($line in (Get-Content $file.FullName)) {
-            if ($line -match '^\*\*Category:\*\* (?<category>.+)$') {
+            if ($line -match '^\*\*Derived category:\*\* (?<category>.+)$') {
                 $category = $matches['category']
                 if (-not $categoryCounts.ContainsKey($category)) { $categoryCounts[$category] = 0 }
                 $categoryCounts[$category]++

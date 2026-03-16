@@ -111,7 +111,7 @@ trap cleanup EXIT HUP INT TERM
 acquire_lock
 
 task_id=$(basename "$task_dir")
-generated=$(date '+%Y-%m-%d %H:%M:%S %Z')
+generated=$(date -u '+%Y-%m-%d %H:%M:%S %Z')
 task_summary=
 if [ -f "$session_file" ]; then
   task_summary_file=$(grep '^FRICTION_TASK_SUMMARY_FILE=' "$session_file" | sed 's/^FRICTION_TASK_SUMMARY_FILE=//' || true)
@@ -125,13 +125,23 @@ fi
 log_list_file=$(mktemp "$task_dir/.log-files.XXXXXX.tmp")
 find "$task_dir" -type f -name '*.md' ! -name 'INDEX.md' | sort >"$log_list_file"
 
+events_jsonl=$task_dir/events.jsonl
 log_file_count=0
 total_entries=0
+entries_from_jsonl=false
+if [ -f "$events_jsonl" ]; then
+  total_entries=$(wc -l <"$events_jsonl" | tr -d ' ')
+  if [ "$total_entries" -gt 0 ]; then
+    entries_from_jsonl=true
+  fi
+fi
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   log_file_count=$((log_file_count + 1))
-  count=$(grep -c '^## Entry [0-9][0-9]*:' "$file" 2>/dev/null || true)
-  total_entries=$((total_entries + count))
+  if [ "$entries_from_jsonl" = "false" ]; then
+    count=$(grep -c '^## Event [0-9][0-9]*:' "$file" 2>/dev/null || true)
+    total_entries=$((total_entries + count))
+  fi
 done <"$log_list_file"
 
 category_counts_file=$(mktemp "$task_dir/.category-counts.XXXXXX.tmp")
@@ -143,12 +153,12 @@ if [ -s "$log_list_file" ]; then
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     rel=${file#"$task_dir"/}
-    count=$(grep -c '^## Entry [0-9][0-9]*:' "$file" 2>/dev/null || true)
+    count=$(grep -c '^## Event [0-9][0-9]*:' "$file" 2>/dev/null || true)
     printf '%s\t%s\n' "$count" "$rel" >>"$log_counts_file"
     awk '
-      /^\*\*Category:\*\*/ {
+      /^\*\*Derived category:\*\*/ {
         line=$0
-        sub(/^\*\*Category:\*\* /, "", line)
+        sub(/^\*\*Derived category:\*\* /, "", line)
         counts[line]++
       }
       END {

@@ -35,10 +35,11 @@ Script-generated entries (via `report-friction.sh` or `report-friction.ps1`) inc
 
 **Required for manual entries:**
 - **Title** — a 3–8 word summary that identifies the friction at a glance
-- **Category** — `surface/mode/impact` triple. Required because INDEX.md aggregation and the entire 3-axis design depend on it
+- **Derived category** — `surface/mode/run_effect` triple. Required because INDEX.md aggregation and the category design depend on it
+- **Guidance quality** — `clear`, `ambiguous`, `misleading`, or `not-applicable`
 - **Instruction source** — where the agent got the instruction it followed
 - **Actual outcome** — what happened, including exact error text when available
-- **Interpretation** — how the agent understood the situation and why it acted as it did
+- **Interpretation** — what the agent understood the instruction or context to mean at the time, and what specific language led to that understanding. This is a witness statement about your reading, not a diagnosis of the problem.
 
 **Strongly recommended for manual entries:**
 - **Instruction text** — the exact text or close paraphrase of what was read
@@ -59,29 +60,36 @@ WHEN the root cause is genuinely ambiguous THEN you SHOULD use the surface where
 
 WHEN mode is unclear THEN you SHOULD let the auto-categorizer choose and explain the uncertainty in Interpretation. Override only when the auto-label is directionally wrong — for example, the categorizer says `crash` but the failure was actually `permission` (a permission error that looks like a crash in the log output).
 
-WHEN you override THEN you SHOULD pass the relevant flag to the report script (`--surface`, `--mode`, or `--impact`) and include a one-line note in the entry explaining why the override was needed.
+WHEN you override THEN you SHOULD pass the relevant flag to the report script (`--surface`, `--mode`, `--run-effect`, or `--guidance-quality`) and include a one-line note in the entry explaining why the override was needed.
 
-The report scripts recompute the base `surface`, `mode`, and `impact` tags from the final category after overrides, then merge any explicit `--tags` additions on top.
+The report scripts recompute the base `surface`, `mode`, `run_effect`, and `guidance_quality` tags from the final category after overrides, then merge any explicit `--tags` additions on top.
 
 ## Reporting principles
 
-You are a field reporter, not a patch author.
+You are a field witness giving a statement, not a detective writing a case summary.
 
-Capture:
+Each entry should read like a first-person account: what you were told, what you understood that to mean, what you did because of that understanding, and what actually happened. Think of a patrol officer's report: "Dispatch told me to proceed to 4th and Main. I understood that as the intersection. I drove there. The address was actually a building on 4th Avenue near Main Street, two blocks east."
 
-- what you read or were told to do
-- what you tried because of that
-- what you expected to happen
-- what actually happened
-- how you interpreted the instruction or situation at the time
+**Interpretation is about your understanding, not your diagnosis.** The Interpretation field records what you believed the instruction, tool description, or documentation meant *at the time you acted on it*, and why that belief was reasonable. It is NOT:
+- your analysis of what went wrong
+- your theory about the root cause
+- your suggestion for how to fix it
+- a restatement of the actual outcome in different words
+
+Good interpretation: "I read 'the resolved config entry' as promising a single string because the docstring uses the singular 'entry'. The function name `resolve_config` also implies a single resolution. Nothing in the surrounding code or docs warned that it could return a list."
+
+Bad interpretation: "The function should return a single value instead of a list. This is a bug in the resolver."
+
+**Provide rich context in every field.** Entries should give a future reader enough detail to reproduce the situation without access to the original session. Specifically:
+
+- **Instruction source**: Include the file, line number, tool name, or prompt location. "AGENTS.md:34" not "AGENTS.md". "MCP tool description for `docker_inspect`, parameter `container_id`" not "MCP tool".
+- **Instruction text**: Quote the exact text you read, or a close paraphrase that preserves the specific language you acted on. Include surrounding context when it affected your reading.
+- **Action taken**: Include the exact command, arguments, tool call parameters, or code you wrote. "Ran `mpcr protocol dispatch --role architecture`" not "Ran the dispatch command". If you made multiple attempts, describe the sequence.
+- **Expected outcome**: Be specific about what the instruction or context led you to expect. "A JSON object with a `healthcheck` key containing the container's health configuration" not "The right data".
+- **Actual outcome**: Include exact error messages, status codes, response shapes, field values, exit codes. "HTTP 403 with body `{\"message\":\"API rate limit exceeded\"}` and `X-RateLimit-Remaining: 0` header" not "Got a 403".
+- **Interpretation**: Explain what you understood, why that understanding was reasonable given what you read, and what specific words or context led you to that understanding. Cite the language that steered you.
 
 Do not turn the entry into a fix proposal, implementation plan, or code review.
-
-Keep the entry concrete:
-
-- include exact command names, file paths, option names, field names, and short error excerpts
-- keep the error excerpt short unless extra lines materially change the interpretation
-- explain the agent's interpretation in plain language
 
 ## File layout
 
@@ -109,22 +117,39 @@ components remain valid on typical filesystems.
 Each entry uses this shape:
 
 ```markdown
-## Entry N: <short title>
-**Recorded:** <yyyy-mm-dd HH:MM:SS TZ>
-**Category:** <surface>/<mode>/<impact>
+## Event N: <short title>
+**Incident:** <incident id>
+**Recorded:** <yyyy-mm-ddTHH:MM:SSZ>
+**Derived category:** <surface>/<mode>/<run_effect>
+**Guidance quality:** <clear|ambiguous|misleading|not-applicable>
+**Observed surface:** <surface detected from observation text>
+**Confidence:** <low|medium|high>
+**Evidence type:** <execution|instruction|handoff|mixed>
+**Status:** <open|mitigated|resolved|stale>
 **Tags:** <comma-separated tags>
 **Instruction source:** <file:line, command, prompt source, tool name, or other origin>
 **Instruction text:** <exact text or close paraphrase>
 **Action taken:** <what the agent did because of that instruction or interpretation>
 **Expected outcome:** <what the instruction or context implied would happen>
 **Actual outcome:** <what actually happened, including short error text when available>
-**Interpretation:** <how the agent understood the instruction and why it acted that way>
+**Interpretation:** <what the agent understood the instruction to mean, what language led to that reading, and why it was reasonable>
 ---
 ```
 
-Single-line values are written inline. Multi-line values may be blockquoted so the Markdown stays readable.
+Single-line values are written inline. Multi-line values may be blockquoted so the Markdown stays readable. All text inputs are sanitized — secrets and tokens are redacted before storage.
 
-**Workaround field:** IF you used a workaround to proceed THEN you MAY manually append a `**Workaround:**` field after Interpretation. Frame it as what you did to continue, not as a recommendation. This field is for manual entries only — the report scripts do not currently accept a workaround flag.
+**Constrained fields:** The following fields accept only the listed values. You SHALL NOT invent new values for these fields — the scripts will silently fall back to defaults if you do, which degrades aggregation quality.
+
+- **Evidence type:** `execution` | `instruction` | `handoff` | `mixed` — auto-inferred from which fields are populated. Override only with one of these four values.
+- **Confidence:** `low` | `medium` | `high` — auto-inferred from surface/mode clarity. Override only with one of these three values.
+- **Status:** `open` | `mitigated` | `resolved` | `stale` — auto-set to `mitigated` when workaround_used is true, otherwise `open`.
+- **Mode:** One of the modes listed in `references/taxonomy.md`. Use `other` when none fit. You SHALL NOT invent new modes.
+- **Run effect:** `blocked` | `degraded` | `noisy` | `continued`.
+- **Guidance quality:** `clear` | `ambiguous` | `misleading` | `not-applicable`.
+
+Each event is also appended to `events.jsonl` as a structured JSON line for machine consumption. The markdown log is the human-readable view; `events.jsonl` is the structured view.
+
+**Workaround fields:** The report scripts accept `--workaround-used` (boolean) and `--workaround-note` (text) to record whether and how the agent worked around the friction.
 
 ## Duplicate control
 

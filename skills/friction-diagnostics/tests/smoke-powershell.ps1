@@ -35,11 +35,32 @@ try {
     if ($null -eq $logFile) { throw "log file missing under $taskDir" }
 
     $sessionLines = Get-Content $sessionFile
-    if ($sessionLines.Count -ne 5) { throw "SESSION.txt should contain 5 records, found $($sessionLines.Count)" }
+    if ($sessionLines.Count -ne 14) { throw "SESSION.txt should contain 14 records, found $($sessionLines.Count)" }
     if (-not ($sessionLines -match '^FRICTION_TASK_SUMMARY_FILE=')) { throw 'SESSION.txt missing FRICTION_TASK_SUMMARY_FILE' }
     if ($sessionLines -match '^FRICTION_TASK_SUMMARY=') { throw 'SESSION.txt still contains inline task summary' }
+    if (-not ($sessionLines -match '^FRICTION_TASK_DESCRIPTOR=')) { throw 'SESSION.txt missing FRICTION_TASK_DESCRIPTOR' }
+    if (-not ($sessionLines -match '^FRICTION_TASK_JSON=')) { throw 'SESSION.txt missing FRICTION_TASK_JSON' }
+    if (-not ($sessionLines -match '^FRICTION_EVENTS_FILE=')) { throw 'SESSION.txt missing FRICTION_EVENTS_FILE' }
+    if (-not ($sessionLines -match '^FRICTION_INCIDENTS_FILE=')) { throw 'SESSION.txt missing FRICTION_INCIDENTS_FILE' }
+    if (-not ($sessionLines -match '^FRICTION_STORAGE_MODE=')) { throw 'SESSION.txt missing FRICTION_STORAGE_MODE' }
+    if (-not ($sessionLines -match '^FRICTION_CAPTURE_MODE=')) { throw 'SESSION.txt missing FRICTION_CAPTURE_MODE' }
+    if (-not ($sessionLines -match '^FRICTION_PRIVACY_TIER=')) { throw 'SESSION.txt missing FRICTION_PRIVACY_TIER' }
+    if (-not ($sessionLines -match '^FRICTION_EXPORT_DIR=')) { throw 'SESSION.txt missing FRICTION_EXPORT_DIR' }
+    if (-not ($sessionLines -match '^FRICTION_SANITIZED_EXPORT=')) { throw 'SESSION.txt missing FRICTION_SANITIZED_EXPORT' }
     if ($outputMap['FRICTION_TASK_SUMMARY_FILE'] -ne $summaryFile) { throw 'init-log.ps1 did not emit FRICTION_TASK_SUMMARY_FILE' }
     if ($outputMap['FRICTION_TASK_SUMMARY'] -ne 'PowerShell multiline summary') { throw 'line-oriented output should expose only the first summary line when parsed this way' }
+
+    # Verify new structured files
+    $eventsFile = Join-Path $taskDir 'events.jsonl'
+    $taskJsonFile = Join-Path $taskDir 'task.json'
+    $incidentsFile = Join-Path $taskDir 'incidents.json'
+    $descriptorFile = Join-Path $taskDir 'TASK_DESCRIPTOR.json'
+    $exportsDir = Join-Path $taskDir 'exports'
+    if (-not (Test-Path $eventsFile)) { throw "events.jsonl missing: $eventsFile" }
+    if (-not (Test-Path $taskJsonFile)) { throw "task.json missing: $taskJsonFile" }
+    if (-not (Test-Path $incidentsFile)) { throw "incidents.json missing: $incidentsFile" }
+    if (-not (Test-Path $descriptorFile)) { throw "TASK_DESCRIPTOR.json missing: $descriptorFile" }
+    if (-not (Test-Path $exportsDir)) { throw "exports/ missing: $exportsDir" }
 
     $summaryText = [System.IO.File]::ReadAllText($summaryFile)
     if ($summaryText -ne $taskSummary) { throw 'TASK_SUMMARY.txt did not preserve the multiline summary' }
@@ -63,7 +84,8 @@ try {
         -Interpretation 'The subagent lacked context it needed to continue from the prior step.'
     if (-not ($categorizeLines -contains 'surface=workflow')) { throw 'categorize.ps1 should classify handoff context loss as workflow surface' }
     if (-not ($categorizeLines -contains 'mode=context-loss')) { throw 'categorize.ps1 should classify missing context as context-loss mode' }
-    if (-not ($categorizeLines -contains 'impact=confusing')) { throw 'categorize.ps1 should classify missing context as confusing impact' }
+    if (-not ($categorizeLines -contains 'run_effect=blocked')) { throw 'categorize.ps1 should classify missing context as blocked run_effect' }
+    if (-not ($categorizeLines -contains 'guidance_quality=clear')) { throw 'categorize.ps1 should classify missing context as clear guidance_quality' }
 
     $categorizeLines = & "$root/scripts/categorize.ps1" `
         -InstructionSource 'scripts/build.sh' `
@@ -73,7 +95,7 @@ try {
         -ActualOutcome 'The manifest file was missing, so the step could not continue.' `
         -Interpretation 'The expected artifact was absent and blocked the next step.'
     if (-not ($categorizeLines -contains 'mode=missing')) { throw 'categorize.ps1 should keep generic missing cases as missing mode' }
-    if (-not ($categorizeLines -contains 'impact=blocked')) { throw 'categorize.ps1 should keep generic missing cases as blocked impact' }
+    if (-not ($categorizeLines -contains 'run_effect=blocked')) { throw 'categorize.ps1 should keep generic missing cases as blocked run_effect' }
 
     & "$root/scripts/build-index.ps1" -TaskDir $taskDir | Out-Null
     if (-not (Test-Path $indexFile)) { throw "INDEX.md missing: $indexFile" }
@@ -132,7 +154,7 @@ try {
         -InstructionText 'Keep inline category text inside other fields from affecting category totals.' `
         -ActionTaken 'Recorded a workflow classification entry with inline category prose in the actual outcome.' `
         -ExpectedOutcome 'Only the real category field should contribute to category aggregates.' `
-        -ActualOutcome 'The generated note quoted **Category:** skill/ambiguity/confusing inside the prose, but this line is not a category field.' `
+        -ActualOutcome 'The generated note quoted **Derived category:** skill/ambiguity/continued inside the prose, but this line is not a category field.' `
         -Interpretation 'Index rebuild should count only lines that start with the category field marker.' `
         -Surface 'workflow' `
         -Mode 'ambiguity' `
@@ -140,12 +162,12 @@ try {
 
     & "$root/scripts/build-index.ps1" -TaskDir $taskDir | Out-Null
     $indexText = [System.IO.File]::ReadAllText($indexFile)
-    $skillCategoryIndex = $indexText.IndexOf('- ``skill/ambiguity/confusing`` - 2')
-    $workflowCategoryIndex = $indexText.IndexOf('- ``workflow/ambiguity/confusing`` - 2')
+    $skillCategoryIndex = $indexText.IndexOf('- ``skill/ambiguity/continued`` - 2')
+    $workflowCategoryIndex = $indexText.IndexOf('- ``workflow/ambiguity/continued`` - 2')
     if ($skillCategoryIndex -lt 0) { throw 'INDEX.md missing the expected skill category aggregate' }
     if ($workflowCategoryIndex -lt 0) { throw 'INDEX.md missing the expected workflow category aggregate' }
     if ($skillCategoryIndex -ge $workflowCategoryIndex) { throw 'INDEX.md should sort categories by descending count before name' }
-    if ($indexText -match '(?m)^- ``The generated note quoted \*\*Category:\*\* skill/ambiguity/confusing inside the prose, but this line is not a category field\.`` - ') {
+    if ($indexText -match '(?m)^- ``The generated note quoted \*\*Derived category:\*\* skill/ambiguity/continued inside the prose, but this line is not a category field\.`` - ') {
         throw 'INDEX.md should not aggregate inline category prose as its own category'
     }
 

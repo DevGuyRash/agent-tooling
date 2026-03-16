@@ -157,7 +157,7 @@ Use `unknown` only when genuinely unable to identify where the friction originat
 
 ## Mode
 
-What kind of breakdown happened.
+What kind of breakdown happened. WHEN overriding mode THEN you SHALL use one of the values listed below. You SHALL NOT invent new mode values — use `other` when none of the specific modes fit.
 
 ### `ambiguity`
 An instruction, description, or contract can be read multiple ways and the agent picked the wrong interpretation or could not determine which was correct. Signal: "unclear", "ambiguous", "underspecified", "not sure which".
@@ -206,9 +206,9 @@ The breakdown does not fit any of the above modes. Use `other` when the mode is 
 
 ---
 
-## Impact
+## Run effect
 
-How the run was affected.
+How the run was operationally affected. WHEN overriding run effect THEN you SHALL use one of: `blocked`, `degraded`, `noisy`, `continued`. You SHALL NOT invent new run effect values.
 
 ### `blocked`
 Progress stopped or the intended action could not complete. The agent had to abandon the step or wait for external resolution.
@@ -220,8 +220,25 @@ Work continued, but with reduced correctness or reliability. The agent produced 
 
 Example scenario: A function returns a list when a single value was expected — the code runs but downstream behavior is subtly wrong. The agent continued but the output quality was reduced.
 
-### `confusing`
-The run became hard to steer because guidance or behavior was unclear. The agent spent effort interpreting ambiguous signals without reaching confident understanding.
+### `noisy`
+The run thrashed, retried, or wasted effort without yielding new signal. The agent spent cycles on non-productive work but was not blocked.
+
+Example scenario: A flaky test fails on first run, passes on retry with no code change — the agent cannot tell if its fix worked and spends extra runs trying to distinguish signal from noise.
+
+### `continued`
+The run proceeded without operational disruption. This is the default when no blocking, degrading, or noisy condition was detected.
+
+---
+
+## Guidance quality
+
+How clear or misleading the available guidance was. WHEN overriding guidance quality THEN you SHALL use one of: `clear`, `ambiguous`, `misleading`, `not-applicable`. You SHALL NOT invent new guidance quality values.
+
+### `clear`
+The guidance was unambiguous and accurately described the actual behavior. This is the default.
+
+### `ambiguous`
+The guidance was unclear, underspecified, or could be read multiple ways. The agent spent effort interpreting signals without reaching confident understanding.
 
 Example scenario: AGENTS.md says "keep the change minimal and production ready" — the agent cannot tell if a migration is in scope and proceeds with uncertainty about whether the reviewer will accept the result.
 
@@ -230,10 +247,8 @@ The available evidence actively suggested the wrong action or interpretation. Th
 
 Example scenario: A `--help` text lists `json` as a valid format option but the CLI rejects it — the documentation pointed the agent toward an action that was guaranteed to fail.
 
-### `noisy`
-The run thrashed, retried, or wasted effort without yielding new signal. The agent spent cycles on non-productive work but was not blocked.
-
-Example scenario: A flaky test fails on first run, passes on retry with no code change — the agent cannot tell if its fix worked and spends extra runs trying to distinguish signal from noise.
+### `not-applicable`
+No guidance was involved in the friction — the event was purely operational (e.g., a timeout, a missing dependency).
 
 ---
 
@@ -241,8 +256,8 @@ Example scenario: A flaky test fails on first run, passes on retry with no code 
 
 - `skill/name-resolution/blocked`
 - `mcp/timeout/blocked`
-- `instructions/ambiguity/confusing`
-- `data/schema/misleading`
+- `instructions/ambiguity/continued`
+- `data/schema/degraded`
 - `workflow/context-loss/degraded`
 
 ---
@@ -318,4 +333,5 @@ WHEN no axis is clearly identifiable THEN you SHOULD leave the closest category 
 
 - The `logic` surface check looks for `assumption`, `misread`, `interpreted`, `logic`, and `reasoning`. Since many entries naturally use words like "interpreted" in the Interpretation field, entries targeting a non-logic surface should avoid these trigger words in other fields (title, actual-outcome, instruction-source).
 - The `code` surface check also matches on `traceback`, `exception`, and `runtime`. If the friction is environmental (missing library causes a crash), these words will push the surface to `code` before reaching `environment`. Use an override in such cases.
-- The impact heuristic checks for `wrong output` and `unexpected output` and maps them to `misleading`. For entries targeting `degraded` impact, phrase the mismatch differently (e.g., "did not match the caller's expected result").
+- The `run_effect` heuristic checks for "blocked" keywords first, so entries with words like "missing" or "failed" will land on `blocked` even when the overall outcome was `degraded`. Use `--run-effect degraded` to override.
+- The `guidance_quality` heuristic operates on `source_text` (instruction/expected context), not the full text. Words like "ambiguous" in the actual-outcome field do not trigger `ambiguous` guidance quality.

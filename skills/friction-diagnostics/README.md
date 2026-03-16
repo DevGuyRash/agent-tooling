@@ -21,14 +21,15 @@ Each entry is categorized as:
 
 - `surface` — where the friction showed up
 - `mode` — what kind of breakdown happened
-- `impact` — how it affected the run
+- `run_effect` — how it affected the run operationally (`blocked`, `degraded`, `noisy`, `continued`)
+- `guidance_quality` — how clear or misleading the available guidance was (`clear`, `ambiguous`, `misleading`, `not-applicable`)
 
 That yields compact categories like:
 
 - `skill/name-resolution/blocked`
 - `mcp/timeout/blocked`
-- `instructions/ambiguity/confusing`
-- `data/schema/misleading`
+- `instructions/ambiguity/continued`
+- `data/schema/degraded`
 
 This makes the skill broadly useful without needing to predeclare every failure mode in the world.
 
@@ -59,6 +60,11 @@ Each task directory also gets:
 - `INDEX.md` — aggregated category counts and log inventory
 - `SESSION.txt` — task-level metadata for reuse, stored as one `KEY=value` record per line
 - `TASK_SUMMARY.txt` — full task summary text for multiline-safe reuse
+- `task.json` — task-level metadata in JSON
+- `TASK_DESCRIPTOR.json` — per-agent descriptor with file paths and settings
+- `events.jsonl` — one structured JSON line per friction event
+- `incidents.json` — incident-level aggregation
+- `exports/` — sanitized export artifacts
 
 Task IDs and log filename slugs are normalized for filesystem safety. If a
 task summary, explicit task ID, agent, or role is too long for a single path
@@ -81,7 +87,7 @@ Unix-like systems:
 SKILL_ROOT=/absolute/path/to/friction-diagnostics
 
 INIT_OUTPUT="$(sh "$SKILL_ROOT/scripts/init-log.sh" \
-  --task-summary "Investigate tool dispatch failures" \
+  --task-summary "Investigate tool dispatch failures — mpcr protocol dispatch returns unknown role errors for documented domain labels" \
   --agent orchestrator \
   --skill-path "$SKILL_ROOT")"
 
@@ -93,12 +99,12 @@ TASK_DIR=$FRICTION_TASK_DIR
 sh "$SKILL_ROOT/scripts/report-friction.sh" \
   --log-file "$LOG_FILE" \
   --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160" \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture" \
-  --expected-outcome "The CLI returns the architecture prompt." \
-  --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the visible domain label as the CLI role slug."
+  --instruction-source "SKILL.md:160, inside the Domain routing table" \
+  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs." \
+  --action-taken "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value." \
+  --expected-outcome "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug." \
+  --actual-outcome "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help." \
+  --interpretation "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
 
 sh "$SKILL_ROOT/scripts/build-index.sh" --task-dir "$TASK_DIR"
 ```
@@ -109,7 +115,7 @@ Windows PowerShell:
 
 ```powershell
 $SkillRoot = "C:\absolute\path\to\friction-diagnostics"
-$initOutput = & "$SkillRoot\scripts\init-log.ps1" -TaskSummary "Investigate tool dispatch failures" -Agent orchestrator -SkillPath $SkillRoot
+$initOutput = & "$SkillRoot\scripts\init-log.ps1" -TaskSummary "Investigate tool dispatch failures — mpcr protocol dispatch returns unknown role errors for documented domain labels" -Agent orchestrator -SkillPath $SkillRoot
 $initMap = @{}
 $initOutput | ForEach-Object {
   if ($_ -match '^(FRICTION_[A-Z_]+)=(.*)$') {
@@ -124,12 +130,12 @@ $taskSummary = [System.IO.File]::ReadAllText($initMap["FRICTION_TASK_SUMMARY_FIL
 & "$SkillRoot\scripts\report-friction.ps1" `
   -LogFile $initMap["FRICTION_LOG_FILE"] `
   -Title "Dispatch role slug mismatch" `
-  -InstructionSource "SKILL.md:160" `
-  -InstructionText "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt." `
-  -ActionTaken "Ran mpcr protocol dispatch --role architecture" `
-  -ExpectedOutcome "The CLI returns the architecture prompt." `
-  -ActualOutcome "error: unknown dispatch role: architecture" `
-  -Interpretation "I treated the visible domain label as the CLI role slug."
+  -InstructionSource "SKILL.md:160, inside the Domain routing table" `
+  -InstructionText "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs." `
+  -ActionTaken "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value." `
+  -ExpectedOutcome "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug." `
+  -ActualOutcome "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help." `
+  -Interpretation "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs."
 
 & "$SkillRoot\scripts\build-index.ps1" -TaskDir $initMap["FRICTION_TASK_DIR"]
 ```
