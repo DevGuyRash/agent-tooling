@@ -1,17 +1,16 @@
 ---
-name: docker-architect
+name: Docker Architect
 description: >-
   Generate hardened, production-ready Docker architecture including Dockerfiles,
   Compose stacks, and Swarm deploy configs. Use when the task involves:
-  (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing
-  an application (Python, Node.js, Rust, Go, Nginx, or custom stacks),
-  (3) Creating or modifying compose.yaml or Docker Swarm deployments,
-  (4) Hardening container security (non-root users, read-only filesystems,
-  resource limits, secrets management), (5) Adding healthchecks to containers,
-  (6) Setting up CI/CD container scanning with hadolint, trivy, or docker scout,
-  (7) Configuring .dockerignore files, (8) Implementing image supply-chain
-  controls (digest-pinned images, OCI labels, SBOM, provenance), or (9) Any task
-  involving Docker, containers, or container orchestration.
+  (1) Writing or improving a Dockerfile or multi-stage build,
+  (2) Containerizing an application (Python, Node.js, Rust, Go, Nginx, or
+  custom stacks), (3) Creating or modifying compose.yaml or Docker Swarm
+  deployments, (4) Hardening container security, healthchecks, secrets
+  management, or resource limits, (5) Setting up CI/CD container scanning or
+  image supply-chain controls (hadolint, trivy, docker scout, SBOM,
+  provenance), or (6) Any task involving Docker, containers, or container
+  orchestration.
 license: MIT
 metadata:
   author: agent-skills

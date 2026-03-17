@@ -1,17 +1,16 @@
 ---
-name: rust-development
+name: Rust Development
 description: >-
-  Idiomatic, production-grade Rust development with phased workflow enforcement,
-  banned-pattern scanning, and deterministic verification. Use when the task
-  involves: (1) Writing new Rust code, features, or bugfixes, (2) Migrating an
-  existing tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing
-  Rust coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions for
-  Rust projects, (5) Creating or modifying Rust workspace layouts (single-crate or
-  monorepo), (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy
-  lints, rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors
+  Idiomatic, production-grade Rust development with structured TDD workflow,
+  lint enforcement, and CI integration. Use when the task involves:
+  (1) Writing new Rust code, features, or bugfixes, (2) Migrating an existing
+  tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing Rust
+  coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions,
+  (5) Creating or modifying Rust workspace layouts (single-crate or monorepo),
+  (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy lints,
+  rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors
   or borrow-checker issues, or (9) Any task where the primary language is Rust
-  (.rs files). Includes scaffolding scripts, Clippy lint configs, banned-family
-  test harness, and GitHub Actions CI template.
+  (.rs files).
 metadata:
   author: agent-skills
   version: "2.2.0"

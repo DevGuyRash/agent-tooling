@@ -1,10 +1,14 @@
 ---
-name: skill-auditor
+name: Skill Auditor
 description: >-
   Audit a skill's packaging, trigger behavior, task leverage, context design,
   verification loop, and AGENTS.md adherence, then produce a concise Skill
-  Improvement Brief with concrete changes and checks. Use when asked to audit,
-  self-audit, health-check, evaluate, review, or revise a skill.
+  Improvement Brief. Use when the task involves: (1) Auditing or self-auditing
+  a skill for quality or correctness, (2) Health-checking a skill's trigger
+  reliability or context efficiency, (3) Evaluating whether a skill belongs as
+  a skill, AGENTS.md entry, explicit prompt, or tool, (4) Reviewing or revising
+  a skill's packaging, descriptions, or references, or (5) Any task requiring
+  structured skill evaluation with concrete improvement checks.
 ---
 
 # Skill Auditor

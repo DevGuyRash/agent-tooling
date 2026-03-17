@@ -1,5 +1,5 @@
 ---
-name: gitops-workflow
+name: GitOps Workflow
 description: >-
   End-to-end GitOps workflow governance and automation covering branching,
   Conventional Commits, PR lifecycle, CI gating, and release management. Use

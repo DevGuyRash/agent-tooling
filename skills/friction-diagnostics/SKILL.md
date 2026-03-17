@@ -1,21 +1,18 @@
 ---
-name: friction-diagnostics
+name: Friction Diagnostics
 description: >-
-  Use this skill when something you followed, interpreted, or executed did not
-  work as the available instructions, tools, documentation, or workflow implied
-  it would. The core pattern is: you read or were told something, you acted on
-  that understanding, and the outcome diverged from what the source material
-  led you to expect. This applies across any surface — skills, instructions,
-  MCP tools, scripts, CLIs, APIs, data contracts, environments, handoffs, or
-  reasoning paths. Also use it when the user or repository guidance explicitly
-  asks for durable friction reporting, or when multi-agent runs need repairable
-  evidence that survives session boundaries. The skill creates per-task logs
-  under the system temp directory, auto-categorizes each event along
-  surface/mode/run_effect/guidance_quality axes, and records what was read,
-  what was tried, what happened, and what the agent understood at the time.
-  Do not use it for pure bug fixing without a logging requirement, or for
-  failures caused only by the user's project unless the agent's instructions,
-  tools, or workflow contributed to the friction.
+  Log and categorize friction events where agent-executed instructions, tools,
+  or workflows produced unexpected results. Use when the task involves:
+  (1) An instruction, skill, MCP tool, script, CLI, API, or data contract that
+  did not behave as its documentation implied, (2) A workflow or handoff where
+  the outcome diverged from what the source material led you to expect,
+  (3) Durable diagnostic reporting across a top-level task, (4) Multi-agent
+  runs where subagents need to leave repairable evidence that survives session
+  boundaries, (5) Repeated or subtle frictions that should survive context
+  loss, or (6) Any scenario where you acted on available guidance and the
+  result did not match. Do not use for pure bug fixing without a logging
+  requirement, or for user-project failures unless agent instructions, tools,
+  or workflow contributed.
 compatibility: Designed for filesystem-capable coding agents. Deterministic helpers require POSIX sh on Unix-like systems or PowerShell on Windows. No network required.
 metadata:
   author: generated-template
@@ -24,7 +21,7 @@ metadata:
   tags: friction,logging,postmortem,troubleshooting
 ---
 
-# Friction diagnostics
+# Friction Diagnostics
 
 This skill creates durable friction logs that a later agent can inspect and fix from the temp directory. Keep entries concise and concrete. Record the what and why. Do not put proposed fixes inside the log.
 

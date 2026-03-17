@@ -1,10 +1,13 @@
 ---
-name: code-review
+name: Code Review
 description: >-
   Run recursive, machine-first code review, review application, and full-cycle
-  convergence workflows with the `mpcr` CLI. Use when reviewing diffs or PRs,
-  applying structured findings, validating canonical review artifacts, or
-  driving review→apply→verify loops with per-agent report trees.
+  convergence workflows with the `mpcr` CLI. Use when the task involves:
+  (1) Reviewing a diff, pull request, or set of commits, (2) Applying
+  structured review findings back to code, (3) Validating canonical review
+  artifacts or report trees, (4) Driving review→apply→verify convergence
+  loops, or (5) Any task requiring systematic, multi-pass code review with
+  per-agent report trees.
 compatibility: >-
   Cross-platform. Primary entrypoint: `<skills-file-root>/scripts/mpcr` (POSIX)
   or `<skills-file-root>/scripts/mpcr.cmd` (Windows; falls back to

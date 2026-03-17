@@ -75,15 +75,31 @@ Every skill's `SKILL.md` starts with YAML frontmatter. The `name` and
 
 ### Name field
 
-The `name` must match the parent directory name and follow these rules:
+The `name` field is the **display name** shown to users in skill listings
+and selection UIs. It is title-cased with spaces. The **directory name**
+(the folder containing `SKILL.md`) is the invocation slug — that's what
+users type after `/` to trigger the skill.
+
+Directory naming rules (the slug):
 
 - Lowercase alphanumeric characters and hyphens only (`a-z`, `0-9`, `-`)
 - Max 64 characters
 - Must not start or end with `-`
 - Must not contain consecutive hyphens (`--`)
 
-Valid: `code-review`, `pdf-processing`, `rust-development`
-Invalid: `Code-Review` (uppercase), `-pdf` (leading hyphen), `pdf--tools` (consecutive hyphens)
+The `name` field is the title-cased equivalent of the directory slug:
+
+| Directory (slug)        | `name:` (display)         |
+| ----------------------- | ------------------------- |
+| `code-review`           | `Code Review`             |
+| `rust-development`      | `Rust Development`        |
+| `docker-architect`      | `Docker Architect`        |
+| `espanso-dynamic-forms` | `Espanso Dynamic Forms`   |
+| `gitops-workflow`       | `GitOps Workflow`         |
+| `friction-diagnostics`  | `Friction Diagnostics`    |
+
+The H1 heading in the SKILL.md body (`# ...`) should match the `name`
+field exactly.
 
 ### Description field
 
@@ -92,25 +108,83 @@ primary mechanism every platform uses to decide whether to activate the
 skill — agents see descriptions for all available skills at startup and
 match against the user's request.
 
-Rules from the spec:
-- Max 1024 characters
-- Must describe both *what* the skill does and *when* to use it
-- Should include specific keywords that users are likely to say
+**Hard constraint:** max **1024 characters**. Skills that exceed this limit
+fail to load entirely — no warning, no truncation, just a silent skip.
+Measure your description after editing:
 
-A good description covers trigger conditions explicitly:
+```bash
+python3 -c "
+import yaml
+with open('SKILL.md') as f:
+    parts = f.read().split('---', 2)
+    d = yaml.safe_load(parts[1]).get('description', '')
+    print(f'{len(d)} / 1024 chars')
+"
+```
+
+#### Two-part structure (required pattern)
+
+Every description follows two parts:
+
+1. **Lead sentence** — a capability statement describing what the skill
+   does (not "Use this skill when..."). This gives the agent a quick
+   "what does this do" signal.
+2. **Numbered trigger list** — `"Use when the task involves: (1)... (2)...
+   (N) Any task involving X."` Each numbered item is a discrete,
+   keyword-rich scenario the agent can scan and match against.
+
+Optionally end with a short negative trigger ("Do not use for X") if the
+skill has common false-positive triggers that need guarding against.
+
+#### Good example (follows the pattern)
 
 ```yaml
 description: >-
-  Extract text and tables from PDF files, fill PDF forms, and merge
-  multiple PDFs. Use when working with PDF documents or when the user
-  mentions PDFs, forms, or document extraction.
+  Generate hardened, production-ready Docker architecture including
+  Dockerfiles, Compose stacks, and Swarm deploy configs. Use when the
+  task involves: (1) Writing or improving a Dockerfile or multi-stage
+  build, (2) Containerizing an application, (3) Creating or modifying
+  compose.yaml or Docker Swarm deployments, (4) Hardening container
+  security, or (5) Any task involving Docker, containers, or container
+  orchestration.
 ```
 
-A poor description forces the agent to guess:
+Why this works: the lead sentence tells the agent what the skill produces.
+Each numbered item is a concrete scenario with keywords an agent can match
+against a user's request. The catch-all `(5)` covers edge cases.
+
+#### Bad examples
 
 ```yaml
-description: Helps with PDFs.
+# Too vague — no trigger keywords, agent must guess
+description: Helps with Docker stuff.
+
+# Narrative prose — no scannable trigger points
+description: >-
+  Use this skill when something you followed did not work as the
+  available instructions implied it would. The core pattern is: you
+  read something, acted on it, and the outcome diverged from what you
+  expected. This applies across any surface.
+
+# Implementation details instead of triggers
+description: >-
+  Creates per-task logs under the system temp directory, auto-categorizes
+  each event along surface/mode/run_effect axes, and records what was
+  read, what was tried, and what happened.
 ```
+
+The narrative example buries triggers in flowing sentences that are hard
+to decompose programmatically. The implementation example describes *how*
+the skill works instead of *when* to use it.
+
+#### What NOT to put in the description
+
+- **Implementation details** (temp dirs, categorization axes, internal
+  data structures) — these belong in the SKILL.md body.
+- **Narrative prose** explaining the conceptual pattern — use numbered
+  triggers instead.
+- **Long negative-trigger lists** — one short sentence at the end is
+  enough; detailed "do not use" guidance belongs in the SKILL.md body.
 
 Test your description by imagining 5-10 realistic user prompts that should
 trigger the skill and 5-10 that shouldn't. If the description doesn't
