@@ -31,7 +31,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: Review demo skills for maintainers updating metadata and instructions.
                     ---
                     """
@@ -53,7 +53,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: >-
                       Check a demo skill and explain what it does. Use when
                       reviewing demo skills.
@@ -79,7 +79,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: >-
                       Review demo skills for maintainers revising metadata,
                       references, and workflow instructions.
@@ -103,7 +103,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: >+
                       Check a demo skill and explain what it does. Use when
                       reviewing demo skills.
@@ -127,7 +127,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: >-
                      Check a demo skill and explain what it does. Use when
                      reviewing demo skills.
@@ -151,7 +151,7 @@ class FrontmatterCheckTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     ---
-                    name: demo-skill
+                    name: Demo Skill
                     description: Helps with demo skills.
                     ---
                     """
@@ -164,6 +164,75 @@ class FrontmatterCheckTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertTrue(data["ok"])
         self.assertIn("description_trigger_weak", {warning["code"] for warning in data["warnings"]})
+
+    def test_slug_name_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: demo-skill
+                    description: Review demo skills for maintainers updating metadata and instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertFalse(data["ok"])
+        issue_codes = {issue["code"] for issue in data["issues"]}
+        self.assertIn("name_not_title_case", issue_codes)
+
+    def test_name_slug_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "demo-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: Wrong Name
+                    description: Review demo skills for maintainers updating metadata and instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertFalse(data["ok"])
+        issue_codes = {issue["code"] for issue in data["issues"]}
+        self.assertIn("name_slug_mismatch", issue_codes)
+
+    def test_bad_directory_slug_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "Bad--Slug"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    name: Bad Slug
+                    description: Review demo skills for maintainers updating metadata and instructions.
+                    ---
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            completed, data = run_frontmatter_check(skill_dir)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertFalse(data["ok"])
+        issue_codes = {issue["code"] for issue in data["issues"]}
+        self.assertTrue(issue_codes & {"slug_format", "slug_double_hyphen"})
 
     def test_active_skill_passes(self) -> None:
         completed, data = run_frontmatter_check(ROOT)

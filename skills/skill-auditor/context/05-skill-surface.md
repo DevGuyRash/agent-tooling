@@ -23,9 +23,11 @@ flowchart TB
         C6[profile-rules.md]
         C7[improvement-patterns.md]
         C8[output-contract.md]
+        C9[spec-compliance.md]
         D1[frontmatter_check.sh]
         D2[reference_check.sh]
         D3[script_sanity.sh]
+        D4[spec_check.sh]
         T[focused tests + trigger fixtures]
         X[private context diagrams]
     end
@@ -42,9 +44,11 @@ flowchart TB
     C --> C6
     C --> C7
     C --> C8
+    C --> C9
     D --> D1
     D --> D2
     D --> D3
+    D --> D4
     F --> T
     T --> X
 ```

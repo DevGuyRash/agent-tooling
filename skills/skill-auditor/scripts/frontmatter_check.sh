@@ -228,18 +228,28 @@ if [ -z "$NAME_VALUE" ]; then
     append_issue "name_missing" "BLOCKER" "frontmatter is missing a name field"
 else
     DIR_NAME=$(basename "$SKILL_DIR")
-    if [ "$NAME_VALUE" != "$DIR_NAME" ]; then
-        append_issue "name_mismatch" "MAJOR" "name does not match directory: $NAME_VALUE != $DIR_NAME"
+
+    # Directory slug validation (lowercase, hyphens, no --, max 64)
+    if ! printf '%s' "$DIR_NAME" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+        append_issue "slug_format" "MAJOR" "directory slug must use lowercase letters, numbers, and single hyphens only: $DIR_NAME"
     fi
-    if ! printf '%s' "$NAME_VALUE" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
-        append_issue "name_format" "MAJOR" "name must use lowercase letters, numbers, and single hyphens only"
+    if printf '%s' "$DIR_NAME" | grep -q -- '--'; then
+        append_issue "slug_double_hyphen" "MAJOR" "directory slug must not contain consecutive hyphens: $DIR_NAME"
     fi
-    if printf '%s' "$NAME_VALUE" | grep -q -- '--'; then
-        append_issue "name_double_hyphen" "MAJOR" "name must not contain consecutive hyphens"
+    SLUG_LEN=$(printf '%s' "$DIR_NAME" | wc -c | tr -d ' ')
+    if [ "$SLUG_LEN" -gt 64 ]; then
+        append_issue "slug_length" "MAJOR" "directory slug exceeds 64 characters: $DIR_NAME"
     fi
-    NAME_LEN=$(printf '%s' "$NAME_VALUE" | wc -c | tr -d ' ')
-    if [ "$NAME_LEN" -gt 64 ]; then
-        append_issue "name_length" "MAJOR" "name exceeds 64 characters"
+
+    # Name field must be title-cased (each word starts with uppercase)
+    if ! printf '%s' "$NAME_VALUE" | grep -Eq '^[A-Z][A-Za-z0-9]*([ ][A-Z][A-Za-z0-9]*)*$'; then
+        append_issue "name_not_title_case" "MAJOR" "name must be title-cased with spaces: $NAME_VALUE"
+    fi
+
+    # Name must be the title-cased equivalent of the directory slug
+    EXPECTED_NAME=$(printf '%s' "$DIR_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+    if [ "$NAME_VALUE" != "$EXPECTED_NAME" ]; then
+        append_issue "name_slug_mismatch" "MAJOR" "name is not the title-cased equivalent of directory slug: $NAME_VALUE != $EXPECTED_NAME (from $DIR_NAME)"
     fi
 fi
 

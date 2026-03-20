@@ -62,11 +62,17 @@ context fit.
 WHEN success, retries, or regression checks are unclear THEN you SHALL use
 verification fit.
 
+WHEN the user asks about AGENTS.md adherence, spec conformance, or
+convention compliance THEN you SHALL load `references/spec-compliance.md`.
+WHEN packaging or context fit reveals multiple convention violations THEN
+you MAY load `references/spec-compliance.md` for systematic enumeration.
+
 ## Direct References
 
 - Output contract → `references/output-contract.md`
 - Profile rules → `references/profile-rules.md`
 - Improvement patterns → `references/improvement-patterns.md`
+- Spec compliance → `references/spec-compliance.md`
 
 ## Default Workflow
 
@@ -96,6 +102,7 @@ WHEN structural evidence helps THEN you MAY run one or more of these helpers:
 - `scripts/frontmatter_check.sh`
 - `scripts/reference_check.sh`
 - `scripts/script_sanity.sh`
+- `scripts/spec_check.sh`
 
 WHEN reasoning alone answers the question well enough THEN you SHALL NOT run
 scripts just to satisfy the workflow.

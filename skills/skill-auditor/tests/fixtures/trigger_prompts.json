@@ -3,9 +3,9 @@
     "audit",
     "self-audit",
     "health-check",
-    "evaluate",
+    "evaluating",
     "review",
-    "revise",
+    "revising",
     "AGENTS.md adherence"
   ],
   "negative_terms": [
