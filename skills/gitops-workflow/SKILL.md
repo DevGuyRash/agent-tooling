@@ -12,10 +12,10 @@ description: >-
   structured Git operations with auditability and governance. Includes helper
   scripts for git and GitHub CLI.
 license: MIT
-compatibility: "Requires git. Optional but recommended: GitHub CLI (gh). Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
+compatibility: "Requires git and GitHub CLI (gh) for GitHub operations; falls back to git/curl if gh is unavailable. Helper scripts use bash and python3; optional jq. Designed for GitHub-hosted repos but adaptable."
 metadata:
   author: DevGuyRash
-  version: "1.4.0"
+  version: "2.0.0"
   category: development
 allowed-tools: "Bash(git:*) Bash(gh:*) Bash(python3:*) Bash(jq:*) Read Write"
 ---
@@ -44,18 +44,27 @@ Use this skill when the user asks you to:
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
+- commit and push to the current branch without PR or branch creation (**push-only** mode)
 
 ---
 
 ## Prerequisites
 
 - `git` available and the current working directory is a git repo.
-- For GitHub PR automation: `gh` authenticated (recommended).
+- For GitHub operations: `gh` authenticated (primary tool; falls back to `git`/`curl` if unavailable).
 
 Optional helpers:
 
 - `python3` (for generator scripts)
 - `jq` (some `gh` JSON queries are easier with it, but not required)
+
+---
+
+## Tool priority
+
+- **GitHub operations** (PRs, issues, checks, reviews, labels, templates, repo metadata): `gh` (GitHub CLI) is the primary tool. WHEN `gh` is not available or not authenticated THEN you SHALL fall back to `git`/`curl` targeting the GitHub REST API.
+- **Local git operations** (branching, staging, committing, worktrees, history): always `git`.
+- **Script dispatch**: bundled scripts first, ad-hoc command sequences fallback-only (see [Script-first dispatch](#script-first-dispatch-mandatory) below).
 
 ---
 
@@ -81,7 +90,7 @@ Unless the repo explicitly defines otherwise, follow these rules:
    - at least one approving review (unless explicitly waived)
    - PR author confirms ready
    - branch is up to date / rebased
-8. **Default merge strategy is Squash & Merge**. Generate the deterministic squash body first, then optionally edit the generated body file before the final merge run when cleaner prose is needed.
+8. **Default merge strategy is Squash & Merge**. Generate the squash body skeleton first (deterministic Commits/Refs + agent placeholders for prose), fill the prose sections, then merge with the completed body file. Use `--deterministic` for fully mechanical bodies without placeholders.
 9. **After push/merge operations**, emit a **commit receipt** (see [references/RECEIPTS.md](references/RECEIPTS.md)).
 10. **Governance automation is policy-driven**: when policy files exist, use deterministic `validate -> plan -> apply -> audit` commands rather than ad hoc edits in the GitHub UI.
 11. **When asked to "commit worktree" or "commit changes"**, create **batched Conventional Commits** grouped by logical change (feat/fix/docs/test/refactor/chore/etc.); do **not** make a single catch-all commit unless explicitly requested.
@@ -107,7 +116,7 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
-| Start branch from default branch or linked worktree | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]` |
+| Start branch (worktree default) or adopt existing | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]` |
 | Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
 | Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
@@ -126,8 +135,9 @@ Path resolution (mandatory):
 | Reply to inline review comment | `bash "$SKILL_ROOT/scripts/pr-reply.sh" <pr_number> <comment_id> (--body-file <path> | --body "<text>" | --body=<text>) [--repo owner/repo]` |
 | Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
 | Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
-| Squash merge a PR deterministically (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--body-file <path> \| --body-out <path>] [--admin] [--dry-run]` |
+| Squash merge a PR (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--body-file <path> \| --body-out <path>] [--deterministic] [--admin] [--dry-run]` |
 | Clean up merged branch or worktree and return to base | `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]` |
+| Detect commit signing availability | `bash "$SKILL_ROOT/scripts/detect-signing.sh"` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
 | Governance enforcement sequence | `bash "$SKILL_ROOT/scripts/governance-enforce.sh" [--policy <path>] --repo owner/repo [--no-write-codeowners]` |
@@ -150,11 +160,13 @@ When you are asked to “do Git work” in a repo, do this first:
    - current-branch PR context via `gh pr view --json number,title,state,baseRefName,headRefName,url` when `gh` is available and the branch already has a PR; do not infer unsupported `gh pr status --json` fields
    - existing workflow enforcement (PR template, CI, branch protections)
 2. **Choose the correct playbook**
-   - start work → Branching playbook
-   - open PR → PR creation playbook
-   - update PR → PR update playbook
-   - merge PR → Merge playbook
-   - release notes → Release notes playbook
+   - start work → Branching playbook (A)
+   - commit work → Commit playbook (B)
+   - open PR → PR creation playbook (C)
+   - update PR → PR update playbook (D)
+   - merge PR → Merge playbook (E)
+   - release notes → Release notes playbook (F)
+   - commit and push without PR/branch → Push-only playbook (I)
 
 Detailed checklists live in:
 
@@ -178,8 +190,8 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
-# or create a clean linked checkout:
-# bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
+# or stay in current checkout instead of creating a worktree:
+# bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --no-worktree
 bash "$SKILL_ROOT/scripts/setup-security.sh"
 bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact
 bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output"
@@ -202,23 +214,26 @@ python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref 
 
 ---
 
-## Playbook A: Start work (branch or worktree)
+## Playbook A: Start work (worktree by default)
 
 ### Goal
 
-Create a correctly named branch from the default branch, without accidentally working on `main`. Default behavior stays in-place branch creation; add `--worktree` to create a clean linked checkout instead.
+Create a correctly named branch from the default branch, without accidentally working on `main`. Default behavior creates a clean linked worktree at `<repo>.worktrees/<type>/<slug>` (GitKraken-compatible layout); add `--no-worktree` to stay in the current checkout instead.
 
 ### Steps
 
-1. If working tree is dirty and you are using branch mode, stash tracked + untracked changes with deterministic metadata.
-   - `scripts/start-branch.sh` handles this automatically and restores after branch switch.
+1. If working tree is dirty:
+   - **Worktree mode (default):** dirty files are automatically migrated to the new worktree; the main checkout is restored to a clean state.
+   - **Branch mode (`--no-worktree`):** tracked + untracked changes are stashed with deterministic metadata and restored after branch switch.
+   - `scripts/start-branch.sh` handles both cases automatically.
    - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
 2. Sync the default branch for the mode you are using:
    - branch mode: `git checkout <default-branch> && git pull`
-   - linked worktree mode: let `start-branch.sh --worktree` resolve from the default branch without switching the current checkout
+   - linked worktree mode: let `start-branch.sh` resolve from the default branch without switching the current checkout
 3. Create either:
-   - a local branch in the current checkout, or
-   - a linked worktree at `<main-checkout>.worktrees/<type>/<short-desc>` when `--worktree` is passed.
+   - a linked worktree at `<main-checkout>.worktrees/<type>/<slug>` (default), or
+   - a local branch in the current checkout when `--no-worktree` is passed.
+4. To adopt an existing branch instead of creating a new one, use `--existing`.
 
 **Recommended helper** (handles default-branch detection + naming validation):
 
@@ -230,7 +245,8 @@ Example:
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 4321 --stash-name "carry-local-wip"
-bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --no-worktree
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --existing
 ```
 
 ---
@@ -244,7 +260,7 @@ Use:
 ```md
 <type>(<scope>): <description>
 
-[optional body]
+[body — encouraged]
 
 [optional footer]
 ```
@@ -252,6 +268,7 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
+- include a commit body more often than not; explain **why** the change was made, not a mechanical description of the diff (see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md) for body guidelines)
 - run sensitive-data gate before commit:
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)
@@ -260,6 +277,18 @@ See:
 
 - [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md)
 - [assets/config/gitleaks.toml](assets/config/gitleaks.toml)
+
+### Commit signing
+
+WHEN committing, the agent SHOULD run `detect-signing.sh` to check whether signing is available:
+
+- `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
+
+WHEN signing is configured but unavailable (exit code 1 — e.g., remote SSH session with no agent forwarding) THEN you SHALL commit with `--no-gpg-sign` and warn the user that commits are unsigned.
+
+WHEN signing is not configured (exit code 2) THEN you SHALL commit normally without signing flags.
+
+**Recommended long-term fix:** configure SSH agent forwarding so signing keys are available on remote hosts. For 1Password SSH agent, add `ForwardAgent yes` to the remote host in `~/.ssh/config`. For GPG, use `RemoteForward` of the GPG agent socket. See [1Password SSH agent forwarding docs](https://developer.1password.com/docs/ssh/agent/forwarding/) and [GnuPG agent forwarding wiki](https://wiki.gnupg.org/AgentForwarding).
 
 ---
 
@@ -338,26 +367,28 @@ Draft-ready lifecycle:
 
 ## Playbook E: Merge a PR (squash & merge)
 
-1. Run deterministic merge wrapper:
-   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number>`
-2. Wrapper merge command always includes `--delete-branch` to remove the source branch after successful merge.
-3. Wrapper preconditions (default mode):
+1. Generate the squash body skeleton (default: agent placeholders for prose + deterministic Commits/Refs):
+   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --body-out /tmp/squash-body.md --dry-run`
+2. Fill the `<!-- AGENT: -->` placeholders in the body file with natural prose describing what changed, new features, bug fixes, and breaking changes. Remove sections that don't apply. The `## Commits` and `## Refs` sections are already filled deterministically — leave them as-is.
+3. Merge with the completed body:
+   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --body-file /tmp/squash-body.md`
+4. Wrapper merge command always includes `--delete-branch` to remove the source branch after successful merge.
+5. Wrapper preconditions (default mode):
    - conversations resolved
    - required CI checks green
    - approvals present
    - PR is not draft and mergeable
-4. Squash merge body omits empty optional sections and is generated deterministically with commit bullets:
-   - `- <short-sha> <first-line commit subject>`
-   - `## Commits` and `## Refs` are always present
-   - for a cleaner final body, first run `--body-out <path> --dry-run`, edit the file, then rerun with `--body-file <path>`
-5. Optional escalation path for repository admins:
+6. For repos that prefer fully mechanical bodies (no agent prose), use `--deterministic`:
+   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --deterministic`
+7. Optional escalation path for repository admins:
    - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --admin`
    - this passes `--admin` (while preserving `--delete-branch`) to `gh pr merge` and relaxes approval/check gates
-6. After merge, emit a commit receipt:
+8. After merge, emit a commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <default-branch> --pr-url <url>`
-7. After the receipt, clean up local state:
+9. After the receipt, clean up local state:
    - `bash "$SKILL_ROOT/scripts/finish-work.sh"`
    - this refuses cleanup until the remote branch is gone and the change is confirmed on the base branch
+10. If the repo has its own squash merge template, use that template instead of the skill's skeleton.
 
 ---
 
@@ -435,6 +466,37 @@ Helper references:
 - `scripts/issue-create.sh`
   - Resolve as: `"$SKILL_ROOT/scripts/issue-create.sh"`
 - `assets/templates/issue-body.md`
+
+---
+
+## Playbook I: Push-only mode (commit and push)
+
+### Goal
+
+Commit and push to the current branch without creating branches, worktrees, or PRs.
+
+Use this playbook WHEN:
+- the user says **"push-only"**, **"commit-push"**, or **"just commit and push"**
+- the user asks to commit and push without a PR (e.g., "push this to the branch", "no PR needed, just push")
+- the user explicitly asks not to create a branch, worktree, or PR
+- the context makes it clear the user wants changes on the current branch with no workflow overhead (e.g., pushing directly to a personal branch, updating a config repo, or iterating on a draft branch that already has a PR)
+
+### Steps
+
+1. Detect repo context (same as Quick Start step 1).
+2. Run sensitive-data gate:
+   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
+3. Create batched Conventional Commits with bodies (per Playbook B).
+4. Check signing availability:
+   - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
+   - WHEN signing is configured but unavailable (exit 1) THEN you SHALL commit with `--no-gpg-sign` and warn the user.
+5. Push to current branch: `git push`
+6. Emit commit receipt:
+   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base <default-branch>`
+
+WHEN push-only mode is active THEN you SHALL NOT create branches, worktrees, or PRs.
+
+WHEN push-only mode is active THEN you SHALL still follow Conventional Commits, the sensitive-data gate, and receipts.
 
 ---
 

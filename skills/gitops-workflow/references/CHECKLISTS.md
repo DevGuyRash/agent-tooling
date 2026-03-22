@@ -15,22 +15,26 @@ SKILL_ROOT=<absolute-path-to-gitops-workflow>
 
 ---
 
-## A) Start work checklist (branch or worktree)
+## A) Start work checklist (worktree default)
 
-- [ ] if branch mode worktree is dirty, start helper auto-stashes tracked + untracked and restores safely
+- [ ] default mode creates a linked worktree; use `--no-worktree` to stay in the current checkout
+- [ ] if worktree mode and working tree is dirty, dirty files are migrated to the new worktree automatically
+- [ ] if branch mode (`--no-worktree`) and worktree is dirty, start helper auto-stashes tracked + untracked and restores safely
 - [ ] branch helper auto-installs managed pre-commit hook unless `--no-install-hooks` is used
 - [ ] branch mode starts from an up-to-date default branch checkout (`main`/`master`)
-- [ ] linked worktree mode may stay on the current checkout; helper resolves from the default branch without switching the active worktree
+- [ ] linked worktree mode resolves from the default branch without switching the active worktree
 - [ ] new branch name matches allowed pattern: `<type>/<short-desc>`
 - [ ] branch name is kebab-case and concise (`add-json-output`, not `AddedJsonOutput`)
 - [ ] if `<slug>` is omitted without `--issue`, the helper default is `wip-<YYYYMMDD-HHMMSS>-<HEAD8>` when `HEAD` exists
-- [ ] if using linked worktree mode, target path is `<main-checkout>.worktrees/<type>/<short-desc>`
+- [ ] worktree target path is `<main-checkout>.worktrees/<type>/<short-desc>` (GitKraken-compatible)
+- [ ] to adopt an existing branch, use `--existing`
 
 Recommended:
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry-local-wip"
-bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --no-worktree
+bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 ```
 
 ---
@@ -43,6 +47,7 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --worktree
   - `bash "$SKILL_ROOT/scripts/install-hooks.sh" --repo <path>`
 - [ ] commit subject matches: `type(scope): description`
 - [ ] subject is imperative + lowercase + no trailing period
+- [ ] commit body included for non-trivial changes (explains **why**, not a mechanical description of the diff)
 - [ ] commit is atomic (one logical change)
 - [ ] scope is used when it reduces ambiguity (e.g., `cli`, `api`, `docs`)
 - [ ] tests/docs included in same commit when they are part of the same logical change
@@ -119,12 +124,13 @@ Before pushing *any* updates to a PR:
 - [ ] at least one approving review (unless explicitly waived)
 - [ ] PR author says “ready to merge”
 - [ ] branch is up to date with base (rebase if required)
-- [ ] run deterministic merge helper:
-  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number>`
-- [ ] confirm source branch is deleted by helper (`--delete-branch`) unless merge fails.
-- [ ] if you want to polish the squash body, generate a draft first:
+- [ ] generate squash body skeleton (default: agent placeholders for prose, deterministic Commits/Refs):
   - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number> --body-out /tmp/squash-body.md --dry-run`
-  - edit `/tmp/squash-body.md`, then rerun with `--body-file /tmp/squash-body.md`
+- [ ] fill `<!-- AGENT: -->` placeholders in body file with natural prose; remove inapplicable sections; leave Commits/Refs as-is
+- [ ] merge with completed body:
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <number> --body-file /tmp/squash-body.md`
+- [ ] for fully mechanical bodies (no agent prose): add `--deterministic`
+- [ ] confirm source branch is deleted by helper (`--delete-branch`) unless merge fails
 - [ ] squash commit body includes `## Commits` bullets:
   - each bullet is `<short-sha> <first-line commit subject>`
 - [ ] if emergency admin merge is required, use:
