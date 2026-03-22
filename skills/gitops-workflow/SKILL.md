@@ -44,7 +44,7 @@ Use this skill when the user asks you to:
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
-- commit and push to the current branch without creating a PR or new branch (**push-only** mode)
+- commit and push raw — skip all branch/worktree/PR creation (**push-only** mode; requires **"raw"** keyword)
 
 ---
 
@@ -166,7 +166,7 @@ When you are asked to “do Git work” in a repo, do this first:
    - update PR → PR update playbook (D)
    - merge PR → Merge playbook (E)
    - release notes → Release notes playbook (F)
-   - commit and push (no PR/branch mentioned) → Push-only playbook (I)
+   - commit and push **raw** → Push-only playbook (I) — only when "raw" is explicit
 
 Detailed checklists live in:
 
@@ -469,24 +469,22 @@ Helper references:
 
 ---
 
-## Playbook I: Push-only mode (commit and push)
+## Playbook I: Push-only mode (commit and push raw)
 
 ### Goal
 
-Commit and push to the current branch without creating branches, worktrees, or PRs.
+Commit and push to the current branch without creating branches, worktrees, or PRs. This is an explicit override of the normal workflow.
 
 ### Trigger
 
-WHEN the user asks to commit, push, or both — and does NOT mention creating a branch, worktree, or PR — THEN you SHALL use this playbook. This is the **default interpretation** of "commit and push" when the user is already on a non-default branch.
+This playbook requires the keyword **"raw"** — e.g., **"commit and push raw"**, **"push raw"**, **"raw push"**. Without "raw", "commit and push" follows the normal flow (create worktree if needed, then commit, then push).
 
-Use this playbook WHEN:
-- the user says **"commit and push"**, **"push this"**, **"push-only"**, or similar
-- the user is on a feature branch and asks to commit/push without mentioning PRs or new branches
-- the user explicitly says no PR, no branch, or no worktree
+WHEN the user includes **"raw"** in a commit/push request THEN you SHALL use this playbook.
 
-Use Playbook A (start work) instead WHEN:
-- the user asks to "start work", "create a branch", or "open a PR" — these signal a full workflow
-- the user is on the default branch and asks to work on something new
+WHEN the user says "commit and push" without "raw" THEN you SHALL follow the normal flow:
+- on the default branch → Playbook A (create worktree/branch first)
+- on a feature branch not in a worktree → create a worktree for the branch, then commit and push
+- on a feature branch in a worktree → Playbook B (commit), then push
 
 ### Steps
 
