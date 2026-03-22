@@ -145,15 +145,49 @@ def build_verification(base: str, head: str, changed_files: list[str]) -> list[s
     return commands
 
 
+_CLOSING_KW_RE = re.compile(
+    r"(?:^|\s)(?P<kw>(?:Fix(?:es)?|Close[sd]?|Resolve[sd]?))\s+(?P<ref>#\d+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+)",
+    re.IGNORECASE,
+)
+_CROSS_REPO_RE = re.compile(r"(?:^|[\s(])(?P<ref>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+)")
+_GITHUB_URL_RE = re.compile(
+    r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/(?:issues|pull)/\d+"
+)
+
+
 def build_refs(commit_lines: list[str]) -> list[str]:
     refs: list[str] = []
     seen: set[str] = set()
     for subject in commit_lines:
-        for ref in re.findall(r"#[0-9]+", subject):
-            bullet = f"- Related to {ref}"
+        # Closing keywords first (Fixes #123, Closes owner/repo#456)
+        for m in _CLOSING_KW_RE.finditer(subject):
+            kw = m.group("kw").capitalize()
+            if not kw.endswith("s") and not kw.endswith("d"):
+                kw += "es" if kw.endswith("x") else "s"
+            elif kw.endswith("d"):
+                kw = kw[:-1] + ("es" if kw[-2] == "x" else "s")
+            ref = m.group("ref")
+            bullet = f"- {kw} {ref}"
             if bullet not in seen:
                 seen.add(bullet)
                 refs.append(bullet)
+            seen.add(ref)
+        # Cross-repo refs (owner/repo#123)
+        for m in _CROSS_REPO_RE.finditer(subject):
+            ref = m.group("ref")
+            if ref not in seen:
+                seen.add(ref)
+                refs.append(f"- Related to {ref}")
+        # Bare issue/PR refs (#123)
+        for ref in re.findall(r"#\d+", subject):
+            if ref not in seen:
+                seen.add(ref)
+                refs.append(f"- Related to {ref}")
+        # GitHub URLs
+        for url in _GITHUB_URL_RE.findall(subject):
+            if url not in seen:
+                seen.add(url)
+                refs.append(f"- {url}")
     return refs or ["- (none provided)"]
 
 

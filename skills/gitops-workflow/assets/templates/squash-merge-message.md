@@ -2,23 +2,23 @@
 
 ## Overview
 
-Squash merge for PR #<number>.
+<!-- AGENT: Write 1-2 sentences summarizing what this PR achieves and why. -->
 
 ## New Features
 
-- <deduplicated feature summary>
+<!-- AGENT: Describe new features in natural prose bullets. Remove this section if not applicable. -->
 
 ## What's Changed
 
-- <deduplicated non-feature summary>
+<!-- AGENT: Describe non-feature changes in natural prose bullets. Remove this section if not applicable. -->
 
 ## Bug Fixes
 
-- <deduplicated fix summary>
+<!-- AGENT: Describe bug fixes in natural prose bullets. Remove this section if not applicable. -->
 
 ## Breaking Changes
 
-- <impact one-liner>; migration: <concise steps>
+<!-- AGENT: Describe breaking changes and migration steps. Remove this section if not applicable. -->
 
 ## Commits
 
@@ -27,8 +27,12 @@ Squash merge for PR #<number>.
 
 ## Refs
 
-- #123
-- owner/repo#123
-- https://example.com/issue/456
+- Fixes #123
+- owner/repo#456
+- https://github.com/owner/repo/issues/789
 
-Use the generated draft body as the source of truth. If the deterministic draft reads awkwardly, edit that body file and pass it back via `pr-merge-squash.sh --body-file <path>` rather than rewriting sections ad hoc.
+Two-phase workflow:
+1. Generate skeleton: `pr-merge-squash.sh <number> --body-out /tmp/squash.md --dry-run`
+2. Fill the `<!-- AGENT: -->` placeholders with natural prose, then merge: `pr-merge-squash.sh <number> --body-file /tmp/squash.md`
+
+For fully mechanical bodies (legacy): add `--deterministic` to skip placeholders.

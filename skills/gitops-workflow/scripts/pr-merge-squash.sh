@@ -4,15 +4,17 @@ set -euo pipefail
 # pr-merge-squash.sh - Deterministic Squash & Merge runner for GitHub PRs.
 #
 # Usage:
-#   bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]
+#   bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--deterministic] [--admin] [--dry-run]
 #
 # Behavior:
 # - Enforces unresolved-thread gate.
 # - Enforces CI required checks and approval gate by default.
-# - Generates deterministic squash message body (omits empty optional sections).
-# - Always keeps Overview + Commits + Refs sections.
-# - Optional --body-file uses an explicitly edited squash body for the merge.
-# - Optional --body-out writes the deterministic draft body to a stable path for review/editing.
+# - Default: generates a squash body skeleton with deterministic Commits/Refs and
+#   agent placeholder markers for prose sections (Overview, Features, Fixes, etc.).
+# - --deterministic: generates a fully mechanical squash body (legacy behavior).
+# - Always keeps Commits + Refs sections deterministic.
+# - Optional --body-file uses an explicitly prepared squash body for the merge.
+# - Optional --body-out writes the generated body to a stable path for review/editing.
 # - Merges with: gh pr merge --squash --subject --body-file --match-head-commit --delete-branch
 # - Deletes the source branch after successful merge.
 # - Optional --admin override relaxes approval/check gating and adds --admin to merge command.
@@ -46,7 +48,7 @@ run_required_checks_gate() {
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]
+  bash scripts/pr-merge-squash.sh <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--deterministic] [--admin] [--dry-run]
 
 Arguments:
   <pr_number>          Pull request number.
@@ -55,7 +57,8 @@ Options:
   --repo <owner/repo>  Optional repository override.
   --summary <text>     Optional replacement for Conventional Commit description segment.
   --body-file <path>   Use an explicitly prepared squash body file instead of the generated draft.
-  --body-out <path>    Write the deterministic generated draft body to this path before merge/dry-run.
+  --body-out <path>    Write the generated body to this path before merge/dry-run.
+  --deterministic      Generate a fully mechanical squash body (legacy). Default generates a skeleton with agent placeholders.
   --admin              Admin override: pass --admin to gh merge and relax pre-merge approval/check gates.
   --dry-run            Print subject/body and merge command without executing merge.
   -h, --help           Show help.
@@ -79,6 +82,7 @@ REPO=""
 SUMMARY_OVERRIDE=""
 DRY_RUN="false"
 ADMIN_OVERRIDE="false"
+DETERMINISTIC="false"
 BODY_FILE_INPUT=""
 BODY_OUT=""
 
@@ -99,6 +103,10 @@ while [[ $# -gt 0 ]]; do
     --body-out)
       BODY_OUT="${2:-}"
       shift 2
+      ;;
+    --deterministic)
+      DETERMINISTIC="true"
+      shift
       ;;
     --admin)
       ADMIN_OVERRIDE="true"
@@ -153,6 +161,9 @@ trap 'rm -f "$GENERATED_BODY_FILE" "$META_FILE"' EXIT
 
 if [[ -n "$BODY_FILE_INPUT" ]]; then
   [[ -f "$BODY_FILE_INPUT" ]] || die "body file not found: $BODY_FILE_INPUT"
+  if grep -q '<!-- AGENT:' "$BODY_FILE_INPUT" 2>/dev/null; then
+    echo "Warning: body file contains unfilled <!-- AGENT: --> placeholder markers." >&2
+  fi
   BODY_FILE="$BODY_FILE_INPUT"
   python3 - "$SUMMARY_OVERRIDE" "$META_FILE" "$PR_JSON" "$SCRIPT_DIR" <<'PY'
 import json
@@ -192,7 +203,7 @@ else
     BODY_FILE="$GENERATED_BODY_FILE"
   fi
 
-  python3 - "$SUMMARY_OVERRIDE" "$BODY_FILE" "$META_FILE" "$PR_JSON" "$SCRIPT_DIR" <<'PY'
+  python3 - "$SUMMARY_OVERRIDE" "$BODY_FILE" "$META_FILE" "$PR_JSON" "$SCRIPT_DIR" "$DETERMINISTIC" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -202,9 +213,10 @@ body_file = sys.argv[2]
 meta_file = sys.argv[3]
 data = json.loads(sys.argv[4])
 script_dir = Path(sys.argv[5])
+deterministic = sys.argv[6] == "true"
 sys.path.insert(0, str(script_dir / "lib"))
 
-from squash_renderer import CommitEntry, SquashRenderError, render_squash_message  # noqa: E402
+from squash_renderer import CommitEntry, SquashRenderError, render_squash_message, render_squash_skeleton  # noqa: E402
 
 title = (data.get("title") or "").strip()
 commits_raw = data.get("commits") or []
@@ -229,8 +241,9 @@ for item in commits_raw:
 
 number = data.get("number")
 refs = [f"#{number}"] if number is not None else []
+renderer = render_squash_message if deterministic else render_squash_skeleton
 try:
-    rendered = render_squash_message(
+    rendered = renderer(
         title=title,
         commits=commits,
         pr_ref=f"PR #{number}" if number is not None else None,
