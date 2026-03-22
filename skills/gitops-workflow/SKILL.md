@@ -44,7 +44,7 @@ Use this skill when the user asks you to:
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
-- commit and push to the current branch without PR or branch creation (**push-only** mode)
+- commit and push here (current branch, no PR/branch/worktree creation — **push-only** mode)
 
 ---
 
@@ -166,7 +166,7 @@ When you are asked to “do Git work” in a repo, do this first:
    - update PR → PR update playbook (D)
    - merge PR → Merge playbook (E)
    - release notes → Release notes playbook (F)
-   - commit and push without PR/branch → Push-only playbook (I)
+   - commit and push **here** (no PR/branch) → Push-only playbook (I)
 
 Detailed checklists live in:
 
@@ -469,17 +469,25 @@ Helper references:
 
 ---
 
-## Playbook I: Push-only mode (commit and push)
+## Playbook I: Push-only mode (commit and push here)
 
 ### Goal
 
 Commit and push to the current branch without creating branches, worktrees, or PRs.
 
+### Trigger
+
+The distinguishing signal is **"here"** — the user wants to stay on the current branch and push directly, skipping branch/worktree/PR creation.
+
 Use this playbook WHEN:
-- the user says **"push-only"**, **"commit-push"**, or **"just commit and push"**
-- the user asks to commit and push without a PR (e.g., "push this to the branch", "no PR needed, just push")
-- the user explicitly asks not to create a branch, worktree, or PR
-- the context makes it clear the user wants changes on the current branch with no workflow overhead (e.g., pushing directly to a personal branch, updating a config repo, or iterating on a draft branch that already has a PR)
+- the user says **"commit and push here"**, **"push here"**, or **"push-only"**
+- the user uses location words like "here", "this branch", "current branch" alongside commit/push
+- the user explicitly says no PR, no branch, or no worktree
+- the user is clearly iterating on an existing branch (e.g., "push the fix", "commit this and push" when already on a feature branch)
+
+Do NOT use this playbook WHEN:
+- the user says "commit and push" as part of a larger workflow that includes PR creation — that is normal Playbook B → C flow
+- the user asks to "start work" or "create a branch" — that is Playbook A
 
 ### Steps
 
