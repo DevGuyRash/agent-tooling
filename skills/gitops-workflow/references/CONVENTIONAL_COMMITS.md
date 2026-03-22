@@ -7,7 +7,7 @@ This skill assumes **Conventional Commits** style commit messages.
 ```text
 <type>(<scope>): <description>
 
-[body — include when the change is non-trivial]
+<body>
 
 [optional footer]
 ```
@@ -33,25 +33,27 @@ Extended types (allowed for tooling/workflow):
 
 ## Body guidelines
 
-WHEN a commit changes behavior, fixes a bug, or adds a feature THEN you SHALL include a body explaining **why** the change was made and **what** it achieves at a high level.
+You SHALL include a commit body explaining **why** the change was made and **what** it achieves at a high level.
 
 You SHALL NOT repeat the subject line in the body or describe the diff mechanically (no "changed line 42 of foo.py"). Instead explain intent and context.
 
-Bodies MAY be omitted for trivial changes: typo fixes, formatting, dependency bumps with no behavioral impact, or single-line config tweaks.
+WHEN you omit the body THEN you SHALL note the justification internally (e.g., "headline-only: typo fix, no behavioral change"). Headline-only is acceptable only for changes with zero behavioral impact — typo fixes, whitespace formatting, or dependency bumps with no code change.
 
 Rules:
 - separate body from subject with one blank line
 - wrap body lines at ≈72 characters
 - use paragraphs or bullet lists as appropriate
 
-## Batching rule for worktree commit requests
+## Pre-commit conventions
+
+WHEN committing to an existing repo THEN you SHALL run `git log --oneline -10` first and adapt tone, scope usage, and body style to match the project's existing commit patterns.
 
 When the request is generic (for example, "commit worktree" or "commit changes"), default to batched commits grouped by logical change. Do not collapse unrelated changes into one commit unless the user explicitly requests a single commit.
 
 Before creating commits, run the sensitive-data gate:
 - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 
-Examples (subject-only, for trivial changes):
+Examples (headline-only — justify omission; zero behavioral impact only):
 - `docs: fix typo in README`
 - `style: reformat imports`
 

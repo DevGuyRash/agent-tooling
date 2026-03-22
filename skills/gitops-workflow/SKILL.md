@@ -260,7 +260,7 @@ Use:
 ```md
 <type>(<scope>): <description>
 
-[body — encouraged]
+<body>
 
 [optional footer]
 ```
@@ -268,7 +268,7 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
-- include a commit body more often than not; explain **why** the change was made, not a mechanical description of the diff (see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md) for body guidelines)
+- you SHALL include a commit body explaining **why** the change was made, not a mechanical description of the diff; WHEN you omit the body THEN you SHALL note the justification internally — headline-only is acceptable only for zero-behavioral-impact changes; before writing commits, check `git log --oneline -10` and adapt to the project's conventions (see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md) for body guidelines)
 - run sensitive-data gate before commit:
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)

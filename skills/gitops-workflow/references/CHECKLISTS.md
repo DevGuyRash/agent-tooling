@@ -45,9 +45,10 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - [ ] if needed, install managed hook once per repo:
   - `bash "$SKILL_ROOT/scripts/install-hooks.sh" --repo <path>`
+- [ ] checked repo commit style (`git log --oneline -10`) and adapted tone/conventions
 - [ ] commit subject matches: `type(scope): description`
 - [ ] subject is imperative + lowercase + no trailing period
-- [ ] commit body included for non-trivial changes (explains **why**, not a mechanical description of the diff)
+- [ ] commit body included (explains **why**, not a mechanical description of the diff); if omitted, justification noted (headline-only for zero-behavioral-impact only)
 - [ ] commit is atomic (one logical change)
 - [ ] scope is used when it reduces ambiguity (e.g., `cli`, `api`, `docs`)
 - [ ] tests/docs included in same commit when they are part of the same logical change
