@@ -19,14 +19,16 @@ When bypassing, record:
 
 ## Routing table
 
-- Branch creation:
-  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]`
+- Branch/worktree creation (worktree default):
+  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]`
 - Security bootstrap (hooks + CI files):
   - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
 - Governance capability preflight (required before governance enforce):
   - `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]`
 - Hook installation:
   - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]`
+- Commit signing detection (check before committing):
+  - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
 - Sensitive-data pre-commit gate (required before `git commit`):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact [--repo <path>]`
 - Sensitive-data full repo scan (CI/manual parity):
@@ -61,9 +63,10 @@ When bypassing, record:
 - Issue templates and creation:
   - `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]`
   - `bash "$SKILL_ROOT/scripts/issue-create.sh" --title "<title>" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body "<text>"] [--template-id <path>] [--label <name> ...] [--assignee <login> ...] [--milestone <name|number>] [--dry-run]`
-- Squash merge (deterministic, required; auto-deletes source branch on success):
-  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--admin] [--dry-run]`
-  - Recommended deterministic flow when better prose is needed: (1) run with `--body-out <path> --dry-run`, (2) review/edit that file, then (3) rerun with `--body-file <path>`.
+- Squash merge (skeleton default; auto-deletes source branch on success):
+  - `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary "<desc override>"] [--body-file <path> | --body-out <path>] [--deterministic] [--admin] [--dry-run]`
+  - Default generates a skeleton with deterministic Commits/Refs and `<!-- AGENT: -->` placeholders for prose sections. Use `--deterministic` for fully mechanical bodies (legacy).
+  - Recommended flow: (1) run with `--body-out <path> --dry-run`, (2) fill placeholders with natural prose, then (3) rerun with `--body-file <path>`.
 - Post-merge local cleanup:
   - `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]`
 - Receipt generation:

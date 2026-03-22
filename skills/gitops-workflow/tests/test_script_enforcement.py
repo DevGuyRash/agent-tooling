@@ -564,6 +564,7 @@ class StartBranchScriptTests(unittest.TestCase):
                     "main",
                     "--stash-name",
                     "local-wip",
+                    "--no-worktree",
                 ],
                 cwd=repo,
                 check=False,
@@ -600,6 +601,7 @@ class StartBranchScriptTests(unittest.TestCase):
                     "123",
                     "--base",
                     "main",
+                    "--no-worktree",
                 ],
                 cwd=repo,
                 check=False,
@@ -697,6 +699,7 @@ class StartBranchScriptTests(unittest.TestCase):
                     "collision",
                     "--base",
                     "main",
+                    "--no-worktree",
                 ],
                 cwd=repo,
                 check=False,
@@ -1453,7 +1456,7 @@ class MergeSquashScriptTests(unittest.TestCase):
             self.assertTrue(draft_file.exists())
             body = draft_file.read_text(encoding="utf-8")
             self.assertIn("## Commits", body)
-            self.assertIn("- cli: add deterministic merge", body)
+            self.assertIn("feat(cli): add deterministic merge", body)
 
     def test_merge_squash_body_file_uses_explicit_body(self):
         with tempfile.TemporaryDirectory() as temp_dir:

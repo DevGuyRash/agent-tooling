@@ -4,7 +4,7 @@ set -euo pipefail
 # start-branch.sh - Create a new work branch or linked worktree from the default branch using repo policy.
 #
 # Usage:
-#   bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree]
+#   bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]
 #
 # Examples:
 #   bash scripts/start-branch.sh feat add-json-output
@@ -19,7 +19,7 @@ set -euo pipefail
 # - Uses kebab-case for slug; spaces become hyphens.
 # - Branch mode stashes tracked+untracked changes before switching branches and restores
 #   them after branch creation.
-# - Worktree mode creates a clean linked worktree and does not move local uncommitted changes.
+# - Worktree mode creates a linked worktree and migrates dirty files into it.
 # - Auto-installs managed pre-commit hook by default to enforce sensitive-data scans.
 
 ALLOWED_TYPES=("feat" "fix" "docs" "refactor" "test" "chore" "perf" "ci" "build" "style" "deps" "security" "revert" "hotfix")
@@ -44,7 +44,7 @@ require_opt_value() {
 print_help() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--worktree] [--no-install-hooks]
+  bash scripts/start-branch.sh <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]
 
 Arguments:
   <type>             Branch type prefix (feat, fix, docs, refactor, ...).
@@ -54,7 +54,9 @@ Options:
   --issue <id>       Optional issue token inserted before slug.
   --base <branch>    Optional base branch; default auto-detect from origin/HEAD, fallback main.
   --stash-name <n>   Optional stash note when auto-stashing dirty worktree.
-  --worktree         Create a linked worktree instead of switching the current checkout.
+  --worktree         Create a linked worktree (default; no-op for backwards compatibility).
+  --no-worktree      Stay in the current checkout instead of creating a linked worktree.
+  --existing         Adopt an existing branch instead of creating a new one.
   --no-install-hooks Skip automatic managed pre-commit hook installation.
   -h, --help         Show this help text.
 
@@ -88,7 +90,8 @@ BASE=""
 STASH_NOTE=""
 AUTO_SLUG_FROM_ISSUE="false"
 INSTALL_HOOKS="true"
-USE_WORKTREE="false"
+USE_WORKTREE="true"
+USE_EXISTING="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -117,6 +120,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --worktree)
       USE_WORKTREE="true"
+      shift
+      ;;
+    --no-worktree)
+      USE_WORKTREE="false"
+      shift
+      ;;
+    --existing)
+      USE_EXISTING="true"
       shift
       ;;
     *)
@@ -191,6 +202,16 @@ if [[ -n "$COMMON_DIR" ]]; then
 fi
 WORKTREE_PATH="${MAIN_CHECKOUT_ROOT}.worktrees/$BRANCH"
 
+# Capture dirty files for worktree mode migration.
+DIRTY_FILES_TRACKED=""
+DIRTY_FILES_STAGED=""
+DIRTY_FILES_UNTRACKED=""
+if [[ "$USE_WORKTREE" == "true" && -n "$(git status --porcelain)" ]]; then
+  DIRTY_FILES_TRACKED="$(git diff --name-only HEAD 2>/dev/null || true)"
+  DIRTY_FILES_STAGED="$(git diff --cached --name-only 2>/dev/null || true)"
+  DIRTY_FILES_UNTRACKED="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+fi
+
 # Auto-stash tracked + untracked changes when dirty in branch mode.
 if [[ "$USE_WORKTREE" != "true" && -n "$(git status --porcelain)" ]]; then
   LOCAL_TS="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || true)"
@@ -215,30 +236,72 @@ if ! FETCH_OUTPUT="$(git fetch origin --prune 2>&1)"; then
   echo "Warning: git fetch details: $FETCH_OUTPUT" >&2
 fi
 
-if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  die "branch '$BRANCH' already exists locally"
+if [[ "$USE_EXISTING" == "true" ]]; then
+  if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    die "branch '$BRANCH' does not exist; omit --existing to create it"
+  fi
+  if [[ "$USE_WORKTREE" == "true" ]]; then
+    EXISTING_WT="$(git worktree list --porcelain | grep "branch refs/heads/$BRANCH" || true)"
+    if [[ -n "$EXISTING_WT" ]]; then
+      # Worktree already exists for this branch; validate the path.
+      echo "Worktree for branch '$BRANCH' already exists."
+    else
+      if [[ -e "$WORKTREE_PATH" ]]; then
+        die "worktree path already exists: $WORKTREE_PATH"
+      fi
+      mkdir -p "$(dirname "$WORKTREE_PATH")"
+      git worktree add "$WORKTREE_PATH" "$BRANCH" >/dev/null 2>&1 || die "failed to create linked worktree at '$WORKTREE_PATH'"
+    fi
+  else
+    git checkout "$BRANCH" >/dev/null 2>&1 || die "failed to checkout existing branch '$BRANCH'"
+  fi
+else
+  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    die "branch '$BRANCH' already exists locally"
+  fi
+
+  if [[ "$USE_WORKTREE" == "true" ]]; then
+    BASE_REF="$BASE"
+    if git show-ref --verify --quiet "refs/remotes/origin/$BASE"; then
+      BASE_REF="origin/$BASE"
+    elif ! git show-ref --verify --quiet "refs/heads/$BASE"; then
+      die "failed to resolve base branch '$BASE' locally or on origin"
+    fi
+    if [[ -e "$WORKTREE_PATH" ]]; then
+      die "worktree path already exists: $WORKTREE_PATH"
+    fi
+    mkdir -p "$(dirname "$WORKTREE_PATH")"
+    git worktree add -b "$BRANCH" "$WORKTREE_PATH" "$BASE_REF" >/dev/null 2>&1 || die "failed to create linked worktree at '$WORKTREE_PATH'"
+  else
+    git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout base branch '$BASE' (does it exist locally?)"
+    if git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
+      git pull --ff-only || die "failed to pull base branch '$BASE' (resolve and retry)"
+    else
+      echo "No upstream configured for '$BASE'; skipping pull."
+    fi
+    git checkout -b "$BRANCH"
+  fi
 fi
 
-if [[ "$USE_WORKTREE" == "true" ]]; then
-  BASE_REF="$BASE"
-  if git show-ref --verify --quiet "refs/remotes/origin/$BASE"; then
-    BASE_REF="origin/$BASE"
-  elif ! git show-ref --verify --quiet "refs/heads/$BASE"; then
-    die "failed to resolve base branch '$BASE' locally or on origin"
+# Migrate dirty files into worktree and restore main checkout to clean state.
+if [[ -n "$DIRTY_FILES_TRACKED$DIRTY_FILES_STAGED$DIRTY_FILES_UNTRACKED" ]]; then
+  echo "Migrating dirty files to worktree."
+  ALL_DIRTY="$(printf '%s\n' "$DIRTY_FILES_TRACKED" "$DIRTY_FILES_STAGED" "$DIRTY_FILES_UNTRACKED" | sort -u | grep -v '^$')"
+  while IFS= read -r f; do
+    if [[ -f "$f" ]]; then
+      mkdir -p "$WORKTREE_PATH/$(dirname "$f")"
+      cp -- "$f" "$WORKTREE_PATH/$f"
+    fi
+  done <<< "$ALL_DIRTY"
+  # Restore main checkout to clean state
+  git checkout -- . 2>/dev/null || true
+  # Remove untracked files that were copied
+  if [[ -n "$DIRTY_FILES_UNTRACKED" ]]; then
+    while IFS= read -r f; do
+      [[ -f "$f" ]] && rm -- "$f"
+    done <<< "$DIRTY_FILES_UNTRACKED"
   fi
-  if [[ -e "$WORKTREE_PATH" ]]; then
-    die "worktree path already exists: $WORKTREE_PATH"
-  fi
-  mkdir -p "$(dirname "$WORKTREE_PATH")"
-  git worktree add -b "$BRANCH" "$WORKTREE_PATH" "$BASE_REF" >/dev/null 2>&1 || die "failed to create linked worktree at '$WORKTREE_PATH'"
-else
-  git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout base branch '$BASE' (does it exist locally?)"
-  if git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >/dev/null 2>&1; then
-    git pull --ff-only || die "failed to pull base branch '$BASE' (resolve and retry)"
-  else
-    echo "No upstream configured for '$BASE'; skipping pull."
-  fi
-  git checkout -b "$BRANCH"
+  echo "Dirty files migrated to worktree; main checkout restored to clean state."
 fi
 
 if [[ "$STASHED" == "true" ]]; then
