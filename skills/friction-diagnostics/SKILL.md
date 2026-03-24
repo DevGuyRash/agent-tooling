@@ -1,15 +1,16 @@
 ---
 name: Friction Diagnostics
 description: >-
-  Log structured diagnostic entries for any error, friction, or unexpected
-  outcome encountered during a task. Use when the task involves: (1) Any
-  tool, command, script, or build step that fails or produces unexpected
-  results, (2) Any instruction, workflow, or environment that behaves
-  differently than expected, (3) Code bugs, compilation errors, test
-  failures, or runtime exceptions, (4) MCP server, subagent, or
-  integration misbehavior, (5) User-requested friction or diagnostic
-  reporting, or (6) Any problem, error, or divergence from expected
-  behavior during task execution.
+  REQUIRED for every task. Initialize at task start, then log every error,
+  failure, unexpected outcome, or friction encountered — no exceptions.
+  Covers: (1) Any tool, command, script, or build step that fails or
+  produces unexpected results, (2) Any instruction, workflow, or
+  environment that behaves differently than expected, (3) Code bugs,
+  compilation errors, test failures, or runtime exceptions, (4) MCP
+  server, subagent, or integration misbehavior, (5) User-requested
+  friction or diagnostic reporting, (6) Any problem, error, or divergence
+  from expected behavior during task execution. If anything goes wrong,
+  it gets logged here. Do not skip this skill.
 compatibility: Designed for filesystem-capable coding agents. Deterministic helpers require POSIX sh on Unix-like systems or PowerShell on Windows. No network required.
 metadata:
   author: generated-template
@@ -22,26 +23,28 @@ metadata:
 
 This skill creates durable friction logs that a later agent can inspect and fix from the temp directory. Keep entries concise and concrete. Record the what and why. Do not put proposed fixes inside the log.
 
-## Use this skill for
+## When to use this skill
 
-- Durable diagnostic reporting across a top-level task.
-- Multi-agent runs where subagents should leave repairable evidence.
-- Repeated or subtle frictions that should survive context loss or session boundaries.
+You SHALL use this skill for every task. Initialize it at the start of the task, before substantive work begins. Every error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind gets logged here.
 
-## Do not use this skill for
+- Every top-level task — initialize once at the start.
+- Every subagent — re-initialize with the same task ID to get a separate log file.
+- Every error or unexpected outcome — log it immediately when it happens.
+- Every code bug, test failure, build failure, or runtime crash — log it.
+- Every instruction that was wrong, ambiguous, or misleading — log it.
 
-- High-level retrospectives that do not need structured, per-event entries.
+There is no threshold for "important enough to log." If it went wrong, log it.
 
 ## Available scripts
 
-- `<skills-file-root>/scripts/init-log.sh` / `<skills-file-root>/scripts/init-log.ps1` — create a task-scoped log file and task directory.
+- `<skills-file-root>/scripts/init-log.sh` / `<skills-file-root>/scripts/init-log.ps1` — create the task directory plus the current agent's log file and adjacent descriptor.
 - `<skills-file-root>/scripts/report-friction.sh` / `<skills-file-root>/scripts/report-friction.ps1` — append one structured entry with auto-categorization.
 - `<skills-file-root>/scripts/categorize.sh` / `<skills-file-root>/scripts/categorize.ps1` — classify an event as `surface/mode/run_effect`.
 - `<skills-file-root>/scripts/build-index.sh` / `<skills-file-root>/scripts/build-index.ps1` — rebuild `INDEX.md` for a task directory.
 
 ## Workflow
 
-WHEN a task begins and errors or friction may occur THEN you SHALL initialize a task log before substantive work begins.
+You SHALL initialize a task log at the start of every task, before substantive work begins. This is not optional.
 
 WHEN you are on Linux or macOS THEN you SHALL run:
 
@@ -58,7 +61,7 @@ WHEN you are on Windows THEN you SHALL run:
 & "<skills-file-root>/scripts/init-log.ps1" -TaskSummary "Investigate MCP routing failures — inspect_build returns stale metadata and dispatch roles do not resolve" -Agent orchestrator -SkillPath "<skills-file-root>"
 ```
 
-WHEN any error, failure, or unexpected outcome occurs THEN you SHALL append one entry with `<skills-file-root>/scripts/report-friction.sh` or `<skills-file-root>/scripts/report-friction.ps1`.
+WHEN any error, failure, bug, test failure, compilation error, runtime exception, unexpected outcome, or friction of any kind occurs THEN you SHALL immediately append one entry with `<skills-file-root>/scripts/report-friction.sh` or `<skills-file-root>/scripts/report-friction.ps1`. Do not skip logging because the issue seems minor or is "just a code bug" — log everything.
 
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
 
@@ -68,7 +71,7 @@ WHEN overriding classification axes THEN you SHALL use only the values defined i
 
 WHEN writing the Interpretation field THEN you SHALL describe what you understood the instruction or context to mean, what specific language led to that reading, and why it was a reasonable reading at the time. You SHALL NOT use the Interpretation field to diagnose the root cause, propose a fix, or editorialize.
 
-WHEN a subagent participates THEN you SHALL reuse the same task ID and task directory values, but initialize a separate log file for that agent. Re-pass those values explicitly via `--task-id` or read them from `SESSION.txt`; do not assume exported environment variables persist across separate agent commands.
+WHEN a subagent participates THEN you SHALL reuse the same task ID and task directory values, but initialize a separate log file for that agent. That init also creates the agent's descriptor next to the log and returns it as `FRICTION_TASK_DESCRIPTOR`. Re-pass task-scoped values explicitly via `--task-id` or read them from `SESSION.txt`; do not assume exported environment variables persist across separate agent commands.
 
 WHEN the task ends, OR after a batch of appended entries, THEN you SHOULD refresh `INDEX.md` with `<skills-file-root>/scripts/build-index.sh` or `<skills-file-root>/scripts/build-index.ps1`.
 
@@ -90,7 +93,7 @@ The Interpretation field records what you believed the instruction meant and wha
 
 ## Read these only when needed
 
-- Read `references/logging-spec.md` when you need the full rules for what to log, what not to log, and how much detail is enough.
+- Read `references/logging-spec.md` when you need the full rules for what to log and how much detail is enough.
 - Read `references/taxonomy.md` when you want to understand or override the automatic categories.
 - Read `references/examples.md` when you want concrete good-vs-bad examples.
 - Read `references/integration.md` when you want an `AGENTS.md` snippet or subagent propagation pattern.
@@ -100,7 +103,8 @@ The Interpretation field records what you believed the instruction meant and wha
 WHEN this skill is used for a task THEN you SHALL leave behind:
 
 - A task directory under the system temp root.
-- At least one log file for each reporting agent that encountered friction.
+- At least one log file for each reporting agent.
+- A descriptor next to each reporting agent log file.
 - Entries that capture instruction source, action, expected outcome, actual outcome, and interpretation.
 - No fix proposals inside log entries.
 - A current `INDEX.md` file for later remediation.
