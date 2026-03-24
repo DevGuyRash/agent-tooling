@@ -128,6 +128,8 @@ eval "$(FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --agent "$LONG_AGENT_NAME" \
   --skill-path "$ROOT")"
 LONG_AGENT_LOG=$FRICTION_LOG_FILE
+[ -f "$FRICTION_TASK_DESCRIPTOR" ]
+[ "$(printf '%s' "$(basename "$FRICTION_TASK_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 [ -f "$LONG_AGENT_LOG" ]
 [ "$(printf '%s' "$(basename "$LONG_AGENT_LOG")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
@@ -139,6 +141,8 @@ eval "$(FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --role "$LONG_ROLE_NAME" \
   --skill-path "$ROOT")"
 LONG_ROLE_LOG=$FRICTION_LOG_FILE
+[ -f "$FRICTION_TASK_DESCRIPTOR" ]
+[ "$(printf '%s' "$(basename "$FRICTION_TASK_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 [ -f "$LONG_ROLE_LOG" ]
 [ "$(printf '%s' "$(basename "$LONG_ROLE_LOG")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
@@ -309,6 +313,9 @@ esac
 
 [ -d "$FRICTION_TASK_DIR" ]
 [ -f "$FRICTION_LOG_FILE" ]
+[ -f "$FRICTION_TASK_DESCRIPTOR" ]
+[ "$(dirname "$FRICTION_TASK_DESCRIPTOR")" = "$(dirname "$FRICTION_LOG_FILE")" ]
+[ "$FRICTION_TASK_DESCRIPTOR" != "$FRICTION_TASK_DIR/TASK_DESCRIPTOR.json" ]
 [ -f "$FRICTION_TASK_DIR/TASK_SUMMARY.txt" ]
 [ "$FRICTION_TASK_SUMMARY_FILE" = "$FRICTION_TASK_DIR/TASK_SUMMARY.txt" ]
 
@@ -317,13 +324,16 @@ if grep -q '^FRICTION_TASK_SUMMARY=' "$FRICTION_TASK_DIR/SESSION.txt"; then
   printf '%s\n' 'smoke-posix: SESSION.txt still contains inline task summary' >&2
   exit 1
 fi
-[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 14 ]
+[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 13 ]
 grep -qx 'FRICTION_BASE_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_ID=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_SUMMARY_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_INDEX_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
-grep -qx 'FRICTION_TASK_DESCRIPTOR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+if grep -q '^FRICTION_TASK_DESCRIPTOR=' "$FRICTION_TASK_DIR/SESSION.txt"; then
+  printf '%s\n' 'smoke-posix: SESSION.txt unexpectedly contains FRICTION_TASK_DESCRIPTOR' >&2
+  exit 1
+fi
 grep -qx 'FRICTION_TASK_JSON=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_EVENTS_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_INCIDENTS_FILE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
@@ -335,9 +345,9 @@ grep -qx 'FRICTION_SANITIZED_EXPORT=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 
 [ -f "$FRICTION_TASK_DIR/task.json" ]
 [ -f "$FRICTION_TASK_DIR/events.jsonl" ]
+[ "$(wc -l <"$FRICTION_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 0 ]
 [ -f "$FRICTION_TASK_DIR/incidents.json" ]
 [ -d "$FRICTION_TASK_DIR/exports" ]
-[ -f "$FRICTION_TASK_DIR/TASK_DESCRIPTOR.json" ]
 
 SKILL_SURFACE_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --instruction-source 'SKILL.md:12' \
@@ -642,8 +652,11 @@ E2E_INDEX=$FRICTION_INDEX_FILE
 [ -d "$E2E_TASK_DIR/exports" ]
 [ -f "$E2E_TASK_DIR/task.json" ]
 [ -f "$E2E_TASK_DIR/events.jsonl" ]
+[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 0 ]
 [ -f "$E2E_TASK_DIR/incidents.json" ]
-[ -f "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
+[ -f "$FRICTION_TASK_DESCRIPTOR" ]
+[ "$(dirname "$FRICTION_TASK_DESCRIPTOR")" = "$(dirname "$E2E_ORCH_LOG")" ]
+[ "$FRICTION_TASK_DESCRIPTOR" != "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
 grep -q '"storage_mode":"artifact"' "$E2E_TASK_DIR/task.json"
 grep -q '\*\*Schema version:\*\* 2.0.0' "$E2E_ORCH_LOG"
 grep -q '# Friction Evidence Log: ci-investigation' "$E2E_ORCH_LOG"
@@ -685,6 +698,7 @@ eval "$(FRICTION_BASE_DIR="$E2E_BASE" "$ROOT/scripts/init-log.sh" \
   --privacy-tier shared)"
 
 E2E_SUB_LOG=$FRICTION_LOG_FILE
+E2E_SUB_DESCRIPTOR=$FRICTION_TASK_DESCRIPTOR
 
 # Subagent init must NOT wipe the orchestrator's events.
 [ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq "$E2E_ORCH_EVENT_COUNT" ]
@@ -693,6 +707,9 @@ grep -q '"task_id":"ci-investigation"' "$E2E_TASK_DIR/task.json"
 # But a new log file should exist for the subagent.
 [ "$E2E_SUB_LOG" != "$E2E_ORCH_LOG" ]
 [ -f "$E2E_SUB_LOG" ]
+[ -f "$E2E_SUB_DESCRIPTOR" ]
+[ "$(dirname "$E2E_SUB_DESCRIPTOR")" = "$(dirname "$E2E_SUB_LOG")" ]
+[ "$E2E_SUB_DESCRIPTOR" != "$E2E_SUB_LOG" ]
 grep -q '# Friction Evidence Log: ci-investigation' "$E2E_SUB_LOG"
 
 # ── Step 4: Sub reports an MCP tool gap with workaround ────────────
@@ -811,7 +828,7 @@ grep -q '## Event 4: Forced: container image uses outdated base' "$E2E_SUB_LOG"
 [ -f "$E2E_TASK_DIR/task.json" ]
 [ -f "$E2E_TASK_DIR/events.jsonl" ]
 [ -f "$E2E_TASK_DIR/incidents.json" ]
-[ -f "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
+[ -f "$E2E_SUB_DESCRIPTOR" ]
 [ -f "$E2E_TASK_DIR/SESSION.txt" ]
 [ -f "$E2E_TASK_DIR/TASK_SUMMARY.txt" ]
 [ -d "$E2E_TASK_DIR/exports" ]
@@ -866,12 +883,16 @@ grep -q '"status"' "$E2E_INC_FILE"
 E2E_INC_COUNT=$(sed -n 's/.*"incident_count":\([0-9][0-9]*\).*/\1/p' "$E2E_INC_FILE")
 [ "$E2E_INC_COUNT" -gt 0 ]
 
-# --- SESSION.txt carries all 14 v2 keys ---
-[ "$(wc -l <"$E2E_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 14 ]
+# --- SESSION.txt carries only the 13 task-scoped v2 keys ---
+[ "$(wc -l <"$E2E_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 13 ]
 grep -qx 'FRICTION_STORAGE_MODE=artifact' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_CAPTURE_MODE=threshold' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_PRIVACY_TIER=shared' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_EVENTS_FILE=.*events.jsonl' "$E2E_TASK_DIR/SESSION.txt"
+if grep -q '^FRICTION_TASK_DESCRIPTOR=' "$E2E_TASK_DIR/SESSION.txt"; then
+  printf '%s\n' 'smoke-posix: e2e: SESSION.txt unexpectedly contains FRICTION_TASK_DESCRIPTOR' >&2
+  exit 1
+fi
 
 # --- Legacy --impact mapping (via the rate-limit entry) ---
 # --impact blocked → run_effect=blocked preserved through the full pipeline.

@@ -53,7 +53,9 @@ $timePart = $now.ToString('HH-mm-ss')
 $stamp = $now.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $taskAutoSlugLimit = 80
 $taskIdLimit = 255
-$logSlugLimit = 240
+# Keep both the markdown log filename and its sibling `.descriptor.json`
+# sidecar within a typical NAME_MAX=255 component budget, including `_NN`.
+$logSlugLimit = 227
 New-Item -ItemType Directory -Force -Path $BaseDir | Out-Null
 if (-not [string]::IsNullOrWhiteSpace($ExportDir)) {
     New-Item -ItemType Directory -Force -Path $ExportDir | Out-Null
@@ -106,7 +108,7 @@ while (Test-Path $logFile) {
 $indexFile = Join-Path $taskDir 'INDEX.md'
 $sessionFile = Join-Path $taskDir 'SESSION.txt'
 $taskSummaryFile = Join-Path $taskDir 'TASK_SUMMARY.txt'
-$descriptorFile = Join-Path $taskDir 'TASK_DESCRIPTOR.json'
+$descriptorFile = [System.IO.Path]::ChangeExtension($logFile, 'descriptor.json')
 $taskJsonFile = Join-Path $taskDir 'task.json'
 $eventsFile = Join-Path $taskDir 'events.jsonl'
 $incidentsFile = Join-Path $taskDir 'incidents.json'
@@ -200,7 +202,6 @@ if (-not (Test-Path $incidentsFile)) {
     "FRICTION_TASK_DIR=$taskDir"
     "FRICTION_TASK_SUMMARY_FILE=$taskSummaryFile"
     "FRICTION_INDEX_FILE=$indexFile"
-    "FRICTION_TASK_DESCRIPTOR=$descriptorFile"
     "FRICTION_TASK_JSON=$taskJsonFile"
     "FRICTION_EVENTS_FILE=$eventsFile"
     "FRICTION_INCIDENTS_FILE=$incidentsFile"

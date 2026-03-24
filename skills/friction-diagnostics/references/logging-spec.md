@@ -17,18 +17,6 @@ Common examples:
 - environment surprises such as missing dependencies, sandbox limits, or path assumptions
 - subagent handoffs that lose essential context or route to the wrong workflow
 
-## What not to log
-
-Do not log a problem when it is solely a user-project issue and the agent's instructions, tools, skills, workflow, or interpretation did not contribute.
-
-Examples that usually should not be logged:
-
-- the user's code has a real bug and the task is to fix it
-- a project test fails for domain reasons unrelated to the skill or tooling
-- a user file is malformed in a way the task already expects
-
-Log the event only when the friction belongs to the agent-facing system around the task, or when that system materially contributed to the failure or confusion.
-
 ## Required vs optional fields
 
 Script-generated entries (via `report-friction.sh` or `report-friction.ps1`) include the full field set automatically. Manual fallback entries (when scripts are unavailable) have different requirements.
@@ -106,6 +94,8 @@ Windows:
 ```
 
 A single top-level task gets one task directory. Different agents can create separate log files inside that task directory.
+A per-agent descriptor JSON lives next to each agent log file and is surfaced as `FRICTION_TASK_DESCRIPTOR` during that agent's init. Task-scoped metadata in `SESSION.txt` intentionally excludes that pointer.
+`events.jsonl` is a shared task-scoped artifact and may be empty immediately after init, before the first recorded event.
 
 Task IDs and log filename slugs are filesystem-safe identifiers, not lossless
 display strings. Overlong task summaries, explicit task IDs, agent names, or

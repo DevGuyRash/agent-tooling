@@ -29,16 +29,20 @@ try {
     $summaryFile = Join-Path $taskDir 'TASK_SUMMARY.txt'
     $indexFile = Join-Path $taskDir 'INDEX.md'
     $logFile = Get-ChildItem -Path $taskDir -Recurse -Filter '*.md' -File | Where-Object { $_.Name -ne 'INDEX.md' } | Select-Object -First 1
+    $descriptorFile = $outputMap['FRICTION_TASK_DESCRIPTOR']
 
     if (-not (Test-Path $sessionFile)) { throw "SESSION.txt missing: $sessionFile" }
     if (-not (Test-Path $summaryFile)) { throw "TASK_SUMMARY.txt missing: $summaryFile" }
     if ($null -eq $logFile) { throw "log file missing under $taskDir" }
+    if (-not (Test-Path $descriptorFile)) { throw "per-agent descriptor missing: $descriptorFile" }
+    if ((Split-Path -Parent $descriptorFile) -ne (Split-Path -Parent $logFile.FullName)) { throw 'per-agent descriptor should live next to the agent log file' }
+    if ($descriptorFile -eq (Join-Path $taskDir 'TASK_DESCRIPTOR.json')) { throw 'descriptor should not be stored as a task-root TASK_DESCRIPTOR.json file' }
 
     $sessionLines = Get-Content $sessionFile
-    if ($sessionLines.Count -ne 14) { throw "SESSION.txt should contain 14 records, found $($sessionLines.Count)" }
+    if ($sessionLines.Count -ne 13) { throw "SESSION.txt should contain 13 task-scoped records, found $($sessionLines.Count)" }
     if (-not ($sessionLines -match '^FRICTION_TASK_SUMMARY_FILE=')) { throw 'SESSION.txt missing FRICTION_TASK_SUMMARY_FILE' }
     if ($sessionLines -match '^FRICTION_TASK_SUMMARY=') { throw 'SESSION.txt still contains inline task summary' }
-    if (-not ($sessionLines -match '^FRICTION_TASK_DESCRIPTOR=')) { throw 'SESSION.txt missing FRICTION_TASK_DESCRIPTOR' }
+    if ($sessionLines -match '^FRICTION_TASK_DESCRIPTOR=') { throw 'SESSION.txt should not contain FRICTION_TASK_DESCRIPTOR' }
     if (-not ($sessionLines -match '^FRICTION_TASK_JSON=')) { throw 'SESSION.txt missing FRICTION_TASK_JSON' }
     if (-not ($sessionLines -match '^FRICTION_EVENTS_FILE=')) { throw 'SESSION.txt missing FRICTION_EVENTS_FILE' }
     if (-not ($sessionLines -match '^FRICTION_INCIDENTS_FILE=')) { throw 'SESSION.txt missing FRICTION_INCIDENTS_FILE' }
@@ -54,12 +58,11 @@ try {
     $eventsFile = Join-Path $taskDir 'events.jsonl'
     $taskJsonFile = Join-Path $taskDir 'task.json'
     $incidentsFile = Join-Path $taskDir 'incidents.json'
-    $descriptorFile = Join-Path $taskDir 'TASK_DESCRIPTOR.json'
     $exportsDir = Join-Path $taskDir 'exports'
     if (-not (Test-Path $eventsFile)) { throw "events.jsonl missing: $eventsFile" }
+    if ((Get-Item $eventsFile).Length -ne 0) { throw 'events.jsonl should be empty immediately after init' }
     if (-not (Test-Path $taskJsonFile)) { throw "task.json missing: $taskJsonFile" }
     if (-not (Test-Path $incidentsFile)) { throw "incidents.json missing: $incidentsFile" }
-    if (-not (Test-Path $descriptorFile)) { throw "TASK_DESCRIPTOR.json missing: $descriptorFile" }
     if (-not (Test-Path $exportsDir)) { throw "exports/ missing: $exportsDir" }
 
     $summaryText = [System.IO.File]::ReadAllText($summaryFile)

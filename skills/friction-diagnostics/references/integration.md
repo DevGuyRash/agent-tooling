@@ -4,9 +4,8 @@
 
 ```markdown
 ## Friction diagnostics
-WHEN durable troubleshooting evidence would help later, OR when the run uses unfamiliar skills, MCP servers, tools, or multi-agent handoffs, THEN you SHALL use the `friction-diagnostics` skill.
-WHEN you encounter friction caused by instructions, skills, tools, MCP servers, code, logic, data contracts, environment, or workflow, THEN you SHALL record it.
-WHEN the issue is solely a user-project failure and the agent's instructions, tools, skills, or workflow did not contribute, THEN you SHALL NOT record it.
+You SHALL initialize the `friction-diagnostics` skill at the start of every task, before substantive work begins. This is mandatory, not conditional.
+WHEN any error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind occurs THEN you SHALL immediately log it using the `friction-diagnostics` skill. There is no threshold for "important enough to log" — if it went wrong, log it.
 WHEN the same issue repeats without materially new evidence, THEN you SHALL NOT create a duplicate entry.
 ```
 
@@ -19,7 +18,7 @@ eval "$(sh scripts/init-log.sh \
   --skill-path "$(pwd)")"
 ```
 
-The script exports:
+The script emits:
 
 - `FRICTION_BASE_DIR`
 - `FRICTION_TASK_ID`
@@ -49,8 +48,9 @@ scripts/init-log.ps1 `
 
 The script sets the same environment variables via `$env:`.
 
-Task metadata is persisted in a line-oriented `SESSION.txt` file. The full task summary lives in `TASK_SUMMARY.txt`, and `SESSION.txt` points to it with `FRICTION_TASK_SUMMARY_FILE=...`.
+Task metadata is persisted in a line-oriented `SESSION.txt` file. `SESSION.txt` is task-scoped, so it excludes `FRICTION_TASK_DESCRIPTOR`; that pointer belongs to the current agent and points to a descriptor JSON next to the agent's markdown log. The full task summary lives in `TASK_SUMMARY.txt`, and `SESSION.txt` points to it with `FRICTION_TASK_SUMMARY_FILE=...`.
 When you need multiline-safe reuse across isolated PowerShell invocations, read the summary back from `FRICTION_TASK_SUMMARY_FILE` instead of reparsing the line-oriented `FRICTION_TASK_SUMMARY=...` output.
+`events.jsonl` is task-scoped too, but it may still be empty immediately after init because entries are appended only when friction is recorded.
 
 ## Subagent pattern
 
@@ -82,7 +82,7 @@ eval "$(sh scripts/init-log.sh \
 
 Pass `task_id`, `task_dir`, and `task_summary_file` explicitly in the subagent launch payload. Separate agent invocations usually run in isolated processes, so do not rely on exported shell variables surviving the handoff.
 
-This creates a second log file in the same task directory rather than overwriting the orchestrator log.
+This creates a second log file in the same task directory, plus a second per-agent descriptor next to that log, rather than overwriting the orchestrator artifacts. Appending still only requires `--log-file`; you do not need an extra descriptor step.
 
 ## Refreshing the summary
 

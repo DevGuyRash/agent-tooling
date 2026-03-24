@@ -58,11 +58,11 @@ Windows:
 Each task directory also gets:
 
 - `INDEX.md` — aggregated category counts and log inventory
-- `SESSION.txt` — task-level metadata for reuse, stored as one `KEY=value` record per line
+- `SESSION.txt` — task-scoped metadata for reuse, stored as one `KEY=value` record per line; it excludes the per-agent `FRICTION_TASK_DESCRIPTOR` pointer
 - `TASK_SUMMARY.txt` — full task summary text for multiline-safe reuse
 - `task.json` — task-level metadata in JSON
-- `TASK_DESCRIPTOR.json` — per-agent descriptor with file paths and settings
-- `events.jsonl` — one structured JSON line per friction event
+- a per-agent descriptor JSON next to each log file, surfaced as `FRICTION_TASK_DESCRIPTOR`
+- `events.jsonl` — one structured JSON line per friction event; it may be empty immediately after init
 - `incidents.json` — incident-level aggregation
 - `exports/` — sanitized export artifacts
 
@@ -109,7 +109,7 @@ sh "$SKILL_ROOT/scripts/report-friction.sh" \
 sh "$SKILL_ROOT/scripts/build-index.sh" --task-dir "$TASK_DIR"
 ```
 
-The helper prints shell exports for convenience, but agent tool invocations are usually isolated processes. Capture the emitted values and pass them back as explicit flags when later commands run in separate shells.
+The helper prints shell exports for convenience, but agent tool invocations are usually isolated processes. Capture the emitted values and pass them back as explicit flags when later commands run in separate shells. `FRICTION_TASK_DESCRIPTOR` points to the current agent's descriptor next to its markdown log; task-scoped handoff data still comes from `SESSION.txt`.
 
 Windows PowerShell:
 

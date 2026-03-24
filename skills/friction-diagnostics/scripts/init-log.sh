@@ -72,7 +72,9 @@ time_part=$(date -u '+%H-%M-%S')
 stamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 task_auto_slug_limit=80
 task_id_limit=255
-log_slug_limit=240
+# Keep both the markdown log filename and its sibling `.descriptor.json`
+# sidecar within a typical NAME_MAX=255 component budget, including `_NN`.
+log_slug_limit=227
 mkdir -p "$base_dir"
 if [ -n "$export_dir" ]; then
   mkdir -p "$export_dir"
@@ -117,7 +119,7 @@ done
 index_file=$task_dir/INDEX.md
 session_file=$task_dir/SESSION.txt
 task_summary_file=$task_dir/TASK_SUMMARY.txt
-descriptor_file=$task_dir/TASK_DESCRIPTOR.json
+descriptor_file=${log_file%.md}.descriptor.json
 task_json_file=$task_dir/task.json
 events_file=$task_dir/events.jsonl
 incidents_file=$task_dir/incidents.json
@@ -210,7 +212,6 @@ fi
   printf 'FRICTION_TASK_DIR=%s\n' "$task_dir"
   printf 'FRICTION_TASK_SUMMARY_FILE=%s\n' "$task_summary_file"
   printf 'FRICTION_INDEX_FILE=%s\n' "$index_file"
-  printf 'FRICTION_TASK_DESCRIPTOR=%s\n' "$descriptor_file"
   printf 'FRICTION_TASK_JSON=%s\n' "$task_json_file"
   printf 'FRICTION_EVENTS_FILE=%s\n' "$events_file"
   printf 'FRICTION_INCIDENTS_FILE=%s\n' "$incidents_file"
