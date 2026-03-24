@@ -1,18 +1,15 @@
 ---
 name: Friction Diagnostics
 description: >-
-  Log and categorize friction events where agent-executed instructions, tools,
-  or workflows produced unexpected results. Use when the task involves:
-  (1) An instruction, skill, MCP tool, script, CLI, API, or data contract that
-  did not behave as its documentation implied, (2) A workflow or handoff where
-  the outcome diverged from what the source material led you to expect,
-  (3) Durable diagnostic reporting across a top-level task, (4) Multi-agent
-  runs where subagents need to leave repairable evidence that survives session
-  boundaries, (5) Repeated or subtle frictions that should survive context
-  loss, or (6) Any scenario where you acted on available guidance and the
-  result did not match. Do not use for pure bug fixing without a logging
-  requirement, or for user-project failures unless agent instructions, tools,
-  or workflow contributed.
+  Log structured diagnostic entries for any error, friction, or unexpected
+  outcome encountered during a task. Use when the task involves: (1) Any
+  tool, command, script, or build step that fails or produces unexpected
+  results, (2) Any instruction, workflow, or environment that behaves
+  differently than expected, (3) Code bugs, compilation errors, test
+  failures, or runtime exceptions, (4) MCP server, subagent, or
+  integration misbehavior, (5) User-requested friction or diagnostic
+  reporting, or (6) Any problem, error, or divergence from expected
+  behavior during task execution.
 compatibility: Designed for filesystem-capable coding agents. Deterministic helpers require POSIX sh on Unix-like systems or PowerShell on Windows. No network required.
 metadata:
   author: generated-template
@@ -33,8 +30,6 @@ This skill creates durable friction logs that a later agent can inspect and fix 
 
 ## Do not use this skill for
 
-- Routine bug fixing when no durable record is needed.
-- Pure user-project failures with no agent, tool, instruction, or workflow contribution.
 - High-level retrospectives that do not need structured, per-event entries.
 
 ## Available scripts
@@ -46,7 +41,7 @@ This skill creates durable friction logs that a later agent can inspect and fix 
 
 ## Workflow
 
-WHEN the user explicitly asks for durable friction reporting, OR repository guidance requires it, OR later remediation would benefit from a structured record, THEN you SHALL initialize a task log before substantive work begins.
+WHEN a task begins and errors or friction may occur THEN you SHALL initialize a task log before substantive work begins.
 
 WHEN you are on Linux or macOS THEN you SHALL run:
 
@@ -63,7 +58,7 @@ WHEN you are on Windows THEN you SHALL run:
 & "<skills-file-root>/scripts/init-log.ps1" -TaskSummary "Investigate MCP routing failures — inspect_build returns stale metadata and dispatch roles do not resolve" -Agent orchestrator -SkillPath "<skills-file-root>"
 ```
 
-WHEN a friction event occurs and it is not solely a user-project failure THEN you SHALL append one entry with `<skills-file-root>/scripts/report-friction.sh` or `<skills-file-root>/scripts/report-friction.ps1`.
+WHEN any error, failure, or unexpected outcome occurs THEN you SHALL append one entry with `<skills-file-root>/scripts/report-friction.sh` or `<skills-file-root>/scripts/report-friction.ps1`.
 
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
 
