@@ -14,9 +14,9 @@
       "files": []
     },
     {
-      "id": "eval-negative-control",
-      "prompt": "Encounter a pure user-project bug with no agent-system contribution.",
-      "expected_output": "No new friction entry is written for that event.",
+      "id": "eval-code-bug",
+      "prompt": "Encounter a code bug such as a wrong operator or missing null check while working on a task.",
+      "expected_output": "A friction entry is written with the code surface, including instruction source pointing to the file and line, the actual error, and an interpretation of what the code appeared to promise.",
       "files": []
     }
   ]
