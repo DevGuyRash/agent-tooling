@@ -89,6 +89,10 @@ def extract_skill_root_refs(text: str) -> list[str]:
     return re.findall(r"<skills-file-root>/([^`\s)]+)", text)
 
 
+def display_name_from_slug(slug: str) -> str:
+    return " ".join(part.capitalize() for part in slug.split("-") if part)
+
+
 def run_smoke(skill_root: Path) -> tuple[bool, str]:
     script = skill_root / "scripts" / "selftest_project_harness.py"
     if not script.exists():
@@ -132,12 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(name, str):
         if len(name) > 64:
             errors.append("frontmatter name exceeds 64 characters")
-        if not all(ch.islower() or ch.isdigit() or ch == "-" for ch in name):
-            errors.append("frontmatter name must be lowercase alphanumeric or hyphen")
-        if name.startswith("-") or name.endswith("-") or "--" in name:
-            errors.append("frontmatter name has an invalid hyphen pattern")
-        if name != root.name:
-            errors.append(f"frontmatter name '{name}' does not match directory name '{root.name}'")
+        expected_display_name = display_name_from_slug(root.name)
+        if name != expected_display_name:
+            errors.append(
+                f"frontmatter name '{name}' does not match display name '{expected_display_name}' derived from directory name '{root.name}'"
+            )
 
     if isinstance(description, str) and len(description) > 1024:
         errors.append("description exceeds 1024 characters")

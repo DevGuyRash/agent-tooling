@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 __SETUP_STEPS__
 __BOOTSTRAP_STEPS__
 __DIST_STEPS__
@@ -44,4 +44,4 @@ __DIST_STEPS__
           name: dist-${{ matrix.platform_id }}
           path: dist/${{ matrix.platform_id }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7

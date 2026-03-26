@@ -90,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         assert "extractions/setup-just@v3" in ci2, ci2
         assert "just bootstrap" in ci2, ci2
         assert "actions/setup-node@v6" in ci2, ci2
+        assert "fetch-depth: 1" in ci2, ci2
+        assert "cache: 'pnpm'" in ci2, ci2
+        assert "cache-dependency-path: pnpm-lock.yaml" in ci2, ci2
         bootstrap2 = run_cmd(script, "bootstrap", str(repo2), "--dry-run")
         assert bootstrap2.stdout.strip() == "pnpm install --frozen-lockfile", bootstrap2.stdout
         run2 = run_cmd(script, "run", str(repo2), "test", "--dry-run")
@@ -113,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
         assert "backend-build" in just3, just3
         assert "frontend-test" in just3, just3
         assert "ci.yml" in render3["candidates"], render3
+        ci3 = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "fetch-depth: 1" in ci3, ci3
+        assert "cache-dependency-path: frontend/package-lock.json" in ci3, ci3
 
         # 4) dist renders keep justfiles parseable and clear stale candidates between runs
         repo4 = tmpdir / "dist-renders"
@@ -127,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             assert_just_parses(just4)
             if architecture in {"committed-dist", "cross-os-dist"}:
                 assert ".gitattributes" in render4["candidates"], render4
+            if architecture == "cross-os-dist":
+                release4 = (repo4 / ".local" / "harness" / "render" / "release-cross-os.yml").read_text(encoding="utf-8")
+                assert "fetch-depth: 1" in release4, release4
+                assert "retention-days: 7" in release4, release4
         general4 = run_json(script, "render", str(repo4), "--architecture", "general", "--dist-storage", "none")
         assert ".gitattributes" not in general4["candidates"], general4
         assert not (repo4 / ".local" / "harness" / "render" / ".gitattributes").exists()
@@ -141,6 +151,54 @@ def main(argv: list[str] | None = None) -> int:
         assert "go build {{args}} ./..." in just5, just5
         assert "go test {{args}} ./..." in just5, just5
         assert "ci.yml" in render5["candidates"], render5
+        ci5 = (repo5 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "fetch-depth: 1" in ci5, ci5
+
+        # 5b) Go workspace CI uses dependency-path-aware caching
+        repo5b = tmpdir / "go-workspace"
+        repo5b.mkdir()
+        write(repo5b / "svc-a" / "go.mod", "module example.com/svc-a\n\ngo 1.23.0\n")
+        write(repo5b / "svc-a" / "go.sum", "example.com/mod v1.0.0 h1:abc\n")
+        write(repo5b / "svc-a" / "main.go", "package main\nfunc main() {}\n")
+        write(repo5b / "svc-b" / "go.mod", "module example.com/svc-b\n\ngo 1.23.0\n")
+        write(repo5b / "svc-b" / "go.sum", "example.com/mod v1.0.0 h1:def\n")
+        write(repo5b / "svc-b" / "main.go", "package main\nfunc main() {}\n")
+        render5b = run_json(script, "render", str(repo5b))
+        ci5b = (repo5b / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "cache-dependency-path: |" in ci5b, ci5b
+        assert "svc-a/go.sum" in ci5b, ci5b
+        assert "svc-b/go.sum" in ci5b, ci5b
+        assert "ci.yml" in render5b["candidates"], render5b
+
+        # 5c) Python and uv CI use dependency-aware caches
+        repo5c = tmpdir / "python-caches"
+        repo5c.mkdir()
+        write(repo5c / "api" / "pyproject.toml", "[project]\nname = 'api'\nversion = '0.1.0'\n")
+        write(repo5c / "api" / "poetry.lock", "[[package]]\nname = 'demo'\nversion = '0.1.0'\n")
+        write(repo5c / "worker" / "pyproject.toml", "[project]\nname = 'worker'\nversion = '0.1.0'\n[tool.uv]\n")
+        write(repo5c / "worker" / "uv.lock", "version = 1\n")
+        render5c = run_json(script, "render", str(repo5c))
+        ci5c = (repo5c / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "cache: 'poetry'" in ci5c, ci5c
+        assert "cache-dependency-path: |" in ci5c, ci5c
+        assert "api/poetry.lock" in ci5c, ci5c
+        assert "api/pyproject.toml" in ci5c, ci5c
+        assert "enable-cache: true" in ci5c, ci5c
+        assert "cache-dependency-glob: |" in ci5c, ci5c
+        assert "worker/uv.lock" in ci5c, ci5c
+        assert "ci.yml" in render5c["candidates"], render5c
+
+        # 5d) dotnet setup stays valid without assuming an automatic cache layout
+        repo5d = tmpdir / "dotnet-cache"
+        repo5d.mkdir()
+        write(repo5d / "app" / "app.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n")
+        write(repo5d / "app" / "packages.lock.json", "{\n  \"version\": 1\n}\n")
+        render5d = run_json(script, "render", str(repo5d))
+        ci5d = (repo5d / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "uses: actions/setup-dotnet@v4" in ci5d, ci5d
+        assert "cache: true" not in ci5d, ci5d
+        assert "cache-dependency-path" not in ci5d, ci5d
+        assert "ci.yml" in render5d["candidates"], render5d
 
         # 6) unmanaged targets stay untouched during update
         repo6 = tmpdir / "unmanaged-update"

@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 __SETUP_STEPS__
 __BOOTSTRAP_STEPS__
 __RUN_STEPS__

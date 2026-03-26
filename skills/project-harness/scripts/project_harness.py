@@ -1203,8 +1203,48 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
     languages = set(detected["languages"])
     package_managers = set(detected["package_managers"])
     build_tools = set(detected["build_tools"])
+    components = detected.get("components", [])
+
+    def component_root(component: dict[str, Any]) -> Path:
+        path = component["path"]
+        return repo / path if path != "." else repo
+
+    def existing_paths(candidates: list[Path]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            rel = candidate.relative_to(repo).as_posix()
+            if rel in seen:
+                continue
+            seen.add(rel)
+            out.append(rel)
+        return out
+
+    def add_multiline_input(key: str, values: list[str]) -> None:
+        if not values:
+            return
+        if len(values) == 1:
+            steps.extend([f"          {key}: {values[0]}"])
+            return
+        steps.extend([f"          {key}: |"])
+        for value in values:
+            steps.extend([f"            {value}"])
+
+    def cache_paths_for(language: str, build_tool: str, filenames: list[str]) -> list[str]:
+        paths: list[str] = []
+        for component in components:
+            if component["language"] != language or component.get("build_tool") != build_tool:
+                continue
+            root = component_root(component)
+            paths.extend(existing_paths([root / name for name in filenames]))
+        return paths
 
     if "python" in languages:
+        python_cache_paths = cache_paths_for("python", "pip", ["requirements.txt", "requirements-dev.txt", "pyproject.toml"])
+        poetry_cache_paths = cache_paths_for("python", "poetry", ["poetry.lock", "pyproject.toml"])
+        uv_cache_paths = cache_paths_for("python", "uv", ["uv.lock", "pyproject.toml", "requirements.txt", "requirements-dev.txt"])
         steps.extend([
             "      - uses: actions/setup-python@v6",
             "        with:",
@@ -1212,12 +1252,17 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         ])
         if "poetry" in build_tools:
             steps.extend(["          cache: 'poetry'"])
+            add_multiline_input("cache-dependency-path", poetry_cache_paths)
         elif "pip" in build_tools and "uv" not in build_tools:
             steps.extend(["          cache: 'pip'"])
+            add_multiline_input("cache-dependency-path", python_cache_paths)
         if "uv" in build_tools:
             steps.extend([
                 "      - uses: astral-sh/setup-uv@v6",
+                "        with:",
+                "          enable-cache: true",
             ])
+            add_multiline_input("cache-dependency-glob", uv_cache_paths)
         if "poetry" in build_tools:
             steps.extend([
                 "      - name: Install Poetry",
@@ -1225,6 +1270,20 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
                 "        run: python -m pip install --upgrade pip poetry",
             ])
     if "javascript" in languages:
+        pnpm_cache_paths: list[str] = []
+        yarn_cache_paths: list[str] = []
+        npm_cache_paths: list[str] = []
+        for component in components:
+            if component["language"] != "javascript":
+                continue
+            root = component_root(component)
+            manager = component.get("package_manager")
+            if manager == "pnpm":
+                pnpm_cache_paths.extend(existing_paths([root / "pnpm-lock.yaml"]))
+            elif manager == "yarn":
+                yarn_cache_paths.extend(existing_paths([root / "yarn.lock"]))
+            elif manager == "npm":
+                npm_cache_paths.extend(existing_paths([root / "package-lock.json", root / "npm-shrinkwrap.json"]))
         if "pnpm" in package_managers:
             steps.extend([
                 "      - uses: pnpm/action-setup@v5",
@@ -1236,16 +1295,25 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         ])
         if "pnpm" in package_managers:
             steps.extend(["          cache: 'pnpm'"])
+            add_multiline_input("cache-dependency-path", pnpm_cache_paths)
         elif "yarn" in package_managers:
             steps.extend(["          cache: 'yarn'"])
+            add_multiline_input("cache-dependency-path", yarn_cache_paths)
         elif "npm" in package_managers or not package_managers:
             steps.extend(["          cache: 'npm'"])
+            add_multiline_input("cache-dependency-path", npm_cache_paths)
     if "go" in languages:
+        go_cache_paths: list[str] = []
+        for component in components:
+            if component["language"] != "go":
+                continue
+            go_cache_paths.extend(existing_paths([component_root(component) / "go.sum"]))
         steps.extend([
             "      - uses: actions/setup-go@v6",
             "        with:",
             "          go-version: 'stable'",
         ])
+        add_multiline_input("cache-dependency-path", go_cache_paths)
     if "rust" in languages:
         steps.extend([
             "      - name: Install Rust toolchain",
@@ -1259,6 +1327,19 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
             "          rustup default stable",
         ])
     if "java" in languages:
+        gradle_cache_paths = cache_paths_for(
+            "java",
+            "gradle",
+            [
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+                "gradle/libs.versions.toml",
+                "gradle/wrapper/gradle-wrapper.properties",
+            ],
+        )
+        maven_cache_paths = cache_paths_for("java", "maven", ["pom.xml"])
         steps.extend([
             "      - uses: actions/setup-java@v5",
             "        with:",
@@ -1268,8 +1349,10 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         ])
         if "gradle" in build_tools and "maven" not in build_tools:
             steps.extend(["          cache: 'gradle'"])
+            add_multiline_input("cache-dependency-path", gradle_cache_paths)
         elif "maven" in build_tools and "gradle" not in build_tools:
             steps.extend(["          cache: 'maven'"])
+            add_multiline_input("cache-dependency-path", maven_cache_paths)
     if "dotnet" in languages:
         steps.extend([
             "      - uses: actions/setup-dotnet@v4",
