@@ -55,14 +55,17 @@ Windows:
 %TEMP%\agent-friction\<task-id>\<yyyy-MM-dd>\<HH-mm-ss>_<agent>.md
 ```
 
-Each task directory also gets:
+Manifest created by `init-log.*`:
 
-- `INDEX.md` — aggregated category counts and log inventory
-- `SESSION.txt` — task-scoped metadata for reuse, stored as one `KEY=value` record per line; it excludes the per-agent `FRICTION_TASK_DESCRIPTOR` pointer
+- `SESSION.txt` — task-scoped metadata for reuse, stored as one `KEY=value` record per line
 - `TASK_SUMMARY.txt` — full task summary text for multiline-safe reuse
 - `task.json` — task-level metadata in JSON
-- a per-agent descriptor JSON next to each log file, surfaced as `FRICTION_TASK_DESCRIPTOR`
-- `events.jsonl` — one structured JSON line per friction event; it may be empty immediately after init
+
+Artifacts created only after the first reported event:
+
+- `INDEX.md` — aggregated category counts and log inventory
+- a per-agent markdown log plus adjacent descriptor JSON
+- `events.jsonl` — one structured JSON line per friction event
 - `incidents.json` — incident-level aggregation
 - `exports/` — sanitized export artifacts
 
@@ -85,6 +88,7 @@ Unix-like systems:
 
 ```sh
 SKILL_ROOT=/absolute/path/to/friction-diagnostics
+PAYLOAD_JSON=/tmp/friction-event.json
 
 INIT_OUTPUT="$(sh "$SKILL_ROOT/scripts/init-log.sh" \
   --task-summary "Investigate tool dispatch failures — mpcr protocol dispatch returns unknown role errors for documented domain labels" \
@@ -93,23 +97,26 @@ INIT_OUTPUT="$(sh "$SKILL_ROOT/scripts/init-log.sh" \
 
 eval "$INIT_OUTPUT"
 
-LOG_FILE=$FRICTION_LOG_FILE
-TASK_DIR=$FRICTION_TASK_DIR
+cat <<'EOF' >"$PAYLOAD_JSON"
+{
+  "title": "Dispatch role slug mismatch",
+  "instruction_source": "SKILL.md:160, inside the Domain routing table",
+  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs.",
+  "action_taken": "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value.",
+  "expected_outcome": "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug.",
+  "actual_outcome": "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help.",
+  "interpretation": "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
+}
+EOF
 
 sh "$SKILL_ROOT/scripts/report-friction.sh" \
-  --log-file "$LOG_FILE" \
-  --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160, inside the Domain routing table" \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value." \
-  --expected-outcome "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug." \
-  --actual-outcome "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help." \
-  --interpretation "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
-
-sh "$SKILL_ROOT/scripts/build-index.sh" --task-dir "$TASK_DIR"
+  --task-dir "$FRICTION_TASK_DIR" \
+  --from-json "$PAYLOAD_JSON"
 ```
 
-The helper prints shell exports for convenience, but agent tool invocations are usually isolated processes. Capture the emitted values and pass them back as explicit flags when later commands run in separate shells. `FRICTION_TASK_DESCRIPTOR` points to the current agent's descriptor next to its markdown log; task-scoped handoff data still comes from `SESSION.txt`.
+`init-log.*` is optional. It creates only the task manifest, so `FRICTION_LOG_FILE` and `FRICTION_TASK_DESCRIPTOR` remain empty until the first event materializes the per-agent artifacts. The recommended integration path is to hand `report-friction.*` a plain sanitized JSON payload via `--from-json`; do not Base64-encode individual fields.
+
+The helper prints shell exports for convenience, but agent tool invocations are usually isolated processes. Capture the emitted values and pass them back as explicit flags when later commands run in separate shells. Task-scoped handoff data comes from `SESSION.txt` and `TASK_SUMMARY.txt`.
 
 Windows PowerShell:
 
@@ -126,18 +133,21 @@ $initOutput | ForEach-Object {
 # For multiline-safe reuse across separate PowerShell invocations, prefer the
 # persisted summary file over the line-oriented FRICTION_TASK_SUMMARY output.
 $taskSummary = [System.IO.File]::ReadAllText($initMap["FRICTION_TASK_SUMMARY_FILE"])
+$payload = @{
+  title = "Dispatch role slug mismatch"
+  instruction_source = "SKILL.md:160, inside the Domain routing table"
+  instruction_text = "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs."
+  action_taken = "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value."
+  expected_outcome = "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug."
+  actual_outcome = "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help."
+  interpretation = "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs."
+} | ConvertTo-Json -Depth 4
+$payloadPath = Join-Path $env:TEMP "friction-event.json"
+[System.IO.File]::WriteAllText($payloadPath, $payload)
 
 & "$SkillRoot\scripts\report-friction.ps1" `
-  -LogFile $initMap["FRICTION_LOG_FILE"] `
-  -Title "Dispatch role slug mismatch" `
-  -InstructionSource "SKILL.md:160, inside the Domain routing table" `
-  -InstructionText "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs." `
-  -ActionTaken "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value." `
-  -ExpectedOutcome "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug." `
-  -ActualOutcome "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error output or --help." `
-  -Interpretation "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs."
-
-& "$SkillRoot\scripts\build-index.ps1" -TaskDir $initMap["FRICTION_TASK_DIR"]
+  -TaskDir $initMap["FRICTION_TASK_DIR"] `
+  -FromJson $payloadPath
 ```
 
 ## Notes

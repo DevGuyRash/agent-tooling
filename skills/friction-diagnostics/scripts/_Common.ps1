@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:SCHEMA_VERSION = '2.0.0'
+$script:SCHEMA_VERSION = '2.1.0'
 $script:TAXONOMY_VERSION = '2.0.0'
 
 function Get-Slug {

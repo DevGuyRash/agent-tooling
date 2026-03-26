@@ -31,9 +31,9 @@ done
 
 index_file=$task_dir/INDEX.md
 session_file=$task_dir/SESSION.txt
+events_jsonl=$task_dir/events.jsonl
 lock_dir=$task_dir/.build-index.lock
 lock_acquired=0
-log_list_file=
 category_counts_file=
 log_counts_file=
 index_tmp_file=
@@ -43,8 +43,7 @@ sort_count_then_name() {
 }
 
 cleanup() {
-  rm -f ${log_list_file:+"$log_list_file"} \
-    ${category_counts_file:+"$category_counts_file"} \
+  rm -f ${category_counts_file:+"$category_counts_file"} \
     ${log_counts_file:+"$log_counts_file"} \
     ${index_tmp_file:+"$index_tmp_file"}
   if [ "${lock_acquired:-0}" -eq 1 ] && [ -n "${lock_dir-}" ]; then
@@ -122,73 +121,75 @@ if [ -f "$session_file" ]; then
   fi
 fi
 
-log_list_file=$(mktemp "$task_dir/.log-files.XXXXXX.tmp")
-find "$task_dir" -type f -name '*.md' ! -name 'INDEX.md' | sort >"$log_list_file"
-
-events_jsonl=$task_dir/events.jsonl
-log_file_count=0
 total_entries=0
-entries_from_jsonl=false
 if [ -f "$events_jsonl" ]; then
   total_entries=$(wc -l <"$events_jsonl" | tr -d ' ')
-  if [ "$total_entries" -gt 0 ]; then
-    entries_from_jsonl=true
-  fi
 fi
-while IFS= read -r file; do
-  [ -n "$file" ] || continue
-  log_file_count=$((log_file_count + 1))
-  if [ "$entries_from_jsonl" = "false" ]; then
-    count=$(grep -c '^## Event [0-9][0-9]*:' "$file" 2>/dev/null || true)
-    total_entries=$((total_entries + count))
-  fi
-done <"$log_list_file"
+
+if [ "$total_entries" -eq 0 ]; then
+  rm -f "$index_file"
+  printf '%s\n' "$index_file"
+  exit 0
+fi
 
 category_counts_file=$(mktemp "$task_dir/.category-counts.XXXXXX.tmp")
 log_counts_file=$(mktemp "$task_dir/.log-counts.XXXXXX.tmp")
-: >"$category_counts_file"
-: >"$log_counts_file"
 
-if [ -s "$log_list_file" ]; then
-  while IFS= read -r file; do
-    [ -n "$file" ] || continue
-    rel=${file#"$task_dir"/}
-    count=$(grep -c '^## Event [0-9][0-9]*:' "$file" 2>/dev/null || true)
-    printf '%s\t%s\n' "$count" "$rel" >>"$log_counts_file"
-    awk '
-      /^\*\*Derived category:\*\*/ {
-        line=$0
-        sub(/^\*\*Derived category:\*\* /, "", line)
-        counts[line]++
+awk '
+  function extract(line, key,    start, rest, val, ch) {
+    start = "\"" key "\":\""
+    if ((idx = index(line, start)) == 0) return ""
+    rest = substr(line, idx + length(start))
+    val = ""
+    while (length(rest) > 0) {
+      ch = substr(rest, 1, 1)
+      if (ch == "\\") {
+        val = val substr(rest, 1, 2)
+        rest = substr(rest, 3)
+      } else if (ch == "\"") {
+        break
+      } else {
+        val = val ch
+        rest = substr(rest, 2)
       }
-      END {
-        for (k in counts) {
-          printf "%s\t%s\n", counts[k], k
-        }
-      }
-    ' "$file" >>"$category_counts_file"
-  done <"$log_list_file"
-fi
+    }
+    return val
+  }
+  {
+    if ($0 == "") next
+    category = extract($0, "derived_category")
+    log_file = extract($0, "log_file")
+    if (category != "") category_count[category]++
+    if (log_file != "") log_count[log_file]++
+  }
+  END {
+    for (k in category_count) {
+      printf "C\t%d\t%s\n", category_count[k], k
+    }
+    for (k in log_count) {
+      printf "L\t%d\t%s\n", log_count[k], k
+    }
+  }
+' "$events_jsonl" |
+  while IFS="$(printf '\t')" read -r kind count value; do
+    case "$kind" in
+      C) printf '%s\t%s\n' "$count" "$value" >>"$category_counts_file" ;;
+      L) printf '%s\t%s\n' "$count" "$value" >>"$log_counts_file" ;;
+    esac
+  done
 
 if [ -s "$category_counts_file" ]; then
-  category_lines=$(
-    awk -F '\t' '
-      { counts[$2] += $1 }
-      END {
-        for (k in counts) {
-          printf "%s\t%s\n", counts[k], k
-        }
-      }
-    ' "$category_counts_file" | sort_count_then_name
-  )
+  category_lines=$(sort_count_then_name "$category_counts_file")
 else
   category_lines=
 fi
 
 if [ -s "$log_counts_file" ]; then
   log_lines=$(sort_count_then_name "$log_counts_file")
+  log_file_count=$(wc -l <"$log_counts_file" | tr -d ' ')
 else
   log_lines=
+  log_file_count=0
 fi
 
 index_tmp_file=$(mktemp "$task_dir/.index.XXXXXX.tmp")

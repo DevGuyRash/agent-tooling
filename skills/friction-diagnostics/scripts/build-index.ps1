@@ -80,36 +80,35 @@ try {
     }
 
     $eventsJsonl = Join-Path $TaskDir 'events.jsonl'
-    $logFiles = Get-ChildItem -Path $TaskDir -Recurse -Filter '*.md' -File | Where-Object { $_.Name -ne 'INDEX.md' } | Sort-Object FullName
-    $logFileCount = $logFiles.Count
     $totalEntries = 0
 
     if (Test-Path $eventsJsonl) {
         $totalEntries = @([System.IO.File]::ReadAllLines($eventsJsonl) | Where-Object { $_ }).Count
     }
     if ($totalEntries -eq 0) {
-        foreach ($file in $logFiles) {
-            $content = Get-Content -Path $file.FullName -Raw
-            $totalEntries += ([regex]::Matches($content, '^## Event \d+:', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
-        }
+        Remove-Item -Force -ErrorAction SilentlyContinue $indexFile
+        $indexFile
+        return
     }
 
     $categoryCounts = @{}
-    $logLines = @()
-    foreach ($file in $logFiles) {
-        $content = Get-Content -Path $file.FullName -Raw
-        $entryCount = ([regex]::Matches($content, '^## Event \d+:', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
-        $relativePath = $file.FullName.Substring($TaskDir.Length).TrimStart('\','/')
-        $logLines += [PSCustomObject]@{ Count = $entryCount; Path = $relativePath }
-
-        foreach ($line in (Get-Content $file.FullName)) {
-            if ($line -match '^\*\*Derived category:\*\* (?<category>.+)$') {
-                $category = $matches['category']
-                if (-not $categoryCounts.ContainsKey($category)) { $categoryCounts[$category] = 0 }
-                $categoryCounts[$category]++
+    $logCounts = @{}
+    foreach ($line in ([System.IO.File]::ReadAllLines($eventsJsonl) | Where-Object { $_ })) {
+        $event = $line | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace($event.derived_category)) {
+            if (-not $categoryCounts.ContainsKey($event.derived_category)) {
+                $categoryCounts[$event.derived_category] = 0
             }
+            $categoryCounts[$event.derived_category]++
+        }
+        if (-not [string]::IsNullOrWhiteSpace($event.log_file)) {
+            if (-not $logCounts.ContainsKey($event.log_file)) {
+                $logCounts[$event.log_file] = 0
+            }
+            $logCounts[$event.log_file]++
         }
     }
+    $logFileCount = $logCounts.Count
 
     $lines = @(
         "# Friction Index: $taskId"
@@ -141,13 +140,13 @@ try {
     $lines += "## Log files"
     $lines += ""
 
-    if ($logLines.Count -gt 0) {
-        $sortedLogLines = $logLines | Sort-Object -Property @(
-            @{ Expression = { $_.Count }; Descending = $true }
-            @{ Expression = { $_.Path }; Descending = $false }
+    if ($logCounts.Count -gt 0) {
+        $sortedLogLines = $logCounts.GetEnumerator() | Sort-Object -Property @(
+            @{ Expression = { $_.Value }; Descending = $true }
+            @{ Expression = { $_.Name }; Descending = $false }
         )
         foreach ($item in $sortedLogLines) {
-            $lines += "- ``$($item.Path)`` - $($item.Count) entries"
+            $lines += "- ``$($item.Name)`` - $($item.Value) entries"
         }
     } else {
         $lines += "_No log files yet._"

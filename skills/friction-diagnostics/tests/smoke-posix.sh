@@ -12,6 +12,9 @@ CONCURRENT_BASE_DIR=
 LOCK_WAIT_BASE_DIR=
 LOCK_RECOVERY_BASE_DIR=
 MULTILINE_BASE_DIR=
+FROM_JSON_BASE_DIR=
+FROM_JSON_EVENT_PATH=
+FROM_JSON_STDIN_PATH=
 FAIL_BASE_DIR=
 FAIL_FAKE_BIN=
 FAIL_INIT_STDOUT=
@@ -20,7 +23,17 @@ FAIL_REPORT_STDOUT=
 FAIL_REPORT_STDERR=
 NO_HASH_STDOUT=
 NO_HASH_STDERR=
-trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${NO_REUSE_BASE_DIR:-}" "${AUTO_INIT_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${LOCK_RECOVERY_BASE_DIR:-}" "${MULTILINE_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
+trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${NO_REUSE_BASE_DIR:-}" "${AUTO_INIT_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${LOCK_RECOVERY_BASE_DIR:-}" "${MULTILINE_BASE_DIR:-}" "${FROM_JSON_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FROM_JSON_EVENT_PATH:-}" "${FROM_JSON_STDIN_PATH:-}" "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
+
+find_agent_log() {
+  task_dir=$1
+  agent_display=$2
+  find "$task_dir" -type f -name '*.md' ! -name 'INDEX.md' | sort | while IFS= read -r file; do
+    if grep -F -q "**Agent:** $agent_display" "$file"; then
+      printf '%s\n' "$file"
+    fi
+  done | tail -1
+}
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -33,12 +46,12 @@ case $FRICTION_TASK_ID in
 '*) printf '%s\n' 'smoke-posix: multiline task summary leaked newline into task id' >&2; exit 1 ;;
 esac
 
-ORCH_LOG=$FRICTION_LOG_FILE
 ORCH_TASK_DIR=$FRICTION_TASK_DIR
 ORCH_INDEX=$FRICTION_INDEX_FILE
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$ORCH_LOG" \
+  --task-dir "$ORCH_TASK_DIR" \
+  --agent orchestrator \
   --title "Dispatch role slug mismatch" \
   --instruction-source "SKILL.md:160" \
   --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt." \
@@ -46,6 +59,8 @@ ORCH_INDEX=$FRICTION_INDEX_FILE
   --expected-outcome "The CLI returns the architecture prompt." \
   --actual-outcome "error: unknown dispatch role: architecture" \
   --interpretation "I treated the domain table label as the CLI role slug."
+
+ORCH_LOG=$(find_agent_log "$ORCH_TASK_DIR" "orchestrator")
 
 AUTO_ID_BASE_DIR=$(mktemp -d "/tmp/agent-friction-auto-id.XXXXXX")
 FAKE_DATE_DIR=$(mktemp -d "/tmp/agent-friction-date.XXXXXX")
@@ -70,7 +85,6 @@ eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT
   --skill-path "$ROOT")"
 AUTO_ID_ONE=$FRICTION_TASK_ID
 AUTO_DIR_ONE=$FRICTION_TASK_DIR
-AUTO_LOG_ONE=$FRICTION_LOG_FILE
 AUTO_INDEX_ONE=$FRICTION_INDEX_FILE
 
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -79,13 +93,12 @@ eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT
   --skill-path "$ROOT")"
 AUTO_ID_TWO=$FRICTION_TASK_ID
 AUTO_DIR_TWO=$FRICTION_TASK_DIR
-AUTO_LOG_TWO=$FRICTION_LOG_FILE
 AUTO_INDEX_TWO=$FRICTION_INDEX_FILE
 
-# Session reuse: same task ID and directory, but different log files
+# Session reuse: same task ID and directory, with no eager log artifacts.
 [ "$AUTO_ID_ONE" = "$AUTO_ID_TWO" ]
 [ "$AUTO_DIR_ONE" = "$AUTO_DIR_TWO" ]
-[ "$AUTO_LOG_ONE" != "$AUTO_LOG_TWO" ]
+[ -z "$FRICTION_LOG_FILE" ]
 [ -f "$AUTO_DIR_ONE/SESSION.txt" ]
 
 # ── --no-reuse: same summary → different sessions ───────────────────
@@ -115,7 +128,6 @@ eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT
   --skill-path "$ROOT")"
 LONG_AUTO_ID_ONE=$FRICTION_TASK_ID
 LONG_AUTO_DIR_ONE=$FRICTION_TASK_DIR
-LONG_AUTO_LOG_ONE=$FRICTION_LOG_FILE
 
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "$LONG_TASK_SUMMARY" \
@@ -130,7 +142,6 @@ LONG_AUTO_DIR_TWO=$FRICTION_TASK_DIR
 [ -d "$LONG_AUTO_DIR_ONE" ]
 [ -f "$LONG_AUTO_DIR_ONE/SESSION.txt" ]
 [ "$(printf '%s' "$(basename "$LONG_AUTO_DIR_ONE")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
-[ "$(printf '%s' "$(basename "$LONG_AUTO_LOG_ONE")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
 LONG_EXPLICIT_TASK_ID=$(printf 'explicit task id component %.0s' $(seq 1 20))
 eval "$(FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -150,9 +161,21 @@ eval "$(FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "Long agent name smoke test" \
   --agent "$LONG_AGENT_NAME" \
   --skill-path "$ROOT")"
-LONG_AGENT_LOG=$FRICTION_LOG_FILE
-[ -f "$FRICTION_TASK_DESCRIPTOR" ]
-[ "$(printf '%s' "$(basename "$FRICTION_TASK_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
+LONG_AGENT_TASK_DIR=$FRICTION_TASK_DIR
+"$ROOT/scripts/report-friction.sh" \
+  --task-dir "$LONG_AGENT_TASK_DIR" \
+  --agent "$LONG_AGENT_NAME" \
+  --title "Long agent name entry" \
+  --instruction-source "test" \
+  --instruction-text "Materialize an agent log for a long agent name." \
+  --action-taken "Recorded one friction entry." \
+  --expected-outcome "The lazy-created log and descriptor stay within NAME_MAX." \
+  --actual-outcome "The entry was recorded." \
+  --interpretation "Lazy materialization should still respect filename limits."
+LONG_AGENT_LOG=$(find_agent_log "$LONG_AGENT_TASK_DIR" "$LONG_AGENT_NAME")
+LONG_AGENT_DESCRIPTOR=${LONG_AGENT_LOG%.md}.descriptor.json
+[ -f "$LONG_AGENT_DESCRIPTOR" ]
+[ "$(printf '%s' "$(basename "$LONG_AGENT_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 [ -f "$LONG_AGENT_LOG" ]
 [ "$(printf '%s' "$(basename "$LONG_AGENT_LOG")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
@@ -163,14 +186,28 @@ eval "$(FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --agent subagent \
   --role "$LONG_ROLE_NAME" \
   --skill-path "$ROOT")"
-LONG_ROLE_LOG=$FRICTION_LOG_FILE
-[ -f "$FRICTION_TASK_DESCRIPTOR" ]
-[ "$(printf '%s' "$(basename "$FRICTION_TASK_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
+LONG_ROLE_TASK_DIR=$FRICTION_TASK_DIR
+"$ROOT/scripts/report-friction.sh" \
+  --task-dir "$LONG_ROLE_TASK_DIR" \
+  --agent subagent \
+  --role "$LONG_ROLE_NAME" \
+  --title "Long role name entry" \
+  --instruction-source "test" \
+  --instruction-text "Materialize an agent log for a long role name." \
+  --action-taken "Recorded one friction entry." \
+  --expected-outcome "The lazy-created log and descriptor stay within NAME_MAX." \
+  --actual-outcome "The entry was recorded." \
+  --interpretation "Lazy materialization should still respect filename limits."
+LONG_ROLE_LOG=$(find_agent_log "$LONG_ROLE_TASK_DIR" "subagent ($LONG_ROLE_NAME)")
+LONG_ROLE_DESCRIPTOR=${LONG_ROLE_LOG%.md}.descriptor.json
+[ -f "$LONG_ROLE_DESCRIPTOR" ]
+[ "$(printf '%s' "$(basename "$LONG_ROLE_DESCRIPTOR")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 [ -f "$LONG_ROLE_LOG" ]
 [ "$(printf '%s' "$(basename "$LONG_ROLE_LOG")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$AUTO_LOG_ONE" \
+  --task-dir "$AUTO_DIR_ONE" \
+  --agent orchestrator \
   --title "Session reuse orchestrator entry" \
   --instruction-source "test" \
   --instruction-text "Ensure session reuse shares the task directory." \
@@ -180,7 +217,8 @@ LONG_ROLE_LOG=$FRICTION_LOG_FILE
   --interpretation "Session reuse should consolidate agents into one directory."
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$AUTO_LOG_TWO" \
+  --task-dir "$AUTO_DIR_TWO" \
+  --agent subagent \
   --title "Session reuse subagent entry" \
   --instruction-source "test" \
   --instruction-text "Ensure session reuse shares the task directory." \
@@ -200,10 +238,10 @@ eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --role research \
   --skill-path "$ROOT")"
 
-SUB_LOG=$FRICTION_LOG_FILE
-
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$SUB_LOG" \
+  --task-dir "$ORCH_TASK_DIR" \
+  --agent subagent \
+  --role research \
   --title "MCP call timed out" \
   --instruction-source "MCP server build-inspector" \
   --instruction-text "Use inspect_build to fetch the latest build metadata." \
@@ -213,7 +251,9 @@ SUB_LOG=$FRICTION_LOG_FILE
   --interpretation "I treated the documented MCP method as ready for interactive use."
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$SUB_LOG" \
+  --task-dir "$ORCH_TASK_DIR" \
+  --agent subagent \
+  --role research \
   --title "Second dispatch role slug mismatch" \
   --instruction-source "SKILL.md:160" \
   --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt." \
@@ -223,7 +263,9 @@ SUB_LOG=$FRICTION_LOG_FILE
   --interpretation "The subagent made the same visible-label to slug assumption."
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$SUB_LOG" \
+  --task-dir "$ORCH_TASK_DIR" \
+  --agent subagent \
+  --role research \
   --title "Rate limit is not auth" \
   --instruction-source "CI pipeline step fetch-pr-status" \
   --instruction-text "Query the GitHub API for the PR merge status." \
@@ -236,6 +278,7 @@ SUB_LOG=$FRICTION_LOG_FILE
   --impact "blocked"
 
 "$ROOT/scripts/build-index.sh" --task-dir "$ORCH_TASK_DIR" >/dev/null
+SUB_LOG=$(find_agent_log "$ORCH_TASK_DIR" "subagent (research)")
 
 FAIL_BASE_DIR=$(mktemp -d "/tmp/agent-friction-fail.XXXXXX")
 FAIL_FAKE_BIN=$(mktemp -d "/tmp/agent-friction-fakebin.XXXXXX")
@@ -258,20 +301,20 @@ PATH="$FAIL_FAKE_BIN:$PATH" FRICTION_BASE_DIR="$FAIL_BASE_DIR" "$ROOT/scripts/in
 FAIL_INIT_RC=$?
 set -e
 
-[ "$FAIL_INIT_RC" -ne 0 ]
-[ ! -s "$FAIL_INIT_STDOUT" ]
+[ "$FAIL_INIT_RC" -eq 0 ]
 FAIL_TASK_DIR=$FAIL_BASE_DIR/failing-smoke-task
 [ -f "$FAIL_TASK_DIR/SESSION.txt" ]
 [ -f "$FAIL_TASK_DIR/TASK_SUMMARY.txt" ]
+[ -f "$FAIL_TASK_DIR/task.json" ]
 [ ! -f "$FAIL_TASK_DIR/INDEX.md" ]
-FAIL_INIT_LOG=$(find "$FAIL_TASK_DIR" -type f -name '*.md' ! -name 'INDEX.md' | sort | head -n 1)
-[ -n "$FAIL_INIT_LOG" ]
-[ -f "$FAIL_INIT_LOG" ]
-grep -q '^# Friction Evidence Log: failing-smoke-task$' "$FAIL_INIT_LOG"
+[ ! -f "$FAIL_TASK_DIR/events.jsonl" ]
+[ ! -f "$FAIL_TASK_DIR/incidents.json" ]
+[ ! -d "$FAIL_TASK_DIR/exports" ]
 
 set +e
 PATH="$FAIL_FAKE_BIN:$PATH" "$ROOT/scripts/report-friction.sh" \
-  --log-file "$FAIL_INIT_LOG" \
+  --task-dir "$FAIL_TASK_DIR" \
+  --agent orchestrator \
   --title "Forced index rebuild failure" \
   --instruction-source "test" \
   --instruction-text "Force build-index failure through mktemp." \
@@ -286,8 +329,57 @@ set -e
 [ "$FAIL_REPORT_RC" -ne 0 ]
 [ ! -s "$FAIL_REPORT_STDOUT" ]
 [ ! -f "$FAIL_TASK_DIR/INDEX.md" ]
+FAIL_INIT_LOG=$(find_agent_log "$FAIL_TASK_DIR" "orchestrator")
+[ -n "$FAIL_INIT_LOG" ]
+[ -f "$FAIL_TASK_DIR/events.jsonl" ]
+[ "$(wc -l <"$FAIL_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
+[ -f "$FAIL_TASK_DIR/incidents.json" ]
+[ -d "$FAIL_TASK_DIR/exports" ]
 grep -q '## Event 1: Forced index rebuild failure' "$FAIL_INIT_LOG"
 "$ROOT/scripts/build-index.sh" --task-dir "$FAIL_TASK_DIR" >/dev/null
+
+FROM_JSON_BASE_DIR=$(mktemp -d "/tmp/agent-friction-from-json.XXXXXX")
+eval "$(FRICTION_BASE_DIR="$FROM_JSON_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-id from-json-task \
+  --task-summary "POSIX from-json smoke test" \
+  --agent orchestrator \
+  --skill-path "$ROOT")"
+FROM_JSON_TASK_DIR=$FRICTION_TASK_DIR
+[ -z "$FRICTION_LOG_FILE" ]
+[ -z "$FRICTION_TASK_DESCRIPTOR" ]
+[ ! -f "$FROM_JSON_TASK_DIR/events.jsonl" ]
+
+FROM_JSON_EVENT_PATH=$(mktemp /tmp/friction-from-json-path.XXXXXX.json)
+FROM_JSON_STDIN_PATH=$(mktemp /tmp/friction-from-json-stdin.XXXXXX.json)
+cat <<'EOF' >"$FROM_JSON_EVENT_PATH"
+{"title":"Path ingest smoke","instruction_source":"test","instruction_text":"Load event fields from a JSON file path.","action_taken":"Reported friction with --from-json PATH.","expected_outcome":"POSIX should accept a JSON file path without shell-escaping payload text.","actual_outcome":"The event was loaded from disk and recorded.","interpretation":"A file path is the shell-safe transport for structured input.","surface":"workflow","mode":"ambiguity","impact":"confusing","tags":"from-json,path"}
+EOF
+cat <<'EOF' >"$FROM_JSON_STDIN_PATH"
+{"title":"stdin ingest smoke","instruction_source":"test","instruction_text":"Load event fields from stdin exactly once.","action_taken":"Reported friction with --from-json -.","expected_outcome":"POSIX should parse the stdin payload once and apply all fields.","actual_outcome":"The event was loaded from stdin and recorded.","interpretation":"Streaming JSON should behave the same as file-backed JSON input.","surface":"workflow","mode":"other","run_effect":"continued","tags":"from-json,stdin"}
+EOF
+
+"$ROOT/scripts/report-friction.sh" \
+  --task-dir "$FROM_JSON_TASK_DIR" \
+  --agent orchestrator \
+  --from-json "$FROM_JSON_EVENT_PATH"
+[ -f "$FROM_JSON_TASK_DIR/events.jsonl" ]
+[ "$(wc -l <"$FROM_JSON_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
+grep -q '"title":"Path ingest smoke"' "$FROM_JSON_TASK_DIR/events.jsonl"
+grep -q '"instruction_text":"Load event fields from a JSON file path\."' "$FROM_JSON_TASK_DIR/events.jsonl"
+if grep -q '_b64"' "$FROM_JSON_TASK_DIR/events.jsonl"; then
+  printf '%s\n' 'smoke-posix: events.jsonl should not store base64 payload fields' >&2
+  exit 1
+fi
+grep -q '"artifacts_materialized":true' "$FROM_JSON_TASK_DIR/task.json"
+
+"$ROOT/scripts/report-friction.sh" \
+  --task-dir "$FROM_JSON_TASK_DIR" \
+  --agent orchestrator \
+  --from-json - <"$FROM_JSON_STDIN_PATH"
+[ "$(wc -l <"$FROM_JSON_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 2 ]
+grep -q '"title":"stdin ingest smoke"' "$FROM_JSON_TASK_DIR/events.jsonl"
+grep -q '\*\*Entries:\*\* 2' "$FROM_JSON_TASK_DIR/INDEX.md"
+grep -q '\*\*Log files:\*\* 1' "$FROM_JSON_TASK_DIR/INDEX.md"
 
 NO_HASH_STDOUT=$(mktemp /tmp/friction-no-hash-stdout.XXXXXX)
 NO_HASH_STDERR=$(mktemp /tmp/friction-no-hash-stderr.XXXXXX)
@@ -328,16 +420,10 @@ case $FRICTION_TASK_DIR in
   *'
 '*) printf '%s\n' 'smoke-posix: multiline task dir leaked newline' >&2; exit 1 ;;
 esac
-case $FRICTION_LOG_FILE in
-  *'
-'*) printf '%s\n' 'smoke-posix: multiline log file leaked newline' >&2; exit 1 ;;
-esac
 
 [ -d "$FRICTION_TASK_DIR" ]
-[ -f "$FRICTION_LOG_FILE" ]
-[ -f "$FRICTION_TASK_DESCRIPTOR" ]
-[ "$(dirname "$FRICTION_TASK_DESCRIPTOR")" = "$(dirname "$FRICTION_LOG_FILE")" ]
-[ "$FRICTION_TASK_DESCRIPTOR" != "$FRICTION_TASK_DIR/TASK_DESCRIPTOR.json" ]
+[ -z "$FRICTION_LOG_FILE" ]
+[ -z "$FRICTION_TASK_DESCRIPTOR" ]
 [ -f "$FRICTION_TASK_DIR/TASK_SUMMARY.txt" ]
 [ "$FRICTION_TASK_SUMMARY_FILE" = "$FRICTION_TASK_DIR/TASK_SUMMARY.txt" ]
 
@@ -346,7 +432,7 @@ if grep -q '^FRICTION_TASK_SUMMARY=' "$FRICTION_TASK_DIR/SESSION.txt"; then
   printf '%s\n' 'smoke-posix: SESSION.txt still contains inline task summary' >&2
   exit 1
 fi
-[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 13 ]
+[ "$(wc -l <"$FRICTION_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 15 ]
 grep -qx 'FRICTION_BASE_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_ID=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_TASK_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
@@ -364,12 +450,13 @@ grep -qx 'FRICTION_CAPTURE_MODE=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_PRIVACY_TIER=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_EXPORT_DIR=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_SANITIZED_EXPORT=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_SKILL_PATH=.*' "$FRICTION_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_CONTEXT_PATH=.*' "$FRICTION_TASK_DIR/SESSION.txt"
 
 [ -f "$FRICTION_TASK_DIR/task.json" ]
-[ -f "$FRICTION_TASK_DIR/events.jsonl" ]
-[ "$(wc -l <"$FRICTION_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 0 ]
-[ -f "$FRICTION_TASK_DIR/incidents.json" ]
-[ -d "$FRICTION_TASK_DIR/exports" ]
+[ ! -f "$FRICTION_TASK_DIR/events.jsonl" ]
+[ ! -f "$FRICTION_TASK_DIR/incidents.json" ]
+[ ! -d "$FRICTION_TASK_DIR/exports" ]
 
 SKILL_SURFACE_OUTPUT=$(sh "$ROOT/scripts/categorize.sh" \
   --instruction-source 'SKILL.md:12' \
@@ -415,7 +502,9 @@ printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'mode=missing'
 printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'run_effect=blocked'
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$FRICTION_LOG_FILE" \
+  --task-dir "$FRICTION_TASK_DIR" \
+  --agent "$MULTILINE_AGENT" \
+  --role "$MULTILINE_ROLE" \
   --title "Multiline slug test" \
   --instruction-source "test" \
   --instruction-text "Ensure multiline task metadata normalizes cleanly." \
@@ -423,6 +512,10 @@ printf '%s\n' "$MISSING_OUTPUT" | grep -qx 'run_effect=blocked'
   --expected-outcome "The generated task and log paths remain single-line and usable." \
   --actual-outcome "The log file is writable and the task directory exists." \
   --interpretation "Slug generation should normalize embedded newlines before building paths."
+MULTILINE_LOG=$(find "$FRICTION_TASK_DIR" -type f -name '*.md' ! -name 'INDEX.md' | head -n 1)
+[ -f "$MULTILINE_LOG" ]
+MULTILINE_DESCRIPTOR=${MULTILINE_LOG%.md}.descriptor.json
+[ -f "$MULTILINE_DESCRIPTOR" ]
 
 SPACE_BASE_DIR=$(mktemp -d "/tmp/agent friction spaced.XXXXXX")
 eval "$(FRICTION_BASE_DIR="$SPACE_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -431,12 +524,12 @@ eval "$(FRICTION_BASE_DIR="$SPACE_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --agent orchestrator \
   --skill-path "$ROOT")"
 
-SPACE_LOG_ONE=$FRICTION_LOG_FILE
 SPACE_TASK_DIR=$FRICTION_TASK_DIR
 SPACE_INDEX=$FRICTION_INDEX_FILE
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$SPACE_LOG_ONE" \
+  --task-dir "$SPACE_TASK_DIR" \
+  --agent orchestrator \
   --title "Spaced path first entry" \
   --instruction-source "test" \
   --instruction-text "Ensure build-index handles directories with spaces." \
@@ -452,10 +545,10 @@ eval "$(FRICTION_BASE_DIR="$SPACE_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --role spaced \
   --skill-path "$ROOT")"
 
-SPACE_LOG_TWO=$FRICTION_LOG_FILE
-
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$SPACE_LOG_TWO" \
+  --task-dir "$SPACE_TASK_DIR" \
+  --agent subagent \
+  --role spaced \
   --title "Spaced path second entry" \
   --instruction-source "test" \
   --instruction-text "Create a second log so build-index must traverse multiple files." \
@@ -465,6 +558,8 @@ SPACE_LOG_TWO=$FRICTION_LOG_FILE
   --interpretation "Iteration over log files must preserve spaces in paths."
 
 "$ROOT/scripts/build-index.sh" --task-dir "$SPACE_TASK_DIR" >/dev/null
+SPACE_LOG_ONE=$(find_agent_log "$SPACE_TASK_DIR" "orchestrator")
+SPACE_LOG_TWO=$(find_agent_log "$SPACE_TASK_DIR" "subagent (spaced)")
 
 CONCURRENT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-concurrent.XXXXXX")
 eval "$(FRICTION_BASE_DIR="$CONCURRENT_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -473,7 +568,6 @@ eval "$(FRICTION_BASE_DIR="$CONCURRENT_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --agent orchestrator \
   --skill-path "$ROOT")"
 
-CONCURRENT_LOG_ONE=$FRICTION_LOG_FILE
 CONCURRENT_TASK_DIR=$FRICTION_TASK_DIR
 CONCURRENT_INDEX=$FRICTION_INDEX_FILE
 
@@ -484,10 +578,9 @@ eval "$(FRICTION_BASE_DIR="$CONCURRENT_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --role parallel \
   --skill-path "$ROOT")"
 
-CONCURRENT_LOG_TWO=$FRICTION_LOG_FILE
-
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$CONCURRENT_LOG_ONE" \
+  --task-dir "$CONCURRENT_TASK_DIR" \
+  --agent orchestrator \
   --title "Concurrent log one entry" \
   --instruction-source "test" \
   --instruction-text "Record the first concurrent entry." \
@@ -498,7 +591,9 @@ CONCURRENT_LOG_TWO=$FRICTION_LOG_FILE
 pid_one=$!
 
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$CONCURRENT_LOG_TWO" \
+  --task-dir "$CONCURRENT_TASK_DIR" \
+  --agent subagent \
+  --role parallel \
   --title "Concurrent log two entry" \
   --instruction-source "test" \
   --instruction-text "Record the second concurrent entry." \
@@ -511,6 +606,8 @@ pid_two=$!
 wait "$pid_one"
 wait "$pid_two"
 "$ROOT/scripts/build-index.sh" --task-dir "$CONCURRENT_TASK_DIR" >/dev/null
+CONCURRENT_LOG_ONE=$(find_agent_log "$CONCURRENT_TASK_DIR" "orchestrator")
+CONCURRENT_LOG_TWO=$(find_agent_log "$CONCURRENT_TASK_DIR" "subagent (parallel)")
 
 [ -f "$ORCH_LOG" ]
 [ -f "$SUB_LOG" ]
@@ -555,15 +652,9 @@ SPACE_SUBAGENT_LINE=$(grep -n 'subagent-spaced' "$SPACE_INDEX" | cut -d: -f1)
 [ -n "$SPACE_ORCH_LINE" ]
 [ -n "$SPACE_SUBAGENT_LINE" ]
 [ "$SPACE_ORCH_LINE" -lt "$SPACE_SUBAGENT_LINE" ]
-grep -q '\*\*Log files:\*\* 2' "$CONCURRENT_INDEX"
-grep -q '\*\*Entries:\*\* 2' "$CONCURRENT_INDEX"
+[ "$(wc -l <"$CONCURRENT_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 2 ]
 grep -q 'orchestrator' "$CONCURRENT_INDEX"
 grep -q 'subagent-parallel' "$CONCURRENT_INDEX"
-CONCURRENT_ORCH_LINE=$(grep -n 'orchestrator' "$CONCURRENT_INDEX" | cut -d: -f1)
-CONCURRENT_SUBAGENT_LINE=$(grep -n 'subagent-parallel' "$CONCURRENT_INDEX" | cut -d: -f1)
-[ -n "$CONCURRENT_ORCH_LINE" ]
-[ -n "$CONCURRENT_SUBAGENT_LINE" ]
-[ "$CONCURRENT_ORCH_LINE" -lt "$CONCURRENT_SUBAGENT_LINE" ]
 
 LOCK_WAIT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-lock-wait.XXXXXX")
 eval "$(FRICTION_BASE_DIR="$LOCK_WAIT_BASE_DIR" "$ROOT/scripts/init-log.sh" \
@@ -606,9 +697,10 @@ set +e
 timeout 5 "$ROOT/scripts/build-index.sh" --task-dir "$LOCK_RECOVERY_TASK_DIR" >/dev/null 2>&1
 LOCK_RECOVERY_RC=$?
 set -e
+[ ! -d "$LOCK_RECOVERY_LOCK_DIR" ] || sleep 1
 [ "$LOCK_RECOVERY_RC" -eq 0 ]
 [ ! -d "$LOCK_RECOVERY_LOCK_DIR" ]
-[ -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
+[ ! -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
 
 mkdir -p "$LOCK_RECOVERY_LOCK_DIR"
 printf '%s\n' 'not-a-pid' >"$LOCK_RECOVERY_LOCK_DIR/pid"
@@ -616,9 +708,10 @@ set +e
 timeout 5 "$ROOT/scripts/build-index.sh" --task-dir "$LOCK_RECOVERY_TASK_DIR" >/dev/null 2>&1
 LOCK_RECOVERY_INVALID_RC=$?
 set -e
+[ ! -d "$LOCK_RECOVERY_LOCK_DIR" ] || sleep 1
 [ "$LOCK_RECOVERY_INVALID_RC" -eq 0 ]
 [ ! -d "$LOCK_RECOVERY_LOCK_DIR" ]
-[ -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
+[ ! -f "$LOCK_RECOVERY_TASK_DIR/INDEX.md" ]
 
 grep -q '^\*\*Task summary:\*\*$' "$MULTILINE_INDEX"
 grep -q '^> Multiline task summary$' "$MULTILINE_INDEX"
@@ -643,7 +736,7 @@ fi
 # ── Auto-init: report-friction.sh without prior init-log.sh ──────────
 AUTO_INIT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-auto-init.XXXXXX")
 
-FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
+FRICTION_BASE_DIR= FRICTION_TASK_DIR= FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
   --task-summary "Auto-init smoke test" \
   --agent orchestrator \
   --skill-path "$ROOT" \
@@ -664,7 +757,7 @@ AUTO_INIT_TASK_DIR=$(find "$AUTO_INIT_BASE_DIR" -maxdepth 1 -type d ! -name "$(b
 [ "$(wc -l <"$AUTO_INIT_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
 
 # Second auto-init call should reuse the same session
-FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
+FRICTION_BASE_DIR= FRICTION_TASK_DIR= FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
   --task-summary "Auto-init smoke test" \
   --agent subagent \
   --role research \
@@ -693,7 +786,7 @@ eval "$(FRICTION_BASE_DIR="$ENV_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --agent orchestrator \
   --skill-path "$ROOT")"
 ENV_ORCH_TASK_ID=$FRICTION_TASK_ID
-ENV_ORCH_LOG=$FRICTION_LOG_FILE
+ENV_TASK_DIR=$FRICTION_TASK_DIR
 
 # Subagent: inherits FRICTION_TASK_ID but NOT FRICTION_LOG_FILE (A4 fix)
 # It should join the same session via task ID but get its own log file
@@ -713,6 +806,8 @@ FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
 # Verify: same task directory, but a new log file (not the orchestrator's)
 [ -f "$ENV_BASE_DIR/$ENV_ORCH_TASK_ID/events.jsonl" ]
 [ "$(wc -l <"$ENV_BASE_DIR/$ENV_ORCH_TASK_ID/events.jsonl" | tr -d ' ')" -eq 1 ]
+ENV_SUB_LOG=$(find_agent_log "$ENV_TASK_DIR" "subagent")
+[ -f "$ENV_SUB_LOG" ]
 # Verify FRICTION_LOG_FILE is NOT exported (agent-specific, not inherited)
 env_exports=$(FRICTION_BASE_DIR="$ENV_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "Export check" \
@@ -756,25 +851,20 @@ E2E_ORCH_LOG=$FRICTION_LOG_FILE
 E2E_TASK_DIR=$FRICTION_TASK_DIR
 E2E_INDEX=$FRICTION_INDEX_FILE
 
-# All v2 artifacts should exist after init.
-[ -d "$E2E_TASK_DIR/exports" ]
+# Init is manifest-only.
+[ ! -d "$E2E_TASK_DIR/exports" ]
 [ -f "$E2E_TASK_DIR/task.json" ]
-[ -f "$E2E_TASK_DIR/events.jsonl" ]
-[ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 0 ]
-[ -f "$E2E_TASK_DIR/incidents.json" ]
-[ -f "$FRICTION_TASK_DESCRIPTOR" ]
-[ "$(dirname "$FRICTION_TASK_DESCRIPTOR")" = "$(dirname "$E2E_ORCH_LOG")" ]
-[ "$FRICTION_TASK_DESCRIPTOR" != "$E2E_TASK_DIR/TASK_DESCRIPTOR.json" ]
+[ ! -f "$E2E_TASK_DIR/events.jsonl" ]
+[ ! -f "$E2E_TASK_DIR/incidents.json" ]
+[ -z "$FRICTION_TASK_DESCRIPTOR" ]
 grep -q '"storage_mode":"artifact"' "$E2E_TASK_DIR/task.json"
-grep -q '\*\*Schema version:\*\* 2.0.0' "$E2E_ORCH_LOG"
-grep -q '# Friction Evidence Log: ci-investigation' "$E2E_ORCH_LOG"
-grep -q '\*\*Capture mode:\*\* threshold' "$E2E_ORCH_LOG"
-grep -q '\*\*Privacy tier:\*\* shared' "$E2E_ORCH_LOG"
+grep -q '"artifacts_materialized":false' "$E2E_TASK_DIR/task.json"
 
 # ── Step 2: Orch reports a blocked missing-script event ────────────
 # Blocked events must survive threshold capture mode (first-time but blocked).
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$E2E_ORCH_LOG" \
+  --task-dir "$E2E_TASK_DIR" \
+  --agent orchestrator \
   --title "Referenced CI check script does not exist" \
   --instruction-source "AGENTS.md:18" \
   --instruction-text "Run scripts/ci-check.sh to see the current build status." \
@@ -782,6 +872,8 @@ grep -q '\*\*Privacy tier:\*\* shared' "$E2E_ORCH_LOG"
   --expected-outcome "The script exists and produces build status output." \
   --actual-outcome "scripts/ci-check.sh was not found. The scripts/ directory contains only build.sh and test.sh." \
   --interpretation "AGENTS.md references a script that does not exist in the repository."
+
+E2E_ORCH_LOG=$(find_agent_log "$E2E_TASK_DIR" "orchestrator")
 
 # Event must be recorded (blocked survives threshold).
 [ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
@@ -805,24 +897,19 @@ eval "$(FRICTION_BASE_DIR="$E2E_BASE" "$ROOT/scripts/init-log.sh" \
   --capture-mode threshold \
   --privacy-tier shared)"
 
-E2E_SUB_LOG=$FRICTION_LOG_FILE
-E2E_SUB_DESCRIPTOR=$FRICTION_TASK_DESCRIPTOR
-
 # Subagent init must NOT wipe the orchestrator's events.
 [ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq "$E2E_ORCH_EVENT_COUNT" ]
 # task.json must not be overwritten (still from first init).
 grep -q '"task_id":"ci-investigation"' "$E2E_TASK_DIR/task.json"
-# But a new log file should exist for the subagent.
-[ "$E2E_SUB_LOG" != "$E2E_ORCH_LOG" ]
-[ -f "$E2E_SUB_LOG" ]
-[ -f "$E2E_SUB_DESCRIPTOR" ]
-[ "$(dirname "$E2E_SUB_DESCRIPTOR")" = "$(dirname "$E2E_SUB_LOG")" ]
-[ "$E2E_SUB_DESCRIPTOR" != "$E2E_SUB_LOG" ]
-grep -q '# Friction Evidence Log: ci-investigation' "$E2E_SUB_LOG"
+# But no subagent log should exist until the subagent records real friction.
+[ -z "$FRICTION_LOG_FILE" ]
+[ -z "$FRICTION_TASK_DESCRIPTOR" ]
 
 # ── Step 4: Sub reports an MCP tool gap with workaround ────────────
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$E2E_SUB_LOG" \
+  --task-dir "$E2E_TASK_DIR" \
+  --agent subagent \
+  --role container-inspection \
   --title "MCP docker_inspect omits healthcheck data" \
   --instruction-source "MCP tool description for docker_inspect" \
   --instruction-text "Inspect a running container and return its full configuration." \
@@ -834,6 +921,8 @@ grep -q '# Friction Evidence Log: ci-investigation' "$E2E_SUB_LOG"
   --workaround-note "Ran docker inspect directly via CLI" \
   --retries-lost 2 \
   --minutes-lost 8
+E2E_SUB_LOG=$(find_agent_log "$E2E_TASK_DIR" "subagent (container-inspection)")
+E2E_SUB_DESCRIPTOR=${E2E_SUB_LOG%.md}.descriptor.json
 
 # Global numbering: this is Event 2 (orch had Event 1).
 grep -q '## Event 2: MCP docker_inspect omits healthcheck data' "$E2E_SUB_LOG"
@@ -850,7 +939,9 @@ grep -q '"incident_status":"mitigated"' "$E2E_TASK_DIR/events.jsonl"
 
 # ── Step 5: Sub reports rate limit with leaked token (sanitization) ─
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$E2E_SUB_LOG" \
+  --task-dir "$E2E_TASK_DIR" \
+  --agent subagent \
+  --role container-inspection \
   --title "GitHub API rate limit" \
   --instruction-source "CI pipeline step fetch-pr-status" \
   --instruction-text "Query the GitHub API for PR merge status." \
@@ -885,7 +976,9 @@ grep -q '\*\*Derived category:\*\* external-service/other/blocked' "$E2E_SUB_LOG
 
 # ── Step 6: Sub encounters a trivial issue → threshold skips it ────
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$E2E_SUB_LOG" \
+  --task-dir "$E2E_TASK_DIR" \
+  --agent subagent \
+  --role container-inspection \
   --title "Minor log noise from verbose output" \
   --instruction-source "Container log stream" \
   --instruction-text "Stream container logs for the build step." \
@@ -907,7 +1000,9 @@ fi
 
 # ── Step 7: Sub forces a low-severity event through ────────────────
 "$ROOT/scripts/report-friction.sh" \
-  --log-file "$E2E_SUB_LOG" \
+  --task-dir "$E2E_TASK_DIR" \
+  --agent subagent \
+  --role container-inspection \
   --title "Forced: container image uses outdated base" \
   --instruction-source "Dockerfile:1" \
   --instruction-text "FROM ubuntu:22.04" \
@@ -953,7 +1048,7 @@ grep -q 'subagent-container-inspection' "$E2E_INDEX"
 [ "$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 4 ]
 # Validate required fields exist on every line (file-level grep, no per-line forks).
 E2E_EV_LINES=$(wc -l <"$E2E_TASK_DIR/events.jsonl" | tr -d ' ')
-[ "$(grep -c '"schema_version":"2.0.0"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
+[ "$(grep -c '"schema_version":"2.1.0"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
 [ "$(grep -c '"taxonomy_version":"2.0.0"' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
 [ "$(grep -c '"event_id":"evt-' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
 [ "$(grep -c '"incident_id":"inc-' "$E2E_TASK_DIR/events.jsonl")" -eq "$E2E_EV_LINES" ]
@@ -992,11 +1087,13 @@ E2E_INC_COUNT=$(sed -n 's/.*"incident_count":\([0-9][0-9]*\).*/\1/p' "$E2E_INC_F
 [ "$E2E_INC_COUNT" -gt 0 ]
 
 # --- SESSION.txt carries only the 13 task-scoped v2 keys ---
-[ "$(wc -l <"$E2E_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 13 ]
+[ "$(wc -l <"$E2E_TASK_DIR/SESSION.txt" | tr -d ' ')" -eq 15 ]
 grep -qx 'FRICTION_STORAGE_MODE=artifact' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_CAPTURE_MODE=threshold' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_PRIVACY_TIER=shared' "$E2E_TASK_DIR/SESSION.txt"
 grep -qx 'FRICTION_EVENTS_FILE=.*events.jsonl' "$E2E_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_SKILL_PATH=.*' "$E2E_TASK_DIR/SESSION.txt"
+grep -qx 'FRICTION_CONTEXT_PATH=.*' "$E2E_TASK_DIR/SESSION.txt"
 if grep -q '^FRICTION_TASK_DESCRIPTOR=' "$E2E_TASK_DIR/SESSION.txt"; then
   printf '%s\n' 'smoke-posix: e2e: SESSION.txt unexpectedly contains FRICTION_TASK_DESCRIPTOR' >&2
   exit 1

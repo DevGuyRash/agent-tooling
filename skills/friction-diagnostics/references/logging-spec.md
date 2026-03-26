@@ -94,8 +94,9 @@ Windows:
 ```
 
 A single top-level task gets one task directory. Different agents can create separate log files inside that task directory.
-A per-agent descriptor JSON lives next to each agent log file and is surfaced as `FRICTION_TASK_DESCRIPTOR` during that agent's init. Task-scoped metadata in `SESSION.txt` intentionally excludes that pointer.
-`events.jsonl` is a shared task-scoped artifact and may be empty immediately after init, before the first recorded event.
+`init-log.*` creates only the manifest files: `SESSION.txt`, `TASK_SUMMARY.txt`, and `task.json`.
+Per-agent descriptors, markdown logs, `events.jsonl`, `incidents.json`, `INDEX.md`, and `exports/` do not exist before the first recorded event. Those artifacts are materialized by `report-friction.*` when the first real event is appended.
+A per-agent descriptor JSON lives next to each agent log file once that agent has reported at least one event. Task-scoped metadata in `SESSION.txt` intentionally excludes that pointer.
 
 Task IDs and log filename slugs are filesystem-safe identifiers, not lossless
 display strings. Overlong task summaries, explicit task IDs, agent names, or
@@ -137,7 +138,7 @@ Single-line values are written inline. Multi-line values may be blockquoted so t
 - **Run effect:** `blocked` | `degraded` | `noisy` | `continued`.
 - **Guidance quality:** `clear` | `ambiguous` | `misleading` | `not-applicable`.
 
-Each event is also appended to `events.jsonl` as a structured JSON line for machine consumption. The markdown log is the human-readable view; `events.jsonl` is the structured view.
+Each event is also appended to `events.jsonl` as a structured JSON line for machine consumption. The markdown log is the human-readable view; `events.jsonl` is the structured view. Text fields are stored as plain sanitized JSON strings, not as Base64-encoded `*_b64` fields.
 
 **Workaround fields:** The report scripts accept `--workaround-used` (boolean) and `--workaround-note` (text) to record whether and how the agent worked around the friction.
 

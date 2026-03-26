@@ -37,8 +37,8 @@ There is no threshold for "important enough to log." If it went wrong, log it. B
 
 ## Available scripts
 
-- `<skills-file-root>/scripts/init-log.sh` / `<skills-file-root>/scripts/init-log.ps1` — create the task directory plus the current agent's log file and adjacent descriptor.
-- `<skills-file-root>/scripts/report-friction.sh` / `<skills-file-root>/scripts/report-friction.ps1` — append one structured entry with auto-categorization.
+- `<skills-file-root>/scripts/init-log.sh` / `<skills-file-root>/scripts/init-log.ps1` — create a manifest-only task directory (`SESSION.txt`, `TASK_SUMMARY.txt`, `task.json`) without creating logs, descriptors, index files, or event artifacts.
+- `<skills-file-root>/scripts/report-friction.sh` / `<skills-file-root>/scripts/report-friction.ps1` — append one structured entry with auto-categorization, materializing per-agent and shared artifacts on the first real event.
 - `<skills-file-root>/scripts/categorize.sh` / `<skills-file-root>/scripts/categorize.ps1` — classify an event as `surface/mode/run_effect`.
 - `<skills-file-root>/scripts/build-index.sh` / `<skills-file-root>/scripts/build-index.ps1` — rebuild `INDEX.md` for a task directory.
 
@@ -48,23 +48,31 @@ WHEN any error, failure, bug, test failure, compilation error, runtime exception
 
 You have two options for logging friction:
 
-**Option A — Single-command (preferred).** Call `report-friction.sh` directly with `--task-summary`, `--agent`, and `--skill-path`. The script auto-initializes a session on first call, and subsequent agents with the same task summary automatically join the existing session:
+**Option A — Single-command (preferred).** Call `report-friction.sh` directly with `--task-summary`, `--agent`, `--skill-path`, and `--from-json`. The script auto-initializes a session on first call, materializes the log artifacts on the first real event, and subsequent agents with the same task summary automatically join the existing session:
 
 ```sh
+cat <<'EOF' >/tmp/friction-event.json
+{
+  "title": "Dispatch role slug mismatch",
+  "instruction_source": "SKILL.md:160",
+  "instruction_text": "Use mpcr protocol dispatch --role <ROLE>",
+  "action_taken": "Ran mpcr protocol dispatch --role architecture",
+  "expected_outcome": "The CLI returns the architecture prompt.",
+  "actual_outcome": "error: unknown dispatch role: architecture",
+  "interpretation": "I treated the domain table label as the CLI role slug."
+}
+EOF
+
 sh <skills-file-root>/scripts/report-friction.sh \
   --task-summary "Investigate MCP routing failures" \
   --agent orchestrator \
   --skill-path "<skills-file-root>" \
-  --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160" \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE>" \
-  --action-taken "Ran mpcr protocol dispatch --role architecture" \
-  --expected-outcome "The CLI returns the architecture prompt." \
-  --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the domain table label as the CLI role slug."
+  --from-json /tmp/friction-event.json
 ```
 
-**Option B — Explicit init.** Call `init-log.sh` first if you want to set up the session before any friction occurs (e.g. to configure `--capture-mode` or `--storage-mode`):
+The JSON payload is plain sanitized JSON text. Do not Base64-encode fields such as `title` or `instruction_text` before handing them to `--from-json`.
+
+**Option B — Explicit init.** Call `init-log.sh` first only when you need the manifest before the first friction event (for example, to pin a task dir for reuse). `init-log.sh` is manifest-only: it does not create a markdown log, descriptor, `events.jsonl`, `incidents.json`, `INDEX.md`, or `exports/` until an event is actually reported.
 
 ```sh
 eval "$(sh <skills-file-root>/scripts/init-log.sh \
@@ -73,7 +81,25 @@ eval "$(sh <skills-file-root>/scripts/init-log.sh \
   --skill-path "<skills-file-root>")"
 ```
 
-Then log friction with `--log-file "$FRICTION_LOG_FILE"` as before.
+Then report friction against the task dir:
+
+```sh
+cat <<'EOF' >/tmp/friction-event.json
+{
+  "title": "Dispatch role slug mismatch",
+  "instruction_source": "SKILL.md:160, inside the Domain routing table",
+  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs.",
+  "action_taken": "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value.",
+  "expected_outcome": "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug.",
+  "actual_outcome": "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error or --help.",
+  "interpretation": "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
+}
+EOF
+
+sh <skills-file-root>/scripts/report-friction.sh \
+  --task-dir "$FRICTION_TASK_DIR" \
+  --from-json /tmp/friction-event.json
+```
 
 **Session reuse.** When `--task-id` is not provided, `init-log.sh` automatically discovers and reuses an existing session with the same task summary slug. This means subagents do not need explicit `--task-id` plumbing — they join the orchestrator's session automatically. Pass `--no-reuse` to force a fresh session.
 
@@ -92,15 +118,21 @@ WHEN the task ends, OR after a batch of appended entries, THEN you SHOULD refres
 ## Example append
 
 ```sh
+cat <<'EOF' >/tmp/friction-event.json
+{
+  "title": "Dispatch role slug mismatch",
+  "instruction_source": "SKILL.md:160, inside the Domain routing table",
+  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs.",
+  "action_taken": "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value.",
+  "expected_outcome": "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug.",
+  "actual_outcome": "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error or --help.",
+  "interpretation": "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
+}
+EOF
+
 sh <skills-file-root>/scripts/report-friction.sh \
-  --log-file "$FRICTION_LOG_FILE" \
-  --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160, inside the Domain routing table" \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the domain-specific prompt. The table above lists domains: Architecture, Security, Performance. No column distinguishes labels from CLI slugs." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture. I picked the label Architecture from the table, lowercased it, and passed it as the ROLE value." \
-  --expected-outcome "The CLI prints the architecture domain prompt. The instruction says --role ROLE with the table labels listed directly above, so I expected the label to be the slug." \
-  --actual-outcome "error: unknown dispatch role: architecture — exit code 1. The CLI does not list valid slugs in the error or --help." \
-  --interpretation "I understood ROLE to mean the domain labels from the table directly above the instruction, because nothing in SKILL.md distinguishes labels from slugs. The phrasing Use --role ROLE immediately follows the table, which made the labels look like the intended values."
+  --task-dir "$FRICTION_TASK_DIR" \
+  --from-json /tmp/friction-event.json
 ```
 
 The Interpretation field records what you believed the instruction meant and what language led you there. It is a witness statement about your reading, not an analysis of the root cause.
@@ -117,8 +149,10 @@ The Interpretation field records what you believed the instruction meant and wha
 WHEN friction was encountered during a task THEN you SHALL leave behind:
 
 - A task directory under the system temp root (created only when friction is logged).
+- A manifest (`SESSION.txt`, `TASK_SUMMARY.txt`, `task.json`) if `init-log.*` was called before the first event.
 - Log files for agents that reported friction (not for agents with zero friction).
 - A descriptor next to each reporting agent log file.
+- Shared artifacts such as `events.jsonl`, `incidents.json`, `INDEX.md`, and `exports/` only after at least one event has been recorded.
 - Entries that capture instruction source, action, expected outcome, actual outcome, and interpretation.
 - No fix proposals inside log entries.
 - A current `INDEX.md` file for later remediation.
