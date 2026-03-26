@@ -4,9 +4,9 @@
 
 ```markdown
 ## Friction diagnostics
-You SHALL initialize the `friction-diagnostics` skill at the start of every task, before substantive work begins. This is mandatory, not conditional.
 WHEN any error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind occurs THEN you SHALL immediately log it using the `friction-diagnostics` skill. There is no threshold for "important enough to log" — if it went wrong, log it.
 WHEN the same issue repeats without materially new evidence, THEN you SHALL NOT create a duplicate entry.
+WHEN no friction is encountered THEN you SHALL NOT initialize a friction session.
 ```
 
 ## Unix-like bootstrap
@@ -54,35 +54,38 @@ When you need multiline-safe reuse across isolated PowerShell invocations, read 
 
 ## Subagent pattern
 
-Orchestrator:
+With session auto-discovery, subagents no longer need explicit `--task-id` plumbing. When a subagent uses the same task summary, it automatically finds and joins the orchestrator's session:
+
+Orchestrator logs friction:
 
 ```sh
-eval "$(sh scripts/init-log.sh \
-  --task-summary "Investigate build-routing failures — deploy step exits 1 after PR merge with no diagnostic output" \
+sh scripts/report-friction.sh \
+  --task-summary "Investigate build-routing failures" \
   --agent orchestrator \
-  --skill-path "$(pwd)")"
-task_id=$FRICTION_TASK_ID
-task_dir=$FRICTION_TASK_DIR
-task_summary_file=$FRICTION_TASK_SUMMARY_FILE
-base_dir=$FRICTION_BASE_DIR
+  --skill-path "$(pwd)" \
+  --title "Referenced CI check script does not exist" \
+  --instruction-source "AGENTS.md:18" \
+  ...
 ```
 
-Subagent:
+Subagent logs friction (auto-joins the same session):
 
 ```sh
-task_summary=$(cat "$task_summary_file")
-
-eval "$(sh scripts/init-log.sh \
-  --task-id "$task_id" \
-  --task-summary "$task_summary" \
+sh scripts/report-friction.sh \
+  --task-summary "Investigate build-routing failures" \
   --agent subagent \
   --role research \
-  --skill-path "$(pwd)")"
+  --skill-path "$(pwd)" \
+  --title "MCP docker_inspect omits healthcheck data" \
+  --instruction-source "MCP tool description for docker_inspect" \
+  ...
 ```
 
-Pass `task_id`, `task_dir`, and `task_summary_file` explicitly in the subagent launch payload. Separate agent invocations usually run in isolated processes, so do not rely on exported shell variables surviving the handoff.
+Both agents write to the same task directory. Each gets its own log file and descriptor. Event numbering is global across the shared `events.jsonl`.
 
-This creates a second log file in the same task directory, plus a second per-agent descriptor next to that log, rather than overwriting the orchestrator artifacts. Appending still only requires `--log-file`; you do not need an extra descriptor step.
+For explicit init (e.g. to set `--capture-mode threshold`), the orchestrator can still call `init-log.sh` first. Subagents will auto-discover and join that session.
+
+**Legacy pattern**: Passing `--task-id` explicitly still works for cases where you need deterministic session naming or are joining from a different base directory.
 
 ## Refreshing the summary
 

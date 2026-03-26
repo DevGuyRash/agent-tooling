@@ -49,11 +49,23 @@ Optional context:
   --tags CSV
   --quick
   --force
+
+Auto-init (used when --log-file is not set):
+  --task-summary TEXT    Passed to init-log.sh for auto-initialization.
+  --agent TEXT           Passed to init-log.sh. Defaults to orchestrator.
+  --skill-path TEXT      Passed to init-log.sh.
+  --role TEXT            Passed to init-log.sh.
+  --base-dir PATH        Passed to init-log.sh.
   --help
 EOF
 }
 
 log_file=${FRICTION_LOG_FILE-}
+auto_task_summary=
+auto_agent=orchestrator
+auto_skill_path=
+auto_role=
+auto_base_dir=
 title=
 instruction_source=
 instruction_text=
@@ -120,10 +132,30 @@ while [ $# -gt 0 ]; do
     --tags) tags=${2-}; shift 2 ;;
     --quick) quick_capture=true; shift ;;
     --force) force_capture=true; shift ;;
+    --task-summary) auto_task_summary=${2-}; shift 2 ;;
+    --agent) auto_agent=${2-}; shift 2 ;;
+    --skill-path) auto_skill_path=${2-}; shift 2 ;;
+    --role) auto_role=${2-}; shift 2 ;;
+    --base-dir) auto_base_dir=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
+
+# Auto-init: if no log file is set, bootstrap a session via init-log.sh
+if [ -z "$log_file" ]; then
+  [ -n "$auto_task_summary" ] || die "--log-file or --task-summary is required"
+  [ -n "$auto_skill_path" ] || die "--skill-path is required for auto-init"
+  set -- --task-summary "$auto_task_summary" --agent "$auto_agent" --skill-path "$auto_skill_path"
+  if [ -n "$auto_role" ]; then
+    set -- "$@" --role "$auto_role"
+  fi
+  if [ -n "$auto_base_dir" ]; then
+    set -- "$@" --base-dir "$auto_base_dir"
+  fi
+  eval "$(sh "$SCRIPT_DIR/init-log.sh" "$@")"
+  log_file=$FRICTION_LOG_FILE
+fi
 
 [ -n "$log_file" ] || die "--log-file is required"
 [ -f "$log_file" ] || die "Log file not found: $log_file"

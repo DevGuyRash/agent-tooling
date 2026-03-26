@@ -25,15 +25,14 @@ This skill creates durable friction logs that a later agent can inspect and fix 
 
 ## When to use this skill
 
-You SHALL use this skill for every task. Initialize it at the start of the task, before substantive work begins. Every error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind gets logged here.
+You SHALL use this skill for every task where friction occurs. Every error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind gets logged here.
 
-- Every top-level task — initialize once at the start.
-- Every subagent — re-initialize with the same task ID to get a separate log file.
 - Every error or unexpected outcome — log it immediately when it happens.
 - Every code bug, test failure, build failure, or runtime crash — log it.
 - Every instruction that was wrong, ambiguous, or misleading — log it.
+- Subagents that encounter friction — they auto-join the orchestrator's session.
 
-There is no threshold for "important enough to log." If it went wrong, log it.
+There is no threshold for "important enough to log." If it went wrong, log it. But do not initialize a session unless you have something to log.
 
 ## Available scripts
 
@@ -44,24 +43,38 @@ There is no threshold for "important enough to log." If it went wrong, log it.
 
 ## Workflow
 
-You SHALL initialize a task log at the start of every task, before substantive work begins. This is not optional.
+WHEN any error, failure, bug, test failure, compilation error, runtime exception, unexpected outcome, or friction of any kind occurs THEN you SHALL immediately log it. Do not skip logging because the issue seems minor or is "just a code bug" — log everything.
 
-WHEN you are on Linux or macOS THEN you SHALL run:
+You have two options for logging friction:
+
+**Option A — Single-command (preferred).** Call `report-friction.sh` directly with `--task-summary`, `--agent`, and `--skill-path`. The script auto-initializes a session on first call, and subsequent agents with the same task summary automatically join the existing session:
+
+```sh
+sh <skills-file-root>/scripts/report-friction.sh \
+  --task-summary "Investigate MCP routing failures" \
+  --agent orchestrator \
+  --skill-path "<skills-file-root>" \
+  --title "Dispatch role slug mismatch" \
+  --instruction-source "SKILL.md:160" \
+  --instruction-text "Use mpcr protocol dispatch --role <ROLE>" \
+  --action-taken "Ran mpcr protocol dispatch --role architecture" \
+  --expected-outcome "The CLI returns the architecture prompt." \
+  --actual-outcome "error: unknown dispatch role: architecture" \
+  --interpretation "I treated the domain table label as the CLI role slug."
+```
+
+**Option B — Explicit init.** Call `init-log.sh` first if you want to set up the session before any friction occurs (e.g. to configure `--capture-mode` or `--storage-mode`):
 
 ```sh
 eval "$(sh <skills-file-root>/scripts/init-log.sh \
-  --task-summary "Investigate MCP routing failures — inspect_build returns stale metadata and dispatch roles do not resolve" \
+  --task-summary "Investigate MCP routing failures" \
   --agent orchestrator \
   --skill-path "<skills-file-root>")"
 ```
 
-WHEN you are on Windows THEN you SHALL run:
+Then log friction with `--log-file "$FRICTION_LOG_FILE"` as before.
 
-```powershell
-& "<skills-file-root>/scripts/init-log.ps1" -TaskSummary "Investigate MCP routing failures — inspect_build returns stale metadata and dispatch roles do not resolve" -Agent orchestrator -SkillPath "<skills-file-root>"
-```
-
-WHEN any error, failure, bug, test failure, compilation error, runtime exception, unexpected outcome, or friction of any kind occurs THEN you SHALL immediately append one entry with `<skills-file-root>/scripts/report-friction.sh` or `<skills-file-root>/scripts/report-friction.ps1`. Do not skip logging because the issue seems minor or is "just a code bug" — log everything.
+**Session reuse.** When `--task-id` is not provided, `init-log.sh` automatically discovers and reuses an existing session with the same task summary slug. This means subagents do not need explicit `--task-id` plumbing — they join the orchestrator's session automatically. Pass `--no-reuse` to force a fresh session.
 
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
 
@@ -71,7 +84,7 @@ WHEN overriding classification axes THEN you SHALL use only the values defined i
 
 WHEN writing the Interpretation field THEN you SHALL describe what you understood the instruction or context to mean, what specific language led to that reading, and why it was a reasonable reading at the time. You SHALL NOT use the Interpretation field to diagnose the root cause, propose a fix, or editorialize.
 
-WHEN a subagent participates THEN you SHALL reuse the same task ID and task directory values, but initialize a separate log file for that agent. That init also creates the agent's descriptor next to the log and returns it as `FRICTION_TASK_DESCRIPTOR`. Re-pass task-scoped values explicitly via `--task-id` or read them from `SESSION.txt`; do not assume exported environment variables persist across separate agent commands.
+WHEN a subagent participates THEN it automatically joins the orchestrator's session via slug-based discovery. Each subagent gets its own log file and descriptor within the shared task directory. You do not need to pass `--task-id` explicitly — session reuse is automatic.
 
 WHEN the task ends, OR after a batch of appended entries, THEN you SHOULD refresh `INDEX.md` with `<skills-file-root>/scripts/build-index.sh` or `<skills-file-root>/scripts/build-index.ps1`.
 
@@ -100,11 +113,13 @@ The Interpretation field records what you believed the instruction meant and wha
 
 ## Definition of done
 
-WHEN this skill is used for a task THEN you SHALL leave behind:
+WHEN friction was encountered during a task THEN you SHALL leave behind:
 
-- A task directory under the system temp root.
-- At least one log file for each reporting agent.
+- A task directory under the system temp root (created only when friction is logged).
+- Log files for agents that reported friction (not for agents with zero friction).
 - A descriptor next to each reporting agent log file.
 - Entries that capture instruction source, action, expected outcome, actual outcome, and interpretation.
 - No fix proposals inside log entries.
 - A current `INDEX.md` file for later remediation.
+
+WHEN no friction was encountered THEN no task directory or files SHALL be created.

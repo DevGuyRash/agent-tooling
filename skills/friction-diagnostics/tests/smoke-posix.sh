@@ -4,6 +4,8 @@ set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 BASE_DIR=/tmp/agent-friction-smoke-$$
 AUTO_ID_BASE_DIR=
+NO_REUSE_BASE_DIR=
+AUTO_INIT_BASE_DIR=
 FAKE_DATE_DIR=
 SPACE_BASE_DIR=
 CONCURRENT_BASE_DIR=
@@ -18,7 +20,7 @@ FAIL_REPORT_STDOUT=
 FAIL_REPORT_STDERR=
 NO_HASH_STDOUT=
 NO_HASH_STDERR=
-trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${LOCK_RECOVERY_BASE_DIR:-}" "${MULTILINE_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
+trap 'rm -rf "$BASE_DIR" "${AUTO_ID_BASE_DIR:-}" "${NO_REUSE_BASE_DIR:-}" "${AUTO_INIT_BASE_DIR:-}" "${FAKE_DATE_DIR:-}" "${SPACE_BASE_DIR:-}" "${CONCURRENT_BASE_DIR:-}" "${LOCK_WAIT_BASE_DIR:-}" "${LOCK_RECOVERY_BASE_DIR:-}" "${MULTILINE_BASE_DIR:-}" "${FAIL_BASE_DIR:-}" "${FAIL_FAKE_BIN:-}"; rm -f "${FAIL_INIT_STDOUT:-}" "${FAIL_INIT_STDERR:-}" "${FAIL_REPORT_STDOUT:-}" "${FAIL_REPORT_STDERR:-}" "${NO_HASH_STDOUT:-}" "${NO_HASH_STDERR:-}"' EXIT INT TERM
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -60,6 +62,7 @@ NAME_MAX_VALUE=$(getconf NAME_MAX "$AUTO_ID_BASE_DIR" 2>/dev/null || printf '%s\
 } >"$FAKE_DATE_DIR/date"
 chmod +x "$FAKE_DATE_DIR/date"
 
+# ── Session reuse: same summary → same session ──────────────────────
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "Review the current code changes" \
   --agent orchestrator \
@@ -71,18 +74,39 @@ AUTO_INDEX_ONE=$FRICTION_INDEX_FILE
 
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "Review the current code changes" \
-  --agent orchestrator \
+  --agent subagent \
   --skill-path "$ROOT")"
 AUTO_ID_TWO=$FRICTION_TASK_ID
 AUTO_DIR_TWO=$FRICTION_TASK_DIR
 AUTO_LOG_TWO=$FRICTION_LOG_FILE
 AUTO_INDEX_TWO=$FRICTION_INDEX_FILE
 
-[ "$AUTO_ID_ONE" != "$AUTO_ID_TWO" ]
-[ "$AUTO_DIR_ONE" != "$AUTO_DIR_TWO" ]
+# Session reuse: same task ID and directory, but different log files
+[ "$AUTO_ID_ONE" = "$AUTO_ID_TWO" ]
+[ "$AUTO_DIR_ONE" = "$AUTO_DIR_TWO" ]
+[ "$AUTO_LOG_ONE" != "$AUTO_LOG_TWO" ]
 [ -f "$AUTO_DIR_ONE/SESSION.txt" ]
-[ -f "$AUTO_DIR_TWO/SESSION.txt" ]
 
+# ── --no-reuse: same summary → different sessions ───────────────────
+NO_REUSE_BASE_DIR=$(mktemp -d "/tmp/agent-friction-no-reuse.XXXXXX")
+
+eval "$(FRICTION_BASE_DIR="$NO_REUSE_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-summary "No reuse test" \
+  --agent orchestrator \
+  --skill-path "$ROOT" \
+  --no-reuse)"
+NO_REUSE_ID_ONE=$FRICTION_TASK_ID
+
+eval "$(FRICTION_BASE_DIR="$NO_REUSE_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-summary "No reuse test" \
+  --agent orchestrator \
+  --skill-path "$ROOT" \
+  --no-reuse)"
+NO_REUSE_ID_TWO=$FRICTION_TASK_ID
+
+[ "$NO_REUSE_ID_ONE" != "$NO_REUSE_ID_TWO" ]
+
+# ── Long task summary: reuse still works, NAME_MAX respected ─────────
 LONG_TASK_SUMMARY=$(printf 'This is a deliberately long natural language task summary %.0s' $(seq 1 20))
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "$LONG_TASK_SUMMARY" \
@@ -94,19 +118,17 @@ LONG_AUTO_LOG_ONE=$FRICTION_LOG_FILE
 
 eval "$(PATH="$FAKE_DATE_DIR:$PATH" FRICTION_BASE_DIR="$AUTO_ID_BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-summary "$LONG_TASK_SUMMARY" \
-  --agent orchestrator \
+  --agent subagent \
   --skill-path "$ROOT")"
 LONG_AUTO_ID_TWO=$FRICTION_TASK_ID
 LONG_AUTO_DIR_TWO=$FRICTION_TASK_DIR
 
-[ "$LONG_AUTO_ID_ONE" != "$LONG_AUTO_ID_TWO" ]
-[ "$LONG_AUTO_DIR_ONE" != "$LONG_AUTO_DIR_TWO" ]
+# Session reuse: same ID and directory
+[ "$LONG_AUTO_ID_ONE" = "$LONG_AUTO_ID_TWO" ]
+[ "$LONG_AUTO_DIR_ONE" = "$LONG_AUTO_DIR_TWO" ]
 [ -d "$LONG_AUTO_DIR_ONE" ]
-[ -d "$LONG_AUTO_DIR_TWO" ]
 [ -f "$LONG_AUTO_DIR_ONE/SESSION.txt" ]
-[ -f "$LONG_AUTO_DIR_TWO/SESSION.txt" ]
 [ "$(printf '%s' "$(basename "$LONG_AUTO_DIR_ONE")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
-[ "$(printf '%s' "$(basename "$LONG_AUTO_DIR_TWO")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 [ "$(printf '%s' "$(basename "$LONG_AUTO_LOG_ONE")" | wc -c | tr -d ' ')" -le "$NAME_MAX_VALUE" ]
 
 LONG_EXPLICIT_TASK_ID=$(printf 'explicit task id component %.0s' $(seq 1 20))
@@ -148,28 +170,27 @@ LONG_ROLE_LOG=$FRICTION_LOG_FILE
 
 "$ROOT/scripts/report-friction.sh" \
   --log-file "$AUTO_LOG_ONE" \
-  --title "Auto id uniqueness one" \
+  --title "Session reuse orchestrator entry" \
   --instruction-source "test" \
-  --instruction-text "Ensure auto-generated task IDs isolate unrelated runs." \
-  --action-taken "Initialized the first task with a fixed timestamp." \
-  --expected-outcome "The first task keeps its own directory." \
-  --actual-outcome "A distinct task directory was created for the first run." \
-  --interpretation "Auto-generated IDs should remain unique even with the same summary and second."
+  --instruction-text "Ensure session reuse shares the task directory." \
+  --action-taken "Initialized the first agent with a fixed timestamp." \
+  --expected-outcome "Both agents share the same task directory." \
+  --actual-outcome "The orchestrator log was created in the shared session." \
+  --interpretation "Session reuse should consolidate agents into one directory."
 
 "$ROOT/scripts/report-friction.sh" \
   --log-file "$AUTO_LOG_TWO" \
-  --title "Auto id uniqueness two" \
+  --title "Session reuse subagent entry" \
   --instruction-source "test" \
-  --instruction-text "Ensure auto-generated task IDs isolate unrelated runs." \
-  --action-taken "Initialized the second task with the same fixed timestamp." \
-  --expected-outcome "The second task keeps its own directory." \
-  --actual-outcome "A distinct task directory was created for the second run." \
-  --interpretation "A second run with identical summary text should not reuse the prior task directory."
+  --instruction-text "Ensure session reuse shares the task directory." \
+  --action-taken "Initialized the second agent in the same session." \
+  --expected-outcome "The subagent joins the orchestrator's session." \
+  --actual-outcome "The subagent log was created in the shared session." \
+  --interpretation "Subagents should auto-join the existing session via slug discovery."
 
-grep -q '\*\*Log files:\*\* 1' "$AUTO_INDEX_ONE"
-grep -q '\*\*Entries:\*\* 1' "$AUTO_INDEX_ONE"
-grep -q '\*\*Log files:\*\* 1' "$AUTO_INDEX_TWO"
-grep -q '\*\*Entries:\*\* 1' "$AUTO_INDEX_TWO"
+# Shared session: 2 log files, 2 entries in the same index
+grep -q '\*\*Log files:\*\* 2' "$AUTO_INDEX_ONE"
+grep -q '\*\*Entries:\*\* 2' "$AUTO_INDEX_ONE"
 
 eval "$(FRICTION_BASE_DIR="$BASE_DIR" "$ROOT/scripts/init-log.sh" \
   --task-id smoke-task \
@@ -617,6 +638,50 @@ then
   printf '%s\n' 'smoke-posix: concurrent rebuild left temporary files behind' >&2
   exit 1
 fi
+
+# ── Auto-init: report-friction.sh without prior init-log.sh ──────────
+AUTO_INIT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-auto-init.XXXXXX")
+
+FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
+  --task-summary "Auto-init smoke test" \
+  --agent orchestrator \
+  --skill-path "$ROOT" \
+  --base-dir "$AUTO_INIT_BASE_DIR" \
+  --title "Auto-init first entry" \
+  --instruction-source "test" \
+  --instruction-text "Verify report-friction.sh can auto-initialize a session." \
+  --action-taken "Called report-friction.sh without prior init-log.sh." \
+  --expected-outcome "A session directory is created and the entry is logged." \
+  --actual-outcome "The entry was recorded in an auto-initialized session." \
+  --interpretation "Auto-init should create the full session infrastructure on first call."
+
+# Verify the session was created
+AUTO_INIT_TASK_DIR=$(find "$AUTO_INIT_BASE_DIR" -maxdepth 1 -type d -name 'auto-init-smoke-test-*' | head -1)
+[ -n "$AUTO_INIT_TASK_DIR" ]
+[ -f "$AUTO_INIT_TASK_DIR/SESSION.txt" ]
+[ -f "$AUTO_INIT_TASK_DIR/events.jsonl" ]
+[ "$(wc -l <"$AUTO_INIT_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
+
+# Second auto-init call should reuse the same session
+FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
+  --task-summary "Auto-init smoke test" \
+  --agent subagent \
+  --role research \
+  --skill-path "$ROOT" \
+  --base-dir "$AUTO_INIT_BASE_DIR" \
+  --title "Auto-init second entry" \
+  --instruction-source "test" \
+  --instruction-text "Verify auto-init reuses the existing session." \
+  --action-taken "Called report-friction.sh a second time with the same task summary." \
+  --expected-outcome "The entry joins the existing session." \
+  --actual-outcome "The entry was recorded in the same session directory." \
+  --interpretation "Auto-init should discover and reuse the existing session."
+
+[ "$(wc -l <"$AUTO_INIT_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 2 ]
+grep -q '\*\*Log files:\*\* 2' "$AUTO_INIT_TASK_DIR/INDEX.md"
+grep -q '\*\*Entries:\*\* 2' "$AUTO_INIT_TASK_DIR/INDEX.md"
+
+rm -rf "$AUTO_INIT_BASE_DIR"
 
 # ── E2E: Multi-agent investigation with threshold capture ───────────
 #

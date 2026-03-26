@@ -136,7 +136,68 @@ Every description follows two parts:
 Optionally end with a short negative trigger ("Do not use for X") if the
 skill has common false-positive triggers that need guarding against.
 
-#### Good example (follows the pattern)
+#### Mandatory trigger variant
+
+Some skills must fire every time a condition is met — the agent should not
+treat activation as optional. The standard two-part structure uses passive,
+opt-in language ("Use when the task involves…") that lets the agent decide
+whether to bother. For mandatory skills, replace that with imperative
+language that removes agent discretion.
+
+The mandatory pattern has four parts that work together — removing any
+one weakens the trigger enough for agents to skip it:
+
+1. **Imperative opener** — lead with `REQUIRED` plus the activation
+   condition. This is the strongest signal an agent parses from a
+   description.
+2. **Prohibition** — immediately follow with a `do not <verb> without this
+   skill active` clause. This closes the escape route where the agent
+   decides it can handle the task itself.
+3. **Keyword trigger list** — `Covers: (1)... (2)...` enumerates scope
+   with the same numbered items as the standard pattern, but under
+   mandatory framing reads as "all of these are covered" rather than
+   "pick one to opt in."
+4. **Closing command** — end the description with a direct imperative that
+   restates the trigger (`Do not skip this skill.` or
+   `If the task involves X, use this skill.`). Agents that skim the middle
+   still hit the bookend.
+
+The extra framing consumes character budget — measure against the
+1024-character hard limit (see above) after every edit.
+
+Use this pattern only when the user needs the skill to always fire for its
+domain. If the agent can produce a correct result without the skill — even
+if slower or less polished — use the standard opt-in two-part structure
+instead. Most skills should use the standard pattern.
+
+##### When to use mandatory vs standard
+
+| Use mandatory when | Use standard when |
+|-|-|
+| Skipping the skill produces wrong or unsafe output | The skill is one of several valid approaches |
+| The skill enforces constraints the agent wouldn't know on its own (lint profiles, TDD workflow, compliance) | The skill adds convenience but isn't required for correctness |
+| The skill's triggers overlap with tasks the agent would attempt without any skill (general coding, general debugging) | The skill's domain is narrow enough that keyword matching alone is reliable |
+
+##### Good example (mandatory pattern)
+
+```yaml
+description: >-
+  REQUIRED when any part of the task touches Rust code or Rust tooling —
+  do not write, review, debug, or scaffold Rust without this skill active.
+  Covers: (1) Writing new Rust code, features, or bugfixes,
+  (2) Reviewing Rust pull requests or enforcing Rust coding standards,
+  (3) Setting up Rust CI/CD pipelines or GitHub Actions,
+  (4) Debugging Rust compilation errors or borrow-checker issues, or
+  (5) Any task where the primary language is Rust (.rs files).
+  If the task involves Rust, use this skill.
+```
+
+Why this works: the agent sees `REQUIRED` as the first token (part 1), a
+prohibition that blocks self-handling (part 2), a keyword-rich trigger list
+(part 3), and a closing command (part 4). All four parts reinforce the
+same signal from different positions in the text.
+
+#### Good example (standard pattern)
 
 ```yaml
 description: >-

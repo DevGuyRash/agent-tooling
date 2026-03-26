@@ -22,6 +22,7 @@ Options:
   --capture-mode MODE    explicit | threshold | synthesis. Defaults to explicit.
   --privacy-tier TIER    private | shared. Defaults to private.
   --export-dir PATH      Optional. Used for sanitized exports and telemetry fan-out.
+  --no-reuse             Always create a new session even if one with the same slug exists.
   --help
 EOF
 }
@@ -37,6 +38,7 @@ storage_mode=handoff
 capture_mode=explicit
 privacy_tier=private
 export_dir=
+no_reuse=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,6 +53,7 @@ while [ $# -gt 0 ]; do
     --capture-mode) capture_mode=${2-}; shift 2 ;;
     --privacy-tier) privacy_tier=${2-}; shift 2 ;;
     --export-dir) export_dir=${2-}; shift 2 ;;
+    --no-reuse) no_reuse=true; shift ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -82,9 +85,24 @@ fi
 
 if [ -z "$task_id" ]; then
   slug=$(bounded_slugify "$task_summary" "$task_auto_slug_limit")
-  timestamp=$(date -u '+%Y%m%d-%H%M%S')
-  task_dir=$(mktemp -d "$base_dir/${slug}-${timestamp}.XXXXXX")
-  task_id=$(basename "$task_dir")
+  # Session discovery: reuse an existing session with the same slug prefix
+  # unless --no-reuse was passed. Pick the most recent match by sorted name
+  # (directory names include YYYYMMDD-HHMMSS timestamps).
+  existing_dir=
+  if [ "$no_reuse" != "true" ] && [ -d "$base_dir" ]; then
+    existing_dir=$(
+      find "$base_dir" -maxdepth 1 -type d -name "${slug}-*" 2>/dev/null |
+        sort | tail -1
+    )
+  fi
+  if [ -n "$existing_dir" ] && [ -f "$existing_dir/SESSION.txt" ]; then
+    task_dir=$existing_dir
+    task_id=$(basename "$task_dir")
+  else
+    timestamp=$(date -u '+%Y%m%d-%H%M%S')
+    task_dir=$(mktemp -d "$base_dir/${slug}-${timestamp}.XXXXXX")
+    task_id=$(basename "$task_dir")
+  fi
 else
   # If the caller passes back an existing task-id (subagent re-join), use it
   # verbatim so the subagent lands in the same directory. Only slugify when the

@@ -1,16 +1,16 @@
 ---
 name: Rust Development
 description: >-
-  Idiomatic, production-grade Rust development with structured TDD workflow,
-  lint enforcement, and CI integration. Use when the task involves:
-  (1) Writing new Rust code, features, or bugfixes, (2) Migrating an existing
-  tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing Rust
-  coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions,
-  (5) Creating or modifying Rust workspace layouts (single-crate or monorepo),
-  (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy lints,
-  rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors
-  or borrow-checker issues, or (9) Any task where the primary language is Rust
-  (.rs files).
+  REQUIRED when any part of the task touches Rust code or Rust tooling — do not
+  write, review, debug, or scaffold Rust without this skill active.
+  Covers: (1) Writing new Rust code, features, or bugfixes, (2) Migrating an
+  existing tool or codebase to Rust, (3) Reviewing Rust pull requests or
+  enforcing Rust coding standards, (4) Setting up Rust CI/CD pipelines or
+  GitHub Actions, (5) Creating or modifying Rust workspace layouts (single-crate
+  or monorepo), (6) Scaffolding a new Rust project or crate, (7) Configuring
+  Clippy lints, rustfmt, or Rust toolchain settings, (8) Debugging Rust
+  compilation errors or borrow-checker issues, or (9) Any task where the primary
+  language is Rust (.rs files). If the task involves Rust, use this skill.
 metadata:
   author: agent-skills
   version: "2.2.0"
