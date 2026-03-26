@@ -10,6 +10,7 @@ param(
     [string]$CaptureMode = "explicit",
     [string]$PrivacyTier = "private",
     [string]$ExportDir = "",
+    [switch]$NoReuse,
     [switch]$Help
 )
 
@@ -30,6 +31,7 @@ Options:
   -CaptureMode MODE     explicit | threshold | synthesis
   -PrivacyTier TIER     private | shared
   -ExportDir PATH
+  -NoReuse      Skip session reuse; always create a new session directory
 "@
     exit 0
 }
@@ -62,19 +64,75 @@ if (-not [string]::IsNullOrWhiteSpace($ExportDir)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($TaskId)) {
-    $timestamp = $now.ToString('yyyyMMdd-HHmmss')
+    $today = $now.ToString('yyyyMMdd')
     $slug = Get-BoundedSlug -Text $TaskSummary -Limit $taskAutoSlugLimit
-    while ($true) {
-        $candidateTaskId = "{0}-{1}-{2}" -f $slug, $timestamp, ([System.Guid]::NewGuid().ToString('N').Substring(0, 8))
-        $candidateTaskDir = Join-Path $BaseDir $candidateTaskId
+    $lockDir = Join-Path $BaseDir ".create-lock-${slug}"
+
+    # Helper: find an existing session directory for today
+    function Find-ExistingSession {
+        if (Test-Path $BaseDir) {
+            $match = Get-ChildItem -Path $BaseDir -Directory -Filter "${slug}-${today}-*" -ErrorAction SilentlyContinue |
+                Sort-Object Name | Select-Object -Last 1
+            if ($match -and (Test-Path (Join-Path $match.FullName 'SESSION.txt'))) {
+                return $match.FullName
+            }
+        }
+        return $null
+    }
+
+    # Helper: create a new session directory (race-safe GUID loop)
+    function New-SessionDir {
+        $timestamp = $now.ToString('yyyyMMdd-HHmmss')
+        while ($true) {
+            $candidateTaskId = "{0}-{1}-{2}" -f $slug, $timestamp, ([System.Guid]::NewGuid().ToString('N').Substring(0, 8))
+            $candidateTaskDir = Join-Path $BaseDir $candidateTaskId
+            try {
+                New-Item -ItemType Directory -Path $candidateTaskDir -ErrorAction Stop | Out-Null
+                return $candidateTaskDir
+            }
+            catch [System.IO.IOException] {
+                continue
+            }
+        }
+    }
+
+    $existingDir = $null
+    if (-not $NoReuse) {
+        $existingDir = Find-ExistingSession
+    }
+
+    if ($existingDir) {
+        $taskDir = $existingDir
+        $TaskId = Split-Path -Leaf $taskDir
+    } else {
+        # Clean up stale lock older than 60 seconds
+        if (Test-Path $lockDir) {
+            if ((Get-Item $lockDir).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddSeconds(-60)) {
+                Remove-Item -Path $lockDir -Force -ErrorAction SilentlyContinue
+            }
+        }
+        # Race-safe lock acquisition
         try {
-            New-Item -ItemType Directory -Path $candidateTaskDir -ErrorAction Stop | Out-Null
-            $TaskId = $candidateTaskId
-            $taskDir = $candidateTaskDir
-            break
+            New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
+            # Won the lock — create new session
+            $newDir = New-SessionDir
+            Remove-Item -Path $lockDir -Force -ErrorAction SilentlyContinue
+            $taskDir = $newDir
+            $TaskId = Split-Path -Leaf $taskDir
         }
         catch [System.IO.IOException] {
-            continue
+            # Lost the lock — wait and retry discovery
+            Start-Sleep -Seconds 1
+            $existingDir = Find-ExistingSession
+            if ($existingDir) {
+                $taskDir = $existingDir
+                $TaskId = Split-Path -Leaf $taskDir
+            } else {
+                $newDir = New-SessionDir
+                $taskDir = $newDir
+                $TaskId = Split-Path -Leaf $taskDir
+            }
+            Remove-Item -Path $lockDir -Force -ErrorAction SilentlyContinue
         }
     }
 } else {
@@ -217,9 +275,6 @@ $env:FRICTION_TASK_ID = $TaskId
 $env:FRICTION_TASK_DIR = $taskDir
 $env:FRICTION_TASK_SUMMARY = $TaskSummary
 $env:FRICTION_TASK_SUMMARY_FILE = $taskSummaryFile
-$env:FRICTION_LOG_FILE = $logFile
-$env:FRICTION_INDEX_FILE = $indexFile
-$env:FRICTION_TASK_DESCRIPTOR = $descriptorFile
 $env:FRICTION_TASK_JSON = $taskJsonFile
 $env:FRICTION_EVENTS_FILE = $eventsFile
 $env:FRICTION_INCIDENTS_FILE = $incidentsFile

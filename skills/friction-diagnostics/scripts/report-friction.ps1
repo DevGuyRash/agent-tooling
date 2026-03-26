@@ -29,6 +29,11 @@ param(
     [string]$MinutesLost = "0",
     [string]$FingerprintKey = "",
     [string]$Tags = "",
+    [string]$TaskSummary = "",
+    [string]$Agent = "orchestrator",
+    [string]$SkillPathInit = "",
+    [string]$RoleInit = "",
+    [string]$BaseDirInit = "",
     [switch]$Quick,
     [switch]$Force,
     [switch]$Help
@@ -38,11 +43,45 @@ if ($Help) {
 @"
 Usage:
   scripts/report-friction.ps1 -LogFile `$env:FRICTION_LOG_FILE -Title "..." [fields]
+  scripts/report-friction.ps1 -TaskSummary "..." -SkillPathInit "..." -Title "..." [fields]
+
+Auto-init: omit -LogFile and supply -TaskSummary plus -SkillPathInit to bootstrap
+a session via init-log.ps1 before reporting. Optional: -Agent, -RoleInit, -BaseDirInit.
+Set `$env:FRICTION_TASK_ID to inherit a task ID from a parent agent.
 "@
     exit 0
 }
 
 . "$PSScriptRoot/_Common.ps1"
+
+# Auto-init: if no log file is set, bootstrap a session via init-log.ps1
+if ([string]::IsNullOrWhiteSpace($LogFile)) {
+    if ([string]::IsNullOrWhiteSpace($TaskSummary)) { throw "-LogFile or -TaskSummary is required" }
+    if ([string]::IsNullOrWhiteSpace($SkillPathInit)) { throw "-SkillPathInit is required for auto-init" }
+    $initArgs = @{
+        TaskSummary = $TaskSummary
+        Agent = $Agent
+        SkillPath = $SkillPathInit
+    }
+    # Prefer inherited task ID from parent agent over slug-based discovery
+    if (-not [string]::IsNullOrWhiteSpace($env:FRICTION_TASK_ID)) {
+        $initArgs['TaskId'] = $env:FRICTION_TASK_ID
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RoleInit)) {
+        $initArgs['Role'] = $RoleInit
+    }
+    if (-not [string]::IsNullOrWhiteSpace($BaseDirInit)) {
+        $initArgs['BaseDir'] = $BaseDirInit
+    }
+    $initOutput = & "$PSScriptRoot/init-log.ps1" @initArgs
+    # Parse FRICTION_LOG_FILE from init output
+    foreach ($line in $initOutput) {
+        if ($line -match '^FRICTION_LOG_FILE=(.+)$') {
+            $LogFile = $matches[1]
+            break
+        }
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($LogFile)) { throw "-LogFile is required" }
 if (-not (Test-Path $LogFile)) { throw "Log file not found: $LogFile" }
