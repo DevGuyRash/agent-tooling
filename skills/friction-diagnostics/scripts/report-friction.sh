@@ -147,6 +147,12 @@ if [ -z "$log_file" ]; then
   [ -n "$auto_task_summary" ] || die "--log-file or --task-summary is required"
   [ -n "$auto_skill_path" ] || die "--skill-path is required for auto-init"
   set -- --task-summary "$auto_task_summary" --agent "$auto_agent" --skill-path "$auto_skill_path"
+  # Prefer inherited task ID from parent agent over slug-based discovery.
+  # This ensures subagents join the correct session even if they paraphrase
+  # the task summary differently.
+  if [ -n "${FRICTION_TASK_ID-}" ]; then
+    set -- "$@" --task-id "$FRICTION_TASK_ID"
+  fi
   if [ -n "$auto_role" ]; then
     set -- "$@" --role "$auto_role"
   fi

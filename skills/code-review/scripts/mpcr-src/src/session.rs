@@ -1840,10 +1840,15 @@ fn sync_agent_files_with_counters(
         .map(|path| parse_artifact_file(&path))
         .transpose()?;
 
-    atomic_write(
-        &paths::agent_report_path(&agent_dir),
-        &render_agent_report(&review_copy, artifact.as_ref()),
-    )?;
+    // Only write report.md when there's actual content — prevents skeleton
+    // "no artifact finalized yet" files for agents that were registered but
+    // never completed their review.
+    if artifact.is_some() {
+        atomic_write(
+            &paths::agent_report_path(&agent_dir),
+            &render_agent_report(&review_copy, artifact.as_ref()),
+        )?;
+    }
 
     let pointer_manifest = AgentPointerManifest {
         artifacts: pointer.into_iter().collect(),
@@ -1894,32 +1899,33 @@ fn sync_agent_files_with_counters(
             &to_toml_string(&ledger, "_agent")?,
         )?;
     }
-    atomic_write(
-        &paths::agent_children_path(&agent_dir, StorageFormat::Json),
-        &to_json_string(
-            &AgentChildrenManifest {
-                child_ids: review.child_ids.clone(),
-            },
-            "children",
-        )?,
-    )?;
-    atomic_write(
-        &paths::agent_children_path(&agent_dir, StorageFormat::Toml),
-        &to_toml_string(
-            &AgentChildrenManifest {
-                child_ids: review.child_ids.clone(),
-            },
-            "children",
-        )?,
-    )?;
-    atomic_write(
-        &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Json),
-        &to_json_string(&pointer_manifest, "_artifacts")?,
-    )?;
-    atomic_write(
-        &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Toml),
-        &to_toml_string(&pointer_manifest, "_artifacts")?,
-    )?;
+    // Only write children manifest if there are children — avoids empty
+    // {"child_ids":[]} files for leaf agents that never spawn sub-reviewers.
+    if !review.child_ids.is_empty() {
+        let children_manifest = AgentChildrenManifest {
+            child_ids: review.child_ids.clone(),
+        };
+        atomic_write(
+            &paths::agent_children_path(&agent_dir, StorageFormat::Json),
+            &to_json_string(&children_manifest, "children")?,
+        )?;
+        atomic_write(
+            &paths::agent_children_path(&agent_dir, StorageFormat::Toml),
+            &to_toml_string(&children_manifest, "children")?,
+        )?;
+    }
+    // Only write artifacts manifest if there are artifacts — avoids empty
+    // {"artifacts":[]} files for agents that haven't produced findings.
+    if !pointer_manifest.artifacts.is_empty() {
+        atomic_write(
+            &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Json),
+            &to_json_string(&pointer_manifest, "_artifacts")?,
+        )?;
+        atomic_write(
+            &paths::agent_artifacts_manifest_path(&agent_dir, StorageFormat::Toml),
+            &to_toml_string(&pointer_manifest, "_artifacts")?,
+        )?;
+    }
     Ok(storage)
 }
 

@@ -1,10 +1,11 @@
 ---
 name: Friction Diagnostics
 description: >-
-  REQUIRED for every task. Initialize at task start, then log every error,
-  failure, unexpected outcome, or friction encountered — no exceptions.
-  Covers: (1) Any tool, command, script, or build step that fails or
-  produces unexpected results, (2) Any instruction, workflow, or
+  REQUIRED for every task. Log every error, failure, unexpected outcome,
+  or friction encountered — no exceptions. Sessions initialize lazily on
+  first friction event; do not create a session unless you have something
+  to log. Covers: (1) Any tool, command, script, or build step that fails
+  or produces unexpected results, (2) Any instruction, workflow, or
   environment that behaves differently than expected, (3) Code bugs,
   compilation errors, test failures, or runtime exceptions, (4) MCP
   server, subagent, or integration misbehavior, (5) User-requested

@@ -57,6 +57,7 @@ NAME_MAX_VALUE=$(getconf NAME_MAX "$AUTO_ID_BASE_DIR" 2>/dev/null || printf '%s\
   printf '%s\n' "  '+%H-%M-%S') printf '%s\n' '17-00-00' ;;"
   printf '%s\n' "  '+%Y-%m-%d %H:%M:%S %Z') printf '%s\n' '2026-03-14 17:00:00 UTC' ;;"
   printf '%s\n' "  '+%Y%m%d-%H%M%S') printf '%s\n' '20260314-170000' ;;"
+  printf '%s\n' "  '+%Y%m%d') printf '%s\n' '20260314' ;;"
   printf '%s\n' "  *) /bin/date \"\$@\" ;;"
   printf '%s\n' 'esac'
 } >"$FAKE_DATE_DIR/date"
@@ -642,7 +643,7 @@ fi
 # ── Auto-init: report-friction.sh without prior init-log.sh ──────────
 AUTO_INIT_BASE_DIR=$(mktemp -d "/tmp/agent-friction-auto-init.XXXXXX")
 
-FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
+FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
   --task-summary "Auto-init smoke test" \
   --agent orchestrator \
   --skill-path "$ROOT" \
@@ -656,14 +657,14 @@ FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
   --interpretation "Auto-init should create the full session infrastructure on first call."
 
 # Verify the session was created
-AUTO_INIT_TASK_DIR=$(find "$AUTO_INIT_BASE_DIR" -maxdepth 1 -type d -name 'auto-init-smoke-test-*' | head -1)
+AUTO_INIT_TASK_DIR=$(find "$AUTO_INIT_BASE_DIR" -maxdepth 1 -type d ! -name "$(basename "$AUTO_INIT_BASE_DIR")" | head -1)
 [ -n "$AUTO_INIT_TASK_DIR" ]
 [ -f "$AUTO_INIT_TASK_DIR/SESSION.txt" ]
 [ -f "$AUTO_INIT_TASK_DIR/events.jsonl" ]
 [ "$(wc -l <"$AUTO_INIT_TASK_DIR/events.jsonl" | tr -d ' ')" -eq 1 ]
 
 # Second auto-init call should reuse the same session
-FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
+FRICTION_LOG_FILE= FRICTION_TASK_ID= "$ROOT/scripts/report-friction.sh" \
   --task-summary "Auto-init smoke test" \
   --agent subagent \
   --role research \
@@ -682,6 +683,48 @@ grep -q '\*\*Log files:\*\* 2' "$AUTO_INIT_TASK_DIR/INDEX.md"
 grep -q '\*\*Entries:\*\* 2' "$AUTO_INIT_TASK_DIR/INDEX.md"
 
 rm -rf "$AUTO_INIT_BASE_DIR"
+
+# ── Env inheritance: FRICTION_TASK_ID joins, FRICTION_LOG_FILE does not leak ──
+ENV_BASE_DIR=$(mktemp -d "/tmp/agent-friction-env-test.XXXXXX")
+
+# Orchestrator inits a session
+eval "$(FRICTION_BASE_DIR="$ENV_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-summary "Env inheritance test" \
+  --agent orchestrator \
+  --skill-path "$ROOT")"
+ENV_ORCH_TASK_ID=$FRICTION_TASK_ID
+ENV_ORCH_LOG=$FRICTION_LOG_FILE
+
+# Subagent: inherits FRICTION_TASK_ID but NOT FRICTION_LOG_FILE (A4 fix)
+# It should join the same session via task ID but get its own log file
+FRICTION_LOG_FILE= "$ROOT/scripts/report-friction.sh" \
+  --task-summary "Different paraphrased summary" \
+  --agent subagent \
+  --skill-path "$ROOT" \
+  --base-dir "$ENV_BASE_DIR" \
+  --title "Subagent env join test" \
+  --instruction-source "test" \
+  --instruction-text "Verify subagent joins via FRICTION_TASK_ID env." \
+  --action-taken "Called report-friction.sh with inherited FRICTION_TASK_ID." \
+  --expected-outcome "Subagent joins the orchestrator's session." \
+  --actual-outcome "Subagent joined via FRICTION_TASK_ID env." \
+  --interpretation "Env-based joining works regardless of summary text."
+
+# Verify: same task directory, but a new log file (not the orchestrator's)
+[ -f "$ENV_BASE_DIR/$ENV_ORCH_TASK_ID/events.jsonl" ]
+[ "$(wc -l <"$ENV_BASE_DIR/$ENV_ORCH_TASK_ID/events.jsonl" | tr -d ' ')" -eq 1 ]
+# Verify FRICTION_LOG_FILE is NOT exported (agent-specific, not inherited)
+env_exports=$(FRICTION_BASE_DIR="$ENV_BASE_DIR" "$ROOT/scripts/init-log.sh" \
+  --task-summary "Export check" \
+  --agent test \
+  --skill-path "$ROOT" \
+  --no-reuse)
+printf '%s\n' "$env_exports" | grep -q '^FRICTION_LOG_FILE='
+! printf '%s\n' "$env_exports" | grep -q '^export FRICTION_LOG_FILE'
+# FRICTION_TASK_ID should still be exported
+printf '%s\n' "$env_exports" | grep -q '^export FRICTION_TASK_ID'
+
+rm -rf "$ENV_BASE_DIR"
 
 # ── E2E: Multi-agent investigation with threshold capture ───────────
 #

@@ -392,21 +392,12 @@ fn nested_agent_dirs_and_recursive_reports_are_materialized() -> anyhow::Result<
     let concatenated = reports
         .concatenated_report
         .ok_or_else(|| anyhow::anyhow!("missing concatenated report"))?;
-    ensure!(concatenated.contains("Agent `root0001`"));
-    ensure!(concatenated.contains(&format!("Agent `{child_id}`")));
-    ensure!(concatenated.contains("### Agent Report"));
-    ensure!(!concatenated.contains("\n## Findings"));
-    let root_pos = concatenated
-        .find("Agent `root0001`")
-        .ok_or_else(|| anyhow::anyhow!("missing root agent heading"))?;
-    let child_pos = concatenated
-        .find(&format!("Agent `{child_id}`"))
-        .ok_or_else(|| anyhow::anyhow!("missing child agent heading"))?;
-    let grandchild_pos = concatenated
-        .find(&format!("Agent `{}`", grandchild.child_ids[0]))
-        .ok_or_else(|| anyhow::anyhow!("missing grandchild agent heading"))?;
-    ensure!(root_pos < child_pos);
-    ensure!(child_pos < grandchild_pos);
+    // Agents without artifacts don't get report.md (no skeleton waste), so
+    // they won't appear in the concatenated report. The ledger-based
+    // reports.reports still lists them.
+    ensure!(!concatenated.contains("Agent `root0001`"));
+    ensure!(!concatenated.contains(&format!("Agent `{child_id}`")));
+    ensure!(!concatenated.contains(&format!("Agent `{}`", grandchild.child_ids[0])));
 
     let root_ledger: Value = serde_json::from_str(&fs::read_to_string(
         repo_root_path.join(register.agent_ledger_json),
@@ -493,7 +484,9 @@ fn non_recursive_concatenated_reports_exclude_descendants() -> anyhow::Result<()
     let concatenated = reports
         .concatenated_report
         .ok_or_else(|| anyhow::anyhow!("missing concatenated report"))?;
-    ensure!(concatenated.contains("Agent `root0003`"));
+    // Root agent has no artifact yet, so no report.md → not in concatenation.
+    // The ledger still has it (reports.reports[0] above).
+    ensure!(!concatenated.contains("Agent `root0003`"));
     ensure!(!concatenated.contains(&format!("Agent `{child_id}`")));
     Ok(())
 }

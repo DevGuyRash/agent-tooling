@@ -85,23 +85,57 @@ fi
 
 if [ -z "$task_id" ]; then
   slug=$(bounded_slugify "$task_summary" "$task_auto_slug_limit")
-  # Session discovery: reuse an existing session with the same slug prefix
-  # unless --no-reuse was passed. Pick the most recent match by sorted name
-  # (directory names include YYYYMMDD-HHMMSS timestamps).
+  today=$(date -u '+%Y%m%d')
+
+  # Session discovery: reuse an existing session from today with the same
+  # slug prefix, unless --no-reuse was passed. Date-scoped to prevent
+  # stale sessions from yesterday/last week being reused.
   existing_dir=
   if [ "$no_reuse" != "true" ] && [ -d "$base_dir" ]; then
     existing_dir=$(
-      find "$base_dir" -maxdepth 1 -type d -name "${slug}-*" 2>/dev/null |
+      find "$base_dir" -maxdepth 1 -type d -name "${slug}-${today}-*" 2>/dev/null |
         sort | tail -1
     )
   fi
+
   if [ -n "$existing_dir" ] && [ -f "$existing_dir/SESSION.txt" ]; then
     task_dir=$existing_dir
     task_id=$(basename "$task_dir")
   else
-    timestamp=$(date -u '+%Y%m%d-%H%M%S')
-    task_dir=$(mktemp -d "$base_dir/${slug}-${timestamp}.XXXXXX")
-    task_id=$(basename "$task_dir")
+    # Race-safe creation: use mkdir as atomic lock so two agents with the
+    # same slug don't both create new sessions simultaneously.
+    lock_dir="$base_dir/.create-lock-${slug}"
+    # Clean up stale locks (older than 60 seconds)
+    if [ -d "$lock_dir" ]; then
+      lock_age=$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null | head -1)
+      if [ -n "$lock_age" ]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+      fi
+    fi
+    if mkdir "$lock_dir" 2>/dev/null; then
+      # Won the race: create the session
+      timestamp=$(date -u '+%Y%m%d-%H%M%S')
+      task_dir=$(mktemp -d "$base_dir/${slug}-${timestamp}.XXXXXX")
+      task_id=$(basename "$task_dir")
+      rmdir "$lock_dir" 2>/dev/null || true
+    else
+      # Lost the race: wait for winner to finish, then discover
+      sleep 1
+      existing_dir=$(
+        find "$base_dir" -maxdepth 1 -type d -name "${slug}-${today}-*" 2>/dev/null |
+          sort | tail -1
+      )
+      if [ -n "$existing_dir" ] && [ -f "$existing_dir/SESSION.txt" ]; then
+        task_dir=$existing_dir
+        task_id=$(basename "$task_dir")
+      else
+        # Winner may still be setting up; fall back to creating our own
+        timestamp=$(date -u '+%Y%m%d-%H%M%S')
+        task_dir=$(mktemp -d "$base_dir/${slug}-${timestamp}.XXXXXX")
+        task_id=$(basename "$task_dir")
+      fi
+      rmdir "$lock_dir" 2>/dev/null || true
+    fi
   fi
 else
   # If the caller passes back an existing task-id (subagent re-join), use it
@@ -252,12 +286,10 @@ printf 'FRICTION_TASK_SUMMARY=%s\n' "$(shell_quote "$task_summary")"
 printf 'export FRICTION_TASK_SUMMARY\n'
 printf 'FRICTION_TASK_SUMMARY_FILE=%s\n' "$(shell_quote "$task_summary_file")"
 printf 'export FRICTION_TASK_SUMMARY_FILE\n'
+# Agent-specific vars: set but do NOT export (prevents subagent cross-contamination)
 printf 'FRICTION_LOG_FILE=%s\n' "$(shell_quote "$log_file")"
-printf 'export FRICTION_LOG_FILE\n'
 printf 'FRICTION_INDEX_FILE=%s\n' "$(shell_quote "$index_file")"
-printf 'export FRICTION_INDEX_FILE\n'
 printf 'FRICTION_TASK_DESCRIPTOR=%s\n' "$(shell_quote "$descriptor_file")"
-printf 'export FRICTION_TASK_DESCRIPTOR\n'
 printf 'FRICTION_TASK_JSON=%s\n' "$(shell_quote "$task_json_file")"
 printf 'export FRICTION_TASK_JSON\n'
 printf 'FRICTION_EVENTS_FILE=%s\n' "$(shell_quote "$events_file")"
