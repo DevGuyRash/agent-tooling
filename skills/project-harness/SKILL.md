@@ -1,12 +1,17 @@
 ---
-name: project-harness
+name: Project Harness
 description: >-
   Detects repo languages, frameworks, task runners, distribution shape, and CI
   surface, then scaffolds or updates a repo-level harness: justfile, GitHub
   Actions CI/dist workflows, .gitignore/.gitattributes support files, and
-  local state under .local/harness/. Use when the task is to bootstrap,
-  standardize, update, or run a project command surface without rewriting the
-  build system internals themselves.
+  local state under .local/harness/. Use when the task involves:
+  (1) Bootstrapping a new or existing repo with a standardized command surface,
+  (2) Creating or updating a justfile with build, test, lint, fmt, ci, dev,
+  or dist recipes, (3) Scaffolding GitHub Actions CI or distribution workflows,
+  (4) Configuring .gitignore, .gitattributes, or Git LFS for a project,
+  (5) Standardizing or updating a project command surface without rewriting
+  build system internals, or (6) Any task requiring repo-level harness
+  scaffolding or project command surface management.
 license: MIT
 metadata:
   author: DevGuyRash
