@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def run_cmd(script: Path, *args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        check=check,
+        env=env,
+    )
+    return proc
+
+
+def run_json(script: Path, *args: str, env: dict[str, str] | None = None) -> dict:
+    proc = run_cmd(script, *args, env=env)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover
+        raise AssertionError(f"expected JSON output, got: {proc.stdout!r}") from exc
+
+
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def assert_just_parses(justfile: Path) -> None:
+    if not shutil.which("just"):
+        return
+    proc = subprocess.run(
+        ["just", "--justfile", str(justfile), "--list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Available recipes:" in proc.stdout, proc.stdout
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Smoke-test the project_harness generator.")
+    parser.add_argument("--skill-root", required=True)
+    args = parser.parse_args(argv)
+
+    skill_root = Path(args.skill_root).resolve()
+    script = skill_root / "scripts" / "project_harness.py"
+    if not script.exists():
+        raise SystemExit("missing project_harness.py")
+
+    with tempfile.TemporaryDirectory(prefix="project-harness-smoke-") as tmp:
+        tmpdir = Path(tmp)
+
+        # 1) no-example repo -> placeholder harness, CI none
+        repo1 = tmpdir / "generic"
+        repo1.mkdir()
+        write(repo1 / "README.md", "# generic\n")
+        detected1 = run_json(script, "detect", str(repo1))
+        assert detected1["selection_defaults"]["ci_mode"] == "none", detected1
+        render1 = run_json(script, "render", str(repo1))
+        just1 = (repo1 / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        assert "No native build surface was detected" in just1
+        assert "ci.yml" not in render1["candidates"], render1
+
+        # 2) single-package Node repo -> just CI with bootstrap and direct execution surfaces
+        repo2 = tmpdir / "node"
+        repo2.mkdir()
+        write(repo2 / "package.json", json.dumps({
+            "name": "node-app",
+            "packageManager": "pnpm@10",
+            "scripts": {
+                "build": "node build.js",
+                "test": "node test.js",
+                "lint": "node lint.js"
+            }
+        }, indent=2) + "\n")
+        write(repo2 / "pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+        render2 = run_json(script, "render", str(repo2))
+        assert "ci.yml" in render2["candidates"], render2
+        ci2 = (repo2 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "extractions/setup-just@v3" in ci2, ci2
+        assert "just bootstrap" in ci2, ci2
+        assert "actions/setup-node@v6" in ci2, ci2
+        bootstrap2 = run_cmd(script, "bootstrap", str(repo2), "--dry-run")
+        assert bootstrap2.stdout.strip() == "pnpm install --frozen-lockfile", bootstrap2.stdout
+        run2 = run_cmd(script, "run", str(repo2), "test", "--dry-run")
+        assert run2.stdout.strip() == "pnpm run test --if-present", run2.stdout
+        doctor2 = run_json(script, "doctor", str(repo2), "--pretty")
+        assert doctor2["tool_status"].get("pnpm") is not None, doctor2
+
+        # 3) monorepo -> component-prefixed recipes
+        repo3 = tmpdir / "mono"
+        repo3.mkdir()
+        write(repo3 / "backend" / "Cargo.toml", "[package]\nname = 'backend'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'backend'\npath = 'src/main.rs'\n")
+        write(repo3 / "backend" / "src" / "main.rs", "fn main() {}\n")
+        write(repo3 / "frontend" / "package.json", json.dumps({
+            "name": "frontend",
+            "scripts": {"build": "vite build", "test": "vitest run", "lint": "eslint ."},
+            "devDependencies": {"vite": "1.0.0", "vitest": "1.0.0", "eslint": "1.0.0"}
+        }, indent=2) + "\n")
+        write(repo3 / "frontend" / "package-lock.json", "{}\n")
+        render3 = run_json(script, "render", str(repo3))
+        just3 = (repo3 / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        assert "backend-build" in just3, just3
+        assert "frontend-test" in just3, just3
+        assert "ci.yml" in render3["candidates"], render3
+
+        # 4) dist renders keep justfiles parseable and clear stale candidates between runs
+        repo4 = tmpdir / "dist-renders"
+        repo4.mkdir()
+        write(repo4 / "Cargo.toml", "[package]\nname = 'tool'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'tool'\npath = 'src/main.rs'\n")
+        write(repo4 / "src" / "main.rs", "fn main() {}\n")
+        for architecture in ("local-dist", "committed-dist", "cross-os-dist"):
+            render4 = run_json(script, "render", str(repo4), "--architecture", architecture, "--dist-storage", "git-lfs")
+            just4 = repo4 / ".local" / "harness" / "render" / "justfile"
+            just4_text = just4.read_text(encoding="utf-8")
+            assert "# Internal helper that copies release outputs into dist/\n[private]\n_stage:" in just4_text, just4_text
+            assert_just_parses(just4)
+            if architecture in {"committed-dist", "cross-os-dist"}:
+                assert ".gitattributes" in render4["candidates"], render4
+        general4 = run_json(script, "render", str(repo4), "--architecture", "general", "--dist-storage", "none")
+        assert ".gitattributes" not in general4["candidates"], general4
+        assert not (repo4 / ".local" / "harness" / "render" / ".gitattributes").exists()
+
+        # 5) Go recipes keep forwarded args before package targets
+        repo5 = tmpdir / "go"
+        repo5.mkdir()
+        write(repo5 / "go.mod", "module example.com/tool\n\ngo 1.23.0\n")
+        write(repo5 / "main.go", "package main\nfunc main() {}\n")
+        render5 = run_json(script, "render", str(repo5))
+        just5 = (repo5 / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        assert "go build {{args}} ./..." in just5, just5
+        assert "go test {{args}} ./..." in just5, just5
+        assert "ci.yml" in render5["candidates"], render5
+
+        # 6) unmanaged targets stay untouched during update
+        repo6 = tmpdir / "unmanaged-update"
+        repo6.mkdir()
+        write(repo6 / "package.json", json.dumps({
+            "name": "keep-user-files",
+            "scripts": {"test": "node test.js"}
+        }, indent=2) + "\n")
+        write(repo6 / "justfile", "user-managed: \n\t@echo keep\n")
+        write(repo6 / ".github" / "workflows" / "ci.yml", "name: user-ci\n")
+        update6 = run_json(script, "update", str(repo6))
+        assert update6["candidate_only"] == [".github/workflows/ci.yml", "justfile"] or update6["candidate_only"] == ["justfile", ".github/workflows/ci.yml"], update6
+        assert (repo6 / "justfile").read_text(encoding="utf-8") == "user-managed: \n\t@echo keep\n"
+        assert (repo6 / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8") == "name: user-ci\n"
+        assert (repo6 / ".local" / "harness" / "render" / "justfile").exists()
+
+        # 7) managed Git LFS rule is reversible when the selection changes away from committed dist
+        repo7 = tmpdir / "lfs-migrate"
+        repo7.mkdir()
+        write(repo7 / "Cargo.toml", "[package]\nname = 'tool'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'tool'\npath = 'src/main.rs'\n")
+        write(repo7 / "src" / "main.rs", "fn main() {}\n")
+        run_json(script, "update", str(repo7), "--architecture", "cross-os-dist", "--dist-storage", "git-lfs")
+        gitattributes7 = (repo7 / ".gitattributes").read_text(encoding="utf-8")
+        assert "dist/** filter=lfs diff=lfs merge=lfs -text" in gitattributes7, gitattributes7
+        run_json(script, "update", str(repo7), "--architecture", "general", "--dist-storage", "none")
+        if (repo7 / ".gitattributes").exists():
+            assert "dist/** filter=lfs diff=lfs merge=lfs -text" not in (repo7 / ".gitattributes").read_text(encoding="utf-8")
+
+        # 8) corrupt state is preserved and surfaced instead of disappearing silently
+        repo8 = tmpdir / "corrupt-state"
+        repo8.mkdir()
+        write(repo8 / "package.json", json.dumps({"name": "corrupt-state"}, indent=2) + "\n")
+        write(repo8 / ".local" / "harness" / "state.json", "{not json\n")
+        render8 = run_json(script, "render", str(repo8))
+        assert any("state.json.corrupt" in warning for warning in render8["warnings"]), render8
+        assert (repo8 / ".local" / "harness" / "state.json.corrupt").exists()
+        state8 = json.loads((repo8 / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        assert any("state.json.corrupt" in warning for warning in state8["warnings"]), state8
+
+        # 9) dist warning and persisted state cover negative recovery branches
+        repo9 = tmpdir / "negative-dist"
+        repo9.mkdir()
+        write(repo9 / ".gitignore", "dist/\n")
+        render9 = run_json(script, "render", str(repo9), "--architecture", "cross-os-dist", "--dist-storage", "git")
+        assert any("dist section was omitted" in warning for warning in render9["warnings"]), render9
+        update9 = run_json(script, "update", str(repo9), "--architecture", "cross-os-dist", "--dist-storage", "git")
+        assert any("dist/ is ignored" in warning for warning in update9["warnings"]), update9
+        state9 = json.loads((repo9 / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        assert any("dist/ is ignored" in warning for warning in state9["warnings"]), state9
+
+        # 10) existing justfiles execute recipes without shell interpolation
+        repo10 = tmpdir / "safe-run"
+        repo10.mkdir()
+        write(repo10 / "justfile", "# project-harness: managed-file\ntest:\n    @echo ok\n")
+        fake_bin = tmpdir / "bin"
+        fake_bin.mkdir()
+        write(fake_bin / "just", "#!/usr/bin/env sh\nprintf '%s\\n' \"$@\"\n")
+        os.chmod(fake_bin / "just", 0o755)
+        marker10 = repo10 / "injected.txt"
+        env10 = os.environ.copy()
+        env10["PATH"] = str(fake_bin) + os.pathsep + env10.get("PATH", "")
+        proc10 = run_cmd(
+            script,
+            "run",
+            str(repo10),
+            f"test; printf injected > {marker10}",
+            env=env10,
+        )
+        assert proc10.returncode == 0, proc10.stderr
+        assert not marker10.exists(), proc10.stdout
+
+    print("project_harness smoke tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
