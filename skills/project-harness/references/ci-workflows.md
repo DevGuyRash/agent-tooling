@@ -67,6 +67,18 @@ That is the right default when:
 If you need true Release assets attached to a tag, start from the example
 release-assets template instead of overloading ordinary CI.
 
+## Toolchain version policy
+
+Generated workflows use evergreen version selectors where available:
+- Node: `lts/*`
+- Go: `stable`
+- Python: `3.x`
+- Elixir/OTP: `> 0` (latest stable, excludes RCs)
+
+Java and .NET require a major version number. The generated defaults target
+the current LTS release with an inline comment reminding you to update when
+a newer LTS ships. Java uses `check-latest: true` to get the freshest patch.
+
 ## Runner assumptions
 
 These templates assume GitHub-hosted runners and current official action majors.

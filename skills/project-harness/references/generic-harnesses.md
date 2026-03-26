@@ -19,7 +19,7 @@ That produces a usable starting point instead of a refusal.
 ## Canonical recipe meanings
 
 Use these meanings consistently:
-- `bootstrap`: install dependencies and developer prerequisites
+- `bootstrap`: install project dependencies and prepare the working tree
 - `fmt`: rewrite source into the preferred style
 - `fmt-check`: verify formatting without rewriting
 - `lint`: static checks beyond formatting

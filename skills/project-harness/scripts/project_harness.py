@@ -35,6 +35,11 @@ IGNORE_DIRS = {
     "node_modules",
     "dist",
     "build",
+    "out",
+    "pkg",
+    "extension-dist",
+    "_build",
+    ".output",
     "target",
     "__pycache__",
     ".pytest_cache",
@@ -1057,6 +1062,9 @@ def render_recipe_block(name: str, lines: list[str], *, args: bool = False, doc:
 
 def build_variable_block(commands: dict[str, list[str]], architecture: str) -> str:
     lines: list[str] = []
+    if any("cargo" in cmd for cmds in commands.values() for cmd in cmds):
+        lines.append("# Cargo may be installed in ~/.cargo/bin which non-login shells miss")
+        lines.append('export PATH := env_var("HOME") / ".cargo" / "bin" + ":" + env_var("PATH")')
     if any("dotnet" in cmd for cmds in commands.values() for cmd in cmds):
         lines.append("# dotnet commands rely on the installed SDK")
     return ("\n".join(lines) + "\n\n") if lines else ""
@@ -1200,7 +1208,7 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         steps.extend([
             "      - uses: actions/setup-python@v6",
             "        with:",
-            "          python-version: '3.12'",
+            "          python-version: '3.x'  # latest stable Python 3",
         ])
         if "poetry" in build_tools:
             steps.extend(["          cache: 'poetry'"])
@@ -1255,7 +1263,8 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
             "      - uses: actions/setup-java@v5",
             "        with:",
             "          distribution: 'temurin'",
-            "          java-version: '21'",
+            "          java-version: '21'  # latest LTS; update when a newer LTS ships",
+            "          check-latest: true",
         ])
         if "gradle" in build_tools and "maven" not in build_tools:
             steps.extend(["          cache: 'gradle'"])
@@ -1265,7 +1274,7 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         steps.extend([
             "      - uses: actions/setup-dotnet@v4",
             "        with:",
-            "          dotnet-version: '8.0.x'",
+            "          dotnet-version: '9.0.x'  # latest LTS; update when a newer LTS ships",
         ])
     if "ruby" in languages:
         steps.extend([
@@ -1277,8 +1286,8 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         steps.extend([
             "      - uses: erlef/setup-beam@v1",
             "        with:",
-            "          otp-version: '27'",
-            "          elixir-version: '1.17'",
+            "          otp-version: '> 0'  # latest stable OTP",
+            "          elixir-version: '> 0'  # latest stable Elixir",
         ])
     return steps
 
