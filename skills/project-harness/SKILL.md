@@ -33,6 +33,7 @@ It is meant to answer questions like:
 - should `dist/` stay local, be committed, be tracked with Git LFS, or come only from CI?
 - should CI call `just ci`, mirror commands directly, or stay off until the repo is better defined?
 - how should a monorepo expose both per-component and aggregate recipes?
+- when should a contributor-heavy repo split CI into stable `lint`, `test`, and `build` jobs?
 - how should a repo with no existing examples still get a usable starting harness?
 
 ## What this skill owns
@@ -54,6 +55,10 @@ This skill does **not** rewrite:
 - `go.mod`
 - existing build manifests in general
 
+This skill also does **not** own governance enforcement such as required checks,
+CODEOWNERS reconciliation, or branch/ruleset policy. Keep those in a governance
+tooling surface such as `gitops-workflow`.
+
 ## Default workflow
 
 1. Detect the repo shape.
@@ -62,10 +67,12 @@ This skill does **not** rewrite:
 python <skills-file-root>/scripts/project_harness.py detect /path/to/repo --pretty
 ```
 
-2. Choose three axes:
+2. Choose the command and CI axes:
 - architecture: `general`, `local-dist`, `committed-dist`, or `cross-os-dist`
 - dist storage: `none`, `git`, `git-lfs`, or `artifacts`
 - CI mode: `none`, `just`, or `direct`
+- CI shape: single-job direct CI by default, with `--ci-layout split` as an opt-in contributor-scale overlay
+- path filters: manual opt-in only when component ownership is explicit
 
 3. Preview candidate files without touching managed targets.
 
@@ -142,13 +149,15 @@ GitHub Release assets, start from
 
 - `none`: do not generate CI yet
 - `just`: CI installs toolchains plus `just`, runs `just bootstrap`, then `just ci`
-- `direct`: CI installs toolchains, runs bootstrap steps directly, then explicit checks
+- `direct`: CI installs toolchains, runs bootstrap steps directly, then explicit checks; contributor-heavy repos may opt into stable `lint`, `test`, and `build` jobs
 
 Use `direct` for monorepos, matrices, or polyglot repos.
 Use `just` for smaller repos where `just ci` should stay the source of truth.
+Use split direct CI only when a repo explicitly opts into it and stable per-job checks are more valuable than preserving a single `ci` check surface.
+Keep path filters manual and explicit; do not infer them unless the repo truly has stable ownership boundaries.
 
 Load `<skills-file-root>/references/ci-workflows.md` for workflow quality rules,
-runner notes, and open-source versus private-repo tradeoffs.
+runner notes, contributor-scale guidance, governance handoff notes, and open-source versus private-repo tradeoffs.
 
 ## Existing-file policy
 
@@ -187,11 +196,13 @@ Operational templates:
 - `<skills-file-root>/assets/just-cross-os-dist.just.tpl`
 - `<skills-file-root>/assets/workflow-ci-just.yml.tpl`
 - `<skills-file-root>/assets/workflow-ci-direct.yml.tpl`
+- `<skills-file-root>/assets/workflow-ci-direct-split.yml.tpl`
 - `<skills-file-root>/assets/workflow-release-cross-os.yml.tpl`
 - `<skills-file-root>/assets/gitattributes-lfs.tpl`
 
 Generalized examples:
 - `<skills-file-root>/assets/just-no-example.just.tpl`
+- `<skills-file-root>/assets/workflow-ci-direct-component-paths.yml.tpl`
 - `<skills-file-root>/assets/workflow-release-assets-cross-os.yml.tpl`
 
 ## Bundled scripts

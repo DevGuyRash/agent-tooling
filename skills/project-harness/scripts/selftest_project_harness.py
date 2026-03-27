@@ -119,6 +119,57 @@ def main(argv: list[str] | None = None) -> int:
         ci3 = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert "fetch-depth: 1" in ci3, ci3
         assert "cache-dependency-path: frontend/package-lock.json" in ci3, ci3
+        assert render3["selected"]["ci_layout"] == "single", render3
+        assert "  ci:\n" in ci3, ci3
+        assert "  lint:\n" not in ci3, ci3
+        render3_split = run_json(script, "render", str(repo3), "--ci-layout", "split")
+        ci3_split = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3_split["selected"]["ci_layout"] == "split", render3_split
+        assert "  ci:\n" not in ci3_split, ci3_split
+        assert "  lint:\n" in ci3_split, ci3_split
+        assert "    name: lint" in ci3_split, ci3_split
+        assert "  test:\n" in ci3_split, ci3_split
+        assert "    name: test" in ci3_split, ci3_split
+        assert "  build:\n" in ci3_split, ci3_split
+        assert "    name: build" in ci3_split, ci3_split
+        render3_single = run_json(script, "render", str(repo3), "--ci-layout", "single")
+        ci3_single = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3_single["selected"]["ci_layout"] == "single", render3_single
+        assert "  ci:\n" in ci3_single, ci3_single
+        assert "  lint:\n" not in ci3_single, ci3_single
+        render3_paths = run_json(script, "render", str(repo3), "--ci-paths", "components")
+        assert render3_paths["selected"]["ci_paths"] == "components", render3_paths
+        ci3_paths = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "    paths:\n" in ci3_paths, ci3_paths
+        assert "      - 'backend/**'" in ci3_paths, ci3_paths
+        assert "      - 'frontend/**'" in ci3_paths, ci3_paths
+
+        repo3b = tmpdir / "components-only"
+        repo3b.mkdir()
+        write(repo3b / "backend" / "Cargo.toml", "[package]\nname = 'backend'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3b / "backend" / "src" / "lib.rs", "pub fn ok() {}\n")
+        write(repo3b / "frontend" / "package.json", json.dumps({
+            "name": "frontend",
+            "scripts": {"build": "vite build", "test": "vitest run", "lint": "eslint ."},
+            "devDependencies": {"vite": "1.0.0", "vitest": "1.0.0", "eslint": "1.0.0"}
+        }, indent=2) + "\n")
+        write(repo3b / "frontend" / "package-lock.json", "{}\n")
+        render3b_paths = run_json(script, "render", str(repo3b), "--ci-mode", "direct", "--ci-paths", "components")
+        ci3b_paths = (repo3b / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "    paths:\n" in ci3b_paths, ci3b_paths
+        assert "      - 'backend/**'" in ci3b_paths, ci3b_paths
+        assert "      - 'frontend/**'" in ci3b_paths, ci3b_paths
+        assert "ci.yml" in render3b_paths["candidates"], render3b_paths
+
+        repo3c = tmpdir / "root-workspace"
+        repo3c.mkdir()
+        write(repo3c / "Cargo.toml", "[workspace]\nmembers = ['backend']\n")
+        write(repo3c / "backend" / "Cargo.toml", "[package]\nname = 'backend'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3c / "backend" / "src" / "lib.rs", "pub fn ok() {}\n")
+        render3c_paths = run_json(script, "render", str(repo3c), "--ci-mode", "direct", "--ci-paths", "components")
+        ci3c_paths = (repo3c / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert any("root-level components or workspace manifests" in warning for warning in render3c_paths["warnings"]), render3c_paths
+        assert "    paths:\n" not in ci3c_paths, ci3c_paths
 
         # 4) dist renders keep justfiles parseable and clear stale candidates between runs
         repo4 = tmpdir / "dist-renders"
@@ -153,6 +204,10 @@ def main(argv: list[str] | None = None) -> int:
         assert "ci.yml" in render5["candidates"], render5
         ci5 = (repo5 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert "fetch-depth: 1" in ci5, ci5
+        render5_paths = run_json(script, "render", str(repo5), "--ci-mode", "direct", "--ci-paths", "components")
+        assert any("root-level components or workspace manifests" in warning for warning in render5_paths["warnings"]), render5_paths
+        ci5_paths = (repo5 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "    paths:\n" not in ci5_paths, ci5_paths
 
         # 5b) Go workspace CI uses dependency-path-aware caching
         repo5b = tmpdir / "go-workspace"

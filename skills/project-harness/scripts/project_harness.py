@@ -1388,11 +1388,127 @@ def render_direct_workflow_steps(recipe_lines: list[str], name: str) -> list[str
     return out
 
 
-def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str) -> str:
+def ci_layout_default(detected: dict[str, Any], ci_mode: str) -> str:
+    return "single"
+
+
+def replace_trigger_block(template: str, trigger_block: str) -> str:
+    default_block = "on:\n  push:\n    branches: [main]\n  pull_request:\n"
+    return template.replace(default_block, trigger_block + "\n", 1)
+
+
+def trigger_block_body(trigger_block: str) -> str:
+    lines = trigger_block.splitlines()
+    if not lines or lines[0] != "on:":
+        return trigger_block
+    return "\n".join(f"  {line}" for line in lines[1:])
+
+
+def render_ci_trigger_block(detected: dict[str, Any], ci_paths: str) -> tuple[str, list[str]]:
+    if ci_paths != "components":
+        return "on:\n  push:\n    branches: [main]\n  pull_request:", []
+
+    component_paths = sorted({component["path"] for component in detected.get("components", []) if component["path"] != "."})
+    if any(component["path"] == "." for component in detected.get("components", [])):
+        return (
+            "on:\n  push:\n    branches: [main]\n  pull_request:",
+            ["component path filters were omitted because root-level components or workspace manifests can change generated CI behavior"],
+        )
+    if len(component_paths) < 2:
+        return (
+            "on:\n  push:\n    branches: [main]\n  pull_request:",
+            ["component path filters require at least two non-root components; filter overlay was omitted"],
+        )
+
+    tracked_paths = [
+        ".github/workflows/**",
+        ".github/CODEOWNERS",
+        ".gitattributes",
+        ".gitignore",
+        "justfile",
+        "Makefile",
+        "Taskfile.yml",
+        "Taskfile.yaml",
+        "taskfile.yml",
+        "taskfile.yaml",
+        *[f"{path}/**" for path in component_paths],
+    ]
+    lines = [
+        "on:",
+        "  push:",
+        "    branches: [main]",
+        "    paths:",
+    ]
+    lines.extend([f"      - '{path}'" for path in tracked_paths])
+    lines.extend([
+        "  pull_request:",
+        "    paths:",
+    ])
+    lines.extend([f"      - '{path}'" for path in tracked_paths])
+    return "\n".join(lines), []
+
+
+def render_ci_job(job_id: str, job_name: str, steps: list[str], needs: list[str] | None = None) -> str:
+    lines = [f"  {job_id}:", f"    name: {job_name}"]
+    if needs:
+        if len(needs) == 1:
+            lines.append(f"    needs: {needs[0]}")
+        else:
+            lines.append("    needs:")
+            lines.extend([f"      - {need}" for need in needs])
+    lines.extend([
+        "    runs-on: ubuntu-latest",
+        "    timeout-minutes: 20",
+        "    defaults:",
+        "      run:",
+        "        shell: bash",
+        "    steps:",
+        "      - uses: actions/checkout@v6",
+        "        with:",
+        "          fetch-depth: 1",
+    ])
+    lines.extend(steps)
+    return "\n".join(lines)
+
+
+def render_split_direct_ci(trigger_block: str, detected: dict[str, Any], setup_steps: list[str], commands: dict[str, list[str]]) -> str:
+    bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
+    lint_steps: list[str] = []
+    lint_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
+    lint_steps.extend(render_direct_workflow_steps(commands["lint"], "Lint"))
+    test_steps = render_direct_workflow_steps(commands["test"], "Test")
+    build_lines = commands["build"] or commands["release"]
+    build_steps = render_direct_workflow_steps(build_lines, "Build")
+
+    shared_steps = list(setup_steps) + bootstrap_steps
+    jobs: dict[str, str] = {}
+    if lint_steps:
+        jobs["lint"] = render_ci_job("lint", "lint", shared_steps + lint_steps)
+    if test_steps:
+        jobs["test"] = render_ci_job("test", "test", shared_steps + test_steps)
+    if build_steps:
+        jobs["build"] = render_ci_job("build", "build", shared_steps + build_steps)
+
+    if not jobs:
+        run_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
+        run_steps.extend(render_direct_workflow_steps(commands["test"], "Test"))
+        jobs["lint"] = render_ci_job("ci", "ci", list(setup_steps) + run_steps)
+
+    split_template = read_text(ASSETS_DIR / "workflow-ci-direct-split.yml.tpl")
+    split_template = split_template.replace("__ON_BLOCK__", trigger_block_body(trigger_block))
+    split_template = split_template.replace("__LINT_JOB__", jobs.get("lint", ""))
+    split_template = split_template.replace("__TEST_JOB__", jobs.get("test", ""))
+    split_template = split_template.replace("__BUILD_JOB__", jobs.get("build", ""))
+    return re.sub(r"\n{3,}", "\n\n", split_template).rstrip() + "\n"
+
+
+def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str, ci_layout: str, ci_paths: str) -> tuple[str, list[str]]:
     commands = make_initial_recipe_commands(repo, detected)
     setup_steps = workflow_setup_steps(repo, detected)
+    trigger_block, warnings = render_ci_trigger_block(detected, ci_paths)
     if ci_mode == "just":
         template = read_text(ASSETS_DIR / "workflow-ci-just.yml.tpl")
+        template = replace_trigger_block(template, trigger_block)
         setup_block = "\n".join(setup_steps)
         bootstrap_step = "\n".join([
             "      - name: Bootstrap",
@@ -1401,8 +1517,11 @@ def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str) -> st
         ])
         output = template.replace("__SETUP_STEPS__", setup_block + ("\n" if setup_block else ""))
         output = output.replace("__BOOTSTRAP_STEP__", bootstrap_step + "\n")
-        return output
+        return output, warnings
     template = read_text(ASSETS_DIR / "workflow-ci-direct.yml.tpl")
+    template = replace_trigger_block(template, trigger_block)
+    if ci_layout == "split":
+        return render_split_direct_ci(trigger_block, detected, setup_steps, commands), warnings
     bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
     run_steps: list[str] = []
     run_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
@@ -1414,7 +1533,7 @@ def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str) -> st
     output = template.replace("__SETUP_STEPS__", setup_block + ("\n" if setup_block else ""))
     output = output.replace("__BOOTSTRAP_STEPS__", bootstrap_block + ("\n" if bootstrap_block else ""))
     output = output.replace("__RUN_STEPS__", run_block + ("\n" if run_block else ""))
-    return output
+    return output, warnings
 
 
 def render_release_cross_os(repo: Path, detected: dict[str, Any]) -> str:
@@ -1624,18 +1743,24 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
     detected = detect_components(repo)
     architecture = args.architecture if args.architecture != "auto" else detected["selection_defaults"]["architecture"]
     ci_mode = args.ci_mode if args.ci_mode != "auto" else detected["selection_defaults"]["ci_mode"]
+    ci_layout = args.ci_layout if args.ci_layout != "auto" else ci_layout_default(detected, ci_mode)
+    ci_paths = args.ci_paths
     dist_storage = args.dist_storage if args.dist_storage != "auto" else detected["selection_defaults"].get("dist_storage", "none")
     warnings: list[str] = list(detected.get("notes", []))
     if dist_storage == "artifacts" and architecture in {"committed-dist", "cross-os-dist"}:
         warnings.append("artifact-based dist storage conflicts with a committed dist architecture; prefer local-dist/general plus a release overlay")
     if dist_storage == "git-lfs" and architecture not in {"committed-dist", "cross-os-dist"}:
         warnings.append("Git LFS tracking only matters for committed dist outputs; local-dist/general usually should not add dist/** to .gitattributes")
+    if ci_mode != "direct" and ci_layout == "split":
+        warnings.append("split CI layout only applies to direct CI; falling back to a single job")
+        ci_layout = "single"
 
     justfile_content, just_warnings = render_justfile(repo, detected, architecture, dist_storage)
     warnings.extend(just_warnings)
     ci_content = ""
     if ci_mode != "none":
-        ci_content = render_ci_workflow(repo, detected, ci_mode)
+        ci_content, ci_warnings = render_ci_workflow(repo, detected, ci_mode, ci_layout, ci_paths)
+        warnings.extend(ci_warnings)
     release_requested = bool(args.release_overlay or detected["selection_defaults"].get("release_overlay") or architecture == "cross-os-dist")
     release_content = ""
     if release_requested:
@@ -1703,6 +1828,8 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
     selected = {
         "architecture": architecture,
         "ci_mode": ci_mode,
+        "ci_layout": ci_layout,
+        "ci_paths": ci_paths,
         "release_overlay": bool(release_requested and release_content),
         "dist_storage": dist_storage,
     }
@@ -1799,6 +1926,8 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("repo_root")
     render.add_argument("--architecture", choices=["auto", "general", "local-dist", "committed-dist", "cross-os-dist"], default="auto")
     render.add_argument("--ci-mode", choices=["auto", "just", "direct", "none"], default="auto")
+    render.add_argument("--ci-layout", choices=["auto", "single", "split"], default="auto")
+    render.add_argument("--ci-paths", choices=["none", "components"], default="none")
     render.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
     render.add_argument("--release-overlay", action="store_true")
     render.add_argument("--pretty", action="store_true")
@@ -1808,6 +1937,8 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("repo_root")
     update.add_argument("--architecture", choices=["auto", "general", "local-dist", "committed-dist", "cross-os-dist"], default="auto")
     update.add_argument("--ci-mode", choices=["auto", "just", "direct", "none"], default="auto")
+    update.add_argument("--ci-layout", choices=["auto", "single", "split"], default="auto")
+    update.add_argument("--ci-paths", choices=["none", "components"], default="none")
     update.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
     update.add_argument("--release-overlay", action="store_true")
     update.add_argument("--pretty", action="store_true")
