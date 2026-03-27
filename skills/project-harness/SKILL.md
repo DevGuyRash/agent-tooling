@@ -120,6 +120,8 @@ Default behavior for no-example repos:
 - store decisions and warnings in `.local/harness/state.json`
 
 Load `<skills-file-root>/references/generic-harnesses.md` for the full no-example policy.
+Load `<skills-file-root>/references/extrapolation-protocol.md` when you need the
+full detect -> infer -> render -> stop protocol for partially explicit repos.
 
 ## Distribution choices
 
@@ -159,6 +161,15 @@ Keep path filters manual and explicit; do not infer them unless the repo truly h
 Load `<skills-file-root>/references/ci-workflows.md` for workflow quality rules,
 runner notes, contributor-scale guidance, governance handoff notes, and open-source versus private-repo tradeoffs.
 
+When examples do not match the repo exactly:
+- explore the actual repo first
+- infer from strong signals before weak ones
+- prefer generated defaults when the evidence supports them
+- prefer placeholders, candidate renders, or `none` when the safety boundary is unclear
+- treat example-only assets as patterns, not as repo truth
+- detect broadly, but only promote runnable repo-owned surfaces into generated recipes and workflows
+- leave weak nested surfaces in notes and state instead of turning them into decorative scaffolding
+
 ## Existing-file policy
 
 Managed files are overwritten only when absent or already marked as managed.
@@ -175,6 +186,7 @@ Load these only when relevant:
 - `<skills-file-root>/references/selection.md`
 - `<skills-file-root>/references/distribution-strategies.md`
 - `<skills-file-root>/references/generic-harnesses.md`
+- `<skills-file-root>/references/extrapolation-protocol.md`
 - `<skills-file-root>/references/scenarios.md`
 - `<skills-file-root>/references/ci-workflows.md`
 - `<skills-file-root>/references/existing-files.md`

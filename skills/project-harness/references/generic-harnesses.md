@@ -44,6 +44,29 @@ Look for weak signals, not only explicit scripts:
 
 If the signal is weak, prefer placeholders plus notes over fake certainty.
 
+## Aggressive automation with guardrails
+
+Extrapolate when the repo gives you enough evidence to be useful.
+Do not wait for a perfect example if the build surface is already obvious.
+
+Good extrapolation targets:
+- canonical recipe names
+- package-manager install commands when manifest plus lockfile agree
+- ordinary CI for a single obvious project
+- candidate renders for unmanaged incumbent files
+
+Stop short when the missing piece would change repository policy, not just one command.
+Examples:
+- do not invent a committed dist story from a weak binary hint
+- do not infer path filters from folder names alone
+- do not turn ambiguous docs snippets into authoritative release steps
+
+When confidence is partial:
+- generate the reversible surface
+- attach warnings and notes
+- leave higher-risk surfaces off until the repo is clearer
+- do not create empty per-component scaffolding for weak detections the agent is unlikely to touch
+
 ## When to generate CI anyway
 
 Generate CI only when setup is obvious enough that a first run is likely to
@@ -70,6 +93,9 @@ It should:
 - avoid pretending to know the package manager or test runner
 
 The generated comment block is part of the design, not an error.
+
+Use placeholders as a deliberate fallback when you can name the lifecycle stage
+but cannot defend the exact command.
 
 ## Refinement path
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import re
@@ -513,9 +514,11 @@ def detect_components(repo: Path) -> dict[str, Any]:
         "local_ignored": local_ignored,
     }
 
+    detected_components = classify_components(repo, dedupe_components(components), unique_sorted(ci_systems), unique_sorted(task_runners))
+
     selection_defaults = {
         "architecture": choose_architecture(distribution_hints),
-        "ci_mode": choose_ci_mode(unique_sorted(languages), unique_sorted(ci_systems), components, unique_sorted(task_runners)),
+        "ci_mode": choose_ci_mode(unique_sorted(languages), unique_sorted(ci_systems), detected_components, unique_sorted(task_runners)),
         "release_overlay": bool(binary_targets and not dist_exists),
         "dist_storage": "git-lfs" if dist_lfs_tracked else ("git" if dist_exists and not dist_ignored else ("artifacts" if binary_targets else "none")),
     }
@@ -525,7 +528,7 @@ def detect_components(repo: Path) -> dict[str, Any]:
         "languages": unique_sorted(languages),
         "build_tools": unique_sorted(build_tools),
         "frameworks": unique_sorted(frameworks),
-        "components": dedupe_components(components),
+        "components": detected_components,
         "package_managers": unique_sorted(package_managers),
         "task_runners": unique_sorted(task_runners),
         "ci_systems": unique_sorted(ci_systems),
@@ -561,14 +564,148 @@ def choose_architecture(distribution_hints: dict[str, Any]) -> str:
     return "general"
 
 
+def component_depth(component: dict[str, Any]) -> int:
+    path = component["path"]
+    if path == ".":
+        return 0
+    return len([part for part in path.split("/") if part])
+
+
+def component_root_path(repo: Path, component: dict[str, Any]) -> Path:
+    return repo / component["path"] if component["path"] != "." else repo
+
+
+def workspace_member_patterns(repo: Path, component: dict[str, Any]) -> list[str]:
+    root = component_root_path(repo, component)
+    path = component["path"]
+    patterns: list[str] = []
+    if component["language"] == "rust":
+        cargo_toml = root / "Cargo.toml"
+        data = read_toml(cargo_toml) if cargo_toml.exists() else {}
+        workspace = data.get("workspace", {}) if isinstance(data, dict) else {}
+        members = workspace.get("members", []) if isinstance(workspace, dict) else []
+        if isinstance(members, list):
+            for item in members:
+                if isinstance(item, str):
+                    patterns.append(item if path == "." else f"{path}/{item}")
+    if component["language"] == "javascript":
+        package_json_path = root / "package.json"
+        package_json = read_json(package_json_path) if package_json_path.exists() else {}
+        workspaces = package_json.get("workspaces")
+        packages: list[str] = []
+        if isinstance(workspaces, list):
+            packages = [item for item in workspaces if isinstance(item, str)]
+        elif isinstance(workspaces, dict):
+            raw_packages = workspaces.get("packages", [])
+            if isinstance(raw_packages, list):
+                packages = [item for item in raw_packages if isinstance(item, str)]
+        for item in packages:
+            patterns.append(item if path == "." else f"{path}/{item}")
+    return patterns
+
+
+def matches_workspace_patterns(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def component_has_runnable_surface(repo: Path, component: dict[str, Any]) -> bool:
+    root = component_root_path(repo, component)
+    language = component["language"]
+    if component["path"] == "." or component.get("workspace"):
+        return True
+    if language == "javascript":
+        scripts = component.get("scripts", [])
+        if isinstance(scripts, list) and scripts:
+            return True
+        return any((root / name).exists() for name in ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"])
+    if language == "rust":
+        return bool(component.get("binary_targets")) or (root / "src" / "main.rs").exists() or (root / "src" / "lib.rs").exists()
+    if language == "python":
+        return any((root / name).exists() for name in ["pyproject.toml", "setup.py", "requirements.txt", "requirements-dev.txt"])
+    if language == "go":
+        return (root / "go.mod").exists()
+    if language == "dotnet":
+        return any(root.glob("*.csproj")) or any(root.glob("*.sln"))
+    if language == "java":
+        return any((root / name).exists() for name in ["pom.xml", "build.gradle", "build.gradle.kts"])
+    if language == "cpp":
+        return (root / "CMakeLists.txt").exists()
+    if language == "zig":
+        return (root / "build.zig").exists()
+    if language == "ruby":
+        return (root / "Gemfile").exists()
+    if language == "elixir":
+        return (root / "mix.exs").exists()
+    return False
+
+
+def classify_components(repo: Path, components: list[dict[str, Any]], ci_systems: list[str], task_runners: list[str]) -> list[dict[str, Any]]:
+    classified: list[dict[str, Any]] = []
+    top_level_component_set = bool(components) and all(component_depth(component) <= 1 for component in components if component["path"] != ".")
+    workspace_patterns: list[str] = []
+    for component in components:
+        if component.get("workspace"):
+            workspace_patterns.extend(workspace_member_patterns(repo, component))
+
+    for component in components:
+        candidate = dict(component)
+        runnable_surface = component_has_runnable_surface(repo, component)
+        evidence_strength = "weak"
+        promotion = "candidate"
+        promotion_reason = "nested-or-ambiguous-surface"
+        depth = component_depth(component)
+
+        if not runnable_surface:
+            promotion_reason = "no-defendable-runnable-surface"
+        elif component["path"] == ".":
+            evidence_strength = "strong"
+            promotion = "promoted"
+            promotion_reason = "repo-root-surface"
+        elif component.get("workspace"):
+            evidence_strength = "strong"
+            promotion = "promoted"
+            promotion_reason = "workspace-root-surface"
+        elif matches_workspace_patterns(component["path"], workspace_patterns):
+            evidence_strength = "strong"
+            promotion = "promoted"
+            promotion_reason = "workspace-member"
+        elif depth == 1 and top_level_component_set:
+            evidence_strength = "strong"
+            promotion = "promoted"
+            promotion_reason = "top-level-component-set"
+        elif depth == 1 and (ci_systems or task_runners):
+            evidence_strength = "strong"
+            promotion = "promoted"
+            promotion_reason = "repo-level-tasking-signals"
+
+        candidate["evidence_strength"] = evidence_strength
+        candidate["promotion"] = promotion
+        candidate["promotion_reason"] = promotion_reason
+        candidate["runnable_surface"] = runnable_surface
+        classified.append(candidate)
+    return classified
+
+
+def promoted_components(detected: dict[str, Any]) -> list[dict[str, Any]]:
+    return [component for component in detected.get("components", []) if component.get("promotion") == "promoted"]
+
+
+def promoted_runnable_components(detected: dict[str, Any]) -> list[dict[str, Any]]:
+    return [component for component in promoted_components(detected) if component.get("runnable_surface")]
+
+
 def choose_ci_mode(languages: list[str], ci_systems: list[str], components: list[dict[str, Any]], task_runners: list[str]) -> str:
+    promoted = [component for component in components if component.get("promotion") == "promoted" and component.get("runnable_surface", True)]
+    promoted_languages = unique_sorted([component["language"] for component in promoted])
     if any(system != "github-actions" for system in ci_systems):
         return "none"
-    if not languages and not components and not task_runners:
+    if not promoted and not task_runners:
+        return "none"
+    if not promoted_languages and not promoted and not task_runners:
         return "none"
     if ci_systems:
         return "direct"
-    if len(languages) > 1 or len(components) > 1:
+    if len(promoted_languages) > 1 or len(promoted) > 1:
         return "direct"
     return "just"
 
@@ -576,9 +713,12 @@ def choose_ci_mode(languages: list[str], ci_systems: list[str], components: list
 def derive_notes(detected: dict[str, Any]) -> list[str]:
     notes: list[str] = []
     components = detected.get("components", [])
+    promoted = promoted_components(detected)
+    promoted_runnable = promoted_runnable_components(detected)
+    candidate_components = [component for component in components if component.get("promotion") != "promoted"]
     task_runners = detected.get("task_runners", [])
     hints = detected.get("distribution_hints", {})
-    if not components and not task_runners:
+    if not promoted_runnable and not task_runners:
         notes.append("No build tool or task runner was detected. Generate a placeholder harness and replace the canonical recipes with project-specific commands.")
     if hints.get("has_compiled_binaries") and not hints.get("dist_exists"):
         notes.append("Compiled binary targets were detected without an existing dist/. Choose explicitly between local-dist, committed-dist, cross-os-dist, or CI-built artifacts.")
@@ -588,8 +728,13 @@ def derive_notes(detected: dict[str, Any]) -> list[str]:
         notes.append("dist/ appears to be tracked by Git LFS. Verify archive behavior and bandwidth settings before relying on repository ZIP downloads.")
     if any(system != "github-actions" for system in detected.get("ci_systems", [])):
         notes.append("A non-GitHub CI system is present, so GitHub workflow generation defaults to none unless you override it.")
-    if len(components) > 1:
+    if len(promoted) > 1:
         notes.append("Multiple components were detected. Prefer component-prefixed recipes plus aggregate top-level recipes.")
+    if candidate_components:
+        summary = ", ".join(component["path"] for component in candidate_components[:5])
+        if len(candidate_components) > 5:
+            summary += ", ..."
+        notes.append(f"Candidate components were detected but withheld from generated surfaces until stronger repo-level evidence exists: {summary}.")
     return notes
 
 
@@ -610,7 +755,9 @@ def component_cd(command: str, component: dict[str, Any]) -> str:
     path = component["path"]
     if path == ".":
         return command
-    return f"cd {shell_quote_path(path)} && {command}"
+    # Keep component-scoped commands self-contained so multiline CI run blocks
+    # do not inherit a prior `cd` from an earlier command.
+    return f"(cd {shell_quote_path(path)} && {command})"
 
 
 def manager_script_command(manager: str, script: str, *, passthrough_args: bool = False) -> str:
@@ -933,7 +1080,7 @@ def make_initial_recipe_commands(repo: Path, detected: dict[str, Any]) -> dict[s
             if value not in commands[key]:
                 commands[key].append(value)
 
-    for component in detected["components"]:
+    for component in promoted_runnable_components(detected):
         component_commands = commands_for_component(component, repo)
         commands = merge_recipe_commands(commands, component_commands)
 
@@ -966,7 +1113,7 @@ def choose_dist_plan(detected: dict[str, Any], architecture: str) -> dict[str, A
         'exe_suffix := if os() == "windows" { ".exe" } else { "" }',
     ]
 
-    for component in detected["components"]:
+    for component in promoted_runnable_components(detected):
         if component["language"] == "rust" and component.get("binary_targets"):
             supported_any = True
             dist_build.append(component_cd("cargo build --release", component))
@@ -1075,7 +1222,7 @@ def component_label(component: dict[str, Any]) -> str:
 
 
 def render_component_recipe_blocks(repo: Path, detected: dict[str, Any]) -> str:
-    components = detected.get("components", [])
+    components = promoted_runnable_components(detected)
     if len(components) <= 1 and not any(component.get("workspace") for component in components):
         return ""
     blocks: list[str] = []
@@ -1103,7 +1250,7 @@ def render_component_recipe_blocks(repo: Path, detected: dict[str, Any]) -> str:
 
 
 def guidance_comment_block(detected: dict[str, Any]) -> str:
-    if detected.get("components") or detected.get("task_runners"):
+    if promoted_runnable_components(detected) or detected.get("task_runners"):
         return ""
     return (
         "# No native build surface was detected.\n"
@@ -1200,10 +1347,10 @@ def render_justfile(repo: Path, detected: dict[str, Any], architecture: str, dis
 
 def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
     steps: list[str] = []
-    languages = set(detected["languages"])
-    package_managers = set(detected["package_managers"])
-    build_tools = set(detected["build_tools"])
-    components = detected.get("components", [])
+    components = promoted_runnable_components(detected)
+    languages = {component["language"] for component in components}
+    package_managers = {component.get("package_manager", component.get("build_tool")) for component in components}
+    build_tools = {component["build_tool"] for component in components}
 
     def component_root(component: dict[str, Any]) -> Path:
         path = component["path"]
@@ -1408,8 +1555,9 @@ def render_ci_trigger_block(detected: dict[str, Any], ci_paths: str) -> tuple[st
     if ci_paths != "components":
         return "on:\n  push:\n    branches: [main]\n  pull_request:", []
 
-    component_paths = sorted({component["path"] for component in detected.get("components", []) if component["path"] != "."})
-    if any(component["path"] == "." for component in detected.get("components", [])):
+    components = promoted_runnable_components(detected)
+    component_paths = sorted({component["path"] for component in components if component["path"] != "."})
+    if any(component["path"] == "." for component in components):
         return (
             "on:\n  push:\n    branches: [main]\n  pull_request:",
             ["component path filters were omitted because root-level components or workspace manifests can change generated CI behavior"],
@@ -1602,6 +1750,7 @@ def write_state(repo: Path, detected: dict[str, Any], selected: dict[str, Any], 
             "languages": detected["languages"],
             "build_tools": detected["build_tools"],
             "frameworks": detected["frameworks"],
+            "components": detected.get("components", []),
             "task_runners": detected["task_runners"],
             "ci_systems": detected["ci_systems"],
             "distribution_hints": detected.get("distribution_hints", {}),

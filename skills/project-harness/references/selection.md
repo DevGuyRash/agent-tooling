@@ -4,6 +4,10 @@ Load this file after detection.
 
 There is no single "best" harness. Pick three axes deliberately.
 
+When signals are mixed, choose the more reversible axis value first.
+The goal is a harness that can be refined safely, not one that looks maximally
+complete on the first pass.
+
 ## Axis 1: Harness architecture
 
 ### `general`
@@ -17,6 +21,7 @@ Result:
 - canonical lifecycle recipes only
 - no dist section
 - best default for no-example repos
+- best fallback when the distribution story is only implied
 
 ### `local-dist`
 
@@ -40,6 +45,8 @@ Result:
 - `dist/` belongs to the repository
 - `clean-build` must preserve committed outputs
 - choose normal git versus Git LFS separately
+
+Do not choose this from weak evidence alone.
 
 ### `cross-os-dist`
 
@@ -86,6 +93,9 @@ Use when:
 - binaries are large or frequently updated
 - you want to keep normal git history source-first
 
+Prefer this over speculative committed outputs when the build is clear but the
+repository storage policy is not.
+
 ## Axis 3: CI mode
 
 ### `none`
@@ -109,6 +119,21 @@ Use when:
 - the repo is a monorepo or workspace
 - the workflow needs matrices, artifacts, or split jobs
 - you want CI logic to stay explicit instead of hidden behind one command
+
+Keep the first choice reversible:
+- single-job direct CI is the default direct shape
+- split direct CI is an explicit overlay, not an automatic promotion
+- path filters stay manual and fail closed when root workspace surfaces exist
+
+## Mixed-signal rule
+
+If one axis is well supported and another is weak, commit only the supported one.
+
+Examples:
+- clear lifecycle plus unclear dist story -> generate commands, keep architecture at `general`
+- clear commands plus unsafe trigger boundaries -> generate CI without path filters
+- obvious local harness plus ambiguous CI bootstrap -> render the `justfile`, keep CI at `none`
+- broad raw detection plus only one promoted runnable surface -> keep CI and recipes narrow instead of promoting every detected subtree
 
 ## Recommended combinations
 

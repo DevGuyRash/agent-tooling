@@ -2,6 +2,9 @@
 
 Load this file for GitHub Actions decisions.
 
+For the general detect -> infer -> render protocol, load
+`<skills-file-root>/references/extrapolation-protocol.md`.
+
 ## Templates in this skill
 
 Generated templates:
@@ -98,6 +101,27 @@ Path filters and docs-only skips can save minutes, but they are intentionally no
 Only add them when the repo has stable ownership boundaries and a missed run would not hide a required check.
 The example component-path template is an overlay, not a generated default.
 
+## CI safety matrix
+
+Use this matrix when examples do not match the repo exactly:
+
+- Strong lifecycle, simple repo, clear bootstrap:
+  generate ordinary CI
+- Strong lifecycle, polyglot or multi-component repo:
+  generate `direct` CI
+- Need stable review surfaces and the repo explicitly chose them:
+  allow split direct CI
+- Need path filters and every relevant build surface is nested cleanly under owned components:
+  allow manual component path filters
+- Any root-level workspace or shared manifest changes generated CI behavior:
+  omit path filters and warn instead
+
+Do not treat split CI or path filtering as the default reward for a large repo.
+Treat them as overlays that need an explicit safety case.
+
+Only promoted runnable surfaces should widen generated CI.
+Weak nested detections belong in notes/state until the repo makes them authoritative.
+
 ## Contributor-Scale Guidance
 
 When many people contribute, the main CI risks are not basic syntax or runner setup.
@@ -128,6 +152,15 @@ For enforcement, hand off to `gitops-workflow`, which owns:
 - label and review-governance surfaces
 
 That split keeps `project-harness` focused on command and CI scaffolding and avoids duplicating governance logic in two skills.
+
+## Generated versus example-only CI assets
+
+Generated templates are part of the skill's automatic render path.
+Example-only templates are patterns to adapt, not inferred repo truth.
+
+When you load an example-only template:
+- use it to understand the shape of a solution
+- do not treat its commands, triggers, or ownership boundaries as evidence about the repo you are editing
 
 ## Cross-OS workflow policy
 

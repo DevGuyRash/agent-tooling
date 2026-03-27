@@ -160,6 +160,21 @@ def main(argv: list[str] | None = None) -> int:
         assert "      - 'backend/**'" in ci3b_paths, ci3b_paths
         assert "      - 'frontend/**'" in ci3b_paths, ci3b_paths
         assert "ci.yml" in render3b_paths["candidates"], render3b_paths
+        assert "(cd 'backend' && cargo test " in ci3b_paths, ci3b_paths
+        assert "(cd 'frontend' && npm ci)" in ci3b_paths, ci3b_paths
+        assert "\n          cd 'backend' && cargo test " not in ci3b_paths, ci3b_paths
+
+        repo3d = tmpdir / "rust-bins"
+        repo3d.mkdir()
+        write(repo3d / "cli-a" / "Cargo.toml", "[package]\nname = 'cli-a'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'cli-a'\npath = 'src/main.rs'\n")
+        write(repo3d / "cli-a" / "src" / "main.rs", "fn main() {}\n")
+        write(repo3d / "cli-b" / "Cargo.toml", "[package]\nname = 'cli-b'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'cli-b'\npath = 'src/main.rs'\n")
+        write(repo3d / "cli-b" / "src" / "main.rs", "fn main() {}\n")
+        render3d = run_json(script, "render", str(repo3d), "--architecture", "cross-os-dist")
+        release3d = (repo3d / ".local" / "harness" / "render" / "release-cross-os.yml").read_text(encoding="utf-8")
+        assert "release-cross-os.yml" in render3d["candidates"], render3d
+        assert "(cd 'cli-a' && cargo build --release)" in release3d, release3d
+        assert "(cd 'cli-b' && cargo build --release)" in release3d, release3d
 
         repo3c = tmpdir / "root-workspace"
         repo3c.mkdir()
@@ -170,6 +185,65 @@ def main(argv: list[str] | None = None) -> int:
         ci3c_paths = (repo3c / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert any("root-level components or workspace manifests" in warning for warning in render3c_paths["warnings"]), render3c_paths
         assert "    paths:\n" not in ci3c_paths, ci3c_paths
+
+        repo3e = tmpdir / "guided-components"
+        repo3e.mkdir()
+        write(repo3e / "app" / "package.json", json.dumps({
+            "name": "app",
+            "scripts": {"test": "node test.js", "lint": "node lint.js"}
+        }, indent=2) + "\n")
+        write(repo3e / "app" / "package-lock.json", "{\n}\n")
+        write(repo3e / "tools" / "internal" / "helper" / "package.json", json.dumps({
+            "name": "helper"
+        }, indent=2) + "\n")
+        render3e = run_json(script, "render", str(repo3e))
+        just3e = (repo3e / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        state3e = json.loads((repo3e / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        helper3e = next(component for component in state3e["detected"]["components"] if component["path"] == "tools/internal/helper")
+        app3e = next(component for component in state3e["detected"]["components"] if component["path"] == "app")
+        assert app3e["promotion"] == "promoted", state3e
+        assert app3e["runnable_surface"] is True, state3e
+        assert helper3e["promotion"] == "candidate", state3e
+        assert helper3e["runnable_surface"] is False, state3e
+        assert "(cd 'app' && npm run test --if-present -- {{args}})" in just3e, just3e
+        assert "tools-internal-helper-test" not in just3e, just3e
+        assert "ci.yml" in render3e["candidates"], render3e
+        ci3e = (repo3e / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "cache-dependency-path: app/package-lock.json" in ci3e, ci3e
+        assert "tools/internal/helper" not in ci3e, ci3e
+        assert any("tools/internal/helper" in note for note in state3e["notes"]), state3e
+
+        repo3f = tmpdir / "weak-manifest-only"
+        repo3f.mkdir()
+        write(repo3f / "tools" / "helper" / "package.json", json.dumps({
+            "name": "helper"
+        }, indent=2) + "\n")
+        render3f = run_json(script, "render", str(repo3f))
+        just3f = (repo3f / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        state3f = json.loads((repo3f / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        helper3f = next(component for component in state3f["detected"]["components"] if component["path"] == "tools/helper")
+        assert helper3f["promotion"] == "candidate", state3f
+        assert helper3f["runnable_surface"] is False, state3f
+        assert "No native build surface was detected" in just3f, just3f
+        assert "tools-helper-test" not in just3f, just3f
+        assert "ci.yml" not in render3f["candidates"], render3f
+
+        repo3g = tmpdir / "cross-language-candidate"
+        repo3g.mkdir()
+        write(repo3g / "app" / "package.json", json.dumps({
+            "name": "app",
+            "scripts": {"test": "node test.js", "lint": "node lint.js"}
+        }, indent=2) + "\n")
+        write(repo3g / "app" / "package-lock.json", "{\n}\n")
+        write(repo3g / "tools" / "helper" / "pyproject.toml", "[build-system]\nrequires = ['setuptools']\nbuild-backend = 'setuptools.build_meta'\n")
+        render3g = run_json(script, "render", str(repo3g))
+        state3g = json.loads((repo3g / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        helper3g = next(component for component in state3g["detected"]["components"] if component["path"] == "tools/helper")
+        assert render3g["selected"]["ci_mode"] == "just", render3g
+        assert helper3g["promotion"] == "candidate", state3g
+        ci3g = (repo3g / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "actions/setup-node@v6" in ci3g, ci3g
+        assert "actions/setup-python@v6" not in ci3g, ci3g
 
         # 4) dist renders keep justfiles parseable and clear stale candidates between runs
         repo4 = tmpdir / "dist-renders"
