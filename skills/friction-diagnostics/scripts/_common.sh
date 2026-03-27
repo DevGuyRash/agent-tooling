@@ -383,6 +383,60 @@ read_session_value() {
   sed -n "s/^${key}=//p" "$session_file" | sed -n '1p'
 }
 
+git_repo_root() {
+  if command -v git >/dev/null 2>&1; then
+    git rev-parse --show-toplevel 2>/dev/null || true
+  else
+    printf '\n'
+  fi
+}
+
+context_dir_for_repo() {
+  repo_root=$1
+  default_dir=$repo_root/.local/context
+  if [ -d "$default_dir" ]; then
+    printf '%s\n' "$default_dir"
+    return 0
+  fi
+
+  existing=$(
+    find "$repo_root" -maxdepth 2 -type d -path "$repo_root/.local*/context" 2>/dev/null |
+      LC_ALL=C sort |
+      sed -n '1p'
+  )
+  if [ -n "$existing" ]; then
+    printf '%s\n' "$existing"
+    return 0
+  fi
+
+  mkdir -p "$default_dir"
+  printf '%s\n' "$default_dir"
+}
+
+temp_root_dir() {
+  if [ -n "${TMPDIR-}" ]; then
+    printf '%s\n' "$TMPDIR"
+  elif [ -n "${TEMP-}" ]; then
+    printf '%s\n' "$TEMP"
+  elif [ -n "${TMP-}" ]; then
+    printf '%s\n' "$TMP"
+  else
+    printf '/tmp\n'
+  fi
+}
+
+default_events_file() {
+  repo_root=$(git_repo_root)
+  if [ -n "$repo_root" ]; then
+    context_dir=$(context_dir_for_repo "$repo_root")
+    printf '%s\n' "$context_dir/friction/events.jsonl"
+    return 0
+  fi
+
+  cwd_hash=$(short_hash "$(pwd)" 12)
+  printf '%s\n' "$(temp_root_dir)/agent-friction/$cwd_hash/events.jsonl"
+}
+
 default_owner_for_surface() {
   case "$1" in
     skill) printf 'skill-owner\n' ;;

@@ -8,44 +8,35 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 print_help() {
   cat <<'EOF'
 Usage:
-  sh scripts/build-index.sh --task-dir "$FRICTION_TASK_DIR"
+  sh scripts/build-index.sh --events-file /path/to/events.jsonl
 
 Options:
-  --task-dir PATH
+  --events-file PATH
   --help
 EOF
 }
 
-task_dir=${FRICTION_TASK_DIR-}
+events_file=${FRICTION_EVENTS_FILE-}
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task-dir) task_dir=${2-}; shift 2 ;;
+    --events-file) events_file=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
 
-[ -n "$task_dir" ] || die "--task-dir is required"
-[ -d "$task_dir" ] || die "Task directory not found: $task_dir"
+[ -n "$events_file" ] || die "--events-file is required"
+events_dir=$(dirname "$events_file")
+[ -d "$events_dir" ] || mkdir -p "$events_dir"
 
-index_file=$task_dir/INDEX.md
-session_file=$task_dir/SESSION.txt
-events_jsonl=$task_dir/events.jsonl
-lock_dir=$task_dir/.build-index.lock
+index_file=$events_dir/INDEX.md
+lock_dir=$events_dir/.build-index.lock
 lock_acquired=0
-category_counts_file=
-log_counts_file=
-index_tmp_file=
-
-sort_count_then_name() {
-  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr -k2,2 "$@"
-}
+summary_tmp=
 
 cleanup() {
-  rm -f ${category_counts_file:+"$category_counts_file"} \
-    ${log_counts_file:+"$log_counts_file"} \
-    ${index_tmp_file:+"$index_tmp_file"}
+  rm -f ${summary_tmp:+"$summary_tmp"}
   if [ "${lock_acquired:-0}" -eq 1 ] && [ -n "${lock_dir-}" ]; then
     rm -f "$lock_dir/pid" 2>/dev/null || true
     rmdir "$lock_dir" 2>/dev/null || true
@@ -53,53 +44,20 @@ cleanup() {
 }
 
 acquire_lock() {
-  missing_pid_retries=0
-  invalid_pid_retries=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
-    if [ ! -f "$lock_dir/pid" ]; then
-      missing_pid_retries=$((missing_pid_retries + 1))
-      invalid_pid_retries=0
-      if [ "$missing_pid_retries" -ge 2 ]; then
-        rmdir "$lock_dir" 2>/dev/null || true
-        missing_pid_retries=0
-        continue
-      fi
-      sleep 1
-      continue
+    if [ -f "$lock_dir/pid" ]; then
+      lock_pid=$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)
+      case "$lock_pid" in
+        ''|*[!0-9]*) ;;
+        *)
+          if ! kill -0 "$lock_pid" 2>/dev/null; then
+            rm -f "$lock_dir/pid" 2>/dev/null || true
+            rmdir "$lock_dir" 2>/dev/null || true
+            continue
+          fi
+          ;;
+      esac
     fi
-
-    lock_pid=$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)
-    case "$lock_pid" in
-      '')
-        missing_pid_retries=$((missing_pid_retries + 1))
-        invalid_pid_retries=0
-        if [ "$missing_pid_retries" -ge 2 ]; then
-          rm -f "$lock_dir/pid" 2>/dev/null || true
-          rmdir "$lock_dir" 2>/dev/null || true
-          missing_pid_retries=0
-          continue
-        fi
-        ;;
-      *[!0-9]*)
-        invalid_pid_retries=$((invalid_pid_retries + 1))
-        missing_pid_retries=0
-        if [ "$invalid_pid_retries" -ge 2 ]; then
-          rm -f "$lock_dir/pid" 2>/dev/null || true
-          rmdir "$lock_dir" 2>/dev/null || true
-          invalid_pid_retries=0
-          continue
-        fi
-        ;;
-      *)
-        missing_pid_retries=0
-        invalid_pid_retries=0
-        if ! kill -0 "$lock_pid" 2>/dev/null; then
-          rm -f "$lock_dir/pid" 2>/dev/null || true
-          rmdir "$lock_dir" 2>/dev/null || true
-          continue
-        fi
-        ;;
-    esac
     sleep 1
   done
   lock_acquired=1
@@ -109,113 +67,111 @@ acquire_lock() {
 trap cleanup EXIT HUP INT TERM
 acquire_lock
 
-task_id=$(basename "$task_dir")
-generated=$(date -u '+%Y-%m-%d %H:%M:%S %Z')
-task_summary=
-if [ -f "$session_file" ]; then
-  task_summary_file=$(grep '^FRICTION_TASK_SUMMARY_FILE=' "$session_file" | sed 's/^FRICTION_TASK_SUMMARY_FILE=//' || true)
-  if [ -n "$task_summary_file" ] && [ -f "$task_summary_file" ]; then
-    task_summary=$(cat "$task_summary_file")
-  else
-    task_summary=$(grep '^FRICTION_TASK_SUMMARY=' "$session_file" | sed 's/^FRICTION_TASK_SUMMARY=//' || true)
-  fi
-fi
-
-total_entries=0
-if [ -f "$events_jsonl" ]; then
-  total_entries=$(wc -l <"$events_jsonl" | tr -d ' ')
-fi
-
-if [ "$total_entries" -eq 0 ]; then
+if [ ! -f "$events_file" ]; then
   rm -f "$index_file"
   printf '%s\n' "$index_file"
   exit 0
 fi
 
-category_counts_file=$(mktemp "$task_dir/.category-counts.XXXXXX.tmp")
-log_counts_file=$(mktemp "$task_dir/.log-counts.XXXXXX.tmp")
+summary_tmp=$(mktemp "$events_dir/.index-summary.XXXXXX.tmp")
+python3 - "$events_file" >"$summary_tmp" <<'PY'
+import json
+import sys
+from collections import Counter
+from pathlib import Path
 
-awk '
-  function extract(line, key,    start, rest, val, ch) {
-    start = "\"" key "\":\""
-    if ((idx = index(line, start)) == 0) return ""
-    rest = substr(line, idx + length(start))
-    val = ""
-    while (length(rest) > 0) {
-      ch = substr(rest, 1, 1)
-      if (ch == "\\") {
-        val = val substr(rest, 1, 2)
-        rest = substr(rest, 3)
-      } else if (ch == "\"") {
-        break
-      } else {
-        val = val ch
-        rest = substr(rest, 2)
-      }
-    }
-    return val
-  }
-  {
-    if ($0 == "") next
-    category = extract($0, "derived_category")
-    log_file = extract($0, "log_file")
-    if (category != "") category_count[category]++
-    if (log_file != "") log_count[log_file]++
-  }
-  END {
-    for (k in category_count) {
-      printf "C\t%d\t%s\n", category_count[k], k
-    }
-    for (k in log_count) {
-      printf "L\t%d\t%s\n", log_count[k], k
-    }
-  }
-' "$events_jsonl" |
-  while IFS="$(printf '\t')" read -r kind count value; do
-    case "$kind" in
-      C) printf '%s\t%s\n' "$count" "$value" >>"$category_counts_file" ;;
-      L) printf '%s\t%s\n' "$count" "$value" >>"$log_counts_file" ;;
-    esac
-  done
+events_path = Path(sys.argv[1])
+lines = []
+with events_path.open("r", encoding="utf-8") as fh:
+    for raw in fh:
+        raw = raw.strip()
+        if not raw:
+            continue
+        lines.append(json.loads(raw))
 
-if [ -s "$category_counts_file" ]; then
-  category_lines=$(sort_count_then_name "$category_counts_file")
-else
-  category_lines=
+if not lines:
+    sys.exit(10)
+
+categories = Counter()
+fingerprints = Counter()
+agent_kinds = Counter()
+dates = Counter()
+
+for event in lines:
+    if event.get("derived_category"):
+        categories[event["derived_category"]] += 1
+    if event.get("fingerprint"):
+        fingerprints[event["fingerprint"]] += 1
+    if event.get("provenance_source") == "explicit" and event.get("agent_kind"):
+        agent_kinds[event["agent_kind"]] += 1
+    ts = event.get("recorded_at", "")
+    if len(ts) >= 10:
+        dates[ts[:10]] += 1
+
+def write_count_block(prefix, counter):
+    for key, count in sorted(counter.items(), key=lambda item: (-item[1], item[0])):
+        print(f"{prefix}\t{count}\t{key}")
+
+print(f"META\ttotal\t{len(lines)}")
+print(f"META\tfirst\t{lines[0].get('recorded_at', '')}")
+print(f"META\tlast\t{lines[-1].get('recorded_at', '')}")
+print(f"META\trepo_root\t{lines[-1].get('repo_root', '')}")
+print(f"META\tevents_file\t{events_path}")
+write_count_block("CATEGORY", categories)
+write_count_block("FINGERPRINT", fingerprints)
+write_count_block("AGENT_KIND", agent_kinds)
+write_count_block("DATE", dates)
+PY
+status=$?
+if [ "$status" -eq 10 ]; then
+  rm -f "$index_file"
+  printf '%s\n' "$index_file"
+  exit 0
 fi
+[ "$status" -eq 0 ] || exit "$status"
 
-if [ -s "$log_counts_file" ]; then
-  log_lines=$(sort_count_then_name "$log_counts_file")
-  log_file_count=$(wc -l <"$log_counts_file" | tr -d ' ')
-else
-  log_lines=
-  log_file_count=0
-fi
+generated=$(date -u '+%Y-%m-%d %H:%M:%S %Z')
+total_entries=$(awk -F '\t' '$1=="META" && $2=="total" {print $3}' "$summary_tmp")
+first_recorded=$(awk -F '\t' '$1=="META" && $2=="first" {print $3}' "$summary_tmp")
+last_recorded=$(awk -F '\t' '$1=="META" && $2=="last" {print $3}' "$summary_tmp")
+repo_root=$(awk -F '\t' '$1=="META" && $2=="repo_root" {print $3}' "$summary_tmp")
 
-index_tmp_file=$(mktemp "$task_dir/.index.XXXXXX.tmp")
+index_tmp=$(mktemp "$events_dir/.index.XXXXXX.tmp")
 {
-  printf '# Friction Index: %s\n' "$task_id"
+  printf '# Friction Index\n'
   write_md_field "Generated" "$generated"
-  write_md_field "Task dir" "$task_dir"
-  if [ -n "$task_summary" ]; then
-    write_md_field "Task summary" "$task_summary"
+  write_md_field "Events file" "$events_file"
+  if [ -n "$repo_root" ]; then
+    write_md_field "Repo root" "$repo_root"
   fi
-  write_md_field "Log files" "$log_file_count"
   write_md_field "Entries" "$total_entries"
-  printf -- '\n## Category counts\n\n'
-  if [ -n "$category_lines" ]; then
-    printf '%s\n' "$category_lines" | awk -F '\t' '{printf "- `%s` - %s\n", $2, $1}'
+  write_md_field "First recorded" "$first_recorded"
+  write_md_field "Last recorded" "$last_recorded"
+  printf '\n## Category Counts\n\n'
+  if grep -q '^CATEGORY	' "$summary_tmp"; then
+    awk -F '\t' '$1=="CATEGORY" {printf "- `%s` - %s\n", $3, $2}' "$summary_tmp"
   else
-    printf '_No categorized entries yet._\n'
+    printf '_No categorized events._\n'
   fi
-  printf -- '\n## Log files\n\n'
-  if [ -n "$log_lines" ]; then
-    printf '%s\n' "$log_lines" | awk -F '\t' '{printf "- `%s` - %s entries\n", $2, $1}'
+  printf '\n## Top Fingerprints\n\n'
+  if grep -q '^FINGERPRINT	' "$summary_tmp"; then
+    awk -F '\t' '$1=="FINGERPRINT" {printf "- `%s` - %s events\n", $3, $2}' "$summary_tmp" | sed -n '1,10p'
   else
-    printf '_No log files yet._\n'
+    printf '_No fingerprints yet._\n'
   fi
-} >"$index_tmp_file"
+  printf '\n## Agent Kinds\n\n'
+  if grep -q '^AGENT_KIND	' "$summary_tmp"; then
+    awk -F '\t' '$1=="AGENT_KIND" {printf "- `%s` - %s\n", $3, $2}' "$summary_tmp"
+  else
+    printf '_No explicit provenance recorded._\n'
+  fi
+  printf '\n## Date Counts\n\n'
+  if grep -q '^DATE	' "$summary_tmp"; then
+    awk -F '\t' '$1=="DATE" {printf "- `%s` - %s\n", $3, $2}' "$summary_tmp"
+  else
+    printf '_No date counts available._\n'
+  fi
+} >"$index_tmp"
 
-mv -f "$index_tmp_file" "$index_file"
-index_tmp_file=
+mv -f "$index_tmp" "$index_file"
 printf '%s\n' "$index_file"

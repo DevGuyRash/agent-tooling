@@ -13,8 +13,8 @@ scripts/build-index.ps1
 scripts/build-index.sh
 scripts/categorize.ps1
 scripts/categorize.sh
-scripts/init-log.ps1
-scripts/init-log.sh
+scripts/query-friction.ps1
+scripts/query-friction.sh
 scripts/report-friction.ps1
 scripts/report-friction.sh
 tests/smoke-posix.sh

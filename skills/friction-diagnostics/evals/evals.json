@@ -2,21 +2,21 @@
   "skill_name": "friction-diagnostics",
   "evals": [
     {
-      "id": "eval-init-and-report",
-      "prompt": "Initialize a friction log for a top-level task, record one skill-related failure entry, and leave behind INDEX.md.",
-      "expected_output": "A task directory under the temp root containing SESSION.txt, one markdown log file, and INDEX.md. The log file contains a structured entry with category, source, action, expected outcome, actual outcome, and interpretation.",
+      "id": "eval-report-default-path",
+      "prompt": "Record one friction event from inside a git repository using direct CLI flags.",
+      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local context area, and INDEX.md exists adjacent to it. The event contains source, action, expected outcome, actual outcome, interpretation, and derived category fields.",
       "files": []
     },
     {
-      "id": "eval-subagent-reuse",
-      "prompt": "Reuse an existing task id for a subagent and record a second friction file in the same task directory.",
-      "expected_output": "A second timestamped markdown log file exists in the same task directory, and INDEX.md reports two log files.",
+      "id": "eval-json-stdin",
+      "prompt": "Report one friction event using --from-json - over stdin.",
+      "expected_output": "The event is appended to the same canonical events.jsonl, and no temp-file contract is required.",
       "files": []
     },
     {
-      "id": "eval-code-bug",
-      "prompt": "Encounter a code bug such as a wrong operator or missing null check while working on a task.",
-      "expected_output": "A friction entry is written with the code surface, including instruction source pointing to the file and line, the actual error, and an interpretation of what the code appeared to promise.",
+      "id": "eval-query-by-anchor",
+      "prompt": "Query the canonical events.jsonl for events anchored to a specific file path.",
+      "expected_output": "The query output filters the event stream by anchor path without relying on per-agent markdown logs or session files.",
       "files": []
     }
   ]

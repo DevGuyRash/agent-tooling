@@ -1,14 +1,51 @@
 Set-StrictMode -Version Latest
 
-$script:SCHEMA_VERSION = '2.1.0'
+$script:SCHEMA_VERSION = '3.0.0'
 $script:TAXONOMY_VERSION = '2.0.0'
+$script:KNOWN_EVENT_KEYS = @(
+    'title',
+    'instruction_source',
+    'instruction_text',
+    'action_taken',
+    'expected_outcome',
+    'actual_outcome',
+    'interpretation',
+    'observed_surface',
+    'surface',
+    'mode',
+    'run_effect',
+    'guidance_quality',
+    'impact',
+    'confidence',
+    'evidence_type',
+    'command',
+    'tool_name',
+    'exit_code',
+    'stderr',
+    'stdout_excerpt',
+    'owner_hint',
+    'component_hint',
+    'incident_status',
+    'workaround_used',
+    'workaround_note',
+    'retries_lost',
+    'minutes_lost',
+    'fingerprint_key',
+    'tags',
+    'agent_name',
+    'agent_kind',
+    'role',
+    'anchors',
+    'quick',
+    'force'
+)
 
 function Get-Slug {
     param([string]$Text)
-    if ([string]::IsNullOrWhiteSpace($Text)) { return "friction-task" }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return 'friction-task' }
     $slug = $Text.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
     $slug = $slug.Trim('-')
-    if ([string]::IsNullOrWhiteSpace($slug)) { return "friction-task" }
+    if ([string]::IsNullOrWhiteSpace($slug)) { return 'friction-task' }
     return $slug
 }
 
@@ -62,7 +99,7 @@ function Add-CsvItem {
 
 function Get-FirstLine {
     param([string]$Text)
-    if ($null -eq $Text) { return "" }
+    if ($null -eq $Text) { return '' }
     return (($Text -split "`r?`n")[0])
 }
 
@@ -74,7 +111,7 @@ function Get-TruncatedLine {
     $line = Get-FirstLine $Text
     if ($line.Length -le $Limit) { return $line }
     if ($Limit -lt 4) { return $line.Substring(0, 1) }
-    return ($line.Substring(0, $Limit - 3) + "...")
+    return ($line.Substring(0, $Limit - 3) + '...')
 }
 
 function Get-TruncatedText {
@@ -82,10 +119,11 @@ function Get-TruncatedText {
         [string]$Text,
         [int]$Limit = 600
     )
+    if ($null -eq $Text) { return '' }
     if ($Text.Length -le $Limit) { return $Text }
     $prefixLen = $Limit - 15
     if ($prefixLen -lt 1) { $prefixLen = 1 }
-    return $Text.Substring(0, $prefixLen) + "... [truncated]"
+    return $Text.Substring(0, $prefixLen) + '... [truncated]'
 }
 
 function Write-MarkdownField {
@@ -93,25 +131,26 @@ function Write-MarkdownField {
         [string]$Label,
         [string]$Value
     )
-    if ([string]::IsNullOrEmpty($Value)) { $Value = "(not provided)" }
+    if ([string]::IsNullOrEmpty($Value)) { $Value = '(not provided)' }
     if ($Value -match "`r?`n") {
         $lines = $Value -split "`r?`n"
         @("**$Label:**") + ($lines | ForEach-Object { "> $_" })
-    } else {
+    }
+    else {
         "**$Label:** $Value"
     }
 }
 
 function Get-PlatformName {
-    if ($env:OS -eq 'Windows_NT') { return "windows" }
+    if ($env:OS -eq 'Windows_NT') { return 'windows' }
 
     $uname = Get-Command uname -ErrorAction SilentlyContinue
     if ($null -ne $uname) {
         $platform = & $uname.Source 2>$null
-        if ($platform -eq 'Darwin') { return "darwin" }
+        if ($platform -eq 'Darwin') { return 'darwin' }
     }
 
-    return "linux"
+    return 'linux'
 }
 
 function ConvertTo-JsonEscape {
@@ -142,18 +181,41 @@ function ConvertTo-JsonBool {
     return "`"$Key`":$boolStr"
 }
 
-function ConvertTo-Base64 {
-    param([string]$Text)
-    return [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Text))
+function Get-ProvenanceSource {
+    param(
+        [string]$Agent = '',
+        [string]$Role = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Agent) -or -not [string]::IsNullOrWhiteSpace($Role)) {
+        return 'explicit'
+    }
+
+    return 'unspecified'
 }
 
-function ConvertFrom-Base64 {
-    param([string]$Text)
-    return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Text))
+function Get-AgentDisplay {
+    param(
+        [string]$Agent = '',
+        [string]$Role = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Agent) -and -not [string]::IsNullOrWhiteSpace($Role)) {
+        return "$Agent ($Role)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Agent)) {
+        return $Agent
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Role)) {
+        return "role:$Role"
+    }
+
+    return ''
 }
 
 function Protect-Text {
     param([string]$Text)
+    if ($null -eq $Text) { return '' }
     $Text = $Text -replace '(Bearer\s+)[A-Za-z0-9._-]+', '$1[REDACTED]'
     $Text = $Text -replace '\bgh[pousr]_[A-Za-z0-9]+\b', '[REDACTED_GITHUB_TOKEN]'
     $Text = $Text -replace '\bsk-[A-Za-z0-9_-]+\b', '[REDACTED_API_TOKEN]'
@@ -182,7 +244,7 @@ function ConvertTo-NormalizedBool {
 
 function ConvertTo-SafeInt {
     param([string]$Value = '0')
-    if ($Value -match '^\d+$') { return [int]$Value }
+    if ($Value -match '^-?\d+$') { return [int]$Value }
     return 0
 }
 
@@ -251,7 +313,8 @@ function Get-EventFingerprint {
     )
     if (-not [string]::IsNullOrWhiteSpace($CustomKey)) {
         $seed = Get-NormalizedFingerprintText $CustomKey
-    } else {
+    }
+    else {
         $sourceKey = Get-NormalizedFingerprintText $InstructionSource
         $outcomeKey = Get-NormalizedFingerprintText $ActualOutcome
         $actionKey = Get-NormalizedFingerprintText $ActionTaken
@@ -259,18 +322,6 @@ function Get-EventFingerprint {
         $seed = "$RootSurface|$Mode|$sourceKey|$outcomeKey|$actionKey|$titleKey"
     }
     return Get-ShortSha256 $seed 12
-}
-
-function Get-SessionValue {
-    param(
-        [string]$SessionFile,
-        [string]$Key
-    )
-    if (-not (Test-Path $SessionFile)) { return '' }
-    $lines = Get-Content $SessionFile
-    $match = $lines | Where-Object { $_ -like "$Key=*" } | Select-Object -First 1
-    if ($null -eq $match) { return '' }
-    return $match -replace "^$Key=", ''
 }
 
 function Get-DefaultOwnerForSurface {
@@ -329,7 +380,7 @@ function Get-CategoryTags {
         [string]$TextLower
     )
 
-    $tags = ""
+    $tags = ''
     $tags = Add-CsvItem $tags $Surface
     $tags = Add-CsvItem $tags $Mode
     $tags = Add-CsvItem $tags $RunEffect
@@ -337,34 +388,333 @@ function Get-CategoryTags {
         $tags = Add-CsvItem $tags $GuidanceQuality
     }
 
-    if ($TextLower -match 'dispatch') { $tags = Add-CsvItem $tags "dispatch" }
-    if ($TextLower -match 'role') { $tags = Add-CsvItem $tags "role" }
-    if ($TextLower -match 'slug') { $tags = Add-CsvItem $tags "slug" }
-    if ($TextLower -match 'agents\.md') { $tags = Add-CsvItem $tags "agents-md" }
-    if ($TextLower -match 'skill\.md') { $tags = Add-CsvItem $tags "skill-md" }
-    if ($TextLower -match 'mcp') { $tags = Add-CsvItem $tags "mcp" }
-    if ($TextLower -match 'server') { $tags = Add-CsvItem $tags "server" }
-    if ($TextLower -match 'cli|command ') { $tags = Add-CsvItem $tags "cli" }
-    if ($TextLower -match '\.ps1|powershell') { $tags = Add-CsvItem $tags "powershell" }
-    if ($TextLower -match '\.sh|posix') { $tags = Add-CsvItem $tags "posix-sh" }
-    if ($TextLower -match 'json') { $tags = Add-CsvItem $tags "json" }
-    if ($TextLower -match 'yaml') { $tags = Add-CsvItem $tags "yaml" }
-    if ($TextLower -match 'schema') { $tags = Add-CsvItem $tags "schema" }
-    if ($TextLower -match 'token|credential') { $tags = Add-CsvItem $tags "token" }
-    if ($TextLower -match 'permission') { $tags = Add-CsvItem $tags "permission" }
-    if ($TextLower -match 'timeout') { $tags = Add-CsvItem $tags "timeout" }
-    if ($TextLower -match 'traceback|stacktrace|stack backtrace') { $tags = Add-CsvItem $tags "stacktrace" }
-    if ($TextLower -match 'sandbox') { $tags = Add-CsvItem $tags "sandbox" }
-    if ($TextLower -match 'filesystem') { $tags = Add-CsvItem $tags "filesystem" }
-    if ($TextLower -match 'path') { $tags = Add-CsvItem $tags "path" }
-    if ($TextLower -match 'dependency') { $tags = Add-CsvItem $tags "dependency" }
-    if ($TextLower -match 'api|endpoint') { $tags = Add-CsvItem $tags "api" }
-    if ($TextLower -match 'rate limit') { $tags = Add-CsvItem $tags "rate-limit" }
-    if ($TextLower -match 'context') { $tags = Add-CsvItem $tags "context" }
-    if ($TextLower -match 'handoff') { $tags = Add-CsvItem $tags "handoff" }
-    if ($TextLower -match 'validation|required') { $tags = Add-CsvItem $tags "validation" }
-    if ($TextLower -match 'output') { $tags = Add-CsvItem $tags "output" }
-    if ($TextLower -match 'workaround') { $tags = Add-CsvItem $tags "workaround" }
+    if ($TextLower -match 'dispatch') { $tags = Add-CsvItem $tags 'dispatch' }
+    if ($TextLower -match 'role') { $tags = Add-CsvItem $tags 'role' }
+    if ($TextLower -match 'slug') { $tags = Add-CsvItem $tags 'slug' }
+    if ($TextLower -match 'agents\.md') { $tags = Add-CsvItem $tags 'agents-md' }
+    if ($TextLower -match 'skill\.md') { $tags = Add-CsvItem $tags 'skill-md' }
+    if ($TextLower -match 'mcp') { $tags = Add-CsvItem $tags 'mcp' }
+    if ($TextLower -match 'server') { $tags = Add-CsvItem $tags 'server' }
+    if ($TextLower -match 'cli|command ') { $tags = Add-CsvItem $tags 'cli' }
+    if ($TextLower -match '\.ps1|powershell') { $tags = Add-CsvItem $tags 'powershell' }
+    if ($TextLower -match '\.sh|posix') { $tags = Add-CsvItem $tags 'posix-sh' }
+    if ($TextLower -match 'json') { $tags = Add-CsvItem $tags 'json' }
+    if ($TextLower -match 'yaml') { $tags = Add-CsvItem $tags 'yaml' }
+    if ($TextLower -match 'schema') { $tags = Add-CsvItem $tags 'schema' }
+    if ($TextLower -match 'token|credential') { $tags = Add-CsvItem $tags 'token' }
+    if ($TextLower -match 'permission') { $tags = Add-CsvItem $tags 'permission' }
+    if ($TextLower -match 'timeout') { $tags = Add-CsvItem $tags 'timeout' }
+    if ($TextLower -match 'traceback|stacktrace|stack backtrace') { $tags = Add-CsvItem $tags 'stacktrace' }
+    if ($TextLower -match 'sandbox') { $tags = Add-CsvItem $tags 'sandbox' }
+    if ($TextLower -match 'filesystem') { $tags = Add-CsvItem $tags 'filesystem' }
+    if ($TextLower -match 'path') { $tags = Add-CsvItem $tags 'path' }
+    if ($TextLower -match 'dependency') { $tags = Add-CsvItem $tags 'dependency' }
+    if ($TextLower -match 'api|endpoint') { $tags = Add-CsvItem $tags 'api' }
+    if ($TextLower -match 'rate limit') { $tags = Add-CsvItem $tags 'rate-limit' }
+    if ($TextLower -match 'context') { $tags = Add-CsvItem $tags 'context' }
+    if ($TextLower -match 'handoff') { $tags = Add-CsvItem $tags 'handoff' }
+    if ($TextLower -match 'validation|required') { $tags = Add-CsvItem $tags 'validation' }
+    if ($TextLower -match 'output') { $tags = Add-CsvItem $tags 'output' }
+    if ($TextLower -match 'workaround') { $tags = Add-CsvItem $tags 'workaround' }
 
     return $tags
+}
+
+function Resolve-DirectoryPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return (Get-Location).ProviderPath
+    }
+    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -ne $resolved) {
+        $item = Get-Item -LiteralPath $resolved.Path
+        if ($item.PSIsContainer) { return $item.FullName }
+        return $item.Directory.FullName
+    }
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    if (Test-Path -LiteralPath $candidate -PathType Container) { return $candidate }
+    if ([System.IO.Path]::HasExtension($candidate)) {
+        return [System.IO.Path]::GetDirectoryName($candidate)
+    }
+    return $candidate
+}
+
+function Get-RepoRoot {
+    param([string]$StartPath = (Get-Location).ProviderPath)
+
+    $startDir = Resolve-DirectoryPath $StartPath
+    try {
+        $git = Get-Command git -ErrorAction Stop
+        $repo = & $git.Source -C $startDir rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($repo)) {
+            return ($repo | Select-Object -First 1).Trim()
+        }
+    }
+    catch {
+    }
+
+    $current = Get-Item -LiteralPath $startDir
+    while ($null -ne $current) {
+        $gitMarker = Join-Path $current.FullName '.git'
+        if (Test-Path -LiteralPath $gitMarker) {
+            return $current.FullName
+        }
+        $current = $current.Parent
+    }
+
+    throw "Unable to determine repo root from: $StartPath"
+}
+
+function Get-PreferredContextDir {
+    param([string]$RepoRoot)
+
+    $preferred = @(
+        (Join-Path $RepoRoot '.local/context'),
+        (Join-Path $RepoRoot '.local-test/context')
+    )
+    foreach ($path in $preferred) {
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            return $path
+        }
+    }
+
+    $alternate = Get-ChildItem -LiteralPath $RepoRoot -Directory -Filter '.local*' -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        ForEach-Object { Join-Path $_.FullName 'context' } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        Select-Object -First 1
+    if ($null -ne $alternate) {
+        return $alternate
+    }
+
+    $contextDir = Join-Path $RepoRoot 'context'
+    if (-not (Test-Path -LiteralPath $contextDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $contextDir -Force | Out-Null
+    }
+    return $contextDir
+}
+
+function Resolve-FrictionPaths {
+    param(
+        [string]$RepoRoot = '',
+        [string]$EventsFile = '',
+        [string]$IndexFile = ''
+    )
+
+    $resolvedRepoRoot = $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($EventsFile)) {
+        if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+            $resolvedRepoRoot = Get-RepoRoot
+        }
+        else {
+            $resolvedRepoRoot = [System.IO.Path]::GetFullPath($resolvedRepoRoot)
+        }
+        $contextDir = Get-PreferredContextDir $resolvedRepoRoot
+        $frictionDir = Join-Path $contextDir 'friction'
+        New-Item -ItemType Directory -Force -Path $frictionDir | Out-Null
+        $resolvedEventsFile = Join-Path $frictionDir 'events.jsonl'
+        $resolvedIndexFile = if ([string]::IsNullOrWhiteSpace($IndexFile)) { Join-Path $frictionDir 'INDEX.md' } else { [System.IO.Path]::GetFullPath($IndexFile) }
+    }
+    else {
+        $resolvedEventsFile = [System.IO.Path]::GetFullPath($EventsFile)
+        $eventsDir = Split-Path -Parent $resolvedEventsFile
+        if (-not [string]::IsNullOrWhiteSpace($eventsDir)) {
+            New-Item -ItemType Directory -Force -Path $eventsDir | Out-Null
+        }
+        if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+            try {
+                $resolvedRepoRoot = Get-RepoRoot $eventsDir
+            }
+            catch {
+                $resolvedRepoRoot = ''
+            }
+        }
+        else {
+            $resolvedRepoRoot = [System.IO.Path]::GetFullPath($resolvedRepoRoot)
+        }
+        $resolvedIndexFile = if ([string]::IsNullOrWhiteSpace($IndexFile)) { Join-Path $eventsDir 'INDEX.md' } else { [System.IO.Path]::GetFullPath($IndexFile) }
+    }
+
+    return [pscustomobject]@{
+        RepoRoot = $resolvedRepoRoot
+        EventsFile = $resolvedEventsFile
+        IndexFile = $resolvedIndexFile
+    }
+}
+
+function Test-ActiveProcess {
+    param([string]$ProcessId)
+    if ([string]::IsNullOrWhiteSpace($ProcessId)) { return $false }
+    if ($ProcessId -notmatch '^\d+$') { return $false }
+    try {
+        Get-Process -Id ([int]$ProcessId) -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Invoke-WithFileLock {
+    param(
+        [string]$LockRoot,
+        [scriptblock]$ScriptBlock
+    )
+
+    $lockDir = "${LockRoot}.lock"
+    while ($true) {
+        try {
+            New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $lockDir 'pid'), [string]$PID, [System.Text.UTF8Encoding]::new($false))
+            break
+        }
+        catch [System.IO.IOException] {
+            $pidFile = Join-Path $lockDir 'pid'
+            $lockPid = $null
+            if (Test-Path -LiteralPath $pidFile) {
+                try {
+                    $lockPid = [System.IO.File]::ReadAllText($pidFile).Trim()
+                }
+                catch {
+                    $lockPid = $null
+                }
+            }
+            if (-not (Test-ActiveProcess $lockPid)) {
+                Remove-Item -Force -ErrorAction SilentlyContinue $pidFile
+                Remove-Item -Force -Recurse -ErrorAction SilentlyContinue $lockDir
+                continue
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $pidFile = Join-Path $lockDir 'pid'
+        Remove-Item -Force -ErrorAction SilentlyContinue $pidFile
+        Remove-Item -Force -Recurse -ErrorAction SilentlyContinue $lockDir
+    }
+}
+
+function Get-JsonDiagnosticLabel {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path -eq '-') { return 'stdin' }
+    return $Path
+}
+
+function Import-EventJsonObject {
+    param([string]$Path)
+
+    $jsonText = ''
+    if ($Path -eq '-') {
+        $jsonText = [Console]::In.ReadToEnd()
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            throw "-FromJson file not found: $Path"
+        }
+        $jsonText = Get-Content -LiteralPath $Path -Raw
+    }
+
+    try {
+        $payload = $jsonText | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]
+        throw "Invalid JSON in -FromJson $(Get-JsonDiagnosticLabel $Path): $detail"
+    }
+
+    if ($null -eq $payload) {
+        throw "-FromJson $(Get-JsonDiagnosticLabel $Path) must contain a JSON object"
+    }
+    if ($payload -isnot [pscustomobject] -and $payload -isnot [hashtable]) {
+        throw "-FromJson $(Get-JsonDiagnosticLabel $Path) must decode to a JSON object"
+    }
+
+    return $payload
+}
+
+function Get-JsonFieldValue {
+    param(
+        [object]$Payload,
+        [string]$Key,
+        [string]$Current,
+        [string]$Default
+    )
+
+    if ($Current -ne $Default) {
+        return $Current
+    }
+    $property = $Payload.PSObject.Properties[$Key]
+    if ($null -eq $property) {
+        return $Current
+    }
+    $value = $property.Value
+    if ($null -eq $value) {
+        return $Current
+    }
+    if ($value -is [bool]) {
+        if ($value) { return 'true' }
+        return 'false'
+    }
+    if ($value -is [System.ValueType] -or $value -is [string]) {
+        return [string]$value
+    }
+
+    $kind = $value.GetType().Name
+    throw "-FromJson field '$Key' must be a scalar value, got $kind"
+}
+
+function Test-EventFileField {
+    param(
+        [string]$Path,
+        [string]$FieldName,
+        [string]$DiagnosticPath
+    )
+
+    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $resolved) {
+        return ''
+    }
+    $fullPath = $resolved.Path
+    $repoRoot = ''
+    try {
+        $repoRoot = Get-RepoRoot $fullPath
+    }
+    catch {
+        return $fullPath
+    }
+
+    $canonical = Resolve-FrictionPaths -RepoRoot $repoRoot
+    if ($fullPath -ne $canonical.EventsFile) {
+        throw "$FieldName from -FromJson $DiagnosticPath must match the selected events file"
+    }
+    return $fullPath
+}
+
+function Import-Events {
+    param([string]$EventsFile)
+
+    if (-not (Test-Path -LiteralPath $EventsFile)) {
+        return @()
+    }
+
+    $events = [System.Collections.Generic.List[object]]::new()
+    $lineNumber = 0
+    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+        $lineNumber++
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $event = $line | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]
+            throw "Invalid JSON in events file at line $lineNumber: $detail"
+        }
+        $events.Add($event)
+    }
+
+    return $events.ToArray()
 }
