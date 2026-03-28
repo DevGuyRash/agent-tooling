@@ -22,6 +22,20 @@ $EventsFile = $paths.EventsFile
 $IndexFile = $paths.IndexFile
 $RepoRoot = $paths.RepoRoot
 
+# Helper: get tags from an event, handling v3 (array) and v2 (tags_csv string)
+function Get-EventTags {
+    param($event)
+    $tagsV3 = $event.tags
+    if ($null -ne $tagsV3 -and $tagsV3 -is [System.Array]) {
+        return @($tagsV3 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { [string]$_ })
+    }
+    $tagsCsv = [string]$event.tags_csv
+    if (-not [string]::IsNullOrWhiteSpace($tagsCsv)) {
+        return @($tagsCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    return @()
+}
+
 $indexTempFile = $null
 Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
     $events = Import-Events $EventsFile
@@ -34,8 +48,7 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
     $generated = [System.DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
     $categoryCounts = @{}
     $agentCounts = @{}
-    $openIncidentIds = [System.Collections.Generic.HashSet[string]]::new()
-    $allIncidentIds = [System.Collections.Generic.HashSet[string]]::new()
+    $tagCounts = @{}
 
     foreach ($event in $events) {
         if (-not [string]::IsNullOrWhiteSpace($event.derived_category)) {
@@ -53,11 +66,11 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
             $agentCounts[[string]$event.agent_kind]++
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($event.incident_id)) {
-            $null = $allIncidentIds.Add([string]$event.incident_id)
-            if ([string]$event.incident_status -ne 'mitigated') {
-                $null = $openIncidentIds.Add([string]$event.incident_id)
+        foreach ($tag in (Get-EventTags $event)) {
+            if (-not $tagCounts.ContainsKey($tag)) {
+                $tagCounts[$tag] = 0
             }
+            $tagCounts[$tag]++
         }
     }
 
@@ -74,8 +87,6 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
     }
     $lines += Write-MarkdownField -Label 'Events file' -Value $EventsFile
     $lines += Write-MarkdownField -Label 'Entries' -Value ([string]$events.Count)
-    $lines += Write-MarkdownField -Label 'Incidents' -Value ([string]$allIncidentIds.Count)
-    $lines += Write-MarkdownField -Label 'Open incidents' -Value ([string]$openIncidentIds.Count)
     $lines += ''
     $lines += '## Category counts'
     $lines += ''
@@ -107,18 +118,55 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
         $lines += '_No explicit provenance recorded._'
     }
 
+    if ($tagCounts.Count -gt 0) {
+        $lines += ''
+        $lines += '## Tags'
+        $lines += ''
+        $sortedTagCounts = $tagCounts.GetEnumerator() | Sort-Object -Property @(
+            @{ Expression = { $_.Value }; Descending = $true }
+            @{ Expression = { $_.Name }; Descending = $false }
+        )
+        foreach ($item in $sortedTagCounts) {
+            $lines += "- ``$($item.Key)`` - $($item.Value)"
+        }
+    }
+    else {
+        $lines += ''
+        $lines += '## Tags'
+        $lines += ''
+        $lines += '_No tags recorded._'
+    }
+
     $lines += ''
     $lines += '## Recent events'
     $lines += ''
     foreach ($event in $recentEvents) {
-        $title = if (-not [string]::IsNullOrWhiteSpace($event.title_line)) { $event.title_line } else { $event.title }
+        $title = [string]$event.title
         $provenanceSource = [string]$event.provenance_source
-        if ($provenanceSource -eq 'explicit') {
-            $agent = Get-AgentDisplay -Agent ([string]$event.agent_name) -Role ([string]$event.role)
-            $lines += "- ``$($event.recorded_at)`` ``$($event.derived_category)`` ``$agent`` - $title"
+        # Display sources (v3) or anchors (v2) if present
+        $sourcesDisplay = ''
+        $sources = $event.sources
+        if ($null -ne $sources -and $sources -is [System.Array] -and $sources.Count -gt 0) {
+            $refs = @($sources | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.ref } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($refs.Count -gt 0) {
+                $sourcesDisplay = " [$($refs -join ', ')]"
+            }
         }
         else {
-            $lines += "- ``$($event.recorded_at)`` ``$($event.derived_category)`` - $title"
+            $anchors = $event.anchors
+            if ($null -ne $anchors -and $anchors -is [System.Array] -and $anchors.Count -gt 0) {
+                $anchorPaths = @($anchors | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($anchorPaths.Count -gt 0) {
+                    $sourcesDisplay = " [$($anchorPaths -join ', ')]"
+                }
+            }
+        }
+        if ($provenanceSource -eq 'explicit') {
+            $agent = Get-AgentDisplay -Agent ([string]$event.agent_name) -Role ([string]$event.role)
+            $lines += "- ``$($event.recorded_at)`` ``$($event.derived_category)`` ``$agent``$sourcesDisplay - $title"
+        }
+        else {
+            $lines += "- ``$($event.recorded_at)`` ``$($event.derived_category)``$sourcesDisplay - $title"
         }
     }
 

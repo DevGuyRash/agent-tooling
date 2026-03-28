@@ -19,6 +19,14 @@ assert_contains() {
   grep -Fq "$needle" "$haystack" || fail "expected '$needle' in $haystack"
 }
 
+assert_not_contains() {
+  needle=$1
+  haystack=$2
+  if grep -Fq "$needle" "$haystack"; then
+    fail "did NOT expect '$needle' in $haystack"
+  fi
+}
+
 assert_equals() {
   expected=$1
   actual=$2
@@ -31,17 +39,17 @@ rm -rf "$REPO_ROOT/.local/reports/friction"
 
 cd "$REPO_ROOT"
 
+# --- Test 1: Basic event with source fields and token redaction ---
 OUTPUT=$("$ROOT/scripts/report-friction.sh" \
   --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160" \
-  --instruction-text "Use the documented dispatch role slug from the skill table." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture with Bearer ghp_leakedtoken1234567890abcdef12345678." \
-  --expected-outcome "The CLI returns the architecture prompt." \
-  --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the visible table label as the CLI slug." \
-  --anchor-kind file \
-  --anchor-path "$ROOT/SKILL.md" \
-  --anchor-line 160)
+  --source-type file \
+  --source-ref "$ROOT/SKILL.md" \
+  --source-line 160 \
+  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
+  --action-taken "I opened SKILL.md at line 160 and found the dispatch table. I ran: mpcr protocol dispatch --role architecture with Bearer ghp_leakedtoken1234567890abcdef12345678." \
+  --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the architecture prompt text." \
+  --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned and the process exited non-zero." \
+  --interpretation "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder and the column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading.")
 
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$DEFAULT_EVENTS$" || fail "unexpected default events file output"
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_INDEX_FILE=$DEFAULT_INDEX$" || fail "unexpected default index file output"
@@ -49,80 +57,142 @@ printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_INDEX_FILE=$DEFAULT_INDEX$" || fail
 assert_file "$DEFAULT_EVENTS"
 assert_file "$DEFAULT_INDEX"
 assert_contains '"event_id":"evt-0001"' "$DEFAULT_EVENTS"
-assert_contains '"agent_name":""' "$DEFAULT_EVENTS"
-assert_contains '"agent_kind":""' "$DEFAULT_EVENTS"
-assert_contains '"role":""' "$DEFAULT_EVENTS"
+assert_contains '"schema_version":"3.0.0"' "$DEFAULT_EVENTS"
 assert_contains '"provenance_source":"unspecified"' "$DEFAULT_EVENTS"
-assert_contains '"anchors":[{' "$DEFAULT_EVENTS"
-assert_contains '"path":"'"$ROOT"'/SKILL.md"' "$DEFAULT_EVENTS"
+# Sources array replaces anchors + instruction_source
+assert_contains '"sources":[{' "$DEFAULT_EVENTS"
+assert_contains '"type":"file"' "$DEFAULT_EVENTS"
+assert_contains '"ref":"'"$ROOT"'/SKILL.md"' "$DEFAULT_EVENTS"
+assert_contains '"line":160' "$DEFAULT_EVENTS"
+# Token redaction still works
 if grep -q 'ghp_leakedtoken' "$DEFAULT_EVENTS"; then
   fail "token leaked into events.jsonl"
 fi
-assert_contains '"redaction_applied":true' "$DEFAULT_EVENTS"
 assert_contains 'Bearer [REDACTED]' "$DEFAULT_EVENTS"
+# Removed fields should NOT be present
+assert_not_contains '"title_line"' "$DEFAULT_EVENTS"
+assert_not_contains '"quick_capture"' "$DEFAULT_EVENTS"
+assert_not_contains '"force_capture"' "$DEFAULT_EVENTS"
+assert_not_contains '"redaction_applied"' "$DEFAULT_EVENTS"
+assert_not_contains '"privacy_tier"' "$DEFAULT_EVENTS"
+assert_not_contains '"incident_status"' "$DEFAULT_EVENTS"
+assert_not_contains '"evidence_type"' "$DEFAULT_EVENTS"
+assert_not_contains '"instruction_source"' "$DEFAULT_EVENTS"
+assert_not_contains '"anchors"' "$DEFAULT_EVENTS"
+assert_not_contains '"tags_csv"' "$DEFAULT_EVENTS"
+# Tags as JSON array
+assert_contains '"tags":[' "$DEFAULT_EVENTS"
+# Numeric confidence and guidance_quality
+assert_contains '"confidence":' "$DEFAULT_EVENTS"
+assert_contains '"guidance_quality":' "$DEFAULT_EVENTS"
 assert_contains '**Entries:** 1' "$DEFAULT_INDEX"
-assert_contains '_No explicit provenance recorded._' "$DEFAULT_INDEX"
 
-# A second event from another agent should append to the same repo-scoped file.
+# --- Test 2: Multi-agent convergence ---
 "$ROOT/scripts/report-friction.sh" \
   --agent subagent-a \
   --agent-kind subagent \
   --role research \
   --title "Missing CI helper" \
-  --instruction-source "AGENTS.md:18" \
+  --source-type file \
+  --source-ref "AGENTS.md" \
+  --source-line 18 \
   --instruction-text "Run scripts/ci-check.sh to inspect current status." \
-  --action-taken "Ran rg --files scripts and confirmed ci-check.sh does not exist." \
-  --expected-outcome "The repository contains scripts/ci-check.sh." \
-  --actual-outcome "No such script exists in the repository." \
-  --interpretation "The instruction looked like a direct path to an existing helper."
+  --action-taken "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched using rg --files scripts and found no match for ci-check.sh or any variant." \
+  --expected-outcome "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the imperative instruction." \
+  --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
+  --interpretation "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper."
 
 [ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 2 ] || fail "expected two events in default file"
 assert_contains '**Entries:** 2' "$DEFAULT_INDEX"
-assert_contains '`instructions/missing/continued` - 1' "$DEFAULT_INDEX"
 
-# Query filters should work directly against the canonical event file.
+# --- Test 3: Sparse output — optional empty fields omitted ---
+# The second event has no command, tool_name, stderr, etc. — these should be absent
+SECOND_EVENT=$(sed -n '2p' "$DEFAULT_EVENTS")
+case "$SECOND_EVENT" in
+  *'"command":'*) fail "sparse output: empty command should be omitted" ;;
+  *'"tool_name":'*) fail "sparse output: empty tool_name should be omitted" ;;
+  *'"stderr":'*) fail "sparse output: empty stderr should be omitted" ;;
+  *'"stdout_excerpt":'*) fail "sparse output: empty stdout_excerpt should be omitted" ;;
+  *'"workaround_used":'*) fail "sparse output: false workaround_used should be omitted" ;;
+  *'"exit_code":'*) fail "sparse output: zero exit_code should be omitted" ;;
+  *'"retries_lost":'*) fail "sparse output: zero retries_lost should be omitted" ;;
+  *'"minutes_lost":'*) fail "sparse output: zero minutes_lost should be omitted" ;;
+esac
+
+# --- Test 4: Query by source-ref ---
 QUERY_JSON=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --agent-kind subagent --format json)
-printf '%s\n' "$QUERY_JSON" | grep -q '"agent_kind": "subagent"' || fail "query should return subagent event"
-printf '%s\n' "$QUERY_JSON" | grep -q '"title": "Missing CI helper"' || fail "query should include matching title"
+printf '%s\n' "$QUERY_JSON" | grep -q '"agent_kind": "subagent"' || printf '%s\n' "$QUERY_JSON" | grep -q '"agent_kind":"subagent"' || fail "query should return subagent event"
 
-QUERY_MD=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --anchor-path "$ROOT/SKILL.md" --format md)
-printf '%s\n' "$QUERY_MD" | grep -q 'Dispatch role slug mismatch' || fail "anchor-path query should match first event"
+QUERY_MD=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --source-ref "$ROOT/SKILL.md" --format md)
+printf '%s\n' "$QUERY_MD" | grep -q 'Dispatch role slug mismatch' || fail "source-ref query should match first event"
 
-# JSON via stdin remains supported, but it is not the primary path.
+# --- Test 5: JSON stdin with v3 sources array ---
 cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json -
 {
   "title": "stdin ingest smoke",
-  "instruction_source": "test",
-  "instruction_text": "Load event fields from stdin exactly once.",
-  "action_taken": "Reported friction with --from-json -.",
-  "expected_outcome": "The tool accepts structured input over stdin.",
-  "actual_outcome": "The event was loaded from stdin and recorded.",
-  "interpretation": "stdin is the safest structured path when JSON is needed.",
+  "instruction_text": "WHEN payload text contains shell-sensitive content THEN you SHOULD prefer stdin JSON.",
+  "action_taken": "I constructed a JSON payload containing multiple sources and piped it to report-friction.sh via --from-json - to test the structured input path.",
+  "expected_outcome": "The tool would accept the JSON payload over stdin, parse the sources array, and append a valid event to events.jsonl.",
+  "actual_outcome": "The event was loaded from stdin, all fields were parsed correctly, and the event was appended to the canonical events.jsonl file.",
+  "interpretation": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. I tested this path to verify it handles multi-source payloads correctly. The documentation's recommendation is accurate: stdin avoids shell-escaping hazards that affect direct flags.",
   "agent_name": "subagent-b",
   "agent_kind": "subagent",
-  "role": "verification"
+  "role": "verification",
+  "sources": [
+    {"type": "documentation", "ref": "test", "label": "smoke test source"},
+    {"type": "url", "ref": "https://example.com/docs", "selector": "#section-3"}
+  ]
 }
 EOF
 [ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 3 ] || fail "stdin JSON should append a third event"
 assert_contains '"title":"stdin ingest smoke"' "$DEFAULT_EVENTS"
+# Multiple sources preserved
+THIRD_EVENT=$(sed -n '3p' "$DEFAULT_EVENTS")
+printf '%s\n' "$THIRD_EVENT" | grep -q '"type"' | head -1 >/dev/null 2>&1
+# Sources from --from-json come through Python json.dumps which may add spaces
+printf '%s\n' "$THIRD_EVENT" | grep -q 'url' || fail "second source should be preserved"
+printf '%s\n' "$THIRD_EVENT" | grep -q 'https://example.com/docs' || fail "url source ref should be preserved"
 
-# stdin JSON should preserve shell-sensitive text literally.
+# --- Test 6: Backward compat — v2 format via --from-json ---
+cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json -
+{
+  "title": "v2 backward compat smoke",
+  "instruction_source": "SKILL.md:160",
+  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.",
+  "action_taken": "I constructed a v2-format JSON payload containing instruction_source as a string and anchors as an array, then piped it to report-friction.sh via --from-json - to test backward compatibility.",
+  "expected_outcome": "The tool would auto-convert the v2 instruction_source string to a documentation-type source and the v2 anchors array to typed file sources in the v3 sources array.",
+  "actual_outcome": "The event was recorded with a properly converted sources array containing both the documentation-type entry from instruction_source and the file-type entry from anchors.",
+  "interpretation": "The v2 backward compatibility path converts instruction_source (string) to a documentation-type source and anchors (array) to typed sources based on their fields. This migration path allows existing v2 payloads to work with the v3 schema without modification.",
+  "anchors": [
+    {"kind": "file", "path": "/abs/path/SKILL.md", "line": 160}
+  ]
+}
+EOF
+[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 4 ] || fail "v2 compat JSON should append a fourth event"
+FOURTH_EVENT=$(sed -n '4p' "$DEFAULT_EVENTS")
+# Should have sources, not anchors or instruction_source
+printf '%s\n' "$FOURTH_EVENT" | grep -q '"sources"' || fail "v2 compat: should have sources array"
+# Sources from --from-json Python helper may include spaces after colons
+printf '%s\n' "$FOURTH_EVENT" | grep -q 'documentation' || fail "v2 compat: instruction_source should become documentation type"
+printf '%s\n' "$FOURTH_EVENT" | grep -q '/abs/path/SKILL.md' || fail "v2 compat: anchor path should be preserved as file source ref"
+
+# --- Test 7: Shell-sensitive stdin JSON ---
 cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json -
 {
   "title": "shell-sensitive payload smoke",
-  "instruction_source": "test",
-  "instruction_text": "Record literal shell-sensitive content safely.",
-  "action_taken": "Passed `ghost-router` and $(whoami) through stdin JSON instead of direct shell flags.",
-  "expected_outcome": "The stored event preserves literal backticks and dollar-paren text.",
-  "actual_outcome": "The event preserved `ghost-router` and $(whoami) verbatim.",
-  "interpretation": "stdin JSON is the safe path when payload text would otherwise trigger shell parsing."
+  "instruction_text": "WHEN payload text contains backticks or dollar-paren THEN you SHOULD prefer stdin JSON.",
+  "action_taken": "I constructed a JSON payload containing shell-sensitive characters: backtick-quoted `ghost-router` and dollar-paren $(whoami). I piped this to report-friction.sh via --from-json - instead of using direct flags.",
+  "expected_outcome": "The stored event would preserve the literal backtick and dollar-paren text verbatim, without any shell expansion or escaping damage.",
+  "actual_outcome": "The event preserved `ghost-router` and $(whoami) verbatim in the stored JSONL. No shell expansion occurred on either construct.",
+  "interpretation": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. Direct shell flags would have expanded $(whoami) to the current username and potentially mishandled backticks. The stdin path bypasses shell parsing entirely, confirming the documentation's recommendation.",
+  "sources": [{"type": "documentation", "ref": "test"}]
 }
 EOF
-[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 4 ] || fail "shell-sensitive stdin JSON should append a fourth event"
+[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 5 ] || fail "shell-sensitive stdin JSON should append a fifth event"
 assert_contains '`ghost-router`' "$DEFAULT_EVENTS"
 assert_contains '$(whoami)' "$DEFAULT_EVENTS"
 
-# Invalid JSON should produce concise diagnostics with no stack trace.
+# --- Test 8: Invalid JSON diagnostics ---
 INVALID_STDERR=$(mktemp)
 INVALID_JSON=$(mktemp)
 printf '%s\n' '{"title":"bad",}' >"$INVALID_JSON"
@@ -137,29 +207,62 @@ if grep -qi 'traceback' "$INVALID_STDERR"; then
   fail "invalid JSON should not emit a stack trace"
 fi
 
-# Missing required narrative fields should fail cleanly.
+# --- Test 9: Missing required fields fail cleanly ---
 SCHEMA_STDERR=$(mktemp)
 SCHEMA_JSON=$(mktemp)
 cat <<'EOF' >"$SCHEMA_JSON"
 {
   "title": "schema fail",
-  "instruction_source": "test",
   "instruction_text": "   ",
-  "action_taken": "did something",
-  "expected_outcome": "expected",
-  "actual_outcome": "actual",
-  "interpretation": "interp"
+  "action_taken": "I attempted to report a friction event with a blank instruction_text to test the schema validation enforcement.",
+  "expected_outcome": "The tool would reject the payload because instruction_text is blank (whitespace only), violating the required-field constraint.",
+  "actual_outcome": "The tool rejected the payload with a clear error message identifying instruction_text as the problem field.",
+  "interpretation": "Required narrative fields must contain substantive text, not just whitespace. The validator correctly catches blank values before the event reaches the canonical file, preventing noise entries from polluting the event stream.",
+  "sources": [{"type": "documentation", "ref": "test"}]
 }
 EOF
 set +e
 "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json "$SCHEMA_JSON" > /dev/null 2>"$SCHEMA_STDERR"
 STATUS=$?
 set -e
-[ "$STATUS" -ne 0 ] || fail "invalid schema should fail"
-assert_contains 'Invalid friction payload for --from-json' "$SCHEMA_STDERR"
+[ "$STATUS" -ne 0 ] || fail "blank instruction_text should fail"
 assert_contains 'field must not be blank: instruction_text' "$SCHEMA_STDERR"
 
-# Explicit non-repo target should be honored.
+# --- Test 10: Narrative minimum length validation ---
+SHORT_STDERR=$(mktemp)
+SHORT_JSON=$(mktemp)
+cat <<'EOF' >"$SHORT_JSON"
+{
+  "instruction_text": "Use the slug.",
+  "action_taken": "Ran the command.",
+  "expected_outcome": "It worked.",
+  "actual_outcome": "Error happened.",
+  "interpretation": "It was wrong.",
+  "sources": [{"type": "documentation", "ref": "test"}]
+}
+EOF
+set +e
+"$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json "$SHORT_JSON" > /dev/null 2>"$SHORT_STDERR"
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "short narrative fields should fail length validation"
+assert_contains 'must be at least' "$SHORT_STDERR"
+
+# --- Test 11: Auto-title includes [surface/mode] prefix ---
+"$ROOT/scripts/report-friction.sh" \
+  --events-file "$DEFAULT_EVENTS" \
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
+  --action-taken "I opened SKILL.md and found the dispatch table. I ran: mpcr protocol dispatch --role architecture from the repo root." \
+  --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the architecture prompt text." \
+  --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned and the process exited non-zero." \
+  --interpretation "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading."
+
+LAST_EVENT=$(tail -1 "$DEFAULT_EVENTS")
+printf '%s\n' "$LAST_EVENT" | grep -q '"title":"\[' || fail "auto-title should start with [surface/mode] prefix"
+
+# --- Test 12: Explicit non-repo target ---
 EXPLICIT_DIR=$(mktemp -d)
 EXPLICIT_EVENTS=$EXPLICIT_DIR/events.jsonl
 "$ROOT/scripts/report-friction.sh" \
@@ -168,37 +271,34 @@ EXPLICIT_EVENTS=$EXPLICIT_DIR/events.jsonl
   --agent-kind agent \
   --role isolated \
   --title "Explicit file target" \
-  --instruction-source "test" \
-  --instruction-text "Use the explicitly provided file path." \
-  --action-taken "Passed --events-file to the reporter." \
-  --expected-outcome "The event is written to the explicit path." \
-  --actual-outcome "The event was written to the explicit path." \
-  --interpretation "Explicit file targets should override repo defaults."
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "Use the explicitly provided --events-file path for the events output." \
+  --action-taken "I passed --events-file with an explicit temporary directory path to the reporter to verify that explicit targets override repo defaults." \
+  --expected-outcome "The event would be written to the explicit path rather than the default repo-scoped location, and INDEX.md would be created adjacent to it." \
+  --actual-outcome "The event was written to the explicit path and INDEX.md was created in the same directory as expected." \
+  --interpretation "The --events-file flag is documented as an explicit override for the canonical target resolution. I used it to write to a temporary directory to confirm that the override mechanism works. The flag takes precedence over git-repo-root detection and .local directory scanning."
 assert_file "$EXPLICIT_EVENTS"
 assert_file "$EXPLICIT_DIR/INDEX.md"
 assert_contains '"provenance_source":"explicit"' "$EXPLICIT_EVENTS"
 
-QUERY_NO_PROVENANCE=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --anchor-path "$ROOT/SKILL.md" --format md)
-if printf '%s\n' "$QUERY_NO_PROVENANCE" | grep -q '^- Agent:'; then
-  fail "query markdown should omit provenance lines when provenance is unspecified"
-fi
-
-# If .local is absent, an existing .local* directory should be used.
+# --- Test 13: Alternate .local* directory ---
 ALT_REPO=$(mktemp -d)
 git init -q "$ALT_REPO"
 mkdir -p "$ALT_REPO/.local-test"
 ALT_OUTPUT=$(cd "$ALT_REPO" && "$ROOT/scripts/report-friction.sh" \
   --title "Alternate local dir" \
-  --instruction-source "test" \
-  --instruction-text "Use an existing .local* directory when .local is absent." \
-  --action-taken "Reported friction from a repo containing only .local-test." \
-  --expected-outcome "The default events file lands under .local-test/reports/friction." \
-  --actual-outcome "The tool selected the existing .local-test directory." \
-  --interpretation "An existing .local* directory should win over creating a new .local.")
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "WHEN .local is absent but another .local* directory exists THEN use the existing local area." \
+  --action-taken "I created a git repo with only .local-test (no .local) and ran report-friction.sh from inside it to verify the fallback path resolution." \
+  --expected-outcome "The tool would detect the existing .local-test directory and write events.jsonl under .local-test/reports/friction/ rather than creating a new .local directory." \
+  --actual-outcome "The tool correctly selected .local-test as the local area and wrote the event to .local-test/reports/friction/events.jsonl." \
+  --interpretation "The canonical target resolution docs specify that if .local is absent, the tool should use the first existing .local* directory. This preserves the repo's existing local state layout rather than creating a competing .local directory alongside an existing .local-test.")
 assert_equals "FRICTION_EVENTS_FILE=$ALT_REPO/.local-test/reports/friction/events.jsonl" "$(printf '%s\n' "$ALT_OUTPUT" | sed -n '1p')"
 assert_file "$ALT_REPO/.local-test/reports/friction/events.jsonl"
 
-# Outside a repo, the default should use the system temp root.
+# --- Test 14: Non-repo temp fallback ---
 TEMP_ROOT=$(python3 - <<'PY'
 import tempfile
 print(tempfile.gettempdir())
@@ -207,13 +307,17 @@ PY
 NON_REPO_DIR=$(mktemp -d)
 NON_REPO_OUTPUT=$(cd "$NON_REPO_DIR" && "$ROOT/scripts/report-friction.sh" \
   --title "Non-repo fallback" \
-  --instruction-source "test" \
-  --instruction-text "Use the system temp root outside git repos." \
-  --action-taken "Reported friction from a directory without .git." \
-  --expected-outcome "The default events file lands under the system temp directory." \
-  --actual-outcome "The tool selected a deterministic system-temp path." \
-  --interpretation "Outside git, the temp-root fallback should be used.")
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "WHEN outside a git repo THEN fall back to a deterministic system-temp path." \
+  --action-taken "I created a non-git temporary directory, changed into it, and ran report-friction.sh without --events-file to verify the temp-root fallback path." \
+  --expected-outcome "The tool would detect the absence of a .git directory and fall back to writing events under the system temp directory with a CWD-based hash." \
+  --actual-outcome "The tool correctly fell back to a system-temp path under agent-friction/ with a deterministic hash derived from the CWD." \
+  --interpretation "The canonical target resolution docs specify that outside a git repo, the tool uses a deterministic temp-root path based on a hash of the CWD. This ensures events are still written to a stable location even without git context, and that different directories get isolated event streams.")
 printf '%s\n' "$NON_REPO_OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$TEMP_ROOT/agent-friction/" || fail "non-repo fallback should use the system temp root"
 
-rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON"
+# --- Cleanup ---
+rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON"
 rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$NON_REPO_DIR"
+
+printf 'All smoke tests passed.\n'

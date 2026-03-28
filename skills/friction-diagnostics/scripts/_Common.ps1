@@ -4,7 +4,6 @@ $script:SCHEMA_VERSION = '3.0.0'
 $script:TAXONOMY_VERSION = '2.0.0'
 $script:KNOWN_EVENT_KEYS = @(
     'title',
-    'instruction_source',
     'instruction_text',
     'action_taken',
     'expected_outcome',
@@ -17,7 +16,6 @@ $script:KNOWN_EVENT_KEYS = @(
     'guidance_quality',
     'impact',
     'confidence',
-    'evidence_type',
     'command',
     'tool_name',
     'exit_code',
@@ -25,7 +23,6 @@ $script:KNOWN_EVENT_KEYS = @(
     'stdout_excerpt',
     'owner_hint',
     'component_hint',
-    'incident_status',
     'workaround_used',
     'workaround_note',
     'retries_lost',
@@ -35,9 +32,10 @@ $script:KNOWN_EVENT_KEYS = @(
     'agent_name',
     'agent_kind',
     'role',
-    'anchors',
-    'quick',
-    'force'
+    'sources',
+    # v2 backward-compat keys accepted but mapped to sources during import
+    'instruction_source',
+    'anchors'
 )
 
 function Get-Slug {
@@ -181,17 +179,10 @@ function ConvertTo-JsonBool {
     return "`"$Key`":$boolStr"
 }
 
-function Get-ProvenanceSource {
-    param(
-        [string]$Agent = '',
-        [string]$Role = ''
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($Agent) -or -not [string]::IsNullOrWhiteSpace($Role)) {
-        return 'explicit'
-    }
-
-    return 'unspecified'
+function ConvertTo-JsonTagArray {
+    param([string]$CsvTags)
+    if ([string]::IsNullOrWhiteSpace($CsvTags)) { return @() }
+    return ($CsvTags.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 function Get-AgentDisplay {
@@ -248,30 +239,6 @@ function ConvertTo-SafeInt {
     return 0
 }
 
-function ConvertTo-NormalizedStorageMode {
-    param([string]$Value)
-    switch ($Value) {
-        { $_ -in 'handoff', 'artifact', 'telemetry' } { return $Value }
-        default { throw "Unsupported storage mode: $Value" }
-    }
-}
-
-function ConvertTo-NormalizedCaptureMode {
-    param([string]$Value)
-    switch ($Value) {
-        { $_ -in 'explicit', 'threshold', 'synthesis' } { return $Value }
-        default { throw "Unsupported capture mode: $Value" }
-    }
-}
-
-function ConvertTo-NormalizedPrivacyTier {
-    param([string]$Value)
-    switch ($Value) {
-        { $_ -in 'private', 'shared' } { return $Value }
-        default { throw "Unsupported privacy tier: $Value" }
-    }
-}
-
 function ConvertTo-NormalizedRunEffect {
     param([string]$Value)
     switch ($Value) {
@@ -286,11 +253,47 @@ function ConvertTo-NormalizedRunEffect {
 function ConvertTo-NormalizedGuidanceQuality {
     param([string]$Value)
     switch ($Value) {
-        { $_ -in 'clear', 'ambiguous', 'misleading', 'not-applicable' } { return $Value }
-        'confusing' { return 'ambiguous' }
-        '' { return '' }
-        default { throw "Unsupported guidance quality: $Value" }
+        { $_ -in '0', '1', '2', '3', '4' } { return [int]$Value }
+        'clear' { return 4 }
+        'ambiguous' { return 2 }
+        'misleading' { return 1 }
+        'not-applicable' { return 0 }
+        'confusing' { return 2 }
+        '' { return $null }
+        default { throw "Unsupported guidance quality: $Value (expected 0-4 or clear/ambiguous/misleading/not-applicable)" }
     }
+}
+
+function ConvertTo-NormalizedConfidence {
+    param([string]$Value)
+    switch ($Value) {
+        { $_ -in '1', '2', '3', '4', '5' } { return [int]$Value }
+        'low' { return 2 }
+        'medium' { return 3 }
+        'high' { return 4 }
+        '' { return $null }
+        default { throw "Unsupported confidence: $Value (expected 1-5 or low/medium/high)" }
+    }
+}
+
+function Test-NarrativeLength {
+    param(
+        [string]$Label,
+        [string]$Value,
+        [int]$MinLength
+    )
+    $length = if ($null -eq $Value) { 0 } else { $Value.Length }
+    if ($length -lt $MinLength) {
+        throw "$Label must be at least $MinLength characters (got $length). Provide a detailed, substantive account."
+    }
+}
+
+$script:VALID_SOURCE_TYPES = @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other')
+
+function Test-SourceType {
+    param([string]$SourceType)
+    if ($script:VALID_SOURCE_TYPES -contains $SourceType) { return }
+    throw "Unsupported source type: $SourceType (expected one of: $($script:VALID_SOURCE_TYPES -join ', '))"
 }
 
 function Get-NormalizedFingerprintText {
@@ -305,7 +308,7 @@ function Get-EventFingerprint {
     param(
         [string]$RootSurface,
         [string]$Mode,
-        [string]$InstructionSource,
+        [string]$SourceRef,
         [string]$ActualOutcome,
         [string]$ActionTaken,
         [string]$Title,
@@ -315,7 +318,7 @@ function Get-EventFingerprint {
         $seed = Get-NormalizedFingerprintText $CustomKey
     }
     else {
-        $sourceKey = Get-NormalizedFingerprintText $InstructionSource
+        $sourceKey = Get-NormalizedFingerprintText $SourceRef
         $outcomeKey = Get-NormalizedFingerprintText $ActualOutcome
         $actionKey = Get-NormalizedFingerprintText $ActionTaken
         $titleKey = Get-NormalizedFingerprintText $Title
@@ -344,7 +347,7 @@ function Get-PriorityScore {
     param(
         [int]$Recurrence = 0,
         [string]$RunEffect = 'continued',
-        [string]$GuidanceQuality = 'clear',
+        [int]$GuidanceQuality = 4,
         [int]$MinutesLost = 0,
         [int]$RetriesLost = 0,
         [bool]$WorkaroundUsed = $false
@@ -356,9 +359,10 @@ function Get-PriorityScore {
         'noisy' { $score += 2 }
         'continued' { $score += 1 }
     }
-    switch ($GuidanceQuality) {
-        'misleading' { $score += 2 }
-        'ambiguous' { $score += 1 }
+    # guidance_quality 0-4: lower quality = more priority points
+    # 0=N/A(+0), 1=misleading(+3), 2=ambiguous(+2), 3=partial(+1), 4=clear(+0)
+    if ($GuidanceQuality -gt 0 -and $GuidanceQuality -lt 4) {
+        $score += 4 - $GuidanceQuality
     }
     if ($WorkaroundUsed) { $score += 1 }
     return $score
@@ -376,18 +380,34 @@ function Get-CategoryTags {
         [string]$Surface,
         [string]$Mode,
         [string]$RunEffect,
-        [string]$GuidanceQuality = 'clear',
-        [string]$TextLower
+        [int]$GuidanceQuality = 4,
+        [string]$TextLower,
+        [string]$SourceTypeCsv = ''
     )
 
     $tags = ''
+    # Tier 1: structural tags (always present)
     $tags = Add-CsvItem $tags $Surface
     $tags = Add-CsvItem $tags $Mode
     $tags = Add-CsvItem $tags $RunEffect
-    if ($GuidanceQuality -ne 'not-applicable') {
-        $tags = Add-CsvItem $tags $GuidanceQuality
+
+    # Tier 2: source-type-derived tags
+    if (-not [string]::IsNullOrWhiteSpace($SourceTypeCsv)) {
+        foreach ($st in ($SourceTypeCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            switch ($st) {
+                'file'               { $tags = Add-CsvItem $tags 'file-source' }
+                'url'                { $tags = Add-CsvItem $tags 'web-source' }
+                'system-instruction' { $tags = Add-CsvItem $tags 'system-instruction' }
+                'conversation'       { $tags = Add-CsvItem $tags 'conversation-source' }
+                'audio'              { $tags = Add-CsvItem $tags 'audio-source' }
+                'visual'             { $tags = Add-CsvItem $tags 'visual-source' }
+                'documentation'      { $tags = Add-CsvItem $tags 'doc-source' }
+            }
+        }
     }
 
+    # Tier 3: content-detected keyword tags (expanded vocabulary)
+    # -- Reference document markers --
     if ($TextLower -match 'dispatch') { $tags = Add-CsvItem $tags 'dispatch' }
     if ($TextLower -match 'role') { $tags = Add-CsvItem $tags 'role' }
     if ($TextLower -match 'slug') { $tags = Add-CsvItem $tags 'slug' }
@@ -395,14 +415,20 @@ function Get-CategoryTags {
     if ($TextLower -match 'skill\.md') { $tags = Add-CsvItem $tags 'skill-md' }
     if ($TextLower -match 'mcp') { $tags = Add-CsvItem $tags 'mcp' }
     if ($TextLower -match 'server') { $tags = Add-CsvItem $tags 'server' }
+    # -- Tool and shell markers --
     if ($TextLower -match 'cli|command ') { $tags = Add-CsvItem $tags 'cli' }
     if ($TextLower -match '\.ps1|powershell') { $tags = Add-CsvItem $tags 'powershell' }
     if ($TextLower -match '\.sh|posix') { $tags = Add-CsvItem $tags 'posix-sh' }
+    # -- Data format markers --
     if ($TextLower -match 'json') { $tags = Add-CsvItem $tags 'json' }
-    if ($TextLower -match 'yaml') { $tags = Add-CsvItem $tags 'yaml' }
+    if ($TextLower -match 'yaml|yml') { $tags = Add-CsvItem $tags 'yaml' }
+    if ($TextLower -match 'toml') { $tags = Add-CsvItem $tags 'toml' }
     if ($TextLower -match 'schema') { $tags = Add-CsvItem $tags 'schema' }
+    # -- Security and auth markers --
     if ($TextLower -match 'token|credential') { $tags = Add-CsvItem $tags 'token' }
     if ($TextLower -match 'permission') { $tags = Add-CsvItem $tags 'permission' }
+    if ($TextLower -match 'sign|gpg|ssh-key') { $tags = Add-CsvItem $tags 'signing' }
+    # -- Failure mode markers --
     if ($TextLower -match 'timeout') { $tags = Add-CsvItem $tags 'timeout' }
     if ($TextLower -match 'traceback|stacktrace|stack backtrace') { $tags = Add-CsvItem $tags 'stacktrace' }
     if ($TextLower -match 'sandbox') { $tags = Add-CsvItem $tags 'sandbox' }
@@ -410,12 +436,30 @@ function Get-CategoryTags {
     if ($TextLower -match 'path') { $tags = Add-CsvItem $tags 'path' }
     if ($TextLower -match 'dependency') { $tags = Add-CsvItem $tags 'dependency' }
     if ($TextLower -match 'api|endpoint') { $tags = Add-CsvItem $tags 'api' }
-    if ($TextLower -match 'rate limit') { $tags = Add-CsvItem $tags 'rate-limit' }
+    if ($TextLower -match 'rate limit|quota') { $tags = Add-CsvItem $tags 'rate-limit' }
     if ($TextLower -match 'context') { $tags = Add-CsvItem $tags 'context' }
     if ($TextLower -match 'handoff') { $tags = Add-CsvItem $tags 'handoff' }
     if ($TextLower -match 'validation|required') { $tags = Add-CsvItem $tags 'validation' }
     if ($TextLower -match 'output') { $tags = Add-CsvItem $tags 'output' }
     if ($TextLower -match 'workaround') { $tags = Add-CsvItem $tags 'workaround' }
+    # -- Language and ecosystem markers --
+    if ($TextLower -match 'cargo|rustc|crate') { $tags = Add-CsvItem $tags 'rust' }
+    if ($TextLower -match 'python|pip |pytest') { $tags = Add-CsvItem $tags 'python' }
+    if ($TextLower -match 'node|npm|yarn|pnpm') { $tags = Add-CsvItem $tags 'node' }
+    if ($TextLower -match 'docker|dockerfile|podman') { $tags = Add-CsvItem $tags 'docker' }
+    if ($TextLower -match '\bgit\b|commit|branch|merge') { $tags = Add-CsvItem $tags 'git' }
+    # -- CI/CD and workflow markers --
+    if ($TextLower -match '\bci\b|github actions|github-actions|circleci|travis|pipeline|github workflow') { $tags = Add-CsvItem $tags 'ci' }
+    if ($TextLower -match '\btests?\b|\btesting\b|pytest|cargo test|npm test|\bassert') { $tags = Add-CsvItem $tags 'test' }
+    if ($TextLower -match 'build|compile') { $tags = Add-CsvItem $tags 'build' }
+    if ($TextLower -match '\blink\b|linker|linking') { $tags = Add-CsvItem $tags 'link' }
+    if ($TextLower -match 'lint|clippy|eslint|rustfmt|prettier') { $tags = Add-CsvItem $tags 'lint' }
+    if ($TextLower -match 'deploy|release|publish') { $tags = Add-CsvItem $tags 'deploy' }
+    # -- Infrastructure markers --
+    if ($TextLower -match 'config') { $tags = Add-CsvItem $tags 'config' }
+    if ($TextLower -match 'migration|migrate|upgrade') { $tags = Add-CsvItem $tags 'migration' }
+    if ($TextLower -match 'hook|pre-commit|post-commit') { $tags = Add-CsvItem $tags 'hook' }
+    if ($TextLower -match 'systemd|systemctl|journalctl|service unit|unit file') { $tags = Add-CsvItem $tags 'systemd' }
 
     return $tags
 }
@@ -463,6 +507,25 @@ function Get-RepoRoot {
     }
 
     throw "Unable to determine repo root from: $StartPath"
+}
+
+function Get-GitSuperprojectRoot {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $result = git rev-parse --show-superproject-working-tree 2>$null
+        if ($LASTEXITCODE -eq 0 -and $result) { return $result.Trim() }
+    }
+    return ''
+}
+
+function Get-GitSubmodulePath {
+    param(
+        [string]$SuperprojectRoot,
+        [string]$RepoRoot
+    )
+    if ($SuperprojectRoot -and $RepoRoot -and $RepoRoot.StartsWith($SuperprojectRoot)) {
+        return $RepoRoot.Substring($SuperprojectRoot.Length).TrimStart('/', '\')
+    }
+    return ''
 }
 
 function Get-PreferredLocalDir {

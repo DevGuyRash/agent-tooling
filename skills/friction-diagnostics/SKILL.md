@@ -65,15 +65,14 @@ Preferred path for agents:
 ```sh
 sh <skills-file-root>/scripts/report-friction.sh \
   --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160" \
+  --source-type file \
+  --source-ref "SKILL.md" \
+  --source-line 160 \
   --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture." \
-  --expected-outcome "The CLI returns the architecture prompt." \
-  --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the visible table label as the CLI slug." \
-  --anchor-kind file \
-  --anchor-path "<skills-file-root>/SKILL.md" \
-  --anchor-line 160
+  --action-taken "I opened SKILL.md and found the dispatch table at line 160. The table listed 'Architecture' in the Role column. I ran: mpcr protocol dispatch --role architecture. The command was invoked from the repo root with no other flags." \
+  --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the full architecture prompt text, consistent with the dispatch table row for that role." \
+  --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned. The process exited non-zero immediately." \
+  --interpretation "The dispatch table uses human-readable labels in the Role column (e.g. 'Architecture'). I read that label as the literal CLI slug because the instruction said 'Use --role <ROLE>' with <ROLE> as a placeholder and the table column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading. The mismatch reveals the CLI uses a different internal slug not shown in the table."
 ```
 
 Optional structured-input path:
@@ -82,16 +81,15 @@ Optional structured-input path:
 cat <<'EOF' | sh <skills-file-root>/scripts/report-friction.sh --from-json -
 {
   "title": "Dispatch role slug mismatch",
-  "instruction_source": "SKILL.md:160",
   "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.",
-  "action_taken": "Ran mpcr protocol dispatch --role architecture.",
-  "expected_outcome": "The CLI returns the architecture prompt.",
-  "actual_outcome": "error: unknown dispatch role: architecture",
-  "interpretation": "I treated the visible table label as the CLI slug.",
+  "action_taken": "I opened SKILL.md and found the dispatch table at line 160. The table listed 'Architecture' in the Role column. I ran: mpcr protocol dispatch --role architecture. The command was invoked from the repo root with no other flags.",
+  "expected_outcome": "The CLI would resolve 'architecture' as a valid dispatch role slug and return the full architecture prompt text, consistent with the dispatch table row for that role.",
+  "actual_outcome": "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned. The process exited non-zero immediately.",
+  "interpretation": "The dispatch table uses human-readable labels in the Role column. I read that label as the literal CLI slug because the instruction said 'Use --role <ROLE>' with <ROLE> as a placeholder and the table column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading. The mismatch reveals the CLI uses a different internal slug not shown in the table.",
   "agent_name": "orchestrator",
   "agent_kind": "orchestrator",
-  "anchors": [
-    {"kind": "file", "path": "<skills-file-root>/SKILL.md", "line": 160}
+  "sources": [
+    {"type": "file", "ref": "SKILL.md", "line": 160}
   ]
 }
 EOF
@@ -108,23 +106,36 @@ WHEN category selection is uncertain THEN you SHOULD let the categorizer choose 
 
 WHEN overriding classification axes THEN you SHALL use only the values defined in `references/taxonomy.md`.
 
-## Anchors
+## Narrative quality requirements
 
-The event schema supports a generic `anchors` array so references are not limited to code.
+Each narrative field must contain enough detail to be actionable without re-reading the original context. The examples in this file and in `references/examples.md` demonstrate the expected depth — match that level, not the minimum character thresholds (which exist only to reject empty or trivially short entries like "error" or "ran it").
 
-Anchor fields may include:
+WHEN writing `action_taken` THEN you SHALL write a multi-sentence first-person account of every step you performed in sequence. You SHALL quote the exact command, tool call, or code you invoked, state the arguments or parameters you passed, and note any intermediate output or state you observed before the failure. Do not summarize — reconstruct the actual sequence.
 
-- `kind`
-- `path`
+WHEN writing `expected_outcome` THEN you SHALL state the specific behavior you anticipated and identify which instruction, documentation, code, or configuration you derived it from. Explain what success would have looked like concretely.
+
+WHEN writing `actual_outcome` THEN you SHALL include the exact error message, exit code, or stderr output verbatim. Describe the observable difference between what happened and what was expected. Do not paraphrase the error.
+
+WHEN writing `interpretation` THEN you SHALL write at least three sentences: (1) the precise meaning you assigned to the source material at the time you acted, (2) the specific wording, code, or phrasing that produced that reading — quote or closely paraphrase it, and (3) the reasoning chain that made that reading seem correct given everything you knew at the time. You SHALL NOT compress this into one sentence.
+
+WHEN writing `instruction_text` THEN you SHALL quote the exact text you acted on — whether a written instruction, code snippet, function signature, config value, error message, CLI help output, or documentation fragment. Quote verbatim, do not paraphrase.
+
+## Sources
+
+The event schema supports a unified `sources` array so references are not limited to code.
+
+Source members may include:
+
+- `type`
+- `ref`
 - `line`
 - `end_line`
 - `symbol`
-- `section`
-- `url`
+- `excerpt`
 - `selector`
 - `label`
 
-Use anchors when the friction references a file, function, document section, URL, or UI target that should be preserved for later review.
+Use sources when the friction references a file, function, document section, URL, or UI target that should be preserved for later review.
 
 ## Querying
 
@@ -133,13 +144,13 @@ Use the query script to filter the canonical event stream:
 ```sh
 sh <skills-file-root>/scripts/query-friction.sh --category instructions/missing/blocked --format md
 sh <skills-file-root>/scripts/query-friction.sh --date-from 2026-03-01 --date-to 2026-03-31 --format json
-sh <skills-file-root>/scripts/query-friction.sh --anchor-path "<skills-file-root>/SKILL.md"
+sh <skills-file-root>/scripts/query-friction.sh --source-ref "<skills-file-root>/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
 & .\scripts\query-friction.ps1 -DateFrom 2026-03-01 -DateTo 2026-03-31 -Format json
-& .\scripts\query-friction.ps1 -AnchorPath "$PWD\skills\friction-diagnostics\SKILL.md"
+& .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
 ```
 
 WHEN you need a custom slice that `query-friction.*` does not expose directly THEN you MAY read `events.jsonl` with `jq`.
@@ -158,8 +169,8 @@ WHEN reading prior friction THEN you SHOULD start with `INDEX.md`, then use `que
 WHEN friction was encountered during a task THEN you SHALL leave behind:
 
 - a canonical `events.jsonl`
-- substantive entries with instruction source, action, expected outcome, actual outcome, and interpretation
-- optional anchors when they help localize the issue
+- substantive entries with instruction text, action, expected outcome, actual outcome, and interpretation
+- optional sources when they help localize the issue
 - an automatically maintained `INDEX.md`
 - no fix proposals inside event payloads
 

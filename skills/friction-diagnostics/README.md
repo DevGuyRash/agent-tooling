@@ -34,15 +34,14 @@ The normal agent-facing workflow is:
 ```sh
 sh scripts/report-friction.sh \
   --title "Dispatch role slug mismatch" \
-  --instruction-source "SKILL.md:160" \
+  --source-type file \
+  --source-ref "SKILL.md" \
+  --source-line 160 \
   --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
   --action-taken "Ran mpcr protocol dispatch --role architecture." \
   --expected-outcome "The CLI returns the architecture prompt." \
   --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the visible table label as the CLI slug." \
-  --anchor-kind file \
-  --anchor-path "$PWD/skills/friction-diagnostics/SKILL.md" \
-  --anchor-line 160
+  --interpretation "I treated the visible table label as the CLI slug."
 ```
 
 `--from-json PATH|-` still works, but it is for compatibility and integrations. If JSON is used, prefer stdin over temp files. Also prefer stdin JSON whenever the payload contains shell-sensitive text such as backticks, `$()`, copied command output, or multiple lines.
@@ -53,7 +52,7 @@ PowerShell stdin example:
 
 ```powershell
 @'
-{"title":"Dispatch role slug mismatch","instruction_source":"SKILL.md:160","instruction_text":"Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.","action_taken":"Ran mpcr protocol dispatch --role architecture.","expected_outcome":"The CLI returns the architecture prompt.","actual_outcome":"error: unknown dispatch role: architecture","interpretation":"I treated the visible table label as the CLI slug."}
+{"title":"Dispatch role slug mismatch","instruction_text":"Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.","action_taken":"Ran mpcr protocol dispatch --role architecture.","expected_outcome":"The CLI returns the architecture prompt.","actual_outcome":"error: unknown dispatch role: architecture","interpretation":"I treated the visible table label as the CLI slug.","sources":[{"type":"file","ref":"SKILL.md","line":160}]}
 '@ | & .\scripts\report-friction.ps1 -FromJson -
 ```
 
@@ -86,13 +85,13 @@ Use `query-friction.*` to read `events.jsonl` directly:
 ```sh
 sh scripts/query-friction.sh --category instructions/missing/blocked --format md
 sh scripts/query-friction.sh --date-from 2026-03-01 --date-to 2026-03-31 --format json
-sh scripts/query-friction.sh --anchor-path "$PWD/skills/friction-diagnostics/SKILL.md"
+sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
 & .\scripts\query-friction.ps1 -DateFrom 2026-03-01 -DateTo 2026-03-31 -Format json
-& .\scripts\query-friction.ps1 -AnchorPath "$PWD\skills\friction-diagnostics\SKILL.md"
+& .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
 ```
 
 If an agent wants to inspect the raw canonical file directly, `jq` works fine with the JSONL stream:
@@ -113,4 +112,4 @@ Recommended reading order:
 
 - There is no `init-log` step.
 - `INDEX.md` is auto-created and auto-reconciled by the tooling after append operations.
-- The canonical event schema supports generic anchors so code and non-code references can be stored consistently.
+- The canonical event schema supports a unified `sources` array so code and non-code references can be stored consistently.

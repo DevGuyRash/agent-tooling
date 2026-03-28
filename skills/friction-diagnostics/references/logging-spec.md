@@ -12,12 +12,13 @@ Each non-empty line is one JSON object representing one friction event.
 
 Normal captures require substantive values for:
 
-- `instruction_source`
 - `instruction_text`
 - `action_taken`
 - `expected_outcome`
 - `actual_outcome`
 - `interpretation`
+
+The `sources` array is required when the friction can be localized to a specific file, document, or URL.
 
 `title` may be omitted. The tool derives it from `actual_outcome` when needed.
 
@@ -38,7 +39,14 @@ The canonical event record includes:
 - narrative fields
 - derived category fields
 - redaction metadata
-- optional anchors
+- optional sources
+
+Optional fields are omitted from the stored record when empty, zero, or false (sparse output).
+
+Numeric scales used in the schema:
+
+- **confidence** (1–5): 1 = wild guess, 2 = low confidence, 3 = moderate, 4 = high, 5 = near certain
+- **guidance_quality** (0–4): 0 = N/A, 1 = misleading, 2 = ambiguous, 3 = partial, 4 = clear
 
 ## Identity fields
 
@@ -51,21 +59,33 @@ The event stream may record:
 These fields are descriptive only. There is no parent-child orchestration graph and no session ID.
 When provenance is not provided explicitly, it should remain unspecified rather than inferred.
 
-## Anchors
+## Sources
 
-Anchors are stored as an `anchors` array so code and non-code references can be represented uniformly.
+Sources are stored as a `sources` array so code and non-code references can be represented uniformly.
 
-Anchor members may include:
+Source members may include:
 
-- `kind`
-- `path`
+- `type`
+- `ref`
 - `line`
 - `end_line`
 - `symbol`
-- `section`
-- `url`
+- `excerpt`
 - `selector`
 - `label`
+
+## Removed fields (v3)
+
+The following fields were present in v2 and are no longer part of the schema:
+
+- `title_line`
+- `quick_capture`
+- `force_capture`
+- `redaction_applied`
+- `privacy_tier`
+- `incident_status`
+- `evidence_type`
+- `instruction_source` (replaced by the `sources` array)
 
 ## Sanitization
 

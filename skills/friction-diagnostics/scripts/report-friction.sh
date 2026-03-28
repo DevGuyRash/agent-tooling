@@ -22,29 +22,36 @@ Structured input:
 
 Core fields:
   --title TEXT
-  --instruction-source TEXT
   --instruction-text TEXT
   --action-taken TEXT
   --expected-outcome TEXT
   --actual-outcome TEXT
   --interpretation TEXT
 
+Source fields (single source via CLI; use --from-json for multiple):
+  --source-type TYPE     One of: file, url, system-instruction, conversation,
+                         audio, visual, documentation, other
+  --source-ref TEXT      Primary reference (filepath, URL, description)
+  --source-line INT      Start line (for files)
+  --source-end-line INT  End line (for file ranges)
+  --source-symbol TEXT   Function, class, section, or heading name
+  --source-excerpt TEXT  Relevant quoted text from the source
+  --source-label TEXT    Human-readable description of this source's role
+
 Identity and context:
   --agent TEXT
   --agent-kind TEXT
   --role TEXT
   --repo-root PATH
-  --privacy-tier VALUE
 
 Classification overrides:
   --observed-surface VALUE
   --surface VALUE
   --mode VALUE
   --run-effect VALUE
-  --guidance-quality VALUE
+  --guidance-quality VALUE   (0-4 integer or clear/ambiguous/misleading/not-applicable)
   --impact VALUE
-  --confidence VALUE
-  --evidence-type VALUE
+  --confidence VALUE         (1-5 integer or low/medium/high)
 
 Optional context:
   --command TEXT
@@ -54,26 +61,12 @@ Optional context:
   --stdout-excerpt TEXT
   --owner-hint TEXT
   --component-hint TEXT
-  --incident-status VALUE
   --workaround-used BOOL
   --workaround-note TEXT
   --retries-lost INT
   --minutes-lost INT
   --fingerprint-key TEXT
   --tags CSV
-  --quick
-  --force
-
-Anchor fields:
-  --anchor-kind TEXT
-  --anchor-path TEXT
-  --anchor-line INT
-  --anchor-end-line INT
-  --anchor-symbol TEXT
-  --anchor-section TEXT
-  --anchor-url TEXT
-  --anchor-selector TEXT
-  --anchor-label TEXT
 
 Other:
   --help
@@ -83,7 +76,6 @@ EOF
 events_file=${FRICTION_EVENTS_FILE-}
 from_json=
 title=
-instruction_source=
 instruction_text=
 action_taken=
 expected_outcome=
@@ -93,7 +85,6 @@ agent_name=${FRICTION_AGENT_NAME-}
 agent_kind=${FRICTION_AGENT_KIND-}
 role=
 repo_root=
-privacy_tier=${FRICTION_PRIVACY_TIER-private}
 observed_surface=
 surface=
 mode=
@@ -101,7 +92,6 @@ run_effect=
 guidance_quality=
 impact=
 confidence=
-evidence_type=
 command_text=
 tool_name=
 exit_code=
@@ -109,24 +99,21 @@ stderr_text=
 stdout_excerpt=
 owner_hint=
 component_hint=
-incident_status=
 workaround_used=false
 workaround_note=
 retries_lost=0
 minutes_lost=0
 fingerprint_key=
 tags=
-quick_capture=false
-force_capture=false
-anchor_kind=
-anchor_path=
-anchor_line=
-anchor_end_line=
-anchor_symbol=
-anchor_section=
-anchor_url=
-anchor_selector=
-anchor_label=
+source_type=
+source_ref=
+source_line=
+source_end_line=
+source_symbol=
+source_excerpt=
+source_selector=
+source_label=
+sources_json=
 lock_dir=
 report_lock_acquired=0
 
@@ -209,16 +196,74 @@ if not isinstance(data, dict):
     print("Hint: the payload must be one JSON object.", file=sys.stderr)
     sys.exit(2)
 
-required = [
-    "instruction_source",
+VALID_SOURCE_TYPES = {
+    "file", "url", "system-instruction", "conversation",
+    "audio", "visual", "documentation", "other",
+}
+
+errors = []
+
+# --- Build sources array (v3 native or backward-compat from v2) ---
+sources = data.get("sources")
+if sources is not None:
+    if not isinstance(sources, list):
+        errors.append("field must be an array when present: sources")
+        sources = []
+    for i, src in enumerate(sources):
+        if not isinstance(src, dict):
+            errors.append(f"sources[{i}] must be an object")
+            continue
+        if not src.get("type"):
+            errors.append(f"sources[{i}].type is required")
+        elif src["type"] not in VALID_SOURCE_TYPES:
+            errors.append(
+                f"sources[{i}].type must be one of: {', '.join(sorted(VALID_SOURCE_TYPES))} (got '{src['type']}')"
+            )
+        if not src.get("ref"):
+            errors.append(f"sources[{i}].ref is required")
+else:
+    # Backward compatibility: build sources from v2 fields
+    sources = []
+    instr_src = data.get("instruction_source")
+    if isinstance(instr_src, str) and instr_src.strip():
+        sources.append({"type": "documentation", "ref": instr_src.strip()})
+
+    anchors = data.get("anchors")
+    if isinstance(anchors, list):
+        for anc in anchors:
+            if not isinstance(anc, dict):
+                continue
+            src = {}
+            if anc.get("url"):
+                src["type"] = "url"
+                src["ref"] = anc["url"]
+            elif anc.get("path"):
+                src["type"] = "file"
+                src["ref"] = anc["path"]
+            else:
+                src["type"] = "other"
+                src["ref"] = anc.get("label", anc.get("section", "unknown"))
+            for k in ("line", "end_line", "symbol", "section", "selector", "label"):
+                if anc.get(k) is not None:
+                    src[k] = anc[k]
+            # Deduplicate: skip if same ref already present from instruction_source
+            if not any(s.get("ref") == src.get("ref") for s in sources):
+                sources.append(src)
+
+    if not sources:
+        errors.append(
+            "missing sources array (or legacy instruction_source / anchors fields)"
+        )
+
+# --- Validate required narrative fields ---
+required_narrative = [
     "instruction_text",
     "action_taken",
     "expected_outcome",
     "actual_outcome",
     "interpretation",
 ]
-errors = []
-for key in required:
+for key in required_narrative:
     value = data.get(key)
     if value is None:
         errors.append(f"missing required field: {key}")
@@ -227,62 +272,13 @@ for key in required:
     elif value.strip() == "":
         errors.append(f"field must not be blank: {key}")
 
-anchors = data.get("anchors")
-anchor = None
-if anchors is not None:
-    if not isinstance(anchors, list):
-        errors.append("field must be an array when present: anchors")
-    elif anchors:
-        if not isinstance(anchors[0], dict):
-            errors.append("anchors[0] must be an object")
-        else:
-            anchor = anchors[0]
-
 if errors:
     print("Invalid friction payload for --from-json", file=sys.stderr)
     for item in errors:
       print(f"- {item}", file=sys.stderr)
     sys.exit(3)
 
-keys = [
-    ("title", "json_title"),
-    ("instruction_source", "json_instruction_source"),
-    ("instruction_text", "json_instruction_text"),
-    ("action_taken", "json_action_taken"),
-    ("expected_outcome", "json_expected_outcome"),
-    ("actual_outcome", "json_actual_outcome"),
-    ("interpretation", "json_interpretation"),
-    ("agent_name", "json_agent_name"),
-    ("agent_kind", "json_agent_kind"),
-    ("role", "json_role"),
-    ("repo_root", "json_repo_root"),
-    ("privacy_tier", "json_privacy_tier"),
-    ("observed_surface", "json_observed_surface"),
-    ("surface", "json_surface"),
-    ("mode", "json_mode"),
-    ("run_effect", "json_run_effect"),
-    ("guidance_quality", "json_guidance_quality"),
-    ("impact", "json_impact"),
-    ("confidence", "json_confidence"),
-    ("evidence_type", "json_evidence_type"),
-    ("command", "json_command_text"),
-    ("tool_name", "json_tool_name"),
-    ("exit_code", "json_exit_code"),
-    ("stderr", "json_stderr_text"),
-    ("stdout_excerpt", "json_stdout_excerpt"),
-    ("owner_hint", "json_owner_hint"),
-    ("component_hint", "json_component_hint"),
-    ("incident_status", "json_incident_status"),
-    ("workaround_used", "json_workaround_used"),
-    ("workaround_note", "json_workaround_note"),
-    ("retries_lost", "json_retries_lost"),
-    ("minutes_lost", "json_minutes_lost"),
-    ("fingerprint_key", "json_fingerprint_key"),
-    ("tags", "json_tags"),
-    ("quick", "json_quick_capture"),
-    ("force", "json_force_capture"),
-]
-
+# --- Emit shell variables ---
 def normalize(value):
     if value is None:
         return None
@@ -294,26 +290,46 @@ def normalize(value):
         return value
     return json.dumps(value, ensure_ascii=False)
 
+keys = [
+    ("title", "json_title"),
+    ("instruction_text", "json_instruction_text"),
+    ("action_taken", "json_action_taken"),
+    ("expected_outcome", "json_expected_outcome"),
+    ("actual_outcome", "json_actual_outcome"),
+    ("interpretation", "json_interpretation"),
+    ("agent_name", "json_agent_name"),
+    ("agent_kind", "json_agent_kind"),
+    ("role", "json_role"),
+    ("repo_root", "json_repo_root"),
+    ("observed_surface", "json_observed_surface"),
+    ("surface", "json_surface"),
+    ("mode", "json_mode"),
+    ("run_effect", "json_run_effect"),
+    ("guidance_quality", "json_guidance_quality"),
+    ("impact", "json_impact"),
+    ("confidence", "json_confidence"),
+    ("command", "json_command_text"),
+    ("tool_name", "json_tool_name"),
+    ("exit_code", "json_exit_code"),
+    ("stderr", "json_stderr_text"),
+    ("stdout_excerpt", "json_stdout_excerpt"),
+    ("owner_hint", "json_owner_hint"),
+    ("component_hint", "json_component_hint"),
+    ("workaround_used", "json_workaround_used"),
+    ("workaround_note", "json_workaround_note"),
+    ("retries_lost", "json_retries_lost"),
+    ("minutes_lost", "json_minutes_lost"),
+    ("fingerprint_key", "json_fingerprint_key"),
+    ("tags", "json_tags"),
+]
+
 for key, var_name in keys:
     value = normalize(data.get(key))
     if value is not None:
         print(f"{var_name}={shlex.quote(value)}")
 
-if anchor:
-    for key, var_name in [
-        ("kind", "json_anchor_kind"),
-        ("path", "json_anchor_path"),
-        ("line", "json_anchor_line"),
-        ("end_line", "json_anchor_end_line"),
-        ("symbol", "json_anchor_symbol"),
-        ("section", "json_anchor_section"),
-        ("url", "json_anchor_url"),
-        ("selector", "json_anchor_selector"),
-        ("label", "json_anchor_label"),
-    ]:
-        value = normalize(anchor.get(key))
-        if value is not None:
-            print(f"{var_name}={shlex.quote(value)}")
+# Emit sources as JSON for shell to embed directly
+print(f"json_sources_json={shlex.quote(json.dumps(sources, ensure_ascii=False))}")
 PY
   json_output=$(python3 "$json_helper" "$path") || {
     status=$?
@@ -353,7 +369,6 @@ while [ $# -gt 0 ]; do
     --events-file) events_file=${2-}; shift 2 ;;
     --from-json) from_json=${2-}; shift 2 ;;
     --title) title=${2-}; shift 2 ;;
-    --instruction-source) instruction_source=${2-}; shift 2 ;;
     --instruction-text) instruction_text=${2-}; shift 2 ;;
     --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
@@ -363,7 +378,6 @@ while [ $# -gt 0 ]; do
     --agent-kind) agent_kind=${2-}; shift 2 ;;
     --role) role=${2-}; shift 2 ;;
     --repo-root) repo_root=${2-}; shift 2 ;;
-    --privacy-tier) privacy_tier=${2-}; shift 2 ;;
     --observed-surface) observed_surface=${2-}; shift 2 ;;
     --surface) surface=${2-}; shift 2 ;;
     --mode) mode=${2-}; shift 2 ;;
@@ -371,7 +385,6 @@ while [ $# -gt 0 ]; do
     --guidance-quality) guidance_quality=${2-}; shift 2 ;;
     --impact) impact=${2-}; shift 2 ;;
     --confidence) confidence=${2-}; shift 2 ;;
-    --evidence-type) evidence_type=${2-}; shift 2 ;;
     --command) command_text=${2-}; shift 2 ;;
     --tool-name) tool_name=${2-}; shift 2 ;;
     --exit-code) exit_code=${2-}; shift 2 ;;
@@ -379,24 +392,20 @@ while [ $# -gt 0 ]; do
     --stdout-excerpt) stdout_excerpt=${2-}; shift 2 ;;
     --owner-hint) owner_hint=${2-}; shift 2 ;;
     --component-hint) component_hint=${2-}; shift 2 ;;
-    --incident-status) incident_status=${2-}; shift 2 ;;
     --workaround-used) workaround_used=${2-}; shift 2 ;;
     --workaround-note) workaround_note=${2-}; shift 2 ;;
     --retries-lost) retries_lost=${2-}; shift 2 ;;
     --minutes-lost) minutes_lost=${2-}; shift 2 ;;
     --fingerprint-key) fingerprint_key=${2-}; shift 2 ;;
     --tags) tags=${2-}; shift 2 ;;
-    --quick) quick_capture=true; shift ;;
-    --force) force_capture=true; shift ;;
-    --anchor-kind) anchor_kind=${2-}; shift 2 ;;
-    --anchor-path) anchor_path=${2-}; shift 2 ;;
-    --anchor-line) anchor_line=${2-}; shift 2 ;;
-    --anchor-end-line) anchor_end_line=${2-}; shift 2 ;;
-    --anchor-symbol) anchor_symbol=${2-}; shift 2 ;;
-    --anchor-section) anchor_section=${2-}; shift 2 ;;
-    --anchor-url) anchor_url=${2-}; shift 2 ;;
-    --anchor-selector) anchor_selector=${2-}; shift 2 ;;
-    --anchor-label) anchor_label=${2-}; shift 2 ;;
+    --source-type) source_type=${2-}; shift 2 ;;
+    --source-ref) source_ref=${2-}; shift 2 ;;
+    --source-line) source_line=${2-}; shift 2 ;;
+    --source-end-line) source_end_line=${2-}; shift 2 ;;
+    --source-symbol) source_symbol=${2-}; shift 2 ;;
+    --source-excerpt) source_excerpt=${2-}; shift 2 ;;
+    --source-selector) source_selector=${2-}; shift 2 ;;
+    --source-label) source_label=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -405,7 +414,6 @@ done
 if [ -n "$from_json" ]; then
   load_json_overrides "$from_json"
   title=$(load_json_field "$title" "" json_title)
-  instruction_source=$(load_json_field "$instruction_source" "" json_instruction_source)
   instruction_text=$(load_json_field "$instruction_text" "" json_instruction_text)
   action_taken=$(load_json_field "$action_taken" "" json_action_taken)
   expected_outcome=$(load_json_field "$expected_outcome" "" json_expected_outcome)
@@ -415,7 +423,6 @@ if [ -n "$from_json" ]; then
   agent_kind=$(load_json_field "$agent_kind" "" json_agent_kind)
   role=$(load_json_field "$role" "" json_role)
   repo_root=$(load_json_field "$repo_root" "" json_repo_root)
-  privacy_tier=$(load_json_field "$privacy_tier" "private" json_privacy_tier)
   observed_surface=$(load_json_field "$observed_surface" "" json_observed_surface)
   surface=$(load_json_field "$surface" "" json_surface)
   mode=$(load_json_field "$mode" "" json_mode)
@@ -423,7 +430,6 @@ if [ -n "$from_json" ]; then
   guidance_quality=$(load_json_field "$guidance_quality" "" json_guidance_quality)
   impact=$(load_json_field "$impact" "" json_impact)
   confidence=$(load_json_field "$confidence" "" json_confidence)
-  evidence_type=$(load_json_field "$evidence_type" "" json_evidence_type)
   command_text=$(load_json_field "$command_text" "" json_command_text)
   tool_name=$(load_json_field "$tool_name" "" json_tool_name)
   exit_code=$(load_json_field "$exit_code" "" json_exit_code)
@@ -431,24 +437,14 @@ if [ -n "$from_json" ]; then
   stdout_excerpt=$(load_json_field "$stdout_excerpt" "" json_stdout_excerpt)
   owner_hint=$(load_json_field "$owner_hint" "" json_owner_hint)
   component_hint=$(load_json_field "$component_hint" "" json_component_hint)
-  incident_status=$(load_json_field "$incident_status" "" json_incident_status)
   workaround_used=$(load_json_field "$workaround_used" "false" json_workaround_used)
   workaround_note=$(load_json_field "$workaround_note" "" json_workaround_note)
   retries_lost=$(load_json_field "$retries_lost" "0" json_retries_lost)
   minutes_lost=$(load_json_field "$minutes_lost" "0" json_minutes_lost)
   fingerprint_key=$(load_json_field "$fingerprint_key" "" json_fingerprint_key)
   tags=$(load_json_field "$tags" "" json_tags)
-  quick_capture=$(load_json_field "$quick_capture" "false" json_quick_capture)
-  force_capture=$(load_json_field "$force_capture" "false" json_force_capture)
-  anchor_kind=$(load_json_field "$anchor_kind" "" json_anchor_kind)
-  anchor_path=$(load_json_field "$anchor_path" "" json_anchor_path)
-  anchor_line=$(load_json_field "$anchor_line" "" json_anchor_line)
-  anchor_end_line=$(load_json_field "$anchor_end_line" "" json_anchor_end_line)
-  anchor_symbol=$(load_json_field "$anchor_symbol" "" json_anchor_symbol)
-  anchor_section=$(load_json_field "$anchor_section" "" json_anchor_section)
-  anchor_url=$(load_json_field "$anchor_url" "" json_anchor_url)
-  anchor_selector=$(load_json_field "$anchor_selector" "" json_anchor_selector)
-  anchor_label=$(load_json_field "$anchor_label" "" json_anchor_label)
+  # sources_json is set directly by the Python helper
+  sources_json=$(load_json_field "$sources_json" "" json_sources_json)
 fi
 
 if [ -z "$events_file" ]; then
@@ -462,30 +458,49 @@ if [ -z "$repo_root" ]; then
   repo_root=$(git_repo_root)
 fi
 
-validate_required_field "instruction_source" "$instruction_source"
+# Detect submodule context
+superproject_root=$(git_superproject_root)
+submodule_path=
+if [ -n "$superproject_root" ] && [ -n "$repo_root" ]; then
+  submodule_path=$(git_submodule_path "$superproject_root" "$repo_root")
+fi
+
+# Build sources JSON from CLI flags if not already set from --from-json
+if [ -z "$sources_json" ]; then
+  if [ -n "$source_ref" ]; then
+    if [ -z "$source_type" ]; then
+      source_type=documentation
+    fi
+    validate_source_type "$source_type"
+    src_fields="$(json_string "type" "$source_type"),$(json_string "ref" "$source_ref")"
+    src_line_val=$(safe_int "$source_line")
+    src_end_line_val=$(safe_int "$source_end_line")
+    if [ "$src_line_val" -gt 0 ]; then src_fields="$src_fields,$(json_number "line" "$src_line_val")"; fi
+    if [ "$src_end_line_val" -gt 0 ]; then src_fields="$src_fields,$(json_number "end_line" "$src_end_line_val")"; fi
+    if [ -n "$source_symbol" ]; then src_fields="$src_fields,$(json_string "symbol" "$(sanitize_text "$source_symbol")")"; fi
+    if [ -n "$source_excerpt" ]; then src_fields="$src_fields,$(json_string "excerpt" "$(sanitize_text "$source_excerpt")")"; fi
+    if [ -n "$source_selector" ]; then src_fields="$src_fields,$(json_string "selector" "$(sanitize_text "$source_selector")")"; fi
+    if [ -n "$source_label" ]; then src_fields="$src_fields,$(json_string "label" "$(sanitize_text "$source_label")")"; fi
+    sources_json="[{${src_fields}}]"
+  else
+    die "Missing required source: provide --source-ref (and optionally --source-type) or use --from-json with a sources array"
+  fi
+fi
+
+# Extract primary source ref for fingerprinting and categorizer
+primary_source_ref=$(printf '%s' "$sources_json" | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | sed -n '1p')
+
+# Extract source types CSV for tag generation
+source_type_csv=$(printf '%s' "$sources_json" | sed 's/},{/}\n{/g' | sed -n 's/.*"type":"\([^"]*\)".*/\1/p' | paste -sd ',' -)
+
 validate_required_field "instruction_text" "$instruction_text"
 validate_required_field "action_taken" "$action_taken"
 validate_required_field "expected_outcome" "$expected_outcome"
 validate_required_field "actual_outcome" "$actual_outcome"
 validate_required_field "interpretation" "$interpretation"
 
-title_original=$title
-instruction_source_original=$instruction_source
-instruction_text_original=$instruction_text
-action_taken_original=$action_taken
-expected_outcome_original=$expected_outcome
-actual_outcome_original=$actual_outcome
-interpretation_original=$interpretation
-command_original=$command_text
-tool_name_original=$tool_name
-stderr_original=$stderr_text
-stdout_original=$stdout_excerpt
-owner_hint_original=$owner_hint
-component_hint_original=$component_hint
-workaround_note_original=$workaround_note
-
+# Sanitize narrative fields
 title=$(sanitize_text "$title")
-instruction_source=$(sanitize_text "$instruction_source")
 instruction_text=$(sanitize_text "$instruction_text")
 action_taken=$(sanitize_text "$action_taken")
 expected_outcome=$(sanitize_text "$expected_outcome")
@@ -501,44 +516,27 @@ workaround_note=$(sanitize_text "$workaround_note")
 agent_name=$(sanitize_text "$agent_name")
 agent_kind=$(sanitize_text "$agent_kind")
 role=$(sanitize_text "$role")
-anchor_kind=$(sanitize_text "$anchor_kind")
-anchor_path=$(sanitize_text "$anchor_path")
-anchor_symbol=$(sanitize_text "$anchor_symbol")
-anchor_section=$(sanitize_text "$anchor_section")
-anchor_url=$(sanitize_text "$anchor_url")
-anchor_selector=$(sanitize_text "$anchor_selector")
-anchor_label=$(sanitize_text "$anchor_label")
 
-redaction_applied=false
-if [ "$title" != "$title_original" ] ||
-  [ "$instruction_source" != "$instruction_source_original" ] ||
-  [ "$instruction_text" != "$instruction_text_original" ] ||
-  [ "$action_taken" != "$action_taken_original" ] ||
-  [ "$expected_outcome" != "$expected_outcome_original" ] ||
-  [ "$actual_outcome" != "$actual_outcome_original" ] ||
-  [ "$interpretation" != "$interpretation_original" ] ||
-  [ "$command_text" != "$command_original" ] ||
-  [ "$tool_name" != "$tool_name_original" ] ||
-  [ "$stderr_text" != "$stderr_original" ] ||
-  [ "$stdout_excerpt" != "$stdout_original" ] ||
-  [ "$owner_hint" != "$owner_hint_original" ] ||
-  [ "$component_hint" != "$component_hint_original" ] ||
-  [ "$workaround_note" != "$workaround_note_original" ]; then
-  redaction_applied=true
-fi
+# Validate narrative depth
+# Minimum lengths are spam filters, not quality enforcement.
+# Quality is driven by EARS structural guidance in SKILL.md and AGENTS.md
+# (multi-sentence mandates, quoting requirements, reasoning chain structure).
+# These thresholds only reject obviously worthless entries.
+validate_narrative_length "instruction_text" "$instruction_text" 10
+validate_narrative_length "action_taken" "$action_taken" 20
+validate_narrative_length "expected_outcome" "$expected_outcome" 15
+validate_narrative_length "actual_outcome" "$actual_outcome" 15
+validate_narrative_length "interpretation" "$interpretation" 30
 
 provenance_source=unspecified
 if [ -n "$(trim "$agent_name")$(trim "$agent_kind")$(trim "$role")" ]; then
   provenance_source=explicit
 fi
 
-if [ -z "$(trim "$title")" ]; then
-  title=$(truncate_line "$actual_outcome" 72)
-fi
-
+# Run categorizer
 cat_output=$(
   sh "$SCRIPT_DIR/categorize.sh" \
-    --instruction-source "$instruction_source" \
+    --source-ref "$primary_source_ref" \
     --instruction-text "$instruction_text" \
     --action-taken "$action_taken" \
     --expected-outcome "$expected_outcome" \
@@ -554,7 +552,7 @@ cat_output=$(
     --guidance-quality "$guidance_quality" \
     --impact "$impact" \
     --confidence "$confidence" \
-    --evidence-type "$evidence_type"
+    --source-type-csv "$source_type_csv"
 )
 
 final_observed_surface=
@@ -563,7 +561,6 @@ final_mode=
 final_run_effect=
 final_guidance_quality=
 final_confidence=
-final_evidence_type=
 final_derived_category=
 final_taxonomy_version=
 final_tags=
@@ -575,7 +572,6 @@ while IFS='=' read -r key value; do
     run_effect) final_run_effect=$value ;;
     guidance_quality) final_guidance_quality=$value ;;
     confidence) final_confidence=$value ;;
-    evidence_type) final_evidence_type=$value ;;
     derived_category) final_derived_category=$value ;;
     taxonomy_version) final_taxonomy_version=$value ;;
     tags) final_tags=$value ;;
@@ -590,10 +586,10 @@ mode=$final_mode
 run_effect=$final_run_effect
 guidance_quality=$final_guidance_quality
 confidence=$final_confidence
-evidence_type=$final_evidence_type
 derived_category=$final_derived_category
 taxonomy_version=$final_taxonomy_version
 
+# Merge user-supplied tags with auto-generated tags
 merged_tags=$final_tags
 if [ -n "$tags" ]; then
   normalized=$(printf '%s' "$tags" | sed 's/[[:space:]]*,[[:space:]]*/,/g')
@@ -606,27 +602,22 @@ if [ -n "$tags" ]; then
   IFS=$old_ifs
 fi
 tags=$merged_tags
+tags_json=$(csv_to_json_array "$tags")
 
+# Normalize optional fields
 workaround_used=$(normalize_bool "$workaround_used")
-quick_capture=$(normalize_bool "$quick_capture")
-force_capture=$(normalize_bool "$force_capture")
 retries_lost=$(safe_int "$retries_lost")
 minutes_lost=$(safe_int "$minutes_lost")
 exit_code_value=$(safe_int "$exit_code")
-privacy_tier=$(normalize_privacy_tier "$privacy_tier")
-if [ -z "$incident_status" ]; then
-  if [ "$workaround_used" = "true" ]; then
-    incident_status=mitigated
-  else
-    incident_status=open
-  fi
-fi
-case "$incident_status" in
-  open|mitigated|resolved|stale) ;;
-  *) die "Unsupported incident status: $incident_status" ;;
-esac
 
-fingerprint=$(build_event_fingerprint "$surface" "$mode" "$instruction_source" "$actual_outcome" "$action_taken" "$title" "$fingerprint_key")
+# Auto-title: [surface/mode] prefix + actual_outcome excerpt
+if [ -z "$(trim "$title")" ]; then
+  title_prefix="[$surface/$mode]"
+  title_body=$(truncate_line "$actual_outcome" 60)
+  title="$title_prefix $title_body"
+fi
+
+fingerprint=$(build_event_fingerprint "$surface" "$mode" "$primary_source_ref" "$actual_outcome" "$action_taken" "$title" "$fingerprint_key")
 incident_id=inc-$fingerprint
 entry_number=0
 if [ -f "$events_file" ]; then
@@ -636,28 +627,12 @@ entry_number=$((entry_number + 1))
 event_id=$(printf 'evt-%04d' "$entry_number")
 recorded=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 index_file=$events_dir/INDEX.md
-title_line=$(truncate_line "$title" 120)
 
-anchor_line_value=$(safe_int "$anchor_line")
-anchor_end_line_value=$(safe_int "$anchor_end_line")
-anchors_json='[]'
-if [ -n "$anchor_kind$anchor_path$anchor_symbol$anchor_section$anchor_url$anchor_selector$anchor_label" ] || [ "$anchor_line_value" -gt 0 ] || [ "$anchor_end_line_value" -gt 0 ]; then
-  anchor_fields=
-  if [ -n "$anchor_kind" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "kind" "$anchor_kind")"); fi
-  if [ -n "$anchor_path" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "path" "$anchor_path")"); fi
-  if [ "$anchor_line_value" -gt 0 ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_number "line" "$anchor_line_value")"); fi
-  if [ "$anchor_end_line_value" -gt 0 ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_number "end_line" "$anchor_end_line_value")"); fi
-  if [ -n "$anchor_symbol" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "symbol" "$anchor_symbol")"); fi
-  if [ -n "$anchor_section" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "section" "$anchor_section")"); fi
-  if [ -n "$anchor_url" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "url" "$anchor_url")"); fi
-  if [ -n "$anchor_selector" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "selector" "$anchor_selector")"); fi
-  if [ -n "$anchor_label" ]; then anchor_fields=$(append_csv "$anchor_fields" "$(json_string "label" "$anchor_label")"); fi
-  anchors_json="[{${anchor_fields}}]"
-fi
-
+# Emit event JSON with sparse optional fields
 tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
 {
   printf '{'
+  # Always-present metadata
   printf '%s,' "$(json_string "schema_version" "$SCHEMA_VERSION")"
   printf '%s,' "$(json_string "taxonomy_version" "$taxonomy_version")"
   printf '%s,' "$(json_string "event_id" "$event_id")"
@@ -666,44 +641,44 @@ tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
   printf '%s,' "$(json_string "recorded_at" "$recorded")"
   printf '%s,' "$(json_string "events_file" "$events_file")"
   printf '%s,' "$(json_string "repo_root" "$repo_root")"
+  json_string_if "superproject_root" "$superproject_root"
+  json_string_if "submodule_path" "$submodule_path"
+  # Identity (agent_name/agent_kind always present; role sparse)
   printf '%s,' "$(json_string "agent_name" "$agent_name")"
   printf '%s,' "$(json_string "agent_kind" "$agent_kind")"
-  printf '%s,' "$(json_string "role" "$role")"
+  json_string_if "role" "$role"
   printf '%s,' "$(json_string "provenance_source" "$provenance_source")"
-  printf '%s,' "$(json_bool "quick_capture" "$quick_capture")"
-  printf '%s,' "$(json_bool "force_capture" "$force_capture")"
-  printf '%s,' "$(json_bool "redaction_applied" "$redaction_applied")"
+  # Core narrative (always present)
   printf '%s,' "$(json_string "title" "$title")"
-  printf '%s,' "$(json_string "title_line" "$title_line")"
-  printf '%s,' "$(json_string "instruction_source" "$instruction_source")"
   printf '%s,' "$(json_string "instruction_text" "$instruction_text")"
   printf '%s,' "$(json_string "action_taken" "$action_taken")"
   printf '%s,' "$(json_string "expected_outcome" "$expected_outcome")"
   printf '%s,' "$(json_string "actual_outcome" "$actual_outcome")"
   printf '%s,' "$(json_string "interpretation" "$interpretation")"
-  printf '%s,' "$(json_string "command" "$command_text")"
-  printf '%s,' "$(json_string "tool_name" "$tool_name")"
-  printf '%s,' "$(json_string "stderr" "$stderr_text")"
-  printf '%s,' "$(json_string "stdout_excerpt" "$stdout_excerpt")"
-  printf '%s,' "$(json_string "owner_hint" "$owner_hint")"
-  printf '%s,' "$(json_string "component_hint" "$component_hint")"
-  printf '%s,' "$(json_string "workaround_note" "$workaround_note")"
+  # Sparse optional context
+  json_string_if "command" "$command_text"
+  json_string_if "tool_name" "$tool_name"
+  json_string_if "stderr" "$stderr_text"
+  json_string_if "stdout_excerpt" "$stdout_excerpt"
+  json_string_if "owner_hint" "$owner_hint"
+  json_string_if "component_hint" "$component_hint"
+  json_string_if "workaround_note" "$workaround_note"
+  # Classification (always present, numeric)
   printf '%s,' "$(json_string "observed_surface" "$observed_surface")"
   printf '%s,' "$(json_string "surface" "$surface")"
   printf '%s,' "$(json_string "mode" "$mode")"
   printf '%s,' "$(json_string "run_effect" "$run_effect")"
-  printf '%s,' "$(json_string "guidance_quality" "$guidance_quality")"
-  printf '%s,' "$(json_string "confidence" "$confidence")"
-  printf '%s,' "$(json_string "evidence_type" "$evidence_type")"
+  printf '%s,' "$(json_number "guidance_quality" "$guidance_quality")"
+  printf '%s,' "$(json_number "confidence" "$confidence")"
   printf '%s,' "$(json_string "derived_category" "$derived_category")"
-  printf '%s,' "$(json_string "tags_csv" "$tags")"
-  printf '%s,' "$(json_string "incident_status" "$incident_status")"
-  printf '%s,' "$(json_bool "workaround_used" "$workaround_used")"
-  printf '%s,' "$(json_number "exit_code" "$exit_code_value")"
-  printf '%s,' "$(json_number "retries_lost" "$retries_lost")"
-  printf '%s,' "$(json_number "minutes_lost" "$minutes_lost")"
-  printf '%s,' "$(json_string "privacy_tier" "$privacy_tier")"
-  printf '"anchors":%s' "$anchors_json"
+  printf '"tags":%s,' "$tags_json"
+  # Sparse impact fields
+  json_bool_if "workaround_used" "$workaround_used"
+  json_number_if "exit_code" "$exit_code_value"
+  json_number_if "retries_lost" "$retries_lost"
+  json_number_if "minutes_lost" "$minutes_lost"
+  # Sources array (always present, replaces anchors + instruction_source)
+  printf '"sources":%s' "$sources_json"
   printf '}\n'
 } >"$tmp_event"
 cat "$tmp_event" >>"$events_file"

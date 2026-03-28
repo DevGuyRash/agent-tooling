@@ -96,6 +96,17 @@ categories = Counter()
 fingerprints = Counter()
 agent_kinds = Counter()
 dates = Counter()
+tags_counter = Counter()
+
+def _event_tags(event):
+    """Return list of tag strings, handling v3 (array) and v2 (tags_csv string)."""
+    tags_v3 = event.get("tags")
+    if isinstance(tags_v3, list):
+        return [str(t) for t in tags_v3 if t]
+    tags_csv = event.get("tags_csv")
+    if isinstance(tags_csv, str) and tags_csv.strip():
+        return [t.strip() for t in tags_csv.split(",") if t.strip()]
+    return []
 
 for event in lines:
     if event.get("derived_category"):
@@ -107,6 +118,8 @@ for event in lines:
     ts = event.get("recorded_at", "")
     if len(ts) >= 10:
         dates[ts[:10]] += 1
+    for tag in _event_tags(event):
+        tags_counter[tag] += 1
 
 def write_count_block(prefix, counter):
     for key, count in sorted(counter.items(), key=lambda item: (-item[1], item[0])):
@@ -121,6 +134,7 @@ write_count_block("CATEGORY", categories)
 write_count_block("FINGERPRINT", fingerprints)
 write_count_block("AGENT_KIND", agent_kinds)
 write_count_block("DATE", dates)
+write_count_block("TAG", tags_counter)
 PY
 status=$?
 if [ "$status" -eq 10 ]; then
@@ -170,6 +184,12 @@ index_tmp=$(mktemp "$events_dir/.index.XXXXXX.tmp")
     awk -F '\t' '$1=="DATE" {printf "- `%s` - %s\n", $3, $2}' "$summary_tmp"
   else
     printf '_No date counts available._\n'
+  fi
+  printf '\n## Tags\n\n'
+  if grep -q '^TAG	' "$summary_tmp"; then
+    awk -F '\t' '$1=="TAG" {printf "- `%s` - %s\n", $3, $2}' "$summary_tmp"
+  else
+    printf '_No tags recorded._\n'
   fi
 } >"$index_tmp"
 

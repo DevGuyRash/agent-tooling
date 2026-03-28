@@ -3,20 +3,26 @@
   "evals": [
     {
       "id": "eval-report-default-path",
-      "prompt": "Record one friction event from inside a git repository using direct CLI flags.",
-      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local reports area, or under another existing .local* reports area when .local is absent, and INDEX.md exists adjacent to it. The event contains source, action, expected outcome, actual outcome, interpretation, and derived category fields.",
+      "prompt": "Record one friction event from inside a git repository using direct CLI flags with --source-type and --source-ref.",
+      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local reports area, or under another existing .local* reports area when .local is absent, and INDEX.md exists adjacent to it. The event contains schema_version 3.0.0, a sources array with at least one typed entry, action, expected outcome, actual outcome, interpretation, derived category, numeric confidence (1-5), and numeric guidance_quality (0-4). Optional fields with empty/zero/false values are omitted from the JSON.",
       "files": []
     },
     {
       "id": "eval-json-stdin",
-      "prompt": "Report one friction event using --from-json - over stdin.",
-      "expected_output": "The event is appended to the same canonical events.jsonl, and no temp-file contract is required.",
+      "prompt": "Report one friction event using --from-json - over stdin with a sources array containing multiple entries.",
+      "expected_output": "The event is appended to the same canonical events.jsonl. Multiple sources are preserved in the output. Tags are emitted as a JSON array, not a CSV string.",
       "files": []
     },
     {
-      "id": "eval-query-by-anchor",
-      "prompt": "Query the canonical events.jsonl for events anchored to a specific file path.",
-      "expected_output": "The query output filters the event stream by anchor path without relying on per-agent markdown logs or session files.",
+      "id": "eval-query-by-source-ref",
+      "prompt": "Query the canonical events.jsonl for events matching a specific source reference.",
+      "expected_output": "The query output filters the event stream by source ref without relying on per-agent markdown logs or session files. Both v2 events (with anchors/instruction_source) and v3 events (with sources array) are handled.",
+      "files": []
+    },
+    {
+      "id": "eval-backward-compat",
+      "prompt": "Submit a v2-format JSON payload via --from-json with instruction_source (string) and anchors (array).",
+      "expected_output": "The tool auto-converts the v2 fields to a v3 sources array. instruction_source becomes a documentation-type source, and anchors are converted to typed sources based on their fields (path → file, url → url).",
       "files": []
     }
   ]

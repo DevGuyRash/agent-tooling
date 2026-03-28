@@ -7,6 +7,7 @@
 WHEN any error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind occurs THEN you SHALL immediately log it using the `friction-diagnostics` skill.
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT create a duplicate entry.
 WHEN friction is logged THEN you SHALL use the canonical repo-scoped `events.jsonl` target unless an explicit `--events-file` path is required.
+WHEN the friction can be localized to a specific file, document, or URL THEN you SHALL populate the `sources` array in the event.
 ```
 
 ## Agent-facing default
@@ -16,12 +17,14 @@ Agents should use direct flags by default:
 ```sh
 sh scripts/report-friction.sh \
   --title "Referenced CI check script does not exist" \
-  --instruction-source "AGENTS.md:18" \
+  --source-type file \
+  --source-ref "AGENTS.md" \
+  --source-line 18 \
   --instruction-text "Run scripts/ci-check.sh to see the current build status." \
-  --action-taken "Ran rg --files scripts and confirmed ci-check.sh does not exist." \
-  --expected-outcome "The repository contains scripts/ci-check.sh." \
-  --actual-outcome "The file does not exist in the repository." \
-  --interpretation "The instruction used a concrete script path in imperative form, so I understood it as pointing to an existing helper."
+  --action-taken "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched for the file using rg --files scripts, which returned no match. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none." \
+  --expected-outcome "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the instruction's use of a bare concrete path in imperative form." \
+  --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
+  --interpretation "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap."
 ```
 
 ## Structured-input path
@@ -32,14 +35,16 @@ sh scripts/report-friction.sh \
 cat <<'EOF' | sh scripts/report-friction.sh --from-json -
 {
   "title": "Referenced CI check script does not exist",
-  "instruction_source": "AGENTS.md:18",
   "instruction_text": "Run scripts/ci-check.sh to see the current build status.",
-  "action_taken": "Ran rg --files scripts and confirmed ci-check.sh does not exist.",
-  "expected_outcome": "The repository contains scripts/ci-check.sh.",
-  "actual_outcome": "The file does not exist in the repository.",
-  "interpretation": "The instruction used a concrete script path in imperative form, so I understood it as pointing to an existing helper.",
+  "action_taken": "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched for the file using rg --files scripts, which returned no match. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none.",
+  "expected_outcome": "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the instruction's use of a bare concrete path in imperative form.",
+  "actual_outcome": "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository.",
+  "interpretation": "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap.",
   "agent_name": "orchestrator",
-  "agent_kind": "orchestrator"
+  "agent_kind": "orchestrator",
+  "sources": [
+    {"type": "file", "ref": "AGENTS.md", "line": 18}
+  ]
 }
 EOF
 ```
@@ -73,13 +78,13 @@ Use the query script to filter the canonical event stream:
 ```sh
 sh scripts/query-friction.sh --category instructions/missing/blocked --format md
 sh scripts/query-friction.sh --agent-kind subagent --format json
-sh scripts/query-friction.sh --anchor-path "$PWD/skills/friction-diagnostics/SKILL.md"
+sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
 & .\scripts\query-friction.ps1 -AgentKind subagent -Format json
-& .\scripts\query-friction.ps1 -AnchorPath "$PWD\skills\friction-diagnostics\SKILL.md"
+& .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
 ```
 
 If an agent needs an ad hoc parse beyond the built-in query filters, it can read the raw stream with `jq`:

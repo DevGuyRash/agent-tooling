@@ -2,6 +2,34 @@
 
 The categorizer uses three axes. This avoids a giant brittle enum while still producing deterministic, grep-friendly labels.
 
+## Numeric scales
+
+Two fields in the event schema use numeric values:
+
+### Confidence (1–5)
+
+How certain the agent was about its interpretation when the friction occurred.
+
+| Value | Label | Meaning |
+|-------|-------|---------|
+| 1 | wild guess | No real basis; proceeding blind |
+| 2 | low | Some signal but mostly uncertain |
+| 3 | moderate | Plausible reading, reasonable doubt |
+| 4 | high | Strong basis; minor uncertainty only |
+| 5 | near certain | Evidence strongly supports this reading |
+
+### Guidance quality (0–4)
+
+How clear or misleading the available guidance was.
+
+| Value | Label | Meaning |
+|-------|-------|---------|
+| 0 | N/A | No guidance was involved |
+| 1 | misleading | Guidance actively suggested the wrong action |
+| 2 | ambiguous | Guidance could be read multiple ways |
+| 3 | partial | Guidance was correct but incomplete |
+| 4 | clear | Guidance was unambiguous and accurate |
+
 ## Surface
 
 Where the friction primarily showed up.
@@ -232,22 +260,22 @@ The run proceeded without operational disruption. This is the default when no bl
 
 ## Guidance quality
 
-How clear or misleading the available guidance was. WHEN overriding guidance quality THEN you SHALL use one of: `clear`, `ambiguous`, `misleading`, `not-applicable`. You SHALL NOT invent new guidance quality values.
+How clear or misleading the available guidance was. The schema stores guidance quality as a numeric value (0–4); see the Numeric scales section above for the full mapping. WHEN overriding guidance quality THEN you SHALL use one of the semantic labels or their numeric equivalents: `clear` (4), `ambiguous` (2), `misleading` (1), `not-applicable` (0). You SHALL NOT invent new guidance quality values.
 
-### `clear`
+### `clear` (4)
 The guidance was unambiguous and accurately described the actual behavior. This is the default.
 
-### `ambiguous`
+### `ambiguous` (2)
 The guidance was unclear, underspecified, or could be read multiple ways. The agent spent effort interpreting signals without reaching confident understanding.
 
 Example scenario: AGENTS.md says "keep the change minimal and production ready" — the agent cannot tell if a migration is in scope and proceeds with uncertainty about whether the reviewer will accept the result.
 
-### `misleading`
+### `misleading` (1)
 The available evidence actively suggested the wrong action or interpretation. The agent was led astray, not merely confused.
 
 Example scenario: A `--help` text lists `json` as a valid format option but the CLI rejects it — the documentation pointed the agent toward an action that was guaranteed to fail.
 
-### `not-applicable`
+### `not-applicable` (0)
 No guidance was involved in the friction — the event was purely operational (e.g., a timeout, a missing dependency).
 
 ---

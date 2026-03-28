@@ -1,5 +1,5 @@
 param(
-    [string]$InstructionSource = "",
+    [string]$SourceRef = "",
     [string]$InstructionText = "",
     [string]$ActionTaken = "",
     [string]$ExpectedOutcome = "",
@@ -15,8 +15,8 @@ param(
     [string]$RunEffect = "",
     [string]$GuidanceQuality = "",
     [string]$Impact = "",
-    [string]$EvidenceType = "",
     [string]$Confidence = "",
+    [string]$SourceTypeCsv = "",
     [switch]$Help
 )
 
@@ -32,7 +32,6 @@ Output:
   run_effect=<value>
   guidance_quality=<value>
   confidence=<value>
-  evidence_type=<value>
   derived_category=<surface/mode/run_effect>
   tags=<comma-separated tags>
   taxonomy_version=<value>
@@ -45,7 +44,7 @@ Output:
 $observationText = @($ActionTaken, $ActualOutcome, $ToolName, $Command, $Stderr) -join "`n"
 $observationText = $observationText.ToLowerInvariant()
 
-$sourceText = @($InstructionSource, $InstructionText, $ExpectedOutcome, $Interpretation, $StdoutExcerpt) -join "`n"
+$sourceText = @($SourceRef, $InstructionText, $ExpectedOutcome, $Interpretation, $StdoutExcerpt) -join "`n"
 $sourceText = $sourceText.ToLowerInvariant()
 
 $fullText = "$observationText`n$sourceText"
@@ -92,20 +91,20 @@ if ($fullText -match 'rate limit|quota|too many requests|retry-after|http 403|ti
 elseif ($fullText -match 'retry|retries|thrash|looped|repeated|extra steps|flaky') { $detectedRunEffect = 'noisy' }
 elseif ($fullText -match 'partial|workaround|fallback|degraded|succeeded but|continued') { $detectedRunEffect = 'degraded' }
 
-$detectedGuidanceQuality = 'clear'
-if ([string]::IsNullOrWhiteSpace($sourceText)) { $detectedGuidanceQuality = 'not-applicable' }
-elseif ($sourceText -match 'ambiguous|unclear|underspecified|uncertain') { $detectedGuidanceQuality = 'ambiguous' }
-elseif ($sourceText -match 'contradict|inconsistent|wrong output|unexpected output|output mismatch|misleading|did not match docs') { $detectedGuidanceQuality = 'misleading' }
+$detectedGuidanceQuality = 4
+if ([string]::IsNullOrWhiteSpace($sourceText)) { $detectedGuidanceQuality = 0 }
+elseif ($sourceText -match 'contradict|inconsistent|wrong output|unexpected output|output mismatch|misleading|did not match docs') { $detectedGuidanceQuality = 1 }
+elseif ($sourceText -match 'ambiguous|unclear|underspecified|uncertain') { $detectedGuidanceQuality = 2 }
 
 # Legacy --Impact mapping
 switch ($Impact) {
     { $_ -in 'blocked', 'degraded', 'noisy', 'continued' } { $RunEffect = $Impact }
     'confusing' {
-        $GuidanceQuality = 'ambiguous'
+        $GuidanceQuality = '2'
         if ([string]::IsNullOrWhiteSpace($RunEffect)) { $RunEffect = 'continued' }
     }
     'misleading' {
-        $GuidanceQuality = 'misleading'
+        $GuidanceQuality = '1'
         if ([string]::IsNullOrWhiteSpace($RunEffect)) { $RunEffect = 'degraded' }
     }
 }
@@ -116,37 +115,20 @@ if (-not [string]::IsNullOrWhiteSpace($Mode)) { $detectedMode = $Mode }
 if (-not [string]::IsNullOrWhiteSpace($RunEffect)) { $detectedRunEffect = ConvertTo-NormalizedRunEffect $RunEffect }
 if (-not [string]::IsNullOrWhiteSpace($GuidanceQuality)) { $detectedGuidanceQuality = ConvertTo-NormalizedGuidanceQuality $GuidanceQuality }
 
-# Evidence type inference
-if (-not [string]::IsNullOrWhiteSpace($EvidenceType)) {
-    if ($EvidenceType -in 'execution', 'instruction', 'handoff', 'mixed') {
-        $detectedEvidenceType = $EvidenceType
-    } else {
-        $detectedEvidenceType = 'mixed'
-    }
-} elseif ($fullText -match 'handoff|delegat|remaining files') {
-    $detectedEvidenceType = 'handoff'
-} elseif (-not [string]::IsNullOrWhiteSpace("$ActualOutcome$ActionTaken$ToolName$Command$Stderr")) {
-    $detectedEvidenceType = 'execution'
-} elseif (-not [string]::IsNullOrWhiteSpace("$InstructionSource$InstructionText$ExpectedOutcome")) {
-    $detectedEvidenceType = 'instruction'
-} else {
-    $detectedEvidenceType = 'mixed'
-}
-
 # Confidence
 if (-not [string]::IsNullOrWhiteSpace($Confidence)) {
-    $detectedConfidence = $Confidence
+    $detectedConfidence = ConvertTo-NormalizedConfidence $Confidence
 } else {
-    $detectedConfidence = 'medium'
-    if ($detectedSurface -eq 'unknown' -or $detectedObservedSurface -eq 'unknown' -or $detectedMode -eq 'other') {
-        $detectedConfidence = 'low'
-    } elseif ($detectedGuidanceQuality -eq 'misleading' -or $detectedRunEffect -eq 'blocked') {
-        $detectedConfidence = 'high'
+    $detectedConfidence = 3
+    if ($detectedSurface -eq 'unknown' -or $detectedMode -eq 'other') {
+        $detectedConfidence = 2
+    } elseif (($detectedGuidanceQuality -le 1 -and $detectedGuidanceQuality -gt 0) -or $detectedRunEffect -eq 'blocked') {
+        $detectedConfidence = 4
     }
 }
 
 $tagText = "$fullText`n$ToolName`n$Command".ToLowerInvariant()
-$tags = Get-CategoryTags -Surface $detectedSurface -Mode $detectedMode -RunEffect $detectedRunEffect -GuidanceQuality $detectedGuidanceQuality -TextLower $tagText
+$tags = Get-CategoryTags -Surface $detectedSurface -Mode $detectedMode -RunEffect $detectedRunEffect -GuidanceQuality $detectedGuidanceQuality -TextLower $tagText -SourceTypeCsv $SourceTypeCsv
 $derivedCategory = "$detectedSurface/$detectedMode/$detectedRunEffect"
 
 "observed_surface=$detectedObservedSurface"
@@ -155,7 +137,6 @@ $derivedCategory = "$detectedSurface/$detectedMode/$detectedRunEffect"
 "run_effect=$detectedRunEffect"
 "guidance_quality=$detectedGuidanceQuality"
 "confidence=$detectedConfidence"
-"evidence_type=$detectedEvidenceType"
 "derived_category=$derivedCategory"
 "tags=$tags"
 "taxonomy_version=$($script:TAXONOMY_VERSION)"

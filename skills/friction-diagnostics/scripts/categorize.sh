@@ -11,7 +11,7 @@ Usage:
   sh scripts/categorize.sh [options]
 
 Options:
-  --instruction-source TEXT
+  --source-ref TEXT
   --instruction-text TEXT
   --action-taken TEXT
   --expected-outcome TEXT
@@ -27,8 +27,8 @@ Options:
   --run-effect VALUE
   --guidance-quality VALUE
   --impact VALUE
-  --evidence-type VALUE
   --confidence VALUE
+  --source-type-csv TEXT
   --help
 
 Output:
@@ -38,13 +38,12 @@ Output:
   run_effect=<value>
   guidance_quality=<value>
   confidence=<value>
-  evidence_type=<value>
   derived_category=<surface/mode/run_effect>
   tags=<comma-separated tags>
 EOF
 }
 
-instruction_source=
+source_ref=
 instruction_text=
 action_taken=
 expected_outcome=
@@ -60,12 +59,12 @@ mode_override=
 run_effect_override=
 guidance_quality_override=
 impact_override=
-evidence_type_override=
 confidence_override=
+source_type_csv=
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --instruction-source) instruction_source=${2-}; shift 2 ;;
+    --source-ref) source_ref=${2-}; shift 2 ;;
     --instruction-text) instruction_text=${2-}; shift 2 ;;
     --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
@@ -81,8 +80,8 @@ while [ $# -gt 0 ]; do
     --run-effect) run_effect_override=${2-}; shift 2 ;;
     --guidance-quality) guidance_quality_override=${2-}; shift 2 ;;
     --impact) impact_override=${2-}; shift 2 ;;
-    --evidence-type) evidence_type_override=${2-}; shift 2 ;;
     --confidence) confidence_override=${2-}; shift 2 ;;
+    --source-type-csv) source_type_csv=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -100,7 +99,7 @@ observation_text=$(lower "$observation_text")
 
 source_text=$(
   printf '%s\n%s\n%s\n%s\n%s\n' \
-    "$instruction_source" \
+    "$source_ref" \
     "$instruction_text" \
     "$expected_outcome" \
     "$interpretation" \
@@ -222,16 +221,16 @@ case "$full_text" in
     ;;
 esac
 
-guidance_quality=clear
+guidance_quality=4
 case "$source_text" in
   '')
-    guidance_quality=not-applicable
-    ;;
-  *"ambiguous"*|*"unclear"*|*"underspecified"*|*"uncertain"*)
-    guidance_quality=ambiguous
+    guidance_quality=0
     ;;
   *"contradict"*|*"inconsistent"*|*"wrong output"*|*"unexpected output"*|*"output mismatch"*|*"misleading"*|*"did not match docs"*)
-    guidance_quality=misleading
+    guidance_quality=1
+    ;;
+  *"ambiguous"*|*"unclear"*|*"underspecified"*|*"uncertain"*)
+    guidance_quality=2
     ;;
 esac
 
@@ -240,13 +239,13 @@ case "$impact_override" in
     run_effect_override=$impact_override
     ;;
   confusing)
-    guidance_quality_override=ambiguous
+    guidance_quality_override=2
     if [ -z "$run_effect_override" ]; then
       run_effect_override=continued
     fi
     ;;
   misleading)
-    guidance_quality_override=misleading
+    guidance_quality_override=1
     if [ -z "$run_effect_override" ]; then
       run_effect_override=degraded
     fi
@@ -269,43 +268,21 @@ if [ -n "$guidance_quality_override" ]; then
   guidance_quality=$(normalize_guidance_quality "$guidance_quality_override")
 fi
 
-if [ -n "$evidence_type_override" ]; then
-  case "$evidence_type_override" in
-    execution|instruction|handoff|mixed) evidence_type=$evidence_type_override ;;
-    *) evidence_type=mixed ;;
-  esac
-else
-  case "$full_text" in
-    *"handoff"*|*"delegat"*|*"remaining files"*)
-      evidence_type=handoff
-      ;;
-    *)
-      if [ -n "$actual_outcome$action_taken$tool_name$command_text$stderr_text" ]; then
-        evidence_type=execution
-      elif [ -n "$instruction_source$instruction_text$expected_outcome" ]; then
-        evidence_type=instruction
-      else
-        evidence_type=mixed
-      fi
-      ;;
-  esac
-fi
-
 if [ -n "$confidence_override" ]; then
-  confidence=$confidence_override
+  confidence=$(normalize_confidence "$confidence_override")
 else
-  confidence=medium
-  if [ "$surface" = "unknown" ] || [ "$observed_surface" = "unknown" ] || [ "$mode" = "other" ]; then
-    confidence=low
-  elif [ "$guidance_quality" = "misleading" ] || [ "$run_effect" = "blocked" ]; then
-    confidence=high
+  confidence=3
+  if [ "$surface" = "unknown" ] || [ "$mode" = "other" ]; then
+    confidence=2
+  elif [ "$guidance_quality" -le 1 ] && [ "$guidance_quality" -gt 0 ] || [ "$run_effect" = "blocked" ]; then
+    confidence=4
   fi
 fi
 
 text_for_tags=$(
   printf '%s\n%s\n%s\n' "$full_text" "$tool_name" "$command_text"
 )
-tags=$(build_category_tags "$surface" "$mode" "$run_effect" "$guidance_quality" "$text_for_tags")
+tags=$(build_category_tags "$surface" "$mode" "$run_effect" "$guidance_quality" "$text_for_tags" "$source_type_csv")
 derived_category=$surface/$mode/$run_effect
 
 printf 'observed_surface=%s\n' "$observed_surface"
@@ -314,7 +291,6 @@ printf 'mode=%s\n' "$mode"
 printf 'run_effect=%s\n' "$run_effect"
 printf 'guidance_quality=%s\n' "$guidance_quality"
 printf 'confidence=%s\n' "$confidence"
-printf 'evidence_type=%s\n' "$evidence_type"
 printf 'derived_category=%s\n' "$derived_category"
 printf 'tags=%s\n' "$tags"
 printf 'taxonomy_version=%s\n' "$TAXONOMY_VERSION"
