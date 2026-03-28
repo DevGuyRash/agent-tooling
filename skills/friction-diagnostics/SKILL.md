@@ -39,9 +39,10 @@ WHEN writing the `Interpretation` field THEN you SHALL describe what you underst
 
 Default path resolution:
 
-- inside a git repo: `<repo>/.local/context/friction/events.jsonl`
-- if a `.local*/context` directory already exists: use that existing context area
-- outside a git repo: `<temp>/agent-friction/<cwd-hash>/events.jsonl`
+- inside a git repo: `<repo>/.local/reports/friction/events.jsonl`
+- if `.local` is absent but another `.local*` directory already exists: use that existing local area
+- if no `.local*` directory exists in the repo: create `.local/reports/friction/events.jsonl`
+- outside a git repo: `<system-temp>/agent-friction/<cwd-hash>/events.jsonl`
 - explicit override: `--events-file <path>`
 
 `INDEX.md` lives next to the canonical `events.jsonl`, but agents do not create or rebuild it directly. The tool maintains it automatically after append operations.
@@ -146,8 +147,8 @@ WHEN you need a custom slice that `query-friction.*` does not expose directly TH
 Examples:
 
 ```sh
-jq '.title' <repo>/.local/context/friction/events.jsonl
-jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' <repo>/.local/context/friction/events.jsonl
+jq '.title' <repo>/.local/reports/friction/events.jsonl
+jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' <repo>/.local/reports/friction/events.jsonl
 ```
 
 WHEN reading prior friction THEN you SHOULD start with `INDEX.md`, then use `query-friction.*`, and only then read raw `events.jsonl` if you need a custom view.

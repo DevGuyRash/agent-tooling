@@ -391,16 +391,16 @@ git_repo_root() {
   fi
 }
 
-context_dir_for_repo() {
+local_dir_for_repo() {
   repo_root=$1
-  default_dir=$repo_root/.local/context
+  default_dir=$repo_root/.local
   if [ -d "$default_dir" ]; then
     printf '%s\n' "$default_dir"
     return 0
   fi
 
   existing=$(
-    find "$repo_root" -maxdepth 2 -type d -path "$repo_root/.local*/context" 2>/dev/null |
+    find "$repo_root" -maxdepth 1 -mindepth 1 -type d -name '.local*' 2>/dev/null |
       LC_ALL=C sort |
       sed -n '1p'
   )
@@ -414,22 +414,27 @@ context_dir_for_repo() {
 }
 
 temp_root_dir() {
-  if [ -n "${TMPDIR-}" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import tempfile
+print(tempfile.gettempdir())
+PY
+  elif [ -n "${TMPDIR-}" ]; then
     printf '%s\n' "$TMPDIR"
   elif [ -n "${TEMP-}" ]; then
     printf '%s\n' "$TEMP"
   elif [ -n "${TMP-}" ]; then
     printf '%s\n' "$TMP"
   else
-    printf '/tmp\n'
+    die "Unable to determine system temp path."
   fi
 }
 
 default_events_file() {
   repo_root=$(git_repo_root)
   if [ -n "$repo_root" ]; then
-    context_dir=$(context_dir_for_repo "$repo_root")
-    printf '%s\n' "$context_dir/friction/events.jsonl"
+    local_dir=$(local_dir_for_repo "$repo_root")
+    printf '%s\n' "$local_dir/reports/friction/events.jsonl"
     return 0
   fi
 

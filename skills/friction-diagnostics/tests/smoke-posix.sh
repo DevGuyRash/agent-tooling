@@ -19,9 +19,15 @@ assert_contains() {
   grep -Fq "$needle" "$haystack" || fail "expected '$needle' in $haystack"
 }
 
-DEFAULT_EVENTS=$REPO_ROOT/.local/context/friction/events.jsonl
-DEFAULT_INDEX=$REPO_ROOT/.local/context/friction/INDEX.md
-rm -rf "$REPO_ROOT/.local/context/friction"
+assert_equals() {
+  expected=$1
+  actual=$2
+  [ "$expected" = "$actual" ] || fail "expected '$expected' but got '$actual'"
+}
+
+DEFAULT_EVENTS=$REPO_ROOT/.local/reports/friction/events.jsonl
+DEFAULT_INDEX=$REPO_ROOT/.local/reports/friction/INDEX.md
+rm -rf "$REPO_ROOT/.local/reports/friction"
 
 cd "$REPO_ROOT"
 
@@ -177,5 +183,37 @@ if printf '%s\n' "$QUERY_NO_PROVENANCE" | grep -q '^- Agent:'; then
   fail "query markdown should omit provenance lines when provenance is unspecified"
 fi
 
+# If .local is absent, an existing .local* directory should be used.
+ALT_REPO=$(mktemp -d)
+git init -q "$ALT_REPO"
+mkdir -p "$ALT_REPO/.local-test"
+ALT_OUTPUT=$(cd "$ALT_REPO" && "$ROOT/scripts/report-friction.sh" \
+  --title "Alternate local dir" \
+  --instruction-source "test" \
+  --instruction-text "Use an existing .local* directory when .local is absent." \
+  --action-taken "Reported friction from a repo containing only .local-test." \
+  --expected-outcome "The default events file lands under .local-test/reports/friction." \
+  --actual-outcome "The tool selected the existing .local-test directory." \
+  --interpretation "An existing .local* directory should win over creating a new .local.")
+assert_equals "FRICTION_EVENTS_FILE=$ALT_REPO/.local-test/reports/friction/events.jsonl" "$(printf '%s\n' "$ALT_OUTPUT" | sed -n '1p')"
+assert_file "$ALT_REPO/.local-test/reports/friction/events.jsonl"
+
+# Outside a repo, the default should use the system temp root.
+TEMP_ROOT=$(python3 - <<'PY'
+import tempfile
+print(tempfile.gettempdir())
+PY
+)
+NON_REPO_DIR=$(mktemp -d)
+NON_REPO_OUTPUT=$(cd "$NON_REPO_DIR" && "$ROOT/scripts/report-friction.sh" \
+  --title "Non-repo fallback" \
+  --instruction-source "test" \
+  --instruction-text "Use the system temp root outside git repos." \
+  --action-taken "Reported friction from a directory without .git." \
+  --expected-outcome "The default events file lands under the system temp directory." \
+  --actual-outcome "The tool selected a deterministic system-temp path." \
+  --interpretation "Outside git, the temp-root fallback should be used.")
+printf '%s\n' "$NON_REPO_OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$TEMP_ROOT/agent-friction/" || fail "non-repo fallback should use the system temp root"
+
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON"
-rm -rf "$EXPLICIT_DIR"
+rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$NON_REPO_DIR"

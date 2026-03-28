@@ -465,12 +465,11 @@ function Get-RepoRoot {
     throw "Unable to determine repo root from: $StartPath"
 }
 
-function Get-PreferredContextDir {
+function Get-PreferredLocalDir {
     param([string]$RepoRoot)
 
     $preferred = @(
-        (Join-Path $RepoRoot '.local/context'),
-        (Join-Path $RepoRoot '.local-test/context')
+        (Join-Path $RepoRoot '.local')
     )
     foreach ($path in $preferred) {
         if (Test-Path -LiteralPath $path -PathType Container) {
@@ -480,18 +479,56 @@ function Get-PreferredContextDir {
 
     $alternate = Get-ChildItem -LiteralPath $RepoRoot -Directory -Filter '.local*' -ErrorAction SilentlyContinue |
         Sort-Object Name |
-        ForEach-Object { Join-Path $_.FullName 'context' } |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
-        Select-Object -First 1
+        Select-Object -ExpandProperty FullName -First 1
     if ($null -ne $alternate) {
         return $alternate
     }
 
-    $contextDir = Join-Path $RepoRoot 'context'
-    if (-not (Test-Path -LiteralPath $contextDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $contextDir -Force | Out-Null
+    $localDir = Join-Path $RepoRoot '.local'
+    if (-not (Test-Path -LiteralPath $localDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $localDir -Force | Out-Null
     }
-    return $contextDir
+    return $localDir
+}
+
+function Get-TempRoot {
+    $path = [System.IO.Path]::GetTempPath()
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw 'Unable to determine system temp path.'
+    }
+    return $path
+}
+
+function Get-DefaultEventsFile {
+    param([string]$RepoRoot = '')
+
+    $resolvedRepoRoot = $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+        try {
+            $resolvedRepoRoot = Get-RepoRoot
+        }
+        catch {
+            $resolvedRepoRoot = ''
+        }
+    }
+    else {
+        $resolvedRepoRoot = [System.IO.Path]::GetFullPath($resolvedRepoRoot)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+        $localDir = Get-PreferredLocalDir $resolvedRepoRoot
+        return [pscustomobject]@{
+            RepoRoot = $resolvedRepoRoot
+            EventsFile = Join-Path $localDir 'reports/friction/events.jsonl'
+        }
+    }
+
+    $cwdHash = Get-ShortSha256 ((Get-Location).Path) 12
+    $tempRoot = Get-TempRoot
+    return [pscustomobject]@{
+        RepoRoot = ''
+        EventsFile = Join-Path $tempRoot "agent-friction/$cwdHash/events.jsonl"
+    }
 }
 
 function Resolve-FrictionPaths {
@@ -503,17 +540,14 @@ function Resolve-FrictionPaths {
 
     $resolvedRepoRoot = $RepoRoot
     if ([string]::IsNullOrWhiteSpace($EventsFile)) {
-        if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
-            $resolvedRepoRoot = Get-RepoRoot
+        $defaults = Get-DefaultEventsFile $resolvedRepoRoot
+        $resolvedRepoRoot = $defaults.RepoRoot
+        $resolvedEventsFile = [System.IO.Path]::GetFullPath($defaults.EventsFile)
+        $eventsDir = Split-Path -Parent $resolvedEventsFile
+        if (-not [string]::IsNullOrWhiteSpace($eventsDir)) {
+            New-Item -ItemType Directory -Force -Path $eventsDir | Out-Null
         }
-        else {
-            $resolvedRepoRoot = [System.IO.Path]::GetFullPath($resolvedRepoRoot)
-        }
-        $contextDir = Get-PreferredContextDir $resolvedRepoRoot
-        $frictionDir = Join-Path $contextDir 'friction'
-        New-Item -ItemType Directory -Force -Path $frictionDir | Out-Null
-        $resolvedEventsFile = Join-Path $frictionDir 'events.jsonl'
-        $resolvedIndexFile = if ([string]::IsNullOrWhiteSpace($IndexFile)) { Join-Path $frictionDir 'INDEX.md' } else { [System.IO.Path]::GetFullPath($IndexFile) }
+        $resolvedIndexFile = if ([string]::IsNullOrWhiteSpace($IndexFile)) { Join-Path $eventsDir 'INDEX.md' } else { [System.IO.Path]::GetFullPath($IndexFile) }
     }
     else {
         $resolvedEventsFile = [System.IO.Path]::GetFullPath($EventsFile)

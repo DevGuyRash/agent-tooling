@@ -58,8 +58,10 @@ Usage:
   scripts/report-friction.ps1 -EventsFile /path/to/events.jsonl -FromJson event.json
 
 Normal path:
-  Appends one sanitized event to the repo-scoped rolling events file under the repo context
-  directory, then rebuilds INDEX.md automatically.
+  Appends one sanitized event to the repo-scoped rolling events file under
+  .local/reports/friction (or another existing .local*/reports/friction when
+  .local is absent), then rebuilds INDEX.md automatically. Outside a git repo,
+  it falls back to the system temp directory.
 
 Selection:
   -RepoRoot PATH      Resolve the canonical repo-scoped events.jsonl and INDEX.md for PATH.

@@ -51,10 +51,10 @@ The `agent_name` and `agent_kind` fields in the example above are explicit prove
 
 When `--events-file` is omitted, `report-friction.*` resolves the canonical file this way:
 
-1. repo-local `.local/context/friction/events.jsonl`
-2. first existing repo-local `.local*/context/friction/events.jsonl`
-3. create `.local/context/friction/events.jsonl`
-4. outside git, fall back to a deterministic temp-root path
+1. repo-local `.local/reports/friction/events.jsonl`
+2. if `.local` is absent, first existing repo-local `.local*/reports/friction/events.jsonl`
+3. if no `.local*` directory exists, create `.local/reports/friction/events.jsonl`
+4. outside git, fall back to a deterministic system-temp path
 
 This means subagents and nested subagents in the same repo converge on the same rolling file without session IDs or parent IDs.
 
@@ -85,8 +85,8 @@ sh scripts/query-friction.sh --anchor-path "$PWD/skills/friction-diagnostics/SKI
 If an agent needs an ad hoc parse beyond the built-in query filters, it can read the raw stream with `jq`:
 
 ```sh
-jq '.title' .local/context/friction/events.jsonl
-jq -s 'map(select(.agent_kind == "subagent"))' .local/context/friction/events.jsonl
+jq '.title' .local/reports/friction/events.jsonl
+jq -s 'map(select(.agent_kind == "subagent"))' .local/reports/friction/events.jsonl
 ```
 
 Practical read flow:

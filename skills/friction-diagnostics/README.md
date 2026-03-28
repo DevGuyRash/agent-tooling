@@ -4,8 +4,9 @@
 
 The canonical persisted file is:
 
-- repo default: `<repo>/.local/context/friction/events.jsonl`
-- fallback outside git: `<temp>/agent-friction/<cwd-hash>/events.jsonl`
+- repo default: `<repo>/.local/reports/friction/events.jsonl`
+- repo fallback when `.local` is absent: `<repo>/.local*/reports/friction/events.jsonl`
+- fallback outside git: `<system-temp>/agent-friction/<cwd-hash>/events.jsonl`
 - explicit override: `--events-file <path>`
 
 `INDEX.md` lives next to `events.jsonl`, but it is fully tool-managed. Agents do not create or maintain it directly.
@@ -97,9 +98,9 @@ sh scripts/query-friction.sh --anchor-path "$PWD/skills/friction-diagnostics/SKI
 If an agent wants to inspect the raw canonical file directly, `jq` works fine with the JSONL stream:
 
 ```sh
-jq '.title' .local/context/friction/events.jsonl
-jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' .local/context/friction/events.jsonl
-jq -s 'map(select(.derived_category == "skill/name-resolution/blocked"))' .local/context/friction/events.jsonl
+jq '.title' .local/reports/friction/events.jsonl
+jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' .local/reports/friction/events.jsonl
+jq -s 'map(select(.derived_category == "skill/name-resolution/blocked"))' .local/reports/friction/events.jsonl
 ```
 
 Recommended reading order:

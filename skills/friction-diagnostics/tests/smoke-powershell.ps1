@@ -6,14 +6,14 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $repoDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-smoke-{0}" -f [System.Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $repoDir -Force
-$null = New-Item -ItemType Directory -Path (Join-Path $repoDir '.git') -Force
-$null = New-Item -ItemType Directory -Path (Join-Path $repoDir '.local/context') -Force
+& git init -q $repoDir
+$null = New-Item -ItemType Directory -Path (Join-Path $repoDir '.local') -Force
 
 try {
     if ((Get-ShortSha256 'abc') -ne 'ba7816bf') { throw 'Get-ShortSha256 should return the first 8 hex chars of the SHA256 digest' }
 
-    $eventsFile = Join-Path $repoDir '.local/context/friction/events.jsonl'
-    $indexFile = Join-Path $repoDir '.local/context/friction/INDEX.md'
+    $eventsFile = Join-Path $repoDir '.local/reports/friction/events.jsonl'
+    $indexFile = Join-Path $repoDir '.local/reports/friction/INDEX.md'
 
     $stdinJson = @'
 {"title":"stdin ingest smoke","instruction_source":"test","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson -.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded.","interpretation":"stdin JSON is the safe transport for shell-sensitive structured input.","surface":"workflow","mode":"ambiguity","impact":"confusing","tags":"from-json,json,stdin"}
@@ -37,7 +37,7 @@ try {
     if ($events[0].agent_name -ne '') { throw 'events.jsonl should store blank agent_name when provenance is unspecified' }
     if ($events[0].agent_kind -ne '') { throw 'events.jsonl should store blank agent_kind when provenance is unspecified' }
     if ($events[0].role -ne '') { throw 'events.jsonl should store blank role when provenance is unspecified' }
-    if ($events[0].events_file -ne '.local/context/friction/events.jsonl') { throw 'events.jsonl should store the repo-relative events file path' }
+    if ($events[0].events_file -ne '.local/reports/friction/events.jsonl') { throw 'events.jsonl should store the repo-relative events file path' }
 
     $indexText = [System.IO.File]::ReadAllText($indexFile)
     if ($indexText -notmatch '\*\*Entries:\*\* 1') { throw 'INDEX.md should count entries from events.jsonl' }
@@ -94,8 +94,11 @@ try {
 
     $wrongEventsJsonPath = Join-Path $repoDir 'wrong-events.json'
     [System.IO.File]::WriteAllText($wrongEventsJsonPath, @'
-{"title":"Wrong events file","instruction_source":"test","instruction_text":"Carry an events_file override.","action_taken":"Attempted to report friction.","expected_outcome":"The script rejects mismatched events_file values.","actual_outcome":"The script should stop with a concise schema diagnostic.","interpretation":"The explicit or canonical events file is authoritative.","events_file":"/tmp/not-the-selected-events.jsonl"}
+{"title":"Wrong events file","instruction_source":"test","instruction_text":"Carry an events_file override.","action_taken":"Attempted to report friction.","expected_outcome":"The script rejects mismatched events_file values.","actual_outcome":"The script should stop with a concise schema diagnostic.","interpretation":"The explicit or canonical events file is authoritative.","events_file":"TEMP_PLACEHOLDER/not-the-selected-events.jsonl"}
 '@, [System.Text.UTF8Encoding]::new($false))
+    $tempRoot = [System.IO.Path]::GetTempPath().TrimEnd('\', '/')
+    $wrongEventsJson = [System.IO.File]::ReadAllText($wrongEventsJsonPath).Replace('TEMP_PLACEHOLDER', $tempRoot)
+    [System.IO.File]::WriteAllText($wrongEventsJsonPath, $wrongEventsJson, [System.Text.UTF8Encoding]::new($false))
     try {
         & "$root/scripts/report-friction.ps1" -RepoRoot $repoDir -FromJson $wrongEventsJsonPath | Out-Null
         throw 'report-friction.ps1 should reject mismatched events_file values'
@@ -103,6 +106,56 @@ try {
     catch {
         if ($_.Exception.Message -notmatch 'events_file .* must match the selected events file') {
             throw 'report-friction.ps1 should emit a concise schema diagnostic for mismatched events_file'
+        }
+    }
+
+    $altRepoDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-alt-{0}" -f [System.Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $altRepoDir -Force
+    & git init -q $altRepoDir
+    $null = New-Item -ItemType Directory -Path (Join-Path $altRepoDir '.local-test') -Force
+    try {
+        & "$root/scripts/report-friction.ps1" `
+            -RepoRoot $altRepoDir `
+            -Title 'Alternate local dir' `
+            -InstructionSource 'test' `
+            -InstructionText 'Use an existing .local* directory when .local is absent.' `
+            -ActionTaken 'Reported friction from a repo containing only .local-test.' `
+            -ExpectedOutcome 'The default events file lands under .local-test/reports/friction.' `
+            -ActualOutcome 'The tool selected the existing .local-test directory.' `
+            -Interpretation 'An existing .local* directory should win over creating a new .local.' | Out-Null
+        $altEventsFile = Join-Path $altRepoDir '.local-test/reports/friction/events.jsonl'
+        if (-not (Test-Path $altEventsFile)) { throw 'report-friction.ps1 should use an existing .local* directory when .local is absent' }
+    }
+    finally {
+        if (Test-Path $altRepoDir) {
+            Remove-Item -Recurse -Force $altRepoDir
+        }
+    }
+
+    $nonRepoDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-nonrepo-{0}" -f [System.Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $nonRepoDir -Force
+    try {
+        Push-Location $nonRepoDir
+        $nonRepoOutput = & "$root/scripts/report-friction.ps1" `
+            -Title 'Non-repo fallback' `
+            -InstructionSource 'test' `
+            -InstructionText 'Use the system temp root outside git repos.' `
+            -ActionTaken 'Reported friction from a directory without .git.' `
+            -ExpectedOutcome 'The default events file lands under the system temp directory.' `
+            -ActualOutcome 'The tool selected a deterministic system-temp path.' `
+            -Interpretation 'Outside git, the temp-root fallback should be used.'
+        if ($nonRepoOutput -notmatch '^events_file=') { throw 'report-friction.ps1 should emit the selected events file path outside a repo' }
+        $selectedEventsFile = ($nonRepoOutput | Where-Object { $_ -match '^events_file=' } | Select-Object -First 1) -replace '^events_file=', ''
+        $tempRoot = [System.IO.Path]::GetTempPath().TrimEnd('\', '/')
+        if (-not $selectedEventsFile.StartsWith((Join-Path $tempRoot 'agent-friction'))) {
+            throw 'report-friction.ps1 should use the system temp root outside a repo'
+        }
+        if (-not (Test-Path $selectedEventsFile)) { throw 'report-friction.ps1 should create the non-repo events file' }
+    }
+    finally {
+        Pop-Location
+        if (Test-Path $nonRepoDir) {
+            Remove-Item -Recurse -Force $nonRepoDir
         }
     }
 

@@ -4,7 +4,7 @@
     {
       "id": "eval-report-default-path",
       "prompt": "Record one friction event from inside a git repository using direct CLI flags.",
-      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local context area, and INDEX.md exists adjacent to it. The event contains source, action, expected outcome, actual outcome, interpretation, and derived category fields.",
+      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local reports area, or under another existing .local* reports area when .local is absent, and INDEX.md exists adjacent to it. The event contains source, action, expected outcome, actual outcome, interpretation, and derived category fields.",
       "files": []
     },
     {

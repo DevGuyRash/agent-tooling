@@ -167,7 +167,7 @@ load_json_overrides() {
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 is required for --from-json"
   fi
-  json_helper=$(mktemp "${TMPDIR:-/tmp}/friction-json-helper.XXXXXX.py")
+  json_helper=$(mktemp "$(temp_root_dir)/friction-json-helper.XXXXXX.py")
   cat >"$json_helper" <<'PY'
 import json
 import shlex

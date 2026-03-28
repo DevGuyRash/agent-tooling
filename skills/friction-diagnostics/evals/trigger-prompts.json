@@ -9,7 +9,7 @@
     {
       "id": "trigger-02",
       "should_trigger": true,
-      "query": "Capture agent frictions in /tmp so another agent can repair them later."
+      "query": "Capture agent frictions in the system temp directory so another agent can repair them later."
     },
     {
       "id": "trigger-03",
