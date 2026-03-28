@@ -20,47 +20,23 @@ metadata:
 
 # Friction Diagnostics
 
-This skill records friction as a rolling event stream. The canonical persisted data is `events.jsonl`. `INDEX.md` is a tool-managed summary view that the tooling creates and refreshes automatically.
+A rolling event stream that captures friction — errors, failures, mismatches, and unexpected outcomes — as structured JSONL.
 
-## When to use this skill
-
-You SHALL use this skill for every task where friction occurs.
-
-- Every error or unexpected outcome: log it immediately.
-- Every code bug, test failure, build failure, or runtime crash: log it.
-- Every instruction that was wrong, ambiguous, or misleading: log it.
-- Subagents and nested subagents log to the same repo-scoped rolling file by default when they are operating in the same repo.
-
+WHEN any error, failure, unexpected outcome, or friction occurs THEN you SHALL log it using this skill.
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
 
-WHEN writing the `Interpretation` field THEN you SHALL describe what you understood the instruction or context to mean, what specific language led to that reading, and why that reading was reasonable at the time. You SHALL NOT use `Interpretation` to propose a fix.
+The canonical data is `events.jsonl`. `INDEX.md` is an auto-maintained summary.
 
-## Canonical storage
+---
 
-Default path resolution:
+## How to file
 
-- inside a git repo: `<repo>/.local/reports/friction/events.jsonl`
-- if `.local` is absent but another `.local*` directory already exists: use that existing local area
-- if no `.local*` directory exists in the repo: create `.local/reports/friction/events.jsonl`
-- outside a git repo: `<system-temp>/agent-friction/<cwd-hash>/events.jsonl`
-- explicit override: `--events-file <path>`
+Filing a friction event requires two commands. The event is not complete until both have run.
 
-`INDEX.md` lives next to the canonical `events.jsonl`, but agents do not create or rebuild it directly. The tool maintains it automatically after append operations.
+1. **`report-friction.sh`** — writes the event and outputs the event ID + existing tags
+2. **`report-friction.sh --add-tags`** — tags the event using the ID from command 1
 
-## Available scripts
-
-- `<skills-file-root>/scripts/report-friction.sh` / `<skills-file-root>/scripts/report-friction.ps1` — append one structured event to the canonical event stream.
-- `<skills-file-root>/scripts/query-friction.sh` / `<skills-file-root>/scripts/query-friction.ps1` — filter and render the event stream.
-- `<skills-file-root>/scripts/build-index.sh` / `<skills-file-root>/scripts/build-index.ps1` — internal index maintenance.
-- `<skills-file-root>/scripts/categorize.sh` / `<skills-file-root>/scripts/categorize.ps1` — classify an event as `surface/mode/run_effect`.
-
-There is no `init-log` step.
-
-## Workflow
-
-WHEN friction occurs THEN you SHALL call `report-friction.*` directly.
-
-Preferred path for agents:
+### Command 1 — report
 
 ```sh
 sh <skills-file-root>/scripts/report-friction.sh \
@@ -75,103 +51,88 @@ sh <skills-file-root>/scripts/report-friction.sh \
   --interpretation "The dispatch table uses human-readable labels in the Role column (e.g. 'Architecture'). I read that label as the literal CLI slug because the instruction said 'Use --role <ROLE>' with <ROLE> as a placeholder and the table column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading. The mismatch reveals the CLI uses a different internal slug not shown in the table."
 ```
 
-Optional structured-input path:
+WHEN payload text contains shell-sensitive content such as backticks, `$()`, or multiple lines THEN you SHOULD use `--from-json -` via stdin instead of direct flags. See `references/examples.md` for the JSON format.
+
+WHEN `--agent`, `--agent-kind`, or `--role` are omitted THEN the tool records provenance as unspecified rather than guessing.
+
+### Command 2 — tag
+
+The output from command 1 includes the event ID, existing tags in the stream, and the exact `--add-tags` invocation to run. Run it.
 
 ```sh
-cat <<'EOF' | sh <skills-file-root>/scripts/report-friction.sh --from-json -
-{
-  "title": "Dispatch role slug mismatch",
-  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.",
-  "action_taken": "I opened SKILL.md and found the dispatch table at line 160. The table listed 'Architecture' in the Role column. I ran: mpcr protocol dispatch --role architecture. The command was invoked from the repo root with no other flags.",
-  "expected_outcome": "The CLI would resolve 'architecture' as a valid dispatch role slug and return the full architecture prompt text, consistent with the dispatch table row for that role.",
-  "actual_outcome": "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned. The process exited non-zero immediately.",
-  "interpretation": "The dispatch table uses human-readable labels in the Role column. I read that label as the literal CLI slug because the instruction said 'Use --role <ROLE>' with <ROLE> as a placeholder and the table column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading. The mismatch reveals the CLI uses a different internal slug not shown in the table.",
-  "agent_name": "orchestrator",
-  "agent_kind": "orchestrator",
-  "sources": [
-    {"type": "file", "ref": "SKILL.md", "line": 160}
-  ]
-}
-EOF
+sh <skills-file-root>/scripts/report-friction.sh --add-tags evt-NNNN "skill,name-resolution,dispatch,mpcr"
 ```
 
-WHEN JSON input is used THEN you SHOULD prefer stdin (`--from-json -`) over temp files.
-WHEN payload text contains shell-sensitive content such as backticks, `$()`, copied command output, or multiple lines THEN you SHOULD prefer stdin JSON even if direct flags would otherwise work.
-WHEN `--agent`, `--agent-kind`, or `--role` are omitted THEN the tool SHALL record provenance as unspecified instead of guessing.
+WHEN choosing tags THEN you SHALL select relevant tags from the existing vocabulary shown AND create new tags for dimensions not yet covered — tool name, language, component, failure pattern, domain. More tags are better than fewer.
 
-WHEN `--from-json` parsing fails THEN the tool SHALL emit concise parser diagnostics without a raw stack trace.
-WHEN the active runtime exposes line/column details THEN the tool SHOULD include them.
+---
 
-WHEN category selection is uncertain THEN you SHOULD let the categorizer choose the closest `surface/mode/run_effect` and keep the uncertainty in `Interpretation`.
+## Narrative depth
 
-WHEN overriding classification axes THEN you SHALL use only the values defined in `references/taxonomy.md`.
+`references/examples.md` shows bad-vs-good comparisons for every field. Read it before filing your first event.
 
-## Narrative quality requirements
+Summary of what each field requires:
 
-Each narrative field must contain enough detail to be actionable without re-reading the original context. The examples in this file and in `references/examples.md` demonstrate the expected depth — match that level, not the minimum character thresholds (which exist only to reject empty or trivially short entries like "error" or "ran it").
+- **`action_taken`** — three sentences: (1) what you read or consulted before acting and where, (2) the exact command or code you executed with arguments, (3) what you observed before and during the failure.
+- **`interpretation`** — three sentences: (1) the meaning you assigned to the source material — quote the specific wording, (2) why that reading was reasonable, (3) what the mismatch reveals.
+- **`actual_outcome`** — the exact error message, exit code, or output verbatim. Do not paraphrase.
+- **`expected_outcome`** — the specific behavior you anticipated and which source you derived it from.
+- **`instruction_text`** — the exact text you acted on, quoted verbatim.
 
-WHEN writing `action_taken` THEN you SHALL write a multi-sentence first-person account of every step you performed in sequence. You SHALL quote the exact command, tool call, or code you invoked, state the arguments or parameters you passed, and note any intermediate output or state you observed before the failure. Do not summarize — reconstruct the actual sequence.
+Do not propose fixes inside event payloads.
 
-WHEN writing `expected_outcome` THEN you SHALL state the specific behavior you anticipated and identify which instruction, documentation, code, or configuration you derived it from. Explain what success would have looked like concretely.
+---
 
-WHEN writing `actual_outcome` THEN you SHALL include the exact error message, exit code, or stderr output verbatim. Describe the observable difference between what happened and what was expected. Do not paraphrase the error.
+## How to query
 
-WHEN writing `interpretation` THEN you SHALL write at least three sentences: (1) the precise meaning you assigned to the source material at the time you acted, (2) the specific wording, code, or phrasing that produced that reading — quote or closely paraphrase it, and (3) the reasoning chain that made that reading seem correct given everything you knew at the time. You SHALL NOT compress this into one sentence.
-
-WHEN writing `instruction_text` THEN you SHALL quote the exact text you acted on — whether a written instruction, code snippet, function signature, config value, error message, CLI help output, or documentation fragment. Quote verbatim, do not paraphrase.
-
-## Sources
-
-The event schema supports a unified `sources` array so references are not limited to code.
-
-Source members may include:
-
-- `type`
-- `ref`
-- `line`
-- `end_line`
-- `symbol`
-- `excerpt`
-- `selector`
-- `label`
-
-Use sources when the friction references a file, function, document section, URL, or UI target that should be preserved for later review.
-
-## Querying
-
-Use the query script to filter the canonical event stream:
+Start with `INDEX.md` for an overview. Use the query script for filtered views. Fall back to raw `events.jsonl` with `jq` for custom slices.
 
 ```sh
 sh <skills-file-root>/scripts/query-friction.sh --category instructions/missing/blocked --format md
-sh <skills-file-root>/scripts/query-friction.sh --date-from 2026-03-01 --date-to 2026-03-31 --format json
-sh <skills-file-root>/scripts/query-friction.sh --source-ref "<skills-file-root>/SKILL.md"
+sh <skills-file-root>/scripts/query-friction.sh --source-ref "SKILL.md"
 ```
 
-```powershell
-& .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
-& .\scripts\query-friction.ps1 -DateFrom 2026-03-01 -DateTo 2026-03-31 -Format json
-& .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
-```
+---
 
-WHEN you need a custom slice that `query-friction.*` does not expose directly THEN you MAY read `events.jsonl` with `jq`.
+## Reference
 
-Examples:
+### Canonical storage
 
-```sh
-jq '.title' <repo>/.local/reports/friction/events.jsonl
-jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' <repo>/.local/reports/friction/events.jsonl
-```
+- Inside a git repo: `<repo>/.local/reports/friction/events.jsonl`
+- If `.local` absent but `.local*` exists: use that existing local area
+- No `.local*` in the repo: create `.local/reports/friction/events.jsonl`
+- Outside git: `<system-temp>/agent-friction/<cwd-hash>/events.jsonl`
+- Explicit override: `--events-file <path>`
 
-WHEN reading prior friction THEN you SHOULD start with `INDEX.md`, then use `query-friction.*`, and only then read raw `events.jsonl` if you need a custom view.
+`INDEX.md` is auto-maintained next to `events.jsonl`. Agents do not create or rebuild it.
 
-## Definition of done
+### Scripts
 
-WHEN friction was encountered during a task THEN you SHALL leave behind:
+| Script | Purpose |
+|---|---|
+| `report-friction.sh` / `.ps1` | Append one event; `--add-tags` to tag after |
+| `query-friction.sh` / `.ps1` | Filter and render the event stream |
+| `categorize.sh` / `.ps1` | Classify an event as `surface/mode/run_effect` |
+| `build-index.sh` / `.ps1` | Internal index maintenance |
 
-- a canonical `events.jsonl`
-- substantive entries with instruction text, action, expected outcome, actual outcome, and interpretation
-- optional sources when they help localize the issue
-- an automatically maintained `INDEX.md`
-- no fix proposals inside event payloads
+No `init-log` step required.
 
-WHEN no friction was encountered THEN the tool SHALL NOT create a friction event.
+### Sources
+
+The `sources` array accepts typed references — not limited to code:
+
+| Field | Description |
+|---|---|
+| `type` | `file`, `url`, `system-instruction`, `conversation`, `audio`, `visual`, `documentation`, `other` |
+| `ref` | Primary reference: filepath, URL, or description |
+| `line`, `end_line` | Line range (for files) |
+| `symbol` | Function, class, section, or heading name |
+| `excerpt` | Relevant quoted text from the source |
+| `selector` | CSS selector, XPath, section anchor, timestamp |
+| `label` | Human-readable description of this source's role |
+
+### Classification
+
+The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`.
+
+WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `interpretation`.

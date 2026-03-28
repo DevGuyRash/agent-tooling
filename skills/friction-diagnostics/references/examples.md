@@ -1,6 +1,66 @@
 # Examples
 
-## Good event
+Read this file before filing your first friction event. It defines the expected depth for every field.
+
+---
+
+## Field-by-field: bad vs good
+
+Each pair shows the same friction — a missing CI script referenced in AGENTS.md — reported at two quality levels.
+
+### `action_taken`
+
+Bad:
+> Ran the script and it was not there.
+
+Good:
+> I read AGENTS.md and found the instruction at line 18 directing me to run scripts/ci-check.sh. I ran `rg --files scripts` to search for the file, which listed every entry under scripts/. ci-check.sh was not present. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none.
+
+Why the bad version fails: it doesn't say which script, what command was used to look for it, or what was observed. "Ran the script" is not reconstructable.
+
+### `interpretation`
+
+Bad:
+> The instructions seemed wrong about the script path.
+
+Good:
+> The instruction at line 18 uses a concrete, unqualified path in imperative form: "Run scripts/ci-check.sh". There is no conditional qualifier, no "if it exists", and no note that the script must be generated first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper. The script's absence reveals either a documentation gap or a missing setup step.
+
+Why the bad version fails: it draws a conclusion ("seemed wrong") without quoting the source language, explaining the reading, or tracing the reasoning. It's a verdict, not an interpretation.
+
+### `actual_outcome`
+
+Bad:
+> Got an error about the file not existing.
+
+Good:
+> rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository.
+
+Why the bad version fails: "Got an error" has no diagnostic value. The good version includes the exact tool output so someone reading the event can understand the failure without re-running the command.
+
+### `expected_outcome`
+
+Bad:
+> It would work.
+
+Good:
+> The scripts/ directory would contain ci-check.sh, executable and ready to run, consistent with the instruction's use of a bare concrete path without any caveat about the file being optional.
+
+Why the bad version fails: "It would work" says nothing about what success looks like, what behavior was anticipated, or where that expectation came from.
+
+### `instruction_text`
+
+Bad:
+> Run the CI check script to see current status.
+
+Good:
+> Run scripts/ci-check.sh to inspect current status.
+
+Why the bad version fails: it paraphrases instead of quoting verbatim. "The CI check script" is the agent's summary, not the instruction's words.
+
+---
+
+## Complete good event (CLI flags)
 
 ```sh
 sh scripts/report-friction.sh \
@@ -12,44 +72,19 @@ sh scripts/report-friction.sh \
   --source-ref "AGENTS.md" \
   --source-line 18 \
   --instruction-text "Run scripts/ci-check.sh to inspect current status." \
-  --action-taken "I read AGENTS.md and found the instruction at line 18 directing me to run scripts/ci-check.sh. I attempted to locate the file using rg --files scripts, which listed every file under scripts/. The file ci-check.sh was not present in the listing. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none." \
+  --action-taken "I read AGENTS.md and found the instruction at line 18 directing me to run scripts/ci-check.sh. I ran rg --files scripts to search for the file, which listed every entry under scripts/. ci-check.sh was not present. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none." \
   --expected-outcome "The scripts/ directory would contain ci-check.sh, executable and ready to run, consistent with the instruction's use of a bare concrete path without any caveat about the file being optional or conditional." \
   --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
-  --interpretation "The instruction at line 18 uses a concrete, unqualified path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier, no 'if it exists', and no note that the script must be generated first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper I was expected to invoke. The script's absence reveals either a documentation gap or a setup step that was meant to precede this instruction."
+  --interpretation "The instruction at line 18 uses a concrete, unqualified path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier, no 'if it exists', and no note that the script must be generated first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper. The script's absence reveals either a documentation gap or a setup step that was meant to precede this instruction."
 ```
 
-Why it is good:
-
-- localizes the friction to a specific file and line via `--source-type` and `--source-ref`
-- `action_taken` reconstructs the full investigation sequence, not just the final conclusion
-- `expected_outcome` explains what success would have looked like and why
-- `actual_outcome` includes the exact command output, not a paraphrase
-- `interpretation` quotes the specific language ("Run scripts/ci-check.sh"), explains the reading, and provides reasoning for why that reading was natural
-
-## Bad event (shallow but technically complete)
+Then tag it (step 2):
 
 ```sh
-sh scripts/report-friction.sh \
-  --title "CI script failed" \
-  --source-type documentation \
-  --source-ref "AGENTS.md" \
-  --instruction-text "Run the CI check script to see current status." \
-  --action-taken "Ran the script and it was not there." \
-  --expected-outcome "It would work." \
-  --actual-outcome "Got an error about the file not existing." \
-  --interpretation "The instructions seemed wrong about the script path."
+sh scripts/report-friction.sh --add-tags evt-NNNN "missing-script,instructions,ci,agents-md"
 ```
 
-Why it is bad:
-
-- `action_taken` does not quote the exact command, arguments, or output — "Ran the script" could mean anything
-- `expected_outcome` gives no basis for the expectation — what instruction was it derived from? What would success look like concretely?
-- `actual_outcome` omits the exact error message — "Got an error" has no diagnostic value
-- `interpretation` gives no quoted language from the instruction and no reasoning chain — it is a conclusion without a trace
-- `instruction_text` paraphrases instead of quoting the exact text
-- all fields technically have content but none is recoverable for diagnosis without returning to the original context
-
-## Good JSON via stdin
+## Complete good event (JSON stdin)
 
 ```sh
 cat <<'EOF' | sh scripts/report-friction.sh --from-json -
@@ -69,4 +104,4 @@ cat <<'EOF' | sh scripts/report-friction.sh --from-json -
 EOF
 ```
 
-The `agent_name` and `agent_kind` fields above are explicit provenance provided by the caller, not defaults inferred by the tool.
+The JSON payload has no `tags` field. Events start with an empty tags array. Run the `--add-tags` command from the tool output as step 2.

@@ -109,6 +109,18 @@ On schema/content failure, the tool returns concise field-level diagnostics.
 
 Raw parser stack traces are suppressed.
 
+## Tags
+
+Events are initially written with an empty tags array. Tags are agent-curated, not auto-generated.
+
+After an event is filed, the tool displays existing tags from the stream and suggests a ready-to-run `--add-tags` command. The agent runs that command as a deliberate second step:
+
+```sh
+sh scripts/report-friction.sh --add-tags evt-NNNN "tag1,tag2"
+```
+
+`--add-tags` accepts an event ID and a comma-separated tag list. It patches the tags field on the matching event in place and exits. No other event fields are modified.
+
 ## Index behavior
 
 `INDEX.md` is created and refreshed automatically by the tool after append operations.

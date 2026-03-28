@@ -28,7 +28,8 @@ param(
     [string]$RetriesLost = '0',
     [string]$MinutesLost = '0',
     [string]$FingerprintKey = '',
-    [string]$Tags = '',
+    [string]$AddTags = '',
+    [string]$AddTagsCsv = '',
     [Alias('Agent')][string]$AgentName = $(if ($env:FRICTION_AGENT_NAME) { $env:FRICTION_AGENT_NAME } else { '' }),
     [string]$AgentKind = $(if ($env:FRICTION_AGENT_KIND) { $env:FRICTION_AGENT_KIND } else { '' }),
     [string]$Role = $(if ($env:FRICTION_ROLE) { $env:FRICTION_ROLE } else { '' }),
@@ -79,6 +80,11 @@ Provenance:
   -AgentKind VALUE    Optional agent kind such as orchestrator or subagent.
   -Role VALUE         Optional descriptive role value.
                       If omitted, provenance is recorded as unspecified.
+
+Tag management (run after initial event creation):
+  -AddTags EVENT_ID -AddTagsCsv "tag1,tag2"
+                      Add tags to an existing event by event_id.
+                      The report output suggests this command after each write.
 "@
     exit 0
 }
@@ -89,6 +95,50 @@ $paths = Resolve-FrictionPaths -RepoRoot $RepoRoot -EventsFile $EventsFile -Inde
 $EventsFile = $paths.EventsFile
 $IndexFile = $paths.IndexFile
 $RepoRoot = $paths.RepoRoot
+
+# --- --AddTags mode: patch tags on an existing event ---
+if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
+    if ([string]::IsNullOrWhiteSpace($AddTagsCsv)) {
+        throw "-AddTags requires both EVENT_ID (via -AddTags) and tags (via -AddTagsCsv)"
+    }
+    if (-not (Test-Path -LiteralPath $EventsFile)) {
+        throw "Events file not found: $EventsFile"
+    }
+    $newTags = @($AddTagsCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($newTags.Count -eq 0) { throw "No tags provided" }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $found = $false
+    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+        $stripped = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($stripped)) { $lines.Add($line); continue }
+        $event = $stripped | ConvertFrom-Json -ErrorAction Stop
+        if ($event.PSObject.Properties['event_id'].Value -eq $AddTags) {
+            $found = $true
+            $existing = @()
+            $tagsProp = $event.PSObject.Properties['tags']
+            if ($null -ne $tagsProp) {
+                if ($tagsProp.Value -is [System.Array]) {
+                    $existing = @($tagsProp.Value | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                } elseif (-not [string]::IsNullOrWhiteSpace([string]$tagsProp.Value)) {
+                    $existing = @(([string]$tagsProp.Value).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                }
+            }
+            $merged = [System.Collections.Generic.List[string]]::new()
+            $seen = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($t in ($existing + $newTags)) { if ($seen.Add($t)) { $merged.Add($t) } }
+            $event.tags = $merged.ToArray()
+            $lines.Add(($event | ConvertTo-Json -Compress -Depth 8))
+        } else {
+            $lines.Add($line.TrimEnd("`r", "`n"))
+        }
+    }
+    if (-not $found) { throw "Event not found: $AddTags" }
+    [System.IO.File]::WriteAllLines($EventsFile, $lines.ToArray(), [System.Text.UTF8Encoding]::new($false))
+    & "$PSScriptRoot/build-index.ps1" -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot | Out-Null
+    Write-Output "FRICTION_TAGS_UPDATED=$AddTags"
+    exit 0
+}
 
 $superprojectRoot = Get-GitSuperprojectRoot
 $submodulePath = ''
@@ -129,7 +179,6 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $RetriesLost = Get-JsonFieldValue $fromJsonPayload 'retries_lost' $RetriesLost '0'
     $MinutesLost = Get-JsonFieldValue $fromJsonPayload 'minutes_lost' $MinutesLost '0'
     $FingerprintKey = Get-JsonFieldValue $fromJsonPayload 'fingerprint_key' $FingerprintKey ''
-    $Tags = Get-JsonFieldValue $fromJsonPayload 'tags' $Tags ''
     $AgentName = Get-JsonFieldValue $fromJsonPayload 'agent_name' $AgentName ''
     $AgentKind = Get-JsonFieldValue $fromJsonPayload 'agent_kind' $AgentKind ''
     $Role = Get-JsonFieldValue $fromJsonPayload 'role' $Role ''
@@ -329,12 +378,6 @@ if ($null -ne $fromJsonSources) {
 # Extract primary source ref for fingerprinting and categorizer
 $primarySourceRef = if ($sources.Count -gt 0) { [string]($sources[0].PSObject.Properties['ref'].Value) } else { '' }
 
-# Extract source types CSV for tag generation
-$sourceTypeCsv = ($sources | ForEach-Object {
-    $tp = $_.PSObject.Properties['type']
-    if ($null -ne $tp) { [string]$tp.Value } else { '' }
-} | Where-Object { $_ }) -join ','
-
 # --- Run categorizer ---
 $auto = & "$PSScriptRoot/categorize.ps1" `
     -SourceRef $primarySourceRef `
@@ -353,8 +396,7 @@ $auto = & "$PSScriptRoot/categorize.ps1" `
     -RunEffect $RunEffect `
     -GuidanceQuality $GuidanceQuality `
     -Impact $Impact `
-    -Confidence $Confidence `
-    -SourceTypeCsv $sourceTypeCsv
+    -Confidence $Confidence
 
 $autoMap = @{}
 foreach ($line in $auto) {
@@ -371,15 +413,6 @@ $Confidence = $autoMap['confidence']
 $ObservedSurface = $autoMap['observed_surface']
 $derivedCategory = $autoMap['derived_category']
 $taxonomyVersion = $autoMap['taxonomy_version']
-
-# --- Merge user-supplied tags with auto-generated tags ---
-$mergedTags = $autoMap['tags']
-if (-not [string]::IsNullOrWhiteSpace($Tags)) {
-    foreach ($item in ($Tags -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-        $mergedTags = Add-CsvItem $mergedTags $item
-    }
-}
-$Tags = $mergedTags
 
 # --- Normalize numeric/bool fields ---
 $workaroundUsedBool = ConvertTo-NormalizedBool $WorkaroundUsed
@@ -400,9 +433,11 @@ if ([string]::IsNullOrWhiteSpace($OwnerHint)) {
     $OwnerHint = Get-DefaultOwnerForSurface $Surface
 }
 
-$fingerprint = Get-EventFingerprint -RootSurface $Surface -Mode $Mode -SourceRef $primarySourceRef -ActualOutcome $ActualOutcome -ActionTaken $ActionTaken -Title $Title -CustomKey $FingerprintKey
+$recorded = [System.DateTimeOffset]::UtcNow
+$eventDate = $recorded.ToString('yyyy-MM-dd')
+$fingerprint = Get-EventFingerprint -Surface $Surface -Mode $Mode -SourceRef $primarySourceRef -EventDate $eventDate -CustomKey $FingerprintKey
 $incidentId = "inc-$fingerprint"
-$recorded = [System.DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+$recorded = $recorded.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $provenanceSource = if (-not [string]::IsNullOrWhiteSpace($AgentName) -or -not [string]::IsNullOrWhiteSpace($AgentKind) -or -not [string]::IsNullOrWhiteSpace($Role)) { 'explicit' } else { 'unspecified' }
 $repoRelativeEventsFile = ''
 if (-not [string]::IsNullOrWhiteSpace($RepoRoot) -and $EventsFile.StartsWith($RepoRoot)) {
@@ -417,9 +452,6 @@ $sourcesJson = @($sources) | ConvertTo-Json -Compress -Depth 8
 if ([string]::IsNullOrWhiteSpace($sourcesJson) -or $sourcesJson -eq 'null') {
     $sourcesJson = '[]'
 }
-
-# Build tags JSON array
-$tagsArray = ConvertTo-JsonTagArray $Tags
 
 $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     $existingEvents = Import-Events $EventsFile
@@ -468,9 +500,7 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     if ($null -ne $guidanceQualityInt) { $eventFields.Add((ConvertTo-JsonNumber 'guidance_quality' $guidanceQualityInt)) }
     if ($null -ne $confidenceInt) { $eventFields.Add((ConvertTo-JsonNumber 'confidence' $confidenceInt)) }
     $eventFields.Add((ConvertTo-JsonString 'derived_category' $derivedCategory))
-    $tagsJson = ($tagsArray | ConvertTo-Json -Compress)
-    if ([string]::IsNullOrWhiteSpace($tagsJson) -or $tagsJson -eq 'null') { $tagsJson = '[]' }
-    $eventFields.Add('"tags":' + $tagsJson)
+    $eventFields.Add('"tags":[]')
     # Sparse impact fields
     if ($workaroundUsedBool) { $eventFields.Add((ConvertTo-JsonBool 'workaround_used' $workaroundUsedBool)) }
     if ($exitCodeInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'exit_code' $exitCodeInt)) }
@@ -493,3 +523,14 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
 Write-Output "event_id=$($eventOutput.EventId)"
 Write-Output "events_file=$EventsFile"
 Write-Output "index_file=$IndexFile"
+
+# Tag helper: show existing tags and suggest --add-tags command
+$existingTags = Get-AllTags $EventsFile
+Write-Output ""
+if (-not [string]::IsNullOrWhiteSpace($existingTags)) {
+    Write-Output "All tags in this stream: $existingTags"
+} else {
+    Write-Output "No tags in this stream yet."
+}
+Write-Output "To add tags to this event, run:"
+Write-Output "  scripts/report-friction.ps1 -AddTags $($eventOutput.EventId) -AddTagsCsv `"tag1,tag2`""

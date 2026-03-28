@@ -28,7 +28,6 @@ Options:
   --guidance-quality VALUE
   --impact VALUE
   --confidence VALUE
-  --source-type-csv TEXT
   --help
 
 Output:
@@ -39,7 +38,7 @@ Output:
   guidance_quality=<value>
   confidence=<value>
   derived_category=<surface/mode/run_effect>
-  tags=<comma-separated tags>
+  taxonomy_version=<value>
 EOF
 }
 
@@ -60,7 +59,6 @@ run_effect_override=
 guidance_quality_override=
 impact_override=
 confidence_override=
-source_type_csv=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -81,7 +79,6 @@ while [ $# -gt 0 ]; do
     --guidance-quality) guidance_quality_override=${2-}; shift 2 ;;
     --impact) impact_override=${2-}; shift 2 ;;
     --confidence) confidence_override=${2-}; shift 2 ;;
-    --source-type-csv) source_type_csv=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -279,10 +276,6 @@ else
   fi
 fi
 
-text_for_tags=$(
-  printf '%s\n%s\n%s\n' "$full_text" "$tool_name" "$command_text"
-)
-tags=$(build_category_tags "$surface" "$mode" "$run_effect" "$guidance_quality" "$text_for_tags" "$source_type_csv")
 derived_category=$surface/$mode/$run_effect
 
 printf 'observed_surface=%s\n' "$observed_surface"
@@ -292,5 +285,4 @@ printf 'run_effect=%s\n' "$run_effect"
 printf 'guidance_quality=%s\n' "$guidance_quality"
 printf 'confidence=%s\n' "$confidence"
 printf 'derived_category=%s\n' "$derived_category"
-printf 'tags=%s\n' "$tags"
 printf 'taxonomy_version=%s\n' "$TAXONOMY_VERSION"

@@ -12,7 +12,9 @@ WHEN the friction can be localized to a specific file, document, or URL THEN you
 
 ## Agent-facing default
 
-Agents should use direct flags by default:
+Agents should use direct flags by default. Filing the event is step 1; tagging is step 2.
+
+Step 1 — file the event:
 
 ```sh
 sh scripts/report-friction.sh \
@@ -25,6 +27,12 @@ sh scripts/report-friction.sh \
   --expected-outcome "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the instruction's use of a bare concrete path in imperative form." \
   --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
   --interpretation "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap."
+```
+
+Step 2 — the tool output shows existing tags and suggests the command. Run it:
+
+```sh
+sh scripts/report-friction.sh --add-tags evt-NNNN "missing-script,instructions"
 ```
 
 ## Structured-input path
@@ -51,6 +59,7 @@ EOF
 
 Use stdin JSON whenever the payload contains backticks, `$()`, copied command output, or multiple lines that would be brittle as inline shell arguments.
 The `agent_name` and `agent_kind` fields in the example above are explicit provenance supplied by the caller, not defaults that the tool invents.
+The JSON payload does not include a `tags` field. Events are written with an empty tags array. After filing, run the suggested `--add-tags` command shown in the tool output.
 
 ## Canonical target resolution
 

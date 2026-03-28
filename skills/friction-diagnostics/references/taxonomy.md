@@ -260,7 +260,7 @@ The run proceeded without operational disruption. This is the default when no bl
 
 ## Guidance quality
 
-How clear or misleading the available guidance was. The schema stores guidance quality as a numeric value (0–4); see the Numeric scales section above for the full mapping. WHEN overriding guidance quality THEN you SHALL use one of the semantic labels or their numeric equivalents: `clear` (4), `ambiguous` (2), `misleading` (1), `not-applicable` (0). You SHALL NOT invent new guidance quality values.
+How clear or misleading the available guidance was. The schema stores guidance quality as a numeric value (0–4); see the Numeric scales section above for the full mapping. WHEN overriding guidance quality THEN you SHALL use one of the semantic labels or their numeric equivalents: `clear` (4), `partial` (3), `ambiguous` (2), `misleading` (1), `not-applicable` (0). You SHALL NOT invent new guidance quality values.
 
 ### `clear` (4)
 The guidance was unambiguous and accurately described the actual behavior. This is the default.

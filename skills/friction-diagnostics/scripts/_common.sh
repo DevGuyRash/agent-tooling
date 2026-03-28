@@ -337,12 +337,13 @@ normalize_guidance_quality() {
   case "$1" in
     0|1|2|3|4) printf '%s\n' "$1" ;;
     clear) printf '4\n' ;;
+    partial) printf '3\n' ;;
     ambiguous) printf '2\n' ;;
     misleading) printf '1\n' ;;
     not-applicable) printf '0\n' ;;
     confusing) printf '2\n' ;;
     '') printf '\n' ;;
-    *) die "Unsupported guidance quality: $1 (expected 0-4 or clear/ambiguous/misleading/not-applicable)" ;;
+    *) die "Unsupported guidance quality: $1 (expected 0-4 or clear/partial/ambiguous/misleading/not-applicable)" ;;
   esac
 }
 
@@ -350,10 +351,10 @@ normalize_confidence() {
   case "$1" in
     1|2|3|4|5) printf '%s\n' "$1" ;;
     low) printf '2\n' ;;
-    medium) printf '3\n' ;;
+    moderate|medium) printf '3\n' ;;
     high) printf '4\n' ;;
     '') printf '\n' ;;
-    *) die "Unsupported confidence: $1 (expected 1-5 or low/medium/high)" ;;
+    *) die "Unsupported confidence: $1 (expected 1-5 or low/moderate/high)" ;;
   esac
 }
 
@@ -390,21 +391,55 @@ build_event_fingerprint() {
   root_surface=$1
   mode=$2
   source_ref=$3
-  actual_outcome=$4
-  action_taken=$5
-  title=$6
-  custom_key=${7:-}
+  event_date=$4
+  custom_key=${5:-}
 
   if [ -n "$custom_key" ]; then
     seed=$(normalize_fingerprint_text "$custom_key")
   else
     source_key=$(normalize_fingerprint_text "$source_ref")
-    outcome_key=$(normalize_fingerprint_text "$actual_outcome")
-    action_key=$(normalize_fingerprint_text "$action_taken")
-    title_key=$(normalize_fingerprint_text "$title")
-    seed="${root_surface}|${mode}|${source_key}|${outcome_key}|${action_key}|${title_key}"
+    seed="${root_surface}|${mode}|${source_key}|${event_date}"
   fi
   short_hash "$seed" 12
+}
+
+# Extract all unique tags from an events.jsonl file as comma-separated list.
+extract_all_tags() {
+  events_path=$1
+  if [ ! -f "$events_path" ]; then
+    printf '\n'
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '\n'
+    return 0
+  fi
+  python3 - "$events_path" <<'PY'
+import json, sys
+from pathlib import Path
+tags = set()
+with Path(sys.argv[1]).open("r", encoding="utf-8") as fh:
+    for raw in fh:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        t = event.get("tags")
+        if isinstance(t, list):
+            for tag in t:
+                if tag:
+                    tags.add(str(tag))
+        csv = event.get("tags_csv")
+        if isinstance(csv, str) and csv.strip():
+            for tag in csv.split(","):
+                tag = tag.strip()
+                if tag:
+                    tags.add(tag)
+print(", ".join(sorted(tags)))
+PY
 }
 
 extract_json_string() {
@@ -588,93 +623,3 @@ priority_band() {
   fi
 }
 
-build_category_tags() {
-  surface=$1
-  mode=$2
-  run_effect=$3
-  guidance_quality=$4
-  text=$5
-  source_type_csv=${6:-}
-
-  tags=
-  # Tier 1: structural tags (always present)
-  tags=$(append_csv "$tags" "$surface")
-  tags=$(append_csv "$tags" "$mode")
-  tags=$(append_csv "$tags" "$run_effect")
-
-  # Tier 2: source-type-derived tags
-  old_ifs=$IFS
-  IFS=,
-  for st in $source_type_csv; do
-    st=$(trim "$st")
-    case "$st" in
-      file) tags=$(append_csv "$tags" "file-source") ;;
-      url) tags=$(append_csv "$tags" "web-source") ;;
-      system-instruction) tags=$(append_csv "$tags" "system-instruction") ;;
-      conversation) tags=$(append_csv "$tags" "conversation-source") ;;
-      audio) tags=$(append_csv "$tags" "audio-source") ;;
-      visual) tags=$(append_csv "$tags" "visual-source") ;;
-      documentation) tags=$(append_csv "$tags" "doc-source") ;;
-    esac
-  done
-  IFS=$old_ifs
-
-  # Tier 3: content-detected keyword tags (expanded vocabulary)
-  # -- Reference document markers --
-  case "$text" in *"dispatch"*) tags=$(append_csv "$tags" "dispatch") ;; esac
-  case "$text" in *"role"*) tags=$(append_csv "$tags" "role") ;; esac
-  case "$text" in *"slug"*) tags=$(append_csv "$tags" "slug") ;; esac
-  case "$text" in *"agents.md"*) tags=$(append_csv "$tags" "agents-md") ;; esac
-  case "$text" in *"skill.md"*) tags=$(append_csv "$tags" "skill-md") ;; esac
-  case "$text" in *"mcp"*) tags=$(append_csv "$tags" "mcp") ;; esac
-  case "$text" in *"server"*) tags=$(append_csv "$tags" "server") ;; esac
-  # -- Tool and shell markers --
-  case "$text" in *"cli"*|*"command "*) tags=$(append_csv "$tags" "cli") ;; esac
-  case "$text" in *".ps1"*|*"powershell"*) tags=$(append_csv "$tags" "powershell") ;; esac
-  case "$text" in *".sh"*|*"posix"*) tags=$(append_csv "$tags" "posix-sh") ;; esac
-  # -- Data format markers --
-  case "$text" in *"json"*) tags=$(append_csv "$tags" "json") ;; esac
-  case "$text" in *"yaml"*|*"yml"*) tags=$(append_csv "$tags" "yaml") ;; esac
-  case "$text" in *"toml"*) tags=$(append_csv "$tags" "toml") ;; esac
-  case "$text" in *"schema"*) tags=$(append_csv "$tags" "schema") ;; esac
-  # -- Security and auth markers --
-  case "$text" in *"token"*|*"credential"*) tags=$(append_csv "$tags" "token") ;; esac
-  case "$text" in *"permission"*) tags=$(append_csv "$tags" "permission") ;; esac
-  case "$text" in *"sign"*|*"gpg"*|*"ssh-key"*) tags=$(append_csv "$tags" "signing") ;; esac
-  # -- Failure mode markers --
-  case "$text" in *"timeout"*) tags=$(append_csv "$tags" "timeout") ;; esac
-  case "$text" in *"traceback"*|*"stacktrace"*|*"stack backtrace"*) tags=$(append_csv "$tags" "stacktrace") ;; esac
-  case "$text" in *"sandbox"*) tags=$(append_csv "$tags" "sandbox") ;; esac
-  case "$text" in *"filesystem"*) tags=$(append_csv "$tags" "filesystem") ;; esac
-  case "$text" in *"path"*) tags=$(append_csv "$tags" "path") ;; esac
-  case "$text" in *"dependency"*) tags=$(append_csv "$tags" "dependency") ;; esac
-  case "$text" in *"api"*|*"endpoint"*) tags=$(append_csv "$tags" "api") ;; esac
-  case "$text" in *"rate limit"*|*"quota"*) tags=$(append_csv "$tags" "rate-limit") ;; esac
-  case "$text" in *"context"*) tags=$(append_csv "$tags" "context") ;; esac
-  case "$text" in *"handoff"*) tags=$(append_csv "$tags" "handoff") ;; esac
-  case "$text" in *"validation"*|*"required"*) tags=$(append_csv "$tags" "validation") ;; esac
-  case "$text" in *"output"*) tags=$(append_csv "$tags" "output") ;; esac
-  case "$text" in *"workaround"*) tags=$(append_csv "$tags" "workaround") ;; esac
-  # -- Language and ecosystem markers --
-  case "$text" in *"cargo"*|*"rustc"*|*"crate"*) tags=$(append_csv "$tags" "rust") ;; esac
-  case "$text" in *"python"*|*"pip "*|*"pytest"*) tags=$(append_csv "$tags" "python") ;; esac
-  case "$text" in *"node"*|*"npm"*|*"yarn"*|*"pnpm"*) tags=$(append_csv "$tags" "node") ;; esac
-  case "$text" in *"docker"*|*"dockerfile"*|*"podman"*) tags=$(append_csv "$tags" "docker") ;; esac
-  case "$text" in *"git "*|*"commit"*|*"branch"*|*"merge"*) tags=$(append_csv "$tags" "git") ;; esac
-  # -- CI/CD and workflow markers --
-  # Use space-padded text for short words prone to substring false positives
-  _t=" $text "
-  case "$_t" in *" ci "*|*"/ci/"*|*"-ci-"*|*" ci:"*|*"github actions"*|*"github-actions"*|*"circleci"*|*"travis"*|*"pipeline"*|*"github workflow"*) tags=$(append_csv "$tags" "ci") ;; esac
-  case "$_t" in *" test "*|*" tests "*|*" testing "*|*"pytest"*|*"cargo test"*|*"npm test"*|*" assert"*) tags=$(append_csv "$tags" "test") ;; esac
-  case "$text" in *"build"*|*"compile"*) tags=$(append_csv "$tags" "build") ;; esac
-  case "$_t" in *" link "*|*"linker"*|*"linking"*) tags=$(append_csv "$tags" "link") ;; esac
-  case "$text" in *"lint"*|*"clippy"*|*"eslint"*|*"rustfmt"*|*"prettier"*) tags=$(append_csv "$tags" "lint") ;; esac
-  case "$text" in *"deploy"*|*"release"*|*"publish"*) tags=$(append_csv "$tags" "deploy") ;; esac
-  # -- Infrastructure markers --
-  case "$text" in *"config"*) tags=$(append_csv "$tags" "config") ;; esac
-  case "$text" in *"migration"*|*"migrate"*|*"upgrade"*) tags=$(append_csv "$tags" "migration") ;; esac
-  case "$text" in *"hook"*|*"pre-commit"*|*"post-commit"*) tags=$(append_csv "$tags" "hook") ;; esac
-  case "$text" in *"systemd"*|*"systemctl"*|*"journalctl"*|*"service unit"*|*"unit file"*) tags=$(append_csv "$tags" "systemd") ;; esac
-
-  printf '%s\n' "$tags"
-}

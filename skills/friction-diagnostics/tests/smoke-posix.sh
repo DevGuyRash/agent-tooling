@@ -53,6 +53,8 @@ OUTPUT=$("$ROOT/scripts/report-friction.sh" \
 
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$DEFAULT_EVENTS$" || fail "unexpected default events file output"
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_INDEX_FILE=$DEFAULT_INDEX$" || fail "unexpected default index file output"
+printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_EVENT_ID=evt-0001$" || fail "should output event_id"
+printf '%s\n' "$OUTPUT" | grep -q "add-tags evt-0001" || fail "should include --add-tags helper in output"
 
 assert_file "$DEFAULT_EVENTS"
 assert_file "$DEFAULT_INDEX"
@@ -80,8 +82,8 @@ assert_not_contains '"evidence_type"' "$DEFAULT_EVENTS"
 assert_not_contains '"instruction_source"' "$DEFAULT_EVENTS"
 assert_not_contains '"anchors"' "$DEFAULT_EVENTS"
 assert_not_contains '"tags_csv"' "$DEFAULT_EVENTS"
-# Tags as JSON array
-assert_contains '"tags":[' "$DEFAULT_EVENTS"
+# Tags start empty (agent-curated via --add-tags)
+assert_contains '"tags":[]' "$DEFAULT_EVENTS"
 # Numeric confidence and guidance_quality
 assert_contains '"confidence":' "$DEFAULT_EVENTS"
 assert_contains '"guidance_quality":' "$DEFAULT_EVENTS"
@@ -148,7 +150,6 @@ EOF
 assert_contains '"title":"stdin ingest smoke"' "$DEFAULT_EVENTS"
 # Multiple sources preserved
 THIRD_EVENT=$(sed -n '3p' "$DEFAULT_EVENTS")
-printf '%s\n' "$THIRD_EVENT" | grep -q '"type"' | head -1 >/dev/null 2>&1
 # Sources from --from-json come through Python json.dumps which may add spaces
 printf '%s\n' "$THIRD_EVENT" | grep -q 'url' || fail "second source should be preserved"
 printf '%s\n' "$THIRD_EVENT" | grep -q 'https://example.com/docs' || fail "url source ref should be preserved"
@@ -316,8 +317,57 @@ NON_REPO_OUTPUT=$(cd "$NON_REPO_DIR" && "$ROOT/scripts/report-friction.sh" \
   --interpretation "The canonical target resolution docs specify that outside a git repo, the tool uses a deterministic temp-root path based on a hash of the CWD. This ensures events are still written to a stable location even without git context, and that different directories get isolated event streams.")
 printf '%s\n' "$NON_REPO_OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$TEMP_ROOT/agent-friction/" || fail "non-repo fallback should use the system temp root"
 
+# --- Test 15: --add-tags patches tags on existing event ---
+"$ROOT/scripts/report-friction.sh" --add-tags evt-0001 "instructions,missing,deploy,skaffold" --events-file "$DEFAULT_EVENTS"
+FIRST_EVENT=$(sed -n '1p' "$DEFAULT_EVENTS")
+printf '%s\n' "$FIRST_EVENT" | grep -q 'instructions' || fail "--add-tags should add tags to evt-0001"
+printf '%s\n' "$FIRST_EVENT" | grep -q 'skaffold' || fail "--add-tags should add all specified tags"
+
+# --- Test 16: Deterministic fingerprints — same source+day = same fingerprint ---
+FP_EVENTS=$(mktemp)
+"$ROOT/scripts/report-friction.sh" \
+  --events-file "$FP_EVENTS" \
+  --title "First report" \
+  --source-type file \
+  --source-ref "AGENTS.md" \
+  --instruction-text "Use skaffold run --profile staging to deploy." \
+  --action-taken "I ran skaffold run --profile staging from the repo root as directed by AGENTS.md." \
+  --expected-outcome "Skaffold would resolve the staging profile and deploy to the staging namespace." \
+  --actual-outcome "FATA[0003] profile staging not found in skaffold.yaml" \
+  --interpretation "AGENTS.md names the profile 'staging' with confident imperative wording. I took this as a definitive reference. Only dev and prod profiles exist. The instruction was factually wrong." \
+  >/dev/null
+"$ROOT/scripts/report-friction.sh" \
+  --events-file "$FP_EVENTS" \
+  --title "Second report, different wording" \
+  --source-type file \
+  --source-ref "AGENTS.md" \
+  --instruction-text "Use skaffold run --profile staging to deploy." \
+  --action-taken "Following AGENTS.md, I executed skaffold run --profile staging. It failed with a profile-not-found error immediately." \
+  --expected-outcome "The staging profile would be found in skaffold.yaml and the deployment would proceed." \
+  --actual-outcome "skaffold exited with error: profile staging not found. Only dev and prod are defined." \
+  --interpretation "The instruction named a specific profile that does not exist. I had no reason to doubt it since the wording was imperative and unqualified. The root cause is a documentation error in AGENTS.md." \
+  >/dev/null
+FP1=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[0])['fingerprint'])")
+FP2=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[1])['fingerprint'])")
+[ "$FP1" = "$FP2" ] || fail "same source+surface+mode+day should produce same fingerprint (got $FP1 vs $FP2)"
+
+# --- Test 17: Different source = different fingerprint ---
+"$ROOT/scripts/report-friction.sh" \
+  --events-file "$FP_EVENTS" \
+  --title "Different source" \
+  --source-type file \
+  --source-ref "skaffold.yaml" \
+  --instruction-text "profiles: [dev, prod] in skaffold.yaml" \
+  --action-taken "I inspected skaffold.yaml to find the staging profile. Only dev and prod were defined." \
+  --expected-outcome "skaffold.yaml would contain a staging profile matching the AGENTS.md instruction." \
+  --actual-outcome "skaffold.yaml defines only dev and prod profiles. No staging profile exists." \
+  --interpretation "The AGENTS.md instruction referenced a profile by name. I checked skaffold.yaml to verify it exists. The discrepancy confirms the instruction is wrong, not the config." \
+  >/dev/null
+FP3=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[2])['fingerprint'])")
+[ "$FP1" != "$FP3" ] || fail "different source should produce different fingerprint"
+
 # --- Cleanup ---
-rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON"
+rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS"
 rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$NON_REPO_DIR"
 
 printf 'All smoke tests passed.\n'

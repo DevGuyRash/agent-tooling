@@ -16,7 +16,6 @@ param(
     [string]$GuidanceQuality = "",
     [string]$Impact = "",
     [string]$Confidence = "",
-    [string]$SourceTypeCsv = "",
     [switch]$Help
 )
 
@@ -33,7 +32,6 @@ Output:
   guidance_quality=<value>
   confidence=<value>
   derived_category=<surface/mode/run_effect>
-  tags=<comma-separated tags>
   taxonomy_version=<value>
 "@
     exit 0
@@ -127,8 +125,6 @@ if (-not [string]::IsNullOrWhiteSpace($Confidence)) {
     }
 }
 
-$tagText = "$fullText`n$ToolName`n$Command".ToLowerInvariant()
-$tags = Get-CategoryTags -Surface $detectedSurface -Mode $detectedMode -RunEffect $detectedRunEffect -GuidanceQuality $detectedGuidanceQuality -TextLower $tagText -SourceTypeCsv $SourceTypeCsv
 $derivedCategory = "$detectedSurface/$detectedMode/$detectedRunEffect"
 
 "observed_surface=$detectedObservedSurface"
@@ -138,5 +134,4 @@ $derivedCategory = "$detectedSurface/$detectedMode/$detectedRunEffect"
 "guidance_quality=$detectedGuidanceQuality"
 "confidence=$detectedConfidence"
 "derived_category=$derivedCategory"
-"tags=$tags"
 "taxonomy_version=$($script:TAXONOMY_VERSION)"

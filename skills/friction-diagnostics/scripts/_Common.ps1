@@ -255,12 +255,13 @@ function ConvertTo-NormalizedGuidanceQuality {
     switch ($Value) {
         { $_ -in '0', '1', '2', '3', '4' } { return [int]$Value }
         'clear' { return 4 }
+        'partial' { return 3 }
         'ambiguous' { return 2 }
         'misleading' { return 1 }
         'not-applicable' { return 0 }
         'confusing' { return 2 }
         '' { return $null }
-        default { throw "Unsupported guidance quality: $Value (expected 0-4 or clear/ambiguous/misleading/not-applicable)" }
+        default { throw "Unsupported guidance quality: $Value (expected 0-4 or clear/partial/ambiguous/misleading/not-applicable)" }
     }
 }
 
@@ -269,10 +270,11 @@ function ConvertTo-NormalizedConfidence {
     switch ($Value) {
         { $_ -in '1', '2', '3', '4', '5' } { return [int]$Value }
         'low' { return 2 }
+        'moderate' { return 3 }
         'medium' { return 3 }
         'high' { return 4 }
         '' { return $null }
-        default { throw "Unsupported confidence: $Value (expected 1-5 or low/medium/high)" }
+        default { throw "Unsupported confidence: $Value (expected 1-5 or low/moderate/high)" }
     }
 }
 
@@ -306,25 +308,50 @@ function Get-NormalizedFingerprintText {
 
 function Get-EventFingerprint {
     param(
-        [string]$RootSurface,
+        [string]$Surface,
         [string]$Mode,
         [string]$SourceRef,
-        [string]$ActualOutcome,
-        [string]$ActionTaken,
-        [string]$Title,
+        [string]$EventDate,
         [string]$CustomKey = ''
     )
     if (-not [string]::IsNullOrWhiteSpace($CustomKey)) {
         $seed = Get-NormalizedFingerprintText $CustomKey
     }
     else {
-        $sourceKey = Get-NormalizedFingerprintText $SourceRef
-        $outcomeKey = Get-NormalizedFingerprintText $ActualOutcome
-        $actionKey = Get-NormalizedFingerprintText $ActionTaken
-        $titleKey = Get-NormalizedFingerprintText $Title
-        $seed = "$RootSurface|$Mode|$sourceKey|$outcomeKey|$actionKey|$titleKey"
+        $normalizedSourceRef = Get-NormalizedFingerprintText $SourceRef
+        $seed = "$Surface|$Mode|$normalizedSourceRef|$EventDate"
     }
     return Get-ShortSha256 $seed 12
+}
+
+function Get-AllTags {
+    param([string]$EventsFile)
+    if (-not (Test-Path -LiteralPath $EventsFile)) { return '' }
+    $tags = [System.Collections.Generic.SortedSet[string]]::new()
+    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+        $line = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $event = $line | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch { continue }
+        # v3: tags array
+        $tagsProp = $event.PSObject.Properties['tags']
+        if ($null -ne $tagsProp -and $tagsProp.Value -is [System.Array]) {
+            foreach ($t in $tagsProp.Value) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$t)) { $tags.Add([string]$t) | Out-Null }
+            }
+        }
+        # v2: tags_csv string
+        $tagsCsvProp = $event.PSObject.Properties['tags_csv']
+        if ($null -ne $tagsCsvProp -and -not [string]::IsNullOrWhiteSpace([string]$tagsCsvProp.Value)) {
+            foreach ($t in ([string]$tagsCsvProp.Value).Split(',')) {
+                $t = $t.Trim()
+                if ($t) { $tags.Add($t) | Out-Null }
+            }
+        }
+    }
+    return ($tags -join ', ')
 }
 
 function Get-DefaultOwnerForSurface {
@@ -373,95 +400,6 @@ function Get-PriorityBand {
     if ($Score -ge 16) { return 'high' }
     if ($Score -ge 8) { return 'medium' }
     return 'low'
-}
-
-function Get-CategoryTags {
-    param(
-        [string]$Surface,
-        [string]$Mode,
-        [string]$RunEffect,
-        [int]$GuidanceQuality = 4,
-        [string]$TextLower,
-        [string]$SourceTypeCsv = ''
-    )
-
-    $tags = ''
-    # Tier 1: structural tags (always present)
-    $tags = Add-CsvItem $tags $Surface
-    $tags = Add-CsvItem $tags $Mode
-    $tags = Add-CsvItem $tags $RunEffect
-
-    # Tier 2: source-type-derived tags
-    if (-not [string]::IsNullOrWhiteSpace($SourceTypeCsv)) {
-        foreach ($st in ($SourceTypeCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-            switch ($st) {
-                'file'               { $tags = Add-CsvItem $tags 'file-source' }
-                'url'                { $tags = Add-CsvItem $tags 'web-source' }
-                'system-instruction' { $tags = Add-CsvItem $tags 'system-instruction' }
-                'conversation'       { $tags = Add-CsvItem $tags 'conversation-source' }
-                'audio'              { $tags = Add-CsvItem $tags 'audio-source' }
-                'visual'             { $tags = Add-CsvItem $tags 'visual-source' }
-                'documentation'      { $tags = Add-CsvItem $tags 'doc-source' }
-            }
-        }
-    }
-
-    # Tier 3: content-detected keyword tags (expanded vocabulary)
-    # -- Reference document markers --
-    if ($TextLower -match 'dispatch') { $tags = Add-CsvItem $tags 'dispatch' }
-    if ($TextLower -match 'role') { $tags = Add-CsvItem $tags 'role' }
-    if ($TextLower -match 'slug') { $tags = Add-CsvItem $tags 'slug' }
-    if ($TextLower -match 'agents\.md') { $tags = Add-CsvItem $tags 'agents-md' }
-    if ($TextLower -match 'skill\.md') { $tags = Add-CsvItem $tags 'skill-md' }
-    if ($TextLower -match 'mcp') { $tags = Add-CsvItem $tags 'mcp' }
-    if ($TextLower -match 'server') { $tags = Add-CsvItem $tags 'server' }
-    # -- Tool and shell markers --
-    if ($TextLower -match 'cli|command ') { $tags = Add-CsvItem $tags 'cli' }
-    if ($TextLower -match '\.ps1|powershell') { $tags = Add-CsvItem $tags 'powershell' }
-    if ($TextLower -match '\.sh|posix') { $tags = Add-CsvItem $tags 'posix-sh' }
-    # -- Data format markers --
-    if ($TextLower -match 'json') { $tags = Add-CsvItem $tags 'json' }
-    if ($TextLower -match 'yaml|yml') { $tags = Add-CsvItem $tags 'yaml' }
-    if ($TextLower -match 'toml') { $tags = Add-CsvItem $tags 'toml' }
-    if ($TextLower -match 'schema') { $tags = Add-CsvItem $tags 'schema' }
-    # -- Security and auth markers --
-    if ($TextLower -match 'token|credential') { $tags = Add-CsvItem $tags 'token' }
-    if ($TextLower -match 'permission') { $tags = Add-CsvItem $tags 'permission' }
-    if ($TextLower -match 'sign|gpg|ssh-key') { $tags = Add-CsvItem $tags 'signing' }
-    # -- Failure mode markers --
-    if ($TextLower -match 'timeout') { $tags = Add-CsvItem $tags 'timeout' }
-    if ($TextLower -match 'traceback|stacktrace|stack backtrace') { $tags = Add-CsvItem $tags 'stacktrace' }
-    if ($TextLower -match 'sandbox') { $tags = Add-CsvItem $tags 'sandbox' }
-    if ($TextLower -match 'filesystem') { $tags = Add-CsvItem $tags 'filesystem' }
-    if ($TextLower -match 'path') { $tags = Add-CsvItem $tags 'path' }
-    if ($TextLower -match 'dependency') { $tags = Add-CsvItem $tags 'dependency' }
-    if ($TextLower -match 'api|endpoint') { $tags = Add-CsvItem $tags 'api' }
-    if ($TextLower -match 'rate limit|quota') { $tags = Add-CsvItem $tags 'rate-limit' }
-    if ($TextLower -match 'context') { $tags = Add-CsvItem $tags 'context' }
-    if ($TextLower -match 'handoff') { $tags = Add-CsvItem $tags 'handoff' }
-    if ($TextLower -match 'validation|required') { $tags = Add-CsvItem $tags 'validation' }
-    if ($TextLower -match 'output') { $tags = Add-CsvItem $tags 'output' }
-    if ($TextLower -match 'workaround') { $tags = Add-CsvItem $tags 'workaround' }
-    # -- Language and ecosystem markers --
-    if ($TextLower -match 'cargo|rustc|crate') { $tags = Add-CsvItem $tags 'rust' }
-    if ($TextLower -match 'python|pip |pytest') { $tags = Add-CsvItem $tags 'python' }
-    if ($TextLower -match 'node|npm|yarn|pnpm') { $tags = Add-CsvItem $tags 'node' }
-    if ($TextLower -match 'docker|dockerfile|podman') { $tags = Add-CsvItem $tags 'docker' }
-    if ($TextLower -match '\bgit\b|commit|branch|merge') { $tags = Add-CsvItem $tags 'git' }
-    # -- CI/CD and workflow markers --
-    if ($TextLower -match '\bci\b|github actions|github-actions|circleci|travis|pipeline|github workflow') { $tags = Add-CsvItem $tags 'ci' }
-    if ($TextLower -match '\btests?\b|\btesting\b|pytest|cargo test|npm test|\bassert') { $tags = Add-CsvItem $tags 'test' }
-    if ($TextLower -match 'build|compile') { $tags = Add-CsvItem $tags 'build' }
-    if ($TextLower -match '\blink\b|linker|linking') { $tags = Add-CsvItem $tags 'link' }
-    if ($TextLower -match 'lint|clippy|eslint|rustfmt|prettier') { $tags = Add-CsvItem $tags 'lint' }
-    if ($TextLower -match 'deploy|release|publish') { $tags = Add-CsvItem $tags 'deploy' }
-    # -- Infrastructure markers --
-    if ($TextLower -match 'config') { $tags = Add-CsvItem $tags 'config' }
-    if ($TextLower -match 'migration|migrate|upgrade') { $tags = Add-CsvItem $tags 'migration' }
-    if ($TextLower -match 'hook|pre-commit|post-commit') { $tags = Add-CsvItem $tags 'hook' }
-    if ($TextLower -match 'systemd|systemctl|journalctl|service unit|unit file') { $tags = Add-CsvItem $tags 'systemd' }
-
-    return $tags
 }
 
 function Resolve-DirectoryPath {

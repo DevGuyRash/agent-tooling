@@ -1,11 +1,27 @@
 ## Friction diagnostics
-WHEN any error, failure, unexpected outcome, code bug, test failure, compilation error, runtime exception, or friction of any kind occurs THEN you SHALL immediately log it using the `friction-diagnostics` skill.
-WHEN the same issue repeats without materially new evidence THEN you SHALL NOT create a duplicate entry.
-WHEN friction is logged THEN you SHALL use the canonical repo-scoped `events.jsonl` target unless an explicit `--events-file` path is required.
-WHEN the friction can be localized to a specific file, document, or URL THEN you SHALL populate the `sources` array in the event.
-WHEN reading prior friction THEN you SHOULD start with tool-managed `INDEX.md`, then use `query-friction.*`, and only then read raw `events.jsonl` or `jq` for a custom slice.
-WHEN writing `action_taken` THEN you SHALL write a multi-sentence first-person account: quote the exact command or tool call you ran, the arguments you passed, and describe what you observed before and during the failure. You SHALL NOT write a single-sentence summary.
-WHEN writing `actual_outcome` THEN you SHALL include the exact error message, exit code, or stderr output verbatim. Do not paraphrase the error.
-WHEN writing `interpretation` THEN you SHALL write at least three sentences: (1) the precise meaning you assigned to the source material at the time you acted, (2) the specific wording, code, or phrasing that produced that reading — quote it, and (3) the reasoning chain that made that reading seem correct given what you knew. You SHALL NOT compress this into one sentence.
-WHEN writing `expected_outcome` THEN you SHALL state the specific behavior you anticipated and identify which instruction, documentation, code, or configuration you derived it from.
-WHEN writing `instruction_text` THEN you SHALL quote the exact text you acted on verbatim — whether a written instruction, code snippet, function signature, config value, error message, or documentation fragment.
+
+WHEN any error, failure, unexpected outcome, or friction of any kind occurs THEN you SHALL log it using the `friction-diagnostics` skill.
+WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
+
+Filing requires two commands. The event is not complete until both have run.
+
+1. **`report-friction.sh`** — writes the event, outputs the event ID + existing tags
+2. **`report-friction.sh --add-tags`** — tags the event using the ID from command 1
+
+**Command 1 — report.** You SHALL:
+- Write `action_taken` as three sentences: (1) what you read or consulted before acting and where, (2) the exact command or code you executed with arguments, (3) what you observed before and during the failure.
+  - Bad: `"Ran the script and it was not there."`
+  - Good: `"I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I ran rg --files scripts to search for it. The file was not present in the listing."`
+- Write `interpretation` as three sentences: (1) the meaning you assigned to the source material — quote the specific wording, (2) why that reading was reasonable, (3) what the mismatch reveals.
+  - Bad: `"The instructions seemed wrong."`
+  - Good: `"The instruction says 'Run scripts/ci-check.sh' in imperative form with no caveats. Imperative paths normally refer to existing files. Its absence reveals a documentation gap."`
+- Write `actual_outcome` with the exact error message, exit code, or output verbatim. Do not paraphrase.
+- Write `expected_outcome` with the specific behavior you anticipated and which source you derived it from.
+- Write `instruction_text` as the exact text you acted on, quoted verbatim.
+- Populate `sources` with typed references when the friction can be localized.
+
+**Command 2 — tag.** The output from command 1 shows existing tags and the exact `--add-tags` invocation. You SHALL:
+- Run the `--add-tags` command shown in the output.
+- Select relevant tags from the existing vocabulary shown.
+- Create new tags for any dimension not covered (tool, language, component, failure pattern, domain).
+- Prefer more tags over fewer.

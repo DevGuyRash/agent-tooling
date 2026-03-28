@@ -66,7 +66,11 @@ Optional context:
   --retries-lost INT
   --minutes-lost INT
   --fingerprint-key TEXT
-  --tags CSV
+
+Tag management (run after initial event creation):
+  --add-tags EVENT_ID "tag1,tag2,tag3"
+                         Add tags to an existing event by event_id.
+                         The report output suggests this command after each write.
 
 Other:
   --help
@@ -104,7 +108,8 @@ workaround_note=
 retries_lost=0
 minutes_lost=0
 fingerprint_key=
-tags=
+add_tags_event_id=
+add_tags_csv=
 source_type=
 source_ref=
 source_line=
@@ -320,7 +325,6 @@ keys = [
     ("retries_lost", "json_retries_lost"),
     ("minutes_lost", "json_minutes_lost"),
     ("fingerprint_key", "json_fingerprint_key"),
-    ("tags", "json_tags"),
 ]
 
 for key, var_name in keys:
@@ -397,7 +401,7 @@ while [ $# -gt 0 ]; do
     --retries-lost) retries_lost=${2-}; shift 2 ;;
     --minutes-lost) minutes_lost=${2-}; shift 2 ;;
     --fingerprint-key) fingerprint_key=${2-}; shift 2 ;;
-    --tags) tags=${2-}; shift 2 ;;
+    --add-tags) add_tags_event_id=${2-}; add_tags_csv=${3-}; shift 3 ;;
     --source-type) source_type=${2-}; shift 2 ;;
     --source-ref) source_ref=${2-}; shift 2 ;;
     --source-line) source_line=${2-}; shift 2 ;;
@@ -442,7 +446,6 @@ if [ -n "$from_json" ]; then
   retries_lost=$(load_json_field "$retries_lost" "0" json_retries_lost)
   minutes_lost=$(load_json_field "$minutes_lost" "0" json_minutes_lost)
   fingerprint_key=$(load_json_field "$fingerprint_key" "" json_fingerprint_key)
-  tags=$(load_json_field "$tags" "" json_tags)
   # sources_json is set directly by the Python helper
   sources_json=$(load_json_field "$sources_json" "" json_sources_json)
 fi
@@ -452,6 +455,55 @@ if [ -z "$events_file" ]; then
 fi
 events_dir=$(dirname "$events_file")
 mkdir -p "$events_dir"
+
+# --- --add-tags mode: patch tags on an existing event ---
+if [ -n "$add_tags_event_id" ]; then
+  if [ -z "$add_tags_csv" ]; then
+    die "--add-tags requires EVENT_ID and TAGS arguments"
+  fi
+  if [ ! -f "$events_file" ]; then
+    die "Events file not found: $events_file"
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 is required for --add-tags"
+  fi
+  python3 - "$events_file" "$add_tags_event_id" "$add_tags_csv" <<'PY'
+import json, sys
+events_path, target_id, tags_csv = sys.argv[1], sys.argv[2], sys.argv[3]
+new_tags = [t.strip() for t in tags_csv.split(",") if t.strip()]
+if not new_tags:
+    print("No tags provided", file=sys.stderr)
+    sys.exit(1)
+lines = []
+found = False
+with open(events_path, "r", encoding="utf-8") as fh:
+    for raw in fh:
+        stripped = raw.strip()
+        if not stripped:
+            lines.append(raw)
+            continue
+        event = json.loads(stripped)
+        if event.get("event_id") == target_id:
+            found = True
+            existing = event.get("tags", [])
+            if isinstance(existing, str):
+                existing = [t.strip() for t in existing.split(",") if t.strip()]
+            merged = list(dict.fromkeys(existing + new_tags))
+            event["tags"] = merged
+            lines.append(json.dumps(event, ensure_ascii=False) + "\n")
+        else:
+            lines.append(raw)
+if not found:
+    print(f"Event not found: {target_id}", file=sys.stderr)
+    sys.exit(1)
+with open(events_path, "w", encoding="utf-8") as fh:
+    fh.writelines(lines)
+PY
+  sh "$SCRIPT_DIR/build-index.sh" --events-file "$events_file" >/dev/null
+  printf 'FRICTION_TAGS_UPDATED=%s\n' "$add_tags_event_id"
+  exit 0
+fi
+
 acquire_report_lock "$events_dir"
 
 if [ -z "$repo_root" ]; then
@@ -490,8 +542,6 @@ fi
 # Extract primary source ref for fingerprinting and categorizer
 primary_source_ref=$(printf '%s' "$sources_json" | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | sed -n '1p')
 
-# Extract source types CSV for tag generation
-source_type_csv=$(printf '%s' "$sources_json" | sed 's/},{/}\n{/g' | sed -n 's/.*"type":"\([^"]*\)".*/\1/p' | paste -sd ',' -)
 
 validate_required_field "instruction_text" "$instruction_text"
 validate_required_field "action_taken" "$action_taken"
@@ -551,8 +601,7 @@ cat_output=$(
     --run-effect "$run_effect" \
     --guidance-quality "$guidance_quality" \
     --impact "$impact" \
-    --confidence "$confidence" \
-    --source-type-csv "$source_type_csv"
+    --confidence "$confidence"
 )
 
 final_observed_surface=
@@ -563,7 +612,6 @@ final_guidance_quality=
 final_confidence=
 final_derived_category=
 final_taxonomy_version=
-final_tags=
 while IFS='=' read -r key value; do
   case "$key" in
     observed_surface) final_observed_surface=$value ;;
@@ -574,7 +622,6 @@ while IFS='=' read -r key value; do
     confidence) final_confidence=$value ;;
     derived_category) final_derived_category=$value ;;
     taxonomy_version) final_taxonomy_version=$value ;;
-    tags) final_tags=$value ;;
   esac
 done <<EOF
 $cat_output
@@ -589,20 +636,9 @@ confidence=$final_confidence
 derived_category=$final_derived_category
 taxonomy_version=$final_taxonomy_version
 
-# Merge user-supplied tags with auto-generated tags
-merged_tags=$final_tags
-if [ -n "$tags" ]; then
-  normalized=$(printf '%s' "$tags" | sed 's/[[:space:]]*,[[:space:]]*/,/g')
-  old_ifs=$IFS
-  IFS=,
-  for item in $normalized; do
-    item=$(trim "$item")
-    merged_tags=$(append_csv "$merged_tags" "$item")
-  done
-  IFS=$old_ifs
-fi
-tags=$merged_tags
-tags_json=$(csv_to_json_array "$tags")
+# Tags are agent-curated via --add-tags after the event is written.
+# Events are initially written with an empty tags array.
+tags_json='[]'
 
 # Normalize optional fields
 workaround_used=$(normalize_bool "$workaround_used")
@@ -617,7 +653,8 @@ if [ -z "$(trim "$title")" ]; then
   title="$title_prefix $title_body"
 fi
 
-fingerprint=$(build_event_fingerprint "$surface" "$mode" "$primary_source_ref" "$actual_outcome" "$action_taken" "$title" "$fingerprint_key")
+event_date=$(date -u '+%Y-%m-%d')
+fingerprint=$(build_event_fingerprint "$surface" "$mode" "$primary_source_ref" "$event_date" "$fingerprint_key")
 incident_id=inc-$fingerprint
 entry_number=0
 if [ -f "$events_file" ]; then
@@ -688,6 +725,18 @@ sh "$SCRIPT_DIR/build-index.sh" --events-file "$events_file" >/dev/null
 
 printf 'FRICTION_EVENTS_FILE=%s\n' "$events_file"
 printf 'FRICTION_INDEX_FILE=%s\n' "$index_file"
+printf 'FRICTION_EVENT_ID=%s\n' "$event_id"
 if [ -n "$repo_root" ]; then
   printf 'FRICTION_REPO_ROOT=%s\n' "$repo_root"
 fi
+
+# Tag helper: show existing tags and suggest --add-tags command
+existing_tags=$(extract_all_tags "$events_file")
+printf '\n'
+if [ -n "$existing_tags" ]; then
+  printf 'All tags in this stream: %s\n' "$existing_tags"
+else
+  printf 'No tags in this stream yet.\n'
+fi
+printf 'To add tags to this event, run:\n'
+printf '  sh %s/report-friction.sh --add-tags %s "tag1,tag2"\n' "$SCRIPT_DIR" "$event_id"
