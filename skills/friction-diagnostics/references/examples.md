@@ -28,6 +28,16 @@ Good:
 
 Why the bad version fails: it draws a conclusion ("seemed wrong") without quoting the source language, explaining the reading, or tracing the reasoning. It's a verdict, not an interpretation.
 
+Also bad (fix leakage):
+> The dispatch table uses human-readable labels. I read that label as the literal CLI slug because the table column was 'Role'. The correct fix is to add a slug column to the table so future readers can map labels to CLI values.
+
+Why it fails: sentence (3) prescribes a fix ("add a slug column") instead of revealing what the mismatch means. Compare with the good version above, which ends at "The script's absence reveals either a documentation gap or a missing setup step" — a diagnostic observation that doesn't tell anyone what to do.
+
+Also bad (missing verbatim quote):
+> I assumed the repo list could be safely assigned into a shell variable and iterated with whitespace splitting. That was reasonable for a simple list, but the command substitution preserved newlines unexpectedly.
+
+Why it fails: sentence (1) paraphrases the agent's assumption without quoting any source text. What instruction or wording led to that assumption? The good version above opens with: 'The instruction at line 18 uses a concrete, unqualified path in imperative form: "Run scripts/ci-check.sh"' — it pins the interpretation to specific quoted words.
+
 ### `actual_outcome`
 
 Bad:

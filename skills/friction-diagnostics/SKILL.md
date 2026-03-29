@@ -74,12 +74,14 @@ WHEN choosing tags THEN you SHALL select relevant tags from the existing vocabul
 Summary of what each field requires:
 
 - **`action_taken`** — three sentences: (1) what you read or consulted before acting and where, (2) the exact command or code you executed with arguments, (3) what you observed before and during the failure.
-- **`interpretation`** — three sentences: (1) the meaning you assigned to the source material — quote the specific wording, (2) why that reading was reasonable, (3) what the mismatch reveals.
+- **`interpretation`** — three sentences: (1) the meaning you assigned to the source material — use single-quotes to quote the specific wording verbatim, (2) why that reading was reasonable given context, (3) what the mismatch reveals about the source, the environment, or your assumption. Sentence (3) is a diagnostic observation, not an action plan — do not write what to do next.
 - **`actual_outcome`** — the exact error message, exit code, or output verbatim. Do not paraphrase.
 - **`expected_outcome`** — the specific behavior you anticipated and which source you derived it from.
 - **`instruction_text`** — the exact text you acted on, quoted verbatim.
 
-Do not propose fixes inside event payloads.
+Do not propose fixes, next steps, or corrective actions inside event payloads. Phrases like "the correct fix is", "the safer correction is", "the correct next step is", or "the right approach is" belong in your working context, not in the friction record.
+
+WHEN no error, failure, or unexpected outcome has occurred yet THEN you SHALL NOT log a friction event. Task starts, delegation handoffs, and in-progress status are not friction.
 
 ---
 
@@ -133,6 +135,6 @@ The `sources` array accepts typed references — not limited to code:
 
 ### Classification
 
-The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`.
+The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`. WHEN the source material's ambiguity or incompleteness contributed to the friction THEN you SHOULD set `guidance_quality` below 4 to reflect that. A value of 4 means "clear" — use it only when the guidance was genuinely unambiguous and the friction came from elsewhere.
 
 WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `interpretation`.
