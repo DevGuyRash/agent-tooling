@@ -467,20 +467,21 @@ if [ -n "$add_tags_event_id" ]; then
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 is required for --add-tags"
   fi
-  python3 - "$events_file" "$add_tags_event_id" "$add_tags_csv" <<'PY'
-import json, sys
-events_path, target_id, tags_csv = sys.argv[1], sys.argv[2], sys.argv[3]
+  acquire_report_lock "$events_dir"
+  tmp_tags_file=$(mktemp "$events_dir/.events-tags.XXXXXX.tmp")
+  if python3 - "$events_file" "$tmp_tags_file" "$add_tags_event_id" "$add_tags_csv" <<'PY'
+import json, os, sys
+events_path, output_path, target_id, tags_csv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 new_tags = [t.strip() for t in tags_csv.split(",") if t.strip()]
 if not new_tags:
     print("No tags provided", file=sys.stderr)
     sys.exit(1)
-lines = []
 found = False
-with open(events_path, "r", encoding="utf-8") as fh:
-    for raw in fh:
+with open(events_path, "r", encoding="utf-8") as src, open(output_path, "w", encoding="utf-8") as dst:
+    for raw in src:
         stripped = raw.strip()
         if not stripped:
-            lines.append(raw)
+            dst.write(raw)
             continue
         event = json.loads(stripped)
         if event.get("event_id") == target_id:
@@ -490,15 +491,25 @@ with open(events_path, "r", encoding="utf-8") as fh:
                 existing = [t.strip() for t in existing.split(",") if t.strip()]
             merged = list(dict.fromkeys(existing + new_tags))
             event["tags"] = merged
-            lines.append(json.dumps(event, ensure_ascii=False) + "\n")
+            dst.write(json.dumps(event, ensure_ascii=False) + "\n")
         else:
-            lines.append(raw)
+            dst.write(raw)
 if not found:
+    try:
+        os.remove(output_path)
+    except FileNotFoundError:
+        pass
     print(f"Event not found: {target_id}", file=sys.stderr)
     sys.exit(1)
-with open(events_path, "w", encoding="utf-8") as fh:
-    fh.writelines(lines)
+os.replace(output_path, events_path)
 PY
+  then
+    :
+  else
+    status=$?
+    rm -f "$tmp_tags_file"
+    exit "$status"
+  fi
   sh "$SCRIPT_DIR/build-index.sh" --events-file "$events_file" >/dev/null
   printf 'FRICTION_TAGS_UPDATED=%s\n' "$add_tags_event_id"
   exit 0
@@ -540,7 +551,7 @@ if [ -z "$sources_json" ]; then
 fi
 
 # Extract primary source ref for fingerprinting and categorizer
-primary_source_ref=$(printf '%s' "$sources_json" | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | sed -n '1p')
+primary_source_ref=$(extract_primary_source_ref "$sources_json")
 
 
 validate_required_field "instruction_text" "$instruction_text"

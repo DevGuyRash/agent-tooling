@@ -167,13 +167,13 @@ case "$full_text" in
   *"contradict"*|*"inconsistent"*|*"does not match docs"*|*"did not match docs"*|*"differs from docs"*)
     mode=contradiction
     ;;
-  *"unknown dispatch role"*|*"unknown "*|*"unrecognized"*|*"invalid choice"*|*"could not resolve"*|*"cannot resolve"*|*"no command named"*|*"no such subcommand"*)
+  *"unknown dispatch role"*|*"unknown role"*|*"unknown slug"*|*"unsupported role"*|*"unsupported slug"*|*"invalid choice"*|*"invalid role"*|*"invalid slug"*|*"unrecognized"*|*"not a valid role"*|*"not a valid slug"*|*"could not resolve"*|*"cannot resolve"*|*"no command named"*|*"no such subcommand"*|*"role not defined"*|*"slug not defined"*|*"role "*not\ defined*|*"slug "*not\ defined*|*"undefined role"*|*"undefined slug"*)
     mode=name-resolution
     ;;
   *"lost context"*|*"missing context"*|*"lacked context"*|*"forgot"*|*"compaction"*)
     mode=context-loss
     ;;
-  *"not found"*|*"no such file"*|*"missing"*|*"does not exist"*|*"absent"*)
+  *"recipe not found"*|*"recipe "*not\ found*|*"file not found"*|*"script not found"*|*"script "*not\ found*|*"profile not found"*|*"profile "*not\ found*|*"missing recipe"*|*"missing file"*|*"missing script"*|*"missing dependency"*|*"missing profile"*|*"no such file"*|*"does not exist"*|*"absent"*|*"does not contain recipe"*|*"does not contain script"*|*"does not contain file"*|*"does not contain the recipe"*|*"does not contain the script"*|*"does not contain the file"*|*"does not contain profile"*|*"does not define recipe"*|*"does not define script"*|*"does not define profile"*|*"unsupported profile"*|*"unknown profile"*|*"profile missing"*|*"recipe missing"*|*"script missing"*|*"file missing"*|*"dependency missing"*)
     mode=missing
     ;;
   *"permission denied"*|*"operation not permitted"*)
@@ -207,7 +207,7 @@ esac
 
 run_effect=continued
 case "$full_text" in
-  *"rate limit"*|*"quota"*|*"too many requests"*|*"retry-after"*|*"http 403"*|*"timed out"*|*"timeout"*|*"not found"*|*"missing"*|*"permission denied"*|*"unauthorized"*|*"forbidden"*|*"traceback"*|*"stacktrace"*|*"panic"*|*"crash"*|*"error:"*|*"failed"*|*"cannot "*|*"could not "*|*"unable to "*|*"blocked"*)
+  *"rate limit"*|*"quota"*|*"too many requests"*|*"retry-after"*|*"http 403"*|*"timed out"*|*"timeout"*|*"not found"*|*"missing"*|*"does not exist"*|*"does not contain recipe"*|*"does not contain script"*|*"does not contain file"*|*"does not define profile"*|*"not defined"*|*"permission denied"*|*"unauthorized"*|*"forbidden"*|*"traceback"*|*"stacktrace"*|*"panic"*|*"crash"*|*"error:"*|*"failed"*|*"cannot "*|*"could not "*|*"unable to "*|*"blocked"*)
     run_effect=blocked
     ;;
   *"retry"*|*"retries"*|*"thrash"*|*"looped"*|*"repeated"*|*"extra steps"*|*"flaky"*)

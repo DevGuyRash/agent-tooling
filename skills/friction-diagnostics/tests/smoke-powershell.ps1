@@ -17,7 +17,7 @@ try {
 
     # --- Test 1: stdin JSON with v3 sources array ---
     $stdinJson = @'
-{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","interpretation":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","surface":"workflow","mode":"ambiguity","impact":"confusing","tags":"from-json,json,stdin","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
+{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","interpretation":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","surface":"workflow","mode":"ambiguity","impact":"confusing","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
 '@
 
     $reportOutput = $stdinJson | & "$root/scripts/report-friction.ps1" `
@@ -78,13 +78,30 @@ try {
     $indexText = [System.IO.File]::ReadAllText($indexFile)
     if ($indexText -notmatch '\*\*Entries:\*\* 2') { throw 'INDEX.md should report two entries after rebuild' }
 
-    # --- Test 3: Query by agent-kind ---
+    # --- Test 3: AddTags rewrites safely and preserves array tags ---
+    & "$root/scripts/report-friction.ps1" -EventsFile $eventsFile -IndexFile $indexFile -RepoRoot $repoDir -AddTags 'evt-0001' -AddTagsCsv 'powershell,smoke' | Out-Null
+    $events = Import-Events $eventsFile
+    if (@($events[0].tags).Count -ne 2) { throw 'AddTags should preserve tags as an array' }
+    if (@($events[0].tags) -notcontains 'powershell') { throw 'AddTags should add requested tags' }
+
+    # --- Test 4: Query by agent-kind ---
     $queryJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -AgentKind 'subagent' -Format json
     $queryEvents = $queryJson | ConvertFrom-Json
     if (@($queryEvents).Count -ne 1) { throw 'query-friction.ps1 should filter rows by agent kind' }
     if ([string]$queryEvents[0].title -ne 'Follow-on entry') { throw 'query-friction.ps1 should return matching event objects' }
 
-    # --- Test 4: v2 backward compat via stdin ---
+    # --- Test 5: Categorizer catches common missing/name-resolution phrasing ---
+    $categorizeOutput = & "$root/scripts/categorize.ps1" `
+        -SourceRef 'AGENTS.md' `
+        -InstructionText 'Run the staging profile from the deployment helper.' `
+        -ActionTaken 'I ran the documented deployment command and checked the repo configuration.' `
+        -ExpectedOutcome 'The staging profile would be defined and selectable.' `
+        -ActualOutcome 'The config does not define profile staging and the command reported an unsupported role slug.' `
+        -Interpretation 'I treated the profile and slug names as valid identifiers because the wording was imperative and concrete.'
+    if ($categorizeOutput -notcontains 'mode=name-resolution') { throw 'categorize.ps1 should classify unsupported slug / not-defined profile wording as name-resolution' }
+    if ($categorizeOutput -notcontains 'run_effect=blocked') { throw 'categorize.ps1 should classify unsupported resource wording as blocked' }
+
+    # --- Test 6: v2 backward compat via stdin ---
     $v2Json = @'
 {"title":"v2 backward compat","instruction_source":"SKILL.md:160","instruction_text":"Use the documented dispatch role slug from the skill table.","action_taken":"Passed a v2-format payload with instruction_source and anchors to test backward compatibility.","expected_outcome":"The tool auto-converts instruction_source and anchors to sources array.","actual_outcome":"The event was recorded with a properly converted sources array.","interpretation":"v2 payloads should be accepted and automatically migrated to v3 sources format for backward compatibility.","anchors":[{"kind":"file","path":"/abs/path/SKILL.md","line":160}]}
 '@
@@ -95,7 +112,7 @@ try {
     if ($lastRaw -notmatch '"sources":\[') { throw 'v2 compat: should have sources array' }
     if ($lastRaw -match '"anchors"') { throw 'v2 compat: should NOT have anchors in output' }
 
-    # --- Test 5: Invalid JSON diagnostics ---
+    # --- Test 7: Invalid JSON diagnostics ---
     $invalidJsonPath = Join-Path $repoDir 'invalid-event.json'
     [System.IO.File]::WriteAllText($invalidJsonPath, '{bad json}', [System.Text.UTF8Encoding]::new($false))
     try {
@@ -108,7 +125,7 @@ try {
         }
     }
 
-    # --- Test 6: Alternate .local* directory ---
+    # --- Test 8: Alternate .local* directory ---
     $altRepoDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-alt-{0}" -f [System.Guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $altRepoDir -Force
     & git init -q $altRepoDir

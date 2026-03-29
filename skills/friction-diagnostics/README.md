@@ -113,3 +113,4 @@ Recommended reading order:
 - There is no `init-log` step.
 - `INDEX.md` is auto-created and auto-reconciled by the tooling after append operations.
 - The canonical event schema supports a unified `sources` array so code and non-code references can be stored consistently.
+- `--add-tags` uses the same file lock as event writes and swaps the updated JSONL into place atomically.

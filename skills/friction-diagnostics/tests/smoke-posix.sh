@@ -323,6 +323,13 @@ FIRST_EVENT=$(sed -n '1p' "$DEFAULT_EVENTS")
 printf '%s\n' "$FIRST_EVENT" | grep -q 'instructions' || fail "--add-tags should add tags to evt-0001"
 printf '%s\n' "$FIRST_EVENT" | grep -q 'skaffold' || fail "--add-tags should add all specified tags"
 
+# --- Test 15b: --add-tags preserves non-zero failures ---
+set +e
+"$ROOT/scripts/report-friction.sh" --add-tags evt-9999 "missing-event" --events-file "$DEFAULT_EVENTS" >/dev/null 2>&1
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "--add-tags should exit non-zero when the event does not exist"
+
 # --- Test 16: Deterministic fingerprints — same source+day = same fingerprint ---
 FP_EVENTS=$(mktemp)
 "$ROOT/scripts/report-friction.sh" \
@@ -366,8 +373,66 @@ FP2=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[1
 FP3=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[2])['fingerprint'])")
 [ "$FP1" != "$FP3" ] || fail "different source should produce different fingerprint"
 
+# --- Test 18: Categorizer catches common missing/name-resolution phrasing ---
+CATEGORIZE_OUTPUT=$("$ROOT/scripts/categorize.sh" \
+  --source-ref "AGENTS.md" \
+  --instruction-text "Run the staging profile from the deployment helper." \
+  --action-taken "I ran the documented deployment command and checked the repo configuration." \
+  --expected-outcome "The staging profile would be defined and selectable." \
+  --actual-outcome "The config does not define profile staging and the command reported an unsupported role slug." \
+  --interpretation "The instructions referenced a specific profile and slug. I treated those names as valid identifiers because the wording was imperative and concrete.")
+printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^mode=name-resolution$' || fail "categorizer should classify unsupported slug / not-defined profile wording as name-resolution"
+printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^run_effect=blocked$' || fail "categorizer should classify missing/unsupported resource wording as blocked"
+
+# --- Test 19: --from-json spaced sources still drive primary source classification ---
+cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json - >/dev/null
+{
+  "title": "spaced json source ref",
+  "instruction_text": "Follow the guidance exactly as written.",
+  "action_taken": "I followed the documented guidance exactly as written in the referenced source.",
+  "expected_outcome": "The guidance would resolve cleanly without ambiguity.",
+  "actual_outcome": "The guidance used a role slug that was not defined by the system.",
+  "interpretation": "I treated the named slug as authoritative because the instruction source was explicit and concrete.",
+  "sources": [
+    { "type": "file", "ref": "AGENTS.md", "line": 1 }
+  ]
+}
+EOF
+LAST_EVENT=$(tail -1 "$DEFAULT_EVENTS")
+printf '%s\n' "$LAST_EVENT" | grep -q '"surface":"instructions"' || fail "--from-json spaced sources should preserve primary source ref for categorization"
+
+# --- Test 20: Positive submodule metadata ---
+SUBMODULE_FIXTURE=$(mktemp -d)
+SUBMODULE_REMOTE=$(mktemp -d)
+git init -q "$SUBMODULE_FIXTURE"
+git -C "$SUBMODULE_FIXTURE" config user.name "Smoke Test"
+git -C "$SUBMODULE_FIXTURE" config user.email "smoke@example.com"
+printf '%s\n' "fixture" >"$SUBMODULE_FIXTURE/README.md"
+git -C "$SUBMODULE_FIXTURE" add README.md
+git -C "$SUBMODULE_FIXTURE" commit -qm "fixture"
+
+git init -q "$SUBMODULE_REMOTE"
+git -C "$SUBMODULE_REMOTE" config user.name "Smoke Test"
+git -C "$SUBMODULE_REMOTE" config user.email "smoke@example.com"
+git -C "$SUBMODULE_REMOTE" -c protocol.file.allow=always submodule add -q "$SUBMODULE_FIXTURE" deps/fixture
+git -C "$SUBMODULE_REMOTE" commit -qam "add submodule" >/dev/null
+
+SUBMODULE_OUTPUT=$(cd "$SUBMODULE_REMOTE/deps/fixture" && "$ROOT/scripts/report-friction.sh" \
+  --title "submodule metadata" \
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "Report friction from inside a real submodule checkout." \
+  --action-taken "I changed into the checked-out git submodule and ran report-friction.sh without overriding repo-root detection." \
+  --expected-outcome "The event would include superproject_root and the submodule_path relative to the superproject." \
+  --actual-outcome "The event was recorded from inside the submodule checkout with git metadata available." \
+  --interpretation "A real submodule checkout exposes both the submodule repo root and the superproject working tree. The reporter should preserve both so downstream queries can distinguish submodule-local context from the parent repository.")
+SUBMODULE_EVENTS=$(printf '%s\n' "$SUBMODULE_OUTPUT" | sed -n 's/^FRICTION_EVENTS_FILE=//p' | sed -n '1p')
+assert_file "$SUBMODULE_EVENTS"
+assert_contains '"superproject_root":"'"$SUBMODULE_REMOTE"'"' "$SUBMODULE_EVENTS"
+assert_contains '"submodule_path":"deps/fixture"' "$SUBMODULE_EVENTS"
+
 # --- Cleanup ---
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS"
-rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$NON_REPO_DIR"
+rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
 
 printf 'All smoke tests passed.\n'

@@ -292,11 +292,11 @@ base64_decode() {
 sanitize_text() {
   printf '%s' "$1" | sed -E \
     -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._-]+/\1[REDACTED]/g' \
-    -e 's/\bgh[pousr]_[A-Za-z0-9]+\b/[REDACTED_GITHUB_TOKEN]/g' \
-    -e 's/\bsk-[A-Za-z0-9_-]+\b/[REDACTED_API_TOKEN]/g' \
-    -e 's/\bAKIA[0-9A-Z]{16}\b/[REDACTED_AWS_ACCESS_KEY]/g' \
-    -e 's/\bxox[baprs]-[A-Za-z0-9-]+\b/[REDACTED_SLACK_TOKEN]/g' \
-    -e 's/\b([Pp]assword|[Tt]oken|[Ss]ecret|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy])([[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1\2[REDACTED]/g'
+    -e 's/(^|[^[:alnum:]_])(gh[pousr]_[A-Za-z0-9]+)([^[:alnum:]_]|$)/\1[REDACTED_GITHUB_TOKEN]\3/g' \
+    -e 's/(^|[^[:alnum:]_])(sk-[A-Za-z0-9_-]+)([^[:alnum:]_]|$)/\1[REDACTED_API_TOKEN]\3/g' \
+    -e 's/(^|[^[:alnum:]_])(AKIA[0-9A-Z]{16})([^[:alnum:]_]|$)/\1[REDACTED_AWS_ACCESS_KEY]\3/g' \
+    -e 's/(^|[^[:alnum:]_])(xox[baprs]-[A-Za-z0-9-]+)([^[:alnum:]_]|$)/\1[REDACTED_SLACK_TOKEN]\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Pp]assword|[Tt]oken|[Ss]ecret|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy])([[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1\2\3[REDACTED]/g'
 }
 
 sanitize_excerpt() {
@@ -520,6 +520,10 @@ git_submodule_path() {
   fi
 }
 
+extract_primary_source_ref() {
+  printf '%s\n' "$1" | sed -n 's/.*"ref"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+}
+
 local_dir_for_repo() {
   repo_root=$1
   default_dir=$repo_root/.local
@@ -622,4 +626,3 @@ priority_band() {
     printf 'low\n'
   fi
 }
-

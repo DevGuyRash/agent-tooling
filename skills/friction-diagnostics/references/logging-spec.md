@@ -119,7 +119,7 @@ After an event is filed, the tool displays existing tags from the stream and sug
 sh scripts/report-friction.sh --add-tags evt-NNNN "tag1,tag2"
 ```
 
-`--add-tags` accepts an event ID and a comma-separated tag list. It patches the tags field on the matching event in place and exits. No other event fields are modified.
+`--add-tags` accepts an event ID and a comma-separated tag list. It rewrites the canonical file under the report lock and atomically swaps in the updated JSONL. No other event fields are modified.
 
 ## Index behavior
 

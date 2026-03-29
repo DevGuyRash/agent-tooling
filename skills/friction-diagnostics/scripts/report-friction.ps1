@@ -106,35 +106,45 @@ if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
     }
     $newTags = @($AddTagsCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($newTags.Count -eq 0) { throw "No tags provided" }
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    $found = $false
-    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
-        $stripped = $line.Trim()
-        if ([string]::IsNullOrWhiteSpace($stripped)) { $lines.Add($line); continue }
-        $event = $stripped | ConvertFrom-Json -ErrorAction Stop
-        if ($event.PSObject.Properties['event_id'].Value -eq $AddTags) {
-            $found = $true
-            $existing = @()
-            $tagsProp = $event.PSObject.Properties['tags']
-            if ($null -ne $tagsProp) {
-                if ($tagsProp.Value -is [System.Array]) {
-                    $existing = @($tagsProp.Value | ForEach-Object { [string]$_ } | Where-Object { $_ })
-                } elseif (-not [string]::IsNullOrWhiteSpace([string]$tagsProp.Value)) {
-                    $existing = @(([string]$tagsProp.Value).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $found = $false
+        foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+            $stripped = $line.Trim()
+            if ([string]::IsNullOrWhiteSpace($stripped)) { $lines.Add($line); continue }
+            $event = $stripped | ConvertFrom-Json -ErrorAction Stop
+            if ($event.PSObject.Properties['event_id'].Value -eq $AddTags) {
+                $found = $true
+                $existing = @()
+                $tagsProp = $event.PSObject.Properties['tags']
+                if ($null -ne $tagsProp) {
+                    if ($tagsProp.Value -is [System.Array]) {
+                        $existing = @($tagsProp.Value | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                    } elseif (-not [string]::IsNullOrWhiteSpace([string]$tagsProp.Value)) {
+                        $existing = @(([string]$tagsProp.Value).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                    }
                 }
+                $merged = [System.Collections.Generic.List[string]]::new()
+                $seen = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($t in ($existing + $newTags)) { if ($seen.Add($t)) { $merged.Add($t) } }
+                $event.tags = $merged.ToArray()
+                $lines.Add(($event | ConvertTo-Json -Compress -Depth 8))
+            } else {
+                $lines.Add($line.TrimEnd("`r", "`n"))
             }
-            $merged = [System.Collections.Generic.List[string]]::new()
-            $seen = [System.Collections.Generic.HashSet[string]]::new()
-            foreach ($t in ($existing + $newTags)) { if ($seen.Add($t)) { $merged.Add($t) } }
-            $event.tags = $merged.ToArray()
-            $lines.Add(($event | ConvertTo-Json -Compress -Depth 8))
-        } else {
-            $lines.Add($line.TrimEnd("`r", "`n"))
         }
-    }
-    if (-not $found) { throw "Event not found: $AddTags" }
-    [System.IO.File]::WriteAllLines($EventsFile, $lines.ToArray(), [System.Text.UTF8Encoding]::new($false))
+        if (-not $found) { throw "Event not found: $AddTags" }
+        $tempFile = Join-Path ([System.IO.Path]::GetDirectoryName($EventsFile)) ([System.IO.Path]::GetRandomFileName() + '.tmp')
+        try {
+            [System.IO.File]::WriteAllLines($tempFile, $lines.ToArray(), [System.Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $tempFile -Destination $EventsFile -Force
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempFile) {
+                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } | Out-Null
     & "$PSScriptRoot/build-index.ps1" -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot | Out-Null
     Write-Output "FRICTION_TAGS_UPDATED=$AddTags"
     exit 0

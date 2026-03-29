@@ -359,7 +359,7 @@ WHEN no axis is clearly identifiable THEN you SHOULD leave the closest category 
 
 **Important heuristic interactions:**
 
-- The `logic` surface check looks for `assumption`, `misread`, `interpreted`, `logic`, and `reasoning`. Since many entries naturally use words like "interpreted" in the Interpretation field, entries targeting a non-logic surface should avoid these trigger words in other fields (title, actual-outcome, instruction-source).
+- The `logic` surface check looks for `assumption`, `misread`, `interpreted`, `logic`, and `reasoning`. Since many entries naturally use words like "interpreted" in the Interpretation field, entries targeting a non-logic surface should avoid these trigger words in other fields (title, actual-outcome, source refs, instruction text).
 - The `code` surface check also matches on `traceback`, `exception`, and `runtime`. If the friction is environmental (missing library causes a crash), these words will push the surface to `code` before reaching `environment`. Use an override in such cases.
 - The `run_effect` heuristic checks for "blocked" keywords first, so entries with words like "missing" or "failed" will land on `blocked` even when the overall outcome was `degraded`. Use `--run-effect degraded` to override.
 - The `guidance_quality` heuristic operates on `source_text` (instruction/expected context), not the full text. Words like "ambiguous" in the actual-outcome field do not trigger `ambiguous` guidance quality.
