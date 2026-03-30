@@ -354,6 +354,24 @@ SPACE_OUTPUT=$(cd "$SPACE_REPO" && "$ROOT/scripts/report-friction.sh" \
 assert_equals "FRICTION_EVENTS_FILE=$SPACE_REPO/.local/reports/friction/events.jsonl" "$(printf '%s\n' "$SPACE_OUTPUT" | sed -n '1p')"
 assert_file "$SPACE_REPO/.local/reports/friction/events.jsonl"
 
+# --- Test 15b: Path-with-quote discovery ---
+QUOTE_PARENT=$(mktemp -d)
+QUOTE_REPO="$QUOTE_PARENT/repo with 'quote"
+mkdir -p "$QUOTE_REPO"
+git init -q "$QUOTE_REPO"
+QUOTE_OUTPUT=$(cd "$QUOTE_REPO" && "$ROOT/scripts/report-friction.sh" \
+  --title "Quote path repo" \
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "Use scan-dirs with paths that may contain shell-sensitive quote characters." \
+  --action-taken "I created a git repo whose path contains a literal single quote and ran report-friction.sh inside it so generate-report.sh has to pass the path through without eval-based shell reconstruction." \
+  --expected-outcome "The reporter and later scan-dirs report generation would preserve the quoted path as data, not shell syntax, and discover the resulting events file correctly." \
+  --actual-outcome "The reporter wrote the event under the repo path containing a single quote so the later scan-dirs report tests can verify the hardened invocation path." \
+  --reading "A single quote in a filesystem path is the sharpest edge for shell-constructed command strings. This fixture exists specifically to verify that generate-report.sh now passes arguments directly instead of rebuilding them with eval." \
+  --hindsight "Keep one quote-containing path fixture in the smoke suite whenever shell argument passing changes around the report generator.")
+assert_equals "FRICTION_EVENTS_FILE=$QUOTE_REPO/.local/reports/friction/events.jsonl" "$(printf '%s\n' "$QUOTE_OUTPUT" | sed -n '1p')"
+assert_file "$QUOTE_REPO/.local/reports/friction/events.jsonl"
+
 # --- Test 16: Report generator ---
 INDEX_REPORT=$("$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type index)
 printf '%s\n' "$INDEX_REPORT" | grep -q '\*\*Index rebuilt:\*\*' || fail "index report should show the rebuilt label"
@@ -362,21 +380,23 @@ printf '%s\n' "$INDEX_REPORT" | grep -q '## Run Effect Summary' || fail "index r
 INDEX_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type index --format json)
 printf '%s\n' "$INDEX_JSON" | jq -e '.report_type == "index" and .entries >= 1 and (.top_sources | length) >= 1' >/dev/null || fail "index json should include structured counts and sources"
 
-CROSS_REPORT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" --report-type cross-repo)
-printf '%s\n' "$CROSS_REPORT" | grep -q '\*\*Repos scanned:\*\* 3' || fail "cross-repo report should include all discovered repos"
+CROSS_REPORT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type cross-repo)
+printf '%s\n' "$CROSS_REPORT" | grep -q '\*\*Repos scanned:\*\* 4' || fail "cross-repo report should include all discovered repos"
 printf '%s\n' "$CROSS_REPORT" | grep -q "$ALT_REPO" || fail "cross-repo report should list the alternate repo"
 printf '%s\n' "$CROSS_REPORT" | grep -q "$SPACE_REPO" || fail "cross-repo report should preserve repos with spaces in their path"
-CROSS_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" --report-type cross-repo --format json)
-printf '%s\n' "$CROSS_JSON" | jq -e '.repos_scanned == 3 and (.repos | length) == 3 and .total_entries >= 3' >/dev/null || fail "cross-repo json should report all discovered repos"
+printf '%s\n' "$CROSS_REPORT" | grep -q "$QUOTE_REPO" || fail "cross-repo report should preserve repos with quote characters in their path"
+CROSS_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type cross-repo --format json)
+printf '%s\n' "$CROSS_JSON" | jq -e '.repos_scanned == 4 and (.repos | length) == 4 and .total_entries >= 4' >/dev/null || fail "cross-repo json should report all discovered repos"
 
-PER_REPO_REPORT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" --report-type per-repo)
+PER_REPO_REPORT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type per-repo)
 printf '%s\n' "$PER_REPO_REPORT" | grep -q '# Per-Repo Friction Report' || fail "per-repo report should render markdown"
 printf '%s\n' "$PER_REPO_REPORT" | grep -q "$ALT_REPO" || fail "per-repo report should include the alternate repo section"
 printf '%s\n' "$PER_REPO_REPORT" | grep -q "$SPACE_REPO" || fail "per-repo report should include the repo with spaces"
-PER_REPO_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" --report-type per-repo --format json)
-printf '%s\n' "$PER_REPO_JSON" | jq -e '.repos == 3 and (.repo_summaries | length) == 3 and all(.repo_summaries[]; (.entries | type) == "number")' >/dev/null || fail "per-repo json should include one structured summary per repo"
+printf '%s\n' "$PER_REPO_REPORT" | grep -q "$QUOTE_REPO" || fail "per-repo report should include the repo with quote characters"
+PER_REPO_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type per-repo --format json)
+printf '%s\n' "$PER_REPO_JSON" | jq -e '.repos == 4 and (.repo_summaries | length) == 4 and all(.repo_summaries[]; (.entries | type) == "number")' >/dev/null || fail "per-repo json should include one structured summary per repo"
 
-TIMESERIES_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" --report-type timeseries --group-by surface --format json)
+TIMESERIES_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type timeseries --group-by surface --format json)
 printf '%s\n' "$TIMESERIES_JSON" | jq -e '.group_by == "surface"' >/dev/null || fail "timeseries json should record the group-by dimension"
 printf '%s\n' "$TIMESERIES_JSON" | jq -e '(.rows | length) > 0' >/dev/null || fail "timeseries json should include at least one row"
 printf '%s\n' "$TIMESERIES_JSON" | jq -e '(.columns | length) > 0' >/dev/null || fail "timeseries json should expose grouped columns"
@@ -400,6 +420,9 @@ MALFORMED_INDEX_STDERR=$(mktemp)
 MALFORMED_EVENTS=$(mktemp)
 PARTIAL_EVENTS=$(mktemp)
 BULK_EVENTS=$(mktemp)
+SPARSE_SCAN_ROOT=$(mktemp -d)
+SPARSE_SCAN_A="$SPARSE_SCAN_ROOT/sparse-a"
+SPARSE_SCAN_B="$SPARSE_SCAN_ROOT/sparse-b"
 
 set +e
 "$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type nonsense >/dev/null 2>"$REPORT_TYPE_STDERR"
@@ -428,6 +451,20 @@ RC=$?
 set -e
 [ "$RC" -ne 0 ] || fail "invalid query format should fail"
 assert_contains 'Unsupported format: nope' "$QUERY_FORMAT_STDERR"
+
+mkdir -p "$SPARSE_SCAN_A/.local/reports/friction" "$SPARSE_SCAN_B/.local/reports/friction"
+cat <<'EOF' >"$SPARSE_SCAN_A/.local/reports/friction/events.jsonl"
+{"title":"sparse a"}
+EOF
+cat <<'EOF' >"$SPARSE_SCAN_B/.local/reports/friction/events.jsonl"
+{"title":"sparse b"}
+EOF
+set +e
+"$ROOT/scripts/generate-report.sh" --scan-dirs "$SPARSE_SCAN_ROOT" --report-type index >/dev/null 2>"$MULTI_INDEX_STDERR"
+RC=$?
+set -e
+[ "$RC" -ne 0 ] || fail "index report should fail when multiple sparse input files are resolved"
+assert_contains '--report-type index requires exactly one events file' "$MULTI_INDEX_STDERR"
 
 # --- Test 17: Malformed and partial events files ---
 cat <<'EOF' >"$MALFORMED_EVENTS"
@@ -618,6 +655,6 @@ rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_
   "$REPORT_TYPE_STDERR" "$GROUP_BY_STDERR" "$MULTI_INDEX_STDERR" "$QUERY_FORMAT_STDERR" \
   "$MALFORMED_QUERY_STDERR" "$MALFORMED_REPORT_STDERR" "$MALFORMED_INDEX_STDERR" \
   "$MALFORMED_EVENTS" "$PARTIAL_EVENTS" "$BULK_EVENTS"
-rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
+rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" "$SPARSE_SCAN_ROOT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
 
 printf 'All smoke tests passed.\n'

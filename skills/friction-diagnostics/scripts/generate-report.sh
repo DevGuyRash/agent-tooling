@@ -160,55 +160,80 @@ if ! command -v jq >/dev/null 2>&1; then
   die "jq is required for generate-report.sh"
 fi
 
-query_cmd="sh $(shell_quote "$SCRIPT_DIR/query-friction.sh")"
+resolved_events_file_count=0
 if [ -n "$scan_dirs" ]; then
-  query_cmd="$query_cmd --scan-dirs"
+  set --
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
-    query_cmd="$query_cmd $(shell_quote "$dir")"
+    set -- "$@" "$dir"
+  done <<EOF
+$scan_dirs
+EOF
+  [ "$#" -gt 0 ] || die "--scan-dirs requires at least one directory"
+  discovered=$(discover_events_files "$@" || true)
+  if [ -z "$discovered" ]; then
+    die "No events.jsonl files found under the provided scan dirs"
+  fi
+  events_files=$discovered
+else
+  if [ -z "$events_file" ]; then
+    events_file=$(default_events_file)
+  fi
+  [ -f "$events_file" ] || die "Events file not found: $events_file"
+  events_files=$events_file
+fi
+
+set --
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  set -- "$@" "$file"
+  resolved_events_file_count=$((resolved_events_file_count + 1))
+done <<EOF
+$events_files
+EOF
+[ "$resolved_events_file_count" -gt 0 ] || die "No events files resolved"
+
+if [ "$report_type" = "index" ] && [ "$resolved_events_file_count" -ne 1 ]; then
+  die "--report-type index requires exactly one events file"
+fi
+
+set -- "$SCRIPT_DIR/query-friction.sh"
+if [ -n "$scan_dirs" ]; then
+  set -- "$@" --scan-dirs
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    set -- "$@" "$dir"
   done <<EOF
 $scan_dirs
 EOF
 else
-  if [ -n "$events_file" ]; then
-    query_cmd="$query_cmd --events-file $(shell_quote "$events_file")"
-  fi
+  set -- "$@" --events-file "$events_file"
 fi
 
-append_arg() {
-  flag=$1
-  value=$2
-  if [ -n "$value" ]; then
-    query_cmd="$query_cmd $flag $(shell_quote "$value")"
-  fi
-}
-
-append_arg --category "$category"
-append_arg --surface "$surface"
-append_arg --mode "$mode"
-append_arg --run-effect "$run_effect"
-append_arg --fingerprint "$fingerprint"
-append_arg --agent-kind "$agent_kind"
-append_arg --role "$role"
-append_arg --tag "$tag"
-append_arg --text "$text"
-append_arg --confidence-min "$confidence_min"
-append_arg --confidence-max "$confidence_max"
-append_arg --guidance-min "$guidance_min"
-append_arg --guidance-max "$guidance_max"
-append_arg --exit-code "$exit_code"
-append_arg --tool-name "$tool_name"
-append_arg --owner-hint "$owner_hint"
-append_arg --component-hint "$component_hint"
-if [ "$workaround" -eq 1 ]; then
-  query_cmd="$query_cmd --workaround"
-fi
-append_arg --date "$date_exact"
-append_arg --date-from "$date_from"
-append_arg --date-to "$date_to"
-append_arg --after "$after"
-append_arg --source-ref "$source_ref"
-query_cmd="$query_cmd --format json"
+[ -n "$category" ] && set -- "$@" --category "$category"
+[ -n "$surface" ] && set -- "$@" --surface "$surface"
+[ -n "$mode" ] && set -- "$@" --mode "$mode"
+[ -n "$run_effect" ] && set -- "$@" --run-effect "$run_effect"
+[ -n "$fingerprint" ] && set -- "$@" --fingerprint "$fingerprint"
+[ -n "$agent_kind" ] && set -- "$@" --agent-kind "$agent_kind"
+[ -n "$role" ] && set -- "$@" --role "$role"
+[ -n "$tag" ] && set -- "$@" --tag "$tag"
+[ -n "$text" ] && set -- "$@" --text "$text"
+[ -n "$confidence_min" ] && set -- "$@" --confidence-min "$confidence_min"
+[ -n "$confidence_max" ] && set -- "$@" --confidence-max "$confidence_max"
+[ -n "$guidance_min" ] && set -- "$@" --guidance-min "$guidance_min"
+[ -n "$guidance_max" ] && set -- "$@" --guidance-max "$guidance_max"
+[ -n "$exit_code" ] && set -- "$@" --exit-code "$exit_code"
+[ -n "$tool_name" ] && set -- "$@" --tool-name "$tool_name"
+[ -n "$owner_hint" ] && set -- "$@" --owner-hint "$owner_hint"
+[ -n "$component_hint" ] && set -- "$@" --component-hint "$component_hint"
+[ "$workaround" -eq 1 ] && set -- "$@" --workaround
+[ -n "$date_exact" ] && set -- "$@" --date "$date_exact"
+[ -n "$date_from" ] && set -- "$@" --date-from "$date_from"
+[ -n "$date_to" ] && set -- "$@" --date-to "$date_to"
+[ -n "$after" ] && set -- "$@" --after "$after"
+[ -n "$source_ref" ] && set -- "$@" --source-ref "$source_ref"
+set -- "$@" --format json
 
 filtered_tmp=$(mktemp)
 report_tmp=$(mktemp)
@@ -217,16 +242,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-eval "$query_cmd" >"$filtered_tmp"
+sh "$@" >"$filtered_tmp"
 
 generated=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
 case "$report_type" in
   index)
-    unique_files=$(jq '[.[].events_file // empty] | unique | length' "$filtered_tmp")
-    if [ "$unique_files" -gt 1 ]; then
-      die "--report-type index requires exactly one events file"
-    fi
     jq --arg generated "$generated" '
       def pct($count; $total):
         if $total <= 0 then "0%"

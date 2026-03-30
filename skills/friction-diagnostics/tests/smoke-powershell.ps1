@@ -196,9 +196,9 @@ try {
         if ([int]$spaceCross.repos_scanned -ne 1) { throw 'space-path scan should discover one repo' }
         if ([string]$spaceCross.repos[0].repo_root -ne $spaceRepoDir) { throw 'space-path scan should preserve the full repo path' }
 
-        try {
-            & "$root/scripts/generate-report.ps1" -ScanDirs @($repoDir, $spaceRepoDir) -ReportType index | Out-Null
-            throw 'generate-report.ps1 index should reject multi-file scan input'
+    try {
+        & "$root/scripts/generate-report.ps1" -ScanDirs @($repoDir, $spaceRepoDir) -ReportType index | Out-Null
+        throw 'generate-report.ps1 index should reject multi-file scan input'
         }
         catch {
             if ($_.Exception.Message -notmatch 'exactly one events file') {
@@ -249,6 +249,15 @@ try {
     $partialIndex = & "$root/scripts/generate-report.ps1" -EventsFile $partialEventsFile -ReportType index -Format json | ConvertFrom-Json
     if ([int]$partialIndex.entries -ne 1) { throw 'generate-report.ps1 should count sparse but valid event rows' }
     if (@($partialIndex.category_counts).Count -ne 0) { throw 'sparse rows should not fabricate category counts' }
+
+    $futureRunEffectEventsFile = Join-Path $repoDir 'future-run-effect-events.jsonl'
+    [System.IO.File]::WriteAllText($futureRunEffectEventsFile, "{""title"":""future run effect"",""derived_category"":""skill/schema/future-state""}$([Environment]::NewLine)", [System.Text.UTF8Encoding]::new($false))
+    $futureIndex = & "$root/scripts/generate-report.ps1" -EventsFile $futureRunEffectEventsFile -ReportType index -Format json | ConvertFrom-Json
+    if (@($futureIndex.run_effect_summary).Count -ne 1) { throw 'index report should preserve nonstandard run_effect values' }
+    if ([string]$futureIndex.run_effect_summary[0].value -ne 'future-state') { throw 'index report should include the nonstandard run_effect value' }
+    $futureCross = & "$root/scripts/generate-report.ps1" -EventsFile $futureRunEffectEventsFile -ReportType cross-repo -Format json | ConvertFrom-Json
+    if (@($futureCross.run_effect_summary).Count -ne 1) { throw 'cross-repo report should preserve nonstandard run_effect values' }
+    if ([string]$futureCross.run_effect_summary[0].value -ne 'future-state') { throw 'cross-repo report should include the nonstandard run_effect value' }
 
     $bulkEventsFile = Join-Path $repoDir 'bulk-events.jsonl'
     $builder = [System.Text.StringBuilder]::new()

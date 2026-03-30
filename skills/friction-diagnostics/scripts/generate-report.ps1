@@ -304,6 +304,11 @@ function Get-RunEffectCounts {
     return $counter
 }
 
+function Get-RunEffectRows {
+    param([object[]]$Events)
+    return @(Convert-CounterToRows -Counter (Get-RunEffectCounts $Events))
+}
+
 function Test-EventMatchesFilters {
     param($event)
     $ts = [string]$event.recorded_at
@@ -374,14 +379,7 @@ function Get-RepoSummary {
         date_counts = Convert-CounterToRows -Counter (Get-DateCounts $sortedEvents) -SortByValue
         tag_counts = Convert-CounterToRows -Counter (Get-TagCounts $sortedEvents) -Total $entries -WithPercent
         top_sources = Convert-CounterToRows -Counter (Get-SourceCounts $sortedEvents) -Limit 10
-        run_effect_summary = @(
-            foreach ($key in @('blocked', 'degraded', 'noisy', 'continued')) {
-                $count = (Get-RunEffectCounts $sortedEvents)[$key]
-                if ($count -gt 0) {
-                    [pscustomobject]@{ value = $key; count = [int]$count }
-                }
-            }
-        )
+        run_effect_summary = Get-RunEffectRows $sortedEvents
     }
 }
 
@@ -624,7 +622,6 @@ switch ($ReportType) {
         }
     }
     'cross-repo' {
-        $runEffectCounts = Get-RunEffectCounts $sortedEvents
         $report = [pscustomobject]@{
             report_type = 'cross-repo'
             index_rebuilt = $generated
@@ -641,14 +638,7 @@ switch ($ReportType) {
             )
             category_counts = Convert-CounterToRows -Counter (Get-CategoryCounts $sortedEvents) -Total $sortedEvents.Count -WithPercent
             fingerprint_counts = Convert-CounterToRows -Counter (Get-FingerprintCounts $sortedEvents) -Limit 10
-            run_effect_summary = @(
-                foreach ($key in @('blocked', 'degraded', 'noisy', 'continued')) {
-                    $count = $runEffectCounts[$key]
-                    if ($count -gt 0) {
-                        [pscustomobject]@{ value = $key; count = [int]$count }
-                    }
-                }
-            )
+            run_effect_summary = Get-RunEffectRows $sortedEvents
             tag_counts = Convert-CounterToRows -Counter (Get-TagCounts $sortedEvents) -Total $sortedEvents.Count -WithPercent
         }
     }
