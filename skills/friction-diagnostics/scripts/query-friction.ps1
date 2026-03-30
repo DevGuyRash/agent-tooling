@@ -3,9 +3,23 @@ param(
     [string]$RepoRoot = $env:FRICTION_REPO_ROOT,
     [string[]]$ScanDirs = @(),
     [string]$Category = '',
+    [string]$Surface = '',
+    [string]$Mode = '',
+    [string]$RunEffect = '',
     [string]$Fingerprint = '',
     [string]$AgentKind = '',
     [string]$Role = '',
+    [string]$Tag = '',
+    [string]$Text = '',
+    [string]$ConfidenceMin = '',
+    [string]$ConfidenceMax = '',
+    [string]$GuidanceMin = '',
+    [string]$GuidanceMax = '',
+    [string]$ExitCode = '',
+    [string]$ToolName = '',
+    [string]$OwnerHint = '',
+    [string]$ComponentHint = '',
+    [switch]$Workaround,
     [string]$Date = '',
     [string]$DateFrom = '',
     [string]$DateTo = '',
@@ -31,9 +45,23 @@ Input:
 
 Filters:
   -Category VALUE
+  -Surface VALUE
+  -Mode VALUE
+  -RunEffect VALUE
   -Fingerprint VALUE
   -AgentKind VALUE
   -Role VALUE
+  -Tag VALUE               Single tag filter; repeat support is not implemented
+  -Text PATTERN            Case-insensitive substring search across narrative fields
+  -ConfidenceMin N
+  -ConfidenceMax N
+  -GuidanceMin N
+  -GuidanceMax N
+  -ExitCode N
+  -ToolName VALUE
+  -OwnerHint VALUE
+  -ComponentHint VALUE
+  -Workaround              Only include events with workaround_used=true
   -Date YYYY-MM-DD
   -DateFrom YYYY-MM-DD
   -DateTo YYYY-MM-DD
@@ -126,6 +154,38 @@ function Test-SourceRefMatch {
     return $false
 }
 
+function Get-DerivedCategoryParts {
+    param($event)
+    $value = [string]$event.derived_category
+    $parts = if ([string]::IsNullOrWhiteSpace($value)) { @() } else { $value.Split('/', 3) }
+    while ($parts.Count -lt 3) {
+        $parts += ''
+    }
+    return $parts
+}
+
+function Get-NullableInt {
+    param($value)
+    if ($null -eq $value) { return $null }
+    $text = [string]$value
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    if ($text -notmatch '^-?\d+$') { return $null }
+    return [int]$text
+}
+
+function Test-TextMatch {
+    param($event, [string]$query)
+    if ([string]::IsNullOrWhiteSpace($query)) { return $true }
+    $needle = $query.ToLowerInvariant()
+    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight')) {
+        $value = [string]$event.$field
+        if ($value.ToLowerInvariant().Contains($needle)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 if ($SuggestTags) {
     $tagsSet = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($event in $events) {
@@ -149,11 +209,29 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($ts) -and $ts.Length -ge 10) {
         $eventDate = $ts.Substring(0, 10)
     }
+    $categoryParts = Get-DerivedCategoryParts $event
+    $confidenceValue = Get-NullableInt $event.confidence
+    $guidanceValue = Get-NullableInt $event.guidance_quality
+    $exitCodeValue = Get-NullableInt $event.exit_code
 
     if (-not [string]::IsNullOrWhiteSpace($Category) -and [string]$event.derived_category -ne $Category) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Surface) -and $categoryParts[0] -ne $Surface) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Mode) -and $categoryParts[1] -ne $Mode) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($RunEffect) -and $categoryParts[2] -ne $RunEffect) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string]$event.fingerprint -ne $Fingerprint) { continue }
     if (-not [string]::IsNullOrWhiteSpace($AgentKind) -and [string]$event.agent_kind -ne $AgentKind) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Role) -and [string]$event.role -ne $Role) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { continue }
+    if (-not (Test-TextMatch $event $Text)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ConfidenceMin) -and ($null -eq $confidenceValue -or $confidenceValue -lt [int]$ConfidenceMin)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ConfidenceMax) -and ($null -eq $confidenceValue -or $confidenceValue -gt [int]$ConfidenceMax)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($GuidanceMin) -and ($null -eq $guidanceValue -or $guidanceValue -lt [int]$GuidanceMin)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($GuidanceMax) -and ($null -eq $guidanceValue -or $guidanceValue -gt [int]$GuidanceMax)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ExitCode) -and ($null -eq $exitCodeValue -or $exitCodeValue -ne [int]$ExitCode)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ToolName) -and [string]$event.tool_name -ne $ToolName) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string]$event.owner_hint -ne $OwnerHint) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string]$event.component_hint -ne $ComponentHint) { continue }
+    if ($Workaround -and -not [bool]$event.workaround_used) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Date) -and $eventDate -ne $Date) { continue }
     if (-not [string]::IsNullOrWhiteSpace($DateFrom) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -lt $DateFrom) { continue }
     if (-not [string]::IsNullOrWhiteSpace($DateTo) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -gt $DateTo) { continue }

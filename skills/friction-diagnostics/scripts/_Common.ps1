@@ -566,6 +566,24 @@ function Resolve-FrictionPaths {
     }
 }
 
+function Find-FrictionEventsFiles {
+    param([string[]]$ScanDirs)
+
+    $discovered = [System.Collections.Generic.List[string]]::new()
+    foreach ($dir in $ScanDirs) {
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        $resolvedDir = Resolve-DirectoryPath $dir
+        if (-not (Test-Path -LiteralPath $resolvedDir -PathType Container)) { continue }
+        $found = Get-ChildItem -Path $resolvedDir -Recurse -Filter 'events.jsonl' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[/\\]\.local[^/\\]*[/\\]reports[/\\]friction[/\\]events\.jsonl$' } |
+            Sort-Object -Property FullName
+        foreach ($item in $found) {
+            $discovered.Add($item.FullName) | Out-Null
+        }
+    }
+    return $discovered.ToArray()
+}
+
 function Test-ActiveProcess {
     param([string]$ProcessId)
     if ([string]::IsNullOrWhiteSpace($ProcessId)) { return $false }

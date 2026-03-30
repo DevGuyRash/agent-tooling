@@ -90,11 +90,15 @@ WHEN no error, failure, or unexpected outcome has occurred yet THEN you SHALL NO
 
 ## How to query
 
-Start with `INDEX.md` for an overview. Use the query script for filtered views. Fall back to raw `events.jsonl` with `jq` for custom slices.
+Start with `INDEX.md` for an overview. Use the query and report scripts for filtered views.
+
+POSIX query/report/index commands use `jq`. PowerShell variants use native object processing. The write path keeps Python only for advanced `--from-json` parsing and `--add-tags` rewriting.
 
 ```sh
 sh <skills-file-root>/scripts/query-friction.sh --category instructions/missing/blocked --format md
+sh <skills-file-root>/scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
 sh <skills-file-root>/scripts/query-friction.sh --source-ref "SKILL.md"
+sh <skills-file-root>/scripts/generate-report.sh --scan-dirs ~/repos --report-type cross-repo
 ```
 
 ---
@@ -116,7 +120,8 @@ sh <skills-file-root>/scripts/query-friction.sh --source-ref "SKILL.md"
 | Script | Purpose |
 |---|---|
 | `report-friction.sh` / `.ps1` | Append one event; `--add-tags` to tag after |
-| `query-friction.sh` / `.ps1` | Filter and render the event stream |
+| `query-friction.sh` / `.ps1` | Filter and render the event stream with category dimensions, text, numeric ranges, and exact-match filters |
+| `generate-report.sh` / `.ps1` | Generate `index`, `cross-repo`, `per-repo`, or `timeseries` reports |
 | `categorize.sh` / `.ps1` | Classify an event as `surface/mode/run_effect` |
 | `build-index.sh` / `.ps1` | Internal index maintenance |
 

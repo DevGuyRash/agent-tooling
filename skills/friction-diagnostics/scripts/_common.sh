@@ -569,6 +569,34 @@ default_events_file() {
   printf '%s\n' "$(temp_root_dir)/agent-friction/$cwd_hash/events.jsonl"
 }
 
+discover_events_files() {
+  if [ "$#" -eq 0 ]; then
+    die "discover_events_files: at least one directory is required"
+  fi
+  find "$@" -path '*/.local*/reports/friction/events.jsonl' -type f 2>/dev/null | LC_ALL=C sort
+}
+
+validate_events_jsonl_file() {
+  events_path=$1
+  [ -f "$events_path" ] || return 0
+  jq -Rn '
+    def is_blank:
+      test("^[[:space:]]*$");
+    reduce inputs as $line
+      ({line: 0};
+        .line += 1
+        | if ($line | is_blank) then
+            .
+          else
+            .line as $line_number
+            | try ($line | fromjson | .)
+              catch error("Invalid JSON in events file at line \($line_number): " + .)
+            | {line: $line_number}
+          end
+      )
+  ' "$events_path" >/dev/null
+}
+
 default_owner_for_surface() {
   case "$1" in
     skill) printf 'skill-owner\n' ;;

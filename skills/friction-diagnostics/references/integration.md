@@ -82,18 +82,31 @@ This means subagents and nested subagents in the same repo converge on the same 
 
 ## Querying
 
+POSIX query, report, and index commands use `jq`. PowerShell variants use native object processing. The write path keeps Python only for advanced `--from-json` parsing and `--add-tags` rewriting.
+
 Use the query script to filter the canonical event stream:
 
 ```sh
 sh scripts/query-friction.sh --category instructions/missing/blocked --format md
+sh scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
+sh scripts/query-friction.sh --tag dispatch --text slug --format json
 sh scripts/query-friction.sh --agent-kind subagent --format json
 sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
+& .\scripts\query-friction.ps1 -Surface skill -RunEffect blocked -DateFrom 2026-03-01
 & .\scripts\query-friction.ps1 -AgentKind subagent -Format json
 & .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
+```
+
+Use the report generator for aggregate views:
+
+```sh
+sh scripts/generate-report.sh --events-file .local/reports/friction/events.jsonl --report-type index
+sh scripts/generate-report.sh --scan-dirs ~/repos --report-type cross-repo
+sh scripts/generate-report.sh --scan-dirs ~/repos --report-type timeseries --group-by surface
 ```
 
 If an agent needs an ad hoc parse beyond the built-in query filters, it can read the raw stream with `jq`:
@@ -107,4 +120,5 @@ Practical read flow:
 
 1. inspect `INDEX.md`
 2. query with `query-friction.*`
-3. use raw `events.jsonl` plus `jq` for custom analysis
+3. use `generate-report.*` for aggregate views
+4. use raw `events.jsonl` plus `jq` for custom analysis

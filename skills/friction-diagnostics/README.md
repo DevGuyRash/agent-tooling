@@ -65,6 +65,7 @@ The tool redacts common secrets and tokens before writing event text to disk. Th
 - `SKILL.md` — usage guidance
 - `scripts/report-friction.*` — append one event
 - `scripts/query-friction.*` — query the canonical event stream
+- `scripts/generate-report.*` — generate enhanced index, cross-repo, per-repo, and timeseries reports
 - `scripts/build-index.*` — tool-managed index regeneration
 - `scripts/categorize.*` — taxonomy heuristics
 - `references/` — integration and logging references
@@ -80,33 +81,39 @@ When `--from-json` is used:
 
 ## Querying
 
+POSIX query, report, and index commands use `jq`. PowerShell variants use native object processing. The write path keeps Python only for advanced `--from-json` parsing and `--add-tags` rewriting.
+
 Use `query-friction.*` to read `events.jsonl` directly:
 
 ```sh
 sh scripts/query-friction.sh --category instructions/missing/blocked --format md
+sh scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
+sh scripts/query-friction.sh --tag dispatch --text slug --format json
 sh scripts/query-friction.sh --date-from 2026-03-01 --date-to 2026-03-31 --format json
 sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
+& .\scripts\query-friction.ps1 -Surface skill -RunEffect blocked -DateFrom 2026-03-01
 & .\scripts\query-friction.ps1 -DateFrom 2026-03-01 -DateTo 2026-03-31 -Format json
 & .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
 ```
 
-If an agent wants to inspect the raw canonical file directly, `jq` works fine with the JSONL stream:
+Use `generate-report.*` for aggregate views:
 
 ```sh
-jq '.title' .local/reports/friction/events.jsonl
-jq -s 'group_by(.fingerprint) | map({fingerprint: .[0].fingerprint, count: length})' .local/reports/friction/events.jsonl
-jq -s 'map(select(.derived_category == "skill/name-resolution/blocked"))' .local/reports/friction/events.jsonl
+sh scripts/generate-report.sh --events-file .local/reports/friction/events.jsonl --report-type index
+sh scripts/generate-report.sh --scan-dirs ~/repos --report-type cross-repo
+sh scripts/generate-report.sh --scan-dirs ~/repos --report-type timeseries --group-by surface
 ```
 
 Recommended reading order:
 
 1. Read `INDEX.md` for a compact summary.
 2. Use `query-friction.*` for filtered views.
-3. Drop to raw `events.jsonl` plus `jq` only when a custom slice is needed.
+3. Use `generate-report.*` for aggregate views.
+4. Drop to raw `events.jsonl` plus `jq` only when a custom slice is needed.
 
 ## Notes
 
