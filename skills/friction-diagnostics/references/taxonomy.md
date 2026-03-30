@@ -179,7 +179,7 @@ Where the friction primarily showed up.
 
 **Scope:** Fallback surface when no reliable primary surface can be inferred from the available evidence.
 
-Use `unknown` only when genuinely unable to identify where the friction originated. This should be rare — most friction has an identifiable source. If you are uncertain between two surfaces, pick the one closest to the root cause and explain the ambiguity in Interpretation.
+Use `unknown` only when genuinely unable to identify where the friction originated. This should be rare — most friction has an identifiable source. If you are uncertain between two surfaces, pick the one closest to the root cause and explain the ambiguity in `reading`.
 
 ---
 
@@ -230,7 +230,7 @@ The same operation produces different results across runs without any input chan
 An operation was unreasonably slow, hung, thrashed, or consumed excessive resources relative to expectations. Signal: "slow", "hang", "thrash", "looped", "repeated retries".
 
 ### `other`
-The breakdown does not fit any of the above modes. Use `other` when the mode is genuinely novel, and explain in Interpretation. Also use `other` to override a heuristic that picked a directionally wrong mode (e.g., overriding `auth` when the real cause is rate limiting).
+The breakdown does not fit any of the above modes. Use `other` when the mode is genuinely novel, and explain in `reading`. Also use `other` to override a heuristic that picked a directionally wrong mode (e.g., overriding `auth` when the real cause is rate limiting).
 
 ---
 
@@ -355,11 +355,11 @@ WHEN the automatic label is good enough THEN you SHOULD keep it.
 
 WHEN the automatic label is directionally wrong and you have better evidence THEN you SHOULD override one or more axes with explicit flags when calling the report script.
 
-WHEN no axis is clearly identifiable THEN you SHOULD leave the closest category in place and explain the uncertainty in `Interpretation`.
+WHEN no axis is clearly identifiable THEN you SHOULD leave the closest category in place and explain the uncertainty in `reading`.
 
 **Important heuristic interactions:**
 
-- The `logic` surface check looks for `assumption`, `misread`, `interpreted`, `logic`, and `reasoning`. Since many entries naturally use words like "interpreted" in the Interpretation field, entries targeting a non-logic surface should avoid these trigger words in other fields (title, actual-outcome, source refs, instruction text).
+- The `logic` surface check looks for `assumption`, `misread`, `interpreted`, `logic`, and `reasoning`. Since many entries naturally use words like "interpreted" in the `reading` field, entries targeting a non-logic surface should avoid these trigger words in other fields (title, actual-outcome, source refs, instruction text).
 - The `code` surface check also matches on `traceback`, `exception`, and `runtime`. If the friction is environmental (missing library causes a crash), these words will push the surface to `code` before reaching `environment`. Use an override in such cases.
 - The `run_effect` heuristic checks for "blocked" keywords first, so entries with words like "missing" or "failed" will land on `blocked` even when the overall outcome was `degraded`. Use `--run-effect degraded` to override.
 - The `guidance_quality` heuristic operates on `source_text` (instruction/expected context), not the full text. Words like "ambiguous" in the actual-outcome field do not trigger `ambiguous` guidance quality.

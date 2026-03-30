@@ -8,7 +8,8 @@ $script:KNOWN_EVENT_KEYS = @(
     'action_taken',
     'expected_outcome',
     'actual_outcome',
-    'interpretation',
+    'reading',
+    'hindsight',
     'observed_surface',
     'surface',
     'mode',
@@ -32,10 +33,7 @@ $script:KNOWN_EVENT_KEYS = @(
     'agent_name',
     'agent_kind',
     'role',
-    'sources',
-    # v2 backward-compat keys accepted but mapped to sources during import
-    'instruction_source',
-    'anchors'
+    'sources'
 )
 
 function Get-Slug {
@@ -335,19 +333,10 @@ function Get-AllTags {
             $event = $line | ConvertFrom-Json -ErrorAction Stop
         }
         catch { continue }
-        # v3: tags array
         $tagsProp = $event.PSObject.Properties['tags']
         if ($null -ne $tagsProp -and $tagsProp.Value -is [System.Array]) {
             foreach ($t in $tagsProp.Value) {
                 if (-not [string]::IsNullOrWhiteSpace([string]$t)) { $tags.Add([string]$t) | Out-Null }
-            }
-        }
-        # v2: tags_csv string
-        $tagsCsvProp = $event.PSObject.Properties['tags_csv']
-        if ($null -ne $tagsCsvProp -and -not [string]::IsNullOrWhiteSpace([string]$tagsCsvProp.Value)) {
-            foreach ($t in ([string]$tagsCsvProp.Value).Split(',')) {
-                $t = $t.Trim()
-                if ($t) { $tags.Add($t) | Out-Null }
             }
         }
     }

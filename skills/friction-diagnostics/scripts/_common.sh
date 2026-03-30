@@ -432,12 +432,6 @@ with Path(sys.argv[1]).open("r", encoding="utf-8") as fh:
             for tag in t:
                 if tag:
                     tags.add(str(tag))
-        csv = event.get("tags_csv")
-        if isinstance(csv, str) and csv.strip():
-            for tag in csv.split(","):
-                tag = tag.strip()
-                if tag:
-                    tags.add(tag)
 print(", ".join(sorted(tags)))
 PY
 }

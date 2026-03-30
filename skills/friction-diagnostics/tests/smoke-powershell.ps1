@@ -17,7 +17,7 @@ try {
 
     # --- Test 1: stdin JSON with v3 sources array ---
     $stdinJson = @'
-{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","interpretation":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","surface":"workflow","mode":"ambiguity","impact":"confusing","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
+{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","reading":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","hindsight":"Use -FromJson - for all payloads containing special characters or multiline text.","surface":"workflow","mode":"ambiguity","impact":"confusing","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
 '@
 
     $reportOutput = $stdinJson | & "$root/scripts/report-friction.ps1" `
@@ -66,7 +66,8 @@ try {
         -ActionTaken 'Recorded a second event using the direct parameter interface.' `
         -ExpectedOutcome 'The repo-scoped log should roll forward.' `
         -ActualOutcome 'A second event was recorded successfully.' `
-        -Interpretation 'The repo-scoped design should aggregate multiple agents without task directories or session files.' `
+        -Reading 'The repo-scoped design should aggregate multiple agents without task directories or session files.' `
+        -Hindsight 'Pre-confirm the events file path before recording to avoid misdirected writes.' `
         -Surface 'skill' `
         -Mode 'ambiguity' `
         -Impact 'confusing' | Out-Null
@@ -97,20 +98,9 @@ try {
         -ActionTaken 'I ran the documented deployment command and checked the repo configuration.' `
         -ExpectedOutcome 'The staging profile would be defined and selectable.' `
         -ActualOutcome 'The config does not define profile staging and the command reported an unsupported role slug.' `
-        -Interpretation 'I treated the profile and slug names as valid identifiers because the wording was imperative and concrete.'
+        -Reading 'I treated the profile and slug names as valid identifiers because the wording was imperative and concrete.'
     if ($categorizeOutput -notcontains 'mode=name-resolution') { throw 'categorize.ps1 should classify unsupported slug / not-defined profile wording as name-resolution' }
     if ($categorizeOutput -notcontains 'run_effect=blocked') { throw 'categorize.ps1 should classify unsupported resource wording as blocked' }
-
-    # --- Test 6: v2 backward compat via stdin ---
-    $v2Json = @'
-{"title":"v2 backward compat","instruction_source":"SKILL.md:160","instruction_text":"Use the documented dispatch role slug from the skill table.","action_taken":"Passed a v2-format payload with instruction_source and anchors to test backward compatibility.","expected_outcome":"The tool auto-converts instruction_source and anchors to sources array.","actual_outcome":"The event was recorded with a properly converted sources array.","interpretation":"v2 payloads should be accepted and automatically migrated to v3 sources format for backward compatibility.","anchors":[{"kind":"file","path":"/abs/path/SKILL.md","line":160}]}
-'@
-    $v2Json | & "$root/scripts/report-friction.ps1" -RepoRoot $repoDir -FromJson '-' | Out-Null
-    $events = Import-Events $eventsFile
-    if ($events.Count -ne 3) { throw 'v2 compat JSON should append a third event' }
-    $lastRaw = [System.IO.File]::ReadAllLines($eventsFile)[2]
-    if ($lastRaw -notmatch '"sources":\[') { throw 'v2 compat: should have sources array' }
-    if ($lastRaw -match '"anchors"') { throw 'v2 compat: should NOT have anchors in output' }
 
     # --- Test 7: Invalid JSON diagnostics ---
     $invalidJsonPath = Join-Path $repoDir 'invalid-event.json'
@@ -140,7 +130,8 @@ try {
             -ActionTaken 'Reported friction from a repo containing only .local-test to test fallback.' `
             -ExpectedOutcome 'The default events file lands under .local-test/reports/friction.' `
             -ActualOutcome 'The tool selected the existing .local-test directory.' `
-            -Interpretation 'An existing .local* directory should win over creating a new .local, preserving the existing local state layout.' | Out-Null
+            -Reading 'An existing .local* directory should win over creating a new .local, preserving the existing local state layout.' `
+            -Hindsight 'Document the .local* precedence rule in the skill so agents do not create a redundant .local directory.' | Out-Null
         $altEventsFile = Join-Path $altRepoDir '.local-test/reports/friction/events.jsonl'
         if (-not (Test-Path $altEventsFile)) { throw 'report-friction.ps1 should use an existing .local* directory when .local is absent' }
     }

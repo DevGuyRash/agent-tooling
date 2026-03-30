@@ -26,7 +26,7 @@ sh scripts/report-friction.sh \
   --action-taken "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched for the file using rg --files scripts, which returned no match. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none." \
   --expected-outcome "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the instruction's use of a bare concrete path in imperative form." \
   --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
-  --interpretation "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap."
+  --reading "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap."
 ```
 
 Step 2 — the tool output shows existing tags and suggests the command. Run it:
@@ -47,7 +47,7 @@ cat <<'EOF' | sh scripts/report-friction.sh --from-json -
   "action_taken": "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched for the file using rg --files scripts, which returned no match. I also checked for alternate names (ci_check.sh, check-ci.sh) and found none.",
   "expected_outcome": "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the instruction's use of a bare concrete path in imperative form.",
   "actual_outcome": "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository.",
-  "interpretation": "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap.",
+  "reading": "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap.",
   "agent_name": "orchestrator",
   "agent_kind": "orchestrator",
   "sources": [

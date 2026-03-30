@@ -99,13 +99,10 @@ dates = Counter()
 tags_counter = Counter()
 
 def _event_tags(event):
-    """Return list of tag strings, handling v3 (array) and v2 (tags_csv string)."""
-    tags_v3 = event.get("tags")
-    if isinstance(tags_v3, list):
-        return [str(t) for t in tags_v3 if t]
-    tags_csv = event.get("tags_csv")
-    if isinstance(tags_csv, str) and tags_csv.strip():
-        return [t.strip() for t in tags_csv.split(",") if t.strip()]
+    """Return list of tag strings from the tags array."""
+    tags = event.get("tags")
+    if isinstance(tags, list):
+        return [str(t) for t in tags if t]
     return []
 
 for event in lines:

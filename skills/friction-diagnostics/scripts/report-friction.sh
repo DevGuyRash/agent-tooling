@@ -26,7 +26,8 @@ Core fields:
   --action-taken TEXT
   --expected-outcome TEXT
   --actual-outcome TEXT
-  --interpretation TEXT
+  --reading TEXT
+  --hindsight TEXT
 
 Source fields (single source via CLI; use --from-json for multiple):
   --source-type TYPE     One of: file, url, system-instruction, conversation,
@@ -84,7 +85,8 @@ instruction_text=
 action_taken=
 expected_outcome=
 actual_outcome=
-interpretation=
+reading=
+hindsight=
 agent_name=${FRICTION_AGENT_NAME-}
 agent_kind=${FRICTION_AGENT_KIND-}
 role=
@@ -208,7 +210,7 @@ VALID_SOURCE_TYPES = {
 
 errors = []
 
-# --- Build sources array (v3 native or backward-compat from v2) ---
+# --- Build sources array ---
 sources = data.get("sources")
 if sources is not None:
     if not isinstance(sources, list):
@@ -227,38 +229,7 @@ if sources is not None:
         if not src.get("ref"):
             errors.append(f"sources[{i}].ref is required")
 else:
-    # Backward compatibility: build sources from v2 fields
-    sources = []
-    instr_src = data.get("instruction_source")
-    if isinstance(instr_src, str) and instr_src.strip():
-        sources.append({"type": "documentation", "ref": instr_src.strip()})
-
-    anchors = data.get("anchors")
-    if isinstance(anchors, list):
-        for anc in anchors:
-            if not isinstance(anc, dict):
-                continue
-            src = {}
-            if anc.get("url"):
-                src["type"] = "url"
-                src["ref"] = anc["url"]
-            elif anc.get("path"):
-                src["type"] = "file"
-                src["ref"] = anc["path"]
-            else:
-                src["type"] = "other"
-                src["ref"] = anc.get("label", anc.get("section", "unknown"))
-            for k in ("line", "end_line", "symbol", "section", "selector", "label"):
-                if anc.get(k) is not None:
-                    src[k] = anc[k]
-            # Deduplicate: skip if same ref already present from instruction_source
-            if not any(s.get("ref") == src.get("ref") for s in sources):
-                sources.append(src)
-
-    if not sources:
-        errors.append(
-            "missing sources array (or legacy instruction_source / anchors fields)"
-        )
+    errors.append("missing required field: sources")
 
 # --- Validate required narrative fields ---
 required_narrative = [
@@ -266,7 +237,8 @@ required_narrative = [
     "action_taken",
     "expected_outcome",
     "actual_outcome",
-    "interpretation",
+    "reading",
+    "hindsight",
 ]
 for key in required_narrative:
     value = data.get(key)
@@ -301,7 +273,8 @@ keys = [
     ("action_taken", "json_action_taken"),
     ("expected_outcome", "json_expected_outcome"),
     ("actual_outcome", "json_actual_outcome"),
-    ("interpretation", "json_interpretation"),
+    ("reading", "json_reading"),
+    ("hindsight", "json_hindsight"),
     ("agent_name", "json_agent_name"),
     ("agent_kind", "json_agent_kind"),
     ("role", "json_role"),
@@ -377,7 +350,8 @@ while [ $# -gt 0 ]; do
     --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
     --actual-outcome) actual_outcome=${2-}; shift 2 ;;
-    --interpretation) interpretation=${2-}; shift 2 ;;
+    --reading) reading=${2-}; shift 2 ;;
+    --hindsight) hindsight=${2-}; shift 2 ;;
     --agent) agent_name=${2-}; shift 2 ;;
     --agent-kind) agent_kind=${2-}; shift 2 ;;
     --role) role=${2-}; shift 2 ;;
@@ -422,7 +396,8 @@ if [ -n "$from_json" ]; then
   action_taken=$(load_json_field "$action_taken" "" json_action_taken)
   expected_outcome=$(load_json_field "$expected_outcome" "" json_expected_outcome)
   actual_outcome=$(load_json_field "$actual_outcome" "" json_actual_outcome)
-  interpretation=$(load_json_field "$interpretation" "" json_interpretation)
+  reading=$(load_json_field "$reading" "" json_reading)
+  hindsight=$(load_json_field "$hindsight" "" json_hindsight)
   agent_name=$(load_json_field "$agent_name" "" json_agent_name)
   agent_kind=$(load_json_field "$agent_kind" "" json_agent_kind)
   role=$(load_json_field "$role" "" json_role)
@@ -558,7 +533,8 @@ validate_required_field "instruction_text" "$instruction_text"
 validate_required_field "action_taken" "$action_taken"
 validate_required_field "expected_outcome" "$expected_outcome"
 validate_required_field "actual_outcome" "$actual_outcome"
-validate_required_field "interpretation" "$interpretation"
+validate_required_field "reading" "$reading"
+validate_required_field "hindsight" "$hindsight"
 
 # Sanitize narrative fields
 title=$(sanitize_text "$title")
@@ -566,7 +542,8 @@ instruction_text=$(sanitize_text "$instruction_text")
 action_taken=$(sanitize_text "$action_taken")
 expected_outcome=$(sanitize_text "$expected_outcome")
 actual_outcome=$(sanitize_text "$actual_outcome")
-interpretation=$(sanitize_text "$interpretation")
+reading=$(sanitize_text "$reading")
+hindsight=$(sanitize_text "$hindsight")
 command_text=$(sanitize_text "$command_text")
 tool_name=$(sanitize_text "$tool_name")
 stderr_text=$(sanitize_excerpt "$stderr_text" 500)
@@ -587,7 +564,8 @@ validate_narrative_length "instruction_text" "$instruction_text" 10
 validate_narrative_length "action_taken" "$action_taken" 20
 validate_narrative_length "expected_outcome" "$expected_outcome" 15
 validate_narrative_length "actual_outcome" "$actual_outcome" 15
-validate_narrative_length "interpretation" "$interpretation" 30
+validate_narrative_length "reading" "$reading" 30
+validate_narrative_length "hindsight" "$hindsight" 20
 
 provenance_source=unspecified
 if [ -n "$(trim "$agent_name")$(trim "$agent_kind")$(trim "$role")" ]; then
@@ -602,7 +580,7 @@ cat_output=$(
     --action-taken "$action_taken" \
     --expected-outcome "$expected_outcome" \
     --actual-outcome "$actual_outcome" \
-    --interpretation "$interpretation" \
+    --reading "$reading" \
     --command "$command_text" \
     --tool-name "$tool_name" \
     --stderr "$stderr_text" \
@@ -702,7 +680,8 @@ tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
   printf '%s,' "$(json_string "action_taken" "$action_taken")"
   printf '%s,' "$(json_string "expected_outcome" "$expected_outcome")"
   printf '%s,' "$(json_string "actual_outcome" "$actual_outcome")"
-  printf '%s,' "$(json_string "interpretation" "$interpretation")"
+  printf '%s,' "$(json_string "reading" "$reading")"
+  printf '%s,' "$(json_string "hindsight" "$hindsight")"
   # Sparse optional context
   json_string_if "command" "$command_text"
   json_string_if "tool_name" "$tool_name"
@@ -725,7 +704,7 @@ tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
   json_number_if "exit_code" "$exit_code_value"
   json_number_if "retries_lost" "$retries_lost"
   json_number_if "minutes_lost" "$minutes_lost"
-  # Sources array (always present, replaces anchors + instruction_source)
+  # Sources array (always present)
   printf '"sources":%s' "$sources_json"
   printf '}\n'
 } >"$tmp_event"

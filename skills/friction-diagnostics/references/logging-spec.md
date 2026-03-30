@@ -16,7 +16,7 @@ Normal captures require substantive values for:
 - `action_taken`
 - `expected_outcome`
 - `actual_outcome`
-- `interpretation`
+- `reading`
 
 The `sources` array is required when the friction can be localized to a specific file, document, or URL.
 
@@ -73,19 +73,6 @@ Source members may include:
 - `excerpt`
 - `selector`
 - `label`
-
-## Removed fields (v3)
-
-The following fields were present in v2 and are no longer part of the schema:
-
-- `title_line`
-- `quick_capture`
-- `force_capture`
-- `redaction_applied`
-- `privacy_tier`
-- `incident_status`
-- `evidence_type`
-- `instruction_source` (replaced by the `sources` array)
 
 ## Sanitization
 

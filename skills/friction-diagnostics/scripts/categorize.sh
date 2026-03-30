@@ -16,7 +16,7 @@ Options:
   --action-taken TEXT
   --expected-outcome TEXT
   --actual-outcome TEXT
-  --interpretation TEXT
+  --reading TEXT
   --tool-name TEXT
   --command TEXT
   --stderr TEXT
@@ -47,7 +47,7 @@ instruction_text=
 action_taken=
 expected_outcome=
 actual_outcome=
-interpretation=
+reading=
 tool_name=
 command_text=
 stderr_text=
@@ -67,7 +67,7 @@ while [ $# -gt 0 ]; do
     --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
     --actual-outcome) actual_outcome=${2-}; shift 2 ;;
-    --interpretation) interpretation=${2-}; shift 2 ;;
+    --reading) reading=${2-}; shift 2 ;;
     --tool-name) tool_name=${2-}; shift 2 ;;
     --command) command_text=${2-}; shift 2 ;;
     --stderr) stderr_text=${2-}; shift 2 ;;
@@ -99,7 +99,7 @@ source_text=$(
     "$source_ref" \
     "$instruction_text" \
     "$expected_outcome" \
-    "$interpretation" \
+    "$reading" \
     "$stdout_excerpt"
 )
 source_text=$(lower "$source_text")

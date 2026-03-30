@@ -8,7 +8,13 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 print_help() {
   cat <<'EOF'
 Usage:
-  sh scripts/query-friction.sh [--events-file PATH] [filters]
+  sh scripts/query-friction.sh [--events-file PATH | --scan-dirs DIR [DIR...]] [filters]
+
+Input:
+  --events-file PATH        Single events file (default: auto-detected)
+  --scan-dirs DIR [DIR...]  Recursively discover all events.jsonl files under
+                            the given directories matching
+                            */.local*/reports/friction/events.jsonl
 
 Filters:
   --category VALUE
@@ -18,17 +24,20 @@ Filters:
   --date YYYY-MM-DD
   --date-from YYYY-MM-DD
   --date-to YYYY-MM-DD
+  --after ISO-TIMESTAMP     Filter events with recorded_at > TIMESTAMP
   --source-ref PATH
 
 Output:
   --format jsonl|json|md
   --output PATH
+  --compact                 Strip empty-string and null fields (json/jsonl only)
   --suggest-tags
   --help
 EOF
 }
 
 events_file=${FRICTION_EVENTS_FILE-}
+scan_dirs=""
 category=
 fingerprint=
 agent_kind=
@@ -36,14 +45,25 @@ role=
 date_exact=
 date_from=
 date_to=
+after=
 source_ref=
 format=jsonl
 output_path=
 suggest_tags=0
+compact=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --events-file) events_file=${2-}; shift 2 ;;
+    --scan-dirs)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --*) break ;;
+          *) scan_dirs="$scan_dirs $1"; shift ;;
+        esac
+      done
+      ;;
     --category) category=${2-}; shift 2 ;;
     --fingerprint) fingerprint=${2-}; shift 2 ;;
     --agent-kind) agent_kind=${2-}; shift 2 ;;
@@ -51,49 +71,59 @@ while [ $# -gt 0 ]; do
     --date) date_exact=${2-}; shift 2 ;;
     --date-from) date_from=${2-}; shift 2 ;;
     --date-to) date_to=${2-}; shift 2 ;;
+    --after) after=${2-}; shift 2 ;;
     --source-ref) source_ref=${2-}; shift 2 ;;
-    --anchor-path) source_ref=${2-}; shift 2 ;;  # hidden backward-compat alias
     --format) format=${2-}; shift 2 ;;
     --output) output_path=${2-}; shift 2 ;;
+    --compact) compact=1; shift ;;
     --suggest-tags) suggest_tags=1; shift ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
 
-if [ -z "$events_file" ]; then
-  events_file=$(default_events_file)
+# Resolve input: --scan-dirs, --events-file, or default
+if [ -n "$scan_dirs" ]; then
+  # shellcheck disable=SC2086
+  discovered=$(find $scan_dirs -path '*/.local*/reports/friction/events.jsonl' -type f 2>/dev/null || true)
+  if [ -z "$discovered" ]; then
+    die "No events.jsonl files found under: $scan_dirs"
+  fi
+  events_files="$discovered"
+else
+  if [ -z "$events_file" ]; then
+    events_file=$(default_events_file)
+  fi
+  [ -f "$events_file" ] || die "Events file not found: $events_file"
+  events_files="$events_file"
 fi
-[ -f "$events_file" ] || die "Events file not found: $events_file"
 
 if [ "$suggest_tags" -eq 1 ]; then
   result=$(
-    python3 - "$events_file" <<'PY'
+    python3 - "$events_files" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-events_file = sys.argv[1]
+files_arg = sys.argv[1]
+file_paths = [p for p in files_arg.splitlines() if p.strip()]
+
 tags_seen = set()
-with Path(events_file).open("r", encoding="utf-8") as fh:
-    for raw in fh:
-        raw = raw.strip()
-        if not raw:
-            continue
-        event = json.loads(raw)
-        # v3: tags is a JSON array
-        tags_v3 = event.get("tags")
-        if isinstance(tags_v3, list):
-            for t in tags_v3:
-                if t:
-                    tags_seen.add(str(t))
-        # v2: tags_csv is a comma-separated string
-        tags_csv = event.get("tags_csv")
-        if isinstance(tags_csv, str) and tags_csv.strip():
-            for t in tags_csv.split(","):
-                t = t.strip()
-                if t:
-                    tags_seen.add(t)
+for events_file in file_paths:
+    try:
+        with Path(events_file).open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                event = json.loads(raw)
+                tags = event.get("tags")
+                if isinstance(tags, list):
+                    for t in tags:
+                        if t:
+                            tags_seen.add(str(t))
+    except OSError:
+        pass
 for tag in sorted(tags_seen):
     print(tag)
 PY
@@ -107,78 +137,85 @@ PY
 fi
 
 result=$(
-  python3 - "$events_file" "$category" "$fingerprint" "$agent_kind" "$role" "$date_exact" "$date_from" "$date_to" "$source_ref" "$format" <<'PY'
+  python3 - "$events_files" "$category" "$fingerprint" "$agent_kind" "$role" "$date_exact" "$date_from" "$date_to" "$after" "$source_ref" "$format" "$compact" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-events_file, category, fingerprint, agent_kind, role, date_exact, date_from, date_to, source_ref, out_fmt = sys.argv[1:]
+files_arg, category, fingerprint, agent_kind, role, date_exact, date_from, date_to, after, source_ref, out_fmt, compact_str = sys.argv[1:]
+compact = compact_str == "1"
 
 def _event_tags(event):
-    """Return list of tag strings, handling both v3 (array) and v2 (tags_csv string)."""
-    tags_v3 = event.get("tags")
-    if isinstance(tags_v3, list):
-        return [str(t) for t in tags_v3 if t]
-    tags_csv = event.get("tags_csv")
-    if isinstance(tags_csv, str) and tags_csv.strip():
-        return [t.strip() for t in tags_csv.split(",") if t.strip()]
+    """Return list of tag strings from the tags array."""
+    tags = event.get("tags")
+    if isinstance(tags, list):
+        return [str(t) for t in tags if t]
     return []
 
 def _matches_source_ref(event, ref):
-    """Check source ref against v3 sources array, v2 anchors array, and legacy instruction_source."""
-    # v3: sources[].ref
+    """Check source ref against sources array."""
     sources = event.get("sources")
     if isinstance(sources, list):
         if any(isinstance(s, dict) and s.get("ref") == ref for s in sources):
             return True
-    # v2: anchors[].path
-    anchors = event.get("anchors")
-    if isinstance(anchors, list):
-        if any(isinstance(a, dict) and a.get("path") == ref for a in anchors):
-            return True
-    # legacy scalar field
-    if event.get("instruction_source") == ref:
-        return True
     return False
 
+file_paths = [p for p in files_arg.splitlines() if p.strip()]
+
 events = []
-with Path(events_file).open("r", encoding="utf-8") as fh:
-    for raw in fh:
-        raw = raw.strip()
-        if not raw:
-            continue
-        event = json.loads(raw)
-        ts = event.get("recorded_at", "")
-        event_date = ts[:10] if len(ts) >= 10 else ""
-        if category and event.get("derived_category") != category:
-            continue
-        if fingerprint and event.get("fingerprint") != fingerprint:
-            continue
-        if agent_kind and event.get("agent_kind") != agent_kind:
-            continue
-        if role and event.get("role") != role:
-            continue
-        if date_exact and event_date != date_exact:
-            continue
-        if date_from and event_date and event_date < date_from:
-            continue
-        if date_to and event_date and event_date > date_to:
-            continue
-        if source_ref and not _matches_source_ref(event, source_ref):
-            continue
-        events.append(event)
+for events_file in file_paths:
+    try:
+        with Path(events_file).open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                events.append(json.loads(raw))
+    except OSError:
+        pass
+
+events.sort(key=lambda e: e.get("recorded_at", ""))
+
+filtered = []
+for event in events:
+    ts = event.get("recorded_at", "")
+    event_date = ts[:10] if len(ts) >= 10 else ""
+    if category and event.get("derived_category") != category:
+        continue
+    if fingerprint and event.get("fingerprint") != fingerprint:
+        continue
+    if agent_kind and event.get("agent_kind") != agent_kind:
+        continue
+    if role and event.get("role") != role:
+        continue
+    if date_exact and event_date != date_exact:
+        continue
+    if date_from and event_date and event_date < date_from:
+        continue
+    if date_to and event_date and event_date > date_to:
+        continue
+    if after and ts and ts <= after:
+        continue
+    if source_ref and not _matches_source_ref(event, source_ref):
+        continue
+    filtered.append(event)
+
+def _maybe_compact(event):
+    if compact:
+        return {k: v for k, v in event.items() if v is not None and v != ""}
+    return event
 
 if out_fmt == "jsonl":
-    for event in events:
-        print(json.dumps(event, ensure_ascii=False))
+    for event in filtered:
+        print(json.dumps(_maybe_compact(event), ensure_ascii=False))
 elif out_fmt == "json":
-    print(json.dumps(events, ensure_ascii=False, indent=2))
+    print(json.dumps([_maybe_compact(e) for e in filtered], ensure_ascii=False, indent=2))
 elif out_fmt == "md":
     print("# Friction Query Results")
     print()
-    print(f"- Entries: {len(events)}")
+    print(f"- Entries: {len(filtered)}")
     print()
-    for event in events:
+    for event in filtered:
         explicit_provenance = event.get("provenance_source") == "explicit"
         print(f"## {event.get('event_id', '')}: {event.get('title', '')}")
         print()
@@ -189,16 +226,10 @@ elif out_fmt == "md":
             print(f"- Agent: {event.get('agent_name', '')}")
             print(f"- Agent kind: {event.get('agent_kind', '')}")
             print(f"- Role: {event.get('role', '')}")
-        # Display sources (v3) or anchors (v2) if present
         sources = event.get("sources")
         if isinstance(sources, list) and sources:
             refs = [s.get("ref", "") for s in sources if isinstance(s, dict)]
             print(f"- Sources: {', '.join(r for r in refs if r)}")
-        else:
-            anchors = event.get("anchors")
-            if isinstance(anchors, list) and anchors:
-                paths = [a.get("path", "") for a in anchors if isinstance(a, dict)]
-                print(f"- Sources: {', '.join(p for p in paths if p)}")
         tags = _event_tags(event)
         if tags:
             print(f"- Tags: {', '.join(tags)}")

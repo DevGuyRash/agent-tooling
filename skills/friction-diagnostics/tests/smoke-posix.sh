@@ -49,7 +49,8 @@ OUTPUT=$("$ROOT/scripts/report-friction.sh" \
   --action-taken "I opened SKILL.md at line 160 and found the dispatch table. I ran: mpcr protocol dispatch --role architecture with Bearer ghp_leakedtoken1234567890abcdef12345678." \
   --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the architecture prompt text." \
   --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned and the process exited non-zero." \
-  --interpretation "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder and the column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading.")
+  --reading "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder and the column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading." \
+  --hindsight "Confirm the exact CLI slug via --list-roles or similar before invoking a dispatch role from a display-name table.")
 
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$DEFAULT_EVENTS$" || fail "unexpected default events file output"
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_INDEX_FILE=$DEFAULT_INDEX$" || fail "unexpected default index file output"
@@ -102,7 +103,8 @@ assert_contains '**Entries:** 1' "$DEFAULT_INDEX"
   --action-taken "I read AGENTS.md line 18 which directed me to run scripts/ci-check.sh. I searched using rg --files scripts and found no match for ci-check.sh or any variant." \
   --expected-outcome "The scripts/ directory would contain ci-check.sh as an executable helper, consistent with the imperative instruction." \
   --actual-outcome "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository." \
-  --interpretation "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper."
+  --reading "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths normally refer to existing artifacts, so I treated this as a pre-existing helper." \
+  --hindsight "Before running any imperative script path, verify the file exists with ls or find rather than assuming it pre-exists."
 
 [ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 2 ] || fail "expected two events in default file"
 assert_contains '**Entries:** 2' "$DEFAULT_INDEX"
@@ -136,7 +138,8 @@ cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS"
   "action_taken": "I constructed a JSON payload containing multiple sources and piped it to report-friction.sh via --from-json - to test the structured input path.",
   "expected_outcome": "The tool would accept the JSON payload over stdin, parse the sources array, and append a valid event to events.jsonl.",
   "actual_outcome": "The event was loaded from stdin, all fields were parsed correctly, and the event was appended to the canonical events.jsonl file.",
-  "interpretation": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. I tested this path to verify it handles multi-source payloads correctly. The documentation's recommendation is accurate: stdin avoids shell-escaping hazards that affect direct flags.",
+  "reading": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. I tested this path to verify it handles multi-source payloads correctly. The documentation's recommendation is accurate: stdin avoids shell-escaping hazards that affect direct flags.",
+  "hindsight": "Use --from-json - as the default path for any payload with special characters, multiline text, or multiple sources.",
   "agent_name": "subagent-b",
   "agent_kind": "subagent",
   "role": "verification",
@@ -154,29 +157,6 @@ THIRD_EVENT=$(sed -n '3p' "$DEFAULT_EVENTS")
 printf '%s\n' "$THIRD_EVENT" | grep -q 'url' || fail "second source should be preserved"
 printf '%s\n' "$THIRD_EVENT" | grep -q 'https://example.com/docs' || fail "url source ref should be preserved"
 
-# --- Test 6: Backward compat — v2 format via --from-json ---
-cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json -
-{
-  "title": "v2 backward compat smoke",
-  "instruction_source": "SKILL.md:160",
-  "instruction_text": "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.",
-  "action_taken": "I constructed a v2-format JSON payload containing instruction_source as a string and anchors as an array, then piped it to report-friction.sh via --from-json - to test backward compatibility.",
-  "expected_outcome": "The tool would auto-convert the v2 instruction_source string to a documentation-type source and the v2 anchors array to typed file sources in the v3 sources array.",
-  "actual_outcome": "The event was recorded with a properly converted sources array containing both the documentation-type entry from instruction_source and the file-type entry from anchors.",
-  "interpretation": "The v2 backward compatibility path converts instruction_source (string) to a documentation-type source and anchors (array) to typed sources based on their fields. This migration path allows existing v2 payloads to work with the v3 schema without modification.",
-  "anchors": [
-    {"kind": "file", "path": "/abs/path/SKILL.md", "line": 160}
-  ]
-}
-EOF
-[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 4 ] || fail "v2 compat JSON should append a fourth event"
-FOURTH_EVENT=$(sed -n '4p' "$DEFAULT_EVENTS")
-# Should have sources, not anchors or instruction_source
-printf '%s\n' "$FOURTH_EVENT" | grep -q '"sources"' || fail "v2 compat: should have sources array"
-# Sources from --from-json Python helper may include spaces after colons
-printf '%s\n' "$FOURTH_EVENT" | grep -q 'documentation' || fail "v2 compat: instruction_source should become documentation type"
-printf '%s\n' "$FOURTH_EVENT" | grep -q '/abs/path/SKILL.md' || fail "v2 compat: anchor path should be preserved as file source ref"
-
 # --- Test 7: Shell-sensitive stdin JSON ---
 cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json -
 {
@@ -185,11 +165,12 @@ cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS"
   "action_taken": "I constructed a JSON payload containing shell-sensitive characters: backtick-quoted `ghost-router` and dollar-paren $(whoami). I piped this to report-friction.sh via --from-json - instead of using direct flags.",
   "expected_outcome": "The stored event would preserve the literal backtick and dollar-paren text verbatim, without any shell expansion or escaping damage.",
   "actual_outcome": "The event preserved `ghost-router` and $(whoami) verbatim in the stored JSONL. No shell expansion occurred on either construct.",
-  "interpretation": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. Direct shell flags would have expanded $(whoami) to the current username and potentially mishandled backticks. The stdin path bypasses shell parsing entirely, confirming the documentation's recommendation.",
+  "reading": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. Direct shell flags would have expanded $(whoami) to the current username and potentially mishandled backticks. The stdin path bypasses shell parsing entirely, confirming the documentation's recommendation.",
+  "hindsight": "Default to --from-json - whenever the payload contains backticks, dollar-paren constructs, or other shell-special characters.",
   "sources": [{"type": "documentation", "ref": "test"}]
 }
 EOF
-[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 5 ] || fail "shell-sensitive stdin JSON should append a fifth event"
+[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 4 ] || fail "shell-sensitive stdin JSON should append a fourth event"
 assert_contains '`ghost-router`' "$DEFAULT_EVENTS"
 assert_contains '$(whoami)' "$DEFAULT_EVENTS"
 
@@ -218,7 +199,8 @@ cat <<'EOF' >"$SCHEMA_JSON"
   "action_taken": "I attempted to report a friction event with a blank instruction_text to test the schema validation enforcement.",
   "expected_outcome": "The tool would reject the payload because instruction_text is blank (whitespace only), violating the required-field constraint.",
   "actual_outcome": "The tool rejected the payload with a clear error message identifying instruction_text as the problem field.",
-  "interpretation": "Required narrative fields must contain substantive text, not just whitespace. The validator correctly catches blank values before the event reaches the canonical file, preventing noise entries from polluting the event stream.",
+  "reading": "Required narrative fields must contain substantive text, not just whitespace. The validator correctly catches blank values before the event reaches the canonical file, preventing noise entries from polluting the event stream.",
+  "hindsight": "Always supply substantive text for all required narrative fields before invoking the reporter.",
   "sources": [{"type": "documentation", "ref": "test"}]
 }
 EOF
@@ -238,7 +220,8 @@ cat <<'EOF' >"$SHORT_JSON"
   "action_taken": "Ran the command.",
   "expected_outcome": "It worked.",
   "actual_outcome": "Error happened.",
-  "interpretation": "It was wrong.",
+  "reading": "It was wrong.",
+  "hindsight": "Fix it.",
   "sources": [{"type": "documentation", "ref": "test"}]
 }
 EOF
@@ -258,7 +241,8 @@ assert_contains 'must be at least' "$SHORT_STDERR"
   --action-taken "I opened SKILL.md and found the dispatch table. I ran: mpcr protocol dispatch --role architecture from the repo root." \
   --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the architecture prompt text." \
   --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned and the process exited non-zero." \
-  --interpretation "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading."
+  --reading "The dispatch table lists 'Architecture' in the Role column. I read that label as the literal CLI slug because the instruction used '<ROLE>' as a placeholder. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading." \
+  --hindsight "Confirm the exact CLI slug via --list-roles or similar before invoking a dispatch role from a display-name table."
 
 LAST_EVENT=$(tail -1 "$DEFAULT_EVENTS")
 printf '%s\n' "$LAST_EVENT" | grep -q '"title":"\[' || fail "auto-title should start with [surface/mode] prefix"
@@ -278,7 +262,8 @@ EXPLICIT_EVENTS=$EXPLICIT_DIR/events.jsonl
   --action-taken "I passed --events-file with an explicit temporary directory path to the reporter to verify that explicit targets override repo defaults." \
   --expected-outcome "The event would be written to the explicit path rather than the default repo-scoped location, and INDEX.md would be created adjacent to it." \
   --actual-outcome "The event was written to the explicit path and INDEX.md was created in the same directory as expected." \
-  --interpretation "The --events-file flag is documented as an explicit override for the canonical target resolution. I used it to write to a temporary directory to confirm that the override mechanism works. The flag takes precedence over git-repo-root detection and .local directory scanning."
+  --reading "The --events-file flag is documented as an explicit override for the canonical target resolution. I used it to write to a temporary directory to confirm that the override mechanism works. The flag takes precedence over git-repo-root detection and .local directory scanning." \
+  --hindsight "Use --events-file explicitly in CI or isolated test contexts to prevent accidental writes to the repo default stream."
 assert_file "$EXPLICIT_EVENTS"
 assert_file "$EXPLICIT_DIR/INDEX.md"
 assert_contains '"provenance_source":"explicit"' "$EXPLICIT_EVENTS"
@@ -295,7 +280,8 @@ ALT_OUTPUT=$(cd "$ALT_REPO" && "$ROOT/scripts/report-friction.sh" \
   --action-taken "I created a git repo with only .local-test (no .local) and ran report-friction.sh from inside it to verify the fallback path resolution." \
   --expected-outcome "The tool would detect the existing .local-test directory and write events.jsonl under .local-test/reports/friction/ rather than creating a new .local directory." \
   --actual-outcome "The tool correctly selected .local-test as the local area and wrote the event to .local-test/reports/friction/events.jsonl." \
-  --interpretation "The canonical target resolution docs specify that if .local is absent, the tool should use the first existing .local* directory. This preserves the repo's existing local state layout rather than creating a competing .local directory alongside an existing .local-test.")
+  --reading "The canonical target resolution docs specify that if .local is absent, the tool should use the first existing .local* directory. This preserves the repo's existing local state layout rather than creating a competing .local directory alongside an existing .local-test." \
+  --hindsight "Document the .local* precedence rule clearly so agents do not create a redundant .local alongside an existing .local-test.")
 assert_equals "FRICTION_EVENTS_FILE=$ALT_REPO/.local-test/reports/friction/events.jsonl" "$(printf '%s\n' "$ALT_OUTPUT" | sed -n '1p')"
 assert_file "$ALT_REPO/.local-test/reports/friction/events.jsonl"
 
@@ -314,7 +300,8 @@ NON_REPO_OUTPUT=$(cd "$NON_REPO_DIR" && "$ROOT/scripts/report-friction.sh" \
   --action-taken "I created a non-git temporary directory, changed into it, and ran report-friction.sh without --events-file to verify the temp-root fallback path." \
   --expected-outcome "The tool would detect the absence of a .git directory and fall back to writing events under the system temp directory with a CWD-based hash." \
   --actual-outcome "The tool correctly fell back to a system-temp path under agent-friction/ with a deterministic hash derived from the CWD." \
-  --interpretation "The canonical target resolution docs specify that outside a git repo, the tool uses a deterministic temp-root path based on a hash of the CWD. This ensures events are still written to a stable location even without git context, and that different directories get isolated event streams.")
+  --reading "The canonical target resolution docs specify that outside a git repo, the tool uses a deterministic temp-root path based on a hash of the CWD. This ensures events are still written to a stable location even without git context, and that different directories get isolated event streams." \
+  --hindsight "When testing outside a git repo, verify the temp fallback path matches expectations before relying on it for event isolation.")
 printf '%s\n' "$NON_REPO_OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$TEMP_ROOT/agent-friction/" || fail "non-repo fallback should use the system temp root"
 
 # --- Test 15: --add-tags patches tags on existing event ---
@@ -341,7 +328,8 @@ FP_EVENTS=$(mktemp)
   --action-taken "I ran skaffold run --profile staging from the repo root as directed by AGENTS.md." \
   --expected-outcome "Skaffold would resolve the staging profile and deploy to the staging namespace." \
   --actual-outcome "FATA[0003] profile staging not found in skaffold.yaml" \
-  --interpretation "AGENTS.md names the profile 'staging' with confident imperative wording. I took this as a definitive reference. Only dev and prod profiles exist. The instruction was factually wrong." \
+  --reading "AGENTS.md names the profile 'staging' with confident imperative wording. I took this as a definitive reference. Only dev and prod profiles exist. The instruction was factually wrong." \
+  --hindsight "Cross-check profile names in skaffold.yaml before running any profile-targeted deploy command." \
   >/dev/null
 "$ROOT/scripts/report-friction.sh" \
   --events-file "$FP_EVENTS" \
@@ -352,7 +340,8 @@ FP_EVENTS=$(mktemp)
   --action-taken "Following AGENTS.md, I executed skaffold run --profile staging. It failed with a profile-not-found error immediately." \
   --expected-outcome "The staging profile would be found in skaffold.yaml and the deployment would proceed." \
   --actual-outcome "skaffold exited with error: profile staging not found. Only dev and prod are defined." \
-  --interpretation "The instruction named a specific profile that does not exist. I had no reason to doubt it since the wording was imperative and unqualified. The root cause is a documentation error in AGENTS.md." \
+  --reading "The instruction named a specific profile that does not exist. I had no reason to doubt it since the wording was imperative and unqualified. The root cause is a documentation error in AGENTS.md." \
+  --hindsight "Verify all named profiles exist in skaffold.yaml before trusting an imperative instruction referencing them." \
   >/dev/null
 FP1=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[0])['fingerprint'])")
 FP2=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[1])['fingerprint'])")
@@ -368,7 +357,8 @@ FP2=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[1
   --action-taken "I inspected skaffold.yaml to find the staging profile. Only dev and prod were defined." \
   --expected-outcome "skaffold.yaml would contain a staging profile matching the AGENTS.md instruction." \
   --actual-outcome "skaffold.yaml defines only dev and prod profiles. No staging profile exists." \
-  --interpretation "The AGENTS.md instruction referenced a profile by name. I checked skaffold.yaml to verify it exists. The discrepancy confirms the instruction is wrong, not the config." \
+  --reading "The AGENTS.md instruction referenced a profile by name. I checked skaffold.yaml to verify it exists. The discrepancy confirms the instruction is wrong, not the config." \
+  --hindsight "Treat any discrepancy between instruction-named profiles and skaffold.yaml content as a documentation bug to escalate." \
   >/dev/null
 FP3=$(python3 -c "import json; print(json.loads(open('$FP_EVENTS').readlines()[2])['fingerprint'])")
 [ "$FP1" != "$FP3" ] || fail "different source should produce different fingerprint"
@@ -380,7 +370,7 @@ CATEGORIZE_OUTPUT=$("$ROOT/scripts/categorize.sh" \
   --action-taken "I ran the documented deployment command and checked the repo configuration." \
   --expected-outcome "The staging profile would be defined and selectable." \
   --actual-outcome "The config does not define profile staging and the command reported an unsupported role slug." \
-  --interpretation "The instructions referenced a specific profile and slug. I treated those names as valid identifiers because the wording was imperative and concrete.")
+  --reading "The instructions referenced a specific profile and slug. I treated those names as valid identifiers because the wording was imperative and concrete.")
 printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^mode=name-resolution$' || fail "categorizer should classify unsupported slug / not-defined profile wording as name-resolution"
 printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^run_effect=blocked$' || fail "categorizer should classify missing/unsupported resource wording as blocked"
 
@@ -392,7 +382,8 @@ cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS"
   "action_taken": "I followed the documented guidance exactly as written in the referenced source.",
   "expected_outcome": "The guidance would resolve cleanly without ambiguity.",
   "actual_outcome": "The guidance used a role slug that was not defined by the system.",
-  "interpretation": "I treated the named slug as authoritative because the instruction source was explicit and concrete.",
+  "reading": "I treated the named slug as authoritative because the instruction source was explicit and concrete.",
+  "hindsight": "Verify slug availability before treating any instruction-provided slug as definitive.",
   "sources": [
     { "type": "file", "ref": "AGENTS.md", "line": 1 }
   ]
@@ -425,7 +416,8 @@ SUBMODULE_OUTPUT=$(cd "$SUBMODULE_REMOTE/deps/fixture" && "$ROOT/scripts/report-
   --action-taken "I changed into the checked-out git submodule and ran report-friction.sh without overriding repo-root detection." \
   --expected-outcome "The event would include superproject_root and the submodule_path relative to the superproject." \
   --actual-outcome "The event was recorded from inside the submodule checkout with git metadata available." \
-  --interpretation "A real submodule checkout exposes both the submodule repo root and the superproject working tree. The reporter should preserve both so downstream queries can distinguish submodule-local context from the parent repository.")
+  --reading "A real submodule checkout exposes both the submodule repo root and the superproject working tree. The reporter should preserve both so downstream queries can distinguish submodule-local context from the parent repository." \
+  --hindsight "When reporting from a submodule, confirm that superproject_root and submodule_path are present in the recorded event before relying on them for queries.")
 SUBMODULE_EVENTS=$(printf '%s\n' "$SUBMODULE_OUTPUT" | sed -n 's/^FRICTION_EVENTS_FILE=//p' | sed -n '1p')
 assert_file "$SUBMODULE_EVENTS"
 assert_contains '"superproject_root":"'"$SUBMODULE_REMOTE"'"' "$SUBMODULE_EVENTS"

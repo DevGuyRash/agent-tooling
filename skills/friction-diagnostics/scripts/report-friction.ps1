@@ -8,7 +8,8 @@ param(
     [string]$ActionTaken = '',
     [string]$ExpectedOutcome = '',
     [string]$ActualOutcome = '',
-    [string]$Interpretation = '',
+    [string]$Reading = '',
+    [string]$Hindsight = '',
     [string]$ObservedSurface = '',
     [string]$Surface = '',
     [string]$Mode = '',
@@ -169,7 +170,8 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $ActionTaken = Get-JsonFieldValue $fromJsonPayload 'action_taken' $ActionTaken ''
     $ExpectedOutcome = Get-JsonFieldValue $fromJsonPayload 'expected_outcome' $ExpectedOutcome ''
     $ActualOutcome = Get-JsonFieldValue $fromJsonPayload 'actual_outcome' $ActualOutcome ''
-    $Interpretation = Get-JsonFieldValue $fromJsonPayload 'interpretation' $Interpretation ''
+    $Reading = Get-JsonFieldValue $fromJsonPayload 'reading' $Reading ''
+    $Hindsight = Get-JsonFieldValue $fromJsonPayload 'hindsight' $Hindsight ''
     $ObservedSurface = Get-JsonFieldValue $fromJsonPayload 'observed_surface' $ObservedSurface ''
     $Surface = Get-JsonFieldValue $fromJsonPayload 'surface' $Surface ''
     $Mode = Get-JsonFieldValue $fromJsonPayload 'mode' $Mode ''
@@ -193,7 +195,7 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $AgentKind = Get-JsonFieldValue $fromJsonPayload 'agent_kind' $AgentKind ''
     $Role = Get-JsonFieldValue $fromJsonPayload 'role' $Role ''
 
-    # --- Resolve sources array (v3 native or backward compat from v2) ---
+    # --- Resolve sources array ---
     $sourcesProperty = $fromJsonPayload.PSObject.Properties['sources']
     if ($null -ne $sourcesProperty -and $null -ne $sourcesProperty.Value) {
         # v3: native sources array
@@ -246,60 +248,7 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
         }
         $fromJsonSources = $resolvedSources.ToArray()
     } else {
-        # v2 backward compat: build sources from instruction_source and/or anchors
-        $backCompatSources = [System.Collections.Generic.List[object]]::new()
-        $instrSrcProp = $fromJsonPayload.PSObject.Properties['instruction_source']
-        if ($null -ne $instrSrcProp -and -not [string]::IsNullOrWhiteSpace([string]$instrSrcProp.Value)) {
-            $srcMap = [ordered]@{ type = 'documentation'; ref = Protect-Text ([string]$instrSrcProp.Value) }
-            $backCompatSources.Add([pscustomobject]$srcMap)
-        }
-        $anchorsProp = $fromJsonPayload.PSObject.Properties['anchors']
-        if ($null -ne $anchorsProp -and $null -ne $anchorsProp.Value) {
-            foreach ($anc in @($anchorsProp.Value)) {
-                if ($anc -isnot [pscustomobject] -and $anc -isnot [hashtable]) { continue }
-                $srcMap = [ordered]@{}
-                $urlProp = $anc.PSObject.Properties['url']
-                $pathProp = $anc.PSObject.Properties['path']
-                if ($null -ne $urlProp -and -not [string]::IsNullOrWhiteSpace([string]$urlProp.Value)) {
-                    $srcMap['type'] = 'url'
-                    $srcMap['ref'] = Protect-Text ([string]$urlProp.Value)
-                } elseif ($null -ne $pathProp -and -not [string]::IsNullOrWhiteSpace([string]$pathProp.Value)) {
-                    $srcMap['type'] = 'file'
-                    $srcMap['ref'] = Protect-Text ([string]$pathProp.Value)
-                } else {
-                    $labelProp = $anc.PSObject.Properties['label']
-                    $sectionProp = $anc.PSObject.Properties['section']
-                    $fallbackRef = if ($null -ne $labelProp) { [string]$labelProp.Value } elseif ($null -ne $sectionProp) { [string]$sectionProp.Value } else { 'unknown' }
-                    $srcMap['type'] = 'other'
-                    $srcMap['ref'] = Protect-Text $fallbackRef
-                }
-                foreach ($optKey in @('line', 'end_line', 'symbol', 'section', 'selector', 'label')) {
-                    $optProp = $anc.PSObject.Properties[$optKey]
-                    if ($null -ne $optProp -and $null -ne $optProp.Value) {
-                        if ($optKey -in @('line', 'end_line')) {
-                            $numVal = ConvertTo-SafeInt ([string]$optProp.Value)
-                            if ($numVal -gt 0) { $srcMap[$optKey] = $numVal }
-                        } else {
-                            $textVal = Protect-Text ([string]$optProp.Value)
-                            if (-not [string]::IsNullOrWhiteSpace($textVal)) { $srcMap[$optKey] = $textVal }
-                        }
-                    }
-                }
-                # Deduplicate: skip if same ref already present
-                $thisRef = $srcMap['ref']
-                $alreadyPresent = $false
-                foreach ($existing in $backCompatSources) {
-                    if ($existing.PSObject.Properties['ref'].Value -eq $thisRef) { $alreadyPresent = $true; break }
-                }
-                if (-not $alreadyPresent) {
-                    $backCompatSources.Add([pscustomobject]$srcMap)
-                }
-            }
-        }
-        if ($backCompatSources.Count -gt 0) {
-            $fromJsonSources = $backCompatSources.ToArray()
-        }
-        # If still no sources, we'll catch that in the required-source validation below
+        # sources is required — no sources array means the required-source validation below will catch it
     }
 
     $payloadEventsFile = Get-JsonFieldValue $fromJsonPayload 'events_file' '' ''
@@ -323,7 +272,8 @@ $InstructionText = Protect-Text $InstructionText
 $ActionTaken = Protect-Text $ActionTaken
 $ExpectedOutcome = Protect-Text $ExpectedOutcome
 $ActualOutcome = Protect-Text $ActualOutcome
-$Interpretation = Protect-Text $Interpretation
+$Reading = Protect-Text $Reading
+$Hindsight = Protect-Text $Hindsight
 $Command = Protect-Text $Command
 $ToolName = Protect-Text $ToolName
 $Stderr = Protect-Excerpt $Stderr 500
@@ -342,7 +292,8 @@ foreach ($field in @(
     @{ Label = 'action_taken'; Value = $ActionTaken },
     @{ Label = 'expected_outcome'; Value = $ExpectedOutcome },
     @{ Label = 'actual_outcome'; Value = $ActualOutcome },
-    @{ Label = 'interpretation'; Value = $Interpretation }
+    @{ Label = 'reading'; Value = $Reading },
+    @{ Label = 'hindsight'; Value = $Hindsight }
 )) {
     if ([string]::IsNullOrWhiteSpace([string]$field.Value)) {
         throw "Missing required field: $($field.Label)"
@@ -354,7 +305,8 @@ Test-NarrativeLength 'instruction_text' $InstructionText 20
 Test-NarrativeLength 'action_taken' $ActionTaken 30
 Test-NarrativeLength 'expected_outcome' $ExpectedOutcome 20
 Test-NarrativeLength 'actual_outcome' $ActualOutcome 20
-Test-NarrativeLength 'interpretation' $Interpretation 40
+Test-NarrativeLength 'reading' $Reading 30
+Test-NarrativeLength 'hindsight' $Hindsight 20
 
 # --- Build sources array ---
 $sources = @()
@@ -395,7 +347,7 @@ $auto = & "$PSScriptRoot/categorize.ps1" `
     -ActionTaken $ActionTaken `
     -ExpectedOutcome $ExpectedOutcome `
     -ActualOutcome $ActualOutcome `
-    -Interpretation $Interpretation `
+    -Reading $Reading `
     -ToolName $ToolName `
     -Command $Command `
     -Stderr $Stderr `
@@ -493,7 +445,8 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     $eventFields.Add((ConvertTo-JsonString 'action_taken' $ActionTaken))
     $eventFields.Add((ConvertTo-JsonString 'expected_outcome' $ExpectedOutcome))
     $eventFields.Add((ConvertTo-JsonString 'actual_outcome' $ActualOutcome))
-    $eventFields.Add((ConvertTo-JsonString 'interpretation' $Interpretation))
+    $eventFields.Add((ConvertTo-JsonString 'reading' $Reading))
+    $eventFields.Add((ConvertTo-JsonString 'hindsight' $Hindsight))
     # Sparse optional context
     if (-not [string]::IsNullOrEmpty($Command)) { $eventFields.Add((ConvertTo-JsonString 'command' $Command)) }
     if (-not [string]::IsNullOrEmpty($ToolName)) { $eventFields.Add((ConvertTo-JsonString 'tool_name' $ToolName)) }
@@ -516,7 +469,7 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     if ($exitCodeInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'exit_code' $exitCodeInt)) }
     if ($retriesLostInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'retries_lost' $retriesLostInt)) }
     if ($minutesLostInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'minutes_lost' $minutesLostInt)) }
-    # Sources array (always present, replaces anchors + instruction_source)
+    # Sources array (always present)
     $eventFields.Add('"sources":' + $sourcesJson)
 
     $eventJson = '{' + ($eventFields -join ',') + '}'

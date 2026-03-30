@@ -4,7 +4,7 @@ param(
     [string]$ActionTaken = "",
     [string]$ExpectedOutcome = "",
     [string]$ActualOutcome = "",
-    [string]$Interpretation = "",
+    [string]$Reading = "",
     [string]$ToolName = "",
     [string]$Command = "",
     [string]$Stderr = "",
@@ -42,7 +42,7 @@ Output:
 $observationText = @($ActionTaken, $ActualOutcome, $ToolName, $Command, $Stderr) -join "`n"
 $observationText = $observationText.ToLowerInvariant()
 
-$sourceText = @($SourceRef, $InstructionText, $ExpectedOutcome, $Interpretation, $StdoutExcerpt) -join "`n"
+$sourceText = @($SourceRef, $InstructionText, $ExpectedOutcome, $Reading, $StdoutExcerpt) -join "`n"
 $sourceText = $sourceText.ToLowerInvariant()
 
 $fullText = "$observationText`n$sourceText"

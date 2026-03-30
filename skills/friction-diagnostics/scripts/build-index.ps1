@@ -22,16 +22,12 @@ $EventsFile = $paths.EventsFile
 $IndexFile = $paths.IndexFile
 $RepoRoot = $paths.RepoRoot
 
-# Helper: get tags from an event, handling v3 (array) and v2 (tags_csv string)
+# Helper: get tags from an event
 function Get-EventTags {
     param($event)
-    $tagsV3 = $event.tags
-    if ($null -ne $tagsV3 -and $tagsV3 -is [System.Array]) {
-        return @($tagsV3 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { [string]$_ })
-    }
-    $tagsCsv = [string]$event.tags_csv
-    if (-not [string]::IsNullOrWhiteSpace($tagsCsv)) {
-        return @($tagsCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $tags = $event.tags
+    if ($null -ne $tags -and $tags -is [System.Array]) {
+        return @($tags | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { [string]$_ })
     }
     return @()
 }
@@ -143,22 +139,12 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
     foreach ($event in $recentEvents) {
         $title = [string]$event.title
         $provenanceSource = [string]$event.provenance_source
-        # Display sources (v3) or anchors (v2) if present
         $sourcesDisplay = ''
         $sources = $event.sources
         if ($null -ne $sources -and $sources -is [System.Array] -and $sources.Count -gt 0) {
             $refs = @($sources | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.ref } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             if ($refs.Count -gt 0) {
                 $sourcesDisplay = " [$($refs -join ', ')]"
-            }
-        }
-        else {
-            $anchors = $event.anchors
-            if ($null -ne $anchors -and $anchors -is [System.Array] -and $anchors.Count -gt 0) {
-                $anchorPaths = @($anchors | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                if ($anchorPaths.Count -gt 0) {
-                    $sourcesDisplay = " [$($anchorPaths -join ', ')]"
-                }
             }
         }
         if ($provenanceSource -eq 'explicit') {

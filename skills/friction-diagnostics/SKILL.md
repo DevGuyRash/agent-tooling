@@ -24,6 +24,7 @@ A rolling event stream that captures friction — errors, failures, mismatches, 
 
 WHEN any error, failure, unexpected outcome, or friction occurs THEN you SHALL log it using this skill.
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
+WHEN you are about to file an event THEN you SHALL check the last 5 entries in the events stream (via the query tool or `tail -5`). WHEN an existing entry has the same title or describes the same root cause THEN you SHALL NOT file a new event.
 
 The canonical data is `events.jsonl`. `INDEX.md` is an auto-maintained summary.
 
@@ -48,7 +49,8 @@ sh <skills-file-root>/scripts/report-friction.sh \
   --action-taken "I opened SKILL.md and found the dispatch table at line 160. The table listed 'Architecture' in the Role column. I ran: mpcr protocol dispatch --role architecture. The command was invoked from the repo root with no other flags." \
   --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the full architecture prompt text, consistent with the dispatch table row for that role." \
   --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned. The process exited non-zero immediately." \
-  --interpretation "The dispatch table uses human-readable labels in the Role column (e.g. 'Architecture'). I read that label as the literal CLI slug because the instruction said 'Use --role <ROLE>' with <ROLE> as a placeholder and the table column header was 'Role'. Given no separate mapping between display labels and CLI slugs, inferring label-equals-slug was the natural reading. The mismatch reveals the CLI uses a different internal slug not shown in the table."
+  --reading "The dispatch table had a column called 'Role' with 'Architecture' in it, and the instruction said 'Use --role <ROLE>'. So I plugged in 'architecture' — the table column was labeled 'Role,' the placeholder said ROLE, seemed like a direct substitution. The CLI rejected it immediately: 'unknown dispatch role: architecture.' Turns out the actual slug is 'architecture-critic,' which doesn't appear anywhere in the table or the surrounding text." \
+  --hindsight "I should have run the CLI's own discovery command first — something like --list or --help on the dispatch subcommand — instead of inferring the slug from a display table. The table uses human-friendly labels; the CLI uses internal slugs. Those are two different naming schemes and I treated them as one."
 ```
 
 WHEN payload text contains shell-sensitive content such as backticks, `$()`, or multiple lines THEN you SHOULD use `--from-json -` via stdin instead of direct flags. See `references/examples.md` for the JSON format.
@@ -74,7 +76,8 @@ WHEN choosing tags THEN you SHALL select relevant tags from the existing vocabul
 Summary of what each field requires:
 
 - **`action_taken`** — three sentences: (1) what you read or consulted before acting and where, (2) the exact command or code you executed with arguments, (3) what you observed before and during the failure.
-- **`interpretation`** — three sentences: (1) the meaning you assigned to the source material — use single-quotes to quote the specific wording verbatim, (2) why that reading was reasonable given context, (3) what the mismatch reveals about the source, the environment, or your assumption. Sentence (3) is a diagnostic observation, not an action plan — do not write what to do next.
+- **`reading`** — first person. Your account of what happened from your perspective: what you encountered, what you understood it to mean, what you did, and what surprised you. Quote the specific wording you acted on. Vary your language — do not follow a sentence template. This is your story, not your analysis. A reader should understand your perspective, your decision points, and the moment things diverged — without being told "this was reasonable" or "the mismatch reveals." WHEN the source wording shaped your understanding in a specific way THEN you SHALL quote it verbatim. You SHALL NOT use the phrases "that reading was reasonable," "the mismatch reveals," "the mismatch shows," or any formulaic framing. Narrate what happened to you.
+- **`hindsight`** — first person. What you believe you should have done differently, knowing what you know now. This is about your decisions and approach, not about changes to the source material or codebase. WHEN you cannot identify anything you would do differently THEN you SHALL say so and explain why — the friction may have been unavoidable given what you knew.
 - **`actual_outcome`** — the exact error message, exit code, or output verbatim. Do not paraphrase.
 - **`expected_outcome`** — the specific behavior you anticipated and which source you derived it from.
 - **`instruction_text`** — the exact text you acted on, quoted verbatim.
@@ -135,6 +138,14 @@ The `sources` array accepts typed references — not limited to code:
 
 ### Classification
 
-The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`. WHEN the source material's ambiguity or incompleteness contributed to the friction THEN you SHOULD set `guidance_quality` below 4 to reflect that. A value of 4 means "clear" — use it only when the guidance was genuinely unambiguous and the friction came from elsewhere.
+The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`.
 
-WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `interpretation`.
+WHEN the source text could be read more than one way and you picked one THEN `guidance_quality` SHALL be 2 (ambiguous) or lower.
+WHEN the source text was correct but omitted information you needed THEN `guidance_quality` SHALL be 3 (partial).
+WHEN the source text actively pointed you toward the wrong action THEN `guidance_quality` SHALL be 1 (misleading).
+WHEN no source text was involved (purely operational friction like a timeout, missing binary, or resource limit) THEN `guidance_quality` SHALL be 0 (not-applicable).
+A value of 4 (clear) means you followed unambiguous, accurate guidance and the friction came from elsewhere entirely — the guidance did its job.
+
+WHEN the automatic `mode` is `other` AND you can identify a more specific mode from the taxonomy THEN you SHALL override with `--mode <value>`. Common overrides: `apply_patch` or edit context mismatch → `output-mismatch`; spawn/thread/resource limit → `performance`; variable rejected as invalid, reserved, or unbound → `validation`.
+
+WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `reading`.
