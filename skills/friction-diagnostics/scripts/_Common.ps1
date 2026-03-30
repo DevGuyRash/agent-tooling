@@ -130,10 +130,10 @@ function Write-MarkdownField {
     if ([string]::IsNullOrEmpty($Value)) { $Value = '(not provided)' }
     if ($Value -match "`r?`n") {
         $lines = $Value -split "`r?`n"
-        @("**$Label:**") + ($lines | ForEach-Object { "> $_" })
+        @("**${Label}:**") + ($lines | ForEach-Object { "> $_" })
     }
     else {
-        "**$Label:** $Value"
+        "**${Label}:** $Value"
     }
 }
 
@@ -293,7 +293,7 @@ $script:VALID_SOURCE_TYPES = @('file', 'url', 'system-instruction', 'conversatio
 function Test-SourceType {
     param([string]$SourceType)
     if ($script:VALID_SOURCE_TYPES -contains $SourceType) { return }
-    throw "Unsupported source type: $SourceType (expected one of: $($script:VALID_SOURCE_TYPES -join ', '))"
+    throw "Unsupported source type: ${SourceType} (expected one of: $($script:VALID_SOURCE_TYPES -join ', '))"
 }
 
 function Get-NormalizedFingerprintText {
@@ -647,11 +647,19 @@ function Get-JsonDiagnosticLabel {
 }
 
 function Import-EventJsonObject {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [string]$StdinText = ''
+    )
 
     $jsonText = ''
     if ($Path -eq '-') {
-        $jsonText = [Console]::In.ReadToEnd()
+        if (-not [string]::IsNullOrEmpty($StdinText)) {
+            $jsonText = $StdinText
+        }
+        else {
+            $jsonText = [Console]::In.ReadToEnd()
+        }
     }
     else {
         if (-not (Test-Path -LiteralPath $Path)) {
@@ -745,7 +753,7 @@ function Import-Events {
 
     $events = [System.Collections.Generic.List[object]]::new()
     $lineNumber = 0
-    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+    foreach ($line in [System.IO.File]::ReadAllLines($EventsFile, [System.Text.UTF8Encoding]::new($false))) {
         $lineNumber++
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
@@ -753,7 +761,7 @@ function Import-Events {
         }
         catch {
             $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]
-            throw "Invalid JSON in events file at line $lineNumber: $detail"
+            throw "Invalid JSON in events file at line ${lineNumber}: $detail"
         }
         $events.Add($event)
     }

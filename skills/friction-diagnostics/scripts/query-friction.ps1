@@ -91,23 +91,29 @@ function Remove-EmptyFields {
     return $event
 }
 
+function Get-EventFieldValue {
+    param(
+        $event,
+        [string]$Name,
+        $Default = $null
+    )
+
+    $prop = $event.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $Default }
+    return $prop.Value
+}
+
 function Import-MultipleEvents {
     param([string[]]$FilePaths)
     $allEvents = [System.Collections.Generic.List[object]]::new()
     foreach ($fp in $FilePaths) {
         if (-not (Test-Path -LiteralPath $fp)) { continue }
-        $lines = [System.IO.File]::ReadAllLines($fp, [System.Text.UTF8Encoding]::new($false))
-        foreach ($line in $lines) {
-            $trimmed = $line.Trim()
-            if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
-            try {
-                $ev = $trimmed | ConvertFrom-Json
-                $null = $allEvents.Add($ev)
-            } catch { }
+        foreach ($ev in @(Import-Events $fp)) {
+            $null = $allEvents.Add($ev)
         }
     }
     # Sort by recorded_at
-    return @($allEvents | Sort-Object { [string]$_.recorded_at })
+    return @($allEvents | Sort-Object { [string](Get-EventFieldValue -event $_ -Name 'recorded_at' -Default '') })
 }
 
 # Resolve input files
@@ -135,19 +141,17 @@ if ($ScanDirs.Count -gt 0) {
 # Helper: get tags from an event
 function Get-EventTags {
     param($event)
-    $tags = $event.tags
-    if ($null -ne $tags -and $tags -is [System.Array]) {
-        return @($tags | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { [string]$_ })
-    }
-    return @()
+    $tags = Get-EventFieldValue -event $event -Name 'tags'
+    if ($null -eq $tags) { return @() }
+    return @(@($tags) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
 }
 
 # Helper: check if an event matches a source ref
 function Test-SourceRefMatch {
     param($event, [string]$ref)
-    $sources = $event.sources
-    if ($null -ne $sources -and $sources -is [System.Array]) {
-        foreach ($s in $sources) {
+    $sources = Get-EventFieldValue -event $event -Name 'sources'
+    if ($null -ne $sources) {
+        foreach ($s in @($sources)) {
             if ($null -ne $s -and [string]$s.ref -eq $ref) { return $true }
         }
     }
@@ -156,8 +160,11 @@ function Test-SourceRefMatch {
 
 function Get-DerivedCategoryParts {
     param($event)
-    $value = [string]$event.derived_category
-    $parts = if ([string]::IsNullOrWhiteSpace($value)) { @() } else { $value.Split('/', 3) }
+    $value = [string](Get-EventFieldValue -event $event -Name 'derived_category' -Default '')
+    $parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+        $parts = @($value.Split('/', 3))
+    }
     while ($parts.Count -lt 3) {
         $parts += ''
     }
@@ -178,7 +185,7 @@ function Test-TextMatch {
     if ([string]::IsNullOrWhiteSpace($query)) { return $true }
     $needle = $query.ToLowerInvariant()
     foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight')) {
-        $value = [string]$event.$field
+        $value = [string](Get-EventFieldValue -event $event -Name $field -Default '')
         if ($value.ToLowerInvariant().Contains($needle)) {
             return $true
         }
@@ -204,23 +211,23 @@ if ($SuggestTags) {
 }
 
 $filtered = foreach ($event in $events) {
-    $ts = [string]$event.recorded_at
+    $ts = [string](Get-EventFieldValue -event $event -Name 'recorded_at' -Default '')
     $eventDate = ''
     if (-not [string]::IsNullOrWhiteSpace($ts) -and $ts.Length -ge 10) {
         $eventDate = $ts.Substring(0, 10)
     }
     $categoryParts = Get-DerivedCategoryParts $event
-    $confidenceValue = Get-NullableInt $event.confidence
-    $guidanceValue = Get-NullableInt $event.guidance_quality
-    $exitCodeValue = Get-NullableInt $event.exit_code
+    $confidenceValue = Get-NullableInt (Get-EventFieldValue -event $event -Name 'confidence')
+    $guidanceValue = Get-NullableInt (Get-EventFieldValue -event $event -Name 'guidance_quality')
+    $exitCodeValue = Get-NullableInt (Get-EventFieldValue -event $event -Name 'exit_code')
 
-    if (-not [string]::IsNullOrWhiteSpace($Category) -and [string]$event.derived_category -ne $Category) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Category) -and [string](Get-EventFieldValue -event $event -Name 'derived_category' -Default '') -ne $Category) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Surface) -and $categoryParts[0] -ne $Surface) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Mode) -and $categoryParts[1] -ne $Mode) { continue }
     if (-not [string]::IsNullOrWhiteSpace($RunEffect) -and $categoryParts[2] -ne $RunEffect) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string]$event.fingerprint -ne $Fingerprint) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($AgentKind) -and [string]$event.agent_kind -ne $AgentKind) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($Role) -and [string]$event.role -ne $Role) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default '') -ne $Fingerprint) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($AgentKind) -and [string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default '') -ne $AgentKind) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($Role) -and [string](Get-EventFieldValue -event $event -Name 'role' -Default '') -ne $Role) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { continue }
     if (-not (Test-TextMatch $event $Text)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ConfidenceMin) -and ($null -eq $confidenceValue -or $confidenceValue -lt [int]$ConfidenceMin)) { continue }
@@ -228,10 +235,10 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($GuidanceMin) -and ($null -eq $guidanceValue -or $guidanceValue -lt [int]$GuidanceMin)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($GuidanceMax) -and ($null -eq $guidanceValue -or $guidanceValue -gt [int]$GuidanceMax)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ExitCode) -and ($null -eq $exitCodeValue -or $exitCodeValue -ne [int]$ExitCode)) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($ToolName) -and [string]$event.tool_name -ne $ToolName) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string]$event.owner_hint -ne $OwnerHint) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string]$event.component_hint -ne $ComponentHint) { continue }
-    if ($Workaround -and -not [bool]$event.workaround_used) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ToolName) -and [string](Get-EventFieldValue -event $event -Name 'tool_name' -Default '') -ne $ToolName) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string](Get-EventFieldValue -event $event -Name 'owner_hint' -Default '') -ne $OwnerHint) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string](Get-EventFieldValue -event $event -Name 'component_hint' -Default '') -ne $ComponentHint) { continue }
+    if ($Workaround -and -not [bool](Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Date) -and $eventDate -ne $Date) { continue }
     if (-not [string]::IsNullOrWhiteSpace($DateFrom) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -lt $DateFrom) { continue }
     if (-not [string]::IsNullOrWhiteSpace($DateTo) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -gt $DateTo) { continue }
@@ -267,17 +274,17 @@ switch ($Format) {
         $lines.Add("- Entries: $(@($filtered).Count)")
         $lines.Add('')
         foreach ($event in $filtered) {
-            $lines.Add("## $([string]$event.event_id): $([string]$event.title)")
+            $lines.Add("## $([string](Get-EventFieldValue -event $event -Name 'event_id' -Default '')): $([string](Get-EventFieldValue -event $event -Name 'title' -Default ''))")
             $lines.Add('')
-            $lines.Add("- Recorded: $([string]$event.recorded_at)")
-            $lines.Add("- Category: $([string]$event.derived_category)")
-            $lines.Add("- Fingerprint: $([string]$event.fingerprint)")
-            if ([string]$event.provenance_source -eq 'explicit') {
-                $lines.Add("- Agent: $([string]$event.agent_name)")
-                $lines.Add("- Agent kind: $([string]$event.agent_kind)")
-                $lines.Add("- Role: $([string]$event.role)")
+            $lines.Add("- Recorded: $([string](Get-EventFieldValue -event $event -Name 'recorded_at' -Default ''))")
+            $lines.Add("- Category: $([string](Get-EventFieldValue -event $event -Name 'derived_category' -Default ''))")
+            $lines.Add("- Fingerprint: $([string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default ''))")
+            if ([string](Get-EventFieldValue -event $event -Name 'provenance_source' -Default '') -eq 'explicit') {
+                $lines.Add("- Agent: $([string](Get-EventFieldValue -event $event -Name 'agent_name' -Default ''))")
+                $lines.Add("- Agent kind: $([string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default ''))")
+                $lines.Add("- Role: $([string](Get-EventFieldValue -event $event -Name 'role' -Default ''))")
             }
-            $sources = $event.sources
+            $sources = Get-EventFieldValue -event $event -Name 'sources'
             if ($null -ne $sources -and $sources -is [System.Array] -and $sources.Count -gt 0) {
                 $refs = @($sources | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.ref } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                 if ($refs.Count -gt 0) {
@@ -288,7 +295,7 @@ switch ($Format) {
             if ($tags.Count -gt 0) {
                 $lines.Add("- Tags: $($tags -join ', ')")
             }
-            $lines.Add("- Actual outcome: $([string]$event.actual_outcome)")
+            $lines.Add("- Actual outcome: $([string](Get-EventFieldValue -event $event -Name 'actual_outcome' -Default ''))")
             $lines.Add('')
         }
         $result = $lines -join [Environment]::NewLine

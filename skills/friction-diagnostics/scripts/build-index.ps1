@@ -29,7 +29,7 @@ Invoke-WithFileLock -LockRoot $IndexFile -ScriptBlock {
         return
     }
 
-    $events = Import-Events $EventsFile
+    $events = @(Import-Events $EventsFile)
     if ($events.Count -eq 0) {
         Remove-Item -Force -ErrorAction SilentlyContinue $IndexFile
         return

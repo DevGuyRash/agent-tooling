@@ -28,7 +28,7 @@ try {
     if (-not (Test-Path $eventsFile)) { throw "events.jsonl missing: $eventsFile" }
     if (-not (Test-Path $indexFile)) { throw "INDEX.md missing: $indexFile" }
 
-    $events = Import-Events $eventsFile
+    $events = @(Import-Events $eventsFile)
     if ($events.Count -ne 1) { throw 'events.jsonl should contain exactly one event after the first append' }
     if ($events[0].title -ne 'stdin ingest smoke') { throw 'events.jsonl should store plain title strings' }
     if ($events[0].schema_version -ne '3.0.0') { throw 'events.jsonl should use schema version 3.0.0' }
@@ -75,7 +75,7 @@ try {
         -Mode 'ambiguity' `
         -Impact 'confusing' | Out-Null
 
-    $events = Import-Events $eventsFile
+    $events = @(Import-Events $eventsFile)
     if ($events.Count -ne 2) { throw 'events.jsonl should contain two events after the second append' }
 
     & "$root/scripts/build-index.ps1" -RepoRoot $repoDir | Out-Null
@@ -85,7 +85,7 @@ try {
 
     # --- Test 3: AddTags rewrites safely and preserves array tags ---
     & "$root/scripts/report-friction.ps1" -EventsFile $eventsFile -IndexFile $indexFile -RepoRoot $repoDir -AddTags 'evt-0001' -AddTagsCsv 'powershell,smoke' | Out-Null
-    $events = Import-Events $eventsFile
+    $events = @(Import-Events $eventsFile)
     if (@($events[0].tags).Count -ne 2) { throw 'AddTags should preserve tags as an array' }
     if (@($events[0].tags) -notcontains 'powershell') { throw 'AddTags should add requested tags' }
 
@@ -263,7 +263,7 @@ try {
     $builder = [System.Text.StringBuilder]::new()
     foreach ($i in 1..250) {
         $minute = $i % 60
-        $null = $builder.AppendLine(([string]([pscustomobject]@{
+        $bulkEventJson = [pscustomobject]@{
             title = "bulk event $i"
             recorded_at = ('2026-03-30T00:{0:00}:00Z' -f $minute)
             event_id = ('evt-{0:0000}' -f $i)
@@ -273,7 +273,8 @@ try {
             sources = @(@{ ref = 'bulk' })
             repo_root = '/tmp/bulk'
             events_file = '/tmp/bulk/events.jsonl'
-        } | ConvertTo-Json -Compress))))
+        } | ConvertTo-Json -Compress
+        $null = $builder.AppendLine([string]$bulkEventJson)
     }
     [System.IO.File]::WriteAllText($bulkEventsFile, $builder.ToString(), [System.Text.UTF8Encoding]::new($false))
     $bulkQuery = & "$root/scripts/query-friction.ps1" -EventsFile $bulkEventsFile -Tag 'bulk' -Format json | ConvertFrom-Json

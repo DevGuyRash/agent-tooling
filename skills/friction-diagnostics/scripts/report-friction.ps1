@@ -159,10 +159,14 @@ if ($superprojectRoot -and $RepoRoot) {
 
 # --- Sources array: resolved from -FromJson or CLI flags ---
 $fromJsonSources = $null   # $null means not yet resolved from JSON
+$stdinJsonText = ''
+if ($FromJson -eq '-') {
+    $stdinJsonText = (@($input) | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+}
 
 $fromJsonPayload = $null
 if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
-    $fromJsonPayload = Import-EventJsonObject $FromJson
+    $fromJsonPayload = Import-EventJsonObject -Path $FromJson -StdinText $stdinJsonText
     $diagnosticPath = Get-JsonDiagnosticLabel $FromJson
 
     $Title = Get-JsonFieldValue $fromJsonPayload 'title' $Title ''
@@ -244,7 +248,7 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
             $i++
         }
         if ($errors.Count -gt 0) {
-            throw "Invalid sources in -FromJson $diagnosticPath:`n" + ($errors -join "`n")
+            throw "Invalid sources in -FromJson ${diagnosticPath}:`n" + ($errors -join "`n")
         }
         $fromJsonSources = $resolvedSources.ToArray()
     } else {
@@ -262,7 +266,7 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     foreach ($property in $fromJsonPayload.PSObject.Properties.Name) {
         if ($property -in $script:KNOWN_EVENT_KEYS) { continue }
         if ($property -eq 'events_file') { continue }
-        throw "Unsupported key in -FromJson $diagnosticPath: $property"
+        throw "Unsupported key in -FromJson ${diagnosticPath}: $property"
     }
 }
 
@@ -410,13 +414,13 @@ if ([string]::IsNullOrWhiteSpace($repoRelativeEventsFile)) {
 }
 
 # Build sources JSON array
-$sourcesJson = @($sources) | ConvertTo-Json -Compress -Depth 8
+$sourcesJson = @($sources) | ConvertTo-Json -Compress -Depth 8 -AsArray
 if ([string]::IsNullOrWhiteSpace($sourcesJson) -or $sourcesJson -eq 'null') {
     $sourcesJson = '[]'
 }
 
 $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
-    $existingEvents = Import-Events $EventsFile
+    $existingEvents = @(Import-Events $EventsFile)
 
     $eventId = 'evt-{0:d4}' -f ($existingEvents.Count + 1)
 
