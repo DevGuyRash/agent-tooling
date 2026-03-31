@@ -146,7 +146,6 @@ Why the bad version fails: it paraphrases instead of quoting verbatim. "The CI c
 ```sh
 sh scripts/report-friction.sh \
   --agent subagent-a \
-  --agent-kind subagent \
   --role research \
   --title "Missing CI helper" \
   --source-type file \
@@ -179,7 +178,6 @@ cat <<'EOF' | sh scripts/report-friction.sh --from-json -
   "reading": "The dispatch table had a column called 'Role' with 'Architecture' in it, and the instruction said 'Use --role <ROLE>'. I plugged in 'architecture' — the table column was labeled 'Role,' the placeholder said ROLE, seemed like a direct substitution. The CLI rejected it immediately. The actual slug is 'architecture-critic,' which doesn't appear anywhere in the table or the surrounding text.",
   "hindsight": "I should have run the CLI's own discovery command first — --list or --help on the dispatch subcommand — instead of inferring the slug from a display table. The table uses human-friendly labels; the CLI uses internal slugs. Those are different naming schemes and I treated them as one.",
   "agent_name": "orchestrator",
-  "agent_kind": "orchestrator",
   "sources": [
     {"type": "file", "ref": "SKILL.md", "line": 160}
   ]

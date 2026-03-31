@@ -1,0 +1,89 @@
+{
+  "$comment": "Categorization rules for friction event classification. Both categorize.sh and categorize.ps1 consume this file as the single source of truth for keyword patterns.",
+  "surface_patterns": {
+    "skill": ["skill.md", ".agents/skills", " skill ", "skill path"],
+    "instructions": ["agents.md", "instruction", "prompt", "dispatch", "runbook"],
+    "mcp": ["mcp", "model context protocol"],
+    "script": [".ps1", ".sh", "script ", "scripts/"],
+    "external-service": ["http", "api ", "endpoint", "server returned", "rate limit", "retry-after", "webhook"],
+    "environment": ["sandbox", "dependency", "filesystem", "permission", "cwd", "env ", "environment"],
+    "data": ["json", "yaml", "schema", "field", "csv", "deserialize", "serialize", "payload", "contract"],
+    "workflow": ["subagent", "handoff", "delegat", "context window", "compaction", "lost context", "workflow"],
+    "logic": ["algorithm", "reasoning", "logic", "assumption", "misread", "interpreted", "interpretation"],
+    "code": ["traceback", "stacktrace", "exception", "module", "compile", "test ", "runtime", "function", "code "],
+    "tool": ["cli", "command ", "subcommand", "flag ", "option ", "executable"]
+  },
+  "mode_patterns": {
+    "ambiguity": ["ambiguous", "unclear", "underspecified", "vague", "not sure", "uncertain"],
+    "contradiction": ["contradict", "inconsistent", "does not match docs", "did not match docs", "differs from docs"],
+    "name-resolution": [
+      "unknown dispatch role", "unknown role", "unknown slug",
+      "unsupported role", "unsupported slug",
+      "invalid choice", "invalid role", "invalid slug",
+      "unrecognized",
+      "not a valid role", "not a valid slug",
+      "could not resolve", "cannot resolve",
+      "no command named", "no such subcommand",
+      "role not defined", "slug not defined",
+      "role architecture not defined", "role staging not defined",
+      "slug architecture not defined", "slug staging not defined",
+      "undefined role", "undefined slug"
+    ],
+    "context-loss": ["lost context", "missing context", "lacked context", "forgot", "compaction"],
+    "missing": [
+      "recipe not found",
+      "recipe lint not found", "recipe test not found", "recipe build not found",
+      "file not found",
+      "script not found",
+      "profile not found",
+      "missing recipe", "missing file", "missing script", "missing dependency", "missing profile",
+      "no such file",
+      "does not exist",
+      "absent",
+      "does not contain recipe", "does not contain script", "does not contain file",
+      "does not contain the recipe", "does not contain the script", "does not contain the file",
+      "does not contain profile",
+      "does not define recipe", "does not define script", "does not define profile",
+      "unsupported profile", "unknown profile",
+      "profile missing", "recipe missing", "script missing", "file missing", "dependency missing"
+    ],
+    "permission": ["permission denied", "operation not permitted"],
+    "auth": ["unauthorized", "authentication", "invalid token"],
+    "timeout": ["timed out", "timeout", "deadline exceeded"],
+    "crash": ["traceback", "stacktrace", "stack backtrace", "panic", "segmentation fault", "crash", "exception"],
+    "schema": ["json", "yaml", "schema", "parse error", "type mismatch", "deserialize", "serialize", "shape mismatch"],
+    "validation": ["validation", "invalid", "required", "assertion failed"],
+    "output-mismatch": ["wrong output", "unexpected output", "output mismatch", "did not match", "rendered incorrectly", "misleading output"],
+    "nondeterminism": ["flaky", "sometimes", "intermittent", "nondetermin", "non-determin"],
+    "performance": ["slow", "performance", "hang", "thrash", "looped", "repeated retries"]
+  },
+  "run_effect_patterns": {
+    "blocked": [
+      "rate limit", "quota", "too many requests", "retry-after",
+      "http 403",
+      "timed out", "timeout",
+      "not found", "missing", "does not exist",
+      "does not contain recipe", "does not contain script", "does not contain file",
+      "does not define profile",
+      "not defined",
+      "permission denied",
+      "unauthorized", "forbidden",
+      "traceback", "stacktrace", "panic", "crash",
+      "error:", "failed",
+      "cannot ", "could not ", "unable to ",
+      "blocked"
+    ],
+    "noisy": ["retry", "retries", "thrash", "looped", "repeated", "extra steps", "flaky"],
+    "degraded": ["partial", "workaround", "fallback", "degraded", "succeeded but", "continued"]
+  },
+  "guidance_quality_patterns": {
+    "1": ["contradict", "inconsistent", "wrong output", "unexpected output", "output mismatch", "misleading", "did not match docs"],
+    "2": ["ambiguous", "unclear", "underspecified", "uncertain"]
+  },
+  "defaults": {
+    "surface": "unknown",
+    "mode": "other",
+    "run_effect": "continued",
+    "guidance_quality": 4
+  }
+}

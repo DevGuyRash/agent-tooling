@@ -4,6 +4,7 @@ param(
     [string]$ActionTaken = "",
     [string]$ExpectedOutcome = "",
     [string]$ActualOutcome = "",
+    [string]$Hindsight = "",
     [string]$Reading = "",
     [string]$ToolName = "",
     [string]$Command = "",
@@ -14,7 +15,6 @@ param(
     [string]$Mode = "",
     [string]$RunEffect = "",
     [string]$GuidanceQuality = "",
-    [string]$Impact = "",
     [string]$Confidence = "",
     [switch]$Help
 )
@@ -39,28 +39,51 @@ Output:
 
 . "$PSScriptRoot/_Common.ps1"
 
+$rulesFile = if ($env:RULES_FILE) { $env:RULES_FILE } else {
+    Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'data/categorization-rules.json'
+}
+if (-not (Test-Path -LiteralPath $rulesFile)) { throw "Categorization rules file not found: $rulesFile" }
+$rules = Get-Content -LiteralPath $rulesFile -Raw | ConvertFrom-Json -ErrorAction Stop
+
+# Normalize error message boilerplate and synonyms before pattern matching.
+# This reduces wording-dependent classification variance for the same error class.
+function Normalize-CategorizerText {
+    param([string]$Text)
+    $Text = $Text -replace '(?i)^(error|fatal|warning)\s*:\s*', 'error: '
+    $Text = $Text -replace '(?i)\bno such file or directory\b', 'file not found'
+    $Text = $Text -replace '\bENOENT\b', 'file not found'
+    $Text = $Text -replace '(?i)\bcannot find\b', 'file not found'
+    $Text = $Text -replace '(?i)\bcould not (find|locate)\b', 'file not found'
+    $Text = $Text -replace '(?i)\bpermission denied\b', 'permission denied'
+    $Text = $Text -replace '\bEACCES\b', 'permission denied'
+    $Text = $Text -replace '(?i)\baccess denied\b', 'permission denied'
+    $Text = $Text -replace '(?i)\bconnection refused\b', 'connection refused'
+    $Text = $Text -replace '\bECONNREFUSED\b', 'connection refused'
+    $Text = $Text -replace '(?i)\btimed? ?out\b', 'timeout'
+    $Text = $Text -replace '\bETIMEDOUT\b', 'timeout'
+    $Text = $Text -replace '(?i)\bdeadline exceeded\b', 'timeout'
+    $Text = $Text -replace '\b(the|a|an) ', ''
+    return $Text
+}
+
 $observationText = @($ActionTaken, $ActualOutcome, $ToolName, $Command, $Stderr) -join "`n"
+$observationText = Normalize-CategorizerText $observationText
 $observationText = $observationText.ToLowerInvariant()
 
-$sourceText = @($SourceRef, $InstructionText, $ExpectedOutcome, $Reading, $StdoutExcerpt) -join "`n"
+$sourceText = @($SourceRef, $InstructionText, $ExpectedOutcome, $Hindsight, $Reading, $StdoutExcerpt) -join "`n"
+$sourceText = Normalize-CategorizerText $sourceText
 $sourceText = $sourceText.ToLowerInvariant()
 
 $fullText = "$observationText`n$sourceText"
 
 function Detect-Surface {
     param([string]$text)
-    if ($text -match 'skill\.md|\.agents/skills| skill |skill path') { return 'skill' }
-    if ($text -match 'agents\.md|instruction|prompt|dispatch|runbook') { return 'instructions' }
-    if ($text -match 'mcp|model context protocol') { return 'mcp' }
-    if ($text -match '\.ps1|\.sh|script |scripts/') { return 'script' }
-    if ($text -match 'http|api |endpoint|server returned|rate limit|retry-after|webhook') { return 'external-service' }
-    if ($text -match 'sandbox|dependency|filesystem|permission|cwd|env |environment') { return 'environment' }
-    if ($text -match 'json|yaml|schema|field|csv|deserialize|serialize|payload|contract') { return 'data' }
-    if ($text -match 'subagent|handoff|delegat|context window|compaction|lost context|workflow') { return 'workflow' }
-    if ($text -match 'algorithm|reasoning|logic|assumption|misread|interpreted|interpretation') { return 'logic' }
-    if ($text -match 'traceback|stacktrace|exception|module|compile|test |runtime|function|code ') { return 'code' }
-    if ($text -match 'cli|command |subcommand|flag |option |executable') { return 'tool' }
-    return 'unknown'
+    foreach ($entry in $rules.surface_patterns.PSObject.Properties) {
+        foreach ($keyword in $entry.Value) {
+            if ($text.Contains($keyword)) { return $entry.Name }
+        }
+    }
+    return $rules.defaults.surface
 }
 
 $detectedObservedSurface = Detect-Surface $observationText
@@ -68,42 +91,34 @@ $detectedSurface = Detect-Surface $sourceText
 if ($detectedSurface -eq 'unknown') { $detectedSurface = $detectedObservedSurface }
 if ($detectedObservedSurface -eq 'unknown' -and $detectedSurface -ne 'unknown') { $detectedObservedSurface = $detectedSurface }
 
-$detectedMode = 'other'
-if ($fullText -match 'ambiguous|unclear|underspecified|vague|not sure|uncertain') { $detectedMode = 'ambiguity' }
-elseif ($fullText -match 'contradict|inconsistent|does not match docs|did not match docs|differs from docs') { $detectedMode = 'contradiction' }
-elseif ($fullText -match 'unknown dispatch role|unknown role|unknown slug|unsupported role|unsupported slug|unrecognized|invalid choice|invalid role|invalid slug|not a valid role|not a valid slug|could not resolve|cannot resolve|no command named|no such subcommand|role not defined|slug not defined|role .*not defined|slug .*not defined|undefined role|undefined slug') { $detectedMode = 'name-resolution' }
-elseif ($fullText -match 'lost context|missing context|lacked context|forgot|compaction') { $detectedMode = 'context-loss' }
-elseif ($fullText -match 'recipe not found|recipe .*not found|file not found|script not found|script .*not found|profile not found|profile .*not found|missing recipe|missing file|missing script|missing dependency|missing profile|no such file|does not exist|absent|does not contain recipe|does not contain script|does not contain file|does not contain the recipe|does not contain the script|does not contain the file|does not contain profile|does not define recipe|does not define script|does not define profile|unsupported profile|unknown profile|profile missing|recipe missing|script missing|file missing|dependency missing') { $detectedMode = 'missing' }
-elseif ($fullText -match 'permission denied|operation not permitted') { $detectedMode = 'permission' }
-elseif ($fullText -match 'unauthorized|authentication|invalid token') { $detectedMode = 'auth' }
-elseif ($fullText -match 'timed out|timeout|deadline exceeded') { $detectedMode = 'timeout' }
-elseif ($fullText -match 'traceback|stacktrace|stack backtrace|panic|segmentation fault|crash|exception') { $detectedMode = 'crash' }
-elseif ($fullText -match 'json|yaml|schema|parse error|type mismatch|deserialize|serialize|shape mismatch') { $detectedMode = 'schema' }
-elseif ($fullText -match 'validation|invalid|required|assertion failed') { $detectedMode = 'validation' }
-elseif ($fullText -match 'wrong output|unexpected output|output mismatch|did not match|rendered incorrectly|misleading output') { $detectedMode = 'output-mismatch' }
-elseif ($fullText -match 'flaky|sometimes|intermittent|nondetermin|non-determin') { $detectedMode = 'nondeterminism' }
-elseif ($fullText -match 'slow|performance|hang|thrash|looped|repeated retries') { $detectedMode = 'performance' }
-
-$detectedRunEffect = 'continued'
-if ($fullText -match 'rate limit|quota|too many requests|retry-after|http 403|timed out|timeout|not found|missing|does not exist|does not contain recipe|does not contain script|does not contain file|does not define profile|not defined|permission denied|unauthorized|forbidden|traceback|stacktrace|panic|crash|error:|failed|cannot |could not |unable to |blocked') { $detectedRunEffect = 'blocked' }
-elseif ($fullText -match 'retry|retries|thrash|looped|repeated|extra steps|flaky') { $detectedRunEffect = 'noisy' }
-elseif ($fullText -match 'partial|workaround|fallback|degraded|succeeded but|continued') { $detectedRunEffect = 'degraded' }
-
-$detectedGuidanceQuality = 4
-if ([string]::IsNullOrWhiteSpace($sourceText)) { $detectedGuidanceQuality = 0 }
-elseif ($sourceText -match 'contradict|inconsistent|wrong output|unexpected output|output mismatch|misleading|did not match docs') { $detectedGuidanceQuality = 1 }
-elseif ($sourceText -match 'ambiguous|unclear|underspecified|uncertain') { $detectedGuidanceQuality = 2 }
-
-# Legacy --Impact mapping
-switch ($Impact) {
-    { $_ -in 'blocked', 'degraded', 'noisy', 'continued' } { $RunEffect = $Impact }
-    'confusing' {
-        $GuidanceQuality = '2'
-        if ([string]::IsNullOrWhiteSpace($RunEffect)) { $RunEffect = 'continued' }
+$detectedMode = $rules.defaults.mode
+foreach ($entry in $rules.mode_patterns.PSObject.Properties) {
+    $matched = $false
+    foreach ($keyword in $entry.Value) {
+        if ($fullText.Contains($keyword)) { $matched = $true; break }
     }
-    'misleading' {
-        $GuidanceQuality = '1'
-        if ([string]::IsNullOrWhiteSpace($RunEffect)) { $RunEffect = 'degraded' }
+    if ($matched) { $detectedMode = $entry.Name; break }
+}
+
+$detectedRunEffect = $rules.defaults.run_effect
+foreach ($entry in $rules.run_effect_patterns.PSObject.Properties) {
+    $matched = $false
+    foreach ($keyword in $entry.Value) {
+        if ($fullText.Contains($keyword)) { $matched = $true; break }
+    }
+    if ($matched) { $detectedRunEffect = $entry.Name; break }
+}
+
+if ([string]::IsNullOrWhiteSpace($sourceText)) {
+    $detectedGuidanceQuality = 0
+} else {
+    $detectedGuidanceQuality = $rules.defaults.guidance_quality
+    foreach ($entry in $rules.guidance_quality_patterns.PSObject.Properties) {
+        $matched = $false
+        foreach ($keyword in $entry.Value) {
+            if ($sourceText.Contains($keyword)) { $matched = $true; break }
+        }
+        if ($matched) { $detectedGuidanceQuality = [int]$entry.Name; break }
     }
 }
 

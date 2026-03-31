@@ -4,7 +4,7 @@ The categorizer uses three axes. This avoids a giant brittle enum while still pr
 
 ## Numeric scales
 
-Two fields in the event schema use numeric values:
+Canonical scale definitions (labels and aliases) live in `friction-event-schema.json` under `x-scales`. The tables below expand on the intended meaning of each level.
 
 ### Confidence (1–5)
 

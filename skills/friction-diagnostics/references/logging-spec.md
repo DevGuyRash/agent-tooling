@@ -26,34 +26,15 @@ Blank or whitespace-only narrative values are invalid.
 
 ## Core event fields
 
-The canonical event record includes:
-
-- schema and taxonomy versions
-- event id
-- incident id
-- fingerprint
-- recorded timestamp
-- canonical events file path
-- repo root when available
-- agent identity fields
-- narrative fields
-- derived category fields
-- redaction metadata
-- optional sources
+The canonical field definitions, types, constraints, and numeric scales live in `friction-event-schema.json` (the single source of truth). All scripts derive field lists, enums, and scales from that file at runtime.
 
 Optional fields are omitted from the stored record when empty, zero, or false (sparse output).
-
-Numeric scales used in the schema:
-
-- **confidence** (1–5): 1 = wild guess, 2 = low confidence, 3 = moderate, 4 = high, 5 = near certain
-- **guidance_quality** (0–4): 0 = N/A, 1 = misleading, 2 = ambiguous, 3 = partial, 4 = clear
 
 ## Identity fields
 
 The event stream may record:
 
 - `agent_name`
-- `agent_kind`
 - `role`
 
 These fields are descriptive only. There is no parent-child orchestration graph and no session ID.
@@ -61,18 +42,7 @@ When provenance is not provided explicitly, it should remain unspecified rather 
 
 ## Sources
 
-Sources are stored as a `sources` array so code and non-code references can be represented uniformly.
-
-Source members may include:
-
-- `type`
-- `ref`
-- `line`
-- `end_line`
-- `symbol`
-- `excerpt`
-- `selector`
-- `label`
+Sources are stored as a `sources` array so code and non-code references can be represented uniformly. Valid source types and member fields are defined in `friction-event-schema.json`.
 
 ## Sanitization
 

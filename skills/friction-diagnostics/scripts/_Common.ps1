@@ -1,38 +1,87 @@
 Set-StrictMode -Version Latest
 
-$script:SCHEMA_VERSION = '3.0.0'
-$script:TAXONOMY_VERSION = '2.0.0'
+# --- Schema SSOT ---
+# All field definitions live in friction-event-schema.json.
+# Scripts load it once and derive field lists from x- metadata.
+$script:SCHEMA_FILE = if ($env:SCHEMA_FILE) { $env:SCHEMA_FILE } else {
+    Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'friction-event-schema.json'
+}
+$script:_SchemaCache = $null
+
+function Get-EventSchema {
+    if ($null -eq $script:_SchemaCache) {
+        if (-not (Test-Path -LiteralPath $script:SCHEMA_FILE)) {
+            throw "Schema file not found: $($script:SCHEMA_FILE)"
+        }
+        $script:_SchemaCache = Get-Content -LiteralPath $script:SCHEMA_FILE -Raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    return $script:_SchemaCache
+}
+
+function Get-SchemaFieldsWhere {
+    param([scriptblock]$Filter)
+    $schema = Get-EventSchema
+    $fields = @()
+    foreach ($prop in $schema.properties.PSObject.Properties) {
+        if (& $Filter $prop.Value) {
+            $fields += $prop.Name
+        }
+    }
+    return $fields
+}
+
+function Get-SchemaFieldProp {
+    param(
+        [string]$FieldName,
+        [string]$PropName
+    )
+    $schema = Get-EventSchema
+    $field = $schema.properties.PSObject.Properties[$FieldName]
+    if ($null -eq $field) { return $null }
+    $prop = $field.Value.PSObject.Properties[$PropName]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
+
+function Get-SchemaMdRenderOrder {
+    $schema = Get-EventSchema
+    return @($schema.'x-render-md-order')
+}
+
+function Get-SchemaAggregateOrder {
+    $schema = Get-EventSchema
+    return @($schema.'x-aggregate-order')
+}
+
+function Get-SchemaSearchableFields {
+    return Get-SchemaFieldsWhere { param($v) $v.'x-searchable' -eq $true }
+}
+
+function Get-SchemaAllFields {
+    $schema = Get-EventSchema
+    return @($schema.properties.PSObject.Properties.Name)
+}
+
+# Version constants derived from schema SSOT.
+try {
+    $schema = Get-EventSchema
+    $script:SCHEMA_VERSION = if ($schema.'x-schema-version') { $schema.'x-schema-version' } else { '3.0.0' }
+    $script:TAXONOMY_VERSION = if ($schema.'x-taxonomy-version') { $schema.'x-taxonomy-version' } else { '2.0.0' }
+} catch {
+    $script:SCHEMA_VERSION = '3.0.0'
+    $script:TAXONOMY_VERSION = '2.0.0'
+}
+
+# Legacy compatibility: derive KNOWN_EVENT_KEYS from schema at load time.
+# This will be removed once all scripts consume schema functions directly.
 $script:KNOWN_EVENT_KEYS = @(
-    'title',
-    'instruction_text',
-    'action_taken',
-    'expected_outcome',
-    'actual_outcome',
-    'reading',
-    'hindsight',
-    'observed_surface',
-    'surface',
-    'mode',
-    'run_effect',
-    'guidance_quality',
-    'impact',
-    'confidence',
-    'command',
-    'tool_name',
-    'exit_code',
-    'stderr',
-    'stdout_excerpt',
-    'owner_hint',
-    'component_hint',
-    'workaround_used',
-    'workaround_note',
-    'retries_lost',
-    'minutes_lost',
-    'fingerprint_key',
-    'tags',
-    'agent_name',
-    'agent_kind',
-    'role',
+    'title', 'instruction_text', 'action_taken', 'expected_outcome',
+    'actual_outcome', 'reading', 'hindsight', 'observed_surface',
+    'surface', 'mode', 'run_effect', 'guidance_quality', 'confidence',
+    'command', 'tool_name', 'exit_code', 'stderr', 'stdout_excerpt',
+    'owner_hint', 'component_hint', 'workaround_used', 'workaround_note',
+    'retries_lost', 'minutes_lost', 'fingerprint_key', 'tags',
+    'agent_name', 'role', 'superproject_root', 'submodule_path',
     'sources'
 )
 
@@ -288,7 +337,13 @@ function Test-NarrativeLength {
     }
 }
 
-$script:VALID_SOURCE_TYPES = @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other')
+try {
+    $schema = Get-EventSchema
+    $sourceTypeEnum = $schema.properties.sources.items.properties.type.enum
+    $script:VALID_SOURCE_TYPES = if ($null -ne $sourceTypeEnum -and $sourceTypeEnum.Count -gt 0) { @($sourceTypeEnum) } else { @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other') }
+} catch {
+    $script:VALID_SOURCE_TYPES = @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other')
+}
 
 function Test-SourceType {
     param([string]$SourceType)

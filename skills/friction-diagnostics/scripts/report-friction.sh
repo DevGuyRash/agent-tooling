@@ -41,7 +41,6 @@ Source fields (single source via CLI; use --from-json for multiple):
 
 Identity and context:
   --agent TEXT
-  --agent-kind TEXT
   --role TEXT
   --repo-root PATH
 
@@ -51,7 +50,6 @@ Classification overrides:
   --mode VALUE
   --run-effect VALUE
   --guidance-quality VALUE   (0-4 integer or clear/ambiguous/misleading/not-applicable)
-  --impact VALUE
   --confidence VALUE         (1-5 integer or low/medium/high)
 
 Optional context:
@@ -88,7 +86,6 @@ actual_outcome=
 reading=
 hindsight=
 agent_name=${FRICTION_AGENT_NAME-}
-agent_kind=${FRICTION_AGENT_KIND-}
 role=
 repo_root=
 observed_surface=
@@ -96,7 +93,6 @@ surface=
 mode=
 run_effect=
 guidance_quality=
-impact=
 confidence=
 command_text=
 tool_name=
@@ -276,7 +272,6 @@ keys = [
     ("reading", "json_reading"),
     ("hindsight", "json_hindsight"),
     ("agent_name", "json_agent_name"),
-    ("agent_kind", "json_agent_kind"),
     ("role", "json_role"),
     ("repo_root", "json_repo_root"),
     ("observed_surface", "json_observed_surface"),
@@ -284,7 +279,6 @@ keys = [
     ("mode", "json_mode"),
     ("run_effect", "json_run_effect"),
     ("guidance_quality", "json_guidance_quality"),
-    ("impact", "json_impact"),
     ("confidence", "json_confidence"),
     ("command", "json_command_text"),
     ("tool_name", "json_tool_name"),
@@ -353,7 +347,6 @@ while [ $# -gt 0 ]; do
     --reading) reading=${2-}; shift 2 ;;
     --hindsight) hindsight=${2-}; shift 2 ;;
     --agent) agent_name=${2-}; shift 2 ;;
-    --agent-kind) agent_kind=${2-}; shift 2 ;;
     --role) role=${2-}; shift 2 ;;
     --repo-root) repo_root=${2-}; shift 2 ;;
     --observed-surface) observed_surface=${2-}; shift 2 ;;
@@ -361,7 +354,6 @@ while [ $# -gt 0 ]; do
     --mode) mode=${2-}; shift 2 ;;
     --run-effect) run_effect=${2-}; shift 2 ;;
     --guidance-quality) guidance_quality=${2-}; shift 2 ;;
-    --impact) impact=${2-}; shift 2 ;;
     --confidence) confidence=${2-}; shift 2 ;;
     --command) command_text=${2-}; shift 2 ;;
     --tool-name) tool_name=${2-}; shift 2 ;;
@@ -399,7 +391,6 @@ if [ -n "$from_json" ]; then
   reading=$(load_json_field "$reading" "" json_reading)
   hindsight=$(load_json_field "$hindsight" "" json_hindsight)
   agent_name=$(load_json_field "$agent_name" "" json_agent_name)
-  agent_kind=$(load_json_field "$agent_kind" "" json_agent_kind)
   role=$(load_json_field "$role" "" json_role)
   repo_root=$(load_json_field "$repo_root" "" json_repo_root)
   observed_surface=$(load_json_field "$observed_surface" "" json_observed_surface)
@@ -407,7 +398,6 @@ if [ -n "$from_json" ]; then
   mode=$(load_json_field "$mode" "" json_mode)
   run_effect=$(load_json_field "$run_effect" "" json_run_effect)
   guidance_quality=$(load_json_field "$guidance_quality" "" json_guidance_quality)
-  impact=$(load_json_field "$impact" "" json_impact)
   confidence=$(load_json_field "$confidence" "" json_confidence)
   command_text=$(load_json_field "$command_text" "" json_command_text)
   tool_name=$(load_json_field "$tool_name" "" json_tool_name)
@@ -552,7 +542,6 @@ owner_hint=$(sanitize_text "$owner_hint")
 component_hint=$(sanitize_text "$component_hint")
 workaround_note=$(sanitize_text "$workaround_note")
 agent_name=$(sanitize_text "$agent_name")
-agent_kind=$(sanitize_text "$agent_kind")
 role=$(sanitize_text "$role")
 
 # Validate narrative depth
@@ -567,11 +556,6 @@ validate_narrative_length "actual_outcome" "$actual_outcome" 15
 validate_narrative_length "reading" "$reading" 30
 validate_narrative_length "hindsight" "$hindsight" 20
 
-provenance_source=unspecified
-if [ -n "$(trim "$agent_name")$(trim "$agent_kind")$(trim "$role")" ]; then
-  provenance_source=explicit
-fi
-
 # Run categorizer
 cat_output=$(
   sh "$SCRIPT_DIR/categorize.sh" \
@@ -580,16 +564,17 @@ cat_output=$(
     --action-taken "$action_taken" \
     --expected-outcome "$expected_outcome" \
     --actual-outcome "$actual_outcome" \
+    --hindsight "$hindsight" \
     --reading "$reading" \
     --command "$command_text" \
     --tool-name "$tool_name" \
     --stderr "$stderr_text" \
+    --stdout-excerpt "$stdout_excerpt" \
     --observed-surface "$observed_surface" \
     --surface "$surface" \
     --mode "$mode" \
     --run-effect "$run_effect" \
     --guidance-quality "$guidance_quality" \
-    --impact "$impact" \
     --confidence "$confidence"
 )
 
@@ -669,11 +654,9 @@ tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
   printf '%s,' "$(json_string "repo_root" "$repo_root")"
   json_string_if "superproject_root" "$superproject_root"
   json_string_if "submodule_path" "$submodule_path"
-  # Identity (agent_name/agent_kind always present; role sparse)
+  # Identity (agent_name always present; role sparse)
   printf '%s,' "$(json_string "agent_name" "$agent_name")"
-  printf '%s,' "$(json_string "agent_kind" "$agent_kind")"
   json_string_if "role" "$role"
-  printf '%s,' "$(json_string "provenance_source" "$provenance_source")"
   # Core narrative (always present)
   printf '%s,' "$(json_string "title" "$title")"
   printf '%s,' "$(json_string "instruction_text" "$instruction_text")"

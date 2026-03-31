@@ -1,7 +1,59 @@
 #!/bin/sh
 
-SCHEMA_VERSION=3.0.0
-TAXONOMY_VERSION=2.0.0
+# --- Schema SSOT ---
+# All field definitions live in friction-event-schema.json.
+# Scripts query it via jq at startup to derive field lists.
+SCHEMA_FILE="${SCHEMA_FILE:-$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)/friction-event-schema.json}"
+_SCHEMA_CACHE=
+
+load_schema() {
+  if [ -z "$_SCHEMA_CACHE" ]; then
+    [ -f "$SCHEMA_FILE" ] || die "Schema file not found: $SCHEMA_FILE"
+    _SCHEMA_CACHE=$(cat "$SCHEMA_FILE")
+  fi
+  printf '%s\n' "$_SCHEMA_CACHE"
+}
+
+# Return newline-separated field names matching a jq filter on field properties.
+# Usage: schema_fields_where '.["x-searchable"] == true'
+schema_fields_where() {
+  filter=$1
+  load_schema | jq -r --arg f "$filter" \
+    '[.properties | to_entries[] | select(.value | '"$filter"') | .key] | .[]'
+}
+
+# Return the ordered field list for md rendering.
+schema_md_render_order() {
+  load_schema | jq -r '.["x-render-md-order"][]'
+}
+
+# Return the ordered field list for report aggregation.
+schema_aggregate_order() {
+  load_schema | jq -r '.["x-aggregate-order"][]'
+}
+
+# Return all known event field names.
+schema_all_fields() {
+  load_schema | jq -r '.properties | keys[]'
+}
+
+# Return a specific x- property for a given field.
+# Usage: schema_field_prop "title" "x-render-md"
+schema_field_prop() {
+  field=$1
+  prop=$2
+  load_schema | jq -r --arg f "$field" --arg p "$prop" '.properties[$f][$p] // empty'
+}
+
+# Return searchable field names as a jq-compatible array string.
+# Useful for injecting into jq filters at runtime.
+schema_searchable_fields_jq() {
+  load_schema | jq -c '[.properties | to_entries[] | select(.value["x-searchable"] == true) | .key]'
+}
+
+# Version constants derived from schema SSOT.
+SCHEMA_VERSION=$(load_schema | jq -r '.["x-schema-version"] // "3.0.0"' 2>/dev/null || echo "3.0.0")
+TAXONOMY_VERSION=$(load_schema | jq -r '.["x-taxonomy-version"] // "2.0.0"' 2>/dev/null || echo "2.0.0")
 
 die() {
   printf '%s\n' "$*" >&2
@@ -323,6 +375,9 @@ safe_int() {
   esac
 }
 
+# Normalization functions: the canonical definitions live in the schema
+# x-scales block. These case statements are a performance cache — they
+# MUST match x-scales. The smoke tests validate consistency.
 normalize_run_effect() {
   case "$1" in
     blocked|degraded|noisy|continued) printf '%s\n' "$1" ;;
@@ -369,7 +424,10 @@ validate_narrative_length() {
 }
 
 # Allowed source types for the sources array.
-VALID_SOURCE_TYPES="file url system-instruction conversation audio visual documentation other"
+VALID_SOURCE_TYPES=$(load_schema | jq -r '.properties.sources.items.properties.type.enum // [] | join(" ")' 2>/dev/null)
+if [ -z "$VALID_SOURCE_TYPES" ]; then
+  VALID_SOURCE_TYPES="file url system-instruction conversation audio visual documentation other"
+fi
 
 validate_source_type() {
   stype=$1

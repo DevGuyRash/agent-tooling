@@ -49,7 +49,6 @@ cat <<'EOF' | sh scripts/report-friction.sh --from-json -
   "actual_outcome": "rg --files scripts returned no match for ci-check.sh or any variant. The file is completely absent from the repository.",
   "reading": "The instruction at line 18 uses a concrete path in imperative form: 'Run scripts/ci-check.sh'. There is no conditional qualifier or note about generating the script first. Imperative instructions with literal paths refer to existing artifacts, so I treated it as a pre-existing helper. Its absence is a documentation gap.",
   "agent_name": "orchestrator",
-  "agent_kind": "orchestrator",
   "sources": [
     {"type": "file", "ref": "AGENTS.md", "line": 18}
   ]
@@ -58,7 +57,7 @@ EOF
 ```
 
 Use stdin JSON whenever the payload contains backticks, `$()`, copied command output, or multiple lines that would be brittle as inline shell arguments.
-The `agent_name` and `agent_kind` fields in the example above are explicit provenance supplied by the caller, not defaults that the tool invents.
+The `agent_name` field in the example above is explicit provenance supplied by the caller, not a default that the tool invents.
 The JSON payload does not include a `tags` field. Events are written with an empty tags array. After filing, run the suggested `--add-tags` command shown in the tool output.
 
 ## Canonical target resolution
@@ -90,14 +89,12 @@ Use the query script to filter the canonical event stream:
 sh scripts/query-friction.sh --category instructions/missing/blocked --format md
 sh scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
 sh scripts/query-friction.sh --tag dispatch --text slug --format json
-sh scripts/query-friction.sh --agent-kind subagent --format json
 sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
 ```
 
 ```powershell
 & .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
 & .\scripts\query-friction.ps1 -Surface skill -RunEffect blocked -DateFrom 2026-03-01
-& .\scripts\query-friction.ps1 -AgentKind subagent -Format json
 & .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
 ```
 
@@ -113,7 +110,7 @@ If an agent needs an ad hoc parse beyond the built-in query filters, it can read
 
 ```sh
 jq '.title' .local/reports/friction/events.jsonl
-jq -s 'map(select(.agent_kind == "subagent"))' .local/reports/friction/events.jsonl
+jq -s 'map(select(.role == "research"))' .local/reports/friction/events.jsonl
 ```
 
 Practical read flow:

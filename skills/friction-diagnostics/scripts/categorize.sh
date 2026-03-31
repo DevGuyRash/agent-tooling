@@ -5,6 +5,9 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/_common.sh"
 
+RULES_FILE="${RULES_FILE:-$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)/data/categorization-rules.json}"
+[ -f "$RULES_FILE" ] || die "Categorization rules file not found: $RULES_FILE"
+
 print_help() {
   cat <<'EOF'
 Usage:
@@ -16,6 +19,7 @@ Options:
   --action-taken TEXT
   --expected-outcome TEXT
   --actual-outcome TEXT
+  --hindsight TEXT
   --reading TEXT
   --tool-name TEXT
   --command TEXT
@@ -26,7 +30,6 @@ Options:
   --mode VALUE
   --run-effect VALUE
   --guidance-quality VALUE
-  --impact VALUE
   --confidence VALUE
   --help
 
@@ -47,6 +50,7 @@ instruction_text=
 action_taken=
 expected_outcome=
 actual_outcome=
+hindsight=
 reading=
 tool_name=
 command_text=
@@ -57,7 +61,6 @@ surface_override=
 mode_override=
 run_effect_override=
 guidance_quality_override=
-impact_override=
 confidence_override=
 
 while [ $# -gt 0 ]; do
@@ -67,6 +70,7 @@ while [ $# -gt 0 ]; do
     --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
     --actual-outcome) actual_outcome=${2-}; shift 2 ;;
+    --hindsight) hindsight=${2-}; shift 2 ;;
     --reading) reading=${2-}; shift 2 ;;
     --tool-name) tool_name=${2-}; shift 2 ;;
     --command) command_text=${2-}; shift 2 ;;
@@ -77,12 +81,31 @@ while [ $# -gt 0 ]; do
     --mode) mode_override=${2-}; shift 2 ;;
     --run-effect) run_effect_override=${2-}; shift 2 ;;
     --guidance-quality) guidance_quality_override=${2-}; shift 2 ;;
-    --impact) impact_override=${2-}; shift 2 ;;
     --confidence) confidence_override=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
 done
+
+# Normalize error message boilerplate and synonyms before pattern matching.
+# This reduces wording-dependent classification variance for the same error class.
+normalize_categorizer_text() {
+  printf '%s' "$1" | sed -E \
+    -e 's/^(error|fatal|warning|Error|Fatal|Warning|ERROR|FATAL|WARNING)[[:space:]]*:[[:space:]]*/error: /g' \
+    -e 's/\b[Nn]o such file or directory\b/file not found/g' \
+    -e 's/\bENOENT\b/file not found/g' \
+    -e 's/\bcannot find\b/file not found/g' \
+    -e 's/\bcould not (find|locate)\b/file not found/g' \
+    -e 's/\b[Pp]ermission denied\b/permission denied/g' \
+    -e 's/\bEACCES\b/permission denied/g' \
+    -e 's/\baccess denied\b/permission denied/g' \
+    -e 's/\b[Cc]onnection refused\b/connection refused/g' \
+    -e 's/\bECONNREFUSED\b/connection refused/g' \
+    -e 's/\b[Tt]imed? ?out\b/timeout/g' \
+    -e 's/\bETIMEDOUT\b/timeout/g' \
+    -e 's/\bdeadline exceeded\b/timeout/g' \
+    -e 's/\b(the|a|an) //g'
+}
 
 observation_text=$(
   printf '%s\n%s\n%s\n%s\n%s\n' \
@@ -92,16 +115,19 @@ observation_text=$(
     "$command_text" \
     "$stderr_text"
 )
+observation_text=$(normalize_categorizer_text "$observation_text")
 observation_text=$(lower "$observation_text")
 
 source_text=$(
-  printf '%s\n%s\n%s\n%s\n%s\n' \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
     "$source_ref" \
     "$instruction_text" \
     "$expected_outcome" \
+    "$hindsight" \
     "$reading" \
     "$stdout_excerpt"
 )
+source_text=$(normalize_categorizer_text "$source_text")
 source_text=$(lower "$source_text")
 
 full_text=$(
@@ -110,44 +136,18 @@ full_text=$(
 
 detect_surface() {
   text=$1
-  case "$text" in
-    *"skill.md"*|*".agents/skills"*|*" skill "*|*"skill path"*)
-      printf 'skill\n'
-      ;;
-    *"agents.md"*|*"instruction"*|*"prompt"*|*"dispatch"*|*"runbook"*)
-      printf 'instructions\n'
-      ;;
-    *"mcp"*|*"model context protocol"*)
-      printf 'mcp\n'
-      ;;
-    *".ps1"*|*".sh"*|*"script "*|*"scripts/"*)
-      printf 'script\n'
-      ;;
-    *"http"*|*"api "*|*"endpoint"*|*"server returned"*|*"rate limit"*|*"retry-after"*|*"webhook"*)
-      printf 'external-service\n'
-      ;;
-    *"sandbox"*|*"dependency"*|*"filesystem"*|*"permission"*|*"cwd"*|*"env "*|*"environment"*)
-      printf 'environment\n'
-      ;;
-    *"json"*|*"yaml"*|*"schema"*|*"field"*|*"csv"*|*"deserialize"*|*"serialize"*|*"payload"*|*"contract"*)
-      printf 'data\n'
-      ;;
-    *"subagent"*|*"handoff"*|*"delegat"*|*"context window"*|*"compaction"*|*"lost context"*|*"workflow"*)
-      printf 'workflow\n'
-      ;;
-    *"algorithm"*|*"reasoning"*|*"logic"*|*"assumption"*|*"misread"*|*"interpreted"*|*"interpretation"*)
-      printf 'logic\n'
-      ;;
-    *"traceback"*|*"stacktrace"*|*"exception"*|*"module"*|*"compile"*|*"test "*|*"runtime"*|*"function"*|*"code "*)
-      printf 'code\n'
-      ;;
-    *"cli"*|*"command "*|*"subcommand"*|*"flag "*|*"option "*|*"executable"*)
-      printf 'tool\n'
-      ;;
-    *)
-      printf 'unknown\n'
-      ;;
-  esac
+  match=$(printf '%s' "$text" | jq -Rr --slurpfile rules "$RULES_FILE" '
+    . as $text
+    | $rules[0].surface_patterns
+    | to_entries[]
+    | select(.value | any(. as $kw | $text | contains($kw)))
+    | .key
+  ' | head -1)
+  if [ -n "$match" ]; then
+    printf '%s\n' "$match"
+  else
+    jq -r '.defaults.surface' "$RULES_FILE"
+  fi
 }
 
 observed_surface=$(detect_surface "$observation_text")
@@ -159,95 +159,44 @@ if [ "$observed_surface" = "unknown" ] && [ "$surface" != "unknown" ]; then
   observed_surface=$surface
 fi
 
-mode=other
-case "$full_text" in
-  *"ambiguous"*|*"unclear"*|*"underspecified"*|*"vague"*|*"not sure"*|*"uncertain"*)
-    mode=ambiguity
-    ;;
-  *"contradict"*|*"inconsistent"*|*"does not match docs"*|*"did not match docs"*|*"differs from docs"*)
-    mode=contradiction
-    ;;
-  *"unknown dispatch role"*|*"unknown role"*|*"unknown slug"*|*"unsupported role"*|*"unsupported slug"*|*"invalid choice"*|*"invalid role"*|*"invalid slug"*|*"unrecognized"*|*"not a valid role"*|*"not a valid slug"*|*"could not resolve"*|*"cannot resolve"*|*"no command named"*|*"no such subcommand"*|*"role not defined"*|*"slug not defined"*|*"role "*not\ defined*|*"slug "*not\ defined*|*"undefined role"*|*"undefined slug"*)
-    mode=name-resolution
-    ;;
-  *"lost context"*|*"missing context"*|*"lacked context"*|*"forgot"*|*"compaction"*)
-    mode=context-loss
-    ;;
-  *"recipe not found"*|*"recipe "*not\ found*|*"file not found"*|*"script not found"*|*"script "*not\ found*|*"profile not found"*|*"profile "*not\ found*|*"missing recipe"*|*"missing file"*|*"missing script"*|*"missing dependency"*|*"missing profile"*|*"no such file"*|*"does not exist"*|*"absent"*|*"does not contain recipe"*|*"does not contain script"*|*"does not contain file"*|*"does not contain the recipe"*|*"does not contain the script"*|*"does not contain the file"*|*"does not contain profile"*|*"does not define recipe"*|*"does not define script"*|*"does not define profile"*|*"unsupported profile"*|*"unknown profile"*|*"profile missing"*|*"recipe missing"*|*"script missing"*|*"file missing"*|*"dependency missing"*)
-    mode=missing
-    ;;
-  *"permission denied"*|*"operation not permitted"*)
-    mode=permission
-    ;;
-  *"unauthorized"*|*"authentication"*|*"invalid token"*)
-    mode=auth
-    ;;
-  *"timed out"*|*"timeout"*|*"deadline exceeded"*)
-    mode=timeout
-    ;;
-  *"traceback"*|*"stacktrace"*|*"stack backtrace"*|*"panic"*|*"segmentation fault"*|*"crash"*|*"exception"*)
-    mode=crash
-    ;;
-  *"json"*|*"yaml"*|*"schema"*|*"parse error"*|*"type mismatch"*|*"deserialize"*|*"serialize"*|*"shape mismatch"*)
-    mode=schema
-    ;;
-  *"validation"*|*"invalid"*|*"required"*|*"assertion failed"*)
-    mode=validation
-    ;;
-  *"wrong output"*|*"unexpected output"*|*"output mismatch"*|*"did not match"*|*"rendered incorrectly"*|*"misleading output"*)
-    mode=output-mismatch
-    ;;
-  *"flaky"*|*"sometimes"*|*"intermittent"*|*"nondetermin"*|*"non-determin"*)
-    mode=nondeterminism
-    ;;
-  *"slow"*|*"performance"*|*"hang"*|*"thrash"*|*"looped"*|*"repeated retries"*)
-    mode=performance
-    ;;
-esac
+mode=$(printf '%s' "$full_text" | jq -Rr --slurpfile rules "$RULES_FILE" '
+  . as $text
+  | $rules[0].mode_patterns
+  | to_entries[]
+  | select(.value | any(. as $kw | $text | contains($kw)))
+  | .key
+' | head -1)
+if [ -z "$mode" ]; then
+  mode=$(jq -r '.defaults.mode' "$RULES_FILE")
+fi
 
-run_effect=continued
-case "$full_text" in
-  *"rate limit"*|*"quota"*|*"too many requests"*|*"retry-after"*|*"http 403"*|*"timed out"*|*"timeout"*|*"not found"*|*"missing"*|*"does not exist"*|*"does not contain recipe"*|*"does not contain script"*|*"does not contain file"*|*"does not define profile"*|*"not defined"*|*"permission denied"*|*"unauthorized"*|*"forbidden"*|*"traceback"*|*"stacktrace"*|*"panic"*|*"crash"*|*"error:"*|*"failed"*|*"cannot "*|*"could not "*|*"unable to "*|*"blocked"*)
-    run_effect=blocked
-    ;;
-  *"retry"*|*"retries"*|*"thrash"*|*"looped"*|*"repeated"*|*"extra steps"*|*"flaky"*)
-    run_effect=noisy
-    ;;
-  *"partial"*|*"workaround"*|*"fallback"*|*"degraded"*|*"succeeded but"*|*"continued"*)
-    run_effect=degraded
-    ;;
-esac
+run_effect=$(printf '%s' "$full_text" | jq -Rr --slurpfile rules "$RULES_FILE" '
+  . as $text
+  | $rules[0].run_effect_patterns
+  | to_entries[]
+  | select(.value | any(. as $kw | $text | contains($kw)))
+  | .key
+' | head -1)
+if [ -z "$run_effect" ]; then
+  run_effect=$(jq -r '.defaults.run_effect' "$RULES_FILE")
+fi
 
-guidance_quality=4
-case "$source_text" in
-  '')
-    guidance_quality=0
-    ;;
-  *"contradict"*|*"inconsistent"*|*"wrong output"*|*"unexpected output"*|*"output mismatch"*|*"misleading"*|*"did not match docs"*)
-    guidance_quality=1
-    ;;
-  *"ambiguous"*|*"unclear"*|*"underspecified"*|*"uncertain"*)
-    guidance_quality=2
-    ;;
-esac
-
-case "$impact_override" in
-  blocked|degraded|noisy|continued)
-    run_effect_override=$impact_override
-    ;;
-  confusing)
-    guidance_quality_override=2
-    if [ -z "$run_effect_override" ]; then
-      run_effect_override=continued
-    fi
-    ;;
-  misleading)
-    guidance_quality_override=1
-    if [ -z "$run_effect_override" ]; then
-      run_effect_override=degraded
-    fi
-    ;;
-esac
+if [ -z "$source_text" ]; then
+  guidance_quality=0
+else
+  gq_match=$(printf '%s' "$source_text" | jq -Rr --slurpfile rules "$RULES_FILE" '
+    . as $text
+    | $rules[0].guidance_quality_patterns
+    | to_entries[]
+    | select(.value | any(. as $kw | $text | contains($kw)))
+    | .key
+  ' | head -1)
+  if [ -n "$gq_match" ]; then
+    guidance_quality=$gq_match
+  else
+    guidance_quality=$(jq -r '.defaults.guidance_quality' "$RULES_FILE")
+  fi
+fi
 
 if [ -n "$observed_surface_override" ]; then
   observed_surface=$observed_surface_override

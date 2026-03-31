@@ -17,7 +17,7 @@ try {
 
     # --- Test 1: stdin JSON with v3 sources array ---
     $stdinJson = @'
-{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","reading":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","hindsight":"Use -FromJson - for all payloads containing special characters or multiline text.","surface":"workflow","mode":"ambiguity","impact":"confusing","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
+{"title":"stdin ingest smoke","instruction_text":"Load event fields from stdin with sk-live-123 and shell-sensitive punctuation like \"quotes\".","action_taken":"Reported friction with -FromJson - to test the JSON input path.","expected_outcome":"PowerShell should accept stdin JSON without shell-escaping payload text.","actual_outcome":"The event was streamed from stdin and recorded successfully.","reading":"stdin JSON is the safe transport for shell-sensitive structured input, avoiding escaping issues with special characters.","hindsight":"Use -FromJson - for all payloads containing special characters or multiline text.","surface":"workflow","mode":"ambiguity","sources":[{"type":"documentation","ref":"test","label":"smoke test source"}]}
 '@
 
     $reportOutput = $stdinJson | & "$root/scripts/report-friction.ps1" `
@@ -33,7 +33,7 @@ try {
     if ($events[0].title -ne 'stdin ingest smoke') { throw 'events.jsonl should store plain title strings' }
     if ($events[0].schema_version -ne '3.0.0') { throw 'events.jsonl should use schema version 3.0.0' }
     if ($events[0].instruction_text -notmatch '\[REDACTED_API_TOKEN\]') { throw 'report-friction.ps1 should always sanitize API tokens' }
-    if ($events[0].provenance_source -ne 'unspecified') { throw 'events.jsonl should mark omitted provenance as unspecified' }
+    # provenance_source removed — identity fields are shown when non-empty
     # v3: sources array present, no anchors or instruction_source
     $raw = [System.IO.File]::ReadAllLines($eventsFile)[0]
     if ($raw -notmatch '"sources":\[') { throw 'events.jsonl should contain sources array' }
@@ -59,7 +59,6 @@ try {
     & "$root/scripts/report-friction.ps1" `
         -RepoRoot $repoDir `
         -Agent 'subagent' `
-        -AgentKind 'subagent' `
         -Role 'parallel' `
         -Title 'Follow-on entry' `
         -SourceType 'file' `
@@ -72,8 +71,7 @@ try {
         -Reading 'The repo-scoped design should aggregate multiple agents without task directories or session files.' `
         -Hindsight 'Pre-confirm the events file path before recording to avoid misdirected writes.' `
         -Surface 'skill' `
-        -Mode 'ambiguity' `
-        -Impact 'confusing' | Out-Null
+        -Mode 'ambiguity' | Out-Null
 
     $events = @(Import-Events $eventsFile)
     if ($events.Count -ne 2) { throw 'events.jsonl should contain two events after the second append' }
@@ -89,10 +87,10 @@ try {
     if (@($events[0].tags).Count -ne 2) { throw 'AddTags should preserve tags as an array' }
     if (@($events[0].tags) -notcontains 'powershell') { throw 'AddTags should add requested tags' }
 
-    # --- Test 4: Query by agent-kind ---
-    $queryJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -AgentKind 'subagent' -Format json
+    # --- Test 4: Query by role ---
+    $queryJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -Role 'parallel' -Format json
     $queryEvents = $queryJson | ConvertFrom-Json
-    if (@($queryEvents).Count -ne 1) { throw 'query-friction.ps1 should filter rows by agent kind' }
+    if (@($queryEvents).Count -ne 1) { throw 'query-friction.ps1 should filter rows by role' }
     if ([string]$queryEvents[0].title -ne 'Follow-on entry') { throw 'query-friction.ps1 should return matching event objects' }
 
     # --- Test 5: Expanded filters + report generator ---
@@ -294,6 +292,15 @@ try {
         -Reading 'I treated the profile and slug names as valid identifiers because the wording was imperative and concrete.'
     if ($categorizeOutput -notcontains 'mode=name-resolution') { throw 'categorize.ps1 should classify unsupported slug / not-defined profile wording as name-resolution' }
     if ($categorizeOutput -notcontains 'run_effect=blocked') { throw 'categorize.ps1 should classify unsupported resource wording as blocked' }
+    $reviewRegressionOutput = & "$root/scripts/categorize.ps1" `
+        -SourceRef 'AGENTS.md' `
+        -InstructionText 'Run the lint recipe for the architecture role.' `
+        -ActionTaken 'I ran the documented command from the helper wrapper.' `
+        -ExpectedOutcome 'The architecture role and lint recipe would both be available.' `
+        -ActualOutcome 'role architecture not defined and recipe lint not found' `
+        -Reading 'I treated the named role and recipe as concrete identifiers because the instructions presented them as existing names.'
+    if ($reviewRegressionOutput -notcontains 'mode=name-resolution') { throw 'categorize.ps1 should preserve name-resolution for role <name> not defined phrasing' }
+    if ($reviewRegressionOutput -notcontains 'run_effect=blocked') { throw 'categorize.ps1 should preserve blocked for recipe <name> not found phrasing' }
 
     # --- Test 7: Invalid JSON diagnostics ---
     $invalidJsonPath = Join-Path $repoDir 'invalid-event.json'

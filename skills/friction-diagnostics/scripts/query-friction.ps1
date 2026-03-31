@@ -7,7 +7,6 @@ param(
     [string]$Mode = '',
     [string]$RunEffect = '',
     [string]$Fingerprint = '',
-    [string]$AgentKind = '',
     [string]$Role = '',
     [string]$Tag = '',
     [string]$Text = '',
@@ -49,7 +48,6 @@ Filters:
   -Mode VALUE
   -RunEffect VALUE
   -Fingerprint VALUE
-  -AgentKind VALUE
   -Role VALUE
   -Tag VALUE               Single tag filter; repeat support is not implemented
   -Text PATTERN            Case-insensitive substring search across narrative fields
@@ -184,7 +182,7 @@ function Test-TextMatch {
     param($event, [string]$query)
     if ([string]::IsNullOrWhiteSpace($query)) { return $true }
     $needle = $query.ToLowerInvariant()
-    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight')) {
+    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight', 'instruction_text', 'expected_outcome')) {
         $value = [string](Get-EventFieldValue -event $event -Name $field -Default '')
         if ($value.ToLowerInvariant().Contains($needle)) {
             return $true
@@ -226,7 +224,6 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($Mode) -and $categoryParts[1] -ne $Mode) { continue }
     if (-not [string]::IsNullOrWhiteSpace($RunEffect) -and $categoryParts[2] -ne $RunEffect) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default '') -ne $Fingerprint) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($AgentKind) -and [string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default '') -ne $AgentKind) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Role) -and [string](Get-EventFieldValue -event $event -Name 'role' -Default '') -ne $Role) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { continue }
     if (-not (Test-TextMatch $event $Text)) { continue }
@@ -279,23 +276,102 @@ switch ($Format) {
             $lines.Add("- Recorded: $([string](Get-EventFieldValue -event $event -Name 'recorded_at' -Default ''))")
             $lines.Add("- Category: $([string](Get-EventFieldValue -event $event -Name 'derived_category' -Default ''))")
             $lines.Add("- Fingerprint: $([string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default ''))")
-            if ([string](Get-EventFieldValue -event $event -Name 'provenance_source' -Default '') -eq 'explicit') {
-                $lines.Add("- Agent: $([string](Get-EventFieldValue -event $event -Name 'agent_name' -Default ''))")
-                $lines.Add("- Agent kind: $([string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default ''))")
-                $lines.Add("- Role: $([string](Get-EventFieldValue -event $event -Name 'role' -Default ''))")
+            $incidentIdVal = [string](Get-EventFieldValue -event $event -Name 'incident_id' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($incidentIdVal)) { $lines.Add("- Incident: $incidentIdVal") }
+            $agentNameVal = [string](Get-EventFieldValue -event $event -Name 'agent_name' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($agentNameVal)) { $lines.Add("- Agent: $agentNameVal") }
+            $roleVal = [string](Get-EventFieldValue -event $event -Name 'role' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($roleVal)) { $lines.Add("- Role: $roleVal") }
+            $confVal = Get-NullableInt (Get-EventFieldValue -event $event -Name 'confidence')
+            $guidVal = Get-NullableInt (Get-EventFieldValue -event $event -Name 'guidance_quality')
+            if (($null -ne $confVal -and $confVal -ne 0) -or ($null -ne $guidVal -and $guidVal -ne 0)) {
+                $confDisplay = if ($null -ne $confVal) { $confVal } else { 0 }
+                $guidDisplay = if ($null -ne $guidVal) { $guidVal } else { 0 }
+                $lines.Add("- Confidence: $confDisplay | Guidance: $guidDisplay")
             }
+            $exitCodeVal = Get-NullableInt (Get-EventFieldValue -event $event -Name 'exit_code')
+            if ($null -ne $exitCodeVal) { $lines.Add("- Exit code: $exitCodeVal") }
+            $toolNameVal = [string](Get-EventFieldValue -event $event -Name 'tool_name' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($toolNameVal)) { $lines.Add("- Tool: $toolNameVal") }
+            $commandVal = [string](Get-EventFieldValue -event $event -Name 'command' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($commandVal)) { $lines.Add("- Command: $commandVal") }
+            $ownerHintVal = [string](Get-EventFieldValue -event $event -Name 'owner_hint' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($ownerHintVal)) { $lines.Add("- Owner: $ownerHintVal") }
+            $componentHintVal = [string](Get-EventFieldValue -event $event -Name 'component_hint' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($componentHintVal)) { $lines.Add("- Component: $componentHintVal") }
+            $workaroundUsedVal = [bool](Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false)
+            if ($workaroundUsedVal) { $lines.Add("- Workaround used: yes") }
+            $workaroundNoteVal = [string](Get-EventFieldValue -event $event -Name 'workaround_note' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($workaroundNoteVal)) { $lines.Add("- Workaround: $workaroundNoteVal") }
+            $retriesLostVal = Get-NullableInt (Get-EventFieldValue -event $event -Name 'retries_lost')
+            if ($null -ne $retriesLostVal -and $retriesLostVal -gt 0) { $lines.Add("- Retries lost: $retriesLostVal") }
+            $minutesLostVal = Get-NullableInt (Get-EventFieldValue -event $event -Name 'minutes_lost')
+            if ($null -ne $minutesLostVal -and $minutesLostVal -gt 0) { $lines.Add("- Minutes lost: $minutesLostVal") }
+            $superprojectRootVal = [string](Get-EventFieldValue -event $event -Name 'superproject_root' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($superprojectRootVal)) { $lines.Add("- Superproject: $superprojectRootVal") }
+            $submodulePathVal = [string](Get-EventFieldValue -event $event -Name 'submodule_path' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($submodulePathVal)) { $lines.Add("- Submodule: $submodulePathVal") }
             $sources = Get-EventFieldValue -event $event -Name 'sources'
             if ($null -ne $sources -and $sources -is [System.Array] -and $sources.Count -gt 0) {
-                $refs = @($sources | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.ref } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                if ($refs.Count -gt 0) {
-                    $lines.Add("- Sources: $($refs -join ', ')")
+                $sourceEntries = @($sources | Where-Object { $null -ne $_ } | ForEach-Object {
+                    $ref = [string]$_.ref
+                    if ([string]::IsNullOrWhiteSpace($ref)) { return }
+                    $lineNum = $null
+                    $endLineNum = $null
+                    if ($null -ne $_.line) { $lineNum = $_.line }
+                    if ($null -ne $_.end_line) { $endLineNum = $_.end_line }
+                    if ($null -ne $lineNum) {
+                        $ref += ':' + $lineNum
+                        if ($null -ne $endLineNum) { $ref += '-' + $endLineNum }
+                    }
+                    $ref
+                } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($sourceEntries.Count -gt 0) {
+                    $lines.Add("- Sources: $($sourceEntries -join ', ')")
                 }
             }
             $tags = Get-EventTags $event
             if ($tags.Count -gt 0) {
                 $lines.Add("- Tags: $($tags -join ', ')")
             }
-            $lines.Add("- Actual outcome: $([string](Get-EventFieldValue -event $event -Name 'actual_outcome' -Default ''))")
+            $stderrVal = [string](Get-EventFieldValue -event $event -Name 'stderr' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($stderrVal)) {
+                $lines.Add("- Stderr: $($stderrVal.Split([Environment]::NewLine)[0])")
+            }
+            $stdoutExcerptVal = [string](Get-EventFieldValue -event $event -Name 'stdout_excerpt' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($stdoutExcerptVal)) {
+                $lines.Add("- Stdout excerpt: $($stdoutExcerptVal.Split([Environment]::NewLine)[0])")
+            }
+            $instructionTextVal = [string](Get-EventFieldValue -event $event -Name 'instruction_text' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($instructionTextVal)) {
+                $lines.Add('')
+                $lines.Add("**Instruction:** $instructionTextVal")
+            }
+            $actionTakenVal = [string](Get-EventFieldValue -event $event -Name 'action_taken' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($actionTakenVal)) {
+                $lines.Add('')
+                $lines.Add("**Action taken:** $actionTakenVal")
+            }
+            $expectedOutcomeVal = [string](Get-EventFieldValue -event $event -Name 'expected_outcome' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($expectedOutcomeVal)) {
+                $lines.Add('')
+                $lines.Add("**Expected:** $expectedOutcomeVal")
+            }
+            $actualOutcomeVal = [string](Get-EventFieldValue -event $event -Name 'actual_outcome' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($actualOutcomeVal)) {
+                $lines.Add('')
+                $lines.Add("**Actual:** $actualOutcomeVal")
+            }
+            $readingVal = [string](Get-EventFieldValue -event $event -Name 'reading' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($readingVal)) {
+                $lines.Add('')
+                $lines.Add("**Reading:** $readingVal")
+            }
+            $hindsightVal = [string](Get-EventFieldValue -event $event -Name 'hindsight' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($hindsightVal)) {
+                $lines.Add('')
+                $lines.Add("**Hindsight:** $hindsightVal")
+            }
             $lines.Add('')
         }
         $result = $lines -join [Environment]::NewLine

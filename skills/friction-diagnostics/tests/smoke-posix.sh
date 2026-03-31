@@ -61,7 +61,6 @@ assert_file "$DEFAULT_EVENTS"
 assert_file "$DEFAULT_INDEX"
 assert_contains '"event_id":"evt-0001"' "$DEFAULT_EVENTS"
 assert_contains '"schema_version":"3.0.0"' "$DEFAULT_EVENTS"
-assert_contains '"provenance_source":"unspecified"' "$DEFAULT_EVENTS"
 # Sources array replaces anchors + instruction_source
 assert_contains '"sources":[{' "$DEFAULT_EVENTS"
 assert_contains '"type":"file"' "$DEFAULT_EVENTS"
@@ -97,7 +96,6 @@ assert_not_contains '**Generated:**' "$DEFAULT_INDEX"
 # --- Test 2: Multi-agent convergence ---
 "$ROOT/scripts/report-friction.sh" \
   --agent subagent-a \
-  --agent-kind subagent \
   --role research \
   --title "Missing CI helper" \
   --source-type file \
@@ -128,8 +126,8 @@ case "$SECOND_EVENT" in
 esac
 
 # --- Test 4: Query by source-ref ---
-QUERY_JSON=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --agent-kind subagent --format json)
-printf '%s\n' "$QUERY_JSON" | grep -q '"agent_kind": "subagent"' || printf '%s\n' "$QUERY_JSON" | grep -q '"agent_kind":"subagent"' || fail "query should return subagent event"
+QUERY_JSON=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --role research --format json)
+printf '%s\n' "$QUERY_JSON" | grep -q '"role"' || fail "query should return event with role=research"
 
 QUERY_MD=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --source-ref "$ROOT/SKILL.md" --format md)
 printf '%s\n' "$QUERY_MD" | grep -q 'Dispatch role slug mismatch' || fail "source-ref query should match first event"
@@ -145,7 +143,6 @@ cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS"
   "reading": "The SKILL.md documentation recommends stdin JSON for shell-sensitive text. I tested this path to verify it handles multi-source payloads correctly. The documentation's recommendation is accurate: stdin avoids shell-escaping hazards that affect direct flags.",
   "hindsight": "Use --from-json - as the default path for any payload with special characters, multiline text, or multiple sources.",
   "agent_name": "subagent-b",
-  "agent_kind": "subagent",
   "role": "verification",
   "sources": [
     {"type": "documentation", "ref": "test", "label": "smoke test source"},
@@ -304,7 +301,6 @@ EXPLICIT_EVENTS=$EXPLICIT_DIR/events.jsonl
 "$ROOT/scripts/report-friction.sh" \
   --events-file "$EXPLICIT_EVENTS" \
   --agent external \
-  --agent-kind agent \
   --role isolated \
   --title "Explicit file target" \
   --source-type documentation \
@@ -317,7 +313,7 @@ EXPLICIT_EVENTS=$EXPLICIT_DIR/events.jsonl
   --hindsight "Use --events-file explicitly in CI or isolated test contexts to prevent accidental writes to the repo default stream."
 assert_file "$EXPLICIT_EVENTS"
 assert_file "$EXPLICIT_DIR/INDEX.md"
-assert_contains '"provenance_source":"explicit"' "$EXPLICIT_EVENTS"
+assert_contains '"agent_name":"external"' "$EXPLICIT_EVENTS"
 
 # --- Test 14: Alternate .local* directory ---
 ALT_REPO=$(mktemp -d)
@@ -600,6 +596,15 @@ CATEGORIZE_OUTPUT=$("$ROOT/scripts/categorize.sh" \
   --reading "The instructions referenced a specific profile and slug. I treated those names as valid identifiers because the wording was imperative and concrete.")
 printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^mode=name-resolution$' || fail "categorizer should classify unsupported slug / not-defined profile wording as name-resolution"
 printf '%s\n' "$CATEGORIZE_OUTPUT" | grep -q '^run_effect=blocked$' || fail "categorizer should classify missing/unsupported resource wording as blocked"
+REVIEW_REGRESSION_OUTPUT=$("$ROOT/scripts/categorize.sh" \
+  --source-ref "AGENTS.md" \
+  --instruction-text "Run the lint recipe for the architecture role." \
+  --action-taken "I ran the documented command from the helper wrapper." \
+  --expected-outcome "The architecture role and lint recipe would both be available." \
+  --actual-outcome "role architecture not defined and recipe lint not found" \
+  --reading "I treated the named role and recipe as concrete identifiers because the instructions presented them as existing names.")
+printf '%s\n' "$REVIEW_REGRESSION_OUTPUT" | grep -q '^mode=name-resolution$' || fail "categorizer should preserve name-resolution for role <name> not defined phrasing"
+printf '%s\n' "$REVIEW_REGRESSION_OUTPUT" | grep -q '^run_effect=blocked$' || fail "categorizer should preserve blocked for recipe <name> not found phrasing"
 
 # --- Test 24: --from-json spaced sources still drive primary source classification ---
 cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json - >/dev/null
@@ -649,6 +654,44 @@ SUBMODULE_EVENTS=$(printf '%s\n' "$SUBMODULE_OUTPUT" | sed -n 's/^FRICTION_EVENT
 assert_file "$SUBMODULE_EVENTS"
 assert_contains '"superproject_root":"'"$SUBMODULE_REMOTE"'"' "$SUBMODULE_EVENTS"
 assert_contains '"submodule_path":"deps/fixture"' "$SUBMODULE_EVENTS"
+
+# --- Test: Schema consistency for normalization aliases ---
+SCHEMA="$ROOT/friction-event-schema.json"
+
+# Verify run_effect aliases in schema match _common.sh normalize_run_effect
+SCHEMA_FILE="$SCHEMA" . "$ROOT/scripts/_common.sh"
+RE_ALIASES=$(jq -r '.["x-scales"].run_effect_aliases | to_entries[] | "\(.key)=\(.value)"' "$SCHEMA" | LC_ALL=C sort)
+for pair in $RE_ALIASES; do
+  alias_key=$(printf '%s' "$pair" | cut -d= -f1)
+  expected=$(printf '%s' "$pair" | cut -d= -f2)
+  actual=$(normalize_run_effect "$alias_key")
+  [ "$actual" = "$expected" ] || fail "run_effect alias mismatch: '$alias_key' -> '$actual' (schema says '$expected')"
+done
+
+# Verify confidence aliases
+CONF_ALIASES=$(jq -r '.["x-scales"].confidence_aliases | to_entries[] | "\(.key)=\(.value)"' "$SCHEMA" | LC_ALL=C sort)
+for pair in $CONF_ALIASES; do
+  alias_key=$(printf '%s' "$pair" | cut -d= -f1)
+  expected=$(printf '%s' "$pair" | cut -d= -f2)
+  actual=$(normalize_confidence "$alias_key")
+  [ "$actual" = "$expected" ] || fail "confidence alias mismatch: '$alias_key' -> '$actual' (schema says '$expected')"
+done
+
+# Verify guidance_quality aliases
+GQ_ALIASES=$(jq -r '.["x-scales"].guidance_quality_aliases | to_entries[] | "\(.key)=\(.value)"' "$SCHEMA" | LC_ALL=C sort)
+for pair in $GQ_ALIASES; do
+  alias_key=$(printf '%s' "$pair" | cut -d= -f1)
+  expected=$(printf '%s' "$pair" | cut -d= -f2)
+  actual=$(normalize_guidance_quality "$alias_key")
+  [ "$actual" = "$expected" ] || fail "guidance_quality alias mismatch: '$alias_key' -> '$actual' (schema says '$expected')"
+done
+
+# Verify run_effect enum covers all valid values
+RE_ENUM=$(jq -r '.properties.run_effect.enum[]' "$SCHEMA" | LC_ALL=C sort)
+for val in $RE_ENUM; do
+  result=$(normalize_run_effect "$val")
+  [ "$result" = "$val" ] || fail "run_effect enum value '$val' should pass through normalize_run_effect unchanged, got '$result'"
+done
 
 # --- Cleanup ---
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS" \

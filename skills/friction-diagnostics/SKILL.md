@@ -55,7 +55,17 @@ sh <skills-file-root>/scripts/report-friction.sh \
 
 WHEN payload text contains shell-sensitive content such as backticks, `$()`, or multiple lines THEN you SHOULD use `--from-json -` via stdin instead of direct flags. See `references/examples.md` for the JSON format.
 
-WHEN `--agent`, `--agent-kind`, or `--role` are omitted THEN the tool records provenance as unspecified rather than guessing.
+WHEN `--agent` or `--role` are omitted THEN the tool records provenance as unspecified rather than guessing.
+
+### Fingerprint stability
+
+Fingerprints are computed from `surface|mode|source_ref|date`. Narrative text does NOT affect the fingerprint. However, if the auto-categorizer assigns a different `surface` or `mode` for the same error (because wording varied), the fingerprint changes.
+
+WHEN you encounter a recurring error pattern that you have logged before THEN you SHOULD provide `--surface` and `--mode` explicitly to lock the categorization and keep the fingerprint stable.
+
+WHEN the auto-categorizer struggles with an error class (the same underlying issue gets different categories across events) THEN you SHOULD use `--fingerprint-key "descriptive key"` to override the default fingerprint seed entirely.
+
+WHEN logging an error similar to a prior event in the stream THEN you SHOULD use consistent terminology in narrative fields (especially `actual_outcome` and `action_taken`) to help the categorizer's pattern matching produce stable results.
 
 ### Command 2 — tag
 

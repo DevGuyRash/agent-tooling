@@ -46,7 +46,7 @@ sh scripts/report-friction.sh \
 
 `--from-json PATH|-` still works, but it is for compatibility and integrations. If JSON is used, prefer stdin over temp files. Also prefer stdin JSON whenever the payload contains shell-sensitive text such as backticks, `$()`, copied command output, or multiple lines.
 
-Provenance is optional. If `--agent`, `--agent-kind`, or `--role` are omitted, the tool records provenance as unspecified instead of guessing.
+Provenance is optional. If `--agent` or `--role` are omitted, the tool records provenance as unspecified instead of guessing.
 
 PowerShell stdin example:
 

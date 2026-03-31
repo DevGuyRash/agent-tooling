@@ -1,6 +1,8 @@
 README.md
 SKILL.md
 assets/agents-md-snippet.md
+data/categorization-rules.json
+friction-event-schema.json
 evals/evals.json
 evals/trigger-prompts.json
 references/examples.md

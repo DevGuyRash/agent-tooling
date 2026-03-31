@@ -22,7 +22,6 @@ Filters:
   --mode VALUE
   --run-effect VALUE
   --fingerprint VALUE
-  --agent-kind VALUE
   --role VALUE
   --tag VALUE               Single tag filter; repeat support is not implemented
   --text PATTERN            Case-insensitive substring search across narrative fields
@@ -57,7 +56,6 @@ surface=
 mode=
 run_effect=
 fingerprint=
-agent_kind=
 role=
 tag=
 text=
@@ -110,7 +108,6 @@ while [ $# -gt 0 ]; do
     --mode) mode=${2-}; shift 2 ;;
     --run-effect) run_effect=${2-}; shift 2 ;;
     --fingerprint) fingerprint=${2-}; shift 2 ;;
-    --agent-kind) agent_kind=${2-}; shift 2 ;;
     --role) role=${2-}; shift 2 ;;
     --tag) tag=${2-}; shift 2 ;;
     --text) text=${2-}; shift 2 ;;
@@ -193,7 +190,6 @@ jq -s \
   --arg mode "$mode" \
   --arg run_effect "$run_effect" \
   --arg fingerprint "$fingerprint" \
-  --arg agent_kind "$agent_kind" \
   --arg role "$role" \
   --arg tag "$tag" \
   --arg text "$text" \
@@ -223,7 +219,7 @@ jq -s \
   def text_match($needle):
     if $needle == "" then true
     else
-      ([.title, .actual_outcome, .action_taken, .reading, .hindsight]
+      ([.title, .actual_outcome, .action_taken, .reading, .hindsight, .instruction_text, .expected_outcome]
        | map((. // "") | ascii_downcase)
        | join("\u0000")
        | contains($needle | ascii_downcase))
@@ -238,7 +234,6 @@ jq -s \
       ($mode == "" or (category_parts[1] == $mode)) and
       ($run_effect == "" or (category_parts[2] == $run_effect)) and
       ($fingerprint == "" or (.fingerprint // "") == $fingerprint) and
-      ($agent_kind == "" or (.agent_kind // "") == $agent_kind) and
       ($role == "" or (.role // "") == $role) and
       ($tag == "" or (event_tags | index($tag)) != null) and
       text_match($text) and
@@ -303,14 +298,36 @@ case "$format" in
             + "\n- Recorded: \(.recorded_at // "")"
             + "\n- Category: \(.derived_category // "")"
             + "\n- Fingerprint: \(.fingerprint // "")"
-            + (if (.provenance_source // "") == "explicit" then
-                "\n- Agent: \(.agent_name // "")"
-                + "\n- Agent kind: \(.agent_kind // "")"
-                + "\n- Role: \(.role // "")"
+            + (if ((.incident_id // "") | length) > 0 then "\n- Incident: \(.incident_id)" else "" end)
+            + (if ((.agent_name // "") | length) > 0 then "\n- Agent: \(.agent_name)" else "" end)
+            + (if ((.role // "") | length) > 0 then "\n- Role: \(.role)" else "" end)
+            + (if ((.confidence // 0) != 0 or (.guidance_quality // 0) != 0) then "\n- Confidence: \(.confidence // 0) | Guidance: \(.guidance_quality // 0)" else "" end)
+            + (if (.exit_code // null) != null then "\n- Exit code: \(.exit_code)" else "" end)
+            + (if ((.tool_name // "") | length) > 0 then "\n- Tool: \(.tool_name)" else "" end)
+            + (if ((.command // "") | length) > 0 then "\n- Command: \(.command)" else "" end)
+            + (if ((.owner_hint // "") | length) > 0 then "\n- Owner: \(.owner_hint)" else "" end)
+            + (if ((.component_hint // "") | length) > 0 then "\n- Component: \(.component_hint)" else "" end)
+            + (if (.workaround_used // false) == true then "\n- Workaround used: yes" else "" end)
+            + (if ((.workaround_note // "") | length) > 0 then "\n- Workaround: \(.workaround_note)" else "" end)
+            + (if ((.retries_lost // 0) | tonumber) > 0 then "\n- Retries lost: \(.retries_lost)" else "" end)
+            + (if ((.minutes_lost // 0) | tonumber) > 0 then "\n- Minutes lost: \(.minutes_lost)" else "" end)
+            + (if ((.superproject_root // "") | length) > 0 then "\n- Superproject: \(.superproject_root)" else "" end)
+            + (if ((.submodule_path // "") | length) > 0 then "\n- Submodule: \(.submodule_path)" else "" end)
+            + (if ((.sources // []) | length) > 0 then
+                "\n- Sources: " + ([(.sources // [])[] |
+                  (.ref // "") + (if (.line // null) != null then ":" + (.line | tostring) + (if (.end_line // null) != null then "-" + (.end_line | tostring) else "" end) else "" end)
+                ] | join(", "))
               else "" end)
-            + ([(.sources // [])[]? | .ref // empty] | if length > 0 then "\n- Sources: " + join(", ") else "" end)
             + ((.tags // []) | if length > 0 then "\n- Tags: " + join(", ") else "" end)
-            + "\n- Actual outcome: \(.actual_outcome // "")\n"
+            + (if ((.stderr // "") | length) > 0 then "\n- Stderr: \(.stderr | split("\n")[0])" else "" end)
+            + (if ((.stdout_excerpt // "") | length) > 0 then "\n- Stdout excerpt: \(.stdout_excerpt | split("\n")[0])" else "" end)
+            + (if ((.instruction_text // "") | length) > 0 then "\n\n**Instruction:** \(.instruction_text)" else "" end)
+            + (if ((.action_taken // "") | length) > 0 then "\n\n**Action taken:** \(.action_taken)" else "" end)
+            + (if ((.expected_outcome // "") | length) > 0 then "\n\n**Expected:** \(.expected_outcome)" else "" end)
+            + (if ((.actual_outcome // "") | length) > 0 then "\n\n**Actual:** \(.actual_outcome)" else "" end)
+            + (if ((.reading // "") | length) > 0 then "\n\n**Reading:** \(.reading)" else "" end)
+            + (if ((.hindsight // "") | length) > 0 then "\n\n**Hindsight:** \(.hindsight)" else "" end)
+            + "\n"
         ' "$filtered_tmp"
       }
     )

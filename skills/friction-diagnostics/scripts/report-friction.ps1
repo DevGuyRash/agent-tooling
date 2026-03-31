@@ -15,7 +15,6 @@ param(
     [string]$Mode = '',
     [string]$RunEffect = '',
     [string]$GuidanceQuality = '',
-    [string]$Impact = '',
     [string]$Confidence = '',
     [string]$Command = '',
     [string]$ToolName = '',
@@ -32,7 +31,6 @@ param(
     [string]$AddTags = '',
     [string]$AddTagsCsv = '',
     [Alias('Agent')][string]$AgentName = $(if ($env:FRICTION_AGENT_NAME) { $env:FRICTION_AGENT_NAME } else { '' }),
-    [string]$AgentKind = $(if ($env:FRICTION_AGENT_KIND) { $env:FRICTION_AGENT_KIND } else { '' }),
     [string]$Role = $(if ($env:FRICTION_ROLE) { $env:FRICTION_ROLE } else { '' }),
     [string]$SourceType = '',
     [string]$SourceRef = '',
@@ -78,7 +76,6 @@ Source fields (single source via CLI; use -FromJson for multiple):
 
 Provenance:
   -AgentName VALUE    Optional descriptive agent name. Alias: -Agent
-  -AgentKind VALUE    Optional agent kind such as orchestrator or subagent.
   -Role VALUE         Optional descriptive role value.
                       If omitted, provenance is recorded as unspecified.
 
@@ -181,7 +178,6 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $Mode = Get-JsonFieldValue $fromJsonPayload 'mode' $Mode ''
     $RunEffect = Get-JsonFieldValue $fromJsonPayload 'run_effect' $RunEffect ''
     $GuidanceQuality = Get-JsonFieldValue $fromJsonPayload 'guidance_quality' $GuidanceQuality ''
-    $Impact = Get-JsonFieldValue $fromJsonPayload 'impact' $Impact ''
     $Confidence = Get-JsonFieldValue $fromJsonPayload 'confidence' $Confidence ''
     $Command = Get-JsonFieldValue $fromJsonPayload 'command' $Command ''
     $ToolName = Get-JsonFieldValue $fromJsonPayload 'tool_name' $ToolName ''
@@ -196,7 +192,6 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $MinutesLost = Get-JsonFieldValue $fromJsonPayload 'minutes_lost' $MinutesLost '0'
     $FingerprintKey = Get-JsonFieldValue $fromJsonPayload 'fingerprint_key' $FingerprintKey ''
     $AgentName = Get-JsonFieldValue $fromJsonPayload 'agent_name' $AgentName ''
-    $AgentKind = Get-JsonFieldValue $fromJsonPayload 'agent_kind' $AgentKind ''
     $Role = Get-JsonFieldValue $fromJsonPayload 'role' $Role ''
 
     # --- Resolve sources array ---
@@ -286,7 +281,6 @@ $OwnerHint = Protect-Text $OwnerHint
 $ComponentHint = Protect-Text $ComponentHint
 $WorkaroundNote = Protect-Text $WorkaroundNote
 $AgentName = Protect-Text $AgentName
-$AgentKind = Protect-Text $AgentKind
 $Role = Protect-Text $Role
 $RepoRoot = Protect-Text $RepoRoot
 
@@ -351,6 +345,7 @@ $auto = & "$PSScriptRoot/categorize.ps1" `
     -ActionTaken $ActionTaken `
     -ExpectedOutcome $ExpectedOutcome `
     -ActualOutcome $ActualOutcome `
+    -Hindsight $Hindsight `
     -Reading $Reading `
     -ToolName $ToolName `
     -Command $Command `
@@ -361,7 +356,6 @@ $auto = & "$PSScriptRoot/categorize.ps1" `
     -Mode $Mode `
     -RunEffect $RunEffect `
     -GuidanceQuality $GuidanceQuality `
-    -Impact $Impact `
     -Confidence $Confidence
 
 $autoMap = @{}
@@ -404,7 +398,6 @@ $eventDate = $recorded.ToString('yyyy-MM-dd')
 $fingerprint = Get-EventFingerprint -Surface $Surface -Mode $Mode -SourceRef $primarySourceRef -EventDate $eventDate -CustomKey $FingerprintKey
 $incidentId = "inc-$fingerprint"
 $recorded = $recorded.ToString('yyyy-MM-ddTHH:mm:ssZ')
-$provenanceSource = if (-not [string]::IsNullOrWhiteSpace($AgentName) -or -not [string]::IsNullOrWhiteSpace($AgentKind) -or -not [string]::IsNullOrWhiteSpace($Role)) { 'explicit' } else { 'unspecified' }
 $repoRelativeEventsFile = ''
 if (-not [string]::IsNullOrWhiteSpace($RepoRoot) -and $EventsFile.StartsWith($RepoRoot)) {
     $repoRelativeEventsFile = $EventsFile.Substring($RepoRoot.Length).TrimStart('\', '/')
@@ -436,13 +429,11 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     $eventFields.Add((ConvertTo-JsonString 'repo_root' $RepoRoot))
     if (-not [string]::IsNullOrEmpty($superprojectRoot)) { $eventFields.Add((ConvertTo-JsonString 'superproject_root' $superprojectRoot)) }
     if (-not [string]::IsNullOrEmpty($submodulePath)) { $eventFields.Add((ConvertTo-JsonString 'submodule_path' $submodulePath)) }
-    # Identity (agent_name/agent_kind always present; role sparse)
+    # Identity (agent_name always present; role sparse)
     $eventFields.Add((ConvertTo-JsonString 'agent_name' $AgentName))
-    $eventFields.Add((ConvertTo-JsonString 'agent_kind' $AgentKind))
     if (-not [string]::IsNullOrEmpty($Role)) {
         $eventFields.Add((ConvertTo-JsonString 'role' $Role))
     }
-    $eventFields.Add((ConvertTo-JsonString 'provenance_source' $provenanceSource))
     # Core narrative (always present)
     $eventFields.Add((ConvertTo-JsonString 'title' $Title))
     $eventFields.Add((ConvertTo-JsonString 'instruction_text' $InstructionText))

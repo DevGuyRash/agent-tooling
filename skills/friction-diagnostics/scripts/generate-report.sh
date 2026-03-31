@@ -22,7 +22,6 @@ Filters:
   --mode VALUE
   --run-effect VALUE
   --fingerprint VALUE
-  --agent-kind VALUE
   --role VALUE
   --tag VALUE               Single tag filter; repeat support is not implemented
   --text PATTERN            Case-insensitive substring search across narrative fields
@@ -43,7 +42,7 @@ Filters:
 
 Report:
   --report-type TYPE        index|cross-repo|per-repo|timeseries
-  --group-by VALUE          surface|mode|run_effect|category|tag|agent_kind
+  --group-by VALUE          surface|mode|run_effect|category|tag
   --format md|json
   --output PATH
   --help
@@ -57,7 +56,6 @@ surface=
 mode=
 run_effect=
 fingerprint=
-agent_kind=
 role=
 tag=
 text=
@@ -110,7 +108,6 @@ while [ $# -gt 0 ]; do
     --mode) mode=${2-}; shift 2 ;;
     --run-effect) run_effect=${2-}; shift 2 ;;
     --fingerprint) fingerprint=${2-}; shift 2 ;;
-    --agent-kind) agent_kind=${2-}; shift 2 ;;
     --role) role=${2-}; shift 2 ;;
     --tag) tag=${2-}; shift 2 ;;
     --text) text=${2-}; shift 2 ;;
@@ -148,7 +145,7 @@ case "$format" in
 esac
 
 case "$group_by" in
-  ''|surface|mode|run_effect|category|tag|agent_kind) ;;
+  ''|surface|mode|run_effect|category|tag) ;;
   *) die "Unsupported group-by value: $group_by" ;;
 esac
 
@@ -215,7 +212,6 @@ fi
 [ -n "$mode" ] && set -- "$@" --mode "$mode"
 [ -n "$run_effect" ] && set -- "$@" --run-effect "$run_effect"
 [ -n "$fingerprint" ] && set -- "$@" --fingerprint "$fingerprint"
-[ -n "$agent_kind" ] && set -- "$@" --agent-kind "$agent_kind"
 [ -n "$role" ] && set -- "$@" --role "$role"
 [ -n "$tag" ] && set -- "$@" --tag "$tag"
 [ -n "$text" ] && set -- "$@" --text "$text"
@@ -276,11 +272,21 @@ case "$report_type" in
           latest_event: ($sorted[-1].recorded_at // ""),
           category_counts: count_rows_pct($sorted[] | .derived_category // empty; $total),
           fingerprint_counts: (count_rows($sorted[] | .fingerprint // empty) | .[:10]),
-          agent_kind_counts: count_rows($sorted[] | if (.provenance_source // "") == "explicit" then (.agent_kind // empty) else empty end),
           date_counts: ([count_rows($sorted[] | (.recorded_at // "")[0:10])[]] | sort_by(.value)),
-          tag_counts: count_rows_pct($sorted[] | (.tags // [])[]? // empty; $total),
+          tag_counts: (
+            [$sorted | to_entries[] | .key as $idx | (.value.tags // [])[] | select(. != null and . != "") | {tag: ., event_idx: $idx}]
+            | unique_by([.tag, .event_idx])
+            | group_by(.tag)
+            | map({value: .[0].tag, count: length, percent: pct(length; $total)})
+            | sort_by([-.count, .value])
+          ),
           top_sources: (count_rows($sorted[] | (.sources // [])[]? | .ref // empty) | .[:10]),
-          run_effect_summary: count_rows($sorted[] | run_effect_value)
+          run_effect_summary: count_rows($sorted[] | run_effect_value),
+          workaround_rate: { used: ([$sorted[] | select(.workaround_used == true)] | length), total: $total },
+          confidence_dist: ([$sorted[] | .confidence // empty | select(. > 0)] | if length > 0 then sort | { min: .[0], max: .[-1], median: (if length % 2 == 1 then .[length/2 | floor] else ((.[length/2 - 1] + .[length/2]) / 2 | floor) end), count: length } else null end),
+          guidance_dist: ([$sorted[] | .guidance_quality // empty | select(. >= 0)] | if length > 0 then sort | { min: .[0], max: .[-1], median: (if length % 2 == 1 then .[length/2 | floor] else ((.[length/2 - 1] + .[length/2]) / 2 | floor) end), count: length } else null end),
+          tool_counts: (count_rows($sorted[] | .tool_name // empty) | .[:5]),
+          component_counts: (count_rows($sorted[] | .component_hint // empty) | .[:5])
         }
     ' "$filtered_tmp" >"$report_tmp"
     ;;
@@ -390,7 +396,6 @@ case "$report_type" in
         elif $group == "run_effect" then [(.run_effect // category_parts[2])]
         elif $group == "category" then [(.derived_category // "")]
         elif $group == "tag" then (.tags // [])
-        elif $group == "agent_kind" then [(.agent_kind // "")]
         else []
         end
         | map(select(. != null and . != ""));
@@ -457,10 +462,16 @@ case "$format" in
     case "$report_type" in
       index)
         result=$(jq -r '
-          def row_pct($rows; $empty):
-            if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count) (\(.percent))"] | join("\n")) end;
           def row_plain($rows; $empty; $suffix):
             if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count)\($suffix)"] | join("\n")) end;
+          def md_table_row($cells): "| " + ($cells | join(" | ")) + " |";
+          def md_table($headers; $rows; $empty_msg):
+            if ($rows | length) == 0 then $empty_msg
+            else
+              md_table_row($headers)
+              + "\n| " + ([$headers[] | gsub("."; "-")] | join(" | ")) + " |"
+              + "\n" + ([$rows[] | md_table_row(.)] | join("\n"))
+            end;
           "# Friction Index\n\n"
           + "**Index rebuilt:** \(.index_rebuilt)\n"
           + "**Events file:** \(.events_file)\n"
@@ -469,27 +480,59 @@ case "$format" in
           + "**Earliest event:** \((.earliest_event // "") | if . == "" then "(not available)" else . end)\n"
           + "**Latest event:** \((.latest_event // "") | if . == "" then "(not available)" else . end)\n\n"
           + "## Category Counts\n\n"
-          + ([row_pct(.category_counts; "_No categorized events._")] | join("\n"))
+          + md_table(["Category", "Count", "%"];
+              [.category_counts[] | [.value, (.count | tostring), .percent]];
+              "_No categorized events._")
           + "\n\n## Top Fingerprints\n\n"
           + ([row_plain(.fingerprint_counts; "_No fingerprints yet._"; " events")] | join("\n"))
-          + "\n\n## Agent Kinds\n\n"
-          + ([row_plain(.agent_kind_counts; "_No explicit provenance recorded._"; "")] | join("\n"))
           + "\n\n## Date Counts\n\n"
-          + ([row_plain(.date_counts; "_No date counts available._"; "")] | join("\n"))
+          + md_table(["Date", "Count"];
+              [.date_counts[] | [.value, (.count | tostring)]];
+              "_No date counts available._")
           + "\n\n## Tags\n\n"
-          + ([row_pct(.tag_counts; "_No tags recorded._")] | join("\n"))
+          + md_table(["Tag", "Events", "% of events"];
+              [.tag_counts[] | [.value, (.count | tostring), .percent]];
+              "_No tags recorded._")
           + "\n\n## Top Sources\n\n"
           + ([row_plain(.top_sources; "_No sources recorded._"; "")] | join("\n"))
           + "\n\n## Run Effect Summary\n\n"
-          + ([row_plain(.run_effect_summary; "_No run effects recorded._"; "")] | join("\n"))
+          + md_table(["Effect", "Count"];
+              [.run_effect_summary[] | [.value, (.count | tostring)]];
+              "_No run effects recorded._")
+          + "\n\n## Workaround Rate\n\n"
+          + (if .workaround_rate.total <= 0 then "_No events._"
+             else "\(.workaround_rate.used) of \(.workaround_rate.total) events (\( ((((.workaround_rate.used * 100) / .workaround_rate.total) + 0.5) | floor | tostring) + "%" )) used workarounds"
+             end)
+          + "\n\n## Confidence\n\n"
+          + (if .confidence_dist == null then "_No confidence values recorded._"
+             else "\(.confidence_dist.min) / \(.confidence_dist.median) / \(.confidence_dist.max) (\(.confidence_dist.count) events with confidence)"
+             end)
+          + "\n\n## Guidance Quality\n\n"
+          + (if .guidance_dist == null then "_No guidance_quality values recorded._"
+             else "\(.guidance_dist.min) / \(.guidance_dist.median) / \(.guidance_dist.max) (\(.guidance_dist.count) events with guidance_quality)"
+             end)
+          + "\n\n## Top Tools\n\n"
+          + md_table(["Tool", "Count"];
+              [.tool_counts[] | [.value, (.count | tostring)]];
+              "_No tool_name values recorded._")
+          + "\n\n## Top Components\n\n"
+          + md_table(["Component", "Count"];
+              [.component_counts[] | [.value, (.count | tostring)]];
+              "_No component_hint values recorded._")
         ' "$report_tmp")
         ;;
       cross-repo)
         result=$(jq -r '
-          def row_pct($rows; $empty):
-            if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count) (\(.percent))"] | join("\n")) end;
           def row_plain($rows; $empty; $suffix):
             if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count)\($suffix)"] | join("\n")) end;
+          def md_table_row($cells): "| " + ($cells | join(" | ")) + " |";
+          def md_table($headers; $rows; $empty_msg):
+            if ($rows | length) == 0 then $empty_msg
+            else
+              md_table_row($headers)
+              + "\n| " + ([$headers[] | gsub("."; "-")] | join(" | ")) + " |"
+              + "\n" + ([$rows[] | md_table_row(.)] | join("\n"))
+            end;
           "# Cross-Repo Friction Index\n\n"
           + "**Index rebuilt:** \(.index_rebuilt)\n"
           + "**Repos scanned:** \(.repos_scanned)\n"
@@ -498,21 +541,33 @@ case "$format" in
           + (if (.repos | length) == 0 then "_No repos matched the selected filters._"
              else ([.repos[] | "- `\((if (.repo_root // "") != "" then .repo_root else .events_file end))` - \(.entries) events"] | join("\n")) end)
           + "\n\n## Category Counts (all repos)\n\n"
-          + ([row_pct(.category_counts; "_No categorized events._")] | join("\n"))
+          + md_table(["Category", "Count", "%"];
+              [.category_counts[] | [.value, (.count | tostring), .percent]];
+              "_No categorized events._")
           + "\n\n## Top Fingerprints (all repos)\n\n"
           + ([row_plain(.fingerprint_counts; "_No fingerprints yet._"; " events")] | join("\n"))
           + "\n\n## Run Effect Summary\n\n"
-          + ([row_plain(.run_effect_summary; "_No run effects recorded._"; "")] | join("\n"))
+          + md_table(["Effect", "Count"];
+              [.run_effect_summary[] | [.value, (.count | tostring)]];
+              "_No run effects recorded._")
           + "\n\n## Tags\n\n"
-          + ([row_pct(.tag_counts; "_No tags recorded._")] | join("\n"))
+          + md_table(["Tag", "Count", "%"];
+              [.tag_counts[] | [.value, (.count | tostring), .percent]];
+              "_No tags recorded._")
         ' "$report_tmp")
         ;;
       per-repo)
         result=$(jq -r '
-          def row_pct($rows; $empty):
-            if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count) (\(.percent))"] | join("\n")) end;
           def row_plain($rows; $empty; $suffix):
             if ($rows | length) == 0 then $empty else ([$rows[] | "- `\(.value)` - \(.count)\($suffix)"] | join("\n")) end;
+          def md_table_row($cells): "| " + ($cells | join(" | ")) + " |";
+          def md_table($headers; $rows; $empty_msg):
+            if ($rows | length) == 0 then $empty_msg
+            else
+              md_table_row($headers)
+              + "\n| " + ([$headers[] | gsub("."; "-")] | join(" | ")) + " |"
+              + "\n" + ([$rows[] | md_table_row(.)] | join("\n"))
+            end;
           "# Per-Repo Friction Report\n\n"
           + "**Index rebuilt:** \(.index_rebuilt)\n"
           + "**Repos:** \(.repos) | **Total entries:** \(.total_entries)\n"
@@ -524,13 +579,19 @@ case "$format" in
                    + "**Events file:** \(.events_file_display)\n"
                    + "**Entries:** \(.entries) | **Earliest event:** \((.earliest_event // "") | if . == "" then "(not available)" else . end) | **Latest event:** \((.latest_event // "") | if . == "" then "(not available)" else . end)\n\n"
                    + "### Category Counts\n\n"
-                   + ([row_pct(.category_counts; "_No categorized events._")] | join("\n"))
+                   + md_table(["Category", "Count", "%"];
+                       [.category_counts[] | [.value, (.count | tostring), .percent]];
+                       "_No categorized events._")
                    + "\n\n### Top Fingerprints\n\n"
                    + ([row_plain(.fingerprint_counts; "_No fingerprints yet._"; " events")] | join("\n"))
                    + "\n\n### Run Effect Summary\n\n"
-                   + ([row_plain(.run_effect_summary; "_No run effects recorded._"; "")] | join("\n"))
+                   + md_table(["Effect", "Count"];
+                       [.run_effect_summary[] | [.value, (.count | tostring)]];
+                       "_No run effects recorded._")
                    + "\n\n### Tags\n\n"
-                   + ([row_pct(.tag_counts; "_No tags recorded._")] | join("\n"))
+                   + md_table(["Tag", "Count", "%"];
+                       [.tag_counts[] | [.value, (.count | tostring), .percent]];
+                       "_No tags recorded._")
                  )
                | join("")
              )

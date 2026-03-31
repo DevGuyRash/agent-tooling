@@ -7,7 +7,6 @@ param(
     [string]$Mode = '',
     [string]$RunEffect = '',
     [string]$Fingerprint = '',
-    [string]$AgentKind = '',
     [string]$Role = '',
     [string]$Tag = '',
     [string]$Text = '',
@@ -26,7 +25,7 @@ param(
     [string]$After = '',
     [string]$SourceRef = '',
     [ValidateSet('index', 'cross-repo', 'per-repo', 'timeseries')][string]$ReportType = 'index',
-    [ValidateSet('', 'surface', 'mode', 'run_effect', 'category', 'tag', 'agent_kind')][string]$GroupBy = '',
+    [ValidateSet('', 'surface', 'mode', 'run_effect', 'category', 'tag')][string]$GroupBy = '',
     [ValidateSet('md', 'json')][string]$Format = 'md',
     [string]$Output = '',
     [switch]$Help
@@ -49,7 +48,6 @@ Filters:
   -Mode VALUE
   -RunEffect VALUE
   -Fingerprint VALUE
-  -AgentKind VALUE
   -Role VALUE
   -Tag VALUE               Single tag filter; repeat support is not implemented
   -Text PATTERN            Case-insensitive substring search across narrative fields
@@ -70,7 +68,7 @@ Filters:
 
 Report:
   -ReportType index|cross-repo|per-repo|timeseries
-  -GroupBy surface|mode|run_effect|category|tag|agent_kind
+  -GroupBy surface|mode|run_effect|category|tag
   -Format md|json
   -Output PATH
   -Help
@@ -262,17 +260,6 @@ function Get-FingerprintCounts {
     return $counter
 }
 
-function Get-AgentKindCounts {
-    param([object[]]$Events)
-    $counter = @{}
-    foreach ($event in $Events) {
-        if ([string](Get-EventFieldValue -event $event -Name 'provenance_source' -Default '') -eq 'explicit') {
-            Add-CounterValue -Counter $counter -Key ([string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default ''))
-        }
-    }
-    return $counter
-}
-
 function Get-DateCounts {
     param([object[]]$Events)
     $counter = @{}
@@ -289,8 +276,11 @@ function Get-TagCounts {
     param([object[]]$Events)
     $counter = @{}
     foreach ($event in $Events) {
+        $seen = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($tagValue in (Get-EventTags $event)) {
-            Add-CounterValue -Counter $counter -Key $tagValue
+            if ($seen.Add($tagValue)) {
+                Add-CounterValue -Counter $counter -Key $tagValue
+            }
         }
     }
     return $counter
@@ -322,6 +312,57 @@ function Get-RunEffectRows {
     return @(Convert-CounterToRows -Counter (Get-RunEffectCounts $Events))
 }
 
+function Get-WorkaroundRate {
+    param([object[]]$Events)
+    $used = 0
+    foreach ($event in $Events) {
+        $val = Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false
+        if ($val -eq $true) { $used++ }
+    }
+    return [pscustomobject]@{ used = $used; total = $Events.Count }
+}
+
+function Get-NumericDist {
+    param([object[]]$Events, [string]$FieldName, [switch]$AllowZero)
+    $values = @(foreach ($event in $Events) {
+        $v = Get-NullableInt (Get-EventFieldValue -event $event -Name $FieldName)
+        if ($null -ne $v) {
+            if ($AllowZero -or $v -gt 0) { $v }
+        }
+    })
+    if ($values.Count -eq 0) { return $null }
+    $sorted = @($values | Sort-Object)
+    if ($sorted.Count % 2 -eq 1) {
+        $median = $sorted[[int]($sorted.Count / 2)]
+    } else {
+        $median = [int](($sorted[$sorted.Count / 2 - 1] + $sorted[$sorted.Count / 2]) / 2)
+    }
+    return [pscustomobject]@{
+        min    = $sorted[0]
+        max    = $sorted[-1]
+        median = $median
+        count  = $sorted.Count
+    }
+}
+
+function Get-ToolCounts {
+    param([object[]]$Events)
+    $counter = @{}
+    foreach ($event in $Events) {
+        Add-CounterValue -Counter $counter -Key ([string](Get-EventFieldValue -event $event -Name 'tool_name' -Default ''))
+    }
+    return $counter
+}
+
+function Get-ComponentCounts {
+    param([object[]]$Events)
+    $counter = @{}
+    foreach ($event in $Events) {
+        Add-CounterValue -Counter $counter -Key ([string](Get-EventFieldValue -event $event -Name 'component_hint' -Default ''))
+    }
+    return $counter
+}
+
 function Test-EventMatchesFilters {
     param($event)
     $ts = [string](Get-EventFieldValue -event $event -Name 'recorded_at' -Default '')
@@ -339,7 +380,6 @@ function Test-EventMatchesFilters {
     if (-not [string]::IsNullOrWhiteSpace($Mode) -and $categoryParts[1] -ne $Mode) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($RunEffect) -and $categoryParts[2] -ne $RunEffect) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default '') -ne $Fingerprint) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($AgentKind) -and [string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default '') -ne $AgentKind) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($Role) -and [string](Get-EventFieldValue -event $event -Name 'role' -Default '') -ne $Role) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { return $false }
     if (-not (Test-TextMatch $event $Text)) { return $false }
@@ -388,7 +428,6 @@ function Get-RepoSummary {
         latest_event = $latest
         category_counts = Convert-CounterToRows -Counter (Get-CategoryCounts $sortedEvents) -Total $entries -WithPercent
         fingerprint_counts = Convert-CounterToRows -Counter (Get-FingerprintCounts $sortedEvents) -Limit 10
-        agent_kind_counts = Convert-CounterToRows -Counter (Get-AgentKindCounts $sortedEvents)
         date_counts = Convert-CounterToRows -Counter (Get-DateCounts $sortedEvents) -SortByValue
         tag_counts = Convert-CounterToRows -Counter (Get-TagCounts $sortedEvents) -Total $entries -WithPercent
         top_sources = Convert-CounterToRows -Counter (Get-SourceCounts $sortedEvents) -Limit 10
@@ -418,6 +457,22 @@ function Get-MarkdownLinesForRows {
     )
 }
 
+function Format-MarkdownTable {
+    param(
+        [string[]]$Headers,
+        [string[][]]$Rows,
+        [string]$EmptyMessage
+    )
+    if ($Rows.Count -eq 0) { return $EmptyMessage }
+    $lines = @()
+    $lines += '| ' + ($Headers -join ' | ') + ' |'
+    $lines += '| ' + (($Headers | ForEach-Object { '---' }) -join ' | ') + ' |'
+    foreach ($row in $Rows) {
+        $lines += '| ' + ($row -join ' | ') + ' |'
+    }
+    return ($lines -join "`n")
+}
+
 function Render-MarkdownReport {
     param($Report)
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -436,23 +491,22 @@ function Render-MarkdownReport {
             $lines.Add('')
             $lines.Add('## Category Counts')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.category_counts) -EmptyMessage '_No categorized events._' -WithPercent)) { $lines.Add($line) }
+            $catRows = @(@($Report.category_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+            $lines.Add((Format-MarkdownTable -Headers @('Category', 'Count', '%') -Rows $catRows -EmptyMessage '_No categorized events._'))
             $lines.Add('')
             $lines.Add('## Top Fingerprints')
             $lines.Add('')
             foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.fingerprint_counts) -EmptyMessage '_No fingerprints yet._' -Suffix ' events')) { $lines.Add($line) }
             $lines.Add('')
-            $lines.Add('## Agent Kinds')
-            $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.agent_kind_counts) -EmptyMessage '_No explicit provenance recorded._')) { $lines.Add($line) }
-            $lines.Add('')
             $lines.Add('## Date Counts')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.date_counts) -EmptyMessage '_No date counts available._')) { $lines.Add($line) }
+            $dateRows = @(@($Report.date_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+            $lines.Add((Format-MarkdownTable -Headers @('Date', 'Count') -Rows $dateRows -EmptyMessage '_No date counts available._'))
             $lines.Add('')
             $lines.Add('## Tags')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.tag_counts) -EmptyMessage '_No tags recorded._' -WithPercent)) { $lines.Add($line) }
+            $tagRows = @(@($Report.tag_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+            $lines.Add((Format-MarkdownTable -Headers @('Tag', 'Events', '% of events') -Rows $tagRows -EmptyMessage '_No tags recorded._'))
             $lines.Add('')
             $lines.Add('## Top Sources')
             $lines.Add('')
@@ -460,7 +514,50 @@ function Render-MarkdownReport {
             $lines.Add('')
             $lines.Add('## Run Effect Summary')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.run_effect_summary) -EmptyMessage '_No run effects recorded._')) { $lines.Add($line) }
+            $reRows = @(@($Report.run_effect_summary) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+            $lines.Add((Format-MarkdownTable -Headers @('Effect', 'Count') -Rows $reRows -EmptyMessage '_No run effects recorded._'))
+            $lines.Add('')
+            $lines.Add('## Workaround Rate')
+            $lines.Add('')
+            if ($null -eq $Report.workaround_rate -or [int]$Report.workaround_rate.total -le 0) {
+                $lines.Add('_No events._')
+            }
+            else {
+                $waUsed = [int]$Report.workaround_rate.used
+                $waTotal = [int]$Report.workaround_rate.total
+                $waPct = Get-PercentString -Count $waUsed -Total $waTotal
+                $lines.Add("$waUsed of $waTotal events ($waPct) used workarounds")
+            }
+            $lines.Add('')
+            $lines.Add('## Confidence')
+            $lines.Add('')
+            if ($null -eq $Report.confidence_dist) {
+                $lines.Add('_No confidence values recorded._')
+            }
+            else {
+                $cd = $Report.confidence_dist
+                $lines.Add("$([int]$cd.min) / $([int]$cd.median) / $([int]$cd.max) ($([int]$cd.count) events with confidence)")
+            }
+            $lines.Add('')
+            $lines.Add('## Guidance Quality')
+            $lines.Add('')
+            if ($null -eq $Report.guidance_dist) {
+                $lines.Add('_No guidance_quality values recorded._')
+            }
+            else {
+                $gd = $Report.guidance_dist
+                $lines.Add("$([int]$gd.min) / $([int]$gd.median) / $([int]$gd.max) ($([int]$gd.count) events with guidance_quality)")
+            }
+            $lines.Add('')
+            $lines.Add('## Top Tools')
+            $lines.Add('')
+            $toolRows = @(@($Report.tool_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+            $lines.Add((Format-MarkdownTable -Headers @('Tool', 'Count') -Rows $toolRows -EmptyMessage '_No tool_name values recorded._'))
+            $lines.Add('')
+            $lines.Add('## Top Components')
+            $lines.Add('')
+            $compRows = @(@($Report.component_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+            $lines.Add((Format-MarkdownTable -Headers @('Component', 'Count') -Rows $compRows -EmptyMessage '_No component_hint values recorded._'))
         }
         'cross-repo' {
             $lines.Add('# Cross-Repo Friction Index')
@@ -483,7 +580,8 @@ function Render-MarkdownReport {
             $lines.Add('')
             $lines.Add('## Category Counts (all repos)')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.category_counts) -EmptyMessage '_No categorized events._' -WithPercent)) { $lines.Add($line) }
+            $catRows = @(@($Report.category_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+            $lines.Add((Format-MarkdownTable -Headers @('Category', 'Count', '%') -Rows $catRows -EmptyMessage '_No categorized events._'))
             $lines.Add('')
             $lines.Add('## Top Fingerprints (all repos)')
             $lines.Add('')
@@ -491,11 +589,13 @@ function Render-MarkdownReport {
             $lines.Add('')
             $lines.Add('## Run Effect Summary')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.run_effect_summary) -EmptyMessage '_No run effects recorded._')) { $lines.Add($line) }
+            $reRows = @(@($Report.run_effect_summary) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+            $lines.Add((Format-MarkdownTable -Headers @('Effect', 'Count') -Rows $reRows -EmptyMessage '_No run effects recorded._'))
             $lines.Add('')
             $lines.Add('## Tags')
             $lines.Add('')
-            foreach ($line in (Get-MarkdownLinesForRows -Rows @($Report.tag_counts) -EmptyMessage '_No tags recorded._' -WithPercent)) { $lines.Add($line) }
+            $tagRows = @(@($Report.tag_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+            $lines.Add((Format-MarkdownTable -Headers @('Tag', 'Count', '%') -Rows $tagRows -EmptyMessage '_No tags recorded._'))
         }
         'per-repo' {
             $lines.Add('# Per-Repo Friction Report')
@@ -518,7 +618,8 @@ function Render-MarkdownReport {
                     $lines.Add('')
                     $lines.Add('### Category Counts')
                     $lines.Add('')
-                    foreach ($line in (Get-MarkdownLinesForRows -Rows @($repo.category_counts) -EmptyMessage '_No categorized events._' -WithPercent)) { $lines.Add($line) }
+                    $repoCatRows = @(@($repo.category_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+                    $lines.Add((Format-MarkdownTable -Headers @('Category', 'Count', '%') -Rows $repoCatRows -EmptyMessage '_No categorized events._'))
                     $lines.Add('')
                     $lines.Add('### Top Fingerprints')
                     $lines.Add('')
@@ -526,11 +627,13 @@ function Render-MarkdownReport {
                     $lines.Add('')
                     $lines.Add('### Run Effect Summary')
                     $lines.Add('')
-                    foreach ($line in (Get-MarkdownLinesForRows -Rows @($repo.run_effect_summary) -EmptyMessage '_No run effects recorded._')) { $lines.Add($line) }
+                    $repoReRows = @(@($repo.run_effect_summary) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count) })
+                    $lines.Add((Format-MarkdownTable -Headers @('Effect', 'Count') -Rows $repoReRows -EmptyMessage '_No run effects recorded._'))
                     $lines.Add('')
                     $lines.Add('### Tags')
                     $lines.Add('')
-                    foreach ($line in (Get-MarkdownLinesForRows -Rows @($repo.tag_counts) -EmptyMessage '_No tags recorded._' -WithPercent)) { $lines.Add($line) }
+                    $repoTagRows = @(@($repo.tag_counts) | ForEach-Object { [string[]]@([string]$_.value, [string]$_.count, [string]$_.percent) })
+                    $lines.Add((Format-MarkdownTable -Headers @('Tag', 'Count', '%') -Rows $repoTagRows -EmptyMessage '_No tags recorded._'))
                 }
             }
         }
@@ -627,11 +730,15 @@ switch ($ReportType) {
             latest_event = $summary.latest_event
             category_counts = @($summary.category_counts)
             fingerprint_counts = @($summary.fingerprint_counts)
-            agent_kind_counts = @($summary.agent_kind_counts)
             date_counts = @($summary.date_counts)
             tag_counts = @($summary.tag_counts)
             top_sources = @($summary.top_sources)
             run_effect_summary = @($summary.run_effect_summary)
+            workaround_rate = Get-WorkaroundRate $sortedEvents
+            confidence_dist = Get-NumericDist -Events $sortedEvents -FieldName 'confidence'
+            guidance_dist = Get-NumericDist -Events $sortedEvents -FieldName 'guidance_quality' -AllowZero
+            tool_counts = Convert-CounterToRows -Counter (Get-ToolCounts $sortedEvents) -Limit 5
+            component_counts = Convert-CounterToRows -Counter (Get-ComponentCounts $sortedEvents) -Limit 5
         }
     }
     'cross-repo' {
@@ -683,7 +790,6 @@ switch ($ReportType) {
                 'run_effect' { @((Get-DerivedCategoryParts $event)[2]) }
                 'category' { @([string](Get-EventFieldValue -event $event -Name 'derived_category' -Default '')) }
                 'tag' { @(Get-EventTags $event) }
-                'agent_kind' { @([string](Get-EventFieldValue -event $event -Name 'agent_kind' -Default '')) }
             }
             foreach ($value in $values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
                 Add-CounterValue -Counter $rows[$eventDate] -Key ([string]$value)
