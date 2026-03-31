@@ -175,11 +175,25 @@ function Get-RelativeEventsFile {
     )
     if ([string]::IsNullOrWhiteSpace($RepoRoot)) { return $Path }
     try {
-        return [System.IO.Path]::GetRelativePath($RepoRoot, $Path)
+        $repoUri = [System.Uri](([System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')) + [System.IO.Path]::DirectorySeparatorChar)
+        $pathUri = [System.Uri][System.IO.Path]::GetFullPath($Path)
+        $relativeUri = $repoUri.MakeRelativeUri($pathUri)
+        return [System.Uri]::UnescapeDataString($relativeUri.ToString()).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
     }
     catch {
         return $Path
     }
+}
+
+function Get-ValueOrFallback {
+    param(
+        $Value,
+        $Fallback
+    )
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
+        return $Fallback
+    }
+    return $Value
 }
 
 function Add-CounterValue {
@@ -486,8 +500,8 @@ function Render-MarkdownReport {
                 $lines.Add("**Repo root:** $([string]$Report.repo_root)")
             }
             $lines.Add("**Entries:** $([int]$Report.entries)")
-            $lines.Add("**Earliest event:** $([string]($Report.earliest_event ?? '(not available)'))")
-            $lines.Add("**Latest event:** $([string]($Report.latest_event ?? '(not available)'))")
+            $lines.Add("**Earliest event:** $([string](Get-ValueOrFallback $Report.earliest_event '(not available)'))")
+            $lines.Add("**Latest event:** $([string](Get-ValueOrFallback $Report.latest_event '(not available)'))")
             $lines.Add('')
             $lines.Add('## Category Counts')
             $lines.Add('')
@@ -614,7 +628,7 @@ function Render-MarkdownReport {
                     $lines.Add('')
                     $lines.Add("## $label")
                     $lines.Add("**Events file:** $([string]$repo.events_file_display)")
-                    $lines.Add("**Entries:** $([int]$repo.entries) | **Earliest event:** $([string]($repo.earliest_event ?? '(not available)')) | **Latest event:** $([string]($repo.latest_event ?? '(not available)'))")
+                    $lines.Add("**Entries:** $([int]$repo.entries) | **Earliest event:** $([string](Get-ValueOrFallback $repo.earliest_event '(not available)')) | **Latest event:** $([string](Get-ValueOrFallback $repo.latest_event '(not available)'))")
                     $lines.Add('')
                     $lines.Add('### Category Counts')
                     $lines.Add('')
@@ -810,7 +824,7 @@ switch ($ReportType) {
                 else {
                     $row = [ordered]@{ date = $dateKey }
                     foreach ($column in $allColumns) {
-                        $row[$column] = [int]($rows[$dateKey][$column] ?? 0)
+                        $row[$column] = [int](Get-ValueOrFallback $rows[$dateKey][$column] 0)
                     }
                     [pscustomobject]$row
                 }
