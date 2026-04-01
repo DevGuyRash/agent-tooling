@@ -39,6 +39,12 @@ Filing a friction event requires two commands. The event is not complete until b
 
 ### Command 1 — report
 
+Use this filing-path heuristic:
+
+- Direct flags are for short, single-line, scalar payloads with one source and no shell-sensitive text.
+- `--from-json -` is the safe path for backticks, `$()`, copied command output, multiline text, or multiple `sources`.
+- `report-friction-json.sh` / `.ps1` are thin helpers for that safe path when you do not want to hand-assemble the final `--from-json` invocation.
+
 ```sh
 sh <skills-file-root>/scripts/report-friction.sh \
   --title "Dispatch role slug mismatch" \

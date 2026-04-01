@@ -9,8 +9,14 @@
     },
     {
       "id": "eval-json-stdin",
-      "prompt": "Report one friction event using --from-json - over stdin with a sources array containing multiple entries.",
+      "prompt": "Report one friction event through the safe JSON filing path over stdin with a sources array containing multiple entries.",
       "expected_output": "The event is appended to the same canonical events.jsonl. Multiple sources are preserved in the output. Tags are emitted as a JSON array, not a CSV string.",
+      "files": []
+    },
+    {
+      "id": "eval-shell-sensitive-helper",
+      "prompt": "Report one friction event whose narrative contains backticks, quotes, or $() text using the helper or equivalent safe stdin JSON path rather than direct flags.",
+      "expected_output": "The shell-sensitive text is preserved verbatim in the stored event without shell expansion damage. The event uses the same canonical schema and validation behavior as a normal report-friction invocation.",
       "files": []
     },
     {

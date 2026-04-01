@@ -186,3 +186,22 @@ EOF
 ```
 
 The JSON payload has no `tags` field. Events start with an empty tags array. Run the `--add-tags` command from the tool output as step 2.
+
+## Helper path for shell-sensitive payloads
+
+```sh
+cat <<'EOF' | sh scripts/report-friction-json.sh
+{
+  "title": "Shell-sensitive helper example",
+  "instruction_text": "Use the helper when event text contains shell-sensitive content.",
+  "action_taken": "I piped a JSON payload containing backticks like `ghost-router`, quoted strings, and dollar-paren text $(whoami) through report-friction-json.sh instead of constructing direct CLI flags.",
+  "expected_outcome": "The helper would preserve the payload verbatim by routing it through the safe --from-json path.",
+  "actual_outcome": "The payload was filed successfully without shell expansion or quoting damage.",
+  "reading": "The helper removes manual shell quoting from the complex-payload path. It is especially useful when narrative fields include copied command output or other text that would be brittle inside a direct shell command.",
+  "hindsight": "Prefer the helper whenever the payload would be cumbersome or risky to express as direct flags.",
+  "sources": [
+    {"type": "documentation", "ref": "SKILL.md"}
+  ]
+}
+EOF
+```

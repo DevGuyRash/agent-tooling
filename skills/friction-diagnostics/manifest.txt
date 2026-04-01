@@ -23,6 +23,8 @@ scripts/render-summary.ps1
 scripts/render-summary.sh
 scripts/render-table.ps1
 scripts/render-table.sh
+scripts/report-friction-json.ps1
+scripts/report-friction-json.sh
 scripts/report-friction.ps1
 scripts/report-friction.sh
 tests/smoke-posix.sh

@@ -49,6 +49,16 @@ try {
     if ($raw -notmatch '"confidence":\d') { throw 'confidence should be numeric' }
     if ($raw -notmatch '"guidance_quality":\d') { throw 'guidance_quality should be numeric' }
 
+    # --- Test 1b: JSON helper preserves shell-sensitive payloads ---
+    $helperJson = @'
+{"title":"powershell helper shell-sensitive payload","instruction_text":"WHEN payload text is shell-sensitive THEN the JSON helper SHOULD route it through -FromJson safely.","action_taken":"I piped a JSON payload containing ""quotes"", backticks, and dollar-paren text $(whoami) through report-friction-json.ps1.","expected_outcome":"The helper would forward the payload through the safe JSON path without any quoting damage.","actual_outcome":"The event preserved the shell-sensitive text verbatim and was appended successfully.","reading":"The helper exists to remove manual quoting from the complex-payload path. Using it should be equivalent to invoking report-friction.ps1 -FromJson - directly, while keeping the caller away from shell-sensitive argument assembly.","hindsight":"Use the JSON helper for payloads containing shell-sensitive text instead of building direct flags.","sources":[{"type":"documentation","ref":"test"}]}
+'@
+    $helperOutput = $helperJson | & "$root/scripts/report-friction-json.ps1" -RepoRoot $repoDir
+    if (-not ($helperOutput -match '^FRICTION_EVENT_ID=')) { throw 'report-friction-json.ps1 should emit the underlying report output' }
+    $events = @(Import-Events $eventsFile)
+    if ($events.Count -ne 2) { throw 'report-friction-json.ps1 should append a second event' }
+    if ([string]$events[1].title -ne 'powershell helper shell-sensitive payload') { throw 'report-friction-json.ps1 should preserve the helper payload title' }
+
     $indexText = [System.IO.File]::ReadAllText($indexFile)
     if ($indexText -notmatch '\*\*Entries:\*\* 1') { throw 'INDEX.md should count entries from events.jsonl' }
     if ($indexText -notmatch '\*\*Index rebuilt:\*\*') { throw 'INDEX.md should use the rebuilt label' }
@@ -74,11 +84,11 @@ try {
         -Mode 'ambiguity' | Out-Null
 
     $events = @(Import-Events $eventsFile)
-    if ($events.Count -ne 2) { throw 'events.jsonl should contain two events after the second append' }
+    if ($events.Count -ne 3) { throw 'events.jsonl should contain three events after the second append' }
 
     & "$root/scripts/build-index.ps1" -RepoRoot $repoDir | Out-Null
     $indexText = [System.IO.File]::ReadAllText($indexFile)
-    if ($indexText -notmatch '\*\*Entries:\*\* 2') { throw 'INDEX.md should report two entries after rebuild' }
+    if ($indexText -notmatch '\*\*Entries:\*\* 3') { throw 'INDEX.md should report three entries after rebuild' }
     if ($indexText -notmatch '## Top Sources') { throw 'INDEX.md should include top sources from the enhanced index report' }
 
     # --- Test 3: AddTags rewrites safely and preserves array tags ---
@@ -476,6 +486,53 @@ try {
     catch {
         if ($_.Exception.Message -notmatch 'Invalid JSON in -FromJson') {
             throw 'report-friction.ps1 should emit a concise parse diagnostic for invalid -FromJson payloads'
+        }
+    }
+
+    # --- Test 7b: Invalid stdin JSON preserves payload for replay ---
+    $badStdinJson = '{"title":"bad stdin",}'
+    try {
+        $badStdinJson | & "$root/scripts/report-friction.ps1" -RepoRoot $repoDir -FromJson '-' | Out-Null
+        throw 'report-friction.ps1 should reject invalid stdin JSON payloads'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'Invalid JSON in -FromJson stdin') {
+            throw 'report-friction.ps1 should identify stdin parse failures clearly'
+        }
+        if ($_.Exception.Message -notmatch 'Saved invalid stdin payload to:') {
+            throw 'report-friction.ps1 should report the saved invalid stdin payload path'
+        }
+        $savedPath = [regex]::Match($_.Exception.Message, 'Saved invalid stdin payload to: ([^\r\n]+)').Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($savedPath)) { throw 'report-friction.ps1 should include a concrete saved stdin payload path' }
+        if (-not (Test-Path -LiteralPath $savedPath)) { throw 'report-friction.ps1 should save the invalid stdin payload for replay' }
+        if ($savedPath -notmatch '[\\/]\.local[\\/]tmp[\\/]friction-diagnostics[\\/]') { throw 'report-friction.ps1 should save invalid stdin payloads under repo-local .local/tmp/friction-diagnostics' }
+        $savedPayload = [System.IO.File]::ReadAllText($savedPath)
+        if ($savedPayload.TrimEnd("`r", "`n") -ne $badStdinJson) { throw 'saved invalid stdin payload should match the original input' }
+    }
+
+    # --- Test 7c: Repo-local scratch save failure preserves parse diagnostics ---
+    $saveFailRepo = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-savefail-{0}" -f [System.Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $saveFailRepo -Force
+    & git init -q $saveFailRepo
+    try {
+        $null = New-Item -ItemType Directory -Path (Join-Path $saveFailRepo '.local') -Force
+        [System.IO.File]::WriteAllText((Join-Path $saveFailRepo '.local/tmp'), 'block', [System.Text.UTF8Encoding]::new($false))
+        try {
+            $badStdinJson | & "$root/scripts/report-friction.ps1" -RepoRoot $saveFailRepo -FromJson '-' | Out-Null
+            throw 'report-friction.ps1 should reject invalid stdin JSON when repo-local scratch is blocked'
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'Invalid JSON in -FromJson stdin') {
+                throw 'report-friction.ps1 should preserve the parse diagnostic when repo-local scratch is blocked'
+            }
+            if ($_.Exception.Message -notmatch 'Unable to save invalid stdin payload to repo-local scratch:') {
+                throw 'report-friction.ps1 should report repo-local scratch save failures clearly'
+            }
+        }
+    }
+    finally {
+        if (Test-Path $saveFailRepo) {
+            Remove-Item -Recurse -Force $saveFailRepo
         }
     }
 

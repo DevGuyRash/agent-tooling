@@ -598,6 +598,27 @@ local_dir_for_repo() {
   printf '%s\n' "$default_dir"
 }
 
+existing_local_dir_for_repo() {
+  repo_root=$1
+  default_dir=$repo_root/.local
+  if [ -d "$default_dir" ]; then
+    printf '%s\n' "$default_dir"
+    return 0
+  fi
+
+  existing=$(
+    find "$repo_root" -maxdepth 1 -mindepth 1 -type d -name '.local*' 2>/dev/null |
+      LC_ALL=C sort |
+      sed -n '1p'
+  )
+  if [ -n "$existing" ]; then
+    printf '%s\n' "$existing"
+    return 0
+  fi
+
+  printf '%s\n' "$default_dir"
+}
+
 temp_root_dir() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY'
@@ -613,6 +634,17 @@ PY
   else
     die "Unable to determine system temp path."
   fi
+}
+
+friction_scratch_dir_for_repo() {
+  repo_root=$1
+  if [ -z "$repo_root" ]; then
+    printf '\n'
+    return 0
+  fi
+
+  local_dir=$(existing_local_dir_for_repo "$repo_root")
+  printf '%s\n' "$local_dir/tmp/friction-diagnostics"
 }
 
 default_events_file() {

@@ -157,13 +157,17 @@ load_json_overrides() {
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 is required for --from-json"
   fi
+  scratch_dir=$2
   json_helper=$(mktemp "$(temp_root_dir)/friction-json-helper.XXXXXX.py")
   cat >"$json_helper" <<'PY'
 import json
 import shlex
 import sys
+import tempfile
 
 path = sys.argv[1]
+scratch_dir = sys.argv[2]
+temp_root = sys.argv[3]
 if path == "-":
     raw = sys.stdin.read()
 else:
@@ -191,6 +195,23 @@ except json.JSONDecodeError as exc:
     if offending:
         print(offending, file=sys.stderr)
         print(pointer, file=sys.stderr)
+    if path == "-":
+        try:
+            if scratch_dir:
+                target_dir = scratch_dir
+            else:
+                target_dir = temp_root
+            import os
+            os.makedirs(target_dir, exist_ok=True)
+            fd, bad_path = tempfile.mkstemp(prefix="invalid-stdin.", suffix=".json", dir=target_dir)
+            with open(fd, "w", encoding="utf-8", closefd=True) as bad_fh:
+                bad_fh.write(raw)
+            print(f"Saved invalid stdin payload to: {bad_path}", file=sys.stderr)
+        except Exception as save_exc:
+            if scratch_dir:
+                print(f"Unable to save invalid stdin payload to repo-local scratch: {save_exc}", file=sys.stderr)
+            else:
+                print(f"Unable to save invalid stdin payload to temp: {save_exc}", file=sys.stderr)
     print(hint_for(exc.msg), file=sys.stderr)
     sys.exit(2)
 
@@ -302,7 +323,7 @@ for key, var_name in keys:
 # Emit sources as JSON for shell to embed directly
 print(f"json_sources_json={shlex.quote(json.dumps(sources, ensure_ascii=False))}")
 PY
-  json_output=$(python3 "$json_helper" "$path") || {
+  json_output=$(python3 "$json_helper" "$path" "$scratch_dir" "$(temp_root_dir)") || {
     status=$?
     rm -f "$json_helper"
     return "$status"
@@ -382,7 +403,15 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -n "$from_json" ]; then
-  load_json_overrides "$from_json"
+  invalid_json_scratch_dir=
+  resolved_repo_root=$repo_root
+  if [ -z "$resolved_repo_root" ]; then
+    resolved_repo_root=$(git_repo_root)
+  fi
+  if [ -n "$resolved_repo_root" ]; then
+    invalid_json_scratch_dir=$(friction_scratch_dir_for_repo "$resolved_repo_root")
+  fi
+  load_json_overrides "$from_json" "$invalid_json_scratch_dir"
   title=$(load_json_field "$title" "" json_title)
   instruction_text=$(load_json_field "$instruction_text" "" json_instruction_text)
   action_taken=$(load_json_field "$action_taken" "" json_action_taken)

@@ -27,9 +27,11 @@ Everything meaningful is stored in `events.jsonl`.
 
 `INDEX.md` is the only default derived file kept on disk.
 
-### 2. Direct flags are the primary path
+### 2. Filing path is heuristic-driven
 
-The normal agent-facing workflow is:
+Use direct flags only for short, single-line, scalar payloads with one source and no shell-sensitive text. Use stdin JSON for backticks, `$()`, copied command output, multiline text, or multiple `sources`. The `report-friction-json.*` helpers are thin wrappers around the safe JSON path when the caller does not want to hand-assemble the final `--from-json` command.
+
+The simple direct-flags workflow is:
 
 ```sh
 sh scripts/report-friction.sh \
@@ -44,7 +46,7 @@ sh scripts/report-friction.sh \
   --interpretation "I treated the visible table label as the CLI slug."
 ```
 
-`--from-json PATH|-` still works, but it is for compatibility and integrations. If JSON is used, prefer stdin over temp files. Also prefer stdin JSON whenever the payload contains shell-sensitive text such as backticks, `$()`, copied command output, or multiple lines.
+`--from-json PATH|-` remains available for compatibility and integrations. If JSON is used, prefer stdin over temp files. Also prefer stdin JSON whenever the payload contains shell-sensitive text such as backticks, `$()`, copied command output, or multiple lines.
 
 Provenance is optional. If `--agent` or `--role` are omitted, the tool records provenance as unspecified instead of guessing.
 
@@ -54,6 +56,14 @@ PowerShell stdin example:
 @'
 {"title":"Dispatch role slug mismatch","instruction_text":"Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.","action_taken":"Ran mpcr protocol dispatch --role architecture.","expected_outcome":"The CLI returns the architecture prompt.","actual_outcome":"error: unknown dispatch role: architecture","interpretation":"I treated the visible table label as the CLI slug.","sources":[{"type":"file","ref":"SKILL.md","line":160}]}
 '@ | & .\scripts\report-friction.ps1 -FromJson -
+```
+
+POSIX helper example:
+
+```sh
+cat <<'EOF' | sh scripts/report-friction-json.sh
+{"title":"Complex payload","instruction_text":"Example","action_taken":"Example action taken with shell-sensitive text like `ghost-router` and $(whoami).","expected_outcome":"Example","actual_outcome":"Example","reading":"Example reading text that is long enough to satisfy validation.","hindsight":"Example hindsight text that is also long enough.","sources":[{"type":"documentation","ref":"test"}]}
+EOF
 ```
 
 ### 3. Always-on write-time sanitization
@@ -70,6 +80,7 @@ The tool redacts common secrets and tokens before writing event text to disk. Th
 - `scripts/categorize.*` — taxonomy heuristics
 - `scripts/render-table.*` — render Unicode box-drawing tables from TSV/CSV/JSON-family input
 - `scripts/render-summary.*` — render session summaries with query footer and source flattening
+- `scripts/report-friction-json.*` — thin helpers that route JSON payloads into the safe `--from-json` filing path
 - `references/` — integration and logging references
 - `tests/` — smoke tests
 
@@ -78,6 +89,7 @@ The tool redacts common secrets and tokens before writing event text to disk. Th
 When `--from-json` is used:
 
 - syntax failures return concise parser diagnostics, including line/column details when the active runtime exposes them
+- invalid stdin JSON is saved under repo-local `.local/tmp/friction-diagnostics/` for replay when inside a git repo; outside a repo it falls back to the system temp directory
 - schema failures return concise field-level errors
 - raw parser stack traces are suppressed
 

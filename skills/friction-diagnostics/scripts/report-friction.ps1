@@ -163,7 +163,7 @@ if ($FromJson -eq '-') {
 
 $fromJsonPayload = $null
 if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
-    $fromJsonPayload = Import-EventJsonObject -Path $FromJson -StdinText $stdinJsonText
+    $fromJsonPayload = Import-EventJsonObject -Path $FromJson -StdinText $stdinJsonText -RepoRoot $RepoRoot
     $diagnosticPath = Get-JsonDiagnosticLabel $FromJson
 
     $Title = Get-JsonFieldValue $fromJsonPayload 'title' $Title ''

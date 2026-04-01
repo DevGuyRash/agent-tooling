@@ -12,7 +12,10 @@ WHEN the friction can be localized to a specific file, document, or URL THEN you
 
 ## Agent-facing default
 
-Agents should use direct flags by default. Filing the event is step 1; tagging is step 2.
+Agents should use a filing-path heuristic. Filing the event is step 1; tagging is step 2.
+
+- Use direct flags for short, single-line, scalar payloads with one source and no shell-sensitive text.
+- Use `--from-json -` or the `report-friction-json.*` helper for backticks, `$()`, copied command output, multiline text, or multiple `sources`.
 
 Step 1 — file the event:
 
@@ -37,7 +40,7 @@ sh scripts/report-friction.sh --add-tags evt-NNNN "missing-script,instructions"
 
 ## Structured-input path
 
-`--from-json` remains supported, but it is not the recommended default. If JSON is used, prefer stdin:
+`--from-json` is the recommended safe path for complex payloads. If JSON is used, prefer stdin:
 
 ```sh
 cat <<'EOF' | sh scripts/report-friction.sh --from-json -
@@ -59,6 +62,25 @@ EOF
 Use stdin JSON whenever the payload contains backticks, `$()`, copied command output, or multiple lines that would be brittle as inline shell arguments.
 The `agent_name` field in the example above is explicit provenance supplied by the caller, not a default that the tool invents.
 The JSON payload does not include a `tags` field. Events are written with an empty tags array. After filing, run the suggested `--add-tags` command shown in the tool output.
+
+Helper examples:
+
+```sh
+cat <<'EOF' | sh scripts/report-friction-json.sh
+{
+  "title": "Complex payload through helper",
+  "instruction_text": "Use the safe JSON helper when payload text is shell-sensitive.",
+  "action_taken": "I piped a JSON payload with backticks and dollar-paren text through report-friction-json.sh instead of hand-quoting direct flags.",
+  "expected_outcome": "The helper would forward the JSON payload into the safe --from-json path.",
+  "actual_outcome": "The payload was filed successfully without shell expansion damage.",
+  "reading": "The helper removes manual shell quoting from the complex-payload path while preserving the same event schema and validation behavior.",
+  "hindsight": "Use the helper whenever the payload would be annoying or risky to express as inline flags.",
+  "sources": [
+    {"type": "documentation", "ref": "test"}
+  ]
+}
+EOF
+```
 
 ## Canonical target resolution
 

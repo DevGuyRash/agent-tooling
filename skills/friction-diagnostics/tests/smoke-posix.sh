@@ -175,6 +175,22 @@ EOF
 assert_contains '`ghost-router`' "$DEFAULT_EVENTS"
 assert_contains '$(whoami)' "$DEFAULT_EVENTS"
 
+# --- Test 7b: JSON helper handles shell-sensitive payloads ---
+cat <<'EOF' | "$ROOT/scripts/report-friction-json.sh" --events-file "$DEFAULT_EVENTS"
+{
+  "title": "json helper shell-sensitive payload smoke",
+  "instruction_text": "WHEN payload text is shell-sensitive THEN the JSON helper SHOULD route it through --from-json safely.",
+  "action_taken": "I piped a JSON payload containing \"quotes\", backticks like `ghost-router`, and dollar-paren text $(whoami) through report-friction-json.sh.",
+  "expected_outcome": "The helper would forward the payload through the safe JSON path without shell expansion damage.",
+  "actual_outcome": "The event preserved the shell-sensitive text verbatim and was appended successfully.",
+  "reading": "The helper exists to remove manual quoting from the complex-payload path. Using it should be equivalent to invoking report-friction.sh --from-json - directly, but without asking the caller to hand-assemble the final command shape.",
+  "hindsight": "Use the JSON helper for payloads that contain shell-sensitive text rather than constructing direct CLI flags.",
+  "sources": [{"type": "documentation", "ref": "test"}]
+}
+EOF
+[ "$(wc -l <"$DEFAULT_EVENTS" | tr -d ' ')" -eq 5 ] || fail "json helper should append a fifth event"
+assert_contains '"title":"json helper shell-sensitive payload smoke"' "$DEFAULT_EVENTS"
+
 # --- Test 8: Invalid JSON diagnostics ---
 INVALID_STDERR=$(mktemp)
 INVALID_JSON=$(mktemp)
@@ -189,6 +205,39 @@ assert_contains 'Line 1, column' "$INVALID_STDERR"
 if grep -qi 'traceback' "$INVALID_STDERR"; then
   fail "invalid JSON should not emit a stack trace"
 fi
+
+# --- Test 8b: Invalid stdin JSON preserves payload for replay ---
+INVALID_STDIN_STDERR=$(mktemp)
+BAD_STDIN_PAYLOAD='{"title":"bad stdin",}'
+set +e
+printf '%s\n' "$BAD_STDIN_PAYLOAD" | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json - > /dev/null 2>"$INVALID_STDIN_STDERR"
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "invalid stdin JSON should fail"
+assert_contains 'Invalid JSON input for --from-json' "$INVALID_STDIN_STDERR"
+assert_contains 'Saved invalid stdin payload to:' "$INVALID_STDIN_STDERR"
+SAVED_BAD_STDIN=$(sed -n 's/^Saved invalid stdin payload to: //p' "$INVALID_STDIN_STDERR" | sed -n '1p')
+[ -n "$SAVED_BAD_STDIN" ] || fail "invalid stdin diagnostics should report a saved payload path"
+assert_file "$SAVED_BAD_STDIN"
+case "$SAVED_BAD_STDIN" in
+  "$REPO_ROOT"/.local/tmp/friction-diagnostics/*) ;;
+  *) fail "invalid stdin payload should be saved under repo-local .local/tmp/friction-diagnostics" ;;
+esac
+printf '%s\n' "$BAD_STDIN_PAYLOAD" | grep -Fqx "$(cat "$SAVED_BAD_STDIN")" || fail "saved invalid stdin payload should match the original content"
+
+# --- Test 8c: Repo-local scratch save failure preserves parse diagnostics ---
+SAVEFAIL_REPO=$(mktemp -d)
+git init -q "$SAVEFAIL_REPO"
+mkdir -p "$SAVEFAIL_REPO/.local"
+: > "$SAVEFAIL_REPO/.local/tmp"
+SAVEFAIL_STDERR=$(mktemp)
+set +e
+(cd "$SAVEFAIL_REPO" && printf '%s\n' "$BAD_STDIN_PAYLOAD" | "$ROOT/scripts/report-friction.sh" --from-json - > /dev/null 2>"$SAVEFAIL_STDERR")
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "invalid stdin JSON with blocked scratch path should fail"
+assert_contains 'Invalid JSON input for --from-json' "$SAVEFAIL_STDERR"
+assert_contains 'Unable to save invalid stdin payload to repo-local scratch:' "$SAVEFAIL_STDERR"
 
 # --- Test 9: Missing required fields fail cleanly ---
 SCHEMA_STDERR=$(mktemp)
@@ -838,10 +887,10 @@ printf '%s' "$HELP_OUT" | grep -Fq -- '--before' || fail "--before not in query 
 
 # --- Cleanup ---
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS" \
-  "$REPORT_TYPE_STDERR" "$GROUP_BY_STDERR" "$MULTI_INDEX_STDERR" "$QUERY_FORMAT_STDERR" \
+  "$INVALID_STDIN_STDERR" "$SAVEFAIL_STDERR" "$REPORT_TYPE_STDERR" "$GROUP_BY_STDERR" "$MULTI_INDEX_STDERR" "$QUERY_FORMAT_STDERR" \
   "$MALFORMED_QUERY_STDERR" "$MALFORMED_REPORT_STDERR" "$MALFORMED_INDEX_STDERR" \
   "$MISSING_EVENTS_STDERR" "$SCAN_EMPTY_STDERR" \
   "$MALFORMED_EVENTS" "$PARTIAL_EVENTS" "$BULK_EVENTS" "$EMPTY_EVENTS" "$DATE_EVENTS"
-rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" "$SPARSE_SCAN_ROOT" "$EMPTY_SCAN_ROOT" "$NESTED_SCAN_ROOT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
+rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" "$SPARSE_SCAN_ROOT" "$EMPTY_SCAN_ROOT" "$NESTED_SCAN_ROOT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE" "$SAVEFAIL_REPO"
 
 printf 'All smoke tests passed.\n'

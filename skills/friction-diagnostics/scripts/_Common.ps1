@@ -619,12 +619,51 @@ function Get-PreferredLocalDir {
     return $localDir
 }
 
+function Get-ExistingLocalDirPath {
+    param([string]$RepoRoot)
+
+    $defaultDir = Join-Path $RepoRoot '.local'
+    if (Test-Path -LiteralPath $defaultDir -PathType Container) {
+        return $defaultDir
+    }
+
+    $alternate = Get-ChildItem -LiteralPath $RepoRoot -Directory -Filter '.local*' -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        Select-Object -ExpandProperty FullName -First 1
+    if ($null -ne $alternate) {
+        return $alternate
+    }
+
+    return $defaultDir
+}
+
 function Get-TempRoot {
     $path = [System.IO.Path]::GetTempPath()
     if ([string]::IsNullOrWhiteSpace($path)) {
         throw 'Unable to determine system temp path.'
     }
     return $path
+}
+
+function Get-FrictionScratchDir {
+    param([string]$RepoRoot = '')
+
+    $resolvedRepoRoot = $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+        try {
+            $resolvedRepoRoot = Get-RepoRoot
+        }
+        catch {
+            return ''
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($resolvedRepoRoot)) {
+        return ''
+    }
+
+    $localDir = Get-ExistingLocalDirPath $resolvedRepoRoot
+    return (Join-Path $localDir 'tmp/friction-diagnostics')
 }
 
 function Get-DefaultEventsFile {
@@ -784,10 +823,38 @@ function Get-JsonDiagnosticLabel {
     return $Path
 }
 
+function Save-InvalidJsonStdin {
+    param(
+        [string]$JsonText,
+        [string]$ScratchDir = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ScratchDir)) {
+        [System.IO.Directory]::CreateDirectory($ScratchDir) | Out-Null
+        $fileName = "invalid-stdin.{0}.json" -f [System.Guid]::NewGuid().ToString('N')
+        $path = Join-Path $ScratchDir $fileName
+        [System.IO.File]::WriteAllText($path, $JsonText, [System.Text.UTF8Encoding]::new($false))
+        return [pscustomobject]@{
+            Path = $path
+            UsedRepoScratch = $true
+        }
+    }
+
+    $tempRoot = Get-TempRoot
+    $fileName = "invalid-stdin.{0}.json" -f [System.Guid]::NewGuid().ToString('N')
+    $path = Join-Path $tempRoot $fileName
+    [System.IO.File]::WriteAllText($path, $JsonText, [System.Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{
+        Path = $path
+        UsedRepoScratch = $false
+    }
+}
+
 function Import-EventJsonObject {
     param(
         [string]$Path,
-        [string]$StdinText = ''
+        [string]$StdinText = '',
+        [string]$RepoRoot = ''
     )
 
     $jsonText = ''
@@ -807,7 +874,38 @@ function Import-EventJsonObject {
     }
 
     try {
+        $null = [System.Text.Json.JsonDocument]::Parse($jsonText)
         $payload = $jsonText | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch [System.Text.Json.JsonException] {
+        $line = if ($null -ne $_.Exception.LineNumber) { [int]$_.Exception.LineNumber + 1 } else { $null }
+        $column = if ($null -ne $_.Exception.BytePositionInLine) { [int]$_.Exception.BytePositionInLine + 1 } else { $null }
+        $parts = [System.Collections.Generic.List[string]]::new()
+        $parts.Add("Invalid JSON in -FromJson $(Get-JsonDiagnosticLabel $Path)")
+        if ($null -ne $line -and $null -ne $column) {
+            $parts.Add("Line $line, column $column")
+        }
+        $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]
+        if (-not [string]::IsNullOrWhiteSpace($detail)) {
+            $parts.Add($detail)
+        }
+        if ($Path -eq '-') {
+            try {
+                $scratchDir = Get-FrictionScratchDir $RepoRoot
+                $saved = Save-InvalidJsonStdin -JsonText $jsonText -ScratchDir $scratchDir
+                $parts.Add("Saved invalid stdin payload to: $($saved.Path)")
+            }
+            catch {
+                $saveError = $_.Exception.Message.Split([Environment]::NewLine)[0]
+                if (-not [string]::IsNullOrWhiteSpace($scratchDir)) {
+                    $parts.Add("Unable to save invalid stdin payload to repo-local scratch: $saveError")
+                }
+                else {
+                    $parts.Add("Unable to save invalid stdin payload to temp: $saveError")
+                }
+            }
+        }
+        throw ($parts -join [Environment]::NewLine)
     }
     catch {
         $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]
