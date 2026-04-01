@@ -89,18 +89,6 @@ function Remove-EmptyFields {
     return $event
 }
 
-function Get-EventFieldValue {
-    param(
-        $event,
-        [string]$Name,
-        $Default = $null
-    )
-
-    $prop = $event.PSObject.Properties[$Name]
-    if ($null -eq $prop) { return $Default }
-    return $prop.Value
-}
-
 function Import-MultipleEvents {
     param([string[]]$FilePaths)
     $allEvents = [System.Collections.Generic.List[object]]::new()
@@ -156,41 +144,6 @@ function Test-SourceRefMatch {
     return $false
 }
 
-function Get-DerivedCategoryParts {
-    param($event)
-    $value = [string](Get-EventFieldValue -event $event -Name 'derived_category' -Default '')
-    $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace($value)) {
-        $parts = @($value.Split('/', 3))
-    }
-    while ($parts.Count -lt 3) {
-        $parts += ''
-    }
-    return $parts
-}
-
-function Get-NullableInt {
-    param($value)
-    if ($null -eq $value) { return $null }
-    $text = [string]$value
-    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    if ($text -notmatch '^-?\d+$') { return $null }
-    return [int]$text
-}
-
-function Test-TextMatch {
-    param($event, [string]$query)
-    if ([string]::IsNullOrWhiteSpace($query)) { return $true }
-    $needle = $query.ToLowerInvariant()
-    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight', 'instruction_text', 'expected_outcome')) {
-        $value = [string](Get-EventFieldValue -event $event -Name $field -Default '')
-        if ($value.ToLowerInvariant().Contains($needle)) {
-            return $true
-        }
-    }
-    return $false
-}
-
 if ($SuggestTags) {
     $tagsSet = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($event in $events) {
@@ -226,7 +179,7 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default '') -ne $Fingerprint) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Role) -and [string](Get-EventFieldValue -event $event -Name 'role' -Default '') -ne $Role) { continue }
     if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { continue }
-    if (-not (Test-TextMatch $event $Text)) { continue }
+    if (-not (Test-EventTextMatch -Event $event -Query $Text)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ConfidenceMin) -and ($null -eq $confidenceValue -or $confidenceValue -lt [int]$ConfidenceMin)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ConfidenceMax) -and ($null -eq $confidenceValue -or $confidenceValue -gt [int]$ConfidenceMax)) { continue }
     if (-not [string]::IsNullOrWhiteSpace($GuidanceMin) -and ($null -eq $guidanceValue -or $guidanceValue -lt [int]$GuidanceMin)) { continue }
@@ -236,10 +189,7 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string](Get-EventFieldValue -event $event -Name 'owner_hint' -Default '') -ne $OwnerHint) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string](Get-EventFieldValue -event $event -Name 'component_hint' -Default '') -ne $ComponentHint) { continue }
     if ($Workaround -and -not [bool](Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false)) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($Date) -and $eventDate -ne $Date) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($DateFrom) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -lt $DateFrom) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($DateTo) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -gt $DateTo) { continue }
-    if (-not [string]::IsNullOrWhiteSpace($After) -and -not [string]::IsNullOrWhiteSpace($ts) -and $ts -le $After) { continue }
+    if (-not (Test-EventTimestampFilters -RecordedAt $ts -Date $Date -DateFrom $DateFrom -DateTo $DateTo -After $After)) { continue }
 
     if (-not [string]::IsNullOrWhiteSpace($SourceRef)) {
         if (-not (Test-SourceRefMatch $event $SourceRef)) { continue }

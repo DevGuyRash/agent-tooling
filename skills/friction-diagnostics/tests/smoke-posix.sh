@@ -254,8 +254,13 @@ FILTER_OUTPUT=$("$ROOT/scripts/report-friction.sh" \
   --title "filter coverage event" \
   --source-type documentation \
   --source-ref "test" \
+  --source-line 10 \
+  --source-end-line 14 \
+  --source-symbol "query_filter_fixture" \
+  --source-excerpt "Use the structured jq report path for diagnostics." \
+  --source-label "filter coverage fixture" \
   --instruction-text "Use the structured jq report path for diagnostics." \
-  --action-taken "I ran the query path with a structured payload, attached tool metadata, and used a temporary workaround so each expanded filter had one deterministic target event." \
+  --action-taken "I ran the query path with a structured payload, attached tool metadata, captured stdout and stderr excerpts, and used a temporary workaround so each expanded filter had one deterministic target event." \
   --expected-outcome "The event would be written with explicit tool, owner, component, exit-code, confidence, guidance, and workaround metadata for query validation." \
   --actual-outcome "The command degraded but continued, and the workaround let the run finish with exit code 7." \
   --reading "I used this event to verify the expanded query filters. The wording includes the phrase structured payload so the text search can match it directly." \
@@ -263,10 +268,15 @@ FILTER_OUTPUT=$("$ROOT/scripts/report-friction.sh" \
   --surface skill \
   --mode schema \
   --run-effect degraded \
+  --command "jq -s '.' report.jsonl" \
   --tool-name jq \
+  --stderr "jq: warning: synthetic filter coverage stderr" \
+  --stdout-excerpt "synthetic filter coverage stdout" \
   --owner-hint skill-owner \
   --component-hint query-engine \
   --workaround-used true \
+  --retries-lost 2 \
+  --minutes-lost 11 \
   --exit-code 7 \
   --confidence high \
   --guidance-quality partial)
@@ -292,6 +302,24 @@ FILTER_QUERY=$("$ROOT/scripts/query-friction.sh" \
   --format json)
 printf '%s\n' "$FILTER_QUERY" | jq -e 'length == 1' >/dev/null || fail "expanded query filters should isolate one matching event"
 printf '%s\n' "$FILTER_QUERY" | grep -q 'filter coverage event' || fail "expanded query filters should return the filter coverage event"
+printf '%s\n' "$FILTER_QUERY" | jq -e '.[0].sources[0].end_line == 14 and .[0].sources[0].symbol == "query_filter_fixture" and .[0].sources[0].excerpt == "Use the structured jq report path for diagnostics." and .[0].sources[0].label == "filter coverage fixture"' >/dev/null || fail "expanded filter fixture should preserve source enrichment fields"
+printf '%s\n' "$FILTER_QUERY" | jq -e '.[0].command == "jq -s '\''.'\'' report.jsonl" and .[0].stderr == "jq: warning: synthetic filter coverage stderr" and .[0].stdout_excerpt == "synthetic filter coverage stdout" and .[0].retries_lost == 2 and .[0].minutes_lost == 11' >/dev/null || fail "expanded filter fixture should preserve execution-context and impact fields"
+FILTER_FINGERPRINT=$(printf '%s\n' "$FILTER_QUERY" | jq -r '.[0].fingerprint')
+[ -n "$FILTER_FINGERPRINT" ] || fail "expanded filter query should expose a fingerprint"
+FILTER_CATEGORY_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --category skill/schema/degraded --text "structured payload" --format json)
+printf '%s\n' "$FILTER_CATEGORY_QUERY" | jq -e 'length == 1 and .[0].event_id == "'"$FILTER_EVENT_ID"'"' >/dev/null || fail "category filter should isolate the filter coverage event"
+FILTER_FINGERPRINT_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --fingerprint "$FILTER_FINGERPRINT" --format json)
+printf '%s\n' "$FILTER_FINGERPRINT_QUERY" | jq -e 'length == 1 and .[0].event_id == "'"$FILTER_EVENT_ID"'"' >/dev/null || fail "fingerprint filter should isolate the filter coverage event"
+FILTER_QUERY_MD=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --fingerprint "$FILTER_FINGERPRINT" --format md)
+printf '%s\n' "$FILTER_QUERY_MD" | grep -q 'Command: jq -s' || fail "markdown query output should render command metadata"
+printf '%s\n' "$FILTER_QUERY_MD" | grep -q 'Retries lost: 2' || fail "markdown query output should render retries_lost"
+printf '%s\n' "$FILTER_QUERY_MD" | grep -q 'Minutes lost: 11' || fail "markdown query output should render minutes_lost"
+printf '%s\n' "$FILTER_QUERY_MD" | grep -q 'Sources: test:10-14' || fail "markdown query output should render source line ranges"
+FILTER_COMPACT_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --fingerprint "$FILTER_FINGERPRINT" --format json --compact)
+printf '%s\n' "$FILTER_COMPACT_QUERY" | jq -e 'length == 1 and (.[0] | has("command")) and (.[0] | has("role") | not) and (.[0] | has("stderr")) and (.[0] | has("stdout_excerpt")) and (.[0] | has("tags"))' >/dev/null || fail "compact json output should strip empty fields while preserving populated fields"
+SUGGEST_TAGS_OUTPUT=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --suggest-tags)
+assert_equals "$(printf '%s\n' "$SUGGEST_TAGS_OUTPUT" | LC_ALL=C sort | uniq | tr '\n' ' ' | sed 's/ $//')" "$(printf '%s\n' "$SUGGEST_TAGS_OUTPUT" | tr '\n' ' ' | sed 's/ $//')"
+printf '%s\n' "$SUGGEST_TAGS_OUTPUT" | grep -q '^filter-smoke$' || fail "suggest-tags should include filter-smoke"
 EMPTY_QUERY_MD=$("$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --tag tag-that-will-never-match --format md)
 printf '%s\n' "$EMPTY_QUERY_MD" | grep -q '^- Entries: 0$' || fail "empty query markdown should report zero entries"
 
@@ -373,8 +401,11 @@ INDEX_REPORT=$("$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS
 printf '%s\n' "$INDEX_REPORT" | grep -q '\*\*Index rebuilt:\*\*' || fail "index report should show the rebuilt label"
 printf '%s\n' "$INDEX_REPORT" | grep -q '## Top Sources' || fail "index report should include top sources"
 printf '%s\n' "$INDEX_REPORT" | grep -q '## Run Effect Summary' || fail "index report should include run effect summary"
+printf '%s\n' "$INDEX_REPORT" | grep -q '## Top Tools' || fail "index report should include top tools"
 INDEX_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type index --format json)
-printf '%s\n' "$INDEX_JSON" | jq -e '.report_type == "index" and .entries >= 1 and (.top_sources | length) >= 1' >/dev/null || fail "index json should include structured counts and sources"
+printf '%s\n' "$INDEX_JSON" | jq -e '.report_type == "index" and .entries >= 1 and (.top_sources | length) >= 1 and (.tool_counts | length) >= 1' >/dev/null || fail "index json should include structured counts, sources, and tool counts"
+REPORT_TEXT_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type cross-repo --text "structured jq report path" --format json)
+printf '%s\n' "$REPORT_TEXT_JSON" | jq -e '.total_entries == 1' >/dev/null || fail "report text filters should match instruction_text fields"
 
 CROSS_REPORT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" --report-type cross-repo)
 printf '%s\n' "$CROSS_REPORT" | grep -q '\*\*Repos scanned:\*\* 4' || fail "cross-repo report should include all discovered repos"
@@ -413,12 +444,19 @@ QUERY_FORMAT_STDERR=$(mktemp)
 MALFORMED_QUERY_STDERR=$(mktemp)
 MALFORMED_REPORT_STDERR=$(mktemp)
 MALFORMED_INDEX_STDERR=$(mktemp)
+MISSING_EVENTS_STDERR=$(mktemp)
+SCAN_EMPTY_STDERR=$(mktemp)
 MALFORMED_EVENTS=$(mktemp)
 PARTIAL_EVENTS=$(mktemp)
 BULK_EVENTS=$(mktemp)
+EMPTY_EVENTS=$(mktemp)
+DATE_EVENTS=$(mktemp)
 SPARSE_SCAN_ROOT=$(mktemp -d)
 SPARSE_SCAN_A="$SPARSE_SCAN_ROOT/sparse-a"
 SPARSE_SCAN_B="$SPARSE_SCAN_ROOT/sparse-b"
+EMPTY_SCAN_ROOT=$(mktemp -d)
+NESTED_SCAN_ROOT=$(mktemp -d)
+NESTED_SCAN_REPO="$NESTED_SCAN_ROOT/level-one/level-two/deep-repo"
 
 set +e
 "$ROOT/scripts/generate-report.sh" --events-file "$DEFAULT_EVENTS" --report-type nonsense >/dev/null 2>"$REPORT_TYPE_STDERR"
@@ -497,7 +535,58 @@ printf '%s\n' "$PARTIAL_QUERY" | jq -e 'length == 1 and .[0].title == "partial r
 PARTIAL_INDEX_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$PARTIAL_EVENTS" --report-type index --format json)
 printf '%s\n' "$PARTIAL_INDEX_JSON" | jq -e '.entries == 1 and (.category_counts | length) == 0 and (.top_sources | length) == 0' >/dev/null || fail "partial valid rows should still produce a sparse index report"
 
-# --- Test 18: Light larger-stream probe ---
+# --- Test 18: Missing, empty, date, and nested scan coverage ---
+set +e
+"$ROOT/scripts/query-friction.sh" --events-file "$EMPTY_SCAN_ROOT/not-there.jsonl" --format json >/dev/null 2>"$MISSING_EVENTS_STDERR"
+RC=$?
+set -e
+[ "$RC" -ne 0 ] || fail "missing events file should fail query-friction.sh"
+assert_contains 'Events file not found:' "$MISSING_EVENTS_STDERR"
+
+EMPTY_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$EMPTY_EVENTS" --format json)
+printf '%s\n' "$EMPTY_QUERY" | jq -e 'length == 0' >/dev/null || fail "empty events file should produce an empty query result"
+EMPTY_INDEX_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$EMPTY_EVENTS" --report-type index --format json)
+printf '%s\n' "$EMPTY_INDEX_JSON" | jq -e '.entries == 0 and (.category_counts | length) == 0 and (.date_counts | length) == 0' >/dev/null || fail "empty events file should produce an empty index report"
+
+cat <<'EOF' >"$DATE_EVENTS"
+{"title":"dated early","recorded_at":"2026-03-29T08:00:00Z","event_id":"evt-0001","derived_category":"skill/schema/continued","fingerprint":"fp-early","tags":["alpha"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"dated middle","recorded_at":"2026-03-30T09:30:00Z","event_id":"evt-0002","derived_category":"skill/schema/continued","fingerprint":"fp-middle","tags":["beta"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"dated late","recorded_at":"2026-03-31T10:45:00Z","event_id":"evt-0003","derived_category":"skill/schema/continued","fingerprint":"fp-late","tags":["gamma"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"undated row","event_id":"evt-0004","derived_category":"skill/schema/continued","fingerprint":"fp-undated","tags":["undated"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+EOF
+DATE_EXACT_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DATE_EVENTS" --date 2026-03-30 --format json)
+printf '%s\n' "$DATE_EXACT_QUERY" | jq -e 'length == 1 and .[0].title == "dated middle"' >/dev/null || fail "date filter should isolate the exact matching event"
+DATE_RANGE_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DATE_EVENTS" --date-from 2026-03-30 --date-to 2026-03-31 --format json)
+printf '%s\n' "$DATE_RANGE_QUERY" | jq -e 'length == 2 and ([.[].title] | index("undated row")) == null' >/dev/null || fail "date range filters should include only dated in-range rows"
+AFTER_QUERY=$("$ROOT/scripts/query-friction.sh" --events-file "$DATE_EVENTS" --after 2026-03-30T12:00:00Z --format json)
+printf '%s\n' "$AFTER_QUERY" | jq -e 'length == 1 and .[0].title == "dated late"' >/dev/null || fail "after filter should exclude undated and earlier rows"
+DATE_REPORT_JSON=$("$ROOT/scripts/generate-report.sh" --events-file "$DATE_EVENTS" --report-type cross-repo --date-from 2026-03-30 --format json)
+printf '%s\n' "$DATE_REPORT_JSON" | jq -e '.total_entries == 2 and (.repos | length) == 1' >/dev/null || fail "report date filters should match query date semantics"
+
+set +e
+"$ROOT/scripts/query-friction.sh" --scan-dirs "$EMPTY_SCAN_ROOT" --format json >/dev/null 2>"$SCAN_EMPTY_STDERR"
+RC=$?
+set -e
+[ "$RC" -ne 0 ] || fail "scan-dirs with no matching events should fail"
+assert_contains 'No events.jsonl files found under the provided scan dirs' "$SCAN_EMPTY_STDERR"
+
+mkdir -p "$NESTED_SCAN_REPO"
+git init -q "$NESTED_SCAN_REPO"
+NESTED_OUTPUT=$(cd "$NESTED_SCAN_REPO" && "$ROOT/scripts/report-friction.sh" \
+  --title "Nested scan repo" \
+  --source-type documentation \
+  --source-ref "test" \
+  --instruction-text "Recursively discover deeply nested repos under scan roots." \
+  --action-taken "I created a repo two directory levels below the scan root and reported one event so recursive discovery has to traverse beyond the immediate children." \
+  --expected-outcome "scan-dirs would recursively discover the nested repo event stream." \
+  --actual-outcome "The nested repo event stream was created under the deep directory layout." \
+  --reading "This fixture verifies that recursive discovery is not limited to flat child repositories under the scan root." \
+  --hindsight "Keep one deeply nested repo fixture in the suite whenever discovery logic changes.")
+assert_equals "FRICTION_EVENTS_FILE=$NESTED_SCAN_REPO/.local/reports/friction/events.jsonl" "$(printf '%s\n' "$NESTED_OUTPUT" | sed -n '1p')"
+NESTED_CROSS_JSON=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$NESTED_SCAN_ROOT" --report-type cross-repo --format json)
+printf '%s\n' "$NESTED_CROSS_JSON" | jq -e '.repos_scanned == 1 and .repos[0].repo_root == "'"$NESTED_SCAN_REPO"'"' >/dev/null || fail "scan-dirs should recursively discover deeply nested repos"
+
+# --- Test 19: Light larger-stream probe ---
 i=1
 while [ "$i" -le 250 ]; do
   minute=$((i % 60))
@@ -510,7 +599,7 @@ printf '%s\n' "$BULK_QUERY" | jq -e 'length == 250' >/dev/null || fail "bulk que
 BULK_TIMESERIES=$("$ROOT/scripts/generate-report.sh" --events-file "$BULK_EVENTS" --report-type timeseries --group-by tag --format json)
 printf '%s\n' "$BULK_TIMESERIES" | jq -e '.group_by == "tag" and (.columns | index("bulk")) != null and (.columns | index("load")) != null and (.rows | length) == 1 and .rows[0].bulk == 250 and .rows[0].load == 250' >/dev/null || fail "bulk timeseries report should aggregate grouped tag counts correctly"
 
-# --- Test 19: Non-repo temp fallback ---
+# --- Test 20: Non-repo temp fallback ---
 TEMP_PROBE_DIR=$(mktemp -d)
 TEMP_ROOT=$(dirname "$TEMP_PROBE_DIR")
 rmdir "$TEMP_PROBE_DIR"
@@ -527,20 +616,20 @@ NON_REPO_OUTPUT=$(cd "$NON_REPO_DIR" && "$ROOT/scripts/report-friction.sh" \
   --hindsight "When testing outside a git repo, verify the temp fallback path matches expectations before relying on it for event isolation.")
 printf '%s\n' "$NON_REPO_OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$TEMP_ROOT/agent-friction/" || fail "non-repo fallback should use the system temp root"
 
-# --- Test 20: --add-tags patches tags on existing event ---
+# --- Test 21: --add-tags patches tags on existing event ---
 "$ROOT/scripts/report-friction.sh" --add-tags evt-0001 "instructions,missing,deploy,skaffold" --events-file "$DEFAULT_EVENTS"
 FIRST_EVENT=$(sed -n '1p' "$DEFAULT_EVENTS")
 printf '%s\n' "$FIRST_EVENT" | grep -q 'instructions' || fail "--add-tags should add tags to evt-0001"
 printf '%s\n' "$FIRST_EVENT" | grep -q 'skaffold' || fail "--add-tags should add all specified tags"
 
-# --- Test 20b: --add-tags preserves non-zero failures ---
+# --- Test 21b: --add-tags preserves non-zero failures ---
 set +e
 "$ROOT/scripts/report-friction.sh" --add-tags evt-9999 "missing-event" --events-file "$DEFAULT_EVENTS" >/dev/null 2>&1
 STATUS=$?
 set -e
 [ "$STATUS" -ne 0 ] || fail "--add-tags should exit non-zero when the event does not exist"
 
-# --- Test 21: Deterministic fingerprints — same source+day = same fingerprint ---
+# --- Test 22: Deterministic fingerprints — same source+day = same fingerprint ---
 FP_EVENTS=$(mktemp)
 "$ROOT/scripts/report-friction.sh" \
   --events-file "$FP_EVENTS" \
@@ -570,7 +659,7 @@ FP1=$(sed -n '1p' "$FP_EVENTS" | jq -r '.fingerprint')
 FP2=$(sed -n '2p' "$FP_EVENTS" | jq -r '.fingerprint')
 [ "$FP1" = "$FP2" ] || fail "same source+surface+mode+day should produce same fingerprint (got $FP1 vs $FP2)"
 
-# --- Test 22: Different source = different fingerprint ---
+# --- Test 23: Different source = different fingerprint ---
 "$ROOT/scripts/report-friction.sh" \
   --events-file "$FP_EVENTS" \
   --title "Different source" \
@@ -586,7 +675,7 @@ FP2=$(sed -n '2p' "$FP_EVENTS" | jq -r '.fingerprint')
 FP3=$(sed -n '3p' "$FP_EVENTS" | jq -r '.fingerprint')
 [ "$FP1" != "$FP3" ] || fail "different source should produce different fingerprint"
 
-# --- Test 23: Categorizer catches common missing/name-resolution phrasing ---
+# --- Test 24: Categorizer catches common missing/name-resolution phrasing ---
 CATEGORIZE_OUTPUT=$("$ROOT/scripts/categorize.sh" \
   --source-ref "AGENTS.md" \
   --instruction-text "Run the staging profile from the deployment helper." \
@@ -606,7 +695,7 @@ REVIEW_REGRESSION_OUTPUT=$("$ROOT/scripts/categorize.sh" \
 printf '%s\n' "$REVIEW_REGRESSION_OUTPUT" | grep -q '^mode=name-resolution$' || fail "categorizer should preserve name-resolution for role <name> not defined phrasing"
 printf '%s\n' "$REVIEW_REGRESSION_OUTPUT" | grep -q '^run_effect=blocked$' || fail "categorizer should preserve blocked for recipe <name> not found phrasing"
 
-# --- Test 24: --from-json spaced sources still drive primary source classification ---
+# --- Test 25: --from-json spaced sources still drive primary source classification ---
 cat <<'EOF' | "$ROOT/scripts/report-friction.sh" --events-file "$DEFAULT_EVENTS" --from-json - >/dev/null
 {
   "title": "spaced json source ref",
@@ -624,7 +713,7 @@ EOF
 LAST_EVENT=$(tail -1 "$DEFAULT_EVENTS")
 printf '%s\n' "$LAST_EVENT" | grep -q '"surface":"instructions"' || fail "--from-json spaced sources should preserve primary source ref for categorization"
 
-# --- Test 25: Positive submodule metadata ---
+# --- Test 26: Positive submodule metadata ---
 SUBMODULE_FIXTURE=$(mktemp -d)
 SUBMODULE_REMOTE=$(mktemp -d)
 git init -q "$SUBMODULE_FIXTURE"
@@ -697,7 +786,8 @@ done
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS" \
   "$REPORT_TYPE_STDERR" "$GROUP_BY_STDERR" "$MULTI_INDEX_STDERR" "$QUERY_FORMAT_STDERR" \
   "$MALFORMED_QUERY_STDERR" "$MALFORMED_REPORT_STDERR" "$MALFORMED_INDEX_STDERR" \
-  "$MALFORMED_EVENTS" "$PARTIAL_EVENTS" "$BULK_EVENTS"
-rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" "$SPARSE_SCAN_ROOT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
+  "$MISSING_EVENTS_STDERR" "$SCAN_EMPTY_STDERR" \
+  "$MALFORMED_EVENTS" "$PARTIAL_EVENTS" "$BULK_EVENTS" "$EMPTY_EVENTS" "$DATE_EVENTS"
+rm -rf "$EXPLICIT_DIR" "$ALT_REPO" "$SPACE_PARENT" "$QUOTE_PARENT" "$SPARSE_SCAN_ROOT" "$EMPTY_SCAN_ROOT" "$NESTED_SCAN_ROOT" "$NON_REPO_DIR" "$SUBMODULE_REMOTE" "$SUBMODULE_FIXTURE"
 
 printf 'All smoke tests passed.\n'

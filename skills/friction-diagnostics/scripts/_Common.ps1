@@ -286,6 +286,85 @@ function ConvertTo-SafeInt {
     return 0
 }
 
+function Get-EventFieldValue {
+    param(
+        $Event,
+        [string]$Name,
+        $Default = $null
+    )
+
+    $prop = $Event.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $Default }
+    return $prop.Value
+}
+
+function Get-DerivedCategoryParts {
+    param($Event)
+    $value = [string](Get-EventFieldValue -Event $Event -Name 'derived_category' -Default '')
+    $parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+        $parts = @($value.Split('/', 3))
+    }
+    while ($parts.Count -lt 3) {
+        $parts += ''
+    }
+    return $parts
+}
+
+function Get-NullableInt {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    if ($text -notmatch '^-?\d+$') { return $null }
+    return [int]$text
+}
+
+function Test-EventTextMatch {
+    param(
+        $Event,
+        [string]$Query
+    )
+    if ([string]::IsNullOrWhiteSpace($Query)) { return $true }
+    $needle = $Query.ToLowerInvariant()
+    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight', 'instruction_text', 'expected_outcome')) {
+        $value = [string](Get-EventFieldValue -Event $Event -Name $field -Default '')
+        if ($value.ToLowerInvariant().Contains($needle)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-EventTimestampFilters {
+    param(
+        [string]$RecordedAt = '',
+        [string]$Date = '',
+        [string]$DateFrom = '',
+        [string]$DateTo = '',
+        [string]$After = ''
+    )
+    $hasTimestamp = -not [string]::IsNullOrWhiteSpace($RecordedAt)
+    $eventDate = ''
+    if ($hasTimestamp -and $RecordedAt.Length -ge 10) {
+        $eventDate = $RecordedAt.Substring(0, 10)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Date)) {
+        if ([string]::IsNullOrWhiteSpace($eventDate) -or $eventDate -ne $Date) { return $false }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DateFrom)) {
+        if ([string]::IsNullOrWhiteSpace($eventDate) -or $eventDate -lt $DateFrom) { return $false }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DateTo)) {
+        if ([string]::IsNullOrWhiteSpace($eventDate) -or $eventDate -gt $DateTo) { return $false }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($After)) {
+        if (-not $hasTimestamp -or $RecordedAt -le $After) { return $false }
+    }
+    return $true
+}
+
 function ConvertTo-NormalizedRunEffect {
     param([string]$Value)
     switch ($Value) {

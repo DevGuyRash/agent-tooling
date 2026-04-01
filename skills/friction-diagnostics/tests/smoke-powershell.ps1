@@ -99,8 +99,13 @@ try {
         -Title 'PowerShell filter coverage' `
         -SourceType 'documentation' `
         -SourceRef 'test' `
+        -SourceLine '10' `
+        -SourceEndLine '14' `
+        -SourceSymbol 'query_filter_fixture' `
+        -SourceExcerpt 'Use the structured jq report path for diagnostics.' `
+        -SourceLabel 'filter coverage fixture' `
         -InstructionText 'Use the structured jq report path for diagnostics.' `
-        -ActionTaken 'Recorded a filter-focused event with tool metadata and a workaround so the expanded query filters have one deterministic target.' `
+        -ActionTaken 'Recorded a filter-focused event with tool metadata, stdout and stderr excerpts, and a workaround so the expanded query filters have one deterministic target.' `
         -ExpectedOutcome 'The event would persist tool name, owner, component, exit code, confidence, guidance, and workaround metadata.' `
         -ActualOutcome 'The command degraded but continued, and the workaround left the run at exit code 7.' `
         -Reading 'This event exists to verify the expanded query filters. The phrase structured payload appears here so the text filter can match deterministically.' `
@@ -108,10 +113,15 @@ try {
         -Surface 'skill' `
         -Mode 'schema' `
         -RunEffect 'degraded' `
+        -Command "jq -s '.' report.jsonl" `
         -ToolName 'jq' `
+        -Stderr 'jq: warning: synthetic filter coverage stderr' `
+        -StdoutExcerpt 'synthetic filter coverage stdout' `
         -OwnerHint 'skill-owner' `
         -ComponentHint 'query-engine' `
         -WorkaroundUsed 'true' `
+        -RetriesLost '2' `
+        -MinutesLost '11' `
         -ExitCode '7' `
         -Confidence 'high' `
         -GuidanceQuality 'partial'
@@ -139,13 +149,58 @@ try {
     $filterEvents = $filterJson | ConvertFrom-Json
     if (@($filterEvents).Count -ne 1) { throw 'expanded filters should isolate the filter coverage event' }
     if ([string]$filterEvents[0].title -ne 'PowerShell filter coverage') { throw 'expanded filters should return the filter coverage event' }
+    if ([int]$filterEvents[0].sources[0].end_line -ne 14) { throw 'expanded filters should preserve source end_line' }
+    if ([string]$filterEvents[0].sources[0].symbol -ne 'query_filter_fixture') { throw 'expanded filters should preserve source symbol' }
+    if ([string]$filterEvents[0].sources[0].excerpt -ne 'Use the structured jq report path for diagnostics.') { throw 'expanded filters should preserve source excerpt' }
+    if ([string]$filterEvents[0].sources[0].label -ne 'filter coverage fixture') { throw 'expanded filters should preserve source label' }
+    if ([string]$filterEvents[0].command -ne "jq -s '.' report.jsonl") { throw 'expanded filters should preserve command' }
+    if ([string]$filterEvents[0].stderr -ne 'jq: warning: synthetic filter coverage stderr') { throw 'expanded filters should preserve stderr' }
+    if ([string]$filterEvents[0].stdout_excerpt -ne 'synthetic filter coverage stdout') { throw 'expanded filters should preserve stdout_excerpt' }
+    if ([int]$filterEvents[0].retries_lost -ne 2) { throw 'expanded filters should preserve retries_lost' }
+    if ([int]$filterEvents[0].minutes_lost -ne 11) { throw 'expanded filters should preserve minutes_lost' }
+
+    $filterFingerprint = [string]$filterEvents[0].fingerprint
+    if ([string]::IsNullOrWhiteSpace($filterFingerprint)) { throw 'expanded filters should expose a fingerprint' }
+    $categoryJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -Category 'skill/schema/degraded' -Text 'structured payload' -Format json
+    $categoryEvents = $categoryJson | ConvertFrom-Json
+    if (@($categoryEvents).Count -ne 1) { throw 'category filter should isolate the filter coverage event' }
+    if ([string]$categoryEvents[0].event_id -ne $filterEventId) { throw 'category filter should return the filter coverage event' }
+
+    $fingerprintJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -Fingerprint $filterFingerprint -Format json
+    $fingerprintEvents = $fingerprintJson | ConvertFrom-Json
+    if (@($fingerprintEvents).Count -ne 1) { throw 'fingerprint filter should isolate the filter coverage event' }
+    if ([string]$fingerprintEvents[0].event_id -ne $filterEventId) { throw 'fingerprint filter should return the filter coverage event' }
+
+    $compactJson = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -Fingerprint $filterFingerprint -Format json -Compact
+    $compactEvents = $compactJson | ConvertFrom-Json
+    if (@($compactEvents).Count -ne 1) { throw 'compact query should still return one event' }
+    if ($compactEvents[0].PSObject.Properties.Name -contains 'role') { throw 'compact query should remove empty role fields' }
+    if ($compactEvents[0].PSObject.Properties.Name -notcontains 'command') { throw 'compact query should keep populated command fields' }
+    if ($compactEvents[0].PSObject.Properties.Name -notcontains 'stderr') { throw 'compact query should keep populated stderr fields' }
+
+    $queryMd = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -Fingerprint $filterFingerprint -Format md
+    if ($queryMd -notmatch 'Retries lost: 2') { throw 'markdown query output should render retries_lost' }
+    if ($queryMd -notmatch 'Minutes lost: 11') { throw 'markdown query output should render minutes_lost' }
+    if ($queryMd -notmatch 'Sources: test:10-14') { throw 'markdown query output should render source line ranges' }
+
+    $suggestTagsOutput = & "$root/scripts/query-friction.ps1" -RepoRoot $repoDir -SuggestTags
+    $suggestedTags = @($suggestTagsOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $sortedSuggestedTags = @($suggestedTags | Sort-Object -Unique)
+    if (($suggestedTags -join ',') -ne ($sortedSuggestedTags -join ',')) { throw 'suggest-tags should return sorted unique tags' }
+    if ($suggestedTags -notcontains 'filter-smoke') { throw 'suggest-tags should include filter-smoke' }
 
     $indexReport = & "$root/scripts/generate-report.ps1" -RepoRoot $repoDir -ReportType index -Format md
     if ($indexReport -notmatch '## Top Sources') { throw 'generate-report.ps1 index should include top sources' }
     if ($indexReport -notmatch '## Run Effect Summary') { throw 'generate-report.ps1 index should include run effect summary' }
+    if ($indexReport -notmatch '## Top Tools') { throw 'generate-report.ps1 index should include top tools' }
     $indexJson = & "$root/scripts/generate-report.ps1" -RepoRoot $repoDir -ReportType index -Format json | ConvertFrom-Json
     if ([string]$indexJson.report_type -ne 'index') { throw 'index json should label the report type' }
     if (@($indexJson.top_sources).Count -lt 1) { throw 'index json should include structured top_sources rows' }
+    if (@($indexJson.tool_counts).Count -lt 1) { throw 'index json should include structured tool counts' }
+
+    $reportTextJson = & "$root/scripts/generate-report.ps1" -RepoRoot $repoDir -ReportType cross-repo -Text 'structured jq report path' -Format json
+    $reportText = $reportTextJson | ConvertFrom-Json
+    if ([int]$reportText.total_entries -ne 1) { throw 'generate-report.ps1 text filtering should match instruction_text fields' }
 
     $timeseriesJson = & "$root/scripts/generate-report.ps1" -RepoRoot $repoDir -ReportType timeseries -GroupBy surface -Format json
     $timeseries = $timeseriesJson | ConvertFrom-Json
@@ -248,6 +303,41 @@ try {
     if ([int]$partialIndex.entries -ne 1) { throw 'generate-report.ps1 should count sparse but valid event rows' }
     if (@($partialIndex.category_counts).Count -ne 0) { throw 'sparse rows should not fabricate category counts' }
 
+    $missingEventsFile = Join-Path $repoDir 'missing-events.jsonl'
+    try {
+        & "$root/scripts/query-friction.ps1" -EventsFile $missingEventsFile -Format json | Out-Null
+        throw 'query-friction.ps1 should reject missing events files'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'Events file not found:') {
+            throw 'query-friction.ps1 should emit a focused diagnostic for missing events files'
+        }
+    }
+
+    $emptyEventsFile = Join-Path $repoDir 'empty-events.jsonl'
+    [System.IO.File]::WriteAllText($emptyEventsFile, '', [System.Text.UTF8Encoding]::new($false))
+    $emptyQuery = & "$root/scripts/query-friction.ps1" -EventsFile $emptyEventsFile -Format json | ConvertFrom-Json
+    if (@($emptyQuery).Count -ne 0) { throw 'query-friction.ps1 should return zero events for an empty events file' }
+    $emptyIndex = & "$root/scripts/generate-report.ps1" -EventsFile $emptyEventsFile -ReportType index -Format json | ConvertFrom-Json
+    if ([int]$emptyIndex.entries -ne 0) { throw 'generate-report.ps1 should report zero entries for an empty events file' }
+
+    $dateEventsFile = Join-Path $repoDir 'date-events.jsonl'
+    [System.IO.File]::WriteAllText($dateEventsFile, @'
+{"title":"dated early","recorded_at":"2026-03-29T08:00:00Z","event_id":"evt-0001","derived_category":"skill/schema/continued","fingerprint":"fp-early","tags":["alpha"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"dated middle","recorded_at":"2026-03-30T09:30:00Z","event_id":"evt-0002","derived_category":"skill/schema/continued","fingerprint":"fp-middle","tags":["beta"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"dated late","recorded_at":"2026-03-31T10:45:00Z","event_id":"evt-0003","derived_category":"skill/schema/continued","fingerprint":"fp-late","tags":["gamma"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+{"title":"undated row","event_id":"evt-0004","derived_category":"skill/schema/continued","fingerprint":"fp-undated","tags":["undated"],"sources":[{"ref":"date-fixture"}],"repo_root":"/tmp/date","events_file":"/tmp/date/events.jsonl"}
+'@, [System.Text.UTF8Encoding]::new($false))
+    $dateExact = & "$root/scripts/query-friction.ps1" -EventsFile $dateEventsFile -Date '2026-03-30' -Format json | ConvertFrom-Json
+    if (@($dateExact).Count -ne 1 -or [string]$dateExact[0].title -ne 'dated middle') { throw 'query-friction.ps1 should isolate exact date matches' }
+    $dateRange = & "$root/scripts/query-friction.ps1" -EventsFile $dateEventsFile -DateFrom '2026-03-30' -DateTo '2026-03-31' -Format json | ConvertFrom-Json
+    if (@($dateRange).Count -ne 2) { throw 'query-friction.ps1 should return only the dated in-range rows' }
+    if ((@($dateRange | ForEach-Object { [string]$_.title })) -contains 'undated row') { throw 'query-friction.ps1 should exclude undated rows from date ranges' }
+    $afterDate = & "$root/scripts/query-friction.ps1" -EventsFile $dateEventsFile -After '2026-03-30T12:00:00Z' -Format json | ConvertFrom-Json
+    if (@($afterDate).Count -ne 1 -or [string]$afterDate[0].title -ne 'dated late') { throw 'query-friction.ps1 should exclude undated and earlier rows from -After filters' }
+    $dateReport = & "$root/scripts/generate-report.ps1" -EventsFile $dateEventsFile -ReportType cross-repo -DateFrom '2026-03-30' -Format json | ConvertFrom-Json
+    if ([int]$dateReport.total_entries -ne 2) { throw 'generate-report.ps1 date filtering should match query semantics and exclude undated rows' }
+
     $futureRunEffectEventsFile = Join-Path $repoDir 'future-run-effect-events.jsonl'
     [System.IO.File]::WriteAllText($futureRunEffectEventsFile, "{""title"":""future run effect"",""derived_category"":""skill/schema/future-state""}$([Environment]::NewLine)", [System.Text.UTF8Encoding]::new($false))
     $futureIndex = & "$root/scripts/generate-report.ps1" -EventsFile $futureRunEffectEventsFile -ReportType index -Format json | ConvertFrom-Json
@@ -281,6 +371,49 @@ try {
     if ([string]$bulkTimeseries.group_by -ne 'tag') { throw 'bulk timeseries should preserve the tag grouping' }
     if (@($bulkTimeseries.rows).Count -ne 1) { throw 'bulk timeseries should collapse to one dated row for a single date' }
     if ([int]$bulkTimeseries.rows[0].bulk -ne 250 -or [int]$bulkTimeseries.rows[0].load -ne 250) { throw 'bulk timeseries should aggregate grouped tag counts correctly' }
+
+    $emptyScanDir = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-empty-scan-{0}" -f [System.Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $emptyScanDir -Force
+    try {
+        & "$root/scripts/query-friction.ps1" -ScanDirs @($emptyScanDir) -Format json | Out-Null
+        throw 'query-friction.ps1 should reject scan roots with no matching events files'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'No events.jsonl files found under:') {
+            throw 'query-friction.ps1 should emit a focused diagnostic when scan roots contain no events files'
+        }
+    }
+    finally {
+        if (Test-Path $emptyScanDir) {
+            Remove-Item -Recurse -Force $emptyScanDir
+        }
+    }
+
+    $nestedScanRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-friction-ps-nested-scan-{0}" -f [System.Guid]::NewGuid().ToString('N'))
+    $nestedRepoDir = Join-Path $nestedScanRoot 'level-one/level-two/deep-repo'
+    $null = New-Item -ItemType Directory -Path $nestedRepoDir -Force
+    & git init -q $nestedRepoDir
+    try {
+        & "$root/scripts/report-friction.ps1" `
+            -RepoRoot $nestedRepoDir `
+            -Title 'Nested scan repo' `
+            -SourceType 'documentation' `
+            -SourceRef 'test' `
+            -InstructionText 'Recursively discover deeply nested repos under scan roots.' `
+            -ActionTaken 'Recorded an event in a repo nested two levels below the scan root so recursive discovery has to traverse beyond immediate children.' `
+            -ExpectedOutcome 'The nested repo event stream would be discovered under the higher-level scan root.' `
+            -ActualOutcome 'The nested repo event stream was written successfully.' `
+            -Reading 'This fixture proves the PowerShell discovery path is recursive rather than flat-child only.' `
+            -Hindsight 'Keep one deeply nested repo fixture in the smoke suite whenever recursive discovery changes.' | Out-Null
+        $nestedCross = & "$root/scripts/generate-report.ps1" -ScanDirs @($nestedScanRoot) -ReportType cross-repo -Format json | ConvertFrom-Json
+        if ([int]$nestedCross.repos_scanned -ne 1) { throw 'generate-report.ps1 should discover one deeply nested repo' }
+        if ([string]$nestedCross.repos[0].repo_root -ne $nestedRepoDir) { throw 'generate-report.ps1 should preserve the deeply nested repo path' }
+    }
+    finally {
+        if (Test-Path $nestedScanRoot) {
+            Remove-Item -Recurse -Force $nestedScanRoot
+        }
+    }
 
     # --- Test 6: Categorizer catches common missing/name-resolution phrasing ---
     $categorizeOutput = & "$root/scripts/categorize.ps1" `

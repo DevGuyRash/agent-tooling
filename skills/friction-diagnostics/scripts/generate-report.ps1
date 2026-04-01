@@ -93,18 +93,6 @@ function Remove-EmptyFields {
     return $event
 }
 
-function Get-EventFieldValue {
-    param(
-        $event,
-        [string]$Name,
-        $Default = $null
-    )
-
-    $prop = $event.PSObject.Properties[$Name]
-    if ($null -eq $prop) { return $Default }
-    return $prop.Value
-}
-
 function Get-EventTags {
     param($event)
     $tags = Get-EventFieldValue -event $event -Name 'tags'
@@ -122,41 +110,6 @@ function Get-EventSourceRefs {
 function Test-SourceRefMatch {
     param($event, [string]$ref)
     return (Get-EventSourceRefs $event) -contains $ref
-}
-
-function Get-DerivedCategoryParts {
-    param($event)
-    $value = [string](Get-EventFieldValue -event $event -Name 'derived_category' -Default '')
-    $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace($value)) {
-        $parts = @($value.Split('/', 3))
-    }
-    while ($parts.Count -lt 3) {
-        $parts += ''
-    }
-    return $parts
-}
-
-function Get-NullableInt {
-    param($value)
-    if ($null -eq $value) { return $null }
-    $text = [string]$value
-    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    if ($text -notmatch '^-?\d+$') { return $null }
-    return [int]$text
-}
-
-function Test-TextMatch {
-    param($event, [string]$query)
-    if ([string]::IsNullOrWhiteSpace($query)) { return $true }
-    $needle = $query.ToLowerInvariant()
-    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight')) {
-        $value = [string](Get-EventFieldValue -event $event -Name $field -Default '')
-        if ($value.ToLowerInvariant().Contains($needle)) {
-            return $true
-        }
-    }
-    return $false
 }
 
 function Get-RepoRootFromEventsFile {
@@ -396,7 +349,7 @@ function Test-EventMatchesFilters {
     if (-not [string]::IsNullOrWhiteSpace($Fingerprint) -and [string](Get-EventFieldValue -event $event -Name 'fingerprint' -Default '') -ne $Fingerprint) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($Role) -and [string](Get-EventFieldValue -event $event -Name 'role' -Default '') -ne $Role) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($Tag) -and (Get-EventTags $event) -notcontains $Tag) { return $false }
-    if (-not (Test-TextMatch $event $Text)) { return $false }
+    if (-not (Test-EventTextMatch -Event $event -Query $Text)) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($ConfidenceMin) -and ($null -eq $confidenceValue -or $confidenceValue -lt [int]$ConfidenceMin)) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($ConfidenceMax) -and ($null -eq $confidenceValue -or $confidenceValue -gt [int]$ConfidenceMax)) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($GuidanceMin) -and ($null -eq $guidanceValue -or $guidanceValue -lt [int]$GuidanceMin)) { return $false }
@@ -406,10 +359,7 @@ function Test-EventMatchesFilters {
     if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string](Get-EventFieldValue -event $event -Name 'owner_hint' -Default '') -ne $OwnerHint) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string](Get-EventFieldValue -event $event -Name 'component_hint' -Default '') -ne $ComponentHint) { return $false }
     if ($Workaround -and -not [bool](Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false)) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($Date) -and $eventDate -ne $Date) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($DateFrom) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -lt $DateFrom) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($DateTo) -and -not [string]::IsNullOrWhiteSpace($eventDate) -and $eventDate -gt $DateTo) { return $false }
-    if (-not [string]::IsNullOrWhiteSpace($After) -and -not [string]::IsNullOrWhiteSpace($ts) -and $ts -le $After) { return $false }
+    if (-not (Test-EventTimestampFilters -RecordedAt $ts -Date $Date -DateFrom $DateFrom -DateTo $DateTo -After $After)) { return $false }
     if (-not [string]::IsNullOrWhiteSpace($SourceRef) -and -not (Test-SourceRefMatch $event $SourceRef)) { return $false }
     return $true
 }
