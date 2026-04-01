@@ -347,7 +347,19 @@ function Test-EventTimestampFilters {
     )
     $hasTimestamp = -not [string]::IsNullOrWhiteSpace($RecordedAt)
     $eventDate = ''
-    if ($hasTimestamp -and $RecordedAt.Length -ge 10) {
+    $parsedRecordedAt = $null
+    $dateTimeStyles = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces
+    foreach ($culture in @([System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.CultureInfo]::CurrentCulture)) {
+        $candidate = [System.DateTimeOffset]::MinValue
+        if ([System.DateTimeOffset]::TryParse($RecordedAt, $culture, $dateTimeStyles, [ref]$candidate)) {
+            $parsedRecordedAt = $candidate
+            break
+        }
+    }
+
+    if ($null -ne $parsedRecordedAt) {
+        $eventDate = $parsedRecordedAt.ToString('yyyy-MM-dd')
+    } elseif ($hasTimestamp -and $RecordedAt.Length -ge 10) {
         $eventDate = $RecordedAt.Substring(0, 10)
     }
 
@@ -361,10 +373,30 @@ function Test-EventTimestampFilters {
         if ([string]::IsNullOrWhiteSpace($eventDate) -or $eventDate -gt $DateTo) { return $false }
     }
     if (-not [string]::IsNullOrWhiteSpace($After)) {
-        if (-not $hasTimestamp -or $RecordedAt -le $After) { return $false }
+        if (-not $hasTimestamp) { return $false }
+        if ($null -ne $parsedRecordedAt) {
+            $parsedAfter = [System.DateTimeOffset]::MinValue
+            if ([System.DateTimeOffset]::TryParse($After, [System.Globalization.CultureInfo]::InvariantCulture, $dateTimeStyles, [ref]$parsedAfter)) {
+                if ($parsedRecordedAt -le $parsedAfter) { return $false }
+            } elseif ($RecordedAt -le $After) {
+                return $false
+            }
+        } elseif ($RecordedAt -le $After) {
+            return $false
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($Before)) {
-        if (-not $hasTimestamp -or $RecordedAt -ge $Before) { return $false }
+        if (-not $hasTimestamp) { return $false }
+        if ($null -ne $parsedRecordedAt) {
+            $parsedBefore = [System.DateTimeOffset]::MinValue
+            if ([System.DateTimeOffset]::TryParse($Before, [System.Globalization.CultureInfo]::InvariantCulture, $dateTimeStyles, [ref]$parsedBefore)) {
+                if ($parsedRecordedAt -ge $parsedBefore) { return $false }
+            } elseif ($RecordedAt -ge $Before) {
+                return $false
+            }
+        } elseif ($RecordedAt -ge $Before) {
+            return $false
+        }
     }
     return $true
 }
@@ -468,7 +500,7 @@ function Get-AllTags {
         $line = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
-            $event = $line | ConvertFrom-Json -ErrorAction Stop
+            $event = $line | ConvertFrom-Json -DateKind String -ErrorAction Stop
         }
         catch { continue }
         $tagsProp = $event.PSObject.Properties['tags']
@@ -875,7 +907,7 @@ function Import-EventJsonObject {
 
     try {
         $null = [System.Text.Json.JsonDocument]::Parse($jsonText)
-        $payload = $jsonText | ConvertFrom-Json -ErrorAction Stop
+        $payload = $jsonText | ConvertFrom-Json -DateKind String -ErrorAction Stop
     }
     catch [System.Text.Json.JsonException] {
         $line = if ($null -ne $_.Exception.LineNumber) { [int]$_.Exception.LineNumber + 1 } else { $null }
@@ -993,7 +1025,7 @@ function Import-Events {
         $lineNumber++
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
-            $event = $line | ConvertFrom-Json -ErrorAction Stop
+            $event = $line | ConvertFrom-Json -DateKind String -ErrorAction Stop
         }
         catch {
             $detail = $_.Exception.Message.Split([Environment]::NewLine)[0]

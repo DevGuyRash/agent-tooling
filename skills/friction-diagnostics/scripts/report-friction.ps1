@@ -110,7 +110,7 @@ if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
         foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
             $stripped = $line.Trim()
             if ([string]::IsNullOrWhiteSpace($stripped)) { $lines.Add($line); continue }
-            $event = $stripped | ConvertFrom-Json -ErrorAction Stop
+            $event = $stripped | ConvertFrom-Json -DateKind String -ErrorAction Stop
             if ($event.PSObject.Properties['event_id'].Value -eq $AddTags) {
                 $found = $true
                 $existing = @()

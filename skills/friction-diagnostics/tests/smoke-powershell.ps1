@@ -51,7 +51,7 @@ try {
 
     # --- Test 1b: JSON helper preserves shell-sensitive payloads ---
     $helperJson = @'
-{"title":"powershell helper shell-sensitive payload","instruction_text":"WHEN payload text is shell-sensitive THEN the JSON helper SHOULD route it through -FromJson safely.","action_taken":"I piped a JSON payload containing ""quotes"", backticks, and dollar-paren text $(whoami) through report-friction-json.ps1.","expected_outcome":"The helper would forward the payload through the safe JSON path without any quoting damage.","actual_outcome":"The event preserved the shell-sensitive text verbatim and was appended successfully.","reading":"The helper exists to remove manual quoting from the complex-payload path. Using it should be equivalent to invoking report-friction.ps1 -FromJson - directly, while keeping the caller away from shell-sensitive argument assembly.","hindsight":"Use the JSON helper for payloads containing shell-sensitive text instead of building direct flags.","sources":[{"type":"documentation","ref":"test"}]}
+{"title":"powershell helper shell-sensitive payload","instruction_text":"WHEN payload text is shell-sensitive THEN the JSON helper SHOULD route it through -FromJson safely.","action_taken":"I piped a JSON payload containing \"quotes\", backticks, and dollar-paren text $(whoami) through report-friction-json.ps1.","expected_outcome":"The helper would forward the payload through the safe JSON path without any quoting damage.","actual_outcome":"The event preserved the shell-sensitive text verbatim and was appended successfully.","reading":"The helper exists to remove manual quoting from the complex-payload path. Using it should be equivalent to invoking report-friction.ps1 -FromJson - directly, while keeping the caller away from shell-sensitive argument assembly.","hindsight":"Use the JSON helper for payloads containing shell-sensitive text instead of building direct flags.","sources":[{"type":"documentation","ref":"test"}]}
 '@
     $helperOutput = $helperJson | & "$root/scripts/report-friction-json.ps1" -RepoRoot $repoDir
     if (-not ($helperOutput -match '^FRICTION_EVENT_ID=')) { throw 'report-friction-json.ps1 should emit the underlying report output' }
@@ -60,7 +60,7 @@ try {
     if ([string]$events[1].title -ne 'powershell helper shell-sensitive payload') { throw 'report-friction-json.ps1 should preserve the helper payload title' }
 
     $indexText = [System.IO.File]::ReadAllText($indexFile)
-    if ($indexText -notmatch '\*\*Entries:\*\* 1') { throw 'INDEX.md should count entries from events.jsonl' }
+    if ($indexText -notmatch '\*\*Entries:\*\* 2') { throw 'INDEX.md should count entries from events.jsonl' }
     if ($indexText -notmatch '\*\*Index rebuilt:\*\*') { throw 'INDEX.md should use the rebuilt label' }
     if ($indexText -notmatch '\*\*Earliest event:\*\*') { throw 'INDEX.md should include earliest event label' }
     if ($indexText -notmatch '\*\*Latest event:\*\*') { throw 'INDEX.md should include latest event label' }

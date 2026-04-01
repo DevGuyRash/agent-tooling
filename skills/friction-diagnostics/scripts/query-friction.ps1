@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$EventsFile = $env:FRICTION_EVENTS_FILE,
     [string]$RepoRoot = $env:FRICTION_REPO_ROOT,
@@ -209,11 +210,13 @@ switch ($Format) {
         }) -join [Environment]::NewLine
     }
     'json' {
-        if ($Compact) {
+        if (@($filtered).Count -eq 0) {
+            $result = '[]'
+        } elseif ($Compact) {
             $compacted = @($filtered | ForEach-Object { Remove-EmptyFields $_ })
-            $result = $compacted | ConvertTo-Json -Depth 8
+            $result = $compacted | ConvertTo-Json -Depth 8 -AsArray
         } else {
-            $result = @($filtered) | ConvertTo-Json -Depth 8
+            $result = @($filtered) | ConvertTo-Json -Depth 8 -AsArray
         }
     }
     'md' {
@@ -263,8 +266,8 @@ switch ($Format) {
             if (-not [string]::IsNullOrWhiteSpace($superprojectRootVal)) { $lines.Add("- Superproject: $superprojectRootVal") }
             $submodulePathVal = [string](Get-EventFieldValue -event $event -Name 'submodule_path' -Default '')
             if (-not [string]::IsNullOrWhiteSpace($submodulePathVal)) { $lines.Add("- Submodule: $submodulePathVal") }
-            $sources = Get-EventFieldValue -event $event -Name 'sources'
-            if ($null -ne $sources -and $sources -is [System.Array] -and $sources.Count -gt 0) {
+            $sources = @(Get-EventFieldValue -event $event -Name 'sources')
+            if ($sources.Count -gt 0) {
                 $sourceEntries = @($sources | Where-Object { $null -ne $_ } | ForEach-Object {
                     $ref = [string]$_.ref
                     if ([string]::IsNullOrWhiteSpace($ref)) { return }
@@ -282,7 +285,7 @@ switch ($Format) {
                     $lines.Add("- Sources: $($sourceEntries -join ', ')")
                 }
             }
-            $tags = Get-EventTags $event
+            $tags = @(Get-EventTags $event)
             if ($tags.Count -gt 0) {
                 $lines.Add("- Tags: $($tags -join ', ')")
             }

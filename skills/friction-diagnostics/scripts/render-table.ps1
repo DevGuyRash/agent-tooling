@@ -1,6 +1,4 @@
 param(
-    [Parameter(ValueFromPipeline = $true)]
-    [string]$InputObject,
     [switch]$Tsv,
     [switch]$Csv,
     [switch]$Jsonl,
@@ -17,8 +15,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-$script:PipelineLines = [System.Collections.Generic.List[string]]::new()
 
 function Write-Hint {
     param([string]$Message)
@@ -78,8 +74,8 @@ function Get-InputText {
         return [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $File).Path, [System.Text.UTF8Encoding]::new($false))
     }
 
-    if ($script:PipelineLines.Count -gt 0) {
-        return ($script:PipelineLines -join [Environment]::NewLine)
+    if ($script:PipelineTextLines.Count -gt 0) {
+        return ($script:PipelineTextLines -join [Environment]::NewLine)
     }
 
     return ''
@@ -192,8 +188,8 @@ function Get-NormalizedData {
         [string]$Mode
     )
 
-    $headerOverride = Split-CommaList $Headers
-    $fieldList = Split-CommaList $Fields
+    $headerOverride = @(Split-CommaList $Headers)
+    $fieldList = @(Split-CommaList $Fields)
 
     switch ($Mode) {
         'tsv' {
@@ -438,7 +434,8 @@ function Get-ColumnWidths {
 
         $max = Get-DisplayWidth $HeadersResolved[$i]
         foreach ($row in $RowsResolved) {
-            $cell = if ($i -lt $row.Count) { [string]$row[$i] } else { '' }
+            $rowCells = @($row)
+            $cell = if ($i -lt $rowCells.Count) { [string]$rowCells[$i] } else { '' }
             $cellWidth = Get-DisplayWidth $cell
             if ($cellWidth -gt $max) {
                 $max = $cellWidth
@@ -502,16 +499,18 @@ function Write-RenderedRow {
         [int[]]$Widths
     )
 
+    $rowCells = @($Row)
     $wrapped = @()
     for ($i = 0; $i -lt $Widths.Length; $i++) {
-        $cell = if ($i -lt $Row.Count) { [string]$Row[$i] } else { '' }
-        $wrapped += ,(Split-DisplayText -Text $cell -Width $Widths[$i])
+        $cell = if ($i -lt $rowCells.Count) { [string]$rowCells[$i] } else { '' }
+        $wrapped += ,(@(Split-DisplayText -Text $cell -Width $Widths[$i]))
     }
 
     $maxLines = 1
     foreach ($cellLines in $wrapped) {
-        if ($cellLines.Count -gt $maxLines) {
-            $maxLines = $cellLines.Count
+        $cellSegments = @($cellLines)
+        if ($cellSegments.Count -gt $maxLines) {
+            $maxLines = $cellSegments.Count
         }
     }
 
@@ -519,51 +518,46 @@ function Write-RenderedRow {
         $parts = [System.Collections.Generic.List[string]]::new()
         $parts.Add('│')
         for ($i = 0; $i -lt $Widths.Length; $i++) {
-            $segment = if ($lineIndex -lt $wrapped[$i].Count) { [string]$wrapped[$i][$lineIndex] } else { '' }
+            $wrappedSegments = @($wrapped[$i])
+            $segment = if ($lineIndex -lt $wrappedSegments.Count) { [string]$wrappedSegments[$lineIndex] } else { '' }
             $parts.Add((' ' + (Pad-DisplayText -Text $segment -Width $Widths[$i]) + ' │'))
         }
         [Console]::WriteLine(($parts -join ''))
     }
 }
 
-process {
-    if ($null -ne $InputObject) {
-        $script:PipelineLines.Add([string]$InputObject)
-    }
+$script:PipelineTextLines = @($input | ForEach-Object { [string]$_ })
+
+if ($Help) {
+    Show-Help
+    return
 }
 
-end {
-    if ($Help) {
-        Show-Help
-        return
-    }
-
-    $mode = Get-Mode
-    $text = Get-InputText
-    if ([string]::IsNullOrEmpty($text)) {
-        return
-    }
-
-    if ($mode -eq 'auto') {
-        $mode = Get-DetectedMode $text
-    }
-
-    $normalized = Get-NormalizedData -Text $text -Mode $mode
-    $headersResolved = @($normalized.Headers)
-    $rowsResolved = @($normalized.Rows)
-    if ($headersResolved.Count -eq 0 -or $rowsResolved.Count -eq 0) {
-        return
-    }
-
-    $widths = Get-ColumnWidths -HeadersResolved $headersResolved -RowsResolved $rowsResolved
-    Write-Border -Position top -Widths $widths
-    Write-RenderedRow -Row $headersResolved -Widths $widths
-    Write-Border -Position mid -Widths $widths
-    for ($i = 0; $i -lt $rowsResolved.Count; $i++) {
-        Write-RenderedRow -Row @($rowsResolved[$i]) -Widths $widths
-        if ($i -lt ($rowsResolved.Count - 1)) {
-            Write-Border -Position mid -Widths $widths
-        }
-    }
-    Write-Border -Position bot -Widths $widths
+$mode = Get-Mode
+$text = Get-InputText
+if ([string]::IsNullOrEmpty($text)) {
+    return
 }
+
+if ($mode -eq 'auto') {
+    $mode = Get-DetectedMode $text
+}
+
+$normalized = Get-NormalizedData -Text $text -Mode $mode
+$headersResolved = @($normalized.Headers)
+$rowsResolved = @($normalized.Rows)
+if ($headersResolved.Count -eq 0 -or $rowsResolved.Count -eq 0) {
+    return
+}
+
+$widths = Get-ColumnWidths -HeadersResolved $headersResolved -RowsResolved $rowsResolved
+Write-Border -Position top -Widths $widths
+Write-RenderedRow -Row $headersResolved -Widths $widths
+Write-Border -Position mid -Widths $widths
+for ($i = 0; $i -lt $rowsResolved.Count; $i++) {
+    Write-RenderedRow -Row @($rowsResolved[$i]) -Widths $widths
+    if ($i -lt ($rowsResolved.Count - 1)) {
+        Write-Border -Position mid -Widths $widths
+    }
+}
+Write-Border -Position bot -Widths $widths

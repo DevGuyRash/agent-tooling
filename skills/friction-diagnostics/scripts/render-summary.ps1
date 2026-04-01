@@ -59,13 +59,18 @@ function Quote-ForPowerShell {
 function Get-SourceAnchor {
     param($Source)
 
-    $type = [string]$Source.type
-    $ref = [string]$Source.ref
+    $typeProp = $Source.PSObject.Properties['type']
+    $refProp = $Source.PSObject.Properties['ref']
+    $lineProp = $Source.PSObject.Properties['line']
+    $endLineProp = $Source.PSObject.Properties['end_line']
+
+    $type = if ($null -ne $typeProp) { [string]$typeProp.Value } else { '' }
+    $ref = if ($null -ne $refProp) { [string]$refProp.Value } else { '' }
     $anchor = "$type`:$ref"
-    if ($null -ne $Source.line -and [string]$Source.line -ne '') {
-        $anchor += ":$([string]$Source.line)"
-        if ($null -ne $Source.end_line -and [string]$Source.end_line -ne '') {
-            $anchor += "-$([string]$Source.end_line)"
+    if ($null -ne $lineProp -and [string]$lineProp.Value -ne '') {
+        $anchor += ":$([string]$lineProp.Value)"
+        if ($null -ne $endLineProp -and [string]$endLineProp.Value -ne '') {
+            $anchor += "-$([string]$endLineProp.Value)"
         }
     }
     return $anchor
@@ -99,15 +104,35 @@ if ([string]::IsNullOrWhiteSpace($After) -and [string]::IsNullOrWhiteSpace($Befo
     $effectiveDateFrom = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
 }
 
-$queryArgs = @(
-    '-EventsFile', $EventsFile
-)
-if (-not [string]::IsNullOrWhiteSpace($After)) { $queryArgs += @('-After', $After) }
-if (-not [string]::IsNullOrWhiteSpace($Before)) { $queryArgs += @('-Before', $Before) }
-if (-not [string]::IsNullOrWhiteSpace($effectiveDateFrom)) { $queryArgs += @('-DateFrom', $effectiveDateFrom) }
-$queryArgs += @('-Format', 'json')
+function Invoke-QueryScript {
+    if (-not [string]::IsNullOrWhiteSpace($After)) {
+        if (-not [string]::IsNullOrWhiteSpace($Before)) {
+            if (-not [string]::IsNullOrWhiteSpace($effectiveDateFrom)) {
+                return & $queryScript -EventsFile $EventsFile -After $After -Before $Before -DateFrom $effectiveDateFrom -Format json
+            }
+            return & $queryScript -EventsFile $EventsFile -After $After -Before $Before -Format json
+        }
+        if (-not [string]::IsNullOrWhiteSpace($effectiveDateFrom)) {
+            return & $queryScript -EventsFile $EventsFile -After $After -DateFrom $effectiveDateFrom -Format json
+        }
+        return & $queryScript -EventsFile $EventsFile -After $After -Format json
+    }
 
-$queryJson = & $queryScript @queryArgs
+    if (-not [string]::IsNullOrWhiteSpace($Before)) {
+        if (-not [string]::IsNullOrWhiteSpace($effectiveDateFrom)) {
+            return & $queryScript -EventsFile $EventsFile -Before $Before -DateFrom $effectiveDateFrom -Format json
+        }
+        return & $queryScript -EventsFile $EventsFile -Before $Before -Format json
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($effectiveDateFrom)) {
+        return & $queryScript -EventsFile $EventsFile -DateFrom $effectiveDateFrom -Format json
+    }
+
+    return & $queryScript -EventsFile $EventsFile -Format json
+}
+
+$queryJson = Invoke-QueryScript
 $events = @()
 if (-not [string]::IsNullOrWhiteSpace([string]$queryJson)) {
     $events = @($queryJson | ConvertFrom-Json -Depth 16)
@@ -147,17 +172,12 @@ if (-not [string]::IsNullOrWhiteSpace($lastEventTime)) {
 
 [Console]::WriteLine(("Friction Summary — {0} event(s) this session" -f $flattened.Count))
 
-$renderArgs = @(
-    '-Json',
-    '-Fields', 'event_id,recorded_at,title,derived_category,tags,sources_flat',
-    '-Headers', 'ID,Time,Title,Category,Tags,Sources',
-    '-MaxColWidth', [string]$MaxColWidth
-)
+$flattenedJson = $flattened | ConvertTo-Json -Depth 8
 if ($resolvedMaxWidth -gt 0) {
-    $renderArgs += @('-MaxWidth', [string]$resolvedMaxWidth)
+    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -MaxWidth $resolvedMaxWidth
+} else {
+    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth
 }
-
-$flattened | ConvertTo-Json -Depth 8 | & $renderScript @renderArgs
 
 $footerParts = [System.Collections.Generic.List[string]]::new()
 $footerParts.Add('&')

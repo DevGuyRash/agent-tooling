@@ -1,6 +1,4 @@
 param(
-    [Parameter(ValueFromPipeline = $true)]
-    [string]$InputObject,
     [string]$EventsFile = '',
     [string]$IndexFile = '',
     [string]$RepoRoot = '',
@@ -10,8 +8,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-$script:PayloadLines = [System.Collections.Generic.List[string]]::new()
 
 function Show-Help {
 @"
@@ -24,32 +20,89 @@ using -FromJson so callers do not need to hand-quote complex payload text.
 "@
 }
 
-process {
-    if ($null -ne $InputObject) {
-        $script:PayloadLines.Add([string]$InputObject)
+if ($Help) {
+    Show-Help
+    return
+}
+
+$reportScript = Join-Path $PSScriptRoot 'report-friction.ps1'
+
+function Write-HelperOutput {
+    param([object[]]$ReportOutput)
+
+    foreach ($line in @($ReportOutput)) {
+        $text = [string]$line
+        switch -Regex ($text) {
+            '^events_file=(.+)$' { Write-Output "FRICTION_EVENTS_FILE=$($Matches[1])"; continue }
+            '^index_file=(.+)$' { Write-Output "FRICTION_INDEX_FILE=$($Matches[1])"; continue }
+            '^event_id=(.+)$' { Write-Output "FRICTION_EVENT_ID=$($Matches[1])"; continue }
+            '^repo_root=(.+)$' { Write-Output "FRICTION_REPO_ROOT=$($Matches[1])"; continue }
+            default { Write-Output $text }
+        }
     }
 }
 
-end {
-    if ($Help) {
-        Show-Help
-        return
+function Invoke-ReportScript {
+    param([string]$FromJsonPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($EventsFile)) {
+        if (-not [string]::IsNullOrWhiteSpace($IndexFile)) {
+            if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+                return & $reportScript -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
+            }
+            return & $reportScript -EventsFile $EventsFile -IndexFile $IndexFile -FromJson $FromJsonPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+            return & $reportScript -EventsFile $EventsFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
+        }
+        return & $reportScript -EventsFile $EventsFile -FromJson $FromJsonPath
     }
 
-    $reportArgs = @()
-    if (-not [string]::IsNullOrWhiteSpace($EventsFile)) { $reportArgs += @('-EventsFile', $EventsFile) }
-    if (-not [string]::IsNullOrWhiteSpace($IndexFile)) { $reportArgs += @('-IndexFile', $IndexFile) }
-    if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) { $reportArgs += @('-RepoRoot', $RepoRoot) }
-
-    if (-not [string]::IsNullOrWhiteSpace($Path)) {
-        & "$PSScriptRoot/report-friction.ps1" @reportArgs -FromJson $Path
-        return
+    if (-not [string]::IsNullOrWhiteSpace($IndexFile)) {
+        if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+            return & $reportScript -IndexFile $IndexFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
+        }
+        return & $reportScript -IndexFile $IndexFile -FromJson $FromJsonPath
     }
 
-    if ($script:PayloadLines.Count -eq 0 -and [Console]::IsInputRedirected -eq $false) {
-        Show-Help
-        return
+    if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+        return & $reportScript -RepoRoot $RepoRoot -FromJson $FromJsonPath
     }
 
-    ($script:PayloadLines -join [Environment]::NewLine) | & "$PSScriptRoot/report-friction.ps1" @reportArgs -FromJson '-'
+    return & $reportScript -FromJson $FromJsonPath
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Path)) {
+    $reportOutput = Invoke-ReportScript -FromJsonPath $Path
+    Write-HelperOutput $reportOutput
+    return
+}
+
+$payloadLines = @($input | ForEach-Object { [string]$_ })
+if ($payloadLines.Count -eq 0 -and [Console]::IsInputRedirected -eq $false) {
+    Show-Help
+    return
+}
+
+$stdinText = if ($payloadLines.Count -gt 0) {
+    $payloadLines -join [Environment]::NewLine
+} else {
+    [Console]::In.ReadToEnd()
+}
+
+if ([string]::IsNullOrWhiteSpace($stdinText)) {
+    Show-Help
+    return
+}
+
+$tempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("report-friction-json.{0}.json" -f [System.Guid]::NewGuid().ToString('N'))
+try {
+    [System.IO.File]::WriteAllText($tempPath, $stdinText, [System.Text.UTF8Encoding]::new($false))
+    $reportOutput = Invoke-ReportScript -FromJsonPath $tempPath
+    Write-HelperOutput $reportOutput
+}
+finally {
+    if (Test-Path -LiteralPath $tempPath) {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
 }
