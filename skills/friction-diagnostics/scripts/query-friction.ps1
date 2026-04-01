@@ -23,6 +23,7 @@ param(
     [string]$DateFrom = '',
     [string]$DateTo = '',
     [string]$After = '',
+    [string]$Before = '',
     [string]$SourceRef = '',
     [ValidateSet('jsonl', 'json', 'md')][string]$Format = 'jsonl',
     [string]$Output = '',
@@ -64,6 +65,7 @@ Filters:
   -DateFrom YYYY-MM-DD
   -DateTo YYYY-MM-DD
   -After ISO-TIMESTAMP      Filter events with recorded_at > TIMESTAMP
+  -Before ISO-TIMESTAMP     Filter events with recorded_at < TIMESTAMP
   -SourceRef PATH
 
 Output:
@@ -189,7 +191,7 @@ $filtered = foreach ($event in $events) {
     if (-not [string]::IsNullOrWhiteSpace($OwnerHint) -and [string](Get-EventFieldValue -event $event -Name 'owner_hint' -Default '') -ne $OwnerHint) { continue }
     if (-not [string]::IsNullOrWhiteSpace($ComponentHint) -and [string](Get-EventFieldValue -event $event -Name 'component_hint' -Default '') -ne $ComponentHint) { continue }
     if ($Workaround -and -not [bool](Get-EventFieldValue -event $event -Name 'workaround_used' -Default $false)) { continue }
-    if (-not (Test-EventTimestampFilters -RecordedAt $ts -Date $Date -DateFrom $DateFrom -DateTo $DateTo -After $After)) { continue }
+    if (-not (Test-EventTimestampFilters -RecordedAt $ts -Date $Date -DateFrom $DateFrom -DateTo $DateTo -After $After -Before $Before)) { continue }
 
     if (-not [string]::IsNullOrWhiteSpace($SourceRef)) {
         if (-not (Test-SourceRefMatch $event $SourceRef)) { continue }

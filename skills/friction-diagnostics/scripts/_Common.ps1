@@ -342,7 +342,8 @@ function Test-EventTimestampFilters {
         [string]$Date = '',
         [string]$DateFrom = '',
         [string]$DateTo = '',
-        [string]$After = ''
+        [string]$After = '',
+        [string]$Before = ''
     )
     $hasTimestamp = -not [string]::IsNullOrWhiteSpace($RecordedAt)
     $eventDate = ''
@@ -361,6 +362,9 @@ function Test-EventTimestampFilters {
     }
     if (-not [string]::IsNullOrWhiteSpace($After)) {
         if (-not $hasTimestamp -or $RecordedAt -le $After) { return $false }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Before)) {
+        if (-not $hasTimestamp -or $RecordedAt -ge $Before) { return $false }
     }
     return $true
 }

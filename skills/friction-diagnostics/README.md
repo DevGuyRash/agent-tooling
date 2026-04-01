@@ -68,6 +68,8 @@ The tool redacts common secrets and tokens before writing event text to disk. Th
 - `scripts/generate-report.*` — generate enhanced index, cross-repo, per-repo, and timeseries reports
 - `scripts/build-index.*` — tool-managed index regeneration
 - `scripts/categorize.*` — taxonomy heuristics
+- `scripts/render-table.*` — render Unicode box-drawing tables from TSV/CSV/JSON-family input
+- `scripts/render-summary.*` — render session summaries with query footer and source flattening
 - `references/` — integration and logging references
 - `tests/` — smoke tests
 
@@ -114,6 +116,16 @@ Recommended reading order:
 2. Use `query-friction.*` for filtered views.
 3. Use `generate-report.*` for aggregate views.
 4. Drop to raw `events.jsonl` plus `jq` only when a custom slice is needed.
+
+Session summary renderers are available on both POSIX and PowerShell:
+
+```sh
+sh scripts/render-summary.sh --events-file .local/reports/friction/events.jsonl --after 2026-04-01T12:00:00Z
+```
+
+```powershell
+& .\scripts\render-summary.ps1 -EventsFile .local/reports/friction/events.jsonl -After 2026-04-01T12:00:00Z
+```
 
 ## Notes
 

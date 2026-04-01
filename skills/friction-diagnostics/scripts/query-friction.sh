@@ -38,6 +38,7 @@ Filters:
   --date-from YYYY-MM-DD
   --date-to YYYY-MM-DD
   --after ISO-TIMESTAMP     Filter events with recorded_at > TIMESTAMP
+  --before ISO-TIMESTAMP    Filter events with recorded_at < TIMESTAMP
   --source-ref PATH
 
 Output:
@@ -72,6 +73,7 @@ date_exact=
 date_from=
 date_to=
 after=
+before=
 source_ref=
 format=jsonl
 output_path=
@@ -124,6 +126,7 @@ while [ $# -gt 0 ]; do
     --date-from) date_from=${2-}; shift 2 ;;
     --date-to) date_to=${2-}; shift 2 ;;
     --after) after=${2-}; shift 2 ;;
+    --before) before=${2-}; shift 2 ;;
     --source-ref) source_ref=${2-}; shift 2 ;;
     --format) format=${2-}; shift 2 ;;
     --output) output_path=${2-}; shift 2 ;;
@@ -206,6 +209,7 @@ jq -s \
   --arg date_from "$date_from" \
   --arg date_to "$date_to" \
   --arg after "$after" \
+  --arg before "$before" \
   --arg source_ref "$source_ref" \
   '
   def category_parts:
@@ -250,6 +254,7 @@ jq -s \
       (($date_from == "") or (((.recorded_at // "")[0:10]) >= $date_from)) and
       (($date_to == "") or (((.recorded_at // "")[0:10]) <= $date_to)) and
       (($after == "") or ((.recorded_at // "") > $after)) and
+      (($before == "") or ((.recorded_at // "") < $before)) and
       matches_source_ref($source_ref)
     )
   )

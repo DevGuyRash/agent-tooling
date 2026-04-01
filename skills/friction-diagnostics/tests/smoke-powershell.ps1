@@ -338,6 +338,37 @@ try {
     $dateReport = & "$root/scripts/generate-report.ps1" -EventsFile $dateEventsFile -ReportType cross-repo -DateFrom '2026-03-30' -Format json | ConvertFrom-Json
     if ([int]$dateReport.total_entries -ne 2) { throw 'generate-report.ps1 date filtering should match query semantics and exclude undated rows' }
 
+    # --- Test 5b: render-table.ps1 basic coverage ---
+    $tableOutput = "Name`tAge`nAlice`t30`nBob`t25" | & "$root/scripts/render-table.ps1"
+    if ($tableOutput -notmatch '┌') { throw 'render-table.ps1 should emit a top border for TSV input' }
+    if ($tableOutput -notmatch 'Alice') { throw 'render-table.ps1 should render TSV data rows' }
+    $headerOverrideOutput = "old`n1" | & "$root/scripts/render-table.ps1" -Headers 'New'
+    if ($headerOverrideOutput -notmatch 'New') { throw 'render-table.ps1 should honor -Headers overrides' }
+    if ($headerOverrideOutput -match 'old') { throw 'render-table.ps1 should replace TSV header text when -Headers is provided' }
+    $jsonlRow = '{"a":"foo","b":"bar","tags":["x","y"]}'
+    $jsonlOutput = $jsonlRow | & "$root/scripts/render-table.ps1" -Jsonl -Fields 'a,tags'
+    if ($jsonlOutput -notmatch 'foo') { throw 'render-table.ps1 should render JSONL field selections' }
+    if ($jsonlOutput -notmatch 'x,y') { throw 'render-table.ps1 should join scalar arrays in JSONL output' }
+    $emptyTable = '' | & "$root/scripts/render-table.ps1"
+    if (-not [string]::IsNullOrWhiteSpace($emptyTable)) { throw 'render-table.ps1 should emit nothing for empty input' }
+
+    # --- Test 5c: render-summary.ps1 parity coverage ---
+    $summaryOutput = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2020-01-01T00:00:00Z' -NoFit
+    if ($summaryOutput -notmatch 'Friction Summary') { throw 'render-summary.ps1 should emit the summary header line' }
+    if ($summaryOutput -notmatch '┌') { throw 'render-summary.ps1 should render a box-drawing table' }
+    if ($summaryOutput -notmatch 'ID') { throw 'render-summary.ps1 should include the ID header' }
+    if ($summaryOutput -notmatch 'Title') { throw 'render-summary.ps1 should include the Title header' }
+    if ($summaryOutput -notmatch 'Sources') { throw 'render-summary.ps1 should include the Sources header' }
+    if ($summaryOutput -notmatch 'evt-') { throw 'render-summary.ps1 should include event rows' }
+    if ($summaryOutput -notmatch 'file:') { throw 'render-summary.ps1 should flatten source refs into the Sources column' }
+    if ($summaryOutput -notmatch '-After') { throw 'render-summary.ps1 footer should preserve the lower-bound window' }
+    if ($summaryOutput -notmatch '-Before') { throw 'render-summary.ps1 footer should compute an upper-bound re-query window' }
+    if ($summaryOutput -notmatch 'query-friction.ps1') { throw 'render-summary.ps1 footer should reference query-friction.ps1' }
+    $emptySummary = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2099-01-01T00:00:00Z' -NoFit
+    if ($emptySummary -match '┌') { throw 'render-summary.ps1 should emit no table for zero-event sessions' }
+    $dateSummary = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -DateFrom '2020-01-01' -NoFit
+    if ($dateSummary -notmatch '-DateFrom') { throw 'render-summary.ps1 footer should preserve the -DateFrom fallback path' }
+
     $futureRunEffectEventsFile = Join-Path $repoDir 'future-run-effect-events.jsonl'
     [System.IO.File]::WriteAllText($futureRunEffectEventsFile, "{""title"":""future run effect"",""derived_category"":""skill/schema/future-state""}$([Environment]::NewLine)", [System.Text.UTF8Encoding]::new($false))
     $futureIndex = & "$root/scripts/generate-report.ps1" -EventsFile $futureRunEffectEventsFile -ReportType index -Format json | ConvertFrom-Json

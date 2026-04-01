@@ -782,6 +782,60 @@ for val in $RE_ENUM; do
   [ "$result" = "$val" ] || fail "run_effect enum value '$val' should pass through normalize_run_effect unchanged, got '$result'"
 done
 
+# --- Test: render-summary.sh shim produces box-drawing table ---
+RENDER_SUMMARY="$ROOT/scripts/render-summary.sh"
+if [ -f "$RENDER_SUMMARY" ] && [ -f "$DEFAULT_EVENTS" ]; then
+  SUMMARY_OUT=$(sh "$RENDER_SUMMARY" --events-file "$DEFAULT_EVENTS" --after "2020-01-01T00:00:00Z" --no-fit 2>/dev/null) || fail "render-summary.sh exited non-zero"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq '┌' || fail "summary: missing top border ┌"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq '┘' || fail "summary: missing bottom border ┘"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'ID' || fail "summary: missing ID header"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'Title' || fail "summary: missing Title header"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'Sources' || fail "summary: missing Sources header"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'evt-' || fail "summary: missing event ID in table"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'Friction Summary' || fail "summary: missing header line"
+fi
+
+# --- Test: render-summary.sh Sources column includes source refs ---
+if [ -f "$RENDER_SUMMARY" ] && [ -f "$DEFAULT_EVENTS" ]; then
+  # evt-0001 has source ref to SKILL.md — should appear in Sources column
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'file:' || fail "summary sources: missing file: anchor"
+fi
+
+# --- Test: render-summary.sh empty session produces no output ---
+if [ -f "$RENDER_SUMMARY" ] && [ -f "$DEFAULT_EVENTS" ]; then
+  EMPTY_SUMMARY=$(sh "$RENDER_SUMMARY" --events-file "$DEFAULT_EVENTS" --after "2099-01-01T00:00:00Z" --no-fit 2>/dev/null) || true
+  if printf '%s' "$EMPTY_SUMMARY" | grep -Fq '┌'; then
+    fail "empty summary: should not produce a table for zero events"
+  fi
+fi
+
+# --- Test: render-summary.sh footer uses --after + --before window ---
+if [ -f "$RENDER_SUMMARY" ] && [ -f "$DEFAULT_EVENTS" ]; then
+  printf '%s' "$SUMMARY_OUT" | grep -Fq -- '--after' || fail "summary footer: missing --after in query"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq -- '--before' || fail "summary footer: missing --before in query"
+  printf '%s' "$SUMMARY_OUT" | grep -Fq 'query-friction.sh' || fail "summary footer: missing query script path"
+fi
+
+# --- Test: render-summary.sh footer falls back to --date-from ---
+if [ -f "$RENDER_SUMMARY" ] && [ -f "$DEFAULT_EVENTS" ]; then
+  DATE_SUMMARY=$(sh "$RENDER_SUMMARY" --events-file "$DEFAULT_EVENTS" --date-from "2020-01-01" --no-fit 2>/dev/null) || true
+  printf '%s' "$DATE_SUMMARY" | grep -Fq -- '--date-from' || fail "summary footer: missing --date-from fallback"
+fi
+
+# --- Test: query-friction.sh --before flag ---
+BEFORE_OUT=$(sh "$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --before "2020-01-01T00:00:00Z" --format jsonl 2>/dev/null) || true
+BEFORE_COUNT=$(printf '%s' "$BEFORE_OUT" | grep -c '{' || true)
+[ "$BEFORE_COUNT" -eq 0 ] || fail "--before 2020: expected 0 events, got $BEFORE_COUNT"
+
+# --- Test: query-friction.sh --after + --before window ---
+WINDOW_OUT=$(sh "$ROOT/scripts/query-friction.sh" --events-file "$DEFAULT_EVENTS" --after "2020-01-01T00:00:00Z" --before "2099-01-01T00:00:00Z" --format jsonl 2>/dev/null)
+WINDOW_COUNT=$(printf '%s' "$WINDOW_OUT" | grep -c '{' || true)
+[ "$WINDOW_COUNT" -gt 0 ] || fail "--after/--before window: expected >0 events, got $WINDOW_COUNT"
+
+# --- Test: query-friction.sh --help mentions --before ---
+HELP_OUT=$(sh "$ROOT/scripts/query-friction.sh" --help 2>&1) || true
+printf '%s' "$HELP_OUT" | grep -Fq -- '--before' || fail "--before not in query --help"
+
 # --- Cleanup ---
 rm -f "$INVALID_STDERR" "$INVALID_JSON" "$SCHEMA_STDERR" "$SCHEMA_JSON" "$SHORT_STDERR" "$SHORT_JSON" "$FP_EVENTS" \
   "$REPORT_TYPE_STDERR" "$GROUP_BY_STDERR" "$MULTI_INDEX_STDERR" "$QUERY_FORMAT_STDERR" \

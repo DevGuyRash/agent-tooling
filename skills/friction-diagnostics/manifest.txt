@@ -19,6 +19,10 @@ scripts/generate-report.ps1
 scripts/generate-report.sh
 scripts/query-friction.ps1
 scripts/query-friction.sh
+scripts/render-summary.ps1
+scripts/render-summary.sh
+scripts/render-table.ps1
+scripts/render-table.sh
 scripts/report-friction.ps1
 scripts/report-friction.sh
 tests/smoke-posix.sh

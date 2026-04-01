@@ -164,3 +164,63 @@ A value of 4 (clear) means you followed unambiguous, accurate guidance and the f
 WHEN the automatic `mode` is `other` AND you can identify a more specific mode from the taxonomy THEN you SHALL override with `--mode <value>`. Common overrides: `apply_patch` or edit context mismatch → `output-mismatch`; spawn/thread/resource limit → `performance`; variable rejected as invalid, reserved, or unbound → `validation`.
 
 WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `reading`.
+
+---
+
+## Session summary
+
+WHEN your task is complete AND you logged at least one friction event during this session THEN you SHALL include a friction summary at the end of your final response.
+
+WHEN no friction events were logged during the session THEN you SHALL NOT render a summary.
+
+### How to produce
+
+Run the summary renderer and paste its output verbatim. The script handles querying, source flattening, table formatting, and re-query footer generation.
+
+```sh
+sh <skills-file-root>/scripts/render-summary.sh \
+  --events-file <events-file> \
+  --after "<session-start-timestamp>"
+```
+
+```powershell
+& <skills-file-root>\scripts\render-summary.ps1 `
+  -EventsFile <events-file> `
+  -After "<session-start-timestamp>"
+```
+
+WHEN you do not have the session start timestamp THEN you SHALL use `--date-from` with today's date instead of `--after`.
+
+### Output layout
+
+Place the full output of `render-summary.sh` or `render-summary.ps1` after all task content. The script produces a header, a Unicode box-drawing table (with ID, Time, Title, Category, Tags, and Sources columns), and a footer with the events file path and a ready-to-paste re-query command.
+
+You SHALL NOT manually construct or format the table. Paste the script output as-is.
+
+---
+
+## Source attribution
+
+The `source_type`, `source_ref`, and `instruction_text` fields identify where friction originates. Trace back to the artifact that contains the friction — not the channel that delivered the task.
+
+### Decision heuristic
+
+Ask: **"What artifact contains the text, code, or config that broke or misled me?"**
+
+- `source_ref` → the artifact itself (file path, URL, MCP schema, API doc)
+- `source_type` → what kind of artifact it is (use the existing enum: `file`, `url`, `documentation`, `system-instruction`, `conversation`, etc.)
+- `instruction_text` → verbatim quote from the artifact identified in `source_ref`
+
+This applies to any domain — skills, MCP servers, API docs, books, codebases — without enumerating each one.
+
+### Rules
+
+WHEN friction originates from a loaded skill's instructions or scripts THEN `source_type` SHALL be `file` and `source_ref` SHALL be the skill file path — not `conversation`.
+
+WHEN the user's conversational instruction triggered the task but the friction is in an artifact THEN the source is the artifact, not the conversation. The conversation is the trigger, not the origin.
+
+WHEN friction is genuinely in what the user said (e.g., an ambiguous user instruction with no backing artifact) THEN `source_type` SHALL be `conversation`.
+
+WHEN text from multiple sources shaped the action THEN you SHALL use the `sources` array with multiple entries, each pointing to its own artifact. You SHALL NOT merge text from different sources into a single `instruction_text`.
+
+`instruction_text` SHALL be a verbatim quote from the single source identified in `source_ref`. You SHALL NOT paraphrase, blend, or combine text from different origins.
