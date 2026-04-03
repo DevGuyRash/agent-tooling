@@ -1,0 +1,88 @@
+{
+  "names": [
+    {
+      "name": "cf_BadMonthDate",
+      "refersTo": "=LAMBDA(d,LET(v,d,OR(v=\"\",NOT(ISNUMBER(v)),INT(v)<>v,v<curMonthStart,v>curMonthEnd)))"
+    },
+    {
+      "name": "cf_FirstMissingPosInt",
+      "refersTo": "=LAMBDA(rng,LET(nums,IFERROR(--rng,0),pos,FILTER(nums,(nums>=1)*(nums=INT(nums)),0),uniq,SORT(UNIQUE(pos)),n,ROWS(uniq),expected,SEQUENCE(n),mismatchPos,XMATCH(FALSE,uniq=expected,0),IFERROR(INDEX(expected,mismatchPos),n+1)))"
+    },
+    {
+      "name": "cf_FirstMissingPosIntFromMin",
+      "refersTo": "=LAMBDA(rng,LET(nums,IFERROR(--rng,0),pos,FILTER(nums,(nums>=1)*(nums=INT(nums)),0),uniq,SORT(UNIQUE(pos)),n,ROWS(uniq),start,INDEX(uniq,1),expected,SEQUENCE(n,,start),mismatchPos,XMATCH(FALSE,uniq=expected,0),IFERROR(INDEX(expected,mismatchPos),start+n)))"
+    },
+    {
+      "name": "cfInv_FirstMissingID",
+      "refersTo": "=cf_FirstMissingPosIntFromMin(rngInvID)"
+    },
+    {
+      "name": "cfInv_FirstMissingID_Value",
+      "refersTo": "=INDEX(tbl_defaults_cf_helpers[Inv First Missing ID],1)"
+    },
+    {
+      "name": "cfLine_FirstMissingInvID",
+      "refersTo": "=cf_FirstMissingPosIntFromMin(rngLineInvID)"
+    },
+    {
+      "name": "cfLine_FirstMissingInvID_Value",
+      "refersTo": "=INDEX(tbl_defaults_cf_helpers[Line First Missing ID],1)"
+    },
+    {
+      "name": "cfLine_FirstMissingLineNoByInvID",
+      "refersTo": "=IFERROR(LET(ids,rngLineInvID,lns,rngLineNo,invList,UNIQUE(FILTER(ids,ids<>\"\")),miss,MAP(invList,LAMBDA(i,cf_FirstMissingPosInt(FILTER(lns,ids=i,0)))),HSTACK(invList,miss)),HSTACK(\"\",1))"
+    },
+    {
+      "name": "cfLine_TotalsByInvID",
+      "refersTo": "=IFERROR(LET(ids,rngLineInvID,amts,rngLineAmt,uniq,UNIQUE(FILTER(ids,ids<>\"\")),cnt,COUNTIFS(ids,uniq,amts,\"<>\"),sum,SUMIFS(amts,ids,uniq),tot,IF(cnt>0,sum,\"\"),HSTACK(uniq,tot)),HSTACK(\"\",\"\"))"
+    },
+    {
+      "name": "cfSupplier_AnyKeyLineDataByInvID",
+      "refersTo": "=LAMBDA(invId,OR(COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[*Amount]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Description]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Attribute Category]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Attribute 6]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Project Number]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Task Number]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Expenditure Type]],\"<>\")>0,COUNTIFS(tbl_invoice_lines[[#Data],[*Invoice ID]],invId,tbl_invoice_lines[[#Data],[Expenditure Organization]],\"<>\")>0))"
+    },
+    {
+      "name": "cfSupplier_MissingInvoiceFields",
+      "refersTo": "=LAMBDA(invId,invNum,invAmt,invDesc,AND(LEN(invId&\"\")>0,OR(LEN(invNum&\"\")=0,LEN(invAmt&\"\")=0,LEN(invDesc&\"\")=0)))"
+    },
+    {
+      "name": "curMonthEnd",
+      "refersTo": "=tbl_defaults_month_info[[#Data],[Month End]]"
+    },
+    {
+      "name": "curMonthStart",
+      "refersTo": "=tbl_defaults_month_info[[#Data],[Month Start]]"
+    },
+    {
+      "name": "reqInvoiceHeaders",
+      "refersTo": "=tbl_required_invoice_fields[Header Name]"
+    },
+    {
+      "name": "reqLineHeaders",
+      "refersTo": "=tbl_required_line_fields[Header Name]"
+    },
+    {
+      "name": "rng_defaults_cf_helpers",
+      "refersTo": "=Defaults!$A$14:$B$15"
+    },
+    {
+      "name": "rngInvAmt",
+      "refersTo": "=tbl_invoices[[#Data],[*Invoice Amount]]"
+    },
+    {
+      "name": "rngInvID",
+      "refersTo": "=tbl_invoices[[#Data],[*Invoice ID]]"
+    },
+    {
+      "name": "rngLineAmt",
+      "refersTo": "=tbl_invoice_lines[[#Data],[*Amount]]"
+    },
+    {
+      "name": "rngLineInvID",
+      "refersTo": "=tbl_invoice_lines[[#Data],[*Invoice ID]]"
+    },
+    {
+      "name": "rngLineNo",
+      "refersTo": "=tbl_invoice_lines[[#Data],[Line Number]]"
+    }
+  ]
+}

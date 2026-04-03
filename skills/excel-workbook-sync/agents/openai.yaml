@@ -1,0 +1,4 @@
+interface:
+  display_name: "Excel Workbook Sync"
+  short_description: "Inspect, query, and sync Excel workbook artifacts across Windows and WSL"
+  default_prompt: "Use $excel-workbook-sync to inspect, query, parse, and sync Excel workbook artifacts, including VBA project components, tables, Name Manager items, and major conditional-format rule families. Support Windows directly and WSL/POSIX shells through a Windows PowerShell bridge with idempotent push/pull/roundtrip behavior."

@@ -1,0 +1,36 @@
+{
+  "workbookPath": "tr_upload_template.xlsm",
+  "vbaComponents": [
+    {
+      "name": "modAPSync",
+      "path": "macros/modules/modAPSync.vba"
+    },
+    {
+      "name": "AP_INVOICE_LINES_INTERFACE",
+      "path": "macros/sheets/AP_INVOICE_LINES_INTERFACE.vba"
+    },
+    {
+      "name": "csvGenerator",
+      "path": "macros/modules/csvGenerator.vba"
+    }
+  ],
+  "vbaProject": {
+    "projectPath": "workbook_structure/vba_project.json",
+    "referencesPath": "workbook_structure/vba_references.json"
+  },
+  "structure": {
+    "tablesPath": "workbook_structure/defaults_tables.json",
+    "namesPath": "workbook_structure/names.json",
+    "conditionalFormattingPath": "workbook_structure/conditional_formatting.json",
+    "tablesDiscovery": {
+      "mode": "all"
+    },
+    "namesDiscovery": {
+      "mode": "all",
+      "excludeBuiltIn": true
+    },
+    "conditionalFormattingDiscovery": {
+      "mode": "all-major"
+    }
+  }
+}

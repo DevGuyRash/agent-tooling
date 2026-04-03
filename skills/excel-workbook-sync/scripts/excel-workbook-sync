@@ -1,0 +1,152 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+  cat <<'EOF'
+Usage:
+  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke> [options]
+
+Options:
+  --manifest-path PATH
+  --workbook-path PATH
+  --surface LIST
+  --visible
+  --help
+
+This POSIX entrypoint is the user-facing CLI for bash, Git Bash, and WSL.
+It validates arguments, normalizes paths, and bridges to the Windows
+PowerShell backend for Excel COM automation.
+EOF
+}
+
+script_path="$0"
+case "$script_path" in
+  */*) : ;;
+  *) resolved="$(command -v -- "$script_path" 2>/dev/null || true)"; [ -n "$resolved" ] && script_path="$resolved" ;;
+esac
+
+if command -v readlink >/dev/null 2>&1; then
+  while [ -L "$script_path" ]; do
+    link="$(readlink "$script_path" 2>/dev/null || true)"
+    [ -n "$link" ] || break
+    case "$link" in
+      /*) script_path="$link" ;;
+      *) script_path="$(dirname -- "$script_path")/$link" ;;
+    esac
+  done
+fi
+
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
+ps1="${script_dir}/excel-workbook-sync.ps1"
+
+detect_powershell() {
+  if [ "${EXCEL_WORKBOOK_SYNC_POWERSHELL:-}" ]; then
+    printf '%s\n' "${EXCEL_WORKBOOK_SYNC_POWERSHELL}"
+    return 0
+  fi
+  for candidate in pwsh powershell.exe powershell; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+convert_path_arg() {
+  value="$1"
+  case "$value" in
+    [A-Za-z]:\\*|[A-Za-z]:/*)
+      printf '%s\n' "$value"
+      return 0
+      ;;
+  esac
+  if command -v wslpath >/dev/null 2>&1; then
+    wslpath -w "$value"
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$value"
+    return 0
+  fi
+  printf '%s\n' "$value"
+}
+
+subcommand="${1:-}"
+case "$subcommand" in
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+  inspect|query|push|pull|roundtrip|smoke)
+    shift
+    ;;
+  *)
+    echo "error: unknown subcommand: $subcommand" >&2
+    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke" >&2
+    exit 2
+    ;;
+esac
+
+ps="$(detect_powershell || true)"
+if [ -z "${ps}" ]; then
+  echo "error: Excel COM automation is unavailable on this host" >&2
+  echo "hint: run on Windows or inside WSL with Windows PowerShell and desktop Excel installed" >&2
+  exit 127
+fi
+
+set -- "$@"
+translated="$subcommand"
+while [ "$#" -gt 0 ]; do
+  arg="$1"
+  shift
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --manifest-path|-ManifestPath)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      value="$(convert_path_arg "$1")"
+      shift
+      translated="${translated}
+-ManifestPath
+$value"
+      ;;
+    --workbook-path|-WorkbookPath)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      value="$(convert_path_arg "$1")"
+      shift
+      translated="${translated}
+-WorkbookPath
+$value"
+      ;;
+    --surface|-Surface)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Surface
+$1"
+      shift
+      ;;
+    --visible|-Visible)
+      translated="${translated}
+-Visible"
+      ;;
+    *)
+      echo "error: unknown flag or argument: $arg" >&2
+      echo "hint: run 'excel-workbook-sync --help' for the supported CLI surface" >&2
+      exit 2
+      ;;
+  esac
+done
+
+set --
+oldifs="${IFS}"
+IFS='
+'
+for item in $translated; do
+  set -- "$@" "$item"
+done
+IFS="${oldifs}"
+
+exec "$ps" -NoProfile -ExecutionPolicy Bypass -File "$ps1" "$@"
