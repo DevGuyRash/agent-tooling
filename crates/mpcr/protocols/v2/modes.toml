@@ -1,0 +1,44 @@
+[[policy]]
+id = "reviewer"
+version = "2026.03.08"
+summary = "Produce canonical review artifacts from semantic routing and concern-specific worker execution."
+must = ["route by semantic surfaces", "emit machine artifacts first", "register one root reviewer ledger and then spawn every required routed worker before synthesis", "keep first-hand exploration in routed workers rather than the orchestrator", "challenge each surviving reviewer claim end-to-end before escalation: prove the introducing condition and the downstream effect or closure path", "run a tight 3-voter legitimacy gate on each candidate finding before it enters parent_review", "render markdown only from artifacts"]
+must_not = ["treat prose as canonical", "route primarily by churn", "store full artifacts in _session.toml"]
+inputs = ["target_ref", "surface_map", "route_decision", "selected policy refs"]
+outputs = ["child_findings", "parent_review"]
+checks = ["load mode checklist after routing", "reuse the persisted canonical session_dir and same target_ref string when resuming", "validate artifacts at hard and soft layers", "preserve evidence-backed findings only", "surviving findings keep repo anchors and cited supporting sources", "surviving findings still prove both the introducing condition and the downstream effect or closure path before escalation", "candidate findings that survive into parent_review have a recorded 2-of-3 legitimacy vote with a compact call-chain packet"]
+stop_when = ["every required worker is finalized or categorically closed and parent_review is finalized", "hard validation fails", "session is legacy v1"]
+escalate_when = ["malformed output", "security risk exceeds baseline route", "route revision raises rigor"]
+anti_patterns = ["domain sprawl without surface evidence", "manual markdown synthesis before machine artifact exists"]
+examples = ["Low-risk docs-only update -> direct architecture + lite rigor + the full reviewer roster.", "Auth boundary change -> delegated + forensic + exploit-tracer + contract-comparer + release-risk-assessor coverage."]
+schema = ["mode", "execution_architecture", "rigor_level", "worker_plan", "selected_modules", "loaded_policy_refs"]
+
+[[policy]]
+id = "applicator"
+version = "2026.03.08"
+summary = "Challenge reviewer evidence before applying changes and persist structured dispositions plus verification."
+must = ["verify anchor validity", "verify scenario reproducibility", "challenge both sides of the claim: the introducing precondition and the downstream effect or closure path", "run a tight 3-voter legitimacy gate on each candidate finding before code changes begin", "decline findings that no longer have repo anchors or cited supporting evidence", "decline findings when later guards, normalization, rollback, dedupe, retries, or caller handling already neutralize the claimed issue", "drive every routed finding to applied or categorical decline", "record categorical decline and duplicate reasons"]
+must_not = ["mark applied without evidence challenge", "drop verification-needed follow-ups", "invent missing reviewer detail"]
+inputs = ["parent_review", "child_findings", "application_result draft"]
+outputs = ["application_result", "verification_result"]
+checks = ["run hard validation before finalize", "render markdown only from stored artifacts", "persist verification outcomes categorically", "verify exactly the finding_ids recorded in application_result.verification_needed", "accepted findings stay traceable to repo anchors and cited report evidence", "accepted findings still survive introduction-side and closure-side challenge after the current code is inspected end-to-end", "only findings with a recorded 2-of-3 legitimacy vote proceed to edits; rejected ones are declined or noted as false positives"]
+stop_when = ["every routed finding has a categorical disposition and verification_result is finalized", "hard validation fails"]
+escalate_when = ["finding is hallucinated", "severity is disproportionate", "verification fails"]
+anti_patterns = ["bulk apply without itemized disposition", "using rendered markdown as source of truth"]
+examples = ["Valid finding with repro -> applied + verification_needed.", "Duplicate claim after fix -> declined with duplicate reason."]
+schema = ["source_finding_ids", "dispositions", "modified_files", "verification_needed", "decline_codes"]
+
+[[policy]]
+id = "full-cycle"
+version = "2026.03.08"
+summary = "Preserve severity-bounded reopen and behavior-facing staleness handling across review, apply, and verify cycles."
+must = ["persist convergence_state artifacts", "continue the cycle whenever stop_condition is reopen_required", "reopen only for blocker/major/staleness/verification failure/fix regression", "allow one bounded terminal cleanup pass", "carry forward only anchored or verified unresolved evidence into reopen decisions", "reopen only when the unresolved claim still survives end-to-end challenge across review evidence, current code, and verification results"]
+must_not = ["reopen for minor or nit alone", "depend on v1 proof-packet assumptions", "collapse convergence state into session prose"]
+inputs = ["parent_review", "application_result", "verification_result", "current convergence_state"]
+outputs = ["next convergence_state", "next route focus inputs"]
+checks = ["keep reopen severity floor at major", "keep behavior_staleness_reopens true", "carry only compact pointers in session", "reopen reasons remain traceable to anchored findings or verification evidence", "reopen reasons still survive both introduction-side and closure-side challenge instead of repeating a claim already neutralized downstream", "reopen inputs inherit only findings that already survived reviewer/applicator legitimacy gates"]
+stop_when = ["stop_condition is converged", "hard validation fails"]
+escalate_when = ["verification fails", "behavior-facing staleness remains", "major findings remain after application"]
+anti_patterns = ["infinite reopen loops", "using minor cleanup to reopen the cycle"]
+examples = ["Only minor cleanup remains -> terminal cleanup allowed.", "Verification failure -> reopen with focused files and surfaces."]
+schema = ["cycle_index", "reopen_threshold", "reopen_triggers", "next_route_inputs", "stop_condition"]

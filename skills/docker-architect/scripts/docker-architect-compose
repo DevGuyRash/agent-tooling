@@ -24,56 +24,37 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
-tooling_dir="${script_dir}/tooling"
-manifest_path="${tooling_dir}/docker-architect-compose/Cargo.toml"
-lock_path="${tooling_dir}/Cargo.lock"
-bin="${tooling_dir}/target/release/docker-architect-compose"
+skill_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
+os_name="$(uname -s 2>/dev/null || echo unknown)"
+arch_name="$(uname -m 2>/dev/null || echo unknown)"
 
-if [ ! -f "${manifest_path}" ]; then
-  echo "error: missing ${manifest_path} (docker-architect tooling workspace not found)" >&2
-  exit 2
-fi
+case "$os_name" in
+  Linux) platform_os="linux" ;;
+  Darwin) platform_os="macos" ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) platform_os="windows" ;;
+  *)
+    echo "error: unsupported host OS for docker-architect-compose: ${os_name}" >&2
+    exit 2
+    ;;
+esac
+case "$arch_name" in
+  x86_64|amd64) platform_arch="x86_64" ;;
+  arm64|aarch64) platform_arch="aarch64" ;;
+  *)
+    echo "error: unsupported host architecture for docker-architect-compose: ${arch_name}" >&2
+    exit 2
+    ;;
+esac
 
-if [ ! -f "${lock_path}" ]; then
-  echo "error: missing ${lock_path} (workspace is expected to be shipped with a lockfile)" >&2
-  exit 2
-fi
-
-needs_build=0
-if [ ! -x "${bin}" ] || [ ! -f "${bin}" ] || [ -L "${bin}" ]; then
-  needs_build=1
-elif [ "${manifest_path}" -nt "${bin}" ] || [ "${lock_path}" -nt "${bin}" ]; then
-  needs_build=1
-elif [ "${tooling_dir}/Cargo.toml" -nt "${bin}" ] || [ "${tooling_dir}/architect-core/Cargo.toml" -nt "${bin}" ]; then
-  needs_build=1
-else
-  src_check_failed=0
-  for src_dir in "${tooling_dir}/docker-architect-compose/src" "${tooling_dir}/architect-core/src"; do
-    if [ ! -d "${src_dir}" ] || [ ! -r "${src_dir}" ]; then
-      src_check_failed=1
-      break
-    fi
-  done
-
-  if [ "${src_check_failed}" -eq 1 ]; then
-    needs_build=1
-  elif find "${tooling_dir}/docker-architect-compose/src" "${tooling_dir}/architect-core/src" -type f -newer "${bin}" -print -quit | grep -q .; then
-    needs_build=1
-  fi
-fi
-
-if [ "${needs_build}" -eq 1 ]; then
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "error: docker-architect-compose is not built and 'cargo' was not found in PATH" >&2
-    echo "hint: install a Rust toolchain (rustc + cargo) to build ${manifest_path}" >&2
-    exit 127
-  fi
-  cargo build --manifest-path "${manifest_path}" --locked --release
-fi
+platform_id="${platform_os}-${platform_arch}"
+bin_name="docker-architect-compose"
+[ "$platform_os" = "windows" ] && bin_name="${bin_name}.exe"
+bin="${skill_root}/dist/${platform_id}/${bin_name}"
 
 if [ ! -x "${bin}" ] || [ ! -f "${bin}" ] || [ -L "${bin}" ]; then
-  echo "error: refusing to execute an invalid binary path: ${bin}" >&2
-  exit 2
+  echo "error: missing packaged docker-architect-compose binary at ${bin}" >&2
+  echo "hint: run 'just dist-host' from the repo root or fetch refreshed dist outputs from CI" >&2
+  exit 127
 fi
 
 if find "${bin}" -prune -perm -002 -print -quit | grep -q .; then

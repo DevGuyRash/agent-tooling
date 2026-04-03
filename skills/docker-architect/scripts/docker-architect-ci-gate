@@ -25,8 +25,6 @@ fi
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
 skill_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
-tooling_dir="${script_dir}/tooling"
-tooling_manifest="${tooling_dir}/Cargo.toml"
 compose_launcher="${script_dir}/docker-architect-compose"
 
 # ── Argument parsing ──
@@ -86,11 +84,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ ! -f "${tooling_manifest}" ]; then
-  echo "error: missing ${tooling_manifest} (docker-architect tooling workspace not found)" >&2
-  exit 2
-fi
-
 # ── Golden pipeline tests (skip in verify-only mode) ──
 if [ "${run_mode}" != "verify-only" ]; then
   if ! command -v cargo >/dev/null 2>&1; then
@@ -99,7 +92,7 @@ if [ "${run_mode}" != "verify-only" ]; then
   fi
 
   echo "[docker-architect-ci-gate] running deterministic golden pipeline tests"
-  cargo test --manifest-path "${tooling_manifest}" --locked -p architect-core --test golden_pipeline
+  cargo test --manifest-path "${skill_root}/../../Cargo.toml" --locked -p architect-core --test golden_pipeline
 fi
 
 # ── Determine whether to run live verify ──

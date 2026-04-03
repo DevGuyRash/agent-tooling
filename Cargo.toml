@@ -1,0 +1,36 @@
+[workspace]
+members = [
+  "crates/mpcr",
+  "crates/architect-core",
+  "crates/docker-architect-compose",
+  "crates/docker-architect-image",
+  "crates/render-table",
+]
+resolver = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_imports = "warn"
+unused_variables = "warn"
+unused_mut = "warn"
+unused_must_use = "warn"
+dead_code = "warn"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+indexing_slicing = "deny"
+panic_in_result_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"

@@ -1,0 +1,41 @@
+services:
+  api:
+    image: nginx:1.27
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api-init-perms:
+        condition: service_completed_successfully
+    volumes:
+      - app_data:/var/cache/app
+  api-init-perms:
+    image: docker.io/library/busybox:1.36
+    command:
+      - /bin/sh
+      - -c
+      - echo wrong
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    restart: unless-stopped
+    profiles:
+      - init
+    cpus: "1.0"
+    mem_limit: "512m"
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+      - /run:rw,noexec,nosuid,nodev,size=16m
+      - /var/run:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - app_data:/wrong/path
+volumes:
+  app_data: {}

@@ -1,0 +1,27 @@
+[skills.code_review]
+package = "mpcr"
+binary = "mpcr"
+skill_dir = "skills/code-review"
+launcher = "scripts/mpcr"
+smoke_args = ["--help"]
+
+[skills.docker_architect_compose]
+package = "docker-architect-compose"
+binary = "docker-architect-compose"
+skill_dir = "skills/docker-architect"
+launcher = "scripts/docker-architect-compose"
+smoke_args = ["--help"]
+
+[skills.docker_architect_image]
+package = "docker-architect-image"
+binary = "docker-architect-image"
+skill_dir = "skills/docker-architect"
+launcher = "scripts/docker-architect-image"
+smoke_args = ["--help"]
+
+[skills.friction_render_table]
+package = "render-table"
+binary = "render-table"
+skill_dir = "skills/friction-diagnostics"
+launcher = "scripts/render-table.sh"
+smoke_args = ["--help"]

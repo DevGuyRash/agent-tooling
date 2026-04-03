@@ -1,12 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
-# Template for skill-local Rust binary shims.
+# Template for skill-local packaged-binary launchers.
 # Copy this file into a skill's scripts/ directory and replace:
 #   __BIN_NAME__    binary name (example: docker-architect-compose)
-#   __TOOLING_DIR__ path from script_dir to crate workspace root
-#   __MANIFEST__    manifest path relative to tooling dir (example: docker-architect-compose/Cargo.toml)
-#   __SRC_DIRS__    one or more source directories under tooling dir
 
 script_path="$0"
 
@@ -32,53 +29,37 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$script_path")" && pwd)"
-tooling_dir="${script_dir}/__TOOLING_DIR__"
-manifest_path="${tooling_dir}/__MANIFEST__"
-lock_path="${tooling_dir}/Cargo.lock"
-bin="${tooling_dir}/target/release/__BIN_NAME__"
+skill_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
+os_name="$(uname -s 2>/dev/null || echo unknown)"
+arch_name="$(uname -m 2>/dev/null || echo unknown)"
 
-if [ ! -f "${manifest_path}" ]; then
-  echo "error: missing ${manifest_path}" >&2
-  exit 2
-fi
+case "$os_name" in
+  Linux) platform_os="linux" ;;
+  Darwin) platform_os="macos" ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) platform_os="windows" ;;
+  *)
+    echo "error: unsupported host OS: ${os_name}" >&2
+    exit 2
+    ;;
+esac
+case "$arch_name" in
+  x86_64|amd64) platform_arch="x86_64" ;;
+  arm64|aarch64) platform_arch="aarch64" ;;
+  *)
+    echo "error: unsupported host architecture: ${arch_name}" >&2
+    exit 2
+    ;;
+esac
 
-if [ ! -f "${lock_path}" ]; then
-  echo "error: missing ${lock_path} (workspace is expected to be shipped with a lockfile)" >&2
-  exit 2
-fi
-
-needs_build=0
-if [ ! -x "${bin}" ] || [ ! -f "${bin}" ] || [ -L "${bin}" ]; then
-  needs_build=1
-elif [ "${manifest_path}" -nt "${bin}" ] || [ "${lock_path}" -nt "${bin}" ]; then
-  needs_build=1
-else
-  src_check_failed=0
-  for src_dir in __SRC_DIRS__; do
-    if [ ! -d "${src_dir}" ] || [ ! -r "${src_dir}" ]; then
-      src_check_failed=1
-      break
-    fi
-  done
-
-  if [ "${src_check_failed}" -eq 1 ]; then
-    needs_build=1
-  elif find __SRC_DIRS__ -type f -newer "${bin}" -print -quit | grep -q .; then
-    needs_build=1
-  fi
-fi
-
-if [ "${needs_build}" -eq 1 ]; then
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "error: __BIN_NAME__ is not built and 'cargo' was not found in PATH" >&2
-    exit 127
-  fi
-  cargo build --manifest-path "${manifest_path}" --locked --release
-fi
+platform_id="${platform_os}-${platform_arch}"
+bin_name="__BIN_NAME__"
+[ "$platform_os" = "windows" ] && bin_name="${bin_name}.exe"
+bin="${skill_root}/dist/${platform_id}/${bin_name}"
 
 if [ ! -x "${bin}" ] || [ ! -f "${bin}" ] || [ -L "${bin}" ]; then
-  echo "error: refusing to execute an invalid binary path: ${bin}" >&2
-  exit 2
+  echo "error: missing packaged binary at ${bin}" >&2
+  echo "hint: run 'just dist-host' from the repo root or fetch refreshed dist outputs from CI" >&2
+  exit 127
 fi
 
 if find "${bin}" -prune -perm -002 -print -quit | grep -q .; then

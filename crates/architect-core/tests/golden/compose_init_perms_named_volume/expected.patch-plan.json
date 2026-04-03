@@ -1,0 +1,112 @@
+[
+  {
+    "op": "set",
+    "path": "services.api.image",
+    "value": "nginx:1.27@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rule_id": "AC-CMP-DIGEST"
+  },
+  {
+    "op": "set",
+    "path": "services.api.healthcheck",
+    "value": {
+      "interval": "10s",
+      "retries": 3,
+      "start_period": "10s",
+      "test": [
+        "CMD",
+        "nginx",
+        "-t"
+      ],
+      "timeout": "5s"
+    },
+    "rule_id": "AC-CMP-HEALTH"
+  },
+  {
+    "op": "inject_service",
+    "path": "services.api-init-perms",
+    "value": {
+      "cap_add": [
+        "CHOWN",
+        "FOWNER"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": [
+        "/bin/sh",
+        "-euxc",
+        "set -eu; for path in /mnt/perm-0; do mkdir -p \"$path\"; owner=\"$(stat -c '%u:%g' \"$path\" 2>/dev/null || true)\"; if [ \"$owner\" != \"101:101\" ]; then chown -R 101:101 \"$path\"; fi; done"
+      ],
+      "cpus": "1.0",
+      "image": "docker.io/library/alpine:3.20@sha256:a4f4213abb84c497377b8544c81b3564f313746700372ec4fe84653e4fb03805",
+      "mem_limit": "512m",
+      "network_mode": "none",
+      "pids_limit": 256,
+      "read_only": true,
+      "restart": "no",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "/run:rw,noexec,nosuid,nodev,size=16m",
+        "/var/run:rw,noexec,nosuid,nodev,size=16m"
+      ],
+      "user": "0:0",
+      "volumes": [
+        "app_data:/mnt/perm-0"
+      ]
+    },
+    "rule_id": "AC-CMP-PERMS-INIT"
+  },
+  {
+    "op": "depends_on_add",
+    "path": "services.api.depends_on.api-init-perms",
+    "value": {
+      "condition": "service_completed_successfully"
+    },
+    "rule_id": "AC-CMP-PERMS-INIT"
+  },
+  {
+    "op": "set",
+    "path": "services.api.cpus",
+    "value": "1.0",
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.mem_limit",
+    "value": "512m",
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.pids_limit",
+    "value": 256,
+    "rule_id": "AC-CMP-RESOURCES"
+  },
+  {
+    "op": "set",
+    "path": "services.api.restart",
+    "value": "unless-stopped",
+    "rule_id": "AC-CMP-RESTART"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/run:rw,noexec,nosuid,nodev,size=16m",
+    "rule_id": "AC-CMP-WRITABLE"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/tmp:rw,noexec,nosuid,nodev,size=64m",
+    "rule_id": "AC-CMP-WRITABLE"
+  },
+  {
+    "op": "list_add",
+    "path": "services.api.tmpfs",
+    "value": "/var/run:rw,noexec,nosuid,nodev,size=16m",
+    "rule_id": "AC-CMP-WRITABLE"
+  }
+]

@@ -1,3 +1,0 @@
-[workspace]
-members = ["architect-core", "docker-architect-compose", "docker-architect-image"]
-resolver = "2"

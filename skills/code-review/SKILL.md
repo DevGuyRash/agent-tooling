@@ -61,11 +61,11 @@ or `mpcr protocol escalation --id <id>` lookups for discovery, fallback, or narr
 troubleshooting.
 
 ## Wrapper behavior
-`<skills-file-root>/scripts/mpcr` auto-builds the Rust binary in `<skills-file-root>/scripts/mpcr-src/target/release/mpcr`.
+`<skills-file-root>/scripts/mpcr` executes the packaged Rust binary in `<skills-file-root>/dist/<platform-id>/mpcr`.
 
-If the release binary is missing or stale, the wrapper runs `cargo build --manifest-path <skills-file-root>/scripts/mpcr-src/Cargo.toml --locked --release`.
+If the packaged binary is missing, refresh it from the repo root with `just dist-host` or retrieve refreshed `dist/` outputs from CI.
 
-If `cargo` is unavailable and the binary is missing, the wrapper fails with a concise Rust-toolchain error.
+The wrapper does not build from source at runtime.
 
 ## Universal rules
 - Machine artifacts are canonical truth. Each agent directory must finish with a full `report.md` explanatory companion; `mpcr reviewer complete-child` and `mpcr reviewer finalize` render one from the stored artifact when you do not author it separately.
