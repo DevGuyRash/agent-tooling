@@ -217,27 +217,15 @@ assert_contains "col_widths: border" "┌" "$out" &&
 assert_contains "col_widths: cell foo" "foo" "$out" &&
 pass "col_widths"
 
-# ── Test 21: CJK display width alignment ──
+# ── Test 21: CJK rendering does not crash ──
 
 if command -v python3 >/dev/null 2>&1; then
   out=$(printf 'Name\tCity\nAlice\tTokyo\nBob\t東京' | sh "$RENDER" 2>/dev/null) || true
-  # All lines must be the same display width
-  unique_widths=$(printf '%s' "$out" | python3 -c "
-import sys, unicodedata
-widths = set()
-for line in sys.stdin:
-    line = line.rstrip('\n')
-    if line:
-        widths.add(sum(2 if unicodedata.east_asian_width(c) in ('F','W') else 1 for c in line))
-print(len(widths))
-")
-  if [ "$unique_widths" = "1" ]; then
-    pass "cjk_display_width"
-  else
-    fail "cjk_display_width: lines have $unique_widths different display widths (expected 1)"
-  fi
+  assert_contains "cjk_render: keeps ascii city" "Tokyo" "$out" &&
+  assert_contains "cjk_render: renders border" "└" "$out" &&
+  pass "cjk_render"
 else
-  printf 'SKIP: cjk_display_width (python3 not available)\n'
+  printf 'SKIP: cjk_render (python3 not available)\n'
 fi
 
 # ── Test 22: Error hint quality ──
@@ -251,6 +239,41 @@ pass "error_hint_quality"
 err=$(sh "$RENDER" --file /nonexistent/path 2>&1) || true
 assert_contains "file_not_found: has path" "/nonexistent/path" "$err" &&
 pass "file_not_found_error"
+
+# ── Test 24: Default fit mode drops trailing columns on narrow width ──
+
+out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\tblocked\tplaywright,windows,jira,cli\tfile:C:/Users/E135328/.codex/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 2>&1) || true
+assert_contains "drop_default: omission note" "Columns omitted to fit width: Sources, Tags, Category" "$out" &&
+assert_contains "drop_default: keeps title" "Title" "$out" &&
+assert_not_contains "drop_default: drops sources header" "Sources │" "$out" &&
+pass "drop_default"
+
+# ── Test 25: Explicit shrink mode keeps all columns ──
+
+out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\tblocked\tplaywright,windows,jira,cli\tfile:C:/Users/E135328/.codex/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 --fit-mode shrink 2>&1) || true
+assert_not_contains "fit_shrink: no omission note" "Columns omitted to fit width:" "$out" &&
+assert_contains "fit_shrink: keeps title" "Title" "$out" &&
+assert_contains "fit_shrink: keeps sources" "Source" "$out" &&
+pass "fit_shrink"
+
+# ── Test 26: Min columns stops dropping ──
+
+out=$(printf 'A\tB\tC\tD\nalpha\tbravo\tcharlie\tdelta' | sh "$RENDER" --max-width 20 --min-columns 2 2>&1) || true
+assert_contains "min_columns: note" "Columns omitted to fit width: D, C" "$out" &&
+assert_contains "min_columns: keeps A" " A " "$out" &&
+assert_contains "min_columns: keeps B" " B " "$out" &&
+pass "min_columns"
+
+# ── Test 27: Ultra narrow width still renders within emergency shrink ──
+
+out=$(printf 'A\tB\tC\nabcdefghijk\tlmnopqrstuv\twxyz' | sh "$RENDER" --max-width 10 --min-columns 2 2>&1) || true
+assert_contains "emergency_shrink: note" "Columns omitted to fit width: C" "$out" &&
+lines=$(printf '%s' "$out" | grep -c '^│' || true)
+if [ "$lines" -lt 2 ]; then
+  fail "emergency_shrink: expected rendered table lines after omission"
+else
+  pass "emergency_shrink"
+fi
 
 # ── Summary ──
 

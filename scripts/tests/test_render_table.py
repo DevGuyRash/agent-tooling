@@ -16,8 +16,18 @@ def render(stdin: str, *args: str) -> subprocess.CompletedProcess[str]:
         input=stdin,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
+
+
+def visible_header_line(stdout: str) -> str:
+    for line in stdout.splitlines():
+        if line.startswith("│") and (
+            "ID" in line or "Title" in line or "Name" in line or "A" in line
+        ):
+            return line
+    raise AssertionError("No header row found in output")
 
 
 class TSVTests(unittest.TestCase):
@@ -223,6 +233,92 @@ class RenderingTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unknown option", r.stderr)
 
+    def test_default_fit_mode_drops_trailing_columns(self) -> None:
+        r = render(
+            "ID\tTime\tTitle\tCategory\tTags\tSources\n"
+            "evt-1\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\t"
+            "script/other/blocked\tplaywright,windows,argument-parsing,jira,cli\t"
+            "file:C:/Users/E135328/.codex/skills/playwright/references/cli.md",
+            "--max-width",
+            "50",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Columns omitted to fit width: Sources, Tags, Category", r.stdout)
+        header = visible_header_line(r.stdout)
+        self.assertIn("ID", header)
+        self.assertIn("Time", header)
+        self.assertIn("Title", header)
+        self.assertNotIn("Category", header)
+        self.assertNotIn("Tags", header)
+        self.assertNotIn("Sources", header)
+
+    def test_shrink_fit_mode_keeps_all_columns(self) -> None:
+        r = render(
+            "ID\tTime\tTitle\tCategory\tTags\tSources\n"
+            "evt-1\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\t"
+            "script/other/blocked\tplaywright,windows,argument-parsing,jira,cli\t"
+            "file:C:/Users/E135328/.codex/skills/playwright/references/cli.md",
+            "--max-width",
+            "50",
+            "--fit-mode",
+            "shrink",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Columns omitted to fit width:", r.stdout)
+        header = visible_header_line(r.stdout)
+        self.assertIn("Sources", header)
+        self.assertIn("Title", header)
+
+    def test_min_columns_stops_dropping(self) -> None:
+        r = render(
+            "A\tB\tC\tD\n"
+            "alpha\tbravo\tcharlie\tdelta",
+            "--max-width",
+            "20",
+            "--min-columns",
+            "2",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Columns omitted to fit width: D, C", r.stdout)
+        header = visible_header_line(r.stdout)
+        self.assertIn("A", header)
+        self.assertIn("B", header)
+        self.assertNotIn("C", header)
+        self.assertNotIn("D", header)
+
+    def test_min_columns_emergency_shrink_still_fits(self) -> None:
+        r = render(
+            "A\tB\tC\nabcdefghijk\tlmnopqrstuv\twxyz",
+            "--max-width",
+            "10",
+            "--min-columns",
+            "2",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = [line for line in r.stdout.splitlines() if line]
+        self.assertTrue(lines[0].startswith("Columns omitted to fit width:"))
+        for line in lines[1:]:
+            self.assertLessEqual(len(line), 20, line)
+
+    def test_omission_note_only_appears_when_columns_drop(self) -> None:
+        r = render("Name\tAge\nAlice\t30\nBob\t25", "--max-width", "80")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Columns omitted to fit width:", r.stdout)
+
+    def test_explicit_widths_stay_visible_while_auto_columns_drop(self) -> None:
+        r = render(
+            "A\tB\tC\tD\nvalue-one\tvalue-two\tvalue-three\tvalue-four",
+            "--max-width",
+            "24",
+            "--col-widths",
+            "8,,,",
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        header = visible_header_line(r.stdout)
+        self.assertIn("A", header)
+        self.assertIn("B", header)
+        self.assertNotIn("D", header)
+
 
 class FileInputTests(unittest.TestCase):
     def test_positional_file(self) -> None:
@@ -235,6 +331,7 @@ class FileInputTests(unittest.TestCase):
                 ["sh", str(SCRIPT), f.name],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 check=False,
             )
         import os
@@ -254,6 +351,7 @@ class FileInputTests(unittest.TestCase):
                 ["sh", str(SCRIPT), "--file", f.name],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 check=False,
             )
         import os
@@ -320,6 +418,19 @@ class AutoDetectTests(unittest.TestCase):
 
 class YAMLTests(unittest.TestCase):
     def test_yaml_basic(self) -> None:
+        import shutil
+
+        if shutil.which("python3") is None:
+            self.skipTest("python3 not available")
+        probe = subprocess.run(
+            ["python3", "-c", "import yaml"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode != 0:
+            self.skipTest("PyYAML not available")
+
         yaml_input = "- name: Alice\n  age: 30\n- name: Bob\n  age: 25"
         r = render(yaml_input, "--yaml")
         self.assertEqual(r.returncode, 0, r.stderr)

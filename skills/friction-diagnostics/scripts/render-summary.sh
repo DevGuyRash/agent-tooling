@@ -178,6 +178,8 @@ set -- --jsonl
 set -- "$@" --fields "event_id,recorded_at,title,derived_category,tags,sources_flat"
 set -- "$@" --headers "ID,Time,Title,Category,Tags,Sources"
 set -- "$@" --max-col-width "$max_col_width"
+set -- "$@" --fit-mode "drop-last-then-shrink"
+set -- "$@" --min-columns "3"
 if [ "$resolved_max_width" != "0" ]; then
   set -- "$@" --max-width "$resolved_max_width"
 fi

@@ -56,6 +56,11 @@ function Quote-ForPowerShell {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
+function Emit-Line {
+    param([string]$Line)
+    Write-Output $Line
+}
+
 function Get-SourceAnchor {
     param($Source)
 
@@ -170,13 +175,13 @@ if (-not [string]::IsNullOrWhiteSpace($lastEventTime)) {
     }
 }
 
-[Console]::WriteLine(("Friction Summary — {0} event(s) this session" -f $flattened.Count))
+Emit-Line ("Friction Summary — {0} event(s) this session" -f $flattened.Count)
 
 $flattenedJson = $flattened | ConvertTo-Json -Depth 8
 if ($resolvedMaxWidth -gt 0) {
-    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -MaxWidth $resolvedMaxWidth
+    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3 -MaxWidth $resolvedMaxWidth
 } else {
-    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth
+    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3
 }
 
 $footerParts = [System.Collections.Generic.List[string]]::new()
@@ -203,6 +208,6 @@ elseif (-not [string]::IsNullOrWhiteSpace($Before)) {
 $footerParts.Add('-Format')
 $footerParts.Add('md')
 
-[Console]::WriteLine('')
-[Console]::WriteLine("Events: $EventsFile")
-[Console]::WriteLine(("Query:  {0}" -f ($footerParts -join ' ')))
+Emit-Line ''
+Emit-Line "Events: $EventsFile"
+Emit-Line ("Query:  {0}" -f ($footerParts -join ' '))

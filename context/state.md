@@ -1,0 +1,1 @@
+- Generalized box-table renderer now lives in shared repo scripts; follow up by extracting it into its own standalone skill without relying on repo-local wrapper paths.

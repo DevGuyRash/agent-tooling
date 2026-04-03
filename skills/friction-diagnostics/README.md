@@ -129,7 +129,7 @@ Recommended reading order:
 3. Use `generate-report.*` for aggregate views.
 4. Drop to raw `events.jsonl` plus `jq` only when a custom slice is needed.
 
-Session summary renderers are available on both POSIX and PowerShell:
+Session summary renderers are available on both POSIX and PowerShell. Use `--after` to render only the delta since the last assistant turn, not the full session every time:
 
 ```sh
 sh scripts/render-summary.sh --events-file .local/reports/friction/events.jsonl --after 2026-04-01T12:00:00Z

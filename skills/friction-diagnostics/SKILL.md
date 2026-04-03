@@ -175,31 +175,31 @@ WHEN category selection is uncertain THEN you SHOULD let the categorizer choose 
 
 ## Session summary
 
-WHEN your task is complete AND you logged at least one friction event during this session THEN you SHALL include a friction summary at the end of your final response.
+WHEN your task is complete AND you logged at least one new friction event since your last assistant turn THEN you SHALL include a friction summary at the end of your final response.
 
-WHEN no friction events were logged during the session THEN you SHALL NOT render a summary.
+WHEN no new friction events were logged since your last assistant turn THEN you SHALL NOT render a summary.
 
 ### How to produce
 
-Run the summary renderer and paste its output verbatim. The script handles querying, source flattening, table formatting, and re-query footer generation.
+Run the summary renderer and paste its output verbatim. The script handles querying, source flattening, table formatting, and re-query footer generation. You SHOULD query only the delta since your last assistant turn rather than replaying the entire session each time.
 
 ```sh
 sh <skills-file-root>/scripts/render-summary.sh \
   --events-file <events-file> \
-  --after "<session-start-timestamp>"
+  --after "<last-turn-timestamp>"
 ```
 
 ```powershell
 & <skills-file-root>\scripts\render-summary.ps1 `
   -EventsFile <events-file> `
-  -After "<session-start-timestamp>"
+  -After "<last-turn-timestamp>"
 ```
 
-WHEN you do not have the session start timestamp THEN you SHALL use `--date-from` with today's date instead of `--after`.
+WHEN you do not have the last-turn timestamp THEN you SHALL use the most recent available lower bound that excludes already-reported events. IF no such lower bound is available THEN you SHALL use `--date-from` with today's date instead of `--after`.
 
 ### Output layout
 
-Place the full output of `render-summary.sh` or `render-summary.ps1` after all task content. The script produces a header, a Unicode box-drawing table (with ID, Time, Title, Category, Tags, and Sources columns), and a footer with the events file path and a ready-to-paste re-query command.
+Place the full output of `render-summary.sh` or `render-summary.ps1` after all task content. The script produces a header, a Unicode box-drawing table (with ID, Time, Title, Category, Tags, and Sources columns), and a footer with the events file path and a ready-to-paste re-query command for the next delta window.
 
 You SHALL NOT manually construct or format the table. Paste the script output as-is.
 

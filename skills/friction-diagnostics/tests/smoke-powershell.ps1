@@ -349,21 +349,36 @@ try {
     if ([int]$dateReport.total_entries -ne 2) { throw 'generate-report.ps1 date filtering should match query semantics and exclude undated rows' }
 
     # --- Test 5b: render-table.ps1 basic coverage ---
-    $tableOutput = "Name`tAge`nAlice`t30`nBob`t25" | & "$root/scripts/render-table.ps1"
+    $tableOutput = (("Name`tAge`nAlice`t30`nBob`t25" | & "$root/scripts/render-table.ps1") -join "`n")
     if ($tableOutput -notmatch '┌') { throw 'render-table.ps1 should emit a top border for TSV input' }
     if ($tableOutput -notmatch 'Alice') { throw 'render-table.ps1 should render TSV data rows' }
-    $headerOverrideOutput = "old`n1" | & "$root/scripts/render-table.ps1" -Headers 'New'
+    $headerOverrideOutput = (("old`n1" | & "$root/scripts/render-table.ps1" -Headers 'New') -join "`n")
     if ($headerOverrideOutput -notmatch 'New') { throw 'render-table.ps1 should honor -Headers overrides' }
     if ($headerOverrideOutput -match 'old') { throw 'render-table.ps1 should replace TSV header text when -Headers is provided' }
     $jsonlRow = '{"a":"foo","b":"bar","tags":["x","y"]}'
-    $jsonlOutput = $jsonlRow | & "$root/scripts/render-table.ps1" -Jsonl -Fields 'a,tags'
+    $jsonlOutput = (($jsonlRow | & "$root/scripts/render-table.ps1" -Jsonl -Fields 'a,tags') -join "`n")
     if ($jsonlOutput -notmatch 'foo') { throw 'render-table.ps1 should render JSONL field selections' }
     if ($jsonlOutput -notmatch 'x,y') { throw 'render-table.ps1 should join scalar arrays in JSONL output' }
-    $emptyTable = '' | & "$root/scripts/render-table.ps1"
+    $emptyTable = (('' | & "$root/scripts/render-table.ps1") -join "`n")
     if (-not [string]::IsNullOrWhiteSpace($emptyTable)) { throw 'render-table.ps1 should emit nothing for empty input' }
+    $narrowTableInput = @"
+ID`tTime`tTitle`tCategory`tTags`tSources
+evt-0018`t04/02/2026 21:45:31`tPlaywright CLI arguments split badly on Windows cmd`tscript/other/blocked`tplaywright,windows,argument-parsing,jira,cli`tfile:C:/Users/E135328/.codex/skills/playwright/references/cli.md
+"@
+    $droppedTableOutput = (($narrowTableInput | & "$root/scripts/render-table.ps1" -MaxWidth 50) -join "`n")
+    if ($droppedTableOutput -notmatch 'Columns omitted to fit width: Sources, Tags, Category') { throw 'render-table.ps1 should drop trailing columns by default on narrow widths' }
+    if ($droppedTableOutput -notmatch 'Title') { throw 'render-table.ps1 should keep the Title column visible on narrow widths' }
+    if ($droppedTableOutput -match 'Sources\s+│') { throw 'render-table.ps1 should omit the Sources header after dropping that column' }
+    $shrinkTableOutput = (($narrowTableInput | & "$root/scripts/render-table.ps1" -MaxWidth 50 -FitMode shrink) -join "`n")
+    if ($shrinkTableOutput -match 'Columns omitted to fit width:') { throw 'render-table.ps1 shrink mode should not drop columns' }
+    if ($shrinkTableOutput -notmatch 'Sources') { throw 'render-table.ps1 shrink mode should keep all columns visible' }
+    $minColumnsOutput = (("A`tB`tC`tD`nalpha`tbravo`tcharlie`tdelta" | & "$root/scripts/render-table.ps1" -MaxWidth 20 -MinColumns 2) -join "`n")
+    if ($minColumnsOutput -notmatch 'Columns omitted to fit width: D, C') { throw 'render-table.ps1 should stop dropping columns at the configured minimum' }
+    $emergencyShrinkOutput = (("A`tB`tC`nabcdefghijk`tlmnopqrstuv`twxyz" | & "$root/scripts/render-table.ps1" -MaxWidth 10 -MinColumns 2) -join "`n")
+    if ($emergencyShrinkOutput -notmatch 'Columns omitted to fit width: C') { throw 'render-table.ps1 should still emit the omission note before emergency shrink' }
 
     # --- Test 5c: render-summary.ps1 parity coverage ---
-    $summaryOutput = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2020-01-01T00:00:00Z' -NoFit
+    $summaryOutput = ((& "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2020-01-01T00:00:00Z' -NoFit) -join "`n")
     if ($summaryOutput -notmatch 'Friction Summary') { throw 'render-summary.ps1 should emit the summary header line' }
     if ($summaryOutput -notmatch '┌') { throw 'render-summary.ps1 should render a box-drawing table' }
     if ($summaryOutput -notmatch 'ID') { throw 'render-summary.ps1 should include the ID header' }
@@ -374,10 +389,18 @@ try {
     if ($summaryOutput -notmatch '-After') { throw 'render-summary.ps1 footer should preserve the lower-bound window' }
     if ($summaryOutput -notmatch '-Before') { throw 'render-summary.ps1 footer should compute an upper-bound re-query window' }
     if ($summaryOutput -notmatch 'query-friction.ps1') { throw 'render-summary.ps1 footer should reference query-friction.ps1' }
-    $emptySummary = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2099-01-01T00:00:00Z' -NoFit
+    $emptySummary = ((& "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2099-01-01T00:00:00Z' -NoFit) -join "`n")
     if ($emptySummary -match '┌') { throw 'render-summary.ps1 should emit no table for zero-event sessions' }
-    $dateSummary = & "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -DateFrom '2020-01-01' -NoFit
+    $dateSummary = ((& "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -DateFrom '2020-01-01' -NoFit) -join "`n")
     if ($dateSummary -notmatch '-DateFrom') { throw 'render-summary.ps1 footer should preserve the -DateFrom fallback path' }
+    $narrowSummary = ((& "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2020-01-01T00:00:00Z' -MaxWidth 50) -join "`n")
+    if ($narrowSummary -notmatch 'Columns omitted to fit width: Sources, Tags, Category') { throw 'render-summary.ps1 should omit trailing summary columns on narrow widths' }
+    if ($narrowSummary -notmatch 'ID') { throw 'render-summary.ps1 should keep the ID column visible on narrow widths' }
+    if ($narrowSummary -notmatch 'Time') { throw 'render-summary.ps1 should keep the Time column visible on narrow widths' }
+    if ($narrowSummary -notmatch 'Title') { throw 'render-summary.ps1 should keep the Title column visible on narrow widths' }
+    if ($narrowSummary -match 'Sources\s+│') { throw 'render-summary.ps1 should drop Sources before protected leading columns' }
+    $mediumSummary = ((& "$root/scripts/render-summary.ps1" -EventsFile $eventsFile -After '2020-01-01T00:00:00Z' -MaxWidth 80) -join "`n")
+    if ($mediumSummary -notmatch 'Columns omitted to fit width: Sources') { throw 'render-summary.ps1 should reduce columns progressively as width tightens' }
 
     $futureRunEffectEventsFile = Join-Path $repoDir 'future-run-effect-events.jsonl'
     [System.IO.File]::WriteAllText($futureRunEffectEventsFile, "{""title"":""future run effect"",""derived_category"":""skill/schema/future-state""}$([Environment]::NewLine)", [System.Text.UTF8Encoding]::new($false))

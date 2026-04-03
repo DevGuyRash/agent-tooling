@@ -10,6 +10,9 @@ param(
     [int]$MaxColWidth = 0,
     [int]$MaxWidth = 0,
     [string]$ColWidths = '',
+    [ValidateSet('drop-last-then-shrink', 'shrink')][string]$FitMode = 'drop-last-then-shrink',
+    [int]$MinColWidth = 12,
+    [int]$MinColumns = 1,
     [switch]$Help
 )
 
@@ -19,6 +22,11 @@ $ErrorActionPreference = 'Stop'
 function Write-Hint {
     param([string]$Message)
     [Console]::Error.WriteLine("render-table.ps1: $Message")
+}
+
+function Emit-Line {
+    param([string]$Line)
+    Write-Output $Line
 }
 
 function Show-Help {
@@ -46,6 +54,11 @@ Options:
   -MaxColWidth N   Max display columns per column before wrapping (0 = no limit)
   -MaxWidth N      Max total table width in display columns (0 = no limit)
   -ColWidths W,..  Per-column widths (e.g. "10,,30"); empty = auto
+  -FitMode MODE    Width fit strategy: drop-last-then-shrink (default) or shrink
+  -MinColWidth N   Minimum width to preserve for auto-sized columns before
+                   columns start dropping (default: 12)
+  -MinColumns N    Minimum number of leading columns to keep visible when
+                   dropping columns to fit width (default: 1)
   -Help            Show this help
 "@
 }
@@ -206,8 +219,9 @@ function Get-NormalizedData {
             }
             $fieldsResolved = Get-ObjectPropertyNames $parsed[0]
             $displayHeaders = if ($headerOverride.Count -gt 0) { $headerOverride } else { $fieldsResolved }
-            $rows = foreach ($row in $parsed) {
-                @($fieldsResolved | ForEach-Object { ConvertTo-CompactJson $row.$_ })
+            $rows = [System.Collections.Generic.List[object]]::new()
+            foreach ($row in $parsed) {
+                $rows.Add(@($fieldsResolved | ForEach-Object { ConvertTo-CompactJson $row.$_ }))
             }
             return [pscustomobject]@{ Headers = $displayHeaders; Rows = @($rows) }
         }
@@ -218,8 +232,9 @@ function Get-NormalizedData {
             }
             $fieldsResolved = Get-ObjectPropertyNames $parsed[0]
             $displayHeaders = if ($headerOverride.Count -gt 0) { $headerOverride } else { $fieldsResolved }
-            $rows = foreach ($row in $parsed) {
-                @($fieldsResolved | ForEach-Object { ConvertTo-CompactJson $row.$_ })
+            $rows = [System.Collections.Generic.List[object]]::new()
+            foreach ($row in $parsed) {
+                $rows.Add(@($fieldsResolved | ForEach-Object { ConvertTo-CompactJson $row.$_ }))
             }
             return [pscustomobject]@{ Headers = $displayHeaders; Rows = @($rows) }
         }
@@ -242,8 +257,9 @@ function Get-NormalizedData {
                 return [pscustomobject]@{ Headers = @(); Rows = @() }
             }
             $displayHeaders = if ($headerOverride.Count -gt 0) { $headerOverride } else { $fieldList }
-            $rows = foreach ($obj in $objects) {
-                @($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ })
+            $rows = [System.Collections.Generic.List[object]]::new()
+            foreach ($obj in $objects) {
+                $rows.Add(@($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ }))
             }
             return [pscustomobject]@{ Headers = $displayHeaders; Rows = @($rows) }
         }
@@ -263,8 +279,9 @@ function Get-NormalizedData {
                 return [pscustomobject]@{ Headers = @(); Rows = @() }
             }
             $displayHeaders = if ($headerOverride.Count -gt 0) { $headerOverride } else { $fieldList }
-            $rows = foreach ($obj in $objects) {
-                @($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ })
+            $rows = [System.Collections.Generic.List[object]]::new()
+            foreach ($obj in $objects) {
+                $rows.Add(@($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ }))
             }
             return [pscustomobject]@{ Headers = $displayHeaders; Rows = @($rows) }
         }
@@ -287,8 +304,9 @@ function Get-NormalizedData {
                 return [pscustomobject]@{ Headers = @(); Rows = @() }
             }
             $displayHeaders = if ($headerOverride.Count -gt 0) { $headerOverride } else { $fieldList }
-            $rows = foreach ($obj in $objects) {
-                @($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ })
+            $rows = [System.Collections.Generic.List[object]]::new()
+            foreach ($obj in $objects) {
+                $rows.Add(@($fieldList | ForEach-Object { ConvertTo-CompactJson $obj.$_ }))
             }
             return [pscustomobject]@{ Headers = $displayHeaders; Rows = @($rows) }
         }
@@ -407,7 +425,21 @@ function Pad-DisplayText {
     return $Text + (' ' * [Math]::Max(0, $Width - (Get-DisplayWidth $Text)))
 }
 
-function Get-ColumnWidths {
+function Get-Budget {
+    param(
+        [int]$VisibleCount,
+        [int]$TableMaxWidth
+    )
+
+    $overhead = 1 + (3 * $VisibleCount)
+    $budget = $TableMaxWidth - $overhead
+    if ($budget -lt $VisibleCount) {
+        $budget = $VisibleCount
+    }
+    return $budget
+}
+
+function Get-ColumnMetadata {
     param(
         [string[]]$HeadersResolved,
         [object[]]$RowsResolved
@@ -420,15 +452,15 @@ function Get-ColumnWidths {
         for ($i = 0; $i -lt $parts.Count; $i++) {
             $trimmed = $parts[$i].Trim()
             if ($trimmed.Length -gt 0) {
-                $explicit[$i] = [int]$trimmed
+                $explicit[$i] = [Math]::Max(1, [int]$trimmed)
             }
         }
     }
 
-    $widths = New-Object int[] $columnCount
+    $naturalWidths = New-Object int[] $columnCount
     for ($i = 0; $i -lt $columnCount; $i++) {
         if ($explicit.ContainsKey($i)) {
-            $widths[$i] = [Math]::Max(1, [int]$explicit[$i])
+            $naturalWidths[$i] = [int]$explicit[$i]
             continue
         }
 
@@ -444,26 +476,154 @@ function Get-ColumnWidths {
         if ($MaxColWidth -gt 0 -and $max -gt $MaxColWidth) {
             $max = $MaxColWidth
         }
-        $widths[$i] = [Math]::Max(1, $max)
+        $naturalWidths[$i] = [Math]::Max(1, $max)
     }
 
-    if ($MaxWidth -gt 0) {
-        $overhead = 1 + (3 * $columnCount)
-        $budget = $MaxWidth - $overhead
-        if ($budget -lt $columnCount) { $budget = $columnCount }
-        $total = 0
-        foreach ($w in $widths) { $total += $w }
-        if ($total -gt $budget) {
-            $ratio = $budget / [double]$total
-            for ($i = 0; $i -lt $widths.Length; $i++) {
-                if (-not $explicit.ContainsKey($i)) {
-                    $widths[$i] = [Math]::Max(1, [int][Math]::Floor($widths[$i] * $ratio))
-                }
+    return [pscustomobject]@{
+        NaturalWidths = $naturalWidths
+        Explicit = $explicit
+    }
+}
+
+function Invoke-ShrinkWidths {
+    param(
+        [int[]]$Visible,
+        [int[]]$NaturalWidths,
+        [hashtable]$ExplicitWidths,
+        [int]$Budget,
+        [int]$ColumnFloor,
+        [switch]$Emergency
+    )
+
+    $widths = @{}
+    $floors = @{}
+    $effectiveFloor = [Math]::Max(1, $ColumnFloor)
+
+    foreach ($idx in $Visible) {
+        $widths[$idx] = [int]$NaturalWidths[$idx]
+        if ($Emergency) {
+            $floors[$idx] = 1
+        }
+        elseif ($ExplicitWidths.ContainsKey($idx)) {
+            $floors[$idx] = [int]$NaturalWidths[$idx]
+        }
+        else {
+            $floors[$idx] = [Math]::Min([int]$NaturalWidths[$idx], $effectiveFloor)
+        }
+    }
+
+    $total = 0
+    foreach ($idx in $Visible) {
+        $total += [int]$widths[$idx]
+    }
+
+    while ($total -gt $Budget) {
+        $candidates = @(
+            $Visible |
+                Where-Object { [int]$widths[$_] -gt [int]$floors[$_] } |
+                Sort-Object -Property @{ Expression = { [int]$widths[$_] }; Descending = $true }, @{ Expression = { $_ }; Descending = $true }
+        )
+        if ($candidates.Count -eq 0) {
+            return [pscustomobject]@{
+                Widths = $widths
+                Fits = $false
+            }
+        }
+
+        foreach ($idx in $candidates) {
+            if ($total -le $Budget) { break }
+            if ([int]$widths[$idx] -gt [int]$floors[$idx]) {
+                $widths[$idx] = [int]$widths[$idx] - 1
+                $total--
             }
         }
     }
 
-    return $widths
+    return [pscustomobject]@{
+        Widths = $widths
+        Fits = $true
+    }
+}
+
+function Get-FitLayout {
+    param(
+        [string[]]$HeadersResolved,
+        [object[]]$RowsResolved
+    )
+
+    $columnCount = $HeadersResolved.Count
+    $metadata = Get-ColumnMetadata -HeadersResolved $HeadersResolved -RowsResolved $RowsResolved
+    $naturalWidths = [int[]]$metadata.NaturalWidths
+    $explicitWidths = [hashtable]$metadata.Explicit
+
+    $visible = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $columnCount; $i++) {
+        $visible.Add($i)
+    }
+
+    $dropped = [System.Collections.Generic.List[string]]::new()
+    $widthMap = @{}
+    foreach ($idx in $visible) {
+        $widthMap[$idx] = [int]$naturalWidths[$idx]
+    }
+
+    if ($MaxWidth -gt 0 -and $visible.Count -gt 0) {
+        if ($FitMode -eq 'shrink') {
+            $budget = Get-Budget -VisibleCount $visible.Count -TableMaxWidth $MaxWidth
+            $fitResult = Invoke-ShrinkWidths -Visible @($visible) -NaturalWidths $naturalWidths -ExplicitWidths $explicitWidths -Budget $budget -ColumnFloor $MinColWidth
+            if (-not $fitResult.Fits) {
+                $fitResult = Invoke-ShrinkWidths -Visible @($visible) -NaturalWidths $naturalWidths -ExplicitWidths $explicitWidths -Budget $budget -ColumnFloor 1 -Emergency
+            }
+            $widthMap = $fitResult.Widths
+        }
+        else {
+            while ($true) {
+                $budget = Get-Budget -VisibleCount $visible.Count -TableMaxWidth $MaxWidth
+                $fitResult = Invoke-ShrinkWidths -Visible @($visible) -NaturalWidths $naturalWidths -ExplicitWidths $explicitWidths -Budget $budget -ColumnFloor $MinColWidth
+                if ($fitResult.Fits) {
+                    $widthMap = $fitResult.Widths
+                    break
+                }
+
+                if ($visible.Count -gt [Math]::Max(1, $MinColumns)) {
+                    $dropIndex = $visible[$visible.Count - 1]
+                    $dropped.Add([string]$HeadersResolved[$dropIndex])
+                    $visible.RemoveAt($visible.Count - 1)
+                    continue
+                }
+
+                $fitResult = Invoke-ShrinkWidths -Visible @($visible) -NaturalWidths $naturalWidths -ExplicitWidths $explicitWidths -Budget $budget -ColumnFloor 1 -Emergency
+                $widthMap = $fitResult.Widths
+                break
+            }
+        }
+    }
+
+    $visibleHeaders = [System.Collections.Generic.List[string]]::new()
+    $visibleWidths = [System.Collections.Generic.List[int]]::new()
+    $visibleRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($idx in $visible) {
+        $visibleHeaders.Add([string]$HeadersResolved[$idx])
+        $visibleWidths.Add([int]$widthMap[$idx])
+    }
+
+    foreach ($row in $RowsResolved) {
+        $rowCells = @($row)
+        $newRow = [System.Collections.Generic.List[string]]::new()
+        foreach ($idx in $visible) {
+            $cell = if ($idx -lt $rowCells.Count) { [string]$rowCells[$idx] } else { '' }
+            $newRow.Add($cell)
+        }
+        $visibleRows.Add(@($newRow))
+    }
+
+    return [pscustomobject]@{
+        Headers = @($visibleHeaders)
+        Widths = @($visibleWidths)
+        Rows = @($visibleRows)
+        Dropped = @($dropped)
+    }
 }
 
 function Write-Border {
@@ -490,7 +650,7 @@ function Write-Border {
             $parts.Add($right)
         }
     }
-    [Console]::WriteLine(($parts -join ''))
+    Emit-Line ($parts -join '')
 }
 
 function Write-RenderedRow {
@@ -522,7 +682,7 @@ function Write-RenderedRow {
             $segment = if ($lineIndex -lt $wrappedSegments.Count) { [string]$wrappedSegments[$lineIndex] } else { '' }
             $parts.Add((' ' + (Pad-DisplayText -Text $segment -Width $Widths[$i]) + ' │'))
         }
-        [Console]::WriteLine(($parts -join ''))
+        Emit-Line ($parts -join '')
     }
 }
 
@@ -550,14 +710,23 @@ if ($headersResolved.Count -eq 0 -or $rowsResolved.Count -eq 0) {
     return
 }
 
-$widths = Get-ColumnWidths -HeadersResolved $headersResolved -RowsResolved $rowsResolved
-Write-Border -Position top -Widths $widths
-Write-RenderedRow -Row $headersResolved -Widths $widths
-Write-Border -Position mid -Widths $widths
-for ($i = 0; $i -lt $rowsResolved.Count; $i++) {
-    Write-RenderedRow -Row @($rowsResolved[$i]) -Widths $widths
-    if ($i -lt ($rowsResolved.Count - 1)) {
-        Write-Border -Position mid -Widths $widths
+$layout = Get-FitLayout -HeadersResolved $headersResolved -RowsResolved $rowsResolved
+$finalHeaders = @($layout.Headers)
+$finalWidths = [int[]]@($layout.Widths)
+$finalRows = @($layout.Rows)
+$droppedHeaders = @($layout.Dropped)
+
+if ($droppedHeaders.Count -gt 0) {
+    Emit-Line ("Columns omitted to fit width: {0}" -f ($droppedHeaders -join ', '))
+}
+
+Write-Border -Position top -Widths $finalWidths
+Write-RenderedRow -Row $finalHeaders -Widths $finalWidths
+Write-Border -Position mid -Widths $finalWidths
+for ($i = 0; $i -lt $finalRows.Count; $i++) {
+    Write-RenderedRow -Row @($finalRows[$i]) -Widths $finalWidths
+    if ($i -lt ($finalRows.Count - 1)) {
+        Write-Border -Position mid -Widths $finalWidths
     }
 }
-Write-Border -Position bot -Widths $widths
+Write-Border -Position bot -Widths $finalWidths
