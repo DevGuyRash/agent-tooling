@@ -2,9 +2,14 @@
 # dist/ is part of the repo and clean-build must not destroy it.
 # project-harness: managed-file
 # These recipes assume a POSIX shell. On Windows, use Git Bash or WSL.
+# Usage examples:
+#   just bootstrap         # install local prerequisites and tooling
+#   just dist              # compile release outputs and refresh dist/
+#   just clean-build       # remove build outputs while preserving committed dist/
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Show the recipe catalog and short descriptions
 default:
     @just --list
 

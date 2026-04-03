@@ -36,6 +36,21 @@ cargo clippy --workspace -- -D warnings
 
 Add crate-specific recipes only when contributors need them.
 
+## Description examples
+
+Rust repos usually have enough structure to support precise `just` descriptions.
+
+Good workspace-level descriptions:
+- `# Install Cargo dependencies and warm the workspace for local development`
+- `# Compile the Rust workspace in the default build profile`
+- `# Run workspace tests with the locked dependency graph`
+- `# Run Clippy across the workspace and fail on warnings`
+
+Good crate-scoped descriptions:
+- `# Compile only crates/mpcr in the default build profile`
+- `# Run automated tests only for crates/render-table`
+- `# Compile optimized outputs only for crates/docker-architect-image`
+
 ## Dist patterns
 
 Rust is one of the easiest ecosystems to support for staged binaries because

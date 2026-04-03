@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_DIR = SKILL_ROOT / "assets"
-STATE_VERSION = "2.2.0"
+STATE_VERSION = "2.3.0"
 MANAGED_MARKER = "# project-harness: managed-file"
 IGNORE_DIRS = {
     ".git",
@@ -1189,9 +1189,46 @@ def strip_args_placeholder(line: str) -> str:
     return cleaned.strip()
 
 
+def canonical_recipe_doc(recipe: str) -> str:
+    docs = {
+        "bootstrap": "Install dependencies, tooling, and local prerequisites for normal development",
+        "build": "Compile the detected project surfaces in the default build profile",
+        "release": "Compile optimized or distributable outputs for release packaging",
+        "test": "Run the repo's automated test surface",
+        "lint": "Run static analysis and policy checks",
+        "fmt": "Rewrite source files into the canonical project style",
+        "fmt-check": "Verify formatting without rewriting source files",
+        "ci": "Run the pull-request verification surface in local sequence",
+        "clean": "Remove generated build artifacts and local caches",
+        "dev": "Start the main interactive developer loop",
+        "docker-build": "Build the repo's Docker images or compose services",
+        "docker-up": "Start the repo's Docker services in the background",
+        "docker-down": "Stop running Docker services for this repo",
+        "docker-logs": "Stream Docker service logs for local debugging",
+        "docker-clean": "Remove Docker volumes, caches, and local images created for this repo",
+    }
+    return docs[recipe]
+
+
+def component_recipe_doc(recipe: str, label: str) -> str:
+    docs = {
+        "bootstrap": f"Install dependencies and local prerequisites only for {label}",
+        "build": f"Compile only {label} in the default build profile",
+        "release": f"Compile optimized or distributable outputs only for {label}",
+        "test": f"Run automated tests only for {label}",
+        "lint": f"Run static analysis and policy checks only for {label}",
+        "fmt": f"Rewrite source files into the canonical style only for {label}",
+        "fmt-check": f"Verify formatting only for {label} without rewriting files",
+        "clean": f"Remove generated build artifacts only for {label}",
+        "dev": f"Start the main interactive developer loop only for {label}",
+    }
+    return docs[recipe]
+
+
 def render_recipe_block(name: str, lines: list[str], *, args: bool = False, doc: str | None = None, private: bool = False, deps: list[str] | None = None, allow_empty: bool = False) -> str:
     head = ""
     if doc:
+        doc = " ".join(doc.split())
         head += f"# {doc}\n"
     if private:
         head += "[private]\n"
@@ -1217,8 +1254,23 @@ def build_variable_block(commands: dict[str, list[str]], architecture: str) -> s
     return ("\n".join(lines) + "\n\n") if lines else ""
 
 
+def display_language(language: str) -> str:
+    names = {
+        "csharp": "C#",
+        "javascript": "JavaScript",
+        "rust": "Rust",
+        "typescript": "TypeScript",
+    }
+    return names.get(language, language)
+
+
 def component_label(component: dict[str, Any]) -> str:
-    return component["path"] if component["path"] != "." else component["language"]
+    if component["path"] != ".":
+        return component["path"]
+    language = display_language(component["language"])
+    if component.get("workspace"):
+        return f"the repo-root {language} workspace"
+    return f"the repo-root {language} surface"
 
 
 def render_component_recipe_blocks(repo: Path, detected: dict[str, Any]) -> str:
@@ -1231,21 +1283,21 @@ def render_component_recipe_blocks(repo: Path, detected: dict[str, Any]) -> str:
         label = component_label(component)
         commands = commands_for_component(component, repo)
         specs = [
-            ("build", True, f"Build only {label}"),
-            ("release", False, f"Build release outputs only for {label}"),
-            ("test", True, f"Run tests only for {label}"),
-            ("lint", False, f"Run linters only for {label}"),
-            ("fmt", False, f"Format code only for {label}"),
-            ("fmt-check", False, f"Check formatting only for {label}"),
-            ("clean", False, f"Remove build artifacts only for {label}"),
-            ("bootstrap", False, f"Install dependencies only for {label}"),
-            ("dev", True, f"Run the main developer loop only for {label}"),
+            ("build", True),
+            ("release", False),
+            ("test", True),
+            ("lint", False),
+            ("fmt", False),
+            ("fmt-check", False),
+            ("clean", False),
+            ("bootstrap", False),
+            ("dev", True),
         ]
-        for recipe, has_args, doc in specs:
+        for recipe, has_args in specs:
             lines = commands.get(recipe, [])
             if not lines:
                 continue
-            blocks.append(render_recipe_block(f"{prefix}-{recipe}", lines, args=has_args, doc=doc))
+            blocks.append(render_recipe_block(f"{prefix}-{recipe}", lines, args=has_args, doc=component_recipe_doc(recipe, label)))
     return "".join(blocks)
 
 
@@ -1274,17 +1326,17 @@ def build_dist_section(plan: dict[str, Any], architecture: str, dist_storage: st
     ]
     preserve_dist = architecture in {"committed-dist", "cross-os-dist"} and dist_storage in {"git", "git-lfs"}
     dist_block = ""
-    dist_block += render_recipe_block("dist", dist_lines, doc="Build release artifacts and stage them to dist/")
-    dist_block += render_recipe_block("_stage", stage_lines, private=True, doc="Internal helper that copies release outputs into dist/")
-    dist_block += render_recipe_block("clean-build", unique_preserve_order(plan["clean_build"]), doc="Remove build artifacts but preserve dist/")
-    clean_dist_doc = "Remove staged dist outputs"
+    dist_block += render_recipe_block("dist", dist_lines, doc="Compile release outputs and stage them into dist/ for local packaging")
+    dist_block += render_recipe_block("_stage", stage_lines, private=True, doc="Internal helper that copies compiled release outputs into dist/")
+    dist_block += render_recipe_block("clean-build", unique_preserve_order(plan["clean_build"]), doc="Remove compiled build artifacts while preserving staged dist outputs")
+    clean_dist_doc = "Remove staged dist payloads without touching source files"
     if preserve_dist:
-        clean_dist_doc = "Remove staged dist outputs. Use only when you intend to rebuild or restore committed deliverables."
+        clean_dist_doc = "Remove staged dist payloads. Use only when you intend to rebuild or restore committed deliverables."
     dist_block += render_recipe_block("clean-dist", ['rm -rf "{{ dist_dir }}"'], doc=clean_dist_doc)
     if preserve_dist:
-        dist_block += render_recipe_block("clean", ["just clean-build"], doc="Remove build artifacts but preserve committed dist outputs")
+        dist_block += render_recipe_block("clean", ["just clean-build"], doc="Remove build artifacts while preserving committed dist deliverables")
     else:
-        dist_block += render_recipe_block("clean", ["just clean-build", "just clean-dist"], doc="Remove both build artifacts and staged outputs")
+        dist_block += render_recipe_block("clean", ["just clean-build", "just clean-dist"], doc="Remove both compiled build artifacts and staged dist payloads")
     return dist_block, dist_variables
 
 
@@ -1306,32 +1358,32 @@ def render_justfile(repo: Path, detected: dict[str, Any], architecture: str, dis
     }[architecture]
     template = read_text(ASSETS_DIR / template_name)
 
-    ci_block = render_recipe_block("ci", [], doc="Run the normal CI surface", deps=["lint", "fmt-check", "test"], allow_empty=True)
+    ci_block = render_recipe_block("ci", [], doc=canonical_recipe_doc("ci"), deps=["lint", "fmt-check", "test"], allow_empty=True)
     clean_block = ""
     if architecture not in {"local-dist", "committed-dist", "cross-os-dist"}:
-        clean_block = render_recipe_block("clean", commands["clean"], doc="Remove build artifacts")
-    bootstrap_block = render_recipe_block("bootstrap", commands["bootstrap"], doc="Install dependencies and prepare the repo")
-    dev_block = render_recipe_block("dev", commands.get("dev", []), args=True, doc="Run the main developer loop")
+        clean_block = render_recipe_block("clean", commands["clean"], doc=canonical_recipe_doc("clean"))
+    bootstrap_block = render_recipe_block("bootstrap", commands["bootstrap"], doc=canonical_recipe_doc("bootstrap"))
+    dev_block = render_recipe_block("dev", commands.get("dev", []), args=True, doc=canonical_recipe_doc("dev"))
     docker_block = ""
     if detected["docker"]["compose_files"]:
-        docker_block += render_recipe_block("docker-build", commands.get("docker-build", []), doc="Build Docker services")
-        docker_block += render_recipe_block("docker-up", commands.get("docker-up", []), doc="Start Docker services")
-        docker_block += render_recipe_block("docker-down", commands.get("docker-down", []), doc="Stop Docker services")
-        docker_block += render_recipe_block("docker-logs", commands.get("docker-logs", []), doc="Stream Docker logs")
-        docker_block += render_recipe_block("docker-clean", commands.get("docker-clean", []), doc="Remove Docker volumes and local images")
+        docker_block += render_recipe_block("docker-build", commands.get("docker-build", []), doc=canonical_recipe_doc("docker-build"))
+        docker_block += render_recipe_block("docker-up", commands.get("docker-up", []), doc=canonical_recipe_doc("docker-up"))
+        docker_block += render_recipe_block("docker-down", commands.get("docker-down", []), doc=canonical_recipe_doc("docker-down"))
+        docker_block += render_recipe_block("docker-logs", commands.get("docker-logs", []), doc=canonical_recipe_doc("docker-logs"))
+        docker_block += render_recipe_block("docker-clean", commands.get("docker-clean", []), doc=canonical_recipe_doc("docker-clean"))
 
     replacements = {
         "__GUIDANCE_BLOCK__": guidance_comment_block(detected),
         "__VARIABLES__": build_variable_block(commands, architecture),
         "__COMPONENT_BLOCKS__": render_component_recipe_blocks(repo, detected),
         "__DIST_VARIABLES__": dist_variables,
-        "__BUILD_BLOCK__": render_recipe_block("build", commands["build"], args=True, doc="Build the project"),
-        "__RELEASE_BLOCK__": render_recipe_block("release", [strip_args_placeholder(line) for line in (commands["release"] or commands["build"])], doc="Build release or optimized outputs"),
+        "__BUILD_BLOCK__": render_recipe_block("build", commands["build"], args=True, doc=canonical_recipe_doc("build")),
+        "__RELEASE_BLOCK__": render_recipe_block("release", [strip_args_placeholder(line) for line in (commands["release"] or commands["build"])], doc=canonical_recipe_doc("release")),
         "__DIST_BLOCK__": dist_block,
-        "__TEST_BLOCK__": render_recipe_block("test", commands["test"], args=True, doc="Run tests"),
-        "__LINT_BLOCK__": render_recipe_block("lint", commands["lint"], doc="Run linters"),
-        "__FMT_BLOCK__": render_recipe_block("fmt", commands["fmt"], doc="Format code"),
-        "__FMT_CHECK_BLOCK__": render_recipe_block("fmt-check", commands["fmt-check"], doc="Check formatting without changing files"),
+        "__TEST_BLOCK__": render_recipe_block("test", commands["test"], args=True, doc=canonical_recipe_doc("test")),
+        "__LINT_BLOCK__": render_recipe_block("lint", commands["lint"], doc=canonical_recipe_doc("lint")),
+        "__FMT_BLOCK__": render_recipe_block("fmt", commands["fmt"], doc=canonical_recipe_doc("fmt")),
+        "__FMT_CHECK_BLOCK__": render_recipe_block("fmt-check", commands["fmt-check"], doc=canonical_recipe_doc("fmt-check")),
         "__CI_BLOCK__": ci_block,
         "__CLEAN_BLOCK__": clean_block,
         "__BOOTSTRAP_BLOCK__": bootstrap_block,

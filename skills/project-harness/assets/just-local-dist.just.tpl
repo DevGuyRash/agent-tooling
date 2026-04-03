@@ -2,9 +2,14 @@
 # dist/ stays ignored.
 # project-harness: managed-file
 # These recipes assume a POSIX shell. On Windows, use Git Bash or WSL.
+# Usage examples:
+#   just bootstrap         # install local prerequisites and tooling
+#   just dist              # compile release outputs and stage them under dist/
+#   just clean-dist        # remove staged dist payloads without touching sources
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Show the recipe catalog and short descriptions
 default:
     @just --list
 

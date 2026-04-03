@@ -68,6 +68,11 @@ Generate a real `justfile` when:
 Use placeholders when:
 - you can name the lifecycle stages but not the actual commands
 
+Treat recipe descriptions as part of the generated interface, not optional garnish.
+WHEN you infer or promote a recipe THEN you SHALL infer or supply a description that explains the recipe's scope and expected effect.
+WHEN the recipe is component-prefixed or affects packaging, dist, hooks, or CI THEN you SHALL name that scope explicitly.
+WHEN longer guidance would clutter the recipe list THEN you SHOULD keep the recipe description to one line and move examples into a short header comment block.
+
 Do not invent:
 - package-manager-specific install commands
 - test runners

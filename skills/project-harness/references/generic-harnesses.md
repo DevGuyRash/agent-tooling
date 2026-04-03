@@ -31,6 +31,30 @@ Use these meanings consistently:
 - `ci`: the minimal required checks for a pull request
 - `dev`: the main interactive developer loop
 
+## Recipe descriptions and examples
+
+The generated `justfile` should explain itself even before someone opens the skill docs.
+
+WHEN you generate a public recipe THEN you SHALL place a one-line description comment directly above it.
+WHEN a recipe is scoped to a component, platform, or distribution surface THEN you SHALL say so in the description.
+WHEN the repo still relies on placeholders or has a non-obvious lifecycle THEN you SHOULD add a short header block with a few example invocations.
+You SHALL NOT fill the file with vague comments such as `# Build the project` when the recipe can describe the actual scope or effect more precisely.
+
+Good description examples:
+- `# Install dependencies, tooling, and local prerequisites for normal development`
+- `# Compile only backend in the default build profile`
+- `# Run static analysis and policy checks only for frontend`
+- `# Remove staged dist payloads without touching source files`
+
+Good header example:
+
+```text
+# Usage examples:
+#   just bootstrap         # install local prerequisites and tooling
+#   just ci                # run the pull-request verification surface
+#   just dist              # compile release outputs and stage them under dist/
+```
+
 ## How to infer a first harness without examples
 
 Look for weak signals, not only explicit scripts:
@@ -89,6 +113,7 @@ A placeholder harness is acceptable when it is explicit.
 It should:
 - say no native build surface was detected
 - keep recipe names canonical
+- describe what each placeholder recipe is meant to represent
 - make missing commands obvious
 - avoid pretending to know the package manager or test runner
 

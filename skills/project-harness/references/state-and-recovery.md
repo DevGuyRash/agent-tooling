@@ -18,7 +18,7 @@ Example shape:
 
 ```json
 {
-  "version": "2.2.0",
+  "version": "2.3.0",
   "detected": {
     "languages": ["rust", "javascript"],
     "build_tools": ["cargo", "npm"],

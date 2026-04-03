@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,9 +36,9 @@ def write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def assert_just_parses(justfile: Path) -> None:
+def assert_just_parses(justfile: Path) -> str:
     if not shutil.which("just"):
-        return
+        return ""
     proc = subprocess.run(
         ["just", "--justfile", str(justfile), "--list"],
         capture_output=True,
@@ -45,6 +46,7 @@ def assert_just_parses(justfile: Path) -> None:
         check=True,
     )
     assert "Available recipes:" in proc.stdout, proc.stdout
+    return proc.stdout
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,8 +70,14 @@ def main(argv: list[str] | None = None) -> int:
         assert detected1["selection_defaults"]["ci_mode"] == "none", detected1
         render1 = run_json(script, "render", str(repo1))
         just1 = (repo1 / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        assert "# Show the recipe catalog and short descriptions" in just1, just1
+        assert "# Install dependencies, tooling, and local prerequisites for normal development" in just1, just1
         assert "No native build surface was detected" in just1
         assert "ci.yml" not in render1["candidates"], render1
+        if shutil.which("just"):
+            list1 = assert_just_parses(repo1 / ".local" / "harness" / "render" / "justfile")
+            assert re.search(r"default\s+# Show the recipe catalog and short descriptions", list1), list1
+            assert re.search(r"bootstrap\s+# Install dependencies, tooling, and local prerequisites for normal development", list1), list1
 
         # 2) single-package Node repo -> just CI with bootstrap and direct execution surfaces
         repo2 = tmpdir / "node"
@@ -115,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         just3 = (repo3 / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
         assert "backend-build" in just3, just3
         assert "frontend-test" in just3, just3
+        assert "# Compile only backend in the default build profile" in just3, just3
+        assert "# Run automated tests only for frontend" in just3, just3
         assert "ci.yml" in render3["candidates"], render3
         ci3 = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert "fetch-depth: 1" in ci3, ci3
@@ -254,8 +264,11 @@ def main(argv: list[str] | None = None) -> int:
             render4 = run_json(script, "render", str(repo4), "--architecture", architecture, "--dist-storage", "git-lfs")
             just4 = repo4 / ".local" / "harness" / "render" / "justfile"
             just4_text = just4.read_text(encoding="utf-8")
-            assert "# Internal helper that copies release outputs into dist/\n[private]\n_stage:" in just4_text, just4_text
-            assert_just_parses(just4)
+            assert "# Compile release outputs and stage them into dist/ for local packaging" in just4_text, just4_text
+            assert "# Internal helper that copies compiled release outputs into dist/\n[private]\n_stage:" in just4_text, just4_text
+            list4 = assert_just_parses(just4)
+            if list4:
+                assert "dist" in list4 and "# Compile release outputs and stage them into dist/ for local packaging" in list4, list4
             if architecture in {"committed-dist", "cross-os-dist"}:
                 assert ".gitattributes" in render4["candidates"], render4
             if architecture == "cross-os-dist":

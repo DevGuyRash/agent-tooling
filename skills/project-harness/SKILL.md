@@ -15,7 +15,7 @@ description: >-
 license: MIT
 metadata:
   author: DevGuyRash
-  version: "2.2.0"
+  version: "2.3.0"
   category: development
 compatibility: >-
   Requires Python 3.11+ to run the bundled CLI. Optional: just, git, git-lfs,
@@ -58,6 +58,32 @@ This skill does **not** rewrite:
 This skill also does **not** own governance enforcement such as required checks,
 CODEOWNERS reconciliation, or branch/ruleset policy. Keep those in a governance
 tooling surface such as `gitops-workflow`.
+
+## Justfile quality bar
+
+The generated `justfile` is a user interface, not just a dump of commands.
+
+WHEN this skill generates a public recipe THEN you SHALL place a one-line description comment directly above it.
+WHEN the recipe is scoped to a component, platform, or distribution surface THEN you SHALL name that scope in the description.
+WHEN the repo has non-obvious operational surfaces such as packaging, dist refresh, hooks, or Docker workflows THEN you SHOULD add a short header comment block with two or three example invocations.
+You SHALL NOT rely on bare labels such as "Run linters" or "Build the project" when the repo surface is specific enough to describe more precisely.
+
+Preferred description style:
+- one line
+- outcome-first
+- precise about scope and side effects
+- written so it still reads cleanly in `just --list`
+
+Good examples:
+- `# Install dependencies, tooling, and local prerequisites for normal development`
+- `# Compile only crates/mpcr in the default build profile`
+- `# Compile release outputs and stage them into dist/ for local packaging`
+- `# Remove staged dist payloads without touching source files`
+
+Weak examples:
+- `# Run linters`
+- `# Build the project`
+- `# Clean`
 
 ## Default workflow
 
@@ -108,6 +134,8 @@ Examples:
 - Makefile or Taskfile -> preserve them, map canonical targets where obvious
 - monorepo/workspace -> emit both per-component recipes and aggregate top-level recipes
 
+Also generate recipe descriptions that explain what each recipe does, not just its canonical name.
+
 ### When the repo has **no** examples
 
 Do not fail. Generate a minimal canonical harness with placeholder recipes and a
@@ -118,6 +146,7 @@ Default behavior for no-example repos:
 - keep CI mode at `none` unless setup is truly obvious
 - leave distribution mode at `general` unless the repo already shows binary/dist intent
 - store decisions and warnings in `.local/harness/state.json`
+- include recipe descriptions plus a short header block that shows how the placeholder harness is meant to be used
 
 Load `<skills-file-root>/references/generic-harnesses.md` for the full no-example policy.
 Load `<skills-file-root>/references/extrapolation-protocol.md` when you need the
