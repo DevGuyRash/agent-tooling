@@ -1,0 +1,52 @@
+name: Release Cross OS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.platform_id }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_id: linux-x86_64
+          - os: macos-latest
+            platform_id: macos-aarch64
+          - os: windows-latest
+            platform_id: windows-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Stage host packaged binaries
+        shell: bash
+        run: python scripts/package_skills.py stage-host
+
+      - name: Upload packaged skill artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-dist-${{ matrix.platform_id }}
+          path: |
+            skills/code-review/dist/${{ matrix.platform_id }}
+            skills/docker-architect/dist/${{ matrix.platform_id }}
+            skills/friction-diagnostics/dist/${{ matrix.platform_id }}
+          if-no-files-found: error
+          retention-days: 7

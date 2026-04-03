@@ -15,7 +15,7 @@ target/
 **/*.rs.bk
 
 # Local outputs / packaging
-dist/
+/dist/
 out/
 tmp/
 *.tmp

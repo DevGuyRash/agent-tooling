@@ -21,8 +21,8 @@ Path: `skills/code-review/`
 
 Deterministic Docker architecture skill spanning both Compose/Swarm deployment design and image supply-chain planning with strict output ordering and traceability IDs (`AC-*`, `IMG-*`, `RSK-*`, `O-*`).
 
-- Compose/Swarm workflow via `skills/docker-architect/scripts/docker-architect-compose` (auto-build shim)
-- Image/build workflow via `skills/docker-architect/scripts/docker-architect-image` (auto-build shim)
+- Compose/Swarm workflow via `skills/docker-architect/scripts/docker-architect-compose` (packaged-binary launcher)
+- Image/build workflow via `skills/docker-architect/scripts/docker-architect-image` (packaged-binary launcher)
 - API-first image metadata refresh with optional scraping fallback
 - Cached deterministic render/check workflow for reproducible outputs
 
@@ -43,14 +43,26 @@ Single-skill installs should invoke each skill's local launcher under `<skills-f
 Both scripts:
 - Ensure `.local/reports/code_reviews/` exists (gitignored)
 - Best-effort add the repo root to git `safe.directory`
-- Prebuild `mpcr` in `skills/code-review/scripts/mpcr-src` (`cargo build --locked --release`)
-- Prebuild `docker-architect-compose` in `skills/docker-architect/scripts/tooling/docker-architect-compose`
-- Prebuild `docker-architect-image` in `skills/docker-architect/scripts/tooling/docker-architect-image`
+- Bootstrap the root Rust workspace
+- Stage host-platform packaged binaries into each skill's `dist/<platform-id>/` directory
+
+## Repo harness
+
+The repo-local command surface lives in `justfile`.
+
+Common commands:
+- `just bootstrap` — install packaging prerequisites used by the repo scripts
+- `just verify` — run the fast local verification surface (`fmt-check`, `lint`, `test`)
+- `just ci` — run the full repo verification surface, including staged packaging checks
+- `just dist-host` — build and stage host-platform packaged binaries into the skill `dist/` trees
+- `just verify-skill-launchers` — smoke-test skill-local launchers against the staged binaries
+- `just harness-doctor` — inspect the current repo shape and local tool availability from the installed harness
 
 ## Rust shim pattern
 
-- `skills/code-review/scripts/mpcr`, `skills/docker-architect/scripts/docker-architect-compose`, and `skills/docker-architect/scripts/docker-architect-image` are skill-local launchers that auto-build as needed.
-- `scripts/rust-shim-template.sh` is the copy template for adding future Rust skill shims without introducing runtime dependencies on top-level repo scripts.
+- `skills/code-review/scripts/mpcr`, `skills/docker-architect/scripts/docker-architect-compose`, `skills/docker-architect/scripts/docker-architect-image`, and `skills/friction-diagnostics/scripts/render-table.sh` are skill-local launchers that execute packaged binaries from the same skill directory.
+- `scripts/rust-shim-template.sh` is the copy template for future packaged-binary launchers.
+- Build and staging are centralized at the repo root through `just` and `scripts/package_skills.py`.
 - Portability contract: a skill should not require runtime paths outside its own folder.
 
 Environment flags:

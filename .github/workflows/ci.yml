@@ -275,6 +275,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Stage host packaged binaries
+        shell: bash
+        run: python scripts/package_skills.py stage-host
+
       - name: Run friction diagnostics smoke test
         shell: ${{ matrix.shell }}
         run: ${{ matrix.script }}
@@ -477,6 +489,18 @@ jobs:
             --all-targets \
             ${{ steps.cfg.outputs.features_flag }} \
             ${{ steps.cfg.outputs.locked_flag }}
+
+      - name: Stage host packaged binaries
+        if: matrix.dir == '.'
+        run: python3 scripts/package_skills.py stage-host
+
+      - name: Verify packaged binaries
+        if: matrix.dir == '.'
+        run: python3 scripts/package_skills.py verify-host
+
+      - name: Smoke packaged launchers
+        if: matrix.dir == '.'
+        run: python3 scripts/package_skills.py smoke-launchers
 
       - name: Cargo deny (optional; auto if deny.toml exists)
         if: steps.cfg.outputs.run_deny == 'true'

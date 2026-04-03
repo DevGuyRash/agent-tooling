@@ -89,28 +89,15 @@ image_skip_flag="$(resolve_deprecated_flag \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
-build_rust_skill \
-  "setup" \
-  "mpcr" \
-  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" \
-  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
-  "skills/code-review/scripts/mpcr-src/Cargo.toml" \
-  "prebuilding"
-
-build_rust_skill \
-  "setup" \
-  "docker-architect-compose" \
-  "${compose_skip_flag}" \
-  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
-  "skills/docker-architect/scripts/tooling/docker-architect-compose/Cargo.toml" \
-  "prebuilding"
-
-build_rust_skill \
-  "setup" \
-  "docker-architect-image" \
-  "${image_skip_flag}" \
-  "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
-  "skills/docker-architect/scripts/tooling/docker-architect-image/Cargo.toml" \
-  "prebuilding"
+if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ] && \
+   [ "${compose_skip_flag}" = "1" ] && \
+   [ "${image_skip_flag}" = "1" ]; then
+  log "setup" "skipping host dist staging because all Rust skill build flags are disabled"
+else
+  log "setup" "bootstrapping Rust workspace dependencies"
+  python3 scripts/package_skills.py bootstrap
+  log "setup" "staging host packaged binaries into skill-local dist/"
+  python3 scripts/package_skills.py stage-host
+fi
 
 log "setup" "done"
