@@ -15,6 +15,7 @@ POSIX = ROOT / "scripts" / "excel-workbook-sync"
 CMD = ROOT / "scripts" / "excel-workbook-sync.cmd"
 PS1 = ROOT / "scripts" / "excel-workbook-sync.ps1"
 COMMON = ROOT / "scripts" / "ExcelSync.Common.ps1"
+POWERQUERY = ROOT / "scripts" / "sync-excel-powerquery.ps1"
 OPENAI_YAML = ROOT / "agents" / "openai.yaml"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "tr_upload_sheet"
 FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "tr_upload_sheet" / "excel-sync.manifest.json"
@@ -40,6 +41,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue(PS1.exists())
         self.assertTrue(FIXTURE_MANIFEST.exists())
         self.assertTrue(COMMON.exists())
+        self.assertTrue(POWERQUERY.exists())
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
@@ -49,9 +51,12 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_fixture_manifest_exercises_richer_surfaces(self) -> None:
         manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
         self.assertIn("vbaProject", manifest)
+        self.assertIn("powerQuery", manifest)
         self.assertEqual(manifest["structure"]["conditionalFormattingDiscovery"]["mode"], "all-major")
         self.assertIn("projectPath", manifest["vbaProject"])
         self.assertIn("referencesPath", manifest["vbaProject"])
+        self.assertIn("queriesDirectory", manifest["powerQuery"])
+        self.assertIn("queriesPath", manifest["powerQuery"])
 
     def test_manifest_resolution_resolves_relative_paths(self) -> None:
         proc = run_pwsh(
@@ -65,6 +70,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "projectPath=$resolved.VbaProject.ProjectPath;"
                 "referencesPath=$resolved.VbaProject.ReferencesPath;"
                 "tablesPath=$resolved.Structure.TablesPath;"
+                "pqDir=$resolved.PowerQuery.QueriesDirectory;"
+                "pqQueriesPath=$resolved.PowerQuery.QueriesPath;"
                 "} | ConvertTo-Json -Compress -Depth 20"
             )
         )
@@ -85,6 +92,14 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             Path(payload["tablesPath"]),
             (FIXTURE_DIR / "workbook_structure" / "defaults_tables.json").resolve(),
         )
+        self.assertEqual(
+            Path(payload["pqDir"]),
+            (FIXTURE_DIR / "power_query" / "queries").resolve(),
+        )
+        self.assertEqual(
+            Path(payload["pqQueriesPath"]),
+            (FIXTURE_DIR / "power_query" / "queries.json").resolve(),
+        )
 
     def test_manifestless_resolution_for_inspect_query(self) -> None:
         workbook_path = Path(tempfile.gettempdir()) / "excel-workbook-sync-manifestless.xlsm"
@@ -96,7 +111,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "manifestPath=$resolved.ManifestPath;"
                 "workbookPath=$resolved.WorkbookPath;"
                 "vbaCount=@($resolved.VbaComponents).Count;"
-                "tablesPath=$resolved.Structure.TablesPath"
+                "tablesPath=$resolved.Structure.TablesPath;"
+                "pqDir=$resolved.PowerQuery.QueriesDirectory"
                 "} | ConvertTo-Json -Compress -Depth 20"
             )
         )
@@ -106,6 +122,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(Path(payload["workbookPath"]), workbook_path.resolve())
         self.assertEqual(payload["vbaCount"], 0)
         self.assertIsNone(payload["tablesPath"])
+        self.assertIsNone(payload["pqDir"])
 
     def test_manifest_resolution_accepts_legacy_manifest_without_vba_project(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-legacy-") as tmpdir:
@@ -126,6 +143,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                             "conditionalFormattingPath": "structure/cf.json",
                             "conditionalFormattingDiscovery": {"mode": "all-formula"},
                         },
+                        "powerQuery": {
+                            "queriesDirectory": "power_query/queries",
+                            "queriesPath": "power_query/queries.json",
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -138,7 +159,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                     "workbookPath=$resolved.WorkbookPath;"
                     "projectPath=$resolved.VbaProject.ProjectPath;"
                     "referencesPath=$resolved.VbaProject.ReferencesPath;"
-                    "vbaCount=@($resolved.VbaComponents).Count"
+                    "vbaCount=@($resolved.VbaComponents).Count;"
+                    "pqDir=$resolved.PowerQuery.QueriesDirectory"
                     "} | ConvertTo-Json -Compress -Depth 20"
                 )
             )
@@ -148,6 +170,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIsNone(payload["projectPath"])
             self.assertIsNone(payload["referencesPath"])
             self.assertEqual(payload["vbaCount"], 1)
+            self.assertEqual(Path(payload["pqDir"]), (tmp / "power_query" / "queries").resolve())
 
     def test_close_excel_workbook_retries_transient_busy_calls(self) -> None:
         proc = run_pwsh(
@@ -218,6 +241,17 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                         names = @(
                             [pscustomobject]@{{ name = 'n1' }}
                         )
+                        pq = @(
+                            [pscustomobject]@{{ name = 'Matched' }}
+                        )
+                        connections = @(
+                            [pscustomobject]@{{ name = 'Query - Matched' }}
+                        )
+                        model = [pscustomobject]@{{
+                            modelTables = @(
+                                [pscustomobject]@{{ name = 'MatchedModel' }}
+                            )
+                        }}
                         project = [pscustomobject]@{{
                             accessible = $true
                             error = $null
@@ -226,7 +260,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                         }}
                     }}
                 }}
-                Get-ExcelWorkbookInspection -WorkbookPath 'dummy.xlsm' -Surface @('tables','names','project') |
+                Get-ExcelWorkbookInspection -WorkbookPath 'dummy.xlsm' -Surface @('tables','names','project','pq','connections','model') |
                     ConvertTo-Json -Compress -Depth 20
                 """
             )
@@ -236,6 +270,9 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["tables"], 2)
         self.assertEqual(payload["counts"]["names"], 1)
         self.assertEqual(payload["counts"]["cf"], 0)
+        self.assertEqual(payload["counts"]["pq"], 1)
+        self.assertEqual(payload["counts"]["connections"], 1)
+        self.assertEqual(payload["counts"]["modelTables"], 1)
         self.assertEqual(payload["counts"]["vba"], 0)
         self.assertEqual(payload["counts"]["references"], 0)
         self.assertEqual(payload["project"]["componentCount"], 3)
@@ -274,7 +311,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0)
         self.assertIn("Usage:", proc.stdout)
-        self.assertIn("inspect|query|push|pull|roundtrip|smoke", proc.stdout)
+        self.assertIn("inspect|query|push|pull|roundtrip|smoke|refresh", proc.stdout)
 
     def test_posix_launcher_translates_gnu_flags_for_powershell_backend(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-posix-") as tmpdir:
@@ -306,6 +343,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                     "/tmp/test workbook.xlsm",
                     "--surface",
                     "tables,names",
+                    "--query-name",
+                    "Matched",
                     "--visible",
                 ],
                 capture_output=True,
@@ -323,7 +362,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(args[7].lower().endswith("test manifest.json"))
             self.assertEqual(args[8], "-WorkbookPath")
             self.assertTrue(args[9].lower().endswith("test workbook.xlsm"))
-            self.assertEqual(args[10:], ["-Surface", "tables,names", "-Visible"])
+            self.assertEqual(args[10:], ["-Surface", "tables,names", "-QueryName", "Matched", "-Visible"])
 
     def test_cmd_launcher_help_is_available(self) -> None:
         proc = subprocess.run(
@@ -391,6 +430,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ROOT / "scripts" / "excel-workbook-sync.ps1",
             ROOT / "scripts" / "ExcelSync.Common.ps1",
             ROOT / "scripts" / "sync-excel.ps1",
+            ROOT / "scripts" / "sync-excel-powerquery.ps1",
             ROOT / "scripts" / "sync-excel-vba.ps1",
             ROOT / "scripts" / "sync-excel-structure.ps1",
         ]:
@@ -427,7 +467,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "--workbook-path",
                 str(FIXTURE_WORKBOOK),
                 "--surface",
-                "tables,names,project",
+                "tables,names,project,pq,connections,model",
             ],
             capture_output=True,
             text=True,
@@ -441,6 +481,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("project", payload)
         self.assertIn("tables", payload["counts"])
         self.assertIn("names", payload["counts"])
+        self.assertIn("pq", payload["counts"])
+        self.assertIn("connections", payload["counts"])
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_query_returns_expected_shape(self) -> None:
@@ -456,7 +498,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "--workbook-path",
                 str(FIXTURE_WORKBOOK),
                 "--surface",
-                "tables,names,project",
+                "tables,names,project,pq,connections,model",
             ],
             capture_output=True,
             text=True,
@@ -468,7 +510,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(Path(payload["workbookPath"]), FIXTURE_WORKBOOK.resolve())
         self.assertIsInstance(payload["tables"], list)
         self.assertIsInstance(payload["names"], list)
+        self.assertIsInstance(payload["pq"], list)
+        self.assertIsInstance(payload["connections"], list)
         self.assertIn("accessible", payload["project"])
+        self.assertIn("modelTables", payload["model"])
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_roundtrip_on_temp_workspace_copy(self) -> None:
@@ -506,6 +551,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("PULL TABLES", proc.stdout)
             self.assertIn("PULL NAMES", proc.stdout)
             self.assertIn("PULL VBA", proc.stdout)
+            self.assertIn("PUSH PQ", proc.stdout)
+            self.assertIn("PULL PQ", proc.stdout)
 
             for artifact in [
                 tmp_root / "workbook_structure" / "defaults_tables.json",
@@ -513,6 +560,9 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 tmp_root / "workbook_structure" / "conditional_formatting.json",
                 tmp_root / "workbook_structure" / "vba_project.json",
                 tmp_root / "workbook_structure" / "vba_references.json",
+                tmp_root / "power_query" / "queries.json",
+                tmp_root / "power_query" / "connections.json",
+                tmp_root / "power_query" / "model.json",
             ]:
                 payload = json.loads(artifact.read_text(encoding="utf-8"))
                 self.assertIsInstance(payload, dict)

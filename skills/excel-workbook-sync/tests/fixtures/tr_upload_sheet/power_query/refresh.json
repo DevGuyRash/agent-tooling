@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "connectionName": "Query - AP_INVOICE_LINES_INTERFACE",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - AP_INVOICES_INTERFACE",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - Matched",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - UnMatched",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    }
+  ]
+}

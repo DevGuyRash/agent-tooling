@@ -1,0 +1,72 @@
+{
+  "connections": [
+    {
+      "name": "Query - AP_INVOICE_LINES_INTERFACE",
+      "type": "ole-db",
+      "rawType": 1,
+      "description": "Connection to the 'AP_INVOICE_LINES_INTERFACE' query in the workbook.",
+      "oledb": {
+        "connection": "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=AP_INVOICE_LINES_INTERFACE;Extended Properties=\"\"",
+        "commandText": "SELECT * FROM [AP_INVOICE_LINES_INTERFACE]",
+        "commandType": "2",
+        "backgroundQuery": true,
+        "refreshOnFileOpen": false,
+        "refreshWithRefreshAll": false,
+        "enableRefresh": false
+      },
+      "model": null,
+      "worksheetDataConnection": null
+    },
+    {
+      "name": "Query - AP_INVOICES_INTERFACE",
+      "type": "ole-db",
+      "rawType": 1,
+      "description": "Connection to the 'AP_INVOICES_INTERFACE' query in the workbook.",
+      "oledb": {
+        "connection": "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=AP_INVOICES_INTERFACE;Extended Properties=\"\"",
+        "commandText": "SELECT * FROM [AP_INVOICES_INTERFACE]",
+        "commandType": "2",
+        "backgroundQuery": true,
+        "refreshOnFileOpen": false,
+        "refreshWithRefreshAll": false,
+        "enableRefresh": false
+      },
+      "model": null,
+      "worksheetDataConnection": null
+    },
+    {
+      "name": "Query - Matched",
+      "type": "ole-db",
+      "rawType": 1,
+      "description": "Connection to the 'Matched' query in the workbook.",
+      "oledb": {
+        "connection": "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=Matched;Extended Properties=\"\"",
+        "commandText": "SELECT * FROM [Matched]",
+        "commandType": "2",
+        "backgroundQuery": true,
+        "refreshOnFileOpen": false,
+        "refreshWithRefreshAll": false,
+        "enableRefresh": false
+      },
+      "model": null,
+      "worksheetDataConnection": null
+    },
+    {
+      "name": "Query - UnMatched",
+      "type": "ole-db",
+      "rawType": 1,
+      "description": "Connection to the 'UnMatched' query in the workbook.",
+      "oledb": {
+        "connection": "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=UnMatched;Extended Properties=\"\"",
+        "commandText": "SELECT * FROM [UnMatched]",
+        "commandType": "2",
+        "backgroundQuery": true,
+        "refreshOnFileOpen": false,
+        "refreshWithRefreshAll": false,
+        "enableRefresh": false
+      },
+      "model": null,
+      "worksheetDataConnection": null
+    }
+  ]
+}

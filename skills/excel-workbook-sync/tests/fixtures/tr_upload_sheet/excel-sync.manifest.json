@@ -18,6 +18,13 @@
     "projectPath": "workbook_structure/vba_project.json",
     "referencesPath": "workbook_structure/vba_references.json"
   },
+  "powerQuery": {
+    "queriesDirectory": "power_query/queries",
+    "queriesPath": "power_query/queries.json",
+    "connectionsPath": "power_query/connections.json",
+    "modelPath": "power_query/model.json",
+    "refreshPath": "power_query/refresh.json"
+  },
   "structure": {
     "tablesPath": "workbook_structure/defaults_tables.json",
     "namesPath": "workbook_structure/names.json",

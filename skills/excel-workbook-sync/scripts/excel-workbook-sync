@@ -4,11 +4,12 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke> [options]
+  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke|refresh> [options]
 
 Options:
   --manifest-path PATH
   --workbook-path PATH
+  --query-name NAME
   --surface LIST
   --visible
   --help
@@ -78,12 +79,12 @@ case "$subcommand" in
     usage
     exit 0
     ;;
-  inspect|query|push|pull|roundtrip|smoke)
+  inspect|query|push|pull|roundtrip|smoke|refresh)
     shift
     ;;
   *)
     echo "error: unknown subcommand: $subcommand" >&2
-    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke" >&2
+    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh" >&2
     exit 2
     ;;
 esac
@@ -125,6 +126,13 @@ $value"
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       translated="${translated}
 -Surface
+$1"
+      shift
+      ;;
+    --query-name|-QueryName)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-QueryName
 $1"
       shift
       ;;

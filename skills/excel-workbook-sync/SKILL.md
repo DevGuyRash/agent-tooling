@@ -4,11 +4,12 @@ description: >-
   Inspect, query, and sync Excel workbook artifacts through a manifest-driven
   Windows Excel COM workflow with WSL/POSIX launchers. Use when the task
   involves: (1) Exporting or importing workbook VBA, tables, names, formulas,
-  or conditional formatting, (2) Querying or parsing workbook structure into
-  structured JSON, (3) Running manifest-driven push, pull, or roundtrip sync on
-  a workbook, (4) Driving Windows Excel automation from WSL or another POSIX
-  shell, or (5) Any task involving generic Excel workbook artifact sync rather
-  than workbook-behavior regression testing.
+  conditional formatting, or Power Query artifacts, (2) Querying or parsing
+  workbook structure into structured JSON, (3) Running manifest-driven push,
+  pull, roundtrip, or explicit refresh sync on a workbook, (4) Driving Windows
+  Excel automation from WSL or another POSIX shell, or (5) Any task involving
+  generic Excel workbook artifact sync rather than workbook-behavior regression
+  testing.
 ---
 
 # Excel Workbook Sync
@@ -23,8 +24,9 @@ Use the unified launcher for every workflow:
 
 ```bash
 sh <skills-file-root>/scripts/excel-workbook-sync inspect --workbook-path /path/to/workbook.xlsm
-sh <skills-file-root>/scripts/excel-workbook-sync query --manifest-path /path/to/excel-sync.manifest.json --surface tables,names
+sh <skills-file-root>/scripts/excel-workbook-sync query --manifest-path /path/to/excel-sync.manifest.json --surface tables,names,pq,connections,model
 sh <skills-file-root>/scripts/excel-workbook-sync roundtrip --manifest-path /path/to/excel-sync.manifest.json
+sh <skills-file-root>/scripts/excel-workbook-sync refresh --manifest-path /path/to/excel-sync.manifest.json --query-name MyQuery
 sh <skills-file-root>/scripts/excel-workbook-sync smoke --manifest-path /path/to/excel-sync.manifest.json
 ```
 
@@ -59,6 +61,8 @@ Git Bash, or another POSIX shell on Windows.
 - Name Manager artifacts: named ranges, named formulas, `LAMBDA` helpers
 - Excel tables
 - Conditional-format artifacts, including formula rules and major visual rule families
+- Power Query M definitions, workbook query metadata, Mashup connections, and model-load metadata
+- Explicit Power Query refresh execution with structured per-connection results
 - Structured inspect/query JSON
 - Manifest-driven push/pull/roundtrip flows
 
@@ -66,6 +70,7 @@ Git Bash, or another POSIX shell on Windows.
 
 - `<skills-file-root>/references/manifest.md`
 - `<skills-file-root>/references/query.md`
+- `<skills-file-root>/references/power-query.md`
 - `<skills-file-root>/references/vba-project.md`
 - `<skills-file-root>/references/conditional-formatting.md`
 - `<skills-file-root>/references/wsl-linux.md`

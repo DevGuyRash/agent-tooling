@@ -183,6 +183,19 @@ function Write-JsonFile {
     [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Write-TextFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    Ensure-ParentDirectory -Path $Path
+    $normalized = $Value -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Resolve-ExcelSyncManifest {
     param(
         [string]$ManifestPath,
@@ -210,6 +223,13 @@ function Resolve-ExcelSyncManifest {
                 TablesDiscovery = $null
                 NamesDiscovery = $null
                 ConditionalFormattingDiscovery = $null
+            }
+            PowerQuery = [pscustomobject]@{
+                QueriesDirectory = $null
+                QueriesPath = $null
+                ConnectionsPath = $null
+                ModelPath = $null
+                RefreshPath = $null
             }
         }
     }
@@ -287,6 +307,35 @@ function Resolve-ExcelSyncManifest {
         }
     }
 
+    $resolvedPowerQuery = [pscustomobject]@{
+        QueriesDirectory = $null
+        QueriesPath = $null
+        ConnectionsPath = $null
+        ModelPath = $null
+        RefreshPath = $null
+    }
+    $powerQuery = $null
+    if ($null -ne $manifest.PSObject.Properties['powerQuery']) {
+        $powerQuery = $manifest.powerQuery
+    }
+    if ($null -ne $powerQuery) {
+        if ($null -ne $powerQuery.PSObject.Properties['queriesDirectory'] -and $null -ne $powerQuery.queriesDirectory) {
+            $resolvedPowerQuery.QueriesDirectory = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$powerQuery.queriesDirectory)
+        }
+        if ($null -ne $powerQuery.PSObject.Properties['queriesPath'] -and $null -ne $powerQuery.queriesPath) {
+            $resolvedPowerQuery.QueriesPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$powerQuery.queriesPath)
+        }
+        if ($null -ne $powerQuery.PSObject.Properties['connectionsPath'] -and $null -ne $powerQuery.connectionsPath) {
+            $resolvedPowerQuery.ConnectionsPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$powerQuery.connectionsPath)
+        }
+        if ($null -ne $powerQuery.PSObject.Properties['modelPath'] -and $null -ne $powerQuery.modelPath) {
+            $resolvedPowerQuery.ModelPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$powerQuery.modelPath)
+        }
+        if ($null -ne $powerQuery.PSObject.Properties['refreshPath'] -and $null -ne $powerQuery.refreshPath) {
+            $resolvedPowerQuery.RefreshPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$powerQuery.refreshPath)
+        }
+    }
+
     return [pscustomobject]@{
         ManifestPath = $manifestFullPath
         ManifestDirectory = $manifestDir
@@ -294,6 +343,7 @@ function Resolve-ExcelSyncManifest {
         VbaComponents = $resolvedVbaComponents
         VbaProject = $resolvedVbaProject
         Structure = $resolvedStructure
+        PowerQuery = $resolvedPowerQuery
         Manifest = $manifest
     }
 }
@@ -839,6 +889,539 @@ function Test-SurfaceRequested {
     return (($Surface.Count -eq 0) -or ($Surface -contains $Name))
 }
 
+function Get-ConnectionTypeName {
+    param($Connection)
+
+    try {
+        $rawType = [int]$Connection.Type
+    }
+    catch {
+        return $null
+    }
+
+    switch ($rawType) {
+        1 { return "ole-db" }
+        2 { return "odbc" }
+        3 { return "worksheet" }
+        4 { return "text" }
+        5 { return "web" }
+        6 { return "model" }
+        default { return "type-$rawType" }
+    }
+}
+
+function ConvertTo-SafeArtifactFileName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $safe = $Name
+    foreach ($char in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $safe = $safe.Replace([string]$char, "_")
+    }
+    $safe = $safe -replace '[\\/:\*\?"<>\|]', '_'
+    $safe = $safe.Trim()
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "query"
+    }
+    return $safe
+}
+
+function Get-WorkbookConnectionArtifacts {
+    param($Workbook)
+
+    $artifacts = @()
+    foreach ($connection in $Workbook.Connections) {
+        $entry = [ordered]@{
+            name = [string]$connection.Name
+            type = Get-ConnectionTypeName -Connection $connection
+            rawType = $null
+            description = $null
+            oledb = $null
+            model = $null
+            worksheetDataConnection = $null
+        }
+        try { $entry.rawType = [int]$connection.Type } catch {}
+        try { $entry.description = [string]$connection.Description } catch {}
+        try {
+            $oledb = $connection.OLEDBConnection
+            if ($null -ne $oledb) {
+                $entry.oledb = [ordered]@{
+                    connection = $null
+                    commandText = $null
+                    commandType = $null
+                    backgroundQuery = $null
+                    refreshOnFileOpen = $null
+                    refreshWithRefreshAll = $null
+                    enableRefresh = $null
+                }
+                try { $entry.oledb.connection = [string]$oledb.Connection } catch {}
+                try { $entry.oledb.commandText = [string]$oledb.CommandText } catch {}
+                try { $entry.oledb.commandType = [string]$oledb.CommandType } catch {}
+                try { $entry.oledb.backgroundQuery = [bool]$oledb.BackgroundQuery } catch {}
+                try { $entry.oledb.refreshOnFileOpen = [bool]$oledb.RefreshOnFileOpen } catch {}
+                try { $entry.oledb.refreshWithRefreshAll = [bool]$oledb.RefreshWithRefreshAll } catch {}
+                try { $entry.oledb.enableRefresh = [bool]$oledb.EnableRefresh } catch {}
+            }
+        }
+        catch {
+        }
+        try {
+            $modelConnection = $connection.ModelConnection
+            if ($null -ne $modelConnection) {
+                $entry.model = [ordered]@{
+                    commandText = $null
+                    commandType = $null
+                }
+                try { $entry.model.commandText = [string]$modelConnection.CommandText } catch {}
+                try { $entry.model.commandType = [string]$modelConnection.CommandType } catch {}
+            }
+        }
+        catch {
+        }
+        try {
+            $worksheetDataConnection = $connection.WorksheetDataConnection
+            if ($null -ne $worksheetDataConnection) {
+                $entry.worksheetDataConnection = [ordered]@{
+                    name = $null
+                }
+                try { $entry.worksheetDataConnection.name = [string]$worksheetDataConnection.Name } catch {}
+            }
+        }
+        catch {
+        }
+        $artifacts += [pscustomobject]$entry
+    }
+
+    return @($artifacts | Sort-Object name)
+}
+
+function Get-WorkbookQueryLoadArtifacts {
+    param($Workbook)
+
+    $loads = @()
+    foreach ($worksheet in $Workbook.Worksheets) {
+        foreach ($listObject in $worksheet.ListObjects) {
+            try {
+                $queryTable = $listObject.QueryTable
+            }
+            catch {
+                $queryTable = $null
+            }
+            if ($null -eq $queryTable) {
+                continue
+            }
+
+            $connectionName = $null
+            try { $connectionName = [string]$queryTable.WorkbookConnection.Name } catch {}
+            if ([string]::IsNullOrWhiteSpace($connectionName)) {
+                continue
+            }
+
+            $loads += [pscustomobject]@{
+                connectionName = $connectionName
+                destinationType = 'worksheet-table'
+                sheet = [string]$worksheet.Name
+                table = [string]$listObject.Name
+                topLeft = [string]$listObject.Range.Cells.Item(1, 1).Address($false, $false)
+            }
+        }
+    }
+
+    return @($loads | Sort-Object connectionName, sheet, table)
+}
+
+function Get-WorkbookModelArtifacts {
+    param($Workbook)
+
+    try {
+        $modelTables = $Workbook.Model.ModelTables
+    }
+    catch {
+        return @()
+    }
+
+    $tables = @()
+    foreach ($modelTable in $modelTables) {
+        $entry = [ordered]@{
+            name = $null
+            sourceName = $null
+            recordCount = $null
+        }
+        try { $entry.name = [string]$modelTable.Name } catch {}
+        try { $entry.sourceName = [string]$modelTable.SourceName } catch {}
+        try { $entry.recordCount = [int]$modelTable.RecordCount } catch {}
+        $tables += [pscustomobject]$entry
+    }
+
+    return @($tables | Sort-Object name)
+}
+
+function Get-WorkbookPowerQueryArtifacts {
+    param($Workbook)
+
+    $connections = @(Get-WorkbookConnectionArtifacts -Workbook $Workbook)
+    $loads = @(Get-WorkbookQueryLoadArtifacts -Workbook $Workbook)
+    $modelTables = @(Get-WorkbookModelArtifacts -Workbook $Workbook)
+    $modelNames = @($modelTables | ForEach-Object { [string]$_.name })
+    $queries = @()
+
+    foreach ($query in $Workbook.Queries) {
+        $queryName = [string]$query.Name
+        $preferredConnectionName = "Query - $queryName"
+        $connectionName = $null
+        if (@($connections | Where-Object { $_.name -eq $preferredConnectionName }).Count -gt 0) {
+            $connectionName = $preferredConnectionName
+        }
+        elseif (@($connections | Where-Object { $_.name -eq $queryName }).Count -gt 0) {
+            $connectionName = $queryName
+        }
+
+        $queryLoads = @()
+        if (-not [string]::IsNullOrWhiteSpace($connectionName)) {
+            $queryLoads = @($loads | Where-Object { $_.connectionName -eq $connectionName })
+        }
+
+        $queries += [pscustomobject]@{
+            name = $queryName
+            description = $(try { [string]$query.Description } catch { $null })
+            formula = [string]$query.Formula
+            connectionName = $connectionName
+            loads = @($queryLoads)
+            loadToDataModel = ($modelNames -contains $queryName)
+        }
+    }
+
+    return [pscustomobject]@{
+        queries = @($queries | Sort-Object name)
+        connections = $connections
+        modelTables = $modelTables
+    }
+}
+
+function Export-PowerQueryArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $ResolvedManifest
+    )
+
+    $powerQuery = $ResolvedManifest.PowerQuery
+    if ($null -eq $powerQuery) {
+        return
+    }
+
+    $artifacts = Get-WorkbookPowerQueryArtifacts -Workbook $Workbook
+    $entries = @()
+    $usedFiles = @{}
+    foreach ($query in $artifacts.queries) {
+        $baseName = ConvertTo-SafeArtifactFileName -Name ([string]$query.name)
+        $fileName = "$baseName.pq"
+        $suffix = 1
+        while ($usedFiles.ContainsKey($fileName)) {
+            $fileName = "{0}-{1}.pq" -f $baseName, $suffix
+            $suffix++
+        }
+        $usedFiles[$fileName] = $true
+
+        if (-not [string]::IsNullOrWhiteSpace($powerQuery.QueriesDirectory)) {
+            Write-TextFile -Path (Join-Path $powerQuery.QueriesDirectory $fileName) -Value ([string]$query.formula)
+        }
+
+        $entries += [pscustomobject]@{
+            name = [string]$query.name
+            file = $fileName
+            description = $query.description
+            connectionName = $query.connectionName
+            loads = @($query.loads)
+            loadToDataModel = [bool]$query.loadToDataModel
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.QueriesPath)) {
+        Write-JsonFile -Path $powerQuery.QueriesPath -Value ([pscustomobject]@{ queries = @($entries) })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.ConnectionsPath)) {
+        Write-JsonFile -Path $powerQuery.ConnectionsPath -Value ([pscustomobject]@{ connections = @($artifacts.connections) })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.ModelPath)) {
+        Write-JsonFile -Path $powerQuery.ModelPath -Value ([pscustomobject]@{ modelTables = @($artifacts.modelTables) })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.RefreshPath)) {
+        $items = @()
+        foreach ($connection in $artifacts.connections) {
+            if ($null -ne $connection.oledb -and [string]$connection.oledb.connection -like 'OLEDB;Provider=Microsoft.Mashup.OleDb.1*') {
+                $items += [pscustomobject]@{
+                    connectionName = $connection.name
+                    backgroundQuery = $connection.oledb.backgroundQuery
+                    refreshOnFileOpen = $connection.oledb.refreshOnFileOpen
+                    refreshWithRefreshAll = $connection.oledb.refreshWithRefreshAll
+                }
+            }
+        }
+        Write-JsonFile -Path $powerQuery.RefreshPath -Value ([pscustomobject]@{ items = @($items) })
+    }
+}
+
+function Read-PowerQueryArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        $ResolvedManifest
+    )
+
+    $powerQuery = $ResolvedManifest.PowerQuery
+    $queryEntries = @()
+    $connections = @()
+    $modelTables = @()
+    $refreshItems = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.QueriesPath) -and (Test-Path -LiteralPath $powerQuery.QueriesPath)) {
+        $queryRoot = Read-JsonFile -Path $powerQuery.QueriesPath
+        if ($null -ne $queryRoot.PSObject.Properties['queries']) {
+            $queryEntries = @($queryRoot.queries)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.ConnectionsPath) -and (Test-Path -LiteralPath $powerQuery.ConnectionsPath)) {
+        $connectionRoot = Read-JsonFile -Path $powerQuery.ConnectionsPath
+        if ($null -ne $connectionRoot.PSObject.Properties['connections']) {
+            $connections = @($connectionRoot.connections)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.ModelPath) -and (Test-Path -LiteralPath $powerQuery.ModelPath)) {
+        $modelRoot = Read-JsonFile -Path $powerQuery.ModelPath
+        if ($null -ne $modelRoot.PSObject.Properties['modelTables']) {
+            $modelTables = @($modelRoot.modelTables)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($powerQuery.RefreshPath) -and (Test-Path -LiteralPath $powerQuery.RefreshPath)) {
+        $refreshRoot = Read-JsonFile -Path $powerQuery.RefreshPath
+        if ($null -ne $refreshRoot.PSObject.Properties['items']) {
+            $refreshItems = @($refreshRoot.items)
+        }
+    }
+
+    $queries = @()
+    foreach ($entry in $queryEntries) {
+        $queryPath = $null
+        if (-not [string]::IsNullOrWhiteSpace($powerQuery.QueriesDirectory) -and -not [string]::IsNullOrWhiteSpace([string]$entry.file)) {
+            $queryPath = Join-Path $powerQuery.QueriesDirectory ([string]$entry.file)
+            if (-not (Test-Path -LiteralPath $queryPath) -and $queryPath.ToLowerInvariant().EndsWith('.pq')) {
+                $fallback = $queryPath.Substring(0, $queryPath.Length - 3) + '.m'
+                if (Test-Path -LiteralPath $fallback) {
+                    $queryPath = $fallback
+                }
+            }
+            if (-not (Test-Path -LiteralPath $queryPath)) {
+                throw "Power Query file not found: $queryPath"
+            }
+        }
+
+        $queries += [pscustomobject]@{
+            name = [string]$entry.name
+            description = $(if ($null -ne $entry.PSObject.Properties['description']) { $entry.description } else { $null })
+            formula = $(if ($null -ne $queryPath) { Get-Content -Raw -LiteralPath $queryPath } else { $null })
+            connectionName = $(if ($null -ne $entry.PSObject.Properties['connectionName']) { [string]$entry.connectionName } else { $null })
+            loads = $(if ($null -ne $entry.PSObject.Properties['loads']) { @($entry.loads) } else { @() })
+            loadToDataModel = $(if ($null -ne $entry.PSObject.Properties['loadToDataModel']) { [bool]$entry.loadToDataModel } else { $false })
+        }
+    }
+
+    return [pscustomobject]@{
+        queries = @($queries)
+        connections = @($connections)
+        modelTables = @($modelTables)
+        refreshItems = @($refreshItems)
+    }
+}
+
+function Find-WorkbookConnectionByName {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$ConnectionName
+    )
+
+    foreach ($connection in $Workbook.Connections) {
+        if ([string]$connection.Name -eq $ConnectionName) {
+            return $connection
+        }
+    }
+
+    return $null
+}
+
+function Ensure-PowerQueryDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $QuerySpec
+    )
+
+    $existing = $null
+    foreach ($query in $Workbook.Queries) {
+        if ([string]$query.Name -eq [string]$QuerySpec.name) {
+            $existing = $query
+            break
+        }
+    }
+
+    if ($null -eq $existing) {
+        $arguments = @([string]$QuerySpec.name, [string]$QuerySpec.formula)
+        if ($null -ne $QuerySpec.description) {
+            $arguments += [string]$QuerySpec.description
+        }
+        Invoke-LateMethod -Target $Workbook.Queries -Name 'Add' -Arguments $arguments | Out-Null
+        return
+    }
+
+    try {
+        if ([string]$existing.Formula -ne [string]$QuerySpec.formula) {
+            $existing.Formula = [string]$QuerySpec.formula
+        }
+    }
+    catch {
+        $existing.Formula = [string]$QuerySpec.formula
+    }
+
+    if ($null -ne $QuerySpec.description) {
+        try {
+            if ([string]$existing.Description -ne [string]$QuerySpec.description) {
+                $existing.Description = [string]$QuerySpec.description
+            }
+        }
+        catch {
+        }
+    }
+}
+
+function Set-WorkbookConnectionArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Connection,
+        [Parameter(Mandatory = $true)]
+        $ConnectionSpec
+    )
+
+    try {
+        if ($null -ne $ConnectionSpec.oledb) {
+            $oledb = $Connection.OLEDBConnection
+            if ($null -ne $oledb) {
+                foreach ($item in @(
+                    @{ Name = 'BackgroundQuery'; Value = $ConnectionSpec.oledb.backgroundQuery },
+                    @{ Name = 'RefreshOnFileOpen'; Value = $ConnectionSpec.oledb.refreshOnFileOpen },
+                    @{ Name = 'RefreshWithRefreshAll'; Value = $ConnectionSpec.oledb.refreshWithRefreshAll }
+                )) {
+                    if ($null -ne $item.Value) {
+                        [void](Try-SetProperty -Target $oledb -Name $item.Name -Value ([bool]$item.Value))
+                    }
+                }
+            }
+        }
+    }
+    catch {
+    }
+}
+
+function Ensure-PowerQueryArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $ResolvedManifest
+    )
+
+    $artifacts = Read-PowerQueryArtifacts -ResolvedManifest $ResolvedManifest
+    foreach ($query in $artifacts.queries) {
+        Ensure-PowerQueryDefinition -Workbook $Workbook -QuerySpec $query
+    }
+    foreach ($connectionSpec in $artifacts.connections) {
+        $connection = Find-WorkbookConnectionByName -Workbook $Workbook -ConnectionName ([string]$connectionSpec.name)
+        if ($null -ne $connection) {
+            Set-WorkbookConnectionArtifact -Connection $connection -ConnectionSpec $connectionSpec
+        }
+    }
+}
+
+function Wait-ForExcelAsyncQueries {
+    param($Excel)
+
+    try {
+        Invoke-LateMethod -Target $Excel -Name 'CalculateUntilAsyncQueriesDone' | Out-Null
+    }
+    catch {
+    }
+}
+
+function Invoke-WorkbookPowerQueryRefresh {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [string[]]$QueryNames = @()
+    )
+
+    $connections = @(Get-WorkbookConnectionArtifacts -Workbook $Workbook)
+    $targets = @()
+    if (@($QueryNames).Count -gt 0) {
+        foreach ($name in @($QueryNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            $connectionName = if ([string]$name -like 'Query - *') { [string]$name } else { "Query - $name" }
+            $targets += @($connections | Where-Object { $_.name -eq $connectionName })
+        }
+    }
+    else {
+        $targets = @($connections | Where-Object {
+            $null -ne $_.oledb -and
+            $null -ne $_.oledb.connection -and
+            [string]$_.oledb.connection -like 'OLEDB;Provider=Microsoft.Mashup.OleDb.1*'
+        })
+    }
+
+    $results = @()
+    foreach ($target in $targets) {
+        $connection = Find-WorkbookConnectionByName -Workbook $Workbook -ConnectionName ([string]$target.name)
+        if ($null -eq $connection) {
+            $results += [pscustomobject]@{
+                name = [string]$target.name
+                success = $false
+                error = 'Workbook connection not found.'
+                elapsedSeconds = 0
+            }
+            continue
+        }
+
+        $started = Get-Date
+        $errorText = $null
+        try {
+            try {
+                if ($null -ne $connection.OLEDBConnection) {
+                    [void](Try-SetProperty -Target $connection.OLEDBConnection -Name 'BackgroundQuery' -Value $false)
+                }
+            }
+            catch {
+            }
+            Invoke-ExcelComWithRetry -Description ("Refreshing connection {0}" -f [string]$target.name) -Operation {
+                Invoke-LateMethod -Target $connection -Name 'Refresh' | Out-Null
+            } | Out-Null
+            Wait-ForExcelAsyncQueries -Excel $Workbook.Application
+        }
+        catch {
+            $errorText = $_.Exception.Message
+        }
+
+        $results += [pscustomobject]@{
+            name = [string]$target.name
+            success = [string]::IsNullOrWhiteSpace($errorText)
+            error = $errorText
+            elapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 3)
+        }
+    }
+
+    return @($results)
+}
+
 function Get-VbaProjectInfo {
     param($Workbook)
 
@@ -1117,6 +1700,22 @@ function Get-ExcelWorkbookQuery {
         if (Test-SurfaceRequested -Surface $Surface -Name 'cf') {
             $payload["cf"] = @(Get-ConditionalFormattingQuery -Workbook $context.Workbook)
         }
+        if ((Test-SurfaceRequested -Surface $Surface -Name 'pq') -or
+            (Test-SurfaceRequested -Surface $Surface -Name 'connections') -or
+            (Test-SurfaceRequested -Surface $Surface -Name 'model')) {
+            $powerQueryInfo = Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook
+            if (Test-SurfaceRequested -Surface $Surface -Name 'pq') {
+                $payload["pq"] = @($powerQueryInfo.queries)
+            }
+            if (Test-SurfaceRequested -Surface $Surface -Name 'connections') {
+                $payload["connections"] = @($powerQueryInfo.connections)
+            }
+            if (Test-SurfaceRequested -Surface $Surface -Name 'model') {
+                $payload["model"] = [pscustomobject]@{
+                    modelTables = @($powerQueryInfo.modelTables)
+                }
+            }
+        }
         if ((Test-SurfaceRequested -Surface $Surface -Name 'vba') -or
             (Test-SurfaceRequested -Surface $Surface -Name 'project') -or
             (Test-SurfaceRequested -Surface $Surface -Name 'references')) {
@@ -1156,6 +1755,9 @@ function Get-ExcelWorkbookInspection {
     $tables = @()
     $names = @()
     $cf = @()
+    $pq = @()
+    $connections = @()
+    $model = $null
     $vba = @()
     $references = @()
     $project = $null
@@ -1163,6 +1765,9 @@ function Get-ExcelWorkbookInspection {
     if ($null -ne $query.PSObject.Properties['tables']) { $tables = @($query.tables) }
     if ($null -ne $query.PSObject.Properties['names']) { $names = @($query.names) }
     if ($null -ne $query.PSObject.Properties['cf']) { $cf = @($query.cf) }
+    if ($null -ne $query.PSObject.Properties['pq']) { $pq = @($query.pq) }
+    if ($null -ne $query.PSObject.Properties['connections']) { $connections = @($query.connections) }
+    if ($null -ne $query.PSObject.Properties['model']) { $model = $query.model }
     if ($null -ne $query.PSObject.Properties['vba']) { $vba = @($query.vba) }
     if ($null -ne $query.PSObject.Properties['references']) { $references = @($query.references) }
     if ($null -ne $query.PSObject.Properties['project']) { $project = $query.project }
@@ -1173,6 +1778,9 @@ function Get-ExcelWorkbookInspection {
             tables = $tables.Count
             names = $names.Count
             cf = $cf.Count
+            pq = $pq.Count
+            connections = $connections.Count
+            modelTables = if ($null -ne $model -and $null -ne $model.PSObject.Properties['modelTables']) { @($model.modelTables).Count } else { 0 }
             vba = $vba.Count
             references = $references.Count
         }

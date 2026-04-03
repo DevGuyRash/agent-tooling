@@ -3,13 +3,15 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke')]
+    [ValidateSet('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh')]
     [string]$Command = 'inspect',
     [Alias('manifest-path')]
     [string]$ManifestPath,
     [Alias('workbook-path')]
     [string]$WorkbookPath,
-    [string]$Surface = 'vba,tables,names,cf,project,references',
+    [Alias('query-name')]
+    [string[]]$QueryName = @(),
+    [string]$Surface = 'vba,tables,names,cf,project,references,pq,connections,model',
     [switch]$Visible
 )
 
@@ -32,6 +34,10 @@ switch ($Command) {
     }
     'roundtrip' {
         & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'roundtrip' -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+        break
+    }
+    'refresh' {
+        & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'refresh' -WorkbookPath $resolved.WorkbookPath -QueryName $QueryName -Visible:$Visible
         break
     }
     'smoke' {
