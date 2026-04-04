@@ -129,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
         ci3 = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert "fetch-depth: 1" in ci3, ci3
         assert "cache-dependency-path: frontend/package-lock.json" in ci3, ci3
+        assert "dtolnay/rust-toolchain@stable" in ci3, ci3
+        assert "Swatinem/rust-cache@v2" in ci3, ci3
         assert render3["selected"]["ci_layout"] == "single", render3
         assert "  ci:\n" in ci3, ci3
         assert "  lint:\n" not in ci3, ci3
@@ -195,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
         ci3c_paths = (repo3c / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert any("root-level components or workspace manifests" in warning for warning in render3c_paths["warnings"]), render3c_paths
         assert "    paths:\n" not in ci3c_paths, ci3c_paths
+        assert "dtolnay/rust-toolchain@stable" in ci3c_paths, ci3c_paths
+        assert "Swatinem/rust-cache@v2" in ci3c_paths, ci3c_paths
 
         repo3e = tmpdir / "guided-components"
         repo3e.mkdir()
@@ -217,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         assert helper3e["runnable_surface"] is False, state3e
         assert "(cd 'app' && npm run test --if-present -- {{args}})" in just3e, just3e
         assert "tools-internal-helper-test" not in just3e, just3e
+        assert "hooks-install" not in just3e, just3e
         assert "ci.yml" in render3e["candidates"], render3e
         ci3e = (repo3e / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert "cache-dependency-path: app/package-lock.json" in ci3e, ci3e
@@ -266,6 +271,14 @@ def main(argv: list[str] | None = None) -> int:
             just4_text = just4.read_text(encoding="utf-8")
             assert "# Compile release outputs and stage them into dist/ for local packaging" in just4_text, just4_text
             assert "# Internal helper that copies compiled release outputs into dist/\n[private]\n_stage:" in just4_text, just4_text
+            if architecture in {"committed-dist", "cross-os-dist"}:
+                assert "# Install repo-owned Git hooks for this clone" in just4_text, just4_text
+                hook4 = (repo4 / ".local" / "harness" / "render" / "githooks" / "pre-push").read_text(encoding="utf-8")
+                assert "just ci" in hook4, hook4
+                assert "just dist" in hook4, hook4
+                assert "git status --short -- dist" in hook4, hook4
+            else:
+                assert "hooks-install" not in just4_text, just4_text
             list4 = assert_just_parses(just4)
             if list4:
                 assert "dist" in list4 and "# Compile release outputs and stage them into dist/ for local packaging" in list4, list4
@@ -275,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                 release4 = (repo4 / ".local" / "harness" / "render" / "release-cross-os.yml").read_text(encoding="utf-8")
                 assert "fetch-depth: 1" in release4, release4
                 assert "retention-days: 7" in release4, release4
+                assert "Swatinem/rust-cache@v2" in release4, release4
         general4 = run_json(script, "render", str(repo4), "--architecture", "general", "--dist-storage", "none")
         assert ".gitattributes" not in general4["candidates"], general4
         assert not (repo4 / ".local" / "harness" / "render" / ".gitattributes").exists()
@@ -391,7 +405,28 @@ def main(argv: list[str] | None = None) -> int:
         state9 = json.loads((repo9 / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
         assert any("dist/ is ignored" in warning for warning in state9["warnings"]), state9
 
-        # 10) existing justfiles execute recipes without shell interpolation
+        # 10) auto selections reuse prior explicit state when rerendering
+        repo10 = tmpdir / "stateful-selections"
+        repo10.mkdir()
+        write(repo10 / "Cargo.toml", "[package]\nname = 'tool'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'tool'\npath = 'src/main.rs'\n")
+        write(repo10 / "src" / "main.rs", "fn main() {}\n")
+        update10 = run_json(script, "update", str(repo10), "--architecture", "cross-os-dist", "--dist-storage", "git", "--ci-mode", "direct")
+        assert update10["selected"]["architecture"] == "cross-os-dist", update10
+        rerender10 = run_json(script, "render", str(repo10))
+        assert rerender10["selected"]["architecture"] == "cross-os-dist", rerender10
+        assert rerender10["selected"]["dist_storage"] == "git", rerender10
+        assert rerender10["selected"]["ci_mode"] == "direct", rerender10
+        assert "githooks/pre-push" in rerender10["candidates"], rerender10
+        rerender10_general = run_json(script, "render", str(repo10), "--architecture", "general")
+        assert rerender10_general["selected"]["architecture"] == "general", rerender10_general
+        assert rerender10_general["selected"]["release_overlay"] is False, rerender10_general
+        assert "release-cross-os.yml" not in rerender10_general["candidates"], rerender10_general
+        assert not (repo10 / ".local" / "harness" / "render" / "release-cross-os.yml").exists()
+        rerender10_explicit = run_json(script, "render", str(repo10), "--architecture", "cross-os-dist", "--no-release-overlay")
+        assert rerender10_explicit["selected"]["release_overlay"] is False, rerender10_explicit
+        assert "release-cross-os.yml" not in rerender10_explicit["candidates"], rerender10_explicit
+
+        # 11) existing justfiles execute recipes without shell interpolation
         repo10 = tmpdir / "safe-run"
         repo10.mkdir()
         write(repo10 / "justfile", "# project-harness: managed-file\ntest:\n    @echo ok\n")

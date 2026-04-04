@@ -20,6 +20,7 @@ Files without that marker are treated as unmanaged and are **not** force-merged.
 - `justfile`
 - `.github/workflows/ci.yml`
 - `.github/workflows/release-cross-os.yml`
+- `githooks/pre-push`
 - `.gitignore` additions
 - `.gitattributes` additions for `dist/**` when Git LFS is selected
 - `.local/harness/state.json`
@@ -36,6 +37,7 @@ Typical candidate files:
 - `.local/harness/render/justfile`
 - `.local/harness/render/ci.yml`
 - `.local/harness/render/release-cross-os.yml`
+- `.local/harness/render/githooks/pre-push`
 - `.local/harness/render/.gitattributes`
 
 ## Files that are read but not rewritten

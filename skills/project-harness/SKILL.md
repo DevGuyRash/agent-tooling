@@ -15,7 +15,7 @@ description: >-
 license: MIT
 metadata:
   author: DevGuyRash
-  version: "2.3.0"
+  version: "2.5.0"
   category: development
 compatibility: >-
   Requires Python 3.11+ to run the bundled CLI. Optional: just, git, git-lfs,
@@ -42,6 +42,7 @@ This skill owns the repo-level wrapper surface:
 - `justfile`
 - `.github/workflows/ci.yml`
 - `.github/workflows/release-cross-os.yml`
+- `githooks/pre-push` when the selected architecture uses committed dist outputs
 - `.gitignore` additions related to `.local/` and `dist/`
 - `.gitattributes` additions for `dist/**` when Git LFS is selected
 - `.local/harness/state.json`
@@ -58,6 +59,8 @@ This skill does **not** rewrite:
 This skill also does **not** own governance enforcement such as required checks,
 CODEOWNERS reconciliation, or branch/ruleset policy. Keep those in a governance
 tooling surface such as `gitops-workflow`.
+
+Repo-owned Git hooks are a local convenience overlay, not the authoritative enforcement surface. Keep CI and branch governance authoritative even when this skill emits `githooks/pre-push` and a `hooks-install` recipe.
 
 ## Justfile quality bar
 
