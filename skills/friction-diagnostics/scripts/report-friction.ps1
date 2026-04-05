@@ -4,42 +4,24 @@ param(
     [string]$RepoRoot = $env:FRICTION_REPO_ROOT,
     [string]$FromJson = '',
     [string]$Title = '',
-    [string]$InstructionText = '',
-    [string]$ActionTaken = '',
     [string]$ExpectedOutcome = '',
     [string]$ActualOutcome = '',
     [string]$Reading = '',
     [string]$Hindsight = '',
-    [string]$ObservedSurface = '',
-    [string]$Surface = '',
-    [string]$Mode = '',
-    [string]$RunEffect = '',
-    [string]$GuidanceQuality = '',
-    [string]$Confidence = '',
-    [string]$Command = '',
-    [string]$ToolName = '',
-    [string]$ExitCode = '',
-    [string]$Stderr = '',
-    [string]$StdoutExcerpt = '',
-    [string]$OwnerHint = '',
-    [string]$ComponentHint = '',
-    [string]$WorkaroundUsed = 'false',
-    [string]$WorkaroundNote = '',
-    [string]$RetriesLost = '0',
-    [string]$MinutesLost = '0',
+    [ValidateSet('blocked', 'degraded', 'noisy', 'continued')]
+    [string]$Impact = '',
+    [string]$Tags = '',
+    [string]$Aliases = '',
     [string]$FingerprintKey = '',
     [string]$AddTags = '',
     [string]$AddTagsCsv = '',
-    [Alias('Agent')][string]$AgentName = $(if ($env:FRICTION_AGENT_NAME) { $env:FRICTION_AGENT_NAME } else { '' }),
-    [string]$Role = $(if ($env:FRICTION_ROLE) { $env:FRICTION_ROLE } else { '' }),
+    [string]$AddAliases = '',
+    [string]$AddAliasesCsv = '',
     [string]$SourceType = '',
     [string]$SourceRef = '',
     [string]$SourceLine = '',
     [string]$SourceEndLine = '',
-    [string]$SourceSymbol = '',
     [string]$SourceExcerpt = '',
-    [string]$SourceSelector = '',
-    [string]$SourceLabel = '',
     [switch]$Help
 )
 
@@ -63,26 +45,34 @@ Selection:
   -FromJson PATH|-    Load event fields from a JSON object on disk or stdin.
                       Prefer stdin for shell-sensitive or multiline payloads.
 
+Core fields:
+  -Title TEXT
+  -ExpectedOutcome TEXT
+  -ActualOutcome TEXT
+  -Reading TEXT
+  -Hindsight TEXT
+
+Classification:
+  -Impact VALUE       blocked | degraded | noisy | continued (required)
+  -Tags TEXT          Comma-separated specific tags (normalized to lowercase)
+  -Aliases TEXT       Comma-separated broader groupings (normalized to lowercase)
+
 Source fields (single source via CLI; use -FromJson for multiple):
-  -SourceType TYPE    One of: file, url, system-instruction, conversation,
-                      audio, visual, documentation, other
+  -SourceType TYPE    One of: file, url, conversation, audio, visual,
+                      documentation, other
   -SourceRef TEXT     Primary reference (filepath, URL, description)
   -SourceLine INT     Start line (for files)
   -SourceEndLine INT  End line (for file ranges)
-  -SourceSymbol TEXT  Function, class, section, or heading name
-  -SourceExcerpt TEXT Relevant quoted text from the source
-  -SourceSelector TEXT CSS/XPath selector or similar
-  -SourceLabel TEXT   Human-readable description of this source's role
+  -SourceExcerpt TEXT Verbatim quote from the source
 
-Provenance:
-  -AgentName VALUE    Optional descriptive agent name. Alias: -Agent
-  -Role VALUE         Optional descriptive role value.
-                      If omitted, provenance is recorded as unspecified.
+Fingerprint:
+  -FingerprintKey TEXT  Override the default fingerprint seed
 
-Tag management (run after initial event creation):
+Tag/alias management (run after initial event creation):
   -AddTags EVENT_ID -AddTagsCsv "tag1,tag2"
                       Add tags to an existing event by event_id.
-                      The report output suggests this command after each write.
+  -AddAliases EVENT_ID -AddAliasesCsv "alias1,alias2"
+                      Add aliases to an existing event by event_id.
 "@
     exit 0
 }
@@ -102,7 +92,7 @@ if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
     if (-not (Test-Path -LiteralPath $EventsFile)) {
         throw "Events file not found: $EventsFile"
     }
-    $newTags = @($AddTagsCsv.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $newTags = @($AddTagsCsv.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     if ($newTags.Count -eq 0) { throw "No tags provided" }
     Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
         $lines = [System.Collections.Generic.List[string]]::new()
@@ -119,7 +109,7 @@ if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
                     if ($tagsProp.Value -is [System.Array]) {
                         $existing = @($tagsProp.Value | ForEach-Object { [string]$_ } | Where-Object { $_ })
                     } elseif (-not [string]::IsNullOrWhiteSpace([string]$tagsProp.Value)) {
-                        $existing = @(([string]$tagsProp.Value).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                        $existing = @(([string]$tagsProp.Value).Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
                     }
                 }
                 $merged = [System.Collections.Generic.List[string]]::new()
@@ -148,10 +138,58 @@ if (-not [string]::IsNullOrWhiteSpace($AddTags)) {
     exit 0
 }
 
-$superprojectRoot = Get-GitSuperprojectRoot
-$submodulePath = ''
-if ($superprojectRoot -and $RepoRoot) {
-    $submodulePath = Get-GitSubmodulePath -SuperprojectRoot $superprojectRoot -RepoRoot $RepoRoot
+# --- --AddAliases mode: patch aliases on an existing event ---
+if (-not [string]::IsNullOrWhiteSpace($AddAliases)) {
+    if ([string]::IsNullOrWhiteSpace($AddAliasesCsv)) {
+        throw "-AddAliases requires both EVENT_ID (via -AddAliases) and aliases (via -AddAliasesCsv)"
+    }
+    if (-not (Test-Path -LiteralPath $EventsFile)) {
+        throw "Events file not found: $EventsFile"
+    }
+    $newAliases = @($AddAliasesCsv.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    if ($newAliases.Count -eq 0) { throw "No aliases provided" }
+    Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $found = $false
+        foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+            $stripped = $line.Trim()
+            if ([string]::IsNullOrWhiteSpace($stripped)) { $lines.Add($line); continue }
+            $event = $stripped | ConvertFrom-Json -DateKind String -ErrorAction Stop
+            if ($event.PSObject.Properties['event_id'].Value -eq $AddAliases) {
+                $found = $true
+                $existing = @()
+                $aliasesProp = $event.PSObject.Properties['aliases']
+                if ($null -ne $aliasesProp) {
+                    if ($aliasesProp.Value -is [System.Array]) {
+                        $existing = @($aliasesProp.Value | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                    } elseif (-not [string]::IsNullOrWhiteSpace([string]$aliasesProp.Value)) {
+                        $existing = @(([string]$aliasesProp.Value).Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+                    }
+                }
+                $merged = [System.Collections.Generic.List[string]]::new()
+                $seen = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($a in ($existing + $newAliases)) { if ($seen.Add($a)) { $merged.Add($a) } }
+                $event.aliases = $merged.ToArray()
+                $lines.Add(($event | ConvertTo-Json -Compress -Depth 8))
+            } else {
+                $lines.Add($line.TrimEnd("`r", "`n"))
+            }
+        }
+        if (-not $found) { throw "Event not found: $AddAliases" }
+        $tempFile = Join-Path ([System.IO.Path]::GetDirectoryName($EventsFile)) ([System.IO.Path]::GetRandomFileName() + '.tmp')
+        try {
+            [System.IO.File]::WriteAllLines($tempFile, $lines.ToArray(), [System.Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $tempFile -Destination $EventsFile -Force
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempFile) {
+                Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } | Out-Null
+    & "$PSScriptRoot/build-index.ps1" -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot | Out-Null
+    Write-Output "FRICTION_ALIASES_UPDATED=$AddAliases"
+    exit 0
 }
 
 # --- Sources array: resolved from -FromJson or CLI flags ---
@@ -167,37 +205,28 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
     $diagnosticPath = Get-JsonDiagnosticLabel $FromJson
 
     $Title = Get-JsonFieldValue $fromJsonPayload 'title' $Title ''
-    $InstructionText = Get-JsonFieldValue $fromJsonPayload 'instruction_text' $InstructionText ''
-    $ActionTaken = Get-JsonFieldValue $fromJsonPayload 'action_taken' $ActionTaken ''
     $ExpectedOutcome = Get-JsonFieldValue $fromJsonPayload 'expected_outcome' $ExpectedOutcome ''
     $ActualOutcome = Get-JsonFieldValue $fromJsonPayload 'actual_outcome' $ActualOutcome ''
     $Reading = Get-JsonFieldValue $fromJsonPayload 'reading' $Reading ''
     $Hindsight = Get-JsonFieldValue $fromJsonPayload 'hindsight' $Hindsight ''
-    $ObservedSurface = Get-JsonFieldValue $fromJsonPayload 'observed_surface' $ObservedSurface ''
-    $Surface = Get-JsonFieldValue $fromJsonPayload 'surface' $Surface ''
-    $Mode = Get-JsonFieldValue $fromJsonPayload 'mode' $Mode ''
-    $RunEffect = Get-JsonFieldValue $fromJsonPayload 'run_effect' $RunEffect ''
-    $GuidanceQuality = Get-JsonFieldValue $fromJsonPayload 'guidance_quality' $GuidanceQuality ''
-    $Confidence = Get-JsonFieldValue $fromJsonPayload 'confidence' $Confidence ''
-    $Command = Get-JsonFieldValue $fromJsonPayload 'command' $Command ''
-    $ToolName = Get-JsonFieldValue $fromJsonPayload 'tool_name' $ToolName ''
-    $ExitCode = Get-JsonFieldValue $fromJsonPayload 'exit_code' $ExitCode ''
-    $Stderr = Get-JsonFieldValue $fromJsonPayload 'stderr' $Stderr ''
-    $StdoutExcerpt = Get-JsonFieldValue $fromJsonPayload 'stdout_excerpt' $StdoutExcerpt ''
-    $OwnerHint = Get-JsonFieldValue $fromJsonPayload 'owner_hint' $OwnerHint ''
-    $ComponentHint = Get-JsonFieldValue $fromJsonPayload 'component_hint' $ComponentHint ''
-    $WorkaroundUsed = Get-JsonFieldValue $fromJsonPayload 'workaround_used' $WorkaroundUsed 'false'
-    $WorkaroundNote = Get-JsonFieldValue $fromJsonPayload 'workaround_note' $WorkaroundNote ''
-    $RetriesLost = Get-JsonFieldValue $fromJsonPayload 'retries_lost' $RetriesLost '0'
-    $MinutesLost = Get-JsonFieldValue $fromJsonPayload 'minutes_lost' $MinutesLost '0'
+    $Impact = Get-JsonFieldValue $fromJsonPayload 'impact' $Impact ''
     $FingerprintKey = Get-JsonFieldValue $fromJsonPayload 'fingerprint_key' $FingerprintKey ''
-    $AgentName = Get-JsonFieldValue $fromJsonPayload 'agent_name' $AgentName ''
-    $Role = Get-JsonFieldValue $fromJsonPayload 'role' $Role ''
+
+    # Resolve tags from JSON (array -> csv)
+    $tagsProperty = $fromJsonPayload.PSObject.Properties['tags']
+    if ($null -ne $tagsProperty -and $null -ne $tagsProperty.Value -and $tagsProperty.Value -is [System.Array] -and $Tags -eq '') {
+        $Tags = ($tagsProperty.Value | ForEach-Object { [string]$_ } | Where-Object { $_ }) -join ','
+    }
+
+    # Resolve aliases from JSON (array -> csv)
+    $aliasesProperty = $fromJsonPayload.PSObject.Properties['aliases']
+    if ($null -ne $aliasesProperty -and $null -ne $aliasesProperty.Value -and $aliasesProperty.Value -is [System.Array] -and $Aliases -eq '') {
+        $Aliases = ($aliasesProperty.Value | ForEach-Object { [string]$_ } | Where-Object { $_ }) -join ','
+    }
 
     # --- Resolve sources array ---
     $sourcesProperty = $fromJsonPayload.PSObject.Properties['sources']
     if ($null -ne $sourcesProperty -and $null -ne $sourcesProperty.Value) {
-        # v3: native sources array
         $candidateSources = @($sourcesProperty.Value)
         $errors = [System.Collections.Generic.List[string]]::new()
         $resolvedSources = [System.Collections.Generic.List[object]]::new()
@@ -226,7 +255,7 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
                 $srcMap = [ordered]@{}
                 $srcMap['type'] = [string]$typeProp.Value
                 $srcMap['ref'] = Protect-Text ([string]$refProp.Value)
-                foreach ($optKey in @('line', 'end_line', 'symbol', 'excerpt', 'selector', 'label')) {
+                foreach ($optKey in @('line', 'end_line', 'excerpt')) {
                     $optProp = $src.PSObject.Properties[$optKey]
                     if ($null -ne $optProp -and $null -ne $optProp.Value) {
                         if ($optKey -in @('line', 'end_line')) {
@@ -246,8 +275,16 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
             throw "Invalid sources in -FromJson ${diagnosticPath}:`n" + ($errors -join "`n")
         }
         $fromJsonSources = $resolvedSources.ToArray()
-    } else {
-        # sources is required — no sources array means the required-source validation below will catch it
+    }
+
+    # Validate known keys only (v4 schema)
+    $v4KnownKeys = @(
+        'title', 'expected_outcome', 'actual_outcome', 'reading', 'hindsight',
+        'impact', 'tags', 'aliases', 'fingerprint_key', 'sources', 'events_file'
+    )
+    foreach ($property in $fromJsonPayload.PSObject.Properties.Name) {
+        if ($v4KnownKeys -contains $property) { continue }
+        throw "Unsupported key in -FromJson ${diagnosticPath}: $property"
     }
 
     $payloadEventsFile = Get-JsonFieldValue $fromJsonPayload 'events_file' '' ''
@@ -257,54 +294,40 @@ if (-not [string]::IsNullOrWhiteSpace($FromJson)) {
             throw "events_file from -FromJson $diagnosticPath must match the selected events file"
         }
     }
-
-    foreach ($property in $fromJsonPayload.PSObject.Properties.Name) {
-        if ($property -in $script:KNOWN_EVENT_KEYS) { continue }
-        if ($property -eq 'events_file') { continue }
-        throw "Unsupported key in -FromJson ${diagnosticPath}: $property"
-    }
 }
 
 # --- Sanitize text fields ---
 $Title = Protect-Text $Title
-$InstructionText = Protect-Text $InstructionText
-$ActionTaken = Protect-Text $ActionTaken
 $ExpectedOutcome = Protect-Text $ExpectedOutcome
 $ActualOutcome = Protect-Text $ActualOutcome
 $Reading = Protect-Text $Reading
 $Hindsight = Protect-Text $Hindsight
-$Command = Protect-Text $Command
-$ToolName = Protect-Text $ToolName
-$Stderr = Protect-Excerpt $Stderr 500
-$StdoutExcerpt = Protect-Excerpt $StdoutExcerpt 500
-$OwnerHint = Protect-Text $OwnerHint
-$ComponentHint = Protect-Text $ComponentHint
-$WorkaroundNote = Protect-Text $WorkaroundNote
-$AgentName = Protect-Text $AgentName
-$Role = Protect-Text $Role
 $RepoRoot = Protect-Text $RepoRoot
 
 # --- Validate required narrative fields ---
 foreach ($field in @(
-    @{ Label = 'instruction_text'; Value = $InstructionText },
-    @{ Label = 'action_taken'; Value = $ActionTaken },
     @{ Label = 'expected_outcome'; Value = $ExpectedOutcome },
     @{ Label = 'actual_outcome'; Value = $ActualOutcome },
-    @{ Label = 'reading'; Value = $Reading },
-    @{ Label = 'hindsight'; Value = $Hindsight }
+    @{ Label = 'reading'; Value = $Reading }
 )) {
     if ([string]::IsNullOrWhiteSpace([string]$field.Value)) {
         throw "Missing required field: $($field.Label)"
     }
 }
 
+# --- Validate impact ---
+if ([string]::IsNullOrWhiteSpace($Impact)) {
+    throw "Missing required field: -Impact (blocked, degraded, noisy, or continued)"
+}
+$validImpactValues = @('blocked', 'degraded', 'noisy', 'continued')
+if ($validImpactValues -notcontains $Impact) {
+    throw "impact must be one of: blocked, degraded, noisy, continued (got '$Impact')"
+}
+
 # --- Validate narrative depth ---
-Test-NarrativeLength 'instruction_text' $InstructionText 20
-Test-NarrativeLength 'action_taken' $ActionTaken 30
-Test-NarrativeLength 'expected_outcome' $ExpectedOutcome 20
-Test-NarrativeLength 'actual_outcome' $ActualOutcome 20
+Test-NarrativeLength 'expected_outcome' $ExpectedOutcome 15
+Test-NarrativeLength 'actual_outcome' $ActualOutcome 15
 Test-NarrativeLength 'reading' $Reading 30
-Test-NarrativeLength 'hindsight' $Hindsight 20
 
 # --- Build sources array ---
 $sources = @()
@@ -322,88 +345,60 @@ if ($null -ne $fromJsonSources) {
     $srcEndLineInt = ConvertTo-SafeInt $SourceEndLine
     if ($srcLineInt -gt 0) { $srcMap['line'] = $srcLineInt }
     if ($srcEndLineInt -gt 0) { $srcMap['end_line'] = $srcEndLineInt }
-    $sanitizedSymbol = Protect-Text $SourceSymbol
     $sanitizedExcerpt = Protect-Text $SourceExcerpt
-    $sanitizedSelector = Protect-Text $SourceSelector
-    $sanitizedLabel = Protect-Text $SourceLabel
-    if (-not [string]::IsNullOrWhiteSpace($sanitizedSymbol)) { $srcMap['symbol'] = $sanitizedSymbol }
     if (-not [string]::IsNullOrWhiteSpace($sanitizedExcerpt)) { $srcMap['excerpt'] = $sanitizedExcerpt }
-    if (-not [string]::IsNullOrWhiteSpace($sanitizedSelector)) { $srcMap['selector'] = $sanitizedSelector }
-    if (-not [string]::IsNullOrWhiteSpace($sanitizedLabel)) { $srcMap['label'] = $sanitizedLabel }
     $sources = @([pscustomobject]$srcMap)
 } else {
     throw "Missing required source: provide -SourceRef (and optionally -SourceType) or use -FromJson with a sources array"
 }
 
-# Extract primary source ref for fingerprinting and categorizer
+# Extract primary source ref for fingerprinting
 $primarySourceRef = if ($sources.Count -gt 0) { [string]($sources[0].PSObject.Properties['ref'].Value) } else { '' }
 
-# --- Run categorizer ---
-$auto = & "$PSScriptRoot/categorize.ps1" `
-    -SourceRef $primarySourceRef `
-    -InstructionText $InstructionText `
-    -ActionTaken $ActionTaken `
-    -ExpectedOutcome $ExpectedOutcome `
-    -ActualOutcome $ActualOutcome `
-    -Hindsight $Hindsight `
-    -Reading $Reading `
-    -ToolName $ToolName `
-    -Command $Command `
-    -Stderr $Stderr `
-    -StdoutExcerpt $StdoutExcerpt `
-    -ObservedSurface $ObservedSurface `
-    -Surface $Surface `
-    -Mode $Mode `
-    -RunEffect $RunEffect `
-    -GuidanceQuality $GuidanceQuality `
-    -Confidence $Confidence
-
-$autoMap = @{}
-foreach ($line in $auto) {
-    if ($line -match '^(?<key>[^=]+)=(?<value>.*)$') {
-        $autoMap[$matches.key] = $matches.value
-    }
+# --- Build tags and aliases JSON arrays (normalized to lowercase) ---
+function ConvertTo-NormalizedJsonArray {
+    param([string]$CsvInput)
+    if ([string]::IsNullOrWhiteSpace($CsvInput)) { return '[]' }
+    $items = @($CsvInput.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    if ($items.Count -eq 0) { return '[]' }
+    $escaped = $items | ForEach-Object { "`"$(ConvertTo-JsonEscape $_)`"" }
+    return '[' + ($escaped -join ',') + ']'
 }
 
-$Surface = $autoMap['surface']
-$Mode = $autoMap['mode']
-$RunEffect = $autoMap['run_effect']
-$GuidanceQuality = $autoMap['guidance_quality']
-$Confidence = $autoMap['confidence']
-$ObservedSurface = $autoMap['observed_surface']
-$derivedCategory = $autoMap['derived_category']
-$taxonomyVersion = $autoMap['taxonomy_version']
+$tagsJson = ConvertTo-NormalizedJsonArray $Tags
+$aliasesJson = ConvertTo-NormalizedJsonArray $Aliases
 
-# --- Normalize numeric/bool fields ---
-$workaroundUsedBool = ConvertTo-NormalizedBool $WorkaroundUsed
-$retriesLostInt = ConvertTo-SafeInt $RetriesLost
-$minutesLostInt = ConvertTo-SafeInt $MinutesLost
-$exitCodeInt = ConvertTo-SafeInt $ExitCode
-$guidanceQualityInt = ConvertTo-NormalizedGuidanceQuality $GuidanceQuality
-$confidenceInt = ConvertTo-NormalizedConfidence $Confidence
-
-# --- Auto-title: [surface/mode] actual_outcome_excerpt ---
+# --- Auto-title from actual_outcome if not provided ---
 if ([string]::IsNullOrWhiteSpace($Title)) {
-    $titleBody = Get-TruncatedLine -Text (Get-FirstLine $ActualOutcome) -Limit 60
-    $Title = "[$Surface/$Mode] $titleBody"
-}
-
-# --- Owner hint default ---
-if ([string]::IsNullOrWhiteSpace($OwnerHint)) {
-    $OwnerHint = Get-DefaultOwnerForSurface $Surface
+    $Title = Get-TruncatedLine -Text (Get-FirstLine $ActualOutcome) -Limit 80
 }
 
 $recorded = [System.DateTimeOffset]::UtcNow
 $eventDate = $recorded.ToString('yyyy-MM-dd')
-$fingerprint = Get-EventFingerprint -Surface $Surface -Mode $Mode -SourceRef $primarySourceRef -EventDate $eventDate -CustomKey $FingerprintKey
-$incidentId = "inc-$fingerprint"
-$recorded = $recorded.ToString('yyyy-MM-ddTHH:mm:ssZ')
-$repoRelativeEventsFile = ''
-if (-not [string]::IsNullOrWhiteSpace($RepoRoot) -and $EventsFile.StartsWith($RepoRoot)) {
-    $repoRelativeEventsFile = $EventsFile.Substring($RepoRoot.Length).TrimStart('\', '/')
+
+# Fingerprint: hash(source_ref|date) — no surface/mode
+$fingerprintSeed = if (-not [string]::IsNullOrWhiteSpace($FingerprintKey)) {
+    $FingerprintKey.ToLowerInvariant() -replace '[^a-z0-9]+', ' ' | ForEach-Object { $_.Trim() }
+} else {
+    $normalizedRef = $primarySourceRef.ToLowerInvariant() -replace '[^a-z0-9]+', ' '
+    ($normalizedRef.Trim()) + '|' + $eventDate
 }
-if ([string]::IsNullOrWhiteSpace($repoRelativeEventsFile)) {
-    $repoRelativeEventsFile = $EventsFile
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($fingerprintSeed)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $hashBytes = $sha256.ComputeHash($bytes)
+} finally {
+    $sha256.Dispose()
+}
+$fingerprint = (-join ($hashBytes[0..5] | ForEach-Object { $_.ToString('x2') })).Substring(0, 12)
+
+$recorded = $recorded.ToString('yyyy-MM-ddTHH:mm:ssZ')
+$repoRelativeEventsFile = $EventsFile
+if (-not [string]::IsNullOrWhiteSpace($RepoRoot) -and $EventsFile.StartsWith($RepoRoot)) {
+    $rel = $EventsFile.Substring($RepoRoot.Length).TrimStart('\', '/')
+    if (-not [string]::IsNullOrWhiteSpace($rel)) {
+        $repoRelativeEventsFile = $rel
+    }
 }
 
 # Build sources JSON array
@@ -418,77 +413,46 @@ $eventOutput = Invoke-WithFileLock -LockRoot $EventsFile -ScriptBlock {
     $eventId = 'evt-{0:d4}' -f ($existingEvents.Count + 1)
 
     $eventFields = [System.Collections.Generic.List[string]]::new()
-    # Always-present metadata
-    $eventFields.Add((ConvertTo-JsonString 'schema_version' $script:SCHEMA_VERSION))
-    $eventFields.Add((ConvertTo-JsonString 'taxonomy_version' $taxonomyVersion))
     $eventFields.Add((ConvertTo-JsonString 'event_id' $eventId))
-    $eventFields.Add((ConvertTo-JsonString 'incident_id' $incidentId))
-    $eventFields.Add((ConvertTo-JsonString 'fingerprint' $fingerprint))
     $eventFields.Add((ConvertTo-JsonString 'recorded_at' $recorded))
+    $eventFields.Add((ConvertTo-JsonString 'fingerprint' $fingerprint))
+    $eventFields.Add((ConvertTo-JsonString 'title' $Title))
     $eventFields.Add((ConvertTo-JsonString 'events_file' $repoRelativeEventsFile))
     $eventFields.Add((ConvertTo-JsonString 'repo_root' $RepoRoot))
-    if (-not [string]::IsNullOrEmpty($superprojectRoot)) { $eventFields.Add((ConvertTo-JsonString 'superproject_root' $superprojectRoot)) }
-    if (-not [string]::IsNullOrEmpty($submodulePath)) { $eventFields.Add((ConvertTo-JsonString 'submodule_path' $submodulePath)) }
-    # Identity (agent_name always present; role sparse)
-    $eventFields.Add((ConvertTo-JsonString 'agent_name' $AgentName))
-    if (-not [string]::IsNullOrEmpty($Role)) {
-        $eventFields.Add((ConvertTo-JsonString 'role' $Role))
-    }
-    # Core narrative (always present)
-    $eventFields.Add((ConvertTo-JsonString 'title' $Title))
-    $eventFields.Add((ConvertTo-JsonString 'instruction_text' $InstructionText))
-    $eventFields.Add((ConvertTo-JsonString 'action_taken' $ActionTaken))
     $eventFields.Add((ConvertTo-JsonString 'expected_outcome' $ExpectedOutcome))
     $eventFields.Add((ConvertTo-JsonString 'actual_outcome' $ActualOutcome))
     $eventFields.Add((ConvertTo-JsonString 'reading' $Reading))
-    $eventFields.Add((ConvertTo-JsonString 'hindsight' $Hindsight))
-    # Sparse optional context
-    if (-not [string]::IsNullOrEmpty($Command)) { $eventFields.Add((ConvertTo-JsonString 'command' $Command)) }
-    if (-not [string]::IsNullOrEmpty($ToolName)) { $eventFields.Add((ConvertTo-JsonString 'tool_name' $ToolName)) }
-    if (-not [string]::IsNullOrEmpty($Stderr)) { $eventFields.Add((ConvertTo-JsonString 'stderr' $Stderr)) }
-    if (-not [string]::IsNullOrEmpty($StdoutExcerpt)) { $eventFields.Add((ConvertTo-JsonString 'stdout_excerpt' $StdoutExcerpt)) }
-    if (-not [string]::IsNullOrEmpty($OwnerHint)) { $eventFields.Add((ConvertTo-JsonString 'owner_hint' $OwnerHint)) }
-    if (-not [string]::IsNullOrEmpty($ComponentHint)) { $eventFields.Add((ConvertTo-JsonString 'component_hint' $ComponentHint)) }
-    if (-not [string]::IsNullOrEmpty($WorkaroundNote)) { $eventFields.Add((ConvertTo-JsonString 'workaround_note' $WorkaroundNote)) }
-    # Classification (always present, numeric)
-    $eventFields.Add((ConvertTo-JsonString 'observed_surface' $ObservedSurface))
-    $eventFields.Add((ConvertTo-JsonString 'surface' $Surface))
-    $eventFields.Add((ConvertTo-JsonString 'mode' $Mode))
-    $eventFields.Add((ConvertTo-JsonString 'run_effect' $RunEffect))
-    if ($null -ne $guidanceQualityInt) { $eventFields.Add((ConvertTo-JsonNumber 'guidance_quality' $guidanceQualityInt)) }
-    if ($null -ne $confidenceInt) { $eventFields.Add((ConvertTo-JsonNumber 'confidence' $confidenceInt)) }
-    $eventFields.Add((ConvertTo-JsonString 'derived_category' $derivedCategory))
-    $eventFields.Add('"tags":[]')
-    # Sparse impact fields
-    if ($workaroundUsedBool) { $eventFields.Add((ConvertTo-JsonBool 'workaround_used' $workaroundUsedBool)) }
-    if ($exitCodeInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'exit_code' $exitCodeInt)) }
-    if ($retriesLostInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'retries_lost' $retriesLostInt)) }
-    if ($minutesLostInt -ne 0) { $eventFields.Add((ConvertTo-JsonNumber 'minutes_lost' $minutesLostInt)) }
-    # Sources array (always present)
+    if (-not [string]::IsNullOrEmpty($Hindsight)) {
+        $eventFields.Add((ConvertTo-JsonString 'hindsight' $Hindsight))
+    }
     $eventFields.Add('"sources":' + $sourcesJson)
+    $eventFields.Add((ConvertTo-JsonString 'impact' $Impact))
+    $eventFields.Add('"tags":' + $tagsJson)
+    $eventFields.Add('"aliases":' + $aliasesJson)
 
     $eventJson = '{' + ($eventFields -join ',') + '}'
 
     [System.IO.File]::AppendAllText($EventsFile, "$eventJson`n", [System.Text.UTF8Encoding]::new($false))
     return [pscustomobject]@{
-        EventId = $eventId
+        EventId    = $eventId
         EventCount = $existingEvents.Count + 1
     }
 }
 
 & "$PSScriptRoot/build-index.ps1" -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot | Out-Null
 
-Write-Output "event_id=$($eventOutput.EventId)"
-Write-Output "events_file=$EventsFile"
-Write-Output "index_file=$IndexFile"
+Write-Output "FRICTION_EVENTS_FILE=$EventsFile"
+Write-Output "FRICTION_INDEX_FILE=$IndexFile"
+Write-Output "FRICTION_EVENT_ID=$($eventOutput.EventId)"
+if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+    Write-Output "FRICTION_REPO_ROOT=$RepoRoot"
+}
 
-# Tag helper: show existing tags and suggest --add-tags command
+# Show existing tags and aliases for reference
 $existingTags = Get-AllTags $EventsFile
 Write-Output ""
 if (-not [string]::IsNullOrWhiteSpace($existingTags)) {
     Write-Output "All tags in this stream: $existingTags"
-} else {
-    Write-Output "No tags in this stream yet."
 }
-Write-Output "To add tags to this event, run:"
-Write-Output "  scripts/report-friction.ps1 -AddTags $($eventOutput.EventId) -AddTagsCsv `"tag1,tag2`""
+Write-Output "To add tags:    scripts/report-friction.ps1 -AddTags $($eventOutput.EventId) -AddTagsCsv `"tag1,tag2`""
+Write-Output "To add aliases: scripts/report-friction.ps1 -AddAliases $($eventOutput.EventId) -AddAliasesCsv `"alias1,alias2`""

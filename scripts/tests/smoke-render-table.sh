@@ -231,8 +231,8 @@ fi
 # ── Test 22: Error hint quality ──
 
 err=$(sh "$RENDER" --bogus 2>&1) || true
-assert_contains "error_hint: has help pointer" "--help" "$err" &&
-pass "error_hint_quality"
+assert_contains "error_hint: has usage hint" "Usage:" "$err" &&
+pass "error_hint"
 
 # ── Test 23: File not found error ──
 

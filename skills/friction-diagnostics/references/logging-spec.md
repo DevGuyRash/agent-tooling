@@ -12,13 +12,13 @@ Each non-empty line is one JSON object representing one friction event.
 
 Normal captures require substantive values for:
 
-- `instruction_text`
-- `action_taken`
 - `expected_outcome`
 - `actual_outcome`
 - `reading`
 
-The `sources` array is required when the friction can be localized to a specific file, document, or URL.
+`hindsight` is recommended but optional.
+
+The `sources` array is required. Each entry must have `type` and `ref`.
 
 `title` may be omitted. The tool derives it from `actual_outcome` when needed.
 
@@ -26,23 +26,26 @@ Blank or whitespace-only narrative values are invalid.
 
 ## Core event fields
 
-The canonical field definitions, types, constraints, and numeric scales live in `friction-event-schema.json` (the single source of truth). All scripts derive field lists, enums, and scales from that file at runtime.
+The canonical field definitions, types, constraints, and enums live in `friction-event-schema.json` (the single source of truth). All scripts derive field lists and enums from that file at runtime.
 
-Optional fields are omitted from the stored record when empty, zero, or false (sparse output).
+## Classification
 
-## Identity fields
+- **`impact`** (required): `blocked`, `degraded`, `noisy`, or `continued`
+- **`tags`** (optional): specific classification labels, normalized to lowercase
+- **`aliases`** (optional): broader groupings, normalized to lowercase
 
-The event stream may record:
-
-- `agent_name`
-- `role`
-
-These fields are descriptive only. There is no parent-child orchestration graph and no session ID.
-When provenance is not provided explicitly, it should remain unspecified rather than inferred.
+There is no auto-categorizer. Classification is agent-provided.
 
 ## Sources
 
-Sources are stored as a `sources` array so code and non-code references can be represented uniformly. Valid source types and member fields are defined in `friction-event-schema.json`.
+Sources are stored as a `sources` array. Valid source types are defined in `friction-event-schema.json`.
+
+| Field | Description |
+|---|---|
+| `type` | `file`, `url`, `conversation`, `audio`, `visual`, `documentation`, `other` |
+| `ref` | File path, URL, or description |
+| `line`, `end_line` | Line range (for files) |
+| `excerpt` | Verbatim quote from the source |
 
 ## Sanitization
 
@@ -56,27 +59,20 @@ The stored event stream contains sanitized text, not raw secret material.
 
 `--from-json` accepts one JSON object.
 
-On syntax failure, the tool returns:
+On syntax failure, the tool returns concise parser diagnostics with line/column details. On schema/content failure, concise field-level diagnostics. Raw parser stack traces are suppressed.
 
-- concise parser diagnostics
-- line/column details when the active runtime exposes them
-- a short local snippet or hint when detectable
+## Tags and aliases
 
-On schema/content failure, the tool returns concise field-level diagnostics.
+Tags and aliases may be provided at filing time via `--tags` and `--aliases` (comma-separated). Both are normalized to lowercase on write.
 
-Raw parser stack traces are suppressed.
-
-## Tags
-
-Events are initially written with an empty tags array. Tags are agent-curated, not auto-generated.
-
-After an event is filed, the tool displays existing tags from the stream and suggests a ready-to-run `--add-tags` command. The agent runs that command as a deliberate second step:
+Post-hoc additions are available via `--add-tags` and `--add-aliases`:
 
 ```sh
 sh scripts/report-friction.sh --add-tags evt-NNNN "tag1,tag2"
+sh scripts/report-friction.sh --add-aliases evt-NNNN "alias1,alias2"
 ```
 
-`--add-tags` accepts an event ID and a comma-separated tag list. It rewrites the canonical file under the report lock and atomically swaps in the updated JSONL. No other event fields are modified.
+Both commands rewrite the canonical file under the report lock and atomically swap in the updated JSONL. No other event fields are modified.
 
 ## Index behavior
 

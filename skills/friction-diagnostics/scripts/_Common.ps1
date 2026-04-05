@@ -65,25 +65,12 @@ function Get-SchemaAllFields {
 # Version constants derived from schema SSOT.
 try {
     $schema = Get-EventSchema
-    $script:SCHEMA_VERSION = if ($schema.'x-schema-version') { $schema.'x-schema-version' } else { '3.0.0' }
-    $script:TAXONOMY_VERSION = if ($schema.'x-taxonomy-version') { $schema.'x-taxonomy-version' } else { '2.0.0' }
+    $script:SCHEMA_VERSION = if ($schema.'x-schema-version') { $schema.'x-schema-version' } else { '4.0.0' }
+    $script:TAXONOMY_VERSION = if ($schema.'x-taxonomy-version') { $schema.'x-taxonomy-version' } else { '3.0.0' }
 } catch {
-    $script:SCHEMA_VERSION = '3.0.0'
-    $script:TAXONOMY_VERSION = '2.0.0'
+    $script:SCHEMA_VERSION = '4.0.0'
+    $script:TAXONOMY_VERSION = '3.0.0'
 }
-
-# Legacy compatibility: derive KNOWN_EVENT_KEYS from schema at load time.
-# This will be removed once all scripts consume schema functions directly.
-$script:KNOWN_EVENT_KEYS = @(
-    'title', 'instruction_text', 'action_taken', 'expected_outcome',
-    'actual_outcome', 'reading', 'hindsight', 'observed_surface',
-    'surface', 'mode', 'run_effect', 'guidance_quality', 'confidence',
-    'command', 'tool_name', 'exit_code', 'stderr', 'stdout_excerpt',
-    'owner_hint', 'component_hint', 'workaround_used', 'workaround_note',
-    'retries_lost', 'minutes_lost', 'fingerprint_key', 'tags',
-    'agent_name', 'role', 'superproject_root', 'submodule_path',
-    'sources'
-)
 
 function Get-Slug {
     param([string]$Text)
@@ -298,19 +285,6 @@ function Get-EventFieldValue {
     return $prop.Value
 }
 
-function Get-DerivedCategoryParts {
-    param($Event)
-    $value = [string](Get-EventFieldValue -Event $Event -Name 'derived_category' -Default '')
-    $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace($value)) {
-        $parts = @($value.Split('/', 3))
-    }
-    while ($parts.Count -lt 3) {
-        $parts += ''
-    }
-    return $parts
-}
-
 function Get-NullableInt {
     param($Value)
     if ($null -eq $Value) { return $null }
@@ -327,7 +301,7 @@ function Test-EventTextMatch {
     )
     if ([string]::IsNullOrWhiteSpace($Query)) { return $true }
     $needle = $Query.ToLowerInvariant()
-    foreach ($field in @('title', 'actual_outcome', 'action_taken', 'reading', 'hindsight', 'instruction_text', 'expected_outcome')) {
+    foreach ($field in @('title', 'actual_outcome', 'reading', 'hindsight', 'expected_outcome')) {
         $value = [string](Get-EventFieldValue -Event $Event -Name $field -Default '')
         if ($value.ToLowerInvariant().Contains($needle)) {
             return $true
@@ -401,42 +375,12 @@ function Test-EventTimestampFilters {
     return $true
 }
 
-function ConvertTo-NormalizedRunEffect {
+function ConvertTo-NormalizedImpact {
     param([string]$Value)
     switch ($Value) {
         { $_ -in 'blocked', 'degraded', 'noisy', 'continued' } { return $Value }
-        'confusing' { return 'continued' }
-        'misleading' { return 'degraded' }
         '' { return '' }
-        default { throw "Unsupported run effect: $Value" }
-    }
-}
-
-function ConvertTo-NormalizedGuidanceQuality {
-    param([string]$Value)
-    switch ($Value) {
-        { $_ -in '0', '1', '2', '3', '4' } { return [int]$Value }
-        'clear' { return 4 }
-        'partial' { return 3 }
-        'ambiguous' { return 2 }
-        'misleading' { return 1 }
-        'not-applicable' { return 0 }
-        'confusing' { return 2 }
-        '' { return $null }
-        default { throw "Unsupported guidance quality: $Value (expected 0-4 or clear/partial/ambiguous/misleading/not-applicable)" }
-    }
-}
-
-function ConvertTo-NormalizedConfidence {
-    param([string]$Value)
-    switch ($Value) {
-        { $_ -in '1', '2', '3', '4', '5' } { return [int]$Value }
-        'low' { return 2 }
-        'moderate' { return 3 }
-        'medium' { return 3 }
-        'high' { return 4 }
-        '' { return $null }
-        default { throw "Unsupported confidence: $Value (expected 1-5 or low/moderate/high)" }
+        default { throw "Unsupported impact value: $Value (expected: blocked, degraded, noisy, continued)" }
     }
 }
 
@@ -455,9 +399,9 @@ function Test-NarrativeLength {
 try {
     $schema = Get-EventSchema
     $sourceTypeEnum = $schema.properties.sources.items.properties.type.enum
-    $script:VALID_SOURCE_TYPES = if ($null -ne $sourceTypeEnum -and $sourceTypeEnum.Count -gt 0) { @($sourceTypeEnum) } else { @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other') }
+    $script:VALID_SOURCE_TYPES = if ($null -ne $sourceTypeEnum -and $sourceTypeEnum.Count -gt 0) { @($sourceTypeEnum) } else { @('file', 'url', 'conversation', 'audio', 'visual', 'documentation', 'other') }
 } catch {
-    $script:VALID_SOURCE_TYPES = @('file', 'url', 'system-instruction', 'conversation', 'audio', 'visual', 'documentation', 'other')
+    $script:VALID_SOURCE_TYPES = @('file', 'url', 'conversation', 'audio', 'visual', 'documentation', 'other')
 }
 
 function Test-SourceType {
@@ -476,8 +420,6 @@ function Get-NormalizedFingerprintText {
 
 function Get-EventFingerprint {
     param(
-        [string]$Surface,
-        [string]$Mode,
         [string]$SourceRef,
         [string]$EventDate,
         [string]$CustomKey = ''
@@ -487,7 +429,7 @@ function Get-EventFingerprint {
     }
     else {
         $normalizedSourceRef = Get-NormalizedFingerprintText $SourceRef
-        $seed = "$Surface|$Mode|$normalizedSourceRef|$EventDate"
+        $seed = "$normalizedSourceRef|$EventDate"
     }
     return Get-ShortSha256 $seed 12
 }
@@ -506,59 +448,32 @@ function Get-AllTags {
         $tagsProp = $event.PSObject.Properties['tags']
         if ($null -ne $tagsProp -and $tagsProp.Value -is [System.Array]) {
             foreach ($t in $tagsProp.Value) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$t)) { $tags.Add([string]$t) | Out-Null }
+                if (-not [string]::IsNullOrWhiteSpace([string]$t)) { $tags.Add(([string]$t).ToLowerInvariant()) | Out-Null }
             }
         }
     }
     return ($tags -join ', ')
 }
 
-function Get-DefaultOwnerForSurface {
-    param([string]$Surface)
-    switch ($Surface) {
-        'skill' { return 'skill-owner' }
-        'instructions' { return 'prompt-owner' }
-        'mcp' { return 'mcp-owner' }
-        { $_ -in 'tool', 'script' } { return 'tooling-owner' }
-        { $_ -in 'code', 'logic' } { return 'implementation-owner' }
-        'data' { return 'schema-owner' }
-        'environment' { return 'environment-owner' }
-        'external-service' { return 'service-owner' }
-        'workflow' { return 'workflow-owner' }
-        default { return 'triage-owner' }
+function Get-AllAliases {
+    param([string]$EventsFile)
+    if (-not (Test-Path -LiteralPath $EventsFile)) { return '' }
+    $aliases = [System.Collections.Generic.SortedSet[string]]::new()
+    foreach ($line in [System.IO.File]::ReadLines($EventsFile)) {
+        $line = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $event = $line | ConvertFrom-Json -DateKind String -ErrorAction Stop
+        }
+        catch { continue }
+        $aliasesProp = $event.PSObject.Properties['aliases']
+        if ($null -ne $aliasesProp -and $aliasesProp.Value -is [System.Array]) {
+            foreach ($a in $aliasesProp.Value) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$a)) { $aliases.Add(([string]$a).ToLowerInvariant()) | Out-Null }
+            }
+        }
     }
-}
-
-function Get-PriorityScore {
-    param(
-        [int]$Recurrence = 0,
-        [string]$RunEffect = 'continued',
-        [int]$GuidanceQuality = 4,
-        [int]$MinutesLost = 0,
-        [int]$RetriesLost = 0,
-        [bool]$WorkaroundUsed = $false
-    )
-    $score = $Recurrence * 2 + $MinutesLost + $RetriesLost
-    switch ($RunEffect) {
-        'blocked' { $score += 6 }
-        'degraded' { $score += 3 }
-        'noisy' { $score += 2 }
-        'continued' { $score += 1 }
-    }
-    # guidance_quality 0-4: lower quality = more priority points
-    # 0=N/A(+0), 1=misleading(+3), 2=ambiguous(+2), 3=partial(+1), 4=clear(+0)
-    if ($GuidanceQuality -gt 0 -and $GuidanceQuality -lt 4) {
-        $score += 4 - $GuidanceQuality
-    }
-    if ($WorkaroundUsed) { $score += 1 }
-    return $score
-}
-
-function Get-PriorityBand {
-    param([int]$Score)
-    if ($Score -ge 16) { return 'high' }
-    if ($Score -ge 8) { return 'medium' }
-    return 'low'
+    return ($aliases -join ', ')
 }
 
 function Resolve-DirectoryPath {

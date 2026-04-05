@@ -3,32 +3,38 @@
   "evals": [
     {
       "id": "eval-report-default-path",
-      "prompt": "Record one friction event from inside a git repository using direct CLI flags with --source-type and --source-ref.",
-      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local reports area, or under another existing .local* reports area when .local is absent, and INDEX.md exists adjacent to it. The event contains schema_version 3.0.0, a sources array with at least one typed entry, action, expected outcome, actual outcome, interpretation, derived category, numeric confidence (1-5), and numeric guidance_quality (0-4). Optional fields with empty/zero/false values are omitted from the JSON.",
+      "prompt": "Record one friction event from inside a git repository using direct CLI flags with --source-type, --source-ref, --impact, --tags, and --aliases.",
+      "expected_output": "A repo-scoped canonical events.jsonl exists under a .local reports area, or under another existing .local* reports area when .local is absent, and INDEX.md exists adjacent to it. The event contains event_id, recorded_at, fingerprint, title, events_file, repo_root, expected_outcome, actual_outcome, reading, sources array with at least one typed entry, impact (one of blocked/degraded/noisy/continued), tags array, and aliases array. Hindsight may be omitted.",
       "files": []
     },
     {
       "id": "eval-json-stdin",
-      "prompt": "Report one friction event through the safe JSON filing path over stdin with a sources array containing multiple entries.",
-      "expected_output": "The event is appended to the same canonical events.jsonl. Multiple sources are preserved in the output. Tags are emitted as a JSON array, not a CSV string.",
+      "prompt": "Report one friction event through the safe JSON filing path over stdin with a sources array containing multiple entries, tags, and aliases.",
+      "expected_output": "The event is appended to the same canonical events.jsonl. Multiple sources are preserved in the output. Tags and aliases are emitted as JSON arrays, normalized to lowercase.",
       "files": []
     },
     {
-      "id": "eval-shell-sensitive-helper",
-      "prompt": "Report one friction event whose narrative contains backticks, quotes, or $() text using the helper or equivalent safe stdin JSON path rather than direct flags.",
-      "expected_output": "The shell-sensitive text is preserved verbatim in the stored event without shell expansion damage. The event uses the same canonical schema and validation behavior as a normal report-friction invocation.",
+      "id": "eval-shell-sensitive",
+      "prompt": "Report one friction event whose narrative contains backticks, quotes, or $() text using the --from-json stdin path rather than direct flags.",
+      "expected_output": "The shell-sensitive text is preserved verbatim in the stored event without shell expansion damage. The event uses the same canonical schema and validation as a normal report-friction invocation.",
       "files": []
     },
     {
-      "id": "eval-query-by-source-ref",
-      "prompt": "Query the canonical events.jsonl for events matching a specific source reference.",
-      "expected_output": "The query output filters the event stream by source ref without relying on per-agent markdown logs or session files. Both v2 events (with anchors/instruction_source) and v3 events (with sources array) are handled.",
+      "id": "eval-query-by-tag-fuzzy",
+      "prompt": "Query the canonical events.jsonl for events matching a tag substring (e.g., --tag auth should match ssh-auth-sock).",
+      "expected_output": "The query output filters the event stream by tag substring matching. Events with tags containing the query string are returned.",
       "files": []
     },
     {
-      "id": "eval-backward-compat",
-      "prompt": "Submit a v2-format JSON payload via --from-json with instruction_source (string) and anchors (array).",
-      "expected_output": "The tool auto-converts the v2 fields to a v3 sources array. instruction_source becomes a documentation-type source, and anchors are converted to typed sources based on their fields (path → file, url → url).",
+      "id": "eval-query-by-alias",
+      "prompt": "Query the canonical events.jsonl for events matching an alias.",
+      "expected_output": "The query output filters the event stream by alias. Both exact and substring matching are supported via --alias-exact and --alias flags.",
+      "files": []
+    },
+    {
+      "id": "eval-index-structure",
+      "prompt": "Generate an INDEX.md for an events file containing multiple events with different impacts, tags, aliases, and sources.",
+      "expected_output": "The INDEX.md contains: time metadata (created, last event, rebuilt, span), an events table with titles visible, recurring patterns section, by-alias section with blocked counts, by-source section, tags section, and date distribution.",
       "files": []
     }
   ]

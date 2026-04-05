@@ -5,6 +5,7 @@ set -eu
 # Thin shim that encapsulates the query → flatten → render pipeline.
 # Handles path resolution, terminal width detection, and smart re-query
 # footer generation. Agents call this; it calls render-table.sh internally.
+# Sources are flattened into a compact display string for the table.
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 
@@ -15,7 +16,7 @@ render-summary.sh — Render a friction session summary table
 Usage:
   sh render-summary.sh --events-file PATH [--after TIMESTAMP] [OPTIONS]
 
-Queries friction events, flattens source anchors, and renders a Unicode
+Queries friction events, flattens sources, and renders a Unicode
 box-drawing summary table. Produces a ready-to-paste block with header,
 table, events file path, and a re-query command.
 
@@ -28,6 +29,7 @@ Time filters (at least one recommended):
   --date-from YYYY-MM-DD   Events on or after this date
 
 Display:
+  --output-format F       auto|table|markdown|list (default: auto)
   --max-width N            Override terminal width detection (0 = unlimited)
   --no-fit                 Ignore terminal width; unlimited table width
   --max-col-width N        Max column content width before wrapping (default: 40)
@@ -41,6 +43,7 @@ events_file=
 after=
 before=
 date_from=
+output_format=
 max_width=
 no_fit=0
 max_col_width=40
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
     --after)         after=${2-}; shift 2 ;;
     --before)        before=${2-}; shift 2 ;;
     --date-from)     date_from=${2-}; shift 2 ;;
+    --output-format) output_format=${2-}; shift 2 ;;
     --max-width)     max_width=${2-}; shift 2 ;;
     --no-fit)        no_fit=1; shift ;;
     --max-col-width) max_col_width=${2-}; shift 2 ;;
@@ -89,6 +93,21 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+resolved_output_format=$output_format
+if [ -z "$resolved_output_format" ]; then
+  resolved_output_format=${FRICTION_SUMMARY_FORMAT-}
+fi
+if [ -z "$resolved_output_format" ]; then
+  resolved_output_format=auto
+fi
+case "$resolved_output_format" in
+  auto|table|markdown|list) ;;
+  *)
+    printf 'render-summary.sh: invalid --output-format: %s\n' "$resolved_output_format" >&2
+    exit 1
+    ;;
+esac
+
 # ── Terminal width detection ─────────────────────────────────────────
 
 detect_terminal_width() {
@@ -100,22 +119,26 @@ detect_terminal_width() {
     printf '%s\n' "$max_width"
     return
   fi
-  # Only auto-detect when stdout is a TTY
-  if [ -t 1 ]; then
-    if [ -n "${COLUMNS-}" ]; then
-      printf '%s\n' "$COLUMNS"
-    elif command -v tput >/dev/null 2>&1; then
-      tput cols 2>/dev/null || printf '120\n'
-    else
-      printf '120\n'
-    fi
+  if [ -n "${COLUMNS-}" ]; then
+    printf '%s\n' "$COLUMNS"
+    return
+  fi
+  if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+    tput cols 2>/dev/null || printf '120\n'
   else
-    # Not a TTY — unlimited
     printf '0\n'
   fi
 }
 
-resolved_max_width=$(detect_terminal_width)
+resolved_max_width=0
+case "$resolved_output_format" in
+  auto|table)
+    resolved_max_width=$(detect_terminal_width)
+    if [ "$resolved_max_width" = "0" ] && [ "$no_fit" -eq 0 ] && [ -z "$max_width" ]; then
+      resolved_max_width=120
+    fi
+    ;;
+esac
 
 # ── Compute effective date-from fallback ─────────────────────────────
 
@@ -147,7 +170,7 @@ if [ "$event_count" -eq 0 ]; then
   exit 0
 fi
 
-# Flatten sources array into compact anchors
+# Flatten sources array into compact display strings
 jq -c '. + {sources_flat: ([.sources[]? | "\(.type):\(.ref)" + (if .line then ":\(.line)" + (if .end_line then "-\(.end_line)" else "" end) else "" end)] | join(" | "))}' "$query_tmp" > "$flatten_tmp"
 
 # Extract last event timestamp for the re-query footer.
@@ -173,22 +196,64 @@ fi
 
 # ── Render ───────────────────────────────────────────────────────────
 
-# Build render args as a proper array
-set -- --jsonl
-set -- "$@" --fields "event_id,recorded_at,title,derived_category,tags,sources_flat"
-set -- "$@" --headers "ID,Time,Title,Category,Tags,Sources"
-set -- "$@" --max-col-width "$max_col_width"
-set -- "$@" --fit-mode "drop-last-then-shrink"
-set -- "$@" --min-columns "3"
-if [ "$resolved_max_width" != "0" ]; then
-  set -- "$@" --max-width "$resolved_max_width"
-fi
+render_table() {
+  set -- --jsonl
+  set -- "$@" --fields "event_id,recorded_at,title,impact,tags,sources_flat"
+  set -- "$@" --headers "ID,Time,Title,Impact,Tags,Sources"
+  set -- "$@" --max-col-width "$max_col_width"
+  set -- "$@" --fit-mode "drop-last-then-shrink"
+  set -- "$@" --min-columns "3"
+  if [ "$resolved_max_width" != "0" ]; then
+    set -- "$@" --max-width "$resolved_max_width"
+  fi
+  sh "$RENDER_SCRIPT" "$@" < "$flatten_tmp"
+}
+
+render_markdown() {
+  printf '| ID | Time | Title | Impact | Tags | Sources |\n'
+  printf '| --- | --- | --- | --- | --- | --- |\n'
+  jq -r '
+    def md:
+      tostring
+      | gsub("\r"; " ")
+      | gsub("\n"; " ")
+      | gsub("\\|"; "\\\\|");
+    [
+      (.event_id // ""),
+      (.recorded_at // ""),
+      (.title // ""),
+      (.impact // ""),
+      ((.tags // []) | join(", ")),
+      (.sources_flat // "")
+    ]
+    | "| " + (map(md) | join(" | ")) + " |"
+  ' "$flatten_tmp"
+}
+
+render_list() {
+  jq -r '
+    [
+      "[" + (.event_id // "") + "]",
+      "Time: " + (.recorded_at // ""),
+      "Title: " + (.title // ""),
+      "Impact: " + (.impact // ""),
+      "Tags: " + ((.tags // []) | join(", ")),
+      "Sources: " + (.sources_flat // ""),
+      ""
+    ]
+    | .[]
+  ' "$flatten_tmp"
+}
 
 # Header
 printf 'Friction Summary \342\200\224 %d event(s) this session\n' "$event_count"
 
-# Table
-sh "$RENDER_SCRIPT" "$@" < "$flatten_tmp"
+# Body
+case "$resolved_output_format" in
+  auto|table) render_table ;;
+  markdown) render_markdown ;;
+  list) render_list ;;
+esac
 
 # ── Smart re-query footer ────────────────────────────────────────────
 

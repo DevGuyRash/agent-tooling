@@ -3,6 +3,8 @@ param(
     [string]$After = '',
     [string]$Before = '',
     [string]$DateFrom = '',
+    [ValidateSet('auto', 'table', 'markdown', 'list')]
+    [string]$OutputFormat = '',
     [int]$MaxWidth = 0,
     [switch]$NoFit,
     [int]$MaxColWidth = 40,
@@ -32,6 +34,7 @@ Time filters:
   -DateFrom YYYY-MM-DD    Events on or after this date
 
 Display:
+  -OutputFormat F         auto|table|markdown|list (default: auto)
   -MaxWidth N             Override terminal width detection (0 = unlimited)
   -NoFit                  Ignore terminal width; unlimited table width
   -MaxColWidth N          Max column content width before wrapping (default: 40)
@@ -42,7 +45,14 @@ Display:
 function Get-TerminalWidth {
     if ($NoFit) { return 0 }
     if ($MaxWidth -gt 0) { return $MaxWidth }
-    if ([Console]::IsOutputRedirected) { return 0 }
+    $columns = $env:COLUMNS
+    if (-not [string]::IsNullOrWhiteSpace($columns)) {
+        $parsed = 0
+        if ([int]::TryParse($columns, [ref]$parsed) -and $parsed -gt 0) {
+            return $parsed
+        }
+    }
+    if ([Console]::IsOutputRedirected) { return 120 }
     try {
         return [Console]::WindowWidth
     }
@@ -59,6 +69,11 @@ function Quote-ForPowerShell {
 function Emit-Line {
     param([string]$Line)
     Write-Output $Line
+}
+
+function Escape-MarkdownCell {
+    param([string]$Value)
+    return (($Value -replace "`r", ' ' -replace "`n", ' ' -replace '\|', '\|').Trim())
 }
 
 function Get-SourceAnchor {
@@ -103,7 +118,18 @@ if (-not (Test-Path -LiteralPath $renderScript -PathType Leaf)) {
     throw "render-summary.ps1: missing render-table.ps1 at $renderScript"
 }
 
-$resolvedMaxWidth = Get-TerminalWidth
+$resolvedOutputFormat = $OutputFormat
+if ([string]::IsNullOrWhiteSpace($resolvedOutputFormat)) {
+    $resolvedOutputFormat = [string]$env:FRICTION_SUMMARY_FORMAT
+}
+if ([string]::IsNullOrWhiteSpace($resolvedOutputFormat)) {
+    $resolvedOutputFormat = 'auto'
+}
+if ($resolvedOutputFormat -notin @('auto', 'table', 'markdown', 'list')) {
+    throw "render-summary.ps1: invalid -OutputFormat: $resolvedOutputFormat"
+}
+$renderMode = if ($resolvedOutputFormat -eq 'auto') { 'table' } else { $resolvedOutputFormat }
+$resolvedMaxWidth = if ($renderMode -eq 'table') { Get-TerminalWidth } else { 0 }
 $effectiveDateFrom = $DateFrom
 if ([string]::IsNullOrWhiteSpace($After) -and [string]::IsNullOrWhiteSpace($Before) -and [string]::IsNullOrWhiteSpace($DateFrom)) {
     $effectiveDateFrom = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
@@ -157,7 +183,7 @@ $flattened = foreach ($event in $events) {
         event_id = [string]$event.event_id
         recorded_at = [string]$event.recorded_at
         title = [string]$event.title
-        derived_category = [string]$event.derived_category
+        impact = [string]$event.impact
         tags = $tags
         sources_flat = ($sources -join ' | ')
     }
@@ -177,11 +203,41 @@ if (-not [string]::IsNullOrWhiteSpace($lastEventTime)) {
 
 Emit-Line ("Friction Summary — {0} event(s) this session" -f $flattened.Count)
 
-$flattenedJson = $flattened | ConvertTo-Json -Depth 8
-if ($resolvedMaxWidth -gt 0) {
-    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3 -MaxWidth $resolvedMaxWidth
-} else {
-    $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,derived_category,tags,sources_flat' -Headers 'ID,Time,Title,Category,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3
+switch ($renderMode) {
+    'table' {
+        $flattenedJson = $flattened | ConvertTo-Json -Depth 8
+        if ($resolvedMaxWidth -gt 0) {
+            $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,impact,tags,sources_flat' -Headers 'ID,Time,Title,Impact,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3 -MaxWidth $resolvedMaxWidth
+        } else {
+            $flattenedJson | & $renderScript -Json -Fields 'event_id,recorded_at,title,impact,tags,sources_flat' -Headers 'ID,Time,Title,Impact,Tags,Sources' -MaxColWidth $MaxColWidth -FitMode 'drop-last-then-shrink' -MinColumns 3
+        }
+    }
+    'markdown' {
+        Emit-Line '| ID | Time | Title | Impact | Tags | Sources |'
+        Emit-Line '| --- | --- | --- | --- | --- | --- |'
+        foreach ($event in $flattened) {
+            $cells = @(
+                Escape-MarkdownCell ([string]$event.event_id),
+                Escape-MarkdownCell ([string]$event.recorded_at),
+                Escape-MarkdownCell ([string]$event.title),
+                Escape-MarkdownCell ([string]$event.impact),
+                Escape-MarkdownCell ((@($event.tags) | ForEach-Object { [string]$_ }) -join ', '),
+                Escape-MarkdownCell ([string]$event.sources_flat)
+            )
+            Emit-Line ("| {0} |" -f ($cells -join ' | '))
+        }
+    }
+    'list' {
+        foreach ($event in $flattened) {
+            Emit-Line ("[{0}]" -f [string]$event.event_id)
+            Emit-Line ("Time: {0}" -f [string]$event.recorded_at)
+            Emit-Line ("Title: {0}" -f [string]$event.title)
+            Emit-Line ("Impact: {0}" -f [string]$event.impact)
+            Emit-Line ("Tags: {0}" -f ((@($event.tags) | ForEach-Object { [string]$_ }) -join ', '))
+            Emit-Line ("Sources: {0}" -f [string]$event.sources_flat)
+            Emit-Line ''
+        }
+    }
 }
 
 $footerParts = [System.Collections.Generic.List[string]]::new()

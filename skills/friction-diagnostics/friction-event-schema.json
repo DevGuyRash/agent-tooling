@@ -2,55 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "friction-event-schema.json",
   "title": "Friction Diagnostics Event",
-  "description": "Canonical schema for friction event records. All scripts in the friction-diagnostics pipeline consume this file as the single source of truth for field definitions.",
+  "description": "Canonical schema for friction event records. A cognitive debugging tool for agent behavior — captures WHY an agent made decisions and where reasoning diverged from reality.",
   "type": "object",
-  "x-schema-version": "3.0.0",
-  "x-taxonomy-version": "2.0.0",
+  "x-schema-version": "4.0.0",
   "properties": {
-    "schema_version": {
-      "type": "string",
-      "description": "Schema version tag",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "taxonomy_version": {
-      "type": "string",
-      "description": "Taxonomy version tag",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
     "event_id": {
       "type": "string",
-      "description": "Unique event identifier (evt-NNNN)",
+      "description": "Unique event identifier (evt-NNNN), auto-generated sequentially per events file",
       "x-required": true,
       "x-searchable": false,
-      "x-render-md": "header",
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "incident_id": {
-      "type": "string",
-      "description": "Groups related events within a single incident",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "fingerprint": {
-      "type": "string",
-      "description": "Content-based hash for deduplication (surface|mode|source_ref|date)",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "top-n",
-      "x-aggregate-limit": 10,
       "x-sparse": false
     },
     "recorded_at": {
@@ -59,17 +19,27 @@
       "description": "ISO-8601 UTC timestamp of event creation",
       "x-required": true,
       "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "date",
+      "x-sparse": false
+    },
+    "fingerprint": {
+      "type": "string",
+      "description": "Content-based hash for recurrence detection. Default: hash(source_ref|date). Override with --fingerprint-key for intentional clustering.",
+      "x-required": true,
+      "x-searchable": false,
+      "x-sparse": false
+    },
+    "title": {
+      "type": "string",
+      "description": "Short human-readable event summary; derived from actual_outcome when omitted",
+      "x-required": false,
+      "x-searchable": true,
       "x-sparse": false
     },
     "events_file": {
       "type": "string",
-      "description": "Canonical path to the events.jsonl file",
+      "description": "Canonical path to the events.jsonl file this event belongs to",
       "x-required": true,
       "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
       "x-sparse": false
     },
     "repo_root": {
@@ -77,325 +47,76 @@
       "description": "Absolute path to the repository root",
       "x-required": true,
       "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "superproject_root": {
-      "type": "string",
-      "description": "Git superproject root when event is in a submodule",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "submodule_path": {
-      "type": "string",
-      "description": "Relative submodule path within the superproject",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "agent_name": {
-      "type": "string",
-      "description": "Name of the agent that logged the event",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "role": {
-      "type": "string",
-      "description": "Agent role context (e.g. research, verification)",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "title": {
-      "type": "string",
-      "description": "Short event title; derived from actual_outcome when omitted",
-      "x-required": false,
-      "x-searchable": true,
-      "x-render-md": "header",
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "instruction_text": {
-      "type": "string",
-      "description": "The instruction or guidance that was being followed",
-      "x-required": true,
-      "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Instruction",
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "action_taken": {
-      "type": "string",
-      "description": "What the agent actually did",
-      "x-required": true,
-      "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Action taken",
-      "x-aggregate": null,
       "x-sparse": false
     },
     "expected_outcome": {
       "type": "string",
-      "description": "What the agent expected to happen",
+      "description": "What the agent expected to happen — the contract or assumption that was violated",
       "x-required": true,
       "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Expected",
-      "x-aggregate": null,
       "x-sparse": false
     },
     "actual_outcome": {
       "type": "string",
-      "description": "What actually happened (the friction)",
+      "description": "What actually happened — verbatim error message, exit code, or output. Never paraphrase.",
       "x-required": true,
       "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Actual",
-      "x-aggregate": null,
       "x-sparse": false
     },
     "reading": {
       "type": "string",
-      "description": "First-person account of what happened and why it matters",
+      "description": "Full first-person story: what the agent consulted, did, observed, interpreted, and why it made the decisions it made. This is the core value — it traces the agent's reasoning chain so that instructions and environments can be improved.",
       "x-required": true,
       "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Reading",
-      "x-aggregate": null,
       "x-sparse": false
     },
     "hindsight": {
       "type": "string",
-      "description": "Reflection on what could have been done differently",
+      "description": "What the agent would do differently knowing what it knows now. About the agent's decisions, not fixes to source material.",
       "x-required": false,
       "x-searchable": true,
-      "x-render-md": "narrative",
-      "x-render-md-label": "Hindsight",
-      "x-aggregate": null,
       "x-sparse": false
-    },
-    "command": {
-      "type": "string",
-      "description": "The exact command that was executed",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "tool_name": {
-      "type": "string",
-      "description": "Name of the tool involved in the friction",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "top-n",
-      "x-aggregate-limit": 5,
-      "x-sparse": true
-    },
-    "stderr": {
-      "type": "string",
-      "description": "Relevant stderr output from the failed command",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "stdout_excerpt": {
-      "type": "string",
-      "description": "Relevant stdout excerpt from the command",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "owner_hint": {
-      "type": "string",
-      "description": "Suggested owner or team responsible for the friction source",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "component_hint": {
-      "type": "string",
-      "description": "System component where the friction originates",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "top-n",
-      "x-aggregate-limit": 5,
-      "x-sparse": true
-    },
-    "workaround_note": {
-      "type": "string",
-      "description": "Description of the workaround applied, if any",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "observed_surface": {
-      "type": "string",
-      "enum": ["skill", "instructions", "mcp", "tool", "script", "code", "logic", "data", "environment", "external-service", "workflow", "unknown"],
-      "description": "Raw surface value before categorizer override",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "surface": {
-      "type": "string",
-      "enum": ["skill", "instructions", "mcp", "tool", "script", "code", "logic", "data", "environment", "external-service", "workflow", "unknown"],
-      "description": "Friction surface. See enum for valid values.",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "mode": {
-      "type": "string",
-      "enum": ["ambiguity", "contradiction", "name-resolution", "context-loss", "missing", "permission", "auth", "timeout", "crash", "schema", "validation", "output-mismatch", "nondeterminism", "performance", "other"],
-      "description": "Failure mode. See enum for valid values.",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": null,
-      "x-sparse": false
-    },
-    "run_effect": {
-      "type": "string",
-      "enum": ["blocked", "degraded", "noisy", "continued"],
-      "description": "Impact on the run. See enum for valid values.",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": null,
-      "x-aggregate": "count",
-      "x-aggregate-label": "Run Effect Summary",
-      "x-sparse": false
-    },
-    "guidance_quality": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 4,
-      "description": "Quality of guidance that led to the friction (0=N/A, 1=misleading, 2=ambiguous, 3=partial, 4=clear)",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": "inline",
-      "x-aggregate": "distribution",
-      "x-aggregate-label": "Guidance Quality",
-      "x-sparse": false
-    },
-    "confidence": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 5,
-      "description": "Confidence in classification (1=wild guess, 2=low, 3=moderate, 4=high, 5=near certain)",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": "inline",
-      "x-aggregate": "distribution",
-      "x-aggregate-label": "Confidence",
-      "x-sparse": false
-    },
-    "derived_category": {
-      "type": "string",
-      "description": "Full category path: surface/mode/run_effect",
-      "x-required": true,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "count",
-      "x-aggregate-label": "Category Counts",
-      "x-sparse": false
-    },
-    "tags": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Agent-curated classification tags",
-      "x-required": false,
-      "x-searchable": true,
-      "x-render-md": "bullet",
-      "x-aggregate": "count-per-event",
-      "x-aggregate-label": "Tags",
-      "x-sparse": false
-    },
-    "workaround_used": {
-      "type": "boolean",
-      "description": "Whether a workaround was applied",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": "rate",
-      "x-aggregate-label": "Workaround Rate",
-      "x-sparse": true
-    },
-    "exit_code": {
-      "type": "integer",
-      "description": "Process exit code from the failed command",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "retries_lost": {
-      "type": "integer",
-      "description": "Number of retries wasted on this friction",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
-    },
-    "minutes_lost": {
-      "type": "integer",
-      "description": "Estimated minutes lost to this friction",
-      "x-required": false,
-      "x-searchable": false,
-      "x-render-md": "bullet",
-      "x-aggregate": null,
-      "x-sparse": true
     },
     "sources": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "type":      { "type": "string", "description": "Source type identifier", "enum": ["file", "url", "system-instruction", "conversation", "audio", "visual", "documentation", "other"] },
-          "ref":       { "type": "string", "description": "File path, URL, or reference string" },
-          "line":      { "type": "integer", "description": "Start line number" },
-          "end_line":  { "type": "integer", "description": "End line number" },
-          "symbol":    { "type": "string", "description": "Symbol name (function, class, etc.)" },
-          "excerpt":   { "type": "string", "description": "Relevant code or text excerpt" },
-          "selector":  { "type": "string", "description": "CSS/XPath selector for web sources" },
-          "label":     { "type": "string", "description": "Human-readable label for the source" }
-        }
+          "type":     { "type": "string", "description": "Source type identifier", "enum": ["file", "url", "conversation", "audio", "visual", "documentation", "other"] },
+          "ref":      { "type": "string", "description": "File path, URL, or reference string" },
+          "line":     { "type": "integer", "description": "Start line number" },
+          "end_line": { "type": "integer", "description": "End line number" },
+          "excerpt":  { "type": "string", "description": "Verbatim quote from the source — the specific text the agent acted on" }
+        },
+        "required": ["type", "ref"]
       },
-      "description": "Array of source references where the friction was observed",
-      "x-required": false,
+      "description": "Where friction originated. Each entry points to a source the agent consulted or acted on.",
+      "x-required": true,
       "x-searchable": false,
-      "x-render-md": "source-detail",
-      "x-aggregate": "top-n",
-      "x-aggregate-limit": 10,
-      "x-aggregate-key": "ref",
+      "x-sparse": false
+    },
+    "impact": {
+      "type": "string",
+      "enum": ["blocked", "degraded", "noisy", "continued"],
+      "description": "How the friction affected the agent's ability to continue. blocked=work stopped, degraded=workaround used, noisy=extra retries/effort, continued=no workflow disruption.",
+      "x-required": true,
+      "x-searchable": false,
+      "x-sparse": false
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Specific, natural classification tags as-filed. Normalized to lowercase on write. Example: [\"ssh-auth-sock\", \"git-signing\", \"1password\"]",
+      "x-required": false,
+      "x-searchable": true,
+      "x-sparse": false
+    },
+    "aliases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Broader grouping tags for classification. Normalized to lowercase on write. Example: [\"auth\", \"git\"]. Query tool searches both tags and aliases by default.",
+      "x-required": false,
+      "x-searchable": true,
       "x-sparse": false
     }
   },
@@ -403,80 +124,31 @@
     "event_id",
     "title",
     "recorded_at",
-    "derived_category",
     "fingerprint",
-    "incident_id",
-    "agent_name",
-    "role",
-    "confidence",
-    "guidance_quality",
-    "exit_code",
-    "tool_name",
-    "command",
-    "owner_hint",
-    "component_hint",
-    "workaround_used",
-    "workaround_note",
-    "retries_lost",
-    "minutes_lost",
-    "superproject_root",
-    "submodule_path",
+    "impact",
     "sources",
     "tags",
-    "stderr",
-    "stdout_excerpt",
-    "instruction_text",
-    "action_taken",
+    "aliases",
     "expected_outcome",
     "actual_outcome",
     "reading",
     "hindsight"
   ],
-  "x-scales": {
-    "confidence": {
-      "1": "wild guess",
-      "2": "low",
-      "3": "moderate",
-      "4": "high",
-      "5": "near certain"
-    },
-    "confidence_aliases": {
-      "low": 2,
-      "moderate": 3,
-      "medium": 3,
-      "high": 4
-    },
-    "guidance_quality": {
-      "0": "N/A",
-      "1": "misleading",
-      "2": "ambiguous",
-      "3": "partial",
-      "4": "clear"
-    },
-    "guidance_quality_aliases": {
-      "clear": 4,
-      "partial": 3,
-      "ambiguous": 2,
-      "misleading": 1,
-      "not-applicable": 0,
-      "confusing": 2
-    },
-    "run_effect_aliases": {
-      "confusing": "continued",
-      "misleading": "degraded"
-    }
-  },
   "x-aggregate-order": [
-    "derived_category",
-    "run_effect",
+    "impact",
     "fingerprint",
+    "aliases",
     "tags",
-    "tool_name",
-    "component_hint",
     "sources",
-    "workaround_used",
-    "confidence",
-    "guidance_quality",
     "recorded_at"
+  ],
+  "x-index-sections": [
+    "header",
+    "events",
+    "recurring_patterns",
+    "by_alias",
+    "by_source",
+    "tags",
+    "date_distribution"
   ]
 }

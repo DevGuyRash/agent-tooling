@@ -1,6 +1,5 @@
 param(
     [string]$EventsFile = '',
-    [string]$IndexFile = '',
     [string]$RepoRoot = '',
     [string]$Path = '',
     [switch]$Help
@@ -45,31 +44,14 @@ function Write-HelperOutput {
 function Invoke-ReportScript {
     param([string]$FromJsonPath)
 
+    $args = @('-FromJson', $FromJsonPath)
     if (-not [string]::IsNullOrWhiteSpace($EventsFile)) {
-        if (-not [string]::IsNullOrWhiteSpace($IndexFile)) {
-            if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-                return & $reportScript -EventsFile $EventsFile -IndexFile $IndexFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
-            }
-            return & $reportScript -EventsFile $EventsFile -IndexFile $IndexFile -FromJson $FromJsonPath
-        }
-        if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-            return & $reportScript -EventsFile $EventsFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
-        }
-        return & $reportScript -EventsFile $EventsFile -FromJson $FromJsonPath
+        $args = @('-EventsFile', $EventsFile) + $args
     }
-
-    if (-not [string]::IsNullOrWhiteSpace($IndexFile)) {
-        if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-            return & $reportScript -IndexFile $IndexFile -RepoRoot $RepoRoot -FromJson $FromJsonPath
-        }
-        return & $reportScript -IndexFile $IndexFile -FromJson $FromJsonPath
-    }
-
     if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-        return & $reportScript -RepoRoot $RepoRoot -FromJson $FromJsonPath
+        $args = @('-RepoRoot', $RepoRoot) + $args
     }
-
-    return & $reportScript -FromJson $FromJsonPath
+    return & $reportScript @args
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Path)) {

@@ -22,54 +22,35 @@ Structured input:
 
 Core fields:
   --title TEXT
-  --instruction-text TEXT
-  --action-taken TEXT
   --expected-outcome TEXT
   --actual-outcome TEXT
   --reading TEXT
   --hindsight TEXT
 
 Source fields (single source via CLI; use --from-json for multiple):
-  --source-type TYPE     One of: file, url, system-instruction, conversation,
-                         audio, visual, documentation, other
+  --source-type TYPE     One of: file, url, conversation, audio, visual,
+                         documentation, other
   --source-ref TEXT      Primary reference (filepath, URL, description)
   --source-line INT      Start line (for files)
   --source-end-line INT  End line (for file ranges)
-  --source-symbol TEXT   Function, class, section, or heading name
-  --source-excerpt TEXT  Relevant quoted text from the source
-  --source-label TEXT    Human-readable description of this source's role
+  --source-excerpt TEXT  Verbatim quote from the source
 
-Identity and context:
-  --agent TEXT
-  --role TEXT
+Classification:
+  --impact VALUE         blocked | degraded | noisy | continued
+  --tags TEXT            Comma-separated specific tags (normalized to lowercase)
+  --aliases TEXT         Comma-separated broader groupings (normalized to lowercase)
+
+Identity:
   --repo-root PATH
 
-Classification overrides:
-  --observed-surface VALUE
-  --surface VALUE
-  --mode VALUE
-  --run-effect VALUE
-  --guidance-quality VALUE   (0-4 integer or clear/ambiguous/misleading/not-applicable)
-  --confidence VALUE         (1-5 integer or low/medium/high)
-
-Optional context:
-  --command TEXT
-  --tool-name TEXT
-  --exit-code INT
-  --stderr TEXT
-  --stdout-excerpt TEXT
-  --owner-hint TEXT
-  --component-hint TEXT
-  --workaround-used BOOL
-  --workaround-note TEXT
-  --retries-lost INT
-  --minutes-lost INT
-  --fingerprint-key TEXT
+Fingerprint:
+  --fingerprint-key TEXT Override the default fingerprint seed
 
 Tag management (run after initial event creation):
   --add-tags EVENT_ID "tag1,tag2,tag3"
                          Add tags to an existing event by event_id.
-                         The report output suggests this command after each write.
+  --add-aliases EVENT_ID "alias1,alias2"
+                         Add aliases to an existing event by event_id.
 
 Other:
   --help
@@ -79,43 +60,24 @@ EOF
 events_file=${FRICTION_EVENTS_FILE-}
 from_json=
 title=
-instruction_text=
-action_taken=
 expected_outcome=
 actual_outcome=
 reading=
 hindsight=
-agent_name=${FRICTION_AGENT_NAME-}
-role=
 repo_root=
-observed_surface=
-surface=
-mode=
-run_effect=
-guidance_quality=
-confidence=
-command_text=
-tool_name=
-exit_code=
-stderr_text=
-stdout_excerpt=
-owner_hint=
-component_hint=
-workaround_used=false
-workaround_note=
-retries_lost=0
-minutes_lost=0
+impact=
+tags_csv=
+aliases_csv=
 fingerprint_key=
 add_tags_event_id=
 add_tags_csv=
+add_aliases_event_id=
+add_aliases_csv=
 source_type=
 source_ref=
 source_line=
 source_end_line=
-source_symbol=
 source_excerpt=
-source_selector=
-source_label=
 sources_json=
 lock_dir=
 report_lock_acquired=0
@@ -208,10 +170,7 @@ except json.JSONDecodeError as exc:
                 bad_fh.write(raw)
             print(f"Saved invalid stdin payload to: {bad_path}", file=sys.stderr)
         except Exception as save_exc:
-            if scratch_dir:
-                print(f"Unable to save invalid stdin payload to repo-local scratch: {save_exc}", file=sys.stderr)
-            else:
-                print(f"Unable to save invalid stdin payload to temp: {save_exc}", file=sys.stderr)
+            print(f"Unable to save invalid stdin payload: {save_exc}", file=sys.stderr)
     print(hint_for(exc.msg), file=sys.stderr)
     sys.exit(2)
 
@@ -221,7 +180,7 @@ if not isinstance(data, dict):
     sys.exit(2)
 
 VALID_SOURCE_TYPES = {
-    "file", "url", "system-instruction", "conversation",
+    "file", "url", "conversation",
     "audio", "visual", "documentation", "other",
 }
 
@@ -250,12 +209,9 @@ else:
 
 # --- Validate required narrative fields ---
 required_narrative = [
-    "instruction_text",
-    "action_taken",
     "expected_outcome",
     "actual_outcome",
     "reading",
-    "hindsight",
 ]
 for key in required_narrative:
     value = data.get(key)
@@ -265,6 +221,29 @@ for key in required_narrative:
         errors.append(f"field must be a string: {key}")
     elif value.strip() == "":
         errors.append(f"field must not be blank: {key}")
+
+# hindsight is optional
+for key in ["hindsight"]:
+    value = data.get(key)
+    if value is not None and not isinstance(value, str):
+        errors.append(f"field must be a string: {key}")
+
+# Validate impact if provided
+impact_val = data.get("impact")
+if impact_val is not None:
+    if impact_val not in ("blocked", "degraded", "noisy", "continued"):
+        errors.append(f"impact must be one of: blocked, degraded, noisy, continued (got '{impact_val}')")
+
+# Validate tags/aliases are arrays of strings if provided
+for arr_key in ["tags", "aliases"]:
+    arr_val = data.get(arr_key)
+    if arr_val is not None:
+        if not isinstance(arr_val, list):
+            errors.append(f"{arr_key} must be an array")
+        else:
+            for i, item in enumerate(arr_val):
+                if not isinstance(item, str):
+                    errors.append(f"{arr_key}[{i}] must be a string")
 
 if errors:
     print("Invalid friction payload for --from-json", file=sys.stderr)
@@ -286,32 +265,12 @@ def normalize(value):
 
 keys = [
     ("title", "json_title"),
-    ("instruction_text", "json_instruction_text"),
-    ("action_taken", "json_action_taken"),
     ("expected_outcome", "json_expected_outcome"),
     ("actual_outcome", "json_actual_outcome"),
     ("reading", "json_reading"),
     ("hindsight", "json_hindsight"),
-    ("agent_name", "json_agent_name"),
-    ("role", "json_role"),
     ("repo_root", "json_repo_root"),
-    ("observed_surface", "json_observed_surface"),
-    ("surface", "json_surface"),
-    ("mode", "json_mode"),
-    ("run_effect", "json_run_effect"),
-    ("guidance_quality", "json_guidance_quality"),
-    ("confidence", "json_confidence"),
-    ("command", "json_command_text"),
-    ("tool_name", "json_tool_name"),
-    ("exit_code", "json_exit_code"),
-    ("stderr", "json_stderr_text"),
-    ("stdout_excerpt", "json_stdout_excerpt"),
-    ("owner_hint", "json_owner_hint"),
-    ("component_hint", "json_component_hint"),
-    ("workaround_used", "json_workaround_used"),
-    ("workaround_note", "json_workaround_note"),
-    ("retries_lost", "json_retries_lost"),
-    ("minutes_lost", "json_minutes_lost"),
+    ("impact", "json_impact"),
     ("fingerprint_key", "json_fingerprint_key"),
 ]
 
@@ -319,6 +278,15 @@ for key, var_name in keys:
     value = normalize(data.get(key))
     if value is not None:
         print(f"{var_name}={shlex.quote(value)}")
+
+# Emit tags and aliases as CSV for shell
+tags = data.get("tags")
+if isinstance(tags, list) and tags:
+    print(f"json_tags_csv={shlex.quote(','.join(str(t) for t in tags))}")
+
+aliases = data.get("aliases")
+if isinstance(aliases, list) and aliases:
+    print(f"json_aliases_csv={shlex.quote(','.join(str(a) for a in aliases))}")
 
 # Emit sources as JSON for shell to embed directly
 print(f"json_sources_json={shlex.quote(json.dumps(sources, ensure_ascii=False))}")
@@ -348,55 +316,27 @@ load_json_field() {
   eval "printf '%s\n' \"\${$var_name}\""
 }
 
-validate_required_field() {
-  label=$1
-  value=$2
-  if [ -z "$(trim "$value")" ]; then
-    die "Missing required field: $label"
-  fi
-}
-
 while [ $# -gt 0 ]; do
   case "$1" in
     --events-file) events_file=${2-}; shift 2 ;;
     --from-json) from_json=${2-}; shift 2 ;;
     --title) title=${2-}; shift 2 ;;
-    --instruction-text) instruction_text=${2-}; shift 2 ;;
-    --action-taken) action_taken=${2-}; shift 2 ;;
     --expected-outcome) expected_outcome=${2-}; shift 2 ;;
     --actual-outcome) actual_outcome=${2-}; shift 2 ;;
     --reading) reading=${2-}; shift 2 ;;
     --hindsight) hindsight=${2-}; shift 2 ;;
-    --agent) agent_name=${2-}; shift 2 ;;
-    --role) role=${2-}; shift 2 ;;
     --repo-root) repo_root=${2-}; shift 2 ;;
-    --observed-surface) observed_surface=${2-}; shift 2 ;;
-    --surface) surface=${2-}; shift 2 ;;
-    --mode) mode=${2-}; shift 2 ;;
-    --run-effect) run_effect=${2-}; shift 2 ;;
-    --guidance-quality) guidance_quality=${2-}; shift 2 ;;
-    --confidence) confidence=${2-}; shift 2 ;;
-    --command) command_text=${2-}; shift 2 ;;
-    --tool-name) tool_name=${2-}; shift 2 ;;
-    --exit-code) exit_code=${2-}; shift 2 ;;
-    --stderr) stderr_text=${2-}; shift 2 ;;
-    --stdout-excerpt) stdout_excerpt=${2-}; shift 2 ;;
-    --owner-hint) owner_hint=${2-}; shift 2 ;;
-    --component-hint) component_hint=${2-}; shift 2 ;;
-    --workaround-used) workaround_used=${2-}; shift 2 ;;
-    --workaround-note) workaround_note=${2-}; shift 2 ;;
-    --retries-lost) retries_lost=${2-}; shift 2 ;;
-    --minutes-lost) minutes_lost=${2-}; shift 2 ;;
+    --impact) impact=${2-}; shift 2 ;;
+    --tags) tags_csv=${2-}; shift 2 ;;
+    --aliases) aliases_csv=${2-}; shift 2 ;;
     --fingerprint-key) fingerprint_key=${2-}; shift 2 ;;
     --add-tags) add_tags_event_id=${2-}; add_tags_csv=${3-}; shift 3 ;;
+    --add-aliases) add_aliases_event_id=${2-}; add_aliases_csv=${3-}; shift 3 ;;
     --source-type) source_type=${2-}; shift 2 ;;
     --source-ref) source_ref=${2-}; shift 2 ;;
     --source-line) source_line=${2-}; shift 2 ;;
     --source-end-line) source_end_line=${2-}; shift 2 ;;
-    --source-symbol) source_symbol=${2-}; shift 2 ;;
     --source-excerpt) source_excerpt=${2-}; shift 2 ;;
-    --source-selector) source_selector=${2-}; shift 2 ;;
-    --source-label) source_label=${2-}; shift 2 ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -413,33 +353,15 @@ if [ -n "$from_json" ]; then
   fi
   load_json_overrides "$from_json" "$invalid_json_scratch_dir"
   title=$(load_json_field "$title" "" json_title)
-  instruction_text=$(load_json_field "$instruction_text" "" json_instruction_text)
-  action_taken=$(load_json_field "$action_taken" "" json_action_taken)
   expected_outcome=$(load_json_field "$expected_outcome" "" json_expected_outcome)
   actual_outcome=$(load_json_field "$actual_outcome" "" json_actual_outcome)
   reading=$(load_json_field "$reading" "" json_reading)
   hindsight=$(load_json_field "$hindsight" "" json_hindsight)
-  agent_name=$(load_json_field "$agent_name" "" json_agent_name)
-  role=$(load_json_field "$role" "" json_role)
   repo_root=$(load_json_field "$repo_root" "" json_repo_root)
-  observed_surface=$(load_json_field "$observed_surface" "" json_observed_surface)
-  surface=$(load_json_field "$surface" "" json_surface)
-  mode=$(load_json_field "$mode" "" json_mode)
-  run_effect=$(load_json_field "$run_effect" "" json_run_effect)
-  guidance_quality=$(load_json_field "$guidance_quality" "" json_guidance_quality)
-  confidence=$(load_json_field "$confidence" "" json_confidence)
-  command_text=$(load_json_field "$command_text" "" json_command_text)
-  tool_name=$(load_json_field "$tool_name" "" json_tool_name)
-  exit_code=$(load_json_field "$exit_code" "" json_exit_code)
-  stderr_text=$(load_json_field "$stderr_text" "" json_stderr_text)
-  stdout_excerpt=$(load_json_field "$stdout_excerpt" "" json_stdout_excerpt)
-  owner_hint=$(load_json_field "$owner_hint" "" json_owner_hint)
-  component_hint=$(load_json_field "$component_hint" "" json_component_hint)
-  workaround_used=$(load_json_field "$workaround_used" "false" json_workaround_used)
-  workaround_note=$(load_json_field "$workaround_note" "" json_workaround_note)
-  retries_lost=$(load_json_field "$retries_lost" "0" json_retries_lost)
-  minutes_lost=$(load_json_field "$minutes_lost" "0" json_minutes_lost)
+  impact=$(load_json_field "$impact" "" json_impact)
   fingerprint_key=$(load_json_field "$fingerprint_key" "" json_fingerprint_key)
+  tags_csv=$(load_json_field "$tags_csv" "" json_tags_csv)
+  aliases_csv=$(load_json_field "$aliases_csv" "" json_aliases_csv)
   # sources_json is set directly by the Python helper
   sources_json=$(load_json_field "$sources_json" "" json_sources_json)
 fi
@@ -466,7 +388,7 @@ if [ -n "$add_tags_event_id" ]; then
   if python3 - "$events_file" "$tmp_tags_file" "$add_tags_event_id" "$add_tags_csv" <<'PY'
 import json, os, sys
 events_path, output_path, target_id, tags_csv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-new_tags = [t.strip() for t in tags_csv.split(",") if t.strip()]
+new_tags = [t.strip().lower() for t in tags_csv.split(",") if t.strip()]
 if not new_tags:
     print("No tags provided", file=sys.stderr)
     sys.exit(1)
@@ -482,7 +404,7 @@ with open(events_path, "r", encoding="utf-8") as src, open(output_path, "w", enc
             found = True
             existing = event.get("tags", [])
             if isinstance(existing, str):
-                existing = [t.strip() for t in existing.split(",") if t.strip()]
+                existing = [t.strip().lower() for t in existing.split(",") if t.strip()]
             merged = list(dict.fromkeys(existing + new_tags))
             event["tags"] = merged
             dst.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -509,17 +431,69 @@ PY
   exit 0
 fi
 
+# --- --add-aliases mode: patch aliases on an existing event ---
+if [ -n "$add_aliases_event_id" ]; then
+  if [ -z "$add_aliases_csv" ]; then
+    die "--add-aliases requires EVENT_ID and ALIASES arguments"
+  fi
+  if [ ! -f "$events_file" ]; then
+    die "Events file not found: $events_file"
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 is required for --add-aliases"
+  fi
+  acquire_report_lock "$events_dir"
+  tmp_aliases_file=$(mktemp "$events_dir/.events-aliases.XXXXXX.tmp")
+  if python3 - "$events_file" "$tmp_aliases_file" "$add_aliases_event_id" "$add_aliases_csv" <<'PY'
+import json, os, sys
+events_path, output_path, target_id, aliases_csv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+new_aliases = [a.strip().lower() for a in aliases_csv.split(",") if a.strip()]
+if not new_aliases:
+    print("No aliases provided", file=sys.stderr)
+    sys.exit(1)
+found = False
+with open(events_path, "r", encoding="utf-8") as src, open(output_path, "w", encoding="utf-8") as dst:
+    for raw in src:
+        stripped = raw.strip()
+        if not stripped:
+            dst.write(raw)
+            continue
+        event = json.loads(stripped)
+        if event.get("event_id") == target_id:
+            found = True
+            existing = event.get("aliases", [])
+            if isinstance(existing, str):
+                existing = [a.strip().lower() for a in existing.split(",") if a.strip()]
+            merged = list(dict.fromkeys(existing + new_aliases))
+            event["aliases"] = merged
+            dst.write(json.dumps(event, ensure_ascii=False) + "\n")
+        else:
+            dst.write(raw)
+if not found:
+    try:
+        os.remove(output_path)
+    except FileNotFoundError:
+        pass
+    print(f"Event not found: {target_id}", file=sys.stderr)
+    sys.exit(1)
+os.replace(output_path, events_path)
+PY
+  then
+    :
+  else
+    status=$?
+    rm -f "$tmp_aliases_file"
+    exit "$status"
+  fi
+  sh "$SCRIPT_DIR/build-index.sh" --events-file "$events_file" >/dev/null
+  printf 'FRICTION_ALIASES_UPDATED=%s\n' "$add_aliases_event_id"
+  exit 0
+fi
+
 acquire_report_lock "$events_dir"
 
 if [ -z "$repo_root" ]; then
   repo_root=$(git_repo_root)
-fi
-
-# Detect submodule context
-superproject_root=$(git_superproject_root)
-submodule_path=
-if [ -n "$superproject_root" ] && [ -n "$repo_root" ]; then
-  submodule_path=$(git_submodule_path "$superproject_root" "$repo_root")
 fi
 
 # Build sources JSON from CLI flags if not already set from --from-json
@@ -534,131 +508,50 @@ if [ -z "$sources_json" ]; then
     src_end_line_val=$(safe_int "$source_end_line")
     if [ "$src_line_val" -gt 0 ]; then src_fields="$src_fields,$(json_number "line" "$src_line_val")"; fi
     if [ "$src_end_line_val" -gt 0 ]; then src_fields="$src_fields,$(json_number "end_line" "$src_end_line_val")"; fi
-    if [ -n "$source_symbol" ]; then src_fields="$src_fields,$(json_string "symbol" "$(sanitize_text "$source_symbol")")"; fi
     if [ -n "$source_excerpt" ]; then src_fields="$src_fields,$(json_string "excerpt" "$(sanitize_text "$source_excerpt")")"; fi
-    if [ -n "$source_selector" ]; then src_fields="$src_fields,$(json_string "selector" "$(sanitize_text "$source_selector")")"; fi
-    if [ -n "$source_label" ]; then src_fields="$src_fields,$(json_string "label" "$(sanitize_text "$source_label")")"; fi
     sources_json="[{${src_fields}}]"
   else
     die "Missing required source: provide --source-ref (and optionally --source-type) or use --from-json with a sources array"
   fi
 fi
 
-# Extract primary source ref for fingerprinting and categorizer
+# Extract primary source ref for fingerprinting
 primary_source_ref=$(extract_primary_source_ref "$sources_json")
 
-
-validate_required_field "instruction_text" "$instruction_text"
-validate_required_field "action_taken" "$action_taken"
+# Validate required narrative fields
 validate_required_field "expected_outcome" "$expected_outcome"
 validate_required_field "actual_outcome" "$actual_outcome"
 validate_required_field "reading" "$reading"
-validate_required_field "hindsight" "$hindsight"
+
+# Validate impact
+if [ -z "$impact" ]; then
+  die "Missing required field: --impact (blocked, degraded, noisy, or continued)"
+fi
+impact=$(normalize_impact "$impact")
 
 # Sanitize narrative fields
 title=$(sanitize_text "$title")
-instruction_text=$(sanitize_text "$instruction_text")
-action_taken=$(sanitize_text "$action_taken")
 expected_outcome=$(sanitize_text "$expected_outcome")
 actual_outcome=$(sanitize_text "$actual_outcome")
 reading=$(sanitize_text "$reading")
 hindsight=$(sanitize_text "$hindsight")
-command_text=$(sanitize_text "$command_text")
-tool_name=$(sanitize_text "$tool_name")
-stderr_text=$(sanitize_excerpt "$stderr_text" 500)
-stdout_excerpt=$(sanitize_excerpt "$stdout_excerpt" 500)
-owner_hint=$(sanitize_text "$owner_hint")
-component_hint=$(sanitize_text "$component_hint")
-workaround_note=$(sanitize_text "$workaround_note")
-agent_name=$(sanitize_text "$agent_name")
-role=$(sanitize_text "$role")
 
 # Validate narrative depth
-# Minimum lengths are spam filters, not quality enforcement.
-# Quality is driven by EARS structural guidance in SKILL.md and AGENTS.md
-# (multi-sentence mandates, quoting requirements, reasoning chain structure).
-# These thresholds only reject obviously worthless entries.
-validate_narrative_length "instruction_text" "$instruction_text" 10
-validate_narrative_length "action_taken" "$action_taken" 20
 validate_narrative_length "expected_outcome" "$expected_outcome" 15
 validate_narrative_length "actual_outcome" "$actual_outcome" 15
 validate_narrative_length "reading" "$reading" 30
-validate_narrative_length "hindsight" "$hindsight" 20
 
-# Run categorizer
-cat_output=$(
-  sh "$SCRIPT_DIR/categorize.sh" \
-    --source-ref "$primary_source_ref" \
-    --instruction-text "$instruction_text" \
-    --action-taken "$action_taken" \
-    --expected-outcome "$expected_outcome" \
-    --actual-outcome "$actual_outcome" \
-    --hindsight "$hindsight" \
-    --reading "$reading" \
-    --command "$command_text" \
-    --tool-name "$tool_name" \
-    --stderr "$stderr_text" \
-    --stdout-excerpt "$stdout_excerpt" \
-    --observed-surface "$observed_surface" \
-    --surface "$surface" \
-    --mode "$mode" \
-    --run-effect "$run_effect" \
-    --guidance-quality "$guidance_quality" \
-    --confidence "$confidence"
-)
+# Build tags and aliases JSON arrays (normalized to lowercase)
+tags_json=$(csv_to_json_array "$tags_csv")
+aliases_json=$(csv_to_json_array "$aliases_csv")
 
-final_observed_surface=
-final_surface=
-final_mode=
-final_run_effect=
-final_guidance_quality=
-final_confidence=
-final_derived_category=
-final_taxonomy_version=
-while IFS='=' read -r key value; do
-  case "$key" in
-    observed_surface) final_observed_surface=$value ;;
-    surface) final_surface=$value ;;
-    mode) final_mode=$value ;;
-    run_effect) final_run_effect=$value ;;
-    guidance_quality) final_guidance_quality=$value ;;
-    confidence) final_confidence=$value ;;
-    derived_category) final_derived_category=$value ;;
-    taxonomy_version) final_taxonomy_version=$value ;;
-  esac
-done <<EOF
-$cat_output
-EOF
-
-observed_surface=$final_observed_surface
-surface=$final_surface
-mode=$final_mode
-run_effect=$final_run_effect
-guidance_quality=$final_guidance_quality
-confidence=$final_confidence
-derived_category=$final_derived_category
-taxonomy_version=$final_taxonomy_version
-
-# Tags are agent-curated via --add-tags after the event is written.
-# Events are initially written with an empty tags array.
-tags_json='[]'
-
-# Normalize optional fields
-workaround_used=$(normalize_bool "$workaround_used")
-retries_lost=$(safe_int "$retries_lost")
-minutes_lost=$(safe_int "$minutes_lost")
-exit_code_value=$(safe_int "$exit_code")
-
-# Auto-title: [surface/mode] prefix + actual_outcome excerpt
+# Auto-title from actual_outcome if not provided
 if [ -z "$(trim "$title")" ]; then
-  title_prefix="[$surface/$mode]"
-  title_body=$(truncate_line "$actual_outcome" 60)
-  title="$title_prefix $title_body"
+  title=$(truncate_line "$actual_outcome" 80)
 fi
 
 event_date=$(date -u '+%Y-%m-%d')
-fingerprint=$(build_event_fingerprint "$surface" "$mode" "$primary_source_ref" "$event_date" "$fingerprint_key")
-incident_id=inc-$fingerprint
+fingerprint=$(build_event_fingerprint "$primary_source_ref" "$event_date" "$fingerprint_key")
 entry_number=0
 if [ -f "$events_file" ]; then
   entry_number=$(wc -l <"$events_file" | tr -d ' ')
@@ -668,56 +561,24 @@ event_id=$(printf 'evt-%04d' "$entry_number")
 recorded=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 index_file=$events_dir/INDEX.md
 
-# Emit event JSON with sparse optional fields
+# Emit event JSON
 tmp_event=$(mktemp "$events_dir/.event.XXXXXX.tmp")
 {
   printf '{'
-  # Always-present metadata
-  printf '%s,' "$(json_string "schema_version" "$SCHEMA_VERSION")"
-  printf '%s,' "$(json_string "taxonomy_version" "$taxonomy_version")"
   printf '%s,' "$(json_string "event_id" "$event_id")"
-  printf '%s,' "$(json_string "incident_id" "$incident_id")"
-  printf '%s,' "$(json_string "fingerprint" "$fingerprint")"
   printf '%s,' "$(json_string "recorded_at" "$recorded")"
+  printf '%s,' "$(json_string "fingerprint" "$fingerprint")"
+  printf '%s,' "$(json_string "title" "$title")"
   printf '%s,' "$(json_string "events_file" "$events_file")"
   printf '%s,' "$(json_string "repo_root" "$repo_root")"
-  json_string_if "superproject_root" "$superproject_root"
-  json_string_if "submodule_path" "$submodule_path"
-  # Identity (agent_name always present; role sparse)
-  printf '%s,' "$(json_string "agent_name" "$agent_name")"
-  json_string_if "role" "$role"
-  # Core narrative (always present)
-  printf '%s,' "$(json_string "title" "$title")"
-  printf '%s,' "$(json_string "instruction_text" "$instruction_text")"
-  printf '%s,' "$(json_string "action_taken" "$action_taken")"
   printf '%s,' "$(json_string "expected_outcome" "$expected_outcome")"
   printf '%s,' "$(json_string "actual_outcome" "$actual_outcome")"
   printf '%s,' "$(json_string "reading" "$reading")"
-  printf '%s,' "$(json_string "hindsight" "$hindsight")"
-  # Sparse optional context
-  json_string_if "command" "$command_text"
-  json_string_if "tool_name" "$tool_name"
-  json_string_if "stderr" "$stderr_text"
-  json_string_if "stdout_excerpt" "$stdout_excerpt"
-  json_string_if "owner_hint" "$owner_hint"
-  json_string_if "component_hint" "$component_hint"
-  json_string_if "workaround_note" "$workaround_note"
-  # Classification (always present, numeric)
-  printf '%s,' "$(json_string "observed_surface" "$observed_surface")"
-  printf '%s,' "$(json_string "surface" "$surface")"
-  printf '%s,' "$(json_string "mode" "$mode")"
-  printf '%s,' "$(json_string "run_effect" "$run_effect")"
-  printf '%s,' "$(json_number "guidance_quality" "$guidance_quality")"
-  printf '%s,' "$(json_number "confidence" "$confidence")"
-  printf '%s,' "$(json_string "derived_category" "$derived_category")"
+  json_string_if "hindsight" "$hindsight"
+  printf '"sources":%s,' "$sources_json"
+  printf '%s,' "$(json_string "impact" "$impact")"
   printf '"tags":%s,' "$tags_json"
-  # Sparse impact fields
-  json_bool_if "workaround_used" "$workaround_used"
-  json_number_if "exit_code" "$exit_code_value"
-  json_number_if "retries_lost" "$retries_lost"
-  json_number_if "minutes_lost" "$minutes_lost"
-  # Sources array (always present)
-  printf '"sources":%s' "$sources_json"
+  printf '"aliases":%s' "$aliases_json"
   printf '}\n'
 } >"$tmp_event"
 cat "$tmp_event" >>"$events_file"
@@ -732,13 +593,15 @@ if [ -n "$repo_root" ]; then
   printf 'FRICTION_REPO_ROOT=%s\n' "$repo_root"
 fi
 
-# Tag helper: show existing tags and suggest --add-tags command
+# Show existing tags and aliases for reference
 existing_tags=$(extract_all_tags "$events_file")
+existing_aliases=$(extract_all_aliases "$events_file")
 printf '\n'
 if [ -n "$existing_tags" ]; then
   printf 'All tags in this stream: %s\n' "$existing_tags"
-else
-  printf 'No tags in this stream yet.\n'
 fi
-printf 'To add tags to this event, run:\n'
-printf '  sh %s/report-friction.sh --add-tags %s "tag1,tag2"\n' "$SCRIPT_DIR" "$event_id"
+if [ -n "$existing_aliases" ]; then
+  printf 'All aliases in this stream: %s\n' "$existing_aliases"
+fi
+printf 'To add tags:    sh %s/report-friction.sh --add-tags %s "tag1,tag2"\n' "$SCRIPT_DIR" "$event_id"
+printf 'To add aliases: sh %s/report-friction.sh --add-aliases %s "alias1,alias2"\n' "$SCRIPT_DIR" "$event_id"

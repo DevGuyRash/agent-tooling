@@ -1,6 +1,6 @@
 # friction-diagnostics
 
-`friction-diagnostics` records friction as a rolling structured event stream.
+`friction-diagnostics` records friction as a rolling structured event stream. It is a cognitive debugging tool for agent behavior — capturing WHY an agent made decisions and where reasoning diverged from reality.
 
 The canonical persisted file is:
 
@@ -22,16 +22,12 @@ Everything meaningful is stored in `events.jsonl`.
 - no `task.json`
 - no descriptors
 - no per-agent markdown logs
-- no default `incidents.json`
-- no default `exports/`
 
 `INDEX.md` is the only default derived file kept on disk.
 
-### 2. Filing path is heuristic-driven
+### 2. Filing is a single command
 
-Use direct flags only for short, single-line, scalar payloads with one source and no shell-sensitive text. Use stdin JSON for backticks, `$()`, copied command output, multiline text, or multiple `sources`. The `report-friction-json.*` helpers are thin wrappers around the safe JSON path when the caller does not want to hand-assemble the final `--from-json` command.
-
-The simple direct-flags workflow is:
+Use direct flags for short, single-line, scalar payloads with one source and no shell-sensitive text. Use stdin JSON for backticks, `$()`, multiline text, or multiple sources.
 
 ```sh
 sh scripts/report-friction.sh \
@@ -39,88 +35,79 @@ sh scripts/report-friction.sh \
   --source-type file \
   --source-ref "SKILL.md" \
   --source-line 160 \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
-  --action-taken "Ran mpcr protocol dispatch --role architecture." \
+  --source-excerpt "Use mpcr protocol dispatch --role <ROLE>." \
   --expected-outcome "The CLI returns the architecture prompt." \
   --actual-outcome "error: unknown dispatch role: architecture" \
-  --interpretation "I treated the visible table label as the CLI slug."
+  --reading "The dispatch table had 'Architecture' in the Role column. I plugged in 'architecture' as the CLI slug. The CLI rejected it — the actual slug is 'architecture-critic', which doesn't appear anywhere in the table." \
+  --hindsight "I should have run --list-roles first instead of inferring from a display table." \
+  --impact blocked \
+  --tags "dispatch,slug-mismatch,mpcr" \
+  --aliases "instructions"
 ```
 
-`--from-json PATH|-` remains available for compatibility and integrations. If JSON is used, prefer stdin over temp files. Also prefer stdin JSON whenever the payload contains shell-sensitive text such as backticks, `$()`, copied command output, or multiple lines.
-
-Provenance is optional. If `--agent` or `--role` are omitted, the tool records provenance as unspecified instead of guessing.
-
-PowerShell stdin example:
-
-```powershell
-@'
-{"title":"Dispatch role slug mismatch","instruction_text":"Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt.","action_taken":"Ran mpcr protocol dispatch --role architecture.","expected_outcome":"The CLI returns the architecture prompt.","actual_outcome":"error: unknown dispatch role: architecture","interpretation":"I treated the visible table label as the CLI slug.","sources":[{"type":"file","ref":"SKILL.md","line":160}]}
-'@ | & .\scripts\report-friction.ps1 -FromJson -
-```
-
-POSIX helper example:
+JSON stdin example:
 
 ```sh
-cat <<'EOF' | sh scripts/report-friction-json.sh
-{"title":"Complex payload","instruction_text":"Example","action_taken":"Example action taken with shell-sensitive text like `ghost-router` and $(whoami).","expected_outcome":"Example","actual_outcome":"Example","reading":"Example reading text that is long enough to satisfy validation.","hindsight":"Example hindsight text that is also long enough.","sources":[{"type":"documentation","ref":"test"}]}
+cat <<'EOF' | sh scripts/report-friction.sh --from-json -
+{
+  "title": "SSH signing agent unavailable",
+  "expected_outcome": "Git would create the commit object.",
+  "actual_outcome": "error: 1Password: Could not connect to socket.",
+  "reading": "The commit failed during signing because SSH_AUTH_SOCK had no socket available.",
+  "impact": "blocked",
+  "tags": ["ssh-auth-sock", "git-signing"],
+  "aliases": ["auth", "git"],
+  "sources": [
+    {"type": "file", "ref": "functions.exec_command", "excerpt": "git commit -m 'docs: add skill'"}
+  ]
+}
 EOF
+```
+
+Post-hoc tag/alias additions remain available:
+
+```sh
+sh scripts/report-friction.sh --add-tags evt-NNNN "new-tag1,new-tag2"
+sh scripts/report-friction.sh --add-aliases evt-NNNN "broader-group"
 ```
 
 ### 3. Always-on write-time sanitization
 
-The tool redacts common secrets and tokens before writing event text to disk. This keeps the hot append path deterministic while still protecting the stored event stream.
+The tool redacts common secrets and tokens before writing event text to disk.
 
 ## Included files
 
 - `SKILL.md` — usage guidance
-- `scripts/report-friction.*` — append one event
+- `scripts/report-friction.*` — append one event with tags, aliases, and impact inline
 - `scripts/query-friction.*` — query the canonical event stream
-- `scripts/generate-report.*` — generate enhanced index, cross-repo, per-repo, and timeseries reports
+- `scripts/generate-report.*` — generate index, cross-repo, per-repo, and timeseries reports
 - `scripts/build-index.*` — tool-managed index regeneration
-- `scripts/categorize.*` — taxonomy heuristics
-- `scripts/render-table.*` — render Unicode box-drawing tables from TSV/CSV/JSON-family input
-- `scripts/render-summary.*` — render session summaries with query footer and source flattening
-- `scripts/report-friction-json.*` — thin helpers that route JSON payloads into the safe `--from-json` filing path
-- `references/` — integration and logging references
+- `scripts/render-table.*` — render Unicode box-drawing tables
+- `scripts/render-summary.*` — render session summaries with query footer
+- `scripts/report-friction-json.*` — thin helpers for the safe `--from-json` filing path
+- `references/` — integration, logging spec, and examples
 - `tests/` — smoke tests
 
 ## JSON input diagnostics
 
 When `--from-json` is used:
 
-- syntax failures return concise parser diagnostics, including line/column details when the active runtime exposes them
-- invalid stdin JSON is saved under repo-local `.local/tmp/friction-diagnostics/` for replay when inside a git repo; outside a repo it falls back to the system temp directory
+- syntax failures return concise parser diagnostics with line/column details
+- invalid stdin JSON is saved under repo-local `.local/tmp/friction-diagnostics/` for replay
 - schema failures return concise field-level errors
 - raw parser stack traces are suppressed
 
 ## Querying
 
-POSIX query, report, and index commands use `jq`. PowerShell variants use native object processing. The write path keeps Python only for advanced `--from-json` parsing and `--add-tags` rewriting.
-
-Use `query-friction.*` to read `events.jsonl` directly:
-
 ```sh
-sh scripts/query-friction.sh --category instructions/missing/blocked --format md
-sh scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
-sh scripts/query-friction.sh --tag dispatch --text slug --format json
-sh scripts/query-friction.sh --date-from 2026-03-01 --date-to 2026-03-31 --format json
-sh scripts/query-friction.sh --source-ref "$PWD/skills/friction-diagnostics/SKILL.md"
-```
-
-```powershell
-& .\scripts\query-friction.ps1 -Category instructions/missing/blocked -Format md
-& .\scripts\query-friction.ps1 -Surface skill -RunEffect blocked -DateFrom 2026-03-01
-& .\scripts\query-friction.ps1 -DateFrom 2026-03-01 -DateTo 2026-03-31 -Format json
-& .\scripts\query-friction.ps1 -SourceRef "$PWD\skills\friction-diagnostics\SKILL.md"
-```
-
-Use `generate-report.*` for aggregate views:
-
-```sh
-sh scripts/generate-report.sh --events-file .local/reports/friction/events.jsonl --report-type index
+sh scripts/query-friction.sh --impact blocked --format md
+sh scripts/query-friction.sh --tag auth --date-from 2026-03-01
+sh scripts/query-friction.sh --alias environment --format json
+sh scripts/query-friction.sh --source-ref "SKILL.md"
 sh scripts/generate-report.sh --scan-dirs ~/repos --report-type cross-repo
-sh scripts/generate-report.sh --scan-dirs ~/repos --report-type timeseries --group-by surface
 ```
+
+Tag queries use substring matching: `--tag auth` matches tags containing "auth" (e.g., `ssh-auth-sock`). Use `--tag-exact` for exact matches. Same for `--alias` / `--alias-exact`.
 
 Recommended reading order:
 
@@ -129,14 +116,10 @@ Recommended reading order:
 3. Use `generate-report.*` for aggregate views.
 4. Drop to raw `events.jsonl` plus `jq` only when a custom slice is needed.
 
-Session summary renderers are available on both POSIX and PowerShell. Use `--after` to render only the delta since the last assistant turn, not the full session every time:
+Session summary renderers:
 
 ```sh
 sh scripts/render-summary.sh --events-file .local/reports/friction/events.jsonl --after 2026-04-01T12:00:00Z
-```
-
-```powershell
-& .\scripts\render-summary.ps1 -EventsFile .local/reports/friction/events.jsonl -After 2026-04-01T12:00:00Z
 ```
 
 ## Notes
@@ -144,4 +127,4 @@ sh scripts/render-summary.sh --events-file .local/reports/friction/events.jsonl 
 - There is no `init-log` step.
 - `INDEX.md` is auto-created and auto-reconciled by the tooling after append operations.
 - The canonical event schema supports a unified `sources` array so code and non-code references can be stored consistently.
-- `--add-tags` uses the same file lock as event writes and swaps the updated JSONL into place atomically.
+- `--add-tags` and `--add-aliases` use the same file lock as event writes and swap the updated JSONL into place atomically.

@@ -17,23 +17,13 @@ Input:
                             */.local*/reports/friction/events.jsonl
 
 Filters:
-  --category VALUE
-  --surface VALUE
-  --mode VALUE
-  --run-effect VALUE
+  --impact VALUE            blocked | degraded | noisy | continued
   --fingerprint VALUE
-  --role VALUE
-  --tag VALUE               Single tag filter; repeat support is not implemented
+  --tag VALUE               Substring match across tags (e.g. "auth" matches "ssh-auth-sock")
+  --tag-exact VALUE         Exact tag match
+  --alias VALUE             Substring match across aliases
+  --alias-exact VALUE       Exact alias match
   --text PATTERN            Case-insensitive substring search across narrative fields
-  --confidence-min N
-  --confidence-max N
-  --guidance-min N
-  --guidance-max N
-  --exit-code N
-  --tool-name VALUE
-  --owner-hint VALUE
-  --component-hint VALUE
-  --workaround              Only include events with workaround_used=true
   --date YYYY-MM-DD
   --date-from YYYY-MM-DD
   --date-to YYYY-MM-DD
@@ -45,30 +35,19 @@ Output:
   --format jsonl|json|md
   --output PATH
   --compact                 Strip empty-string and null fields (json/jsonl only)
-  --suggest-tags
   --help
 EOF
 }
 
 events_file=${FRICTION_EVENTS_FILE-}
 scan_dirs=
-category=
-surface=
-mode=
-run_effect=
+impact=
 fingerprint=
-role=
 tag=
+tag_exact=
+alias_filter=
+alias_exact=
 text=
-confidence_min=
-confidence_max=
-guidance_min=
-guidance_max=
-exit_code=
-tool_name=
-owner_hint=
-component_hint=
-workaround=0
 date_exact=
 date_from=
 date_to=
@@ -77,7 +56,6 @@ before=
 source_ref=
 format=jsonl
 output_path=
-suggest_tags=0
 compact=0
 
 append_multiline() {
@@ -105,23 +83,13 @@ while [ $# -gt 0 ]; do
         esac
       done
       ;;
-    --category) category=${2-}; shift 2 ;;
-    --surface) surface=${2-}; shift 2 ;;
-    --mode) mode=${2-}; shift 2 ;;
-    --run-effect) run_effect=${2-}; shift 2 ;;
+    --impact) impact=${2-}; shift 2 ;;
     --fingerprint) fingerprint=${2-}; shift 2 ;;
-    --role) role=${2-}; shift 2 ;;
     --tag) tag=${2-}; shift 2 ;;
+    --tag-exact) tag_exact=${2-}; shift 2 ;;
+    --alias) alias_filter=${2-}; shift 2 ;;
+    --alias-exact) alias_exact=${2-}; shift 2 ;;
     --text) text=${2-}; shift 2 ;;
-    --confidence-min) confidence_min=${2-}; shift 2 ;;
-    --confidence-max) confidence_max=${2-}; shift 2 ;;
-    --guidance-min) guidance_min=${2-}; shift 2 ;;
-    --guidance-max) guidance_max=${2-}; shift 2 ;;
-    --exit-code) exit_code=${2-}; shift 2 ;;
-    --tool-name) tool_name=${2-}; shift 2 ;;
-    --owner-hint) owner_hint=${2-}; shift 2 ;;
-    --component-hint) component_hint=${2-}; shift 2 ;;
-    --workaround) workaround=1; shift ;;
     --date) date_exact=${2-}; shift 2 ;;
     --date-from) date_from=${2-}; shift 2 ;;
     --date-to) date_to=${2-}; shift 2 ;;
@@ -131,7 +99,6 @@ while [ $# -gt 0 ]; do
     --format) format=${2-}; shift 2 ;;
     --output) output_path=${2-}; shift 2 ;;
     --compact) compact=1; shift ;;
-    --suggest-tags) suggest_tags=1; shift ;;
     --help|-h) print_help; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -188,23 +155,13 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 jq -s \
-  --arg category "$category" \
-  --arg surface "$surface" \
-  --arg mode "$mode" \
-  --arg run_effect "$run_effect" \
+  --arg impact "$impact" \
   --arg fingerprint "$fingerprint" \
-  --arg role "$role" \
   --arg tag "$tag" \
+  --arg tag_exact "$tag_exact" \
+  --arg alias_filter "$alias_filter" \
+  --arg alias_exact "$alias_exact" \
   --arg text "$text" \
-  --arg confidence_min "$confidence_min" \
-  --arg confidence_max "$confidence_max" \
-  --arg guidance_min "$guidance_min" \
-  --arg guidance_max "$guidance_max" \
-  --arg exit_code "$exit_code" \
-  --arg tool_name "$tool_name" \
-  --arg owner_hint "$owner_hint" \
-  --arg component_hint "$component_hint" \
-  --arg workaround "$workaround" \
   --arg date_exact "$date_exact" \
   --arg date_from "$date_from" \
   --arg date_to "$date_to" \
@@ -212,44 +169,42 @@ jq -s \
   --arg before "$before" \
   --arg source_ref "$source_ref" \
   '
-  def category_parts:
-    (.derived_category // "" | split("/") + ["", "", ""])[0:3];
-  def as_num:
-    if . == null or . == "" then null else (try (tonumber) catch null) end;
   def event_tags:
-    (.tags // [] | map(tostring));
+    (.tags // [] | map(tostring | ascii_downcase));
+  def event_aliases:
+    (.aliases // [] | map(tostring | ascii_downcase));
+  def matches_tag_fuzzy($needle):
+    if $needle == "" then true
+    else ($needle | ascii_downcase) as $n | any(event_tags[]; contains($n)) end;
+  def matches_tag_exact($needle):
+    if $needle == "" then true
+    else ($needle | ascii_downcase) as $n | any(event_tags[]; . == $n) end;
+  def matches_alias_fuzzy($needle):
+    if $needle == "" then true
+    else ($needle | ascii_downcase) as $n | any(event_aliases[]; contains($n)) end;
+  def matches_alias_exact($needle):
+    if $needle == "" then true
+    else ($needle | ascii_downcase) as $n | any(event_aliases[]; . == $n) end;
   def matches_source_ref($ref):
     if $ref == "" then true else any((.sources // [])[]?; (.ref // "") == $ref) end;
   def text_match($needle):
     if $needle == "" then true
     else
-      ([.title, .actual_outcome, .action_taken, .reading, .hindsight, .instruction_text, .expected_outcome]
+      ([.title, .actual_outcome, .reading, .hindsight, .expected_outcome]
        | map((. // "") | ascii_downcase)
        | join("\u0000")
        | contains($needle | ascii_downcase))
     end;
-  def compact_obj:
-    with_entries(select(.value != null and .value != ""));
 
   map(
     select(
-      ($category == "" or (.derived_category // "") == $category) and
-      ($surface == "" or (category_parts[0] == $surface)) and
-      ($mode == "" or (category_parts[1] == $mode)) and
-      ($run_effect == "" or (category_parts[2] == $run_effect)) and
+      ($impact == "" or (.impact // "") == $impact) and
       ($fingerprint == "" or (.fingerprint // "") == $fingerprint) and
-      ($role == "" or (.role // "") == $role) and
-      ($tag == "" or (event_tags | index($tag)) != null) and
+      matches_tag_fuzzy($tag) and
+      matches_tag_exact($tag_exact) and
+      matches_alias_fuzzy($alias_filter) and
+      matches_alias_exact($alias_exact) and
       text_match($text) and
-      ($confidence_min == "" or ((.confidence | as_num) as $v | $v != null and $v >= ($confidence_min | tonumber))) and
-      ($confidence_max == "" or ((.confidence | as_num) as $v | $v != null and $v <= ($confidence_max | tonumber))) and
-      ($guidance_min == "" or ((.guidance_quality | as_num) as $v | $v != null and $v >= ($guidance_min | tonumber))) and
-      ($guidance_max == "" or ((.guidance_quality | as_num) as $v | $v != null and $v <= ($guidance_max | tonumber))) and
-      ($exit_code == "" or ((.exit_code | as_num) as $v | $v != null and $v == ($exit_code | tonumber))) and
-      ($tool_name == "" or (.tool_name // "") == $tool_name) and
-      ($owner_hint == "" or (.owner_hint // "") == $owner_hint) and
-      ($component_hint == "" or (.component_hint // "") == $component_hint) and
-      ($workaround != "1" or (.workaround_used // false) == true) and
       (($date_exact == "") or (((.recorded_at // "")[0:10]) == $date_exact)) and
       (($date_from == "") or (((.recorded_at // "")[0:10]) >= $date_from)) and
       (($date_to == "") or (((.recorded_at // "")[0:10]) <= $date_to)) and
@@ -260,16 +215,6 @@ jq -s \
   )
   | sort_by(.recorded_at // "", .event_id // "")
   ' "$@" >"$filtered_tmp"
-
-if [ "$suggest_tags" -eq 1 ]; then
-  result=$(jq -r '.[] | (.tags // [])[]? // empty' "$filtered_tmp" | LC_ALL=C sort -u)
-  if [ -n "$output_path" ]; then
-    printf '%s\n' "$result" >"$output_path"
-  else
-    printf '%s\n' "$result"
-  fi
-  exit 0
-fi
 
 case "$format" in
   jsonl)
@@ -301,33 +246,15 @@ case "$format" in
           .[]
           | "## \(.event_id // ""): \(.title // "")\n"
             + "\n- Recorded: \(.recorded_at // "")"
-            + "\n- Category: \(.derived_category // "")"
+            + "\n- Impact: \(.impact // "")"
             + "\n- Fingerprint: \(.fingerprint // "")"
-            + (if ((.incident_id // "") | length) > 0 then "\n- Incident: \(.incident_id)" else "" end)
-            + (if ((.agent_name // "") | length) > 0 then "\n- Agent: \(.agent_name)" else "" end)
-            + (if ((.role // "") | length) > 0 then "\n- Role: \(.role)" else "" end)
-            + (if ((.confidence // 0) != 0 or (.guidance_quality // 0) != 0) then "\n- Confidence: \(.confidence // 0) | Guidance: \(.guidance_quality // 0)" else "" end)
-            + (if (.exit_code // null) != null then "\n- Exit code: \(.exit_code)" else "" end)
-            + (if ((.tool_name // "") | length) > 0 then "\n- Tool: \(.tool_name)" else "" end)
-            + (if ((.command // "") | length) > 0 then "\n- Command: \(.command)" else "" end)
-            + (if ((.owner_hint // "") | length) > 0 then "\n- Owner: \(.owner_hint)" else "" end)
-            + (if ((.component_hint // "") | length) > 0 then "\n- Component: \(.component_hint)" else "" end)
-            + (if (.workaround_used // false) == true then "\n- Workaround used: yes" else "" end)
-            + (if ((.workaround_note // "") | length) > 0 then "\n- Workaround: \(.workaround_note)" else "" end)
-            + (if ((.retries_lost // 0) | tonumber) > 0 then "\n- Retries lost: \(.retries_lost)" else "" end)
-            + (if ((.minutes_lost // 0) | tonumber) > 0 then "\n- Minutes lost: \(.minutes_lost)" else "" end)
-            + (if ((.superproject_root // "") | length) > 0 then "\n- Superproject: \(.superproject_root)" else "" end)
-            + (if ((.submodule_path // "") | length) > 0 then "\n- Submodule: \(.submodule_path)" else "" end)
             + (if ((.sources // []) | length) > 0 then
                 "\n- Sources: " + ([(.sources // [])[] |
                   (.ref // "") + (if (.line // null) != null then ":" + (.line | tostring) + (if (.end_line // null) != null then "-" + (.end_line | tostring) else "" end) else "" end)
                 ] | join(", "))
               else "" end)
             + ((.tags // []) | if length > 0 then "\n- Tags: " + join(", ") else "" end)
-            + (if ((.stderr // "") | length) > 0 then "\n- Stderr: \(.stderr | split("\n")[0])" else "" end)
-            + (if ((.stdout_excerpt // "") | length) > 0 then "\n- Stdout excerpt: \(.stdout_excerpt | split("\n")[0])" else "" end)
-            + (if ((.instruction_text // "") | length) > 0 then "\n\n**Instruction:** \(.instruction_text)" else "" end)
-            + (if ((.action_taken // "") | length) > 0 then "\n\n**Action taken:** \(.action_taken)" else "" end)
+            + ((.aliases // []) | if length > 0 then "\n- Aliases: " + join(", ") else "" end)
             + (if ((.expected_outcome // "") | length) > 0 then "\n\n**Expected:** \(.expected_outcome)" else "" end)
             + (if ((.actual_outcome // "") | length) > 0 then "\n\n**Actual:** \(.actual_outcome)" else "" end)
             + (if ((.reading // "") | length) > 0 then "\n\n**Reading:** \(.reading)" else "" end)

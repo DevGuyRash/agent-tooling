@@ -13,14 +13,14 @@ description: >-
 compatibility: Designed for filesystem-capable coding agents. Deterministic helpers require POSIX sh on Unix-like systems or PowerShell on Windows. No network required.
 metadata:
   author: generated-template
-  version: "3.0.0"
+  version: "4.0.0"
   category: diagnostics
   tags: friction,logging,postmortem,troubleshooting
 ---
 
 # Friction Diagnostics
 
-A rolling event stream that captures friction — errors, failures, mismatches, and unexpected outcomes — as structured JSONL.
+A cognitive debugging tool for agent behavior. Captures friction — errors, failures, mismatches, and unexpected outcomes — as structured JSONL, with emphasis on tracing the agent's reasoning chain so that instructions and environments can be improved.
 
 WHEN any error, failure, unexpected outcome, or friction occurs THEN you SHALL log it using this skill.
 WHEN the same issue repeats without materially new evidence THEN you SHALL NOT add a duplicate entry.
@@ -32,56 +32,57 @@ The canonical data is `events.jsonl`. `INDEX.md` is an auto-maintained summary.
 
 ## How to file
 
-Filing a friction event requires two commands. The event is not complete until both have run.
-
-1. **`report-friction.sh`** — writes the event and outputs the event ID + existing tags
-2. **`report-friction.sh --add-tags`** — tags the event using the ID from command 1
-
-### Command 1 — report
+Filing a friction event is a single command. Provide the narrative, sources, impact, and classification together.
 
 Use this filing-path heuristic:
 
 - Direct flags are for short, single-line, scalar payloads with one source and no shell-sensitive text.
 - `--from-json -` is the safe path for backticks, `$()`, copied command output, multiline text, or multiple `sources`.
-- `report-friction-json.sh` / `.ps1` are thin helpers for that safe path when you do not want to hand-assemble the final `--from-json` invocation.
 
 ```sh
 sh <skills-file-root>/scripts/report-friction.sh \
-  --title "Dispatch role slug mismatch" \
+  --title "Git commit failed — SSH signing agent unavailable" \
   --source-type file \
-  --source-ref "SKILL.md" \
-  --source-line 160 \
-  --instruction-text "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
-  --action-taken "I opened SKILL.md and found the dispatch table at line 160. The table listed 'Architecture' in the Role column. I ran: mpcr protocol dispatch --role architecture. The command was invoked from the repo root with no other flags." \
-  --expected-outcome "The CLI would resolve 'architecture' as a valid dispatch role slug and return the full architecture prompt text, consistent with the dispatch table row for that role." \
-  --actual-outcome "The command exited with: error: unknown dispatch role: architecture. No prompt text was returned. The process exited non-zero immediately." \
-  --reading "The dispatch table had a column called 'Role' with 'Architecture' in it, and the instruction said 'Use --role <ROLE>'. So I plugged in 'architecture' — the table column was labeled 'Role,' the placeholder said ROLE, seemed like a direct substitution. The CLI rejected it immediately: 'unknown dispatch role: architecture.' Turns out the actual slug is 'architecture-critic,' which doesn't appear anywhere in the table or the surrounding text." \
-  --hindsight "I should have run the CLI's own discovery command first — something like --list or --help on the dispatch subcommand — instead of inferring the slug from a display table. The table uses human-friendly labels; the CLI uses internal slugs. Those are two different naming schemes and I treated them as one."
+  --source-ref "functions.exec_command" \
+  --source-excerpt "git -C /path/to/repo commit -m 'docs: add skill'" \
+  --expected-outcome "Git would create the commit object for the staged skill files." \
+  --actual-outcome "error: 1Password: Could not connect to socket specified by SSH_AUTH_SOCK. fatal: failed to write commit object" \
+  --reading "I had staged the files and passed the leak scan. I ran git commit and it failed during the signing phase because SSH_AUTH_SOCK had no socket available in this terminal session. The staging was clean so this was purely an environment issue. I retried with signing disabled for this one command." \
+  --hindsight "I should have checked whether this repo enforces commit signing through an external agent before issuing the commit." \
+  --impact blocked \
+  --tags "ssh-auth-sock,git-signing,1password,commit" \
+  --aliases "auth,git"
 ```
 
-WHEN payload text contains shell-sensitive content such as backticks, `$()`, or multiple lines THEN you SHOULD use `--from-json -` via stdin instead of direct flags. See `references/examples.md` for the JSON format.
+### Tags and aliases
 
-WHEN `--agent` or `--role` are omitted THEN the tool records provenance as unspecified rather than guessing.
+**Tags** are specific, natural labels that describe what was involved: `ssh-auth-sock`, `git-signing`, `cargo-test`, `missing-file`. Use whatever words feel natural.
 
-### Fingerprint stability
+**Aliases** are broader groupings: `auth`, `git`, `environment`, `permissions`, `instructions`. They help cluster related events for INDEX summaries and cross-event queries.
 
-Fingerprints are computed from `surface|mode|source_ref|date`. Narrative text does NOT affect the fingerprint. However, if the auto-categorizer assigns a different `surface` or `mode` for the same error (because wording varied), the fingerprint changes.
+Both are normalized to lowercase on write. You MAY provide both at filing time. The output shows existing tags and aliases in the stream for reference.
 
-WHEN you encounter a recurring error pattern that you have logged before THEN you SHOULD provide `--surface` and `--mode` explicitly to lock the categorization and keep the fingerprint stable.
-
-WHEN the auto-categorizer struggles with an error class (the same underlying issue gets different categories across events) THEN you SHOULD use `--fingerprint-key "descriptive key"` to override the default fingerprint seed entirely.
-
-WHEN logging an error similar to a prior event in the stream THEN you SHOULD use consistent terminology in narrative fields (especially `actual_outcome` and `action_taken`) to help the categorizer's pattern matching produce stable results.
-
-### Command 2 — tag
-
-The output from command 1 includes the event ID, existing tags in the stream, and the exact `--add-tags` invocation to run. Run it.
+`--add-tags` and `--add-aliases` remain available for post-hoc additions:
 
 ```sh
-sh <skills-file-root>/scripts/report-friction.sh --add-tags evt-NNNN "skill,name-resolution,dispatch,mpcr"
+sh <skills-file-root>/scripts/report-friction.sh --add-tags evt-NNNN "new-tag1,new-tag2"
+sh <skills-file-root>/scripts/report-friction.sh --add-aliases evt-NNNN "broader-group"
 ```
 
-WHEN choosing tags THEN you SHALL select relevant tags from the existing vocabulary shown AND create new tags for dimensions not yet covered — tool name, language, component, failure pattern, domain. More tags are better than fewer.
+### Impact
+
+WHEN filing an event THEN you SHALL provide `--impact` with one of:
+
+- **`blocked`** — work stopped; you could not proceed without a workaround or different approach
+- **`degraded`** — work continued but with reduced quality, a workaround, or a fallback
+- **`noisy`** — work continued but required extra retries, thrashing, or effort
+- **`continued`** — friction was observed but did not disrupt the workflow
+
+### Fingerprint
+
+Fingerprints are computed from `source_ref|date`. Events from the same source on the same day share a fingerprint, enabling recurrence detection in the INDEX.
+
+WHEN you want finer or different grouping THEN you SHOULD use `--fingerprint-key "descriptive key"` to override the default seed.
 
 ---
 
@@ -91,16 +92,33 @@ WHEN choosing tags THEN you SHALL select relevant tags from the existing vocabul
 
 Summary of what each field requires:
 
-- **`action_taken`** — three sentences: (1) what you read or consulted before acting and where, (2) the exact command or code you executed with arguments, (3) what you observed before and during the failure.
-- **`reading`** — first person. Your account of what happened from your perspective: what you encountered, what you understood it to mean, what you did, and what surprised you. Quote the specific wording you acted on. Vary your language — do not follow a sentence template. This is your story, not your analysis. A reader should understand your perspective, your decision points, and the moment things diverged — without being told "this was reasonable" or "the mismatch reveals." WHEN the source wording shaped your understanding in a specific way THEN you SHALL quote it verbatim. You SHALL NOT use the phrases "that reading was reasonable," "the mismatch reveals," "the mismatch shows," or any formulaic framing. Narrate what happened to you.
-- **`hindsight`** — first person. What you believe you should have done differently, knowing what you know now. This is about your decisions and approach, not about changes to the source material or codebase. WHEN you cannot identify anything you would do differently THEN you SHALL say so and explain why — the friction may have been unavoidable given what you knew.
+- **`reading`** — first person. The core field. Your full account of what happened: what you consulted, what you did, what you observed, how you interpreted it, and why you made the decisions you made. Quote the specific wording you acted on. Vary your language — do not follow a sentence template. This is your story, not your analysis. A reader should understand your perspective, your decision points, and the moment things diverged. WHEN the source wording shaped your understanding THEN you SHALL quote it verbatim. You SHALL NOT use formulaic framing like "that reading was reasonable" or "the mismatch reveals."
+- **`hindsight`** — first person. What you believe you should have done differently, knowing what you know now. This is about your decisions and approach, not about changes to the source material. WHEN you cannot identify anything you would do differently THEN you SHALL say so and explain why.
 - **`actual_outcome`** — the exact error message, exit code, or output verbatim. Do not paraphrase.
 - **`expected_outcome`** — the specific behavior you anticipated and which source you derived it from.
-- **`instruction_text`** — the exact text you acted on, quoted verbatim.
 
-Do not propose fixes, next steps, or corrective actions inside event payloads. Phrases like "the correct fix is", "the safer correction is", "the correct next step is", or "the right approach is" belong in your working context, not in the friction record.
+Do not propose fixes, next steps, or corrective actions inside event payloads. Those belong in your working context, not in the friction record.
 
 WHEN no error, failure, or unexpected outcome has occurred yet THEN you SHALL NOT log a friction event. Task starts, delegation handoffs, and in-progress status are not friction.
+
+---
+
+## Sources
+
+The `sources` array identifies where friction originated. Each entry points to a source the agent consulted or acted on.
+
+Ask: **"What artifact contains the text, code, or config that broke or misled me?"**
+
+| Field | Description |
+|---|---|
+| `type` | `file`, `url`, `conversation`, `audio`, `visual`, `documentation`, `other` |
+| `ref` | Primary reference: filepath, URL, or description |
+| `line`, `end_line` | Line range (for files) |
+| `excerpt` | Verbatim quote from the source — the specific text you acted on |
+
+WHEN friction originates from a file THEN `type` SHALL be `file` and `ref` SHALL be the file path.
+WHEN friction is in what the user said (e.g., an ambiguous instruction with no backing artifact) THEN `type` SHALL be `conversation`.
+WHEN text from multiple sources shaped the action THEN you SHALL use multiple entries in the `sources` array, each pointing to its own artifact.
 
 ---
 
@@ -108,14 +126,15 @@ WHEN no error, failure, or unexpected outcome has occurred yet THEN you SHALL NO
 
 Start with `INDEX.md` for an overview. Use the query and report scripts for filtered views.
 
-POSIX query/report/index commands use `jq`. PowerShell variants use native object processing. The write path keeps Python only for advanced `--from-json` parsing and `--add-tags` rewriting.
-
 ```sh
-sh <skills-file-root>/scripts/query-friction.sh --category instructions/missing/blocked --format md
-sh <skills-file-root>/scripts/query-friction.sh --surface skill --run-effect blocked --date-from 2026-03-01
+sh <skills-file-root>/scripts/query-friction.sh --impact blocked --format md
+sh <skills-file-root>/scripts/query-friction.sh --tag auth --date-from 2026-03-01
+sh <skills-file-root>/scripts/query-friction.sh --alias environment --format json
 sh <skills-file-root>/scripts/query-friction.sh --source-ref "SKILL.md"
 sh <skills-file-root>/scripts/generate-report.sh --scan-dirs ~/repos --report-type cross-repo
 ```
+
+Tag queries use substring matching: `--tag auth` matches tags containing "auth" (e.g., `ssh-auth-sock`, `auth-failure`). Use `--tag-exact` for exact matches. Same for `--alias` / `--alias-exact`.
 
 ---
 
@@ -135,41 +154,12 @@ sh <skills-file-root>/scripts/generate-report.sh --scan-dirs ~/repos --report-ty
 
 | Script | Purpose |
 |---|---|
-| `report-friction.sh` / `.ps1` | Append one event; `--add-tags` to tag after |
-| `query-friction.sh` / `.ps1` | Filter and render the event stream with category dimensions, text, numeric ranges, and exact-match filters |
+| `report-friction.sh` / `.ps1` | Append one event with tags, aliases, and impact inline; `--add-tags` / `--add-aliases` for post-hoc additions |
+| `query-friction.sh` / `.ps1` | Filter and render the event stream by impact, tags, aliases, text, dates, and sources |
 | `generate-report.sh` / `.ps1` | Generate `index`, `cross-repo`, `per-repo`, or `timeseries` reports |
-| `categorize.sh` / `.ps1` | Classify an event as `surface/mode/run_effect` |
 | `build-index.sh` / `.ps1` | Internal index maintenance |
 
 No `init-log` step required.
-
-### Sources
-
-The `sources` array accepts typed references — not limited to code:
-
-| Field | Description |
-|---|---|
-| `type` | `file`, `url`, `system-instruction`, `conversation`, `audio`, `visual`, `documentation`, `other` |
-| `ref` | Primary reference: filepath, URL, or description |
-| `line`, `end_line` | Line range (for files) |
-| `symbol` | Function, class, section, or heading name |
-| `excerpt` | Relevant quoted text from the source |
-| `selector` | CSS selector, XPath, section anchor, timestamp |
-| `label` | Human-readable description of this source's role |
-
-### Classification
-
-The categorizer auto-detects `surface`, `mode`, `run_effect`, `confidence` (1–5), and `guidance_quality` (0–4). Override any axis with explicit flags when the heuristic is wrong. Use only values from `references/taxonomy.md`.
-
-WHEN the source text could be read more than one way and you picked one THEN `guidance_quality` SHALL be 2 (ambiguous) or lower.
-WHEN the source text was correct but omitted information you needed THEN `guidance_quality` SHALL be 3 (partial).
-WHEN the source text actively pointed you toward the wrong action THEN `guidance_quality` SHALL be 1 (misleading).
-WHEN no source text was involved (purely operational friction like a timeout, missing binary, or resource limit) THEN `guidance_quality` SHALL be 0 (not-applicable).
-A value of 4 (clear) means you followed unambiguous, accurate guidance and the friction came from elsewhere entirely — the guidance did its job.
-
-WHEN the automatic `mode` is `other` AND you can identify a more specific mode from the taxonomy THEN you SHALL override with `--mode <value>`. Common overrides: `apply_patch` or edit context mismatch → `output-mismatch`; spawn/thread/resource limit → `performance`; variable rejected as invalid, reserved, or unbound → `validation`.
-
-WHEN category selection is uncertain THEN you SHOULD let the categorizer choose and note the uncertainty in `reading`.
 
 ---
 
@@ -181,7 +171,7 @@ WHEN no new friction events were logged since your last assistant turn THEN you 
 
 ### How to produce
 
-Run the summary renderer and paste its output verbatim. The script handles querying, source flattening, table formatting, and re-query footer generation. You SHOULD query only the delta since your last assistant turn rather than replaying the entire session each time.
+Run the summary renderer and paste its output verbatim:
 
 ```sh
 sh <skills-file-root>/scripts/render-summary.sh \
@@ -189,44 +179,8 @@ sh <skills-file-root>/scripts/render-summary.sh \
   --after "<last-turn-timestamp>"
 ```
 
-```powershell
-& <skills-file-root>\scripts\render-summary.ps1 `
-  -EventsFile <events-file> `
-  -After "<last-turn-timestamp>"
-```
-
-WHEN you do not have the last-turn timestamp THEN you SHALL use the most recent available lower bound that excludes already-reported events. IF no such lower bound is available THEN you SHALL use `--date-from` with today's date instead of `--after`.
-
-### Output layout
-
-Place the full output of `render-summary.sh` or `render-summary.ps1` after all task content. The script produces a header, a Unicode box-drawing table (with ID, Time, Title, Category, Tags, and Sources columns), and a footer with the events file path and a ready-to-paste re-query command for the next delta window.
+The script produces a header, a table (with ID, Time, Title, Impact, Tags, and Sources columns), and a footer with the events file path and a ready-to-paste re-query command.
 
 You SHALL NOT manually construct or format the table. Paste the script output as-is.
 
----
-
-## Source attribution
-
-The `source_type`, `source_ref`, and `instruction_text` fields identify where friction originates. Trace back to the artifact that contains the friction — not the channel that delivered the task.
-
-### Decision heuristic
-
-Ask: **"What artifact contains the text, code, or config that broke or misled me?"**
-
-- `source_ref` → the artifact itself (file path, URL, MCP schema, API doc)
-- `source_type` → what kind of artifact it is (use the existing enum: `file`, `url`, `documentation`, `system-instruction`, `conversation`, etc.)
-- `instruction_text` → verbatim quote from the artifact identified in `source_ref`
-
-This applies to any domain — skills, MCP servers, API docs, books, codebases — without enumerating each one.
-
-### Rules
-
-WHEN friction originates from a loaded skill's instructions or scripts THEN `source_type` SHALL be `file` and `source_ref` SHALL be the skill file path — not `conversation`.
-
-WHEN the user's conversational instruction triggered the task but the friction is in an artifact THEN the source is the artifact, not the conversation. The conversation is the trigger, not the origin.
-
-WHEN friction is genuinely in what the user said (e.g., an ambiguous user instruction with no backing artifact) THEN `source_type` SHALL be `conversation`.
-
-WHEN text from multiple sources shaped the action THEN you SHALL use the `sources` array with multiple entries, each pointing to its own artifact. You SHALL NOT merge text from different sources into a single `instruction_text`.
-
-`instruction_text` SHALL be a verbatim quote from the single source identified in `source_ref`. You SHALL NOT paraphrase, blend, or combine text from different origins.
+WHEN you do not have the last-turn timestamp THEN you SHALL use the most recent available lower bound that excludes already-reported events. IF no such lower bound is available THEN you SHALL use `--date-from` with today's date instead of `--after`.
