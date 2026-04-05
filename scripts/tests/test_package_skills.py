@@ -142,23 +142,32 @@ class PackageSkillsTests(unittest.TestCase):
         write(target_release / "tool", "tool payload\n")
         write(target_release / "helper", "helper payload\n")
 
-        original_run = package_skills.run
+        original_stage_host_native = package_skills.stage_host_native
+        original_use_container_build = package_skills.use_container_build
         original_host_platform_id = package_skills.host_platform_id
-        commands: list[tuple[list[str], dict[str, str] | None]] = []
+        calls: list[tuple[list[tuple[str, dict[str, object]]], str]] = []
 
-        def fake_run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
-            commands.append((cmd, env))
+        def fake_stage_host_native(selected: list[tuple[str, dict[str, object]]], platform_id: str) -> None:
+            calls.append((selected, platform_id))
+            install_root = self.repo / "skills"
+            for _, skill in selected:
+                target_name = str(skill["binary"])
+                dst = install_root / str(skill["skill_dir"]).split("/", 1)[1] / "dist" / platform_id / target_name
+                write(dst, f"{target_name} payload\n")
+                dst.chmod(0o755)
 
-        package_skills.run = fake_run
+        package_skills.stage_host_native = fake_stage_host_native
+        package_skills.use_container_build = lambda platform_id: False
         package_skills.host_platform_id = lambda: "linux-x86_64"
-        self.addCleanup(setattr, package_skills, "run", original_run)
+        self.addCleanup(setattr, package_skills, "stage_host_native", original_stage_host_native)
+        self.addCleanup(setattr, package_skills, "use_container_build", original_use_container_build)
         self.addCleanup(setattr, package_skills, "host_platform_id", original_host_platform_id)
 
         package_skills.stage_host(["tool"])
 
         self.assertEqual(
-            commands,
-            [(["cargo", "build", "--workspace", "--release", "--locked", "-p", "tool"], package_skills.build_env())],
+            calls,
+            [([("tool", package_skills.load_config()["tool"])], "linux-x86_64")],
         )
         self.assertTrue((self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool").exists())
         self.assertFalse((self.repo / "skills" / "helper" / "dist" / "linux-x86_64" / "helper").exists())
@@ -209,6 +218,44 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertIn("--remap-path-prefix=/custom/cargo=/cargo-home", env["RUSTFLAGS"])
         self.assertIn("--remap-path-prefix=/custom/rustup=/rustup-home", env["RUSTFLAGS"])
         self.assertTrue(env["RUSTFLAGS"].endswith("-C target-cpu=native"))
+
+    def test_container_rustflags_use_fixed_container_prefixes(self) -> None:
+        original_env = os.environ.copy()
+        os.environ["RUSTFLAGS"] = "-C target-cpu=native"
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, original_env)
+
+        flags = package_skills.container_rustflags()
+
+        self.assertIn("--remap-path-prefix=/work=/workspace", flags)
+        self.assertIn("--remap-path-prefix=/usr/local/cargo=/cargo-home", flags)
+        self.assertIn("--remap-path-prefix=/usr/local/rustup=/rustup-home", flags)
+        self.assertTrue(flags.endswith("-C target-cpu=native"))
+
+    def test_use_container_build_prefers_docker_for_linux_x86_64_in_auto_mode(self) -> None:
+        original_env = os.environ.copy()
+        original_docker_available = package_skills.docker_available
+        os.environ.pop("AGENT_SKILLS_DIST_BUILD_MODE", None)
+        package_skills.docker_available = lambda: True
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, original_env)
+        self.addCleanup(setattr, package_skills, "docker_available", original_docker_available)
+
+        self.assertTrue(package_skills.use_container_build("linux-x86_64"))
+        self.assertFalse(package_skills.use_container_build("linux-aarch64"))
+
+    def test_use_container_build_requires_docker_in_container_mode(self) -> None:
+        original_env = os.environ.copy()
+        original_docker_available = package_skills.docker_available
+        os.environ["AGENT_SKILLS_DIST_BUILD_MODE"] = "container"
+        package_skills.docker_available = lambda: False
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, original_env)
+        self.addCleanup(setattr, package_skills, "docker_available", original_docker_available)
+
+        with self.assertRaises(SystemExit) as ctx:
+            package_skills.use_container_build("linux-x86_64")
+        self.assertIn("docker is required", str(ctx.exception))
 
 
 if __name__ == "__main__":

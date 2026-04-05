@@ -81,6 +81,7 @@ Windows and macOS are no longer supported packaging targets in this repo.
 That means:
 
 - `just ci` verifies the committed Linux packaged artifacts
+- Linux packaging prefers a fixed `rust:<toolchain>` container when Docker is available, so local `just dist-host` / `just ci` and hosted CI build against the same linker and userspace
 - Linux consumers can use the committed skill-local `dist/linux-x86_64/` payloads directly
 - Non-Linux hosts are outside the supported packaged-binary contract for this repo
 

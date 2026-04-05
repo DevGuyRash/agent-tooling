@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -19,6 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "packaging" / "skills.toml"
+TOOLCHAIN_PATH = REPO_ROOT / "rust-toolchain.toml"
 
 
 def load_config() -> dict[str, dict[str, object]]:
@@ -52,6 +54,15 @@ def binary_name(binary: str, platform_id: str) -> str:
     return binary
 
 
+def toolchain_channel() -> str:
+    with open(TOOLCHAIN_PATH, "rb") as fh:
+        data = tomllib.load(fh)
+    toolchain = data.get("toolchain")
+    if not isinstance(toolchain, dict) or not isinstance(toolchain.get("channel"), str):
+        raise SystemExit("rust-toolchain.toml must define [toolchain].channel")
+    return toolchain["channel"]
+
+
 def remap_prefixes() -> list[tuple[Path, str]]:
     prefixes: list[tuple[Path, str]] = [(REPO_ROOT, "/workspace")]
 
@@ -76,6 +87,128 @@ def build_env() -> dict[str, str]:
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, cwd=REPO_ROOT, check=True, env=env)
+
+
+def docker_available() -> bool:
+    return shutil.which("docker") is not None
+
+
+def dist_build_mode() -> str:
+    mode = os.environ.get("AGENT_SKILLS_DIST_BUILD_MODE", "auto").strip().lower()
+    if mode not in {"auto", "container", "host"}:
+        raise SystemExit(
+            "AGENT_SKILLS_DIST_BUILD_MODE must be one of: auto, container, host"
+        )
+    return mode
+
+
+def use_container_build(platform_id: str) -> bool:
+    if platform_id != "linux-x86_64":
+        return False
+
+    mode = dist_build_mode()
+    if mode == "host":
+        return False
+    if mode == "container":
+        if not docker_available():
+            raise SystemExit("docker is required for AGENT_SKILLS_DIST_BUILD_MODE=container")
+        return True
+    return docker_available()
+
+
+def container_image() -> str:
+    return os.environ.get("AGENT_SKILLS_RUST_IMAGE", f"rust:{toolchain_channel()}")
+
+
+def container_rustflags() -> str:
+    remap_flags = [
+        "--remap-path-prefix=/work=/workspace",
+        "--remap-path-prefix=/usr/local/cargo=/cargo-home",
+        "--remap-path-prefix=/usr/local/rustup=/rustup-home",
+    ]
+    rustflags = os.environ.get("RUSTFLAGS", "").strip()
+    return " ".join([*remap_flags, rustflags]).strip()
+
+
+def install_dist_binary(skill: dict[str, object], platform_id: str, src: Path) -> None:
+    skill_dir = REPO_ROOT / str(skill["skill_dir"])
+    dist_dir = skill_dir / "dist" / platform_id
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    target_name = binary_name(str(skill["binary"]), platform_id)
+    dst = dist_dir / target_name
+    shutil.copy2(src, dst)
+    mode = os.stat(dst).st_mode
+    os.chmod(dst, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def stage_host_native(selected: list[tuple[str, dict[str, object]]], platform_id: str) -> None:
+    packages = []
+    for _, skill in selected:
+        packages.extend(["-p", str(skill["package"])])
+    run(["cargo", "build", "--workspace", "--release", "--locked", *packages], env=build_env())
+
+    for _, skill in selected:
+        target_name = binary_name(str(skill["binary"]), platform_id)
+        src = REPO_ROOT / "target" / "release" / target_name
+        install_dist_binary(skill, platform_id, src)
+
+
+def stage_host_container(selected: list[tuple[str, dict[str, object]]], platform_id: str) -> None:
+    packages = []
+    for _, skill in selected:
+        packages.extend(["-p", str(skill["package"])])
+
+    create = subprocess.run(
+        [
+            "docker",
+            "create",
+            "-v",
+            f"{REPO_ROOT}:/work:ro",
+            "-w",
+            "/work",
+            "-e",
+            "CARGO_TARGET_DIR=/tmp/target",
+            "-e",
+            f"RUSTFLAGS={container_rustflags()}",
+            container_image(),
+            "cargo",
+            "build",
+            "--workspace",
+            "--release",
+            "--locked",
+            *packages,
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    container_id = create.stdout.strip()
+    if not container_id:
+        raise SystemExit("docker create did not return a container id")
+
+    extract_dir = Path(tempfile.mkdtemp(prefix="package-skills-container-"))
+    try:
+        subprocess.run(["docker", "start", "-a", container_id], cwd=REPO_ROOT, check=True)
+        for _, skill in selected:
+            target_name = binary_name(str(skill["binary"]), platform_id)
+            extracted = extract_dir / target_name
+            subprocess.run(
+                ["docker", "cp", f"{container_id}:/tmp/target/release/{target_name}", str(extracted)],
+                cwd=REPO_ROOT,
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            install_dist_binary(skill, platform_id, extracted)
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", container_id],
+            cwd=REPO_ROOT,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        shutil.rmtree(extract_dir, ignore_errors=True)
 
 
 def selected_skill_entries(
@@ -179,21 +312,10 @@ def stage_host(skill_names: list[str] | None = None) -> None:
     config = load_config()
     selected = selected_skill_entries(config, skill_names)
     platform_id = host_platform_id()
-    packages = []
-    for _, skill in selected:
-        packages.extend(["-p", str(skill["package"])])
-    run(["cargo", "build", "--workspace", "--release", "--locked", *packages], env=build_env())
-
-    for _, skill in selected:
-        skill_dir = REPO_ROOT / str(skill["skill_dir"])
-        dist_dir = skill_dir / "dist" / platform_id
-        dist_dir.mkdir(parents=True, exist_ok=True)
-        target_name = binary_name(str(skill["binary"]), platform_id)
-        src = REPO_ROOT / "target" / "release" / target_name
-        dst = dist_dir / target_name
-        shutil.copy2(src, dst)
-        mode = os.stat(dst).st_mode
-        os.chmod(dst, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    if use_container_build(platform_id):
+        stage_host_container(selected, platform_id)
+    else:
+        stage_host_native(selected, platform_id)
 
 
 def verify_host() -> None:
