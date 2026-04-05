@@ -222,7 +222,7 @@ elif [[ ! -s "$TMP_LIST" ]]; then
 fi
 
 if [[ -s "$TMP_LIST" ]]; then
-  sort -u "$TMP_LIST" > "$SORTED_LIST"
+  LC_ALL=C sort -t $'\t' -k3,3 -u "$TMP_LIST" > "$SORTED_LIST"
 else
   : > "$SORTED_LIST"
 fi
