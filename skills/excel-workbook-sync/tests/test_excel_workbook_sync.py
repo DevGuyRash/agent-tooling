@@ -20,9 +20,13 @@ OPENAI_YAML = ROOT / "agents" / "openai.yaml"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "tr_upload_sheet"
 FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "tr_upload_sheet" / "excel-sync.manifest.json"
 FIXTURE_WORKBOOK = FIXTURE_DIR / "tr_upload_template.xlsm"
+HAS_PWSH = shutil.which("pwsh") is not None
+HAS_CMD = shutil.which("cmd") is not None
 
 
 def run_pwsh(command: str, *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    if not HAS_PWSH:
+        raise unittest.SkipTest("pwsh not available on this host")
     return subprocess.run(
         ["pwsh", "-NoProfile", "-Command", command],
         capture_output=True,
@@ -364,6 +368,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(args[9].lower().endswith("test workbook.xlsm"))
             self.assertEqual(args[10:], ["-Surface", "tables,names", "-QueryName", "Matched", "-Visible"])
 
+    @unittest.skipUnless(HAS_CMD, "cmd not available on this host")
     def test_cmd_launcher_help_is_available(self) -> None:
         proc = subprocess.run(
             ["cmd", "/c", str(CMD), "--help"],
@@ -394,6 +399,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("missing value", (proc.stdout + proc.stderr).lower())
 
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_rejects_sync_without_manifest(self) -> None:
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(PS1), "push", "--workbook-path", str(FIXTURE_WORKBOOK)],
@@ -404,6 +410,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("manifestpath is required", (proc.stdout + proc.stderr).lower())
 
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_negative_query_path_is_concise(self) -> None:
         missing = Path(tempfile.gettempdir()) / "excel-workbook-sync-missing.xlsm"
         proc = subprocess.run(
@@ -416,6 +423,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         combined = (proc.stdout + proc.stderr).lower()
         self.assertIn("workbook not found", combined)
 
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_accepts_manifest_path_gnu_alias(self) -> None:
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(PS1), "push", "--manifest-path", str(FIXTURE_MANIFEST)],
@@ -425,6 +433,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         )
         self.assertNotIn("parameter cannot be found", (proc.stdout + proc.stderr).lower())
 
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_scripts_parse_cleanly(self) -> None:
         for script in [
             ROOT / "scripts" / "excel-workbook-sync.ps1",

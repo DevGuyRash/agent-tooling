@@ -89,13 +89,6 @@ case "$subcommand" in
     ;;
 esac
 
-ps="$(detect_powershell || true)"
-if [ -z "${ps}" ]; then
-  echo "error: Excel COM automation is unavailable on this host" >&2
-  echo "hint: run on Windows or inside WSL with Windows PowerShell and desktop Excel installed" >&2
-  exit 127
-fi
-
 set -- "$@"
 translated="$subcommand"
 while [ "$#" -gt 0 ]; do
@@ -147,6 +140,13 @@ $1"
       ;;
   esac
 done
+
+ps="$(detect_powershell || true)"
+if [ -z "${ps}" ]; then
+  echo "error: Excel COM automation is unavailable on this host" >&2
+  echo "hint: run on Windows or inside WSL with Windows PowerShell and desktop Excel installed" >&2
+  exit 127
+fi
 
 set --
 oldifs="${IFS}"
