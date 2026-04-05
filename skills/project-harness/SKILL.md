@@ -15,7 +15,7 @@ description: >-
 license: MIT
 metadata:
   author: DevGuyRash
-  version: "2.5.0"
+  version: "2.6.0"
   category: development
 compatibility: >-
   Requires Python 3.11+ to run the bundled CLI. Optional: just, git, git-lfs,
@@ -101,6 +101,7 @@ python <skills-file-root>/scripts/project_harness.py detect /path/to/repo --pret
 - dist storage: `none`, `git`, `git-lfs`, or `artifacts`
 - CI mode: `none`, `just`, or `direct`
 - CI shape: single-job direct CI by default, with `--ci-layout split` as an opt-in contributor-scale overlay
+- change detection: `none` by default, with `--change-detection git-diff` as an opt-in build-lane overlay for split direct CI
 - path filters: manual opt-in only when component ownership is explicit
 
 3. Preview candidate files without touching managed targets.
@@ -188,6 +189,7 @@ GitHub Release assets, start from
 Use `direct` for monorepos, matrices, or polyglot repos.
 Use `just` for smaller repos where `just ci` should stay the source of truth.
 Use split direct CI only when a repo explicitly opts into it and stable per-job checks are more valuable than preserving a single `ci` check surface.
+Keep change detection at `none` unless the repo has an expensive, distinct `build` lane worth gating. The generated `git-diff` overlay currently targets split direct CI only.
 Keep path filters manual and explicit; do not infer them unless the repo truly has stable ownership boundaries.
 
 Load `<skills-file-root>/references/ci-workflows.md` for workflow quality rules,

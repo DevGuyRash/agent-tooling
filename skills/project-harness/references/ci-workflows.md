@@ -60,6 +60,71 @@ Prefer built-in action caching when available:
 Avoid generic `actions/cache` defaults for ecosystems where the cache surface is tool-specific or easy to stale out. Add those only after the repo's toolchain, lockfiles, and restore paths are clear.
 Some setup actions, including `.NET`, still need extra repo-specific restore safeguards before automatic caching is a safe default.
 
+## Build change-detection modes
+
+There are three useful modes for expensive build lanes:
+
+### 1. No optimization
+
+Use when:
+- the workflow is still evolving
+- the build is cheap enough that correctness and simplicity dominate
+- the repo does not yet have a distinct build lane
+
+Behavior:
+- every job runs whenever the workflow triggers
+- easiest to reason about and the default generated mode
+
+### 2. Git-diff or path-based detection
+
+Use when:
+- the repo already opted into split direct CI
+- `build` is distinct from `lint` and `test`
+- changed-path matching is accurate enough for the repo's structure
+
+Behavior:
+- add a lightweight detection job
+- compare the base and head revisions
+- run `build` only when watched paths changed
+
+Generated support in this skill:
+- opt-in only via `--change-detection git-diff`
+- currently generated only for `direct` plus `--ci-layout split`
+- currently applied only to the `build` lane, not to `lint` or `test`
+- uses language-specific watch sets when the repo shape is known, and broad component-level fallback watching when correctness would otherwise be uncertain
+
+### 3. Hash-based invalidation
+
+Use when:
+- changed-path heuristics are too coarse
+- the repo has a stable definition of the exact inputs that matter to packaging
+- maintainers are willing to own the extra logic
+
+Behavior:
+- compute a fingerprint for the build inputs
+- compare it to a persisted or previously published value
+- skip rebuilding only when the fingerprint matches
+
+This skill does not auto-generate hash invalidation today. Keep it as a repo-owned advanced overlay.
+
+Pseudocode example:
+
+```text
+# build-input-hash:
+#   inputs = [
+#     all source files for promoted runnable components,
+#     dependency manifests and lockfiles,
+#     packaging scripts,
+#     dist staging metadata
+#   ]
+#   fingerprint = hash(sorted(normalize(inputs)))
+#   if fingerprint == previous_fingerprint:
+#     skip build
+#   else:
+#     run build
+#     publish new fingerprint
+```
+
 ## CI mode guidance
 
 ### `just`
@@ -116,6 +181,9 @@ Pseudocode example:
 ```
 
 Keep CI authoritative even when the repo also offers a local hook installer.
+
+Prefer gating only the most expensive lane first.
+Do not introduce broad skip logic for lint/test unless the repo has already proven that the extra complexity is worth it.
 
 ## CI safety matrix
 

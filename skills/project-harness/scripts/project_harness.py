@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_DIR = SKILL_ROOT / "assets"
-STATE_VERSION = "2.5.0"
+STATE_VERSION = "2.6.0"
 MANAGED_MARKER = "# project-harness: managed-file"
 IGNORE_DIRS = {
     ".git",
@@ -521,6 +521,7 @@ def detect_components(repo: Path) -> dict[str, Any]:
         "ci_mode": choose_ci_mode(unique_sorted(languages), unique_sorted(ci_systems), detected_components, unique_sorted(task_runners)),
         "release_overlay": bool(binary_targets and not dist_exists),
         "dist_storage": "git-lfs" if dist_lfs_tracked else ("git" if dist_exists and not dist_ignored else ("artifacts" if binary_targets else "none")),
+        "change_detection": "none",
     }
 
     detected = {
@@ -602,6 +603,19 @@ def workspace_member_patterns(repo: Path, component: dict[str, Any]) -> list[str
         for item in packages:
             patterns.append(item if path == "." else f"{path}/{item}")
     return patterns
+
+
+def workspace_member_watch_patterns(repo: Path, component: dict[str, Any]) -> list[str]:
+    patterns: list[str] = []
+    for item in workspace_member_patterns(repo, component):
+        normalized = item.rstrip("/")
+        if not normalized:
+            continue
+        if any(char in normalized for char in "*?["):
+            patterns.append(normalized)
+        else:
+            patterns.append(f"{normalized}/**")
+    return unique_preserve_order(patterns)
 
 
 def matches_workspace_patterns(path: str, patterns: list[str]) -> bool:
@@ -1684,7 +1698,13 @@ def render_ci_trigger_block(detected: dict[str, Any], ci_paths: str) -> tuple[st
     return "\n".join(lines), []
 
 
-def render_ci_job(job_id: str, job_name: str, steps: list[str], needs: list[str] | None = None) -> str:
+def render_ci_job(
+    job_id: str,
+    job_name: str,
+    steps: list[str],
+    needs: list[str] | None = None,
+    job_if: str | None = None,
+) -> str:
     lines = [f"  {job_id}:", f"    name: {job_name}"]
     if needs:
         if len(needs) == 1:
@@ -1692,6 +1712,8 @@ def render_ci_job(job_id: str, job_name: str, steps: list[str], needs: list[str]
         else:
             lines.append("    needs:")
             lines.extend([f"      - {need}" for need in needs])
+    if job_if:
+        lines.append(f"    if: {job_if}")
     lines.extend([
         "    runs-on: ubuntu-latest",
         "    timeout-minutes: 20",
@@ -1707,7 +1729,304 @@ def render_ci_job(job_id: str, job_name: str, steps: list[str], needs: list[str]
     return "\n".join(lines)
 
 
-def render_split_direct_ci(trigger_block: str, detected: dict[str, Any], setup_steps: list[str], commands: dict[str, list[str]]) -> str:
+def prefixed_patterns(prefix: str, patterns: list[str]) -> list[str]:
+    if prefix == ".":
+        return patterns
+    return [f"{prefix}/{pattern}" for pattern in patterns]
+
+
+def component_wide_pattern(prefix: str) -> str:
+    return "**" if prefix == "." else f"{prefix}/**"
+
+
+def change_detection_patterns_for_component(repo: Path, component: dict[str, Any]) -> tuple[list[str], list[str]]:
+    prefix = component["path"]
+    language = component["language"]
+    warnings: list[str] = []
+
+    if language == "rust":
+        patterns = prefixed_patterns(prefix, [
+            "Cargo.toml",
+            "Cargo.lock",
+            "build.rs",
+            ".cargo/config",
+            ".cargo/config.toml",
+            "src/**",
+            "tests/**",
+            "examples/**",
+            "benches/**",
+        ])
+        patterns.extend([
+            ".cargo/config",
+            ".cargo/config.toml",
+        ])
+        patterns.extend(workspace_member_watch_patterns(repo, component))
+        return patterns, warnings
+
+    if language == "javascript":
+        patterns = prefixed_patterns(prefix, [
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "bun.lockb",
+            "tsconfig.json",
+            "tsconfig.*.json",
+            "vite.config.*",
+            "vitest.config.*",
+            "webpack.config.*",
+            "rollup.config.*",
+            "babel.config.*",
+            "index.html",
+            "public/**",
+            "src/**",
+            "lib/**",
+            "test/**",
+            "tests/**",
+            "scripts/**",
+            "*.js",
+            "*.cjs",
+            "*.mjs",
+            "*.ts",
+            "*.cts",
+            "*.mts",
+            "*.tsx",
+        ])
+        patterns.extend(workspace_member_watch_patterns(repo, component))
+        return patterns, warnings
+
+    if language == "python":
+        return prefixed_patterns(prefix, [
+            "pyproject.toml",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "requirements-test.txt",
+            "requirements/*.txt",
+            "setup.py",
+            "setup.cfg",
+            "poetry.lock",
+            "uv.lock",
+            "Pipfile",
+            "Pipfile.lock",
+            "src/**",
+            "tests/**",
+            "scripts/**",
+            "*.py",
+        ]), warnings
+
+    if language == "go":
+        patterns = prefixed_patterns(prefix, [
+            "go.mod",
+            "go.sum",
+            "*.go",
+            "cmd/**",
+            "pkg/**",
+            "internal/**",
+            "tests/**",
+        ])
+        patterns.extend([
+            "go.work",
+            "go.work.sum",
+        ])
+        return patterns, warnings
+
+    if language in {"java", "kotlin"}:
+        return prefixed_patterns(prefix, [
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "gradle/**",
+            "gradlew",
+            "gradlew.bat",
+            "src/**",
+            "tests/**",
+        ]), warnings
+
+    if language == "dotnet":
+        patterns = prefixed_patterns(prefix, [
+            "*.sln",
+            "*.csproj",
+            "*.fsproj",
+            "*.vbproj",
+            "packages.lock.json",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "*.cs",
+            "*.fs",
+            "*.vb",
+            "*.resx",
+            "*.props",
+            "*.targets",
+            "Properties/**",
+            "appsettings.json",
+            "appsettings.*.json",
+            "wwwroot/**",
+            "src/**",
+            "tests/**",
+        ])
+        patterns.append("global.json")
+        return patterns, warnings
+
+    if language == "cpp":
+        patterns = prefixed_patterns(prefix, [
+            "CMakeLists.txt",
+            "cmake/**",
+            "*.c",
+            "*.cc",
+            "*.cpp",
+            "*.cxx",
+            "*.h",
+            "*.hh",
+            "*.hpp",
+            "*.hxx",
+            "app/**",
+            "lib/**",
+            "src/**",
+            "include/**",
+            "test/**",
+            "tests/**",
+        ])
+        patterns.append(component_wide_pattern(prefix))
+        return patterns, warnings
+
+    if language == "zig":
+        return prefixed_patterns(prefix, [
+            "build.zig",
+            "build.zig.zon",
+            "src/**",
+            "lib/**",
+            "test/**",
+            "tests/**",
+        ]), warnings
+
+    if language == "ruby":
+        return prefixed_patterns(prefix, [
+            "Gemfile",
+            "Gemfile.lock",
+            "Rakefile",
+            "*.gemspec",
+            "lib/**",
+            "app/**",
+            "config/**",
+            "bin/**",
+            "exe/**",
+            "spec/**",
+            "test/**",
+        ]), warnings
+
+    if language == "elixir":
+        return prefixed_patterns(prefix, [
+            "mix.exs",
+            "mix.lock",
+            "lib/**",
+            "config/**",
+            "priv/**",
+            "test/**",
+        ]), warnings
+
+    warnings.append(
+        f"git-diff change detection fell back to broad component watching for {prefix} because no language-specific watch model exists yet"
+    )
+    return [component_wide_pattern(prefix)], warnings
+
+
+def build_change_detection_paths(repo: Path, detected: dict[str, Any]) -> tuple[list[str], list[str]]:
+    repo_meta_patterns = [
+        ".github/workflows/**",
+        ".gitattributes",
+        ".gitignore",
+        "justfile",
+        "Makefile",
+        *sorted(TASKFILE_NAMES),
+    ]
+    component_patterns: list[str] = []
+    warnings: list[str] = []
+
+    for component in promoted_runnable_components(detected):
+        derived_patterns, component_warnings = change_detection_patterns_for_component(repo, component)
+        warnings.extend(component_warnings)
+        component_patterns.extend(derived_patterns)
+
+    if not component_patterns:
+        warnings.append(
+            "git-diff change detection did not derive any component-scoped build inputs; falling back to an unconditional build job"
+        )
+        return [], unique_preserve_order(warnings)
+
+    patterns = repo_meta_patterns + component_patterns
+    return unique_preserve_order(patterns), unique_preserve_order(warnings)
+
+
+def render_git_diff_detection_job(job_id: str, job_name: str, output_name: str, patterns: list[str]) -> str:
+    patterns_json = json.dumps(patterns, separators=(",", ":"))
+    lines = [
+        f"  {job_id}:",
+        f"    name: {job_name}",
+        "    runs-on: ubuntu-latest",
+        "    timeout-minutes: 10",
+        "    outputs:",
+        f"      {output_name}: ${{{{ steps.detect.outputs.{output_name} }}}}",
+        "    defaults:",
+        "      run:",
+        "        shell: bash",
+        "    steps:",
+        "      - uses: actions/checkout@v6",
+        "        with:",
+        "          fetch-depth: 0",
+        "      - name: Detect build-relevant changes",
+        "        id: detect",
+        "        run: |",
+        "          set -euo pipefail",
+        "          event_name=\"${{ github.event_name }}\"",
+        "          base_sha=\"\"",
+        "          head_sha=\"${{ github.sha }}\"",
+        "          if [ \"$event_name\" = \"pull_request\" ]; then",
+        "            base_sha=\"${{ github.event.pull_request.base.sha }}\"",
+        "          elif [ \"$event_name\" = \"push\" ]; then",
+        "            base_sha=\"${{ github.event.before }}\"",
+        "          fi",
+        "          if [ -z \"$base_sha\" ] || [ \"$base_sha\" = \"0000000000000000000000000000000000000000\" ]; then",
+        f"            echo \"{output_name}=true\" >> \"$GITHUB_OUTPUT\"",
+        "            exit 0",
+        "          fi",
+        "          changed_files_file=\"$(mktemp)\"",
+        "          git diff --name-only \"$base_sha\" \"$head_sha\" > \"$changed_files_file\"",
+        "          CHANGED_FILES_PATH=\"$changed_files_file\" GITHUB_OUTPUT_PATH=\"$GITHUB_OUTPUT\" python3 - <<'PY'",
+        "import fnmatch",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "",
+        f"patterns = {patterns_json}",
+        "changed_files = [",
+        "    (line.strip()[2:] if line.strip().startswith('./') else line.strip())",
+        "    for line in Path(os.environ['CHANGED_FILES_PATH']).read_text(encoding='utf-8').splitlines()",
+        "    if line.strip()",
+        "]",
+        "matched = any(",
+        "    any(fnmatch.fnmatch(changed, pattern) for pattern in patterns)",
+        "    for changed in changed_files",
+        ")",
+        "with open(os.environ['GITHUB_OUTPUT_PATH'], 'a', encoding='utf-8') as fh:",
+        f"    fh.write('{output_name}=' + ('true' if matched else 'false') + '\\n')",
+        "PY",
+    ]
+    return "\n".join(lines)
+
+
+def render_split_direct_ci(
+    repo: Path,
+    trigger_block: str,
+    detected: dict[str, Any],
+    setup_steps: list[str],
+    commands: dict[str, list[str]],
+    change_detection: str,
+) -> tuple[str, list[str]]:
     bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
     lint_steps: list[str] = []
     lint_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
@@ -1715,6 +2034,10 @@ def render_split_direct_ci(trigger_block: str, detected: dict[str, Any], setup_s
     test_steps = render_direct_workflow_steps(commands["test"], "Test")
     build_lines = commands["build"] or commands["release"]
     build_steps = render_direct_workflow_steps(build_lines, "Build")
+    warnings: list[str] = []
+    pre_jobs = ""
+    build_needs: list[str] | None = None
+    build_if: str | None = None
 
     shared_steps = list(setup_steps) + bootstrap_steps
     jobs: dict[str, str] = {}
@@ -1723,7 +2046,22 @@ def render_split_direct_ci(trigger_block: str, detected: dict[str, Any], setup_s
     if test_steps:
         jobs["test"] = render_ci_job("test", "test", shared_steps + test_steps)
     if build_steps:
-        jobs["build"] = render_ci_job("build", "build", shared_steps + build_steps)
+        if change_detection == "git-diff":
+            patterns, path_warnings = build_change_detection_paths(repo, detected)
+            warnings.extend(path_warnings)
+            if patterns:
+                pre_jobs = render_git_diff_detection_job("detect-changes", "detect changes", "build_changed", patterns)
+                build_needs = ["detect-changes"]
+                build_if = "needs.detect-changes.outputs.build_changed == 'true'"
+            else:
+                warnings.append(
+                    "git-diff change detection was requested but no build-relevant path groups were derived; falling back to an unconditional build job"
+                )
+        jobs["build"] = render_ci_job("build", "build", shared_steps + build_steps, needs=build_needs, job_if=build_if)
+    elif change_detection == "git-diff":
+        warnings.append(
+            "git-diff change detection was requested but split direct CI did not produce a distinct build job; falling back to ordinary job execution"
+        )
 
     if not jobs:
         run_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
@@ -1732,13 +2070,21 @@ def render_split_direct_ci(trigger_block: str, detected: dict[str, Any], setup_s
 
     split_template = read_text(ASSETS_DIR / "workflow-ci-direct-split.yml.tpl")
     split_template = split_template.replace("__ON_BLOCK__", trigger_block_body(trigger_block))
+    split_template = split_template.replace("__PRE_JOBS__", pre_jobs + ("\n\n" if pre_jobs else ""))
     split_template = split_template.replace("__LINT_JOB__", jobs.get("lint", ""))
     split_template = split_template.replace("__TEST_JOB__", jobs.get("test", ""))
     split_template = split_template.replace("__BUILD_JOB__", jobs.get("build", ""))
-    return re.sub(r"\n{3,}", "\n\n", split_template).rstrip() + "\n"
+    return re.sub(r"\n{3,}", "\n\n", split_template).rstrip() + "\n", warnings
 
 
-def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str, ci_layout: str, ci_paths: str) -> tuple[str, list[str]]:
+def render_ci_workflow(
+    repo: Path,
+    detected: dict[str, Any],
+    ci_mode: str,
+    ci_layout: str,
+    ci_paths: str,
+    change_detection: str,
+) -> tuple[str, list[str]]:
     commands = make_initial_recipe_commands(repo, detected)
     setup_steps = workflow_setup_steps(repo, detected)
     trigger_block, warnings = render_ci_trigger_block(detected, ci_paths)
@@ -1757,7 +2103,8 @@ def render_ci_workflow(repo: Path, detected: dict[str, Any], ci_mode: str, ci_la
     template = read_text(ASSETS_DIR / "workflow-ci-direct.yml.tpl")
     template = replace_trigger_block(template, trigger_block)
     if ci_layout == "split":
-        return render_split_direct_ci(trigger_block, detected, setup_steps, commands), warnings
+        split_output, split_warnings = render_split_direct_ci(repo, trigger_block, detected, setup_steps, commands, change_detection)
+        return split_output, warnings + split_warnings
     bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
     run_steps: list[str] = []
     run_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
@@ -1986,6 +2333,11 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
     ci_layout = args.ci_layout if args.ci_layout != "auto" else str(existing_selected.get("ci_layout", ci_layout_default_value))
     ci_paths = args.ci_paths if args.ci_paths != "none" or "ci_paths" not in existing_selected else str(existing_selected.get("ci_paths", "none"))
     dist_storage = args.dist_storage if args.dist_storage != "auto" else str(existing_selected.get("dist_storage", detected["selection_defaults"].get("dist_storage", "none")))
+    change_detection = (
+        args.change_detection
+        if args.change_detection != "auto"
+        else str(existing_selected.get("change_detection", detected["selection_defaults"].get("change_detection", "none")))
+    )
     warnings: list[str] = [*existing_state_warnings, *detected.get("notes", [])]
     if dist_storage == "artifacts" and architecture in {"committed-dist", "cross-os-dist"}:
         warnings.append("artifact-based dist storage conflicts with a committed dist architecture; prefer local-dist/general plus a release overlay")
@@ -1994,12 +2346,18 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
     if ci_mode != "direct" and ci_layout == "split":
         warnings.append("split CI layout only applies to direct CI; falling back to a single job")
         ci_layout = "single"
+    if change_detection == "git-diff" and ci_mode != "direct":
+        warnings.append("git-diff change detection is currently generated only for direct CI; falling back to none")
+        change_detection = "none"
+    if change_detection == "git-diff" and ci_layout != "split":
+        warnings.append("git-diff change detection currently requires split direct CI with a distinct build job; falling back to none")
+        change_detection = "none"
 
     justfile_content, just_warnings = render_justfile(repo, detected, architecture, dist_storage)
     warnings.extend(just_warnings)
     ci_content = ""
     if ci_mode != "none":
-        ci_content, ci_warnings = render_ci_workflow(repo, detected, ci_mode, ci_layout, ci_paths)
+        ci_content, ci_warnings = render_ci_workflow(repo, detected, ci_mode, ci_layout, ci_paths, change_detection)
         warnings.extend(ci_warnings)
     if args.release_overlay is not None:
         release_requested = bool(args.release_overlay)
@@ -2095,6 +2453,7 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
         "ci_mode": ci_mode,
         "ci_layout": ci_layout,
         "ci_paths": ci_paths,
+        "change_detection": change_detection,
         "release_overlay": bool(release_requested and release_content),
         "dist_storage": dist_storage,
     }
@@ -2193,6 +2552,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--ci-mode", choices=["auto", "just", "direct", "none"], default="auto")
     render.add_argument("--ci-layout", choices=["auto", "single", "split"], default="auto")
     render.add_argument("--ci-paths", choices=["none", "components"], default="none")
+    render.add_argument("--change-detection", choices=["auto", "none", "git-diff"], default="auto")
     render.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
     render_release = render.add_mutually_exclusive_group()
     render_release.add_argument("--release-overlay", action="store_const", const=True, dest="release_overlay")
@@ -2207,6 +2567,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--ci-mode", choices=["auto", "just", "direct", "none"], default="auto")
     update.add_argument("--ci-layout", choices=["auto", "single", "split"], default="auto")
     update.add_argument("--ci-paths", choices=["none", "components"], default="none")
+    update.add_argument("--change-detection", choices=["auto", "none", "git-diff"], default="auto")
     update.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
     update_release = update.add_mutually_exclusive_group()
     update_release.add_argument("--release-overlay", action="store_const", const=True, dest="release_overlay")

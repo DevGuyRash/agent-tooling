@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -144,6 +145,31 @@ def main(argv: list[str] | None = None) -> int:
         assert "    name: test" in ci3_split, ci3_split
         assert "  build:\n" in ci3_split, ci3_split
         assert "    name: build" in ci3_split, ci3_split
+        render3_split_detect = run_json(
+            script,
+            "render",
+            str(repo3),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3_split_detect = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3_split_detect["selected"]["change_detection"] == "git-diff", render3_split_detect
+        assert "  detect-changes:\n" in ci3_split_detect, ci3_split_detect
+        assert "    name: detect changes" in ci3_split_detect, ci3_split_detect
+        assert "build_changed: ${{ steps.detect.outputs.build_changed }}" in ci3_split_detect, ci3_split_detect
+        assert "    needs: detect-changes" in ci3_split_detect, ci3_split_detect
+        assert "    if: needs.detect-changes.outputs.build_changed == 'true'" in ci3_split_detect, ci3_split_detect
+        assert "github.event.pull_request.head.sha" not in ci3_split_detect, ci3_split_detect
+        assert '".github/workflows/**"' in ci3_split_detect, ci3_split_detect
+        assert '".cargo/config.toml"' in ci3_split_detect, ci3_split_detect
+        assert '"backend/.cargo/config.toml"' in ci3_split_detect, ci3_split_detect
+        assert '"backend/src/**"' in ci3_split_detect, ci3_split_detect
+        assert '"frontend/src/**"' in ci3_split_detect, ci3_split_detect
+        assert '"frontend/lib/**"' in ci3_split_detect, ci3_split_detect
         render3_single = run_json(script, "render", str(repo3), "--ci-layout", "single")
         ci3_single = (repo3 / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
         assert render3_single["selected"]["ci_layout"] == "single", render3_single
@@ -187,6 +213,215 @@ def main(argv: list[str] | None = None) -> int:
         assert "release-cross-os.yml" in render3d["candidates"], render3d
         assert "(cd 'cli-a' && cargo build --release)" in release3d, release3d
         assert "(cd 'cli-b' && cargo build --release)" in release3d, release3d
+
+        repo3h = tmpdir / "js-lib-layout"
+        repo3h.mkdir()
+        write(repo3h / "package.json", json.dumps({
+            "name": "lib-layout",
+            "scripts": {"build": "node build.js", "test": "node test.js", "lint": "node lint.js"}
+        }, indent=2) + "\n")
+        write(repo3h / "package-lock.json", "{}\n")
+        write(repo3h / "lib" / "index.js", "module.exports = {};\n")
+        write(repo3h / "index.html", "<!doctype html><html></html>\n")
+        write(repo3h / "public" / "logo.svg", "<svg></svg>\n")
+        render3h = run_json(
+            script,
+            "render",
+            str(repo3h),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3h = (repo3h / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3h["selected"]["change_detection"] == "git-diff", render3h
+        assert '"index.html"' in ci3h, ci3h
+        assert '"public/**"' in ci3h, ci3h
+        assert '"lib/**"' in ci3h, ci3h
+        assert '"*.js"' in ci3h, ci3h
+        assert "line.strip()[2:] if line.strip().startswith('./') else line.strip()" in ci3h, ci3h
+
+        repo3h_workspace = tmpdir / "js-workspace-detect"
+        repo3h_workspace.mkdir()
+        write(repo3h_workspace / "package.json", json.dumps({
+            "name": "workspace-root",
+            "private": True,
+            "workspaces": ["packages/shared"],
+            "scripts": {"build": "node build.js", "test": "node test.js", "lint": "node lint.js"}
+        }, indent=2) + "\n")
+        write(repo3h_workspace / "package-lock.json", "{}\n")
+        write(repo3h_workspace / "packages" / "shared" / "package.json", json.dumps({
+            "name": "@demo/shared",
+            "version": "1.0.0"
+        }, indent=2) + "\n")
+        render3h_workspace = run_json(
+            script,
+            "render",
+            str(repo3h_workspace),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3h_workspace = (repo3h_workspace / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3h_workspace["selected"]["change_detection"] == "git-diff", render3h_workspace
+        assert "  detect-changes:\n" in ci3h_workspace, ci3h_workspace
+        assert '"packages/shared/**"' in ci3h_workspace, ci3h_workspace
+
+        repo3i = tmpdir / "zig-root"
+        repo3i.mkdir()
+        write(repo3i / "build.zig", "pub fn build(_: *std.Build) void {}\n")
+        write(repo3i / "src" / "main.zig", "pub fn main() void {}\n")
+        render3i = run_json(
+            script,
+            "render",
+            str(repo3i),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3i = (repo3i / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3i["selected"]["change_detection"] == "git-diff", render3i
+        assert '"build.zig"' in ci3i, ci3i
+        assert '"src/**"' in ci3i, ci3i
+
+        repo3j = tmpdir / "ruby-root"
+        repo3j.mkdir()
+        write(repo3j / "Gemfile", "source 'https://rubygems.org'\n")
+        write(repo3j / "Rakefile", "task default: :spec\n")
+        write(repo3j / "lib" / "tool.rb", "module Tool\nend\n")
+        render3j = run_json(
+            script,
+            "render",
+            str(repo3j),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3j = (repo3j / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3j["selected"]["change_detection"] == "git-diff", render3j
+        assert '"Gemfile"' in ci3j, ci3j
+        assert '"lib/**"' in ci3j, ci3j
+        assert '"spec/**"' in ci3j, ci3j
+
+        repo3k = tmpdir / "elixir-root"
+        repo3k.mkdir()
+        write(repo3k / "mix.exs", "defmodule Demo.MixProject do\nend\n")
+        write(repo3k / "lib" / "demo.ex", "defmodule Demo do\nend\n")
+        write(repo3k / "config" / "config.exs", "import Config\n")
+        render3k = run_json(
+            script,
+            "render",
+            str(repo3k),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3k = (repo3k / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3k["selected"]["change_detection"] == "git-diff", render3k
+        assert '"mix.exs"' in ci3k, ci3k
+        assert '"lib/**"' in ci3k, ci3k
+        assert '"config/**"' in ci3k, ci3k
+
+        repo3l = tmpdir / "dotnet-root-layout"
+        repo3l.mkdir()
+        write(repo3l / "app.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n")
+        write(repo3l / "Program.cs", "Console.WriteLine(\"ok\");\n")
+        render3l = run_json(
+            script,
+            "render",
+            str(repo3l),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3l = (repo3l / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3l["selected"]["change_detection"] == "git-diff", render3l
+        assert '"*.csproj"' in ci3l, ci3l
+        assert '"global.json"' in ci3l, ci3l
+        assert '"*.cs"' in ci3l, ci3l
+        assert '"Properties/**"' in ci3l, ci3l
+
+        repo3m = tmpdir / "cmake-root-layout"
+        repo3m.mkdir()
+        write(repo3m / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(demo)\nadd_executable(demo main.cpp)\n")
+        write(repo3m / "main.cpp", "int main() { return 0; }\n")
+        render3m = run_json(
+            script,
+            "render",
+            str(repo3m),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3m = (repo3m / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3m["selected"]["change_detection"] == "git-diff", render3m
+        assert '"CMakeLists.txt"' in ci3m, ci3m
+        assert '"*.cpp"' in ci3m, ci3m
+        assert '"**"' in ci3m, ci3m
+
+        repo3n = tmpdir / "go-workspace-detect"
+        repo3n.mkdir()
+        write(repo3n / "go.work", "go 1.23.0\nuse ./svc\n")
+        write(repo3n / "svc" / "go.mod", "module example.com/svc\n\ngo 1.23.0\n")
+        write(repo3n / "svc" / "main.go", "package main\nfunc main() {}\n")
+        render3n = run_json(
+            script,
+            "render",
+            str(repo3n),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3n = (repo3n / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3n["selected"]["change_detection"] == "git-diff", render3n
+        assert '"go.work"' in ci3n, ci3n
+        assert '"go.work.sum"' in ci3n, ci3n
+
+        repo3o = tmpdir / "gradle-wrapper-detect"
+        repo3o.mkdir()
+        write(repo3o / "build.gradle.kts", "plugins {}\n")
+        write(repo3o / "settings.gradle.kts", "rootProject.name = \"demo\"\n")
+        write(repo3o / "gradle" / "wrapper" / "gradle-wrapper.properties", "distributionUrl=https\\://services.gradle.org/distributions/gradle-latest-bin.zip\n")
+        write(repo3o / "gradle" / "libs.versions.toml", "[versions]\n")
+        render3o = run_json(
+            script,
+            "render",
+            str(repo3o),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci3o = (repo3o / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render3o["selected"]["change_detection"] == "git-diff", render3o
+        assert '"gradle/**"' in ci3o, ci3o
+        assert '"gradlew"' in ci3o, ci3o
+        assert '"gradlew.bat"' in ci3o, ci3o
 
         repo3c = tmpdir / "root-workspace"
         repo3c.mkdir()
@@ -416,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
         assert rerender10["selected"]["architecture"] == "cross-os-dist", rerender10
         assert rerender10["selected"]["dist_storage"] == "git", rerender10
         assert rerender10["selected"]["ci_mode"] == "direct", rerender10
+        assert rerender10["selected"]["change_detection"] == "none", rerender10
         assert "githooks/pre-push" in rerender10["candidates"], rerender10
         rerender10_general = run_json(script, "render", str(repo10), "--architecture", "general")
         assert rerender10_general["selected"]["architecture"] == "general", rerender10_general
@@ -425,6 +661,96 @@ def main(argv: list[str] | None = None) -> int:
         rerender10_explicit = run_json(script, "render", str(repo10), "--architecture", "cross-os-dist", "--no-release-overlay")
         assert rerender10_explicit["selected"]["release_overlay"] is False, rerender10_explicit
         assert "release-cross-os.yml" not in rerender10_explicit["candidates"], rerender10_explicit
+
+        repo10b = tmpdir / "stateful-change-detection"
+        repo10b.mkdir()
+        write(repo10b / "Cargo.toml", "[package]\nname = 'tool'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'tool'\npath = 'src/main.rs'\n")
+        write(repo10b / "src" / "main.rs", "fn main() {}\n")
+        update10b = run_json(
+            script,
+            "update",
+            str(repo10b),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        assert update10b["selected"]["change_detection"] == "git-diff", update10b
+        state10b = json.loads((repo10b / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        assert state10b["selected"]["change_detection"] == "git-diff", state10b
+        rerender10b = run_json(script, "render", str(repo10b))
+        assert rerender10b["selected"]["change_detection"] == "git-diff", rerender10b
+        ci10b = (repo10b / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "  detect-changes:\n" in ci10b, ci10b
+
+        repo10c = tmpdir / "change-detection-fallbacks"
+        repo10c.mkdir()
+        write(repo10c / "Cargo.toml", "[package]\nname = 'tool'\nversion = '0.1.0'\nedition = '2021'\n\n[[bin]]\nname = 'tool'\npath = 'src/main.rs'\n")
+        write(repo10c / "src" / "main.rs", "fn main() {}\n")
+        render10c_just = run_json(script, "render", str(repo10c), "--ci-mode", "just", "--change-detection", "git-diff")
+        assert render10c_just["selected"]["change_detection"] == "none", render10c_just
+        assert any("git-diff change detection is currently generated only for direct CI" in warning for warning in render10c_just["warnings"]), render10c_just
+        render10c_single = run_json(
+            script,
+            "render",
+            str(repo10c),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "single",
+            "--change-detection",
+            "git-diff",
+        )
+        assert render10c_single["selected"]["change_detection"] == "none", render10c_single
+        assert any("git-diff change detection currently requires split direct CI with a distinct build job" in warning for warning in render10c_single["warnings"]), render10c_single
+
+        module_spec = importlib.util.spec_from_file_location("project_harness_module", script)
+        assert module_spec and module_spec.loader is not None
+        project_harness = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(project_harness)
+        fallback_detected = {
+            "components": [
+                {
+                    "path": ".",
+                    "language": "mysterylang",
+                    "promotion": "promoted",
+                    "runnable_surface": True,
+                }
+            ]
+        }
+        fallback_patterns, fallback_warnings = project_harness.build_change_detection_paths(repo10c, fallback_detected)
+        assert "**" in fallback_patterns, fallback_patterns
+        assert any("fell back to broad component watching for ." in warning for warning in fallback_warnings), fallback_warnings
+
+        repo10d = tmpdir / "makefile-change-detection-fallback"
+        repo10d.mkdir()
+        write(
+            repo10d / "Makefile",
+            "build:\n\t@echo build\n\ntest:\n\t@echo test\n",
+        )
+        write(repo10d / "src" / "main.c", "int main(void) { return 0; }\n")
+        render10d = run_json(
+            script,
+            "render",
+            str(repo10d),
+            "--ci-mode",
+            "direct",
+            "--ci-layout",
+            "split",
+            "--change-detection",
+            "git-diff",
+        )
+        ci10d = (repo10d / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert render10d["selected"]["change_detection"] == "git-diff", render10d
+        assert "  build:\n" in ci10d, ci10d
+        assert "  detect-changes:\n" not in ci10d, ci10d
+        assert "needs.detect-changes.outputs.build_changed" not in ci10d, ci10d
+        assert any(
+            "did not derive any component-scoped build inputs; falling back to an unconditional build job" in warning
+            for warning in render10d["warnings"]
+        ), render10d
 
         # 11) existing justfiles execute recipes without shell interpolation
         repo10 = tmpdir / "safe-run"

@@ -10,7 +10,7 @@ Path:
 The state records:
 - generator version
 - detection output summary
-- selected architecture, CI mode, release overlay, and dist storage
+- selected architecture, CI mode, CI layout, change detection, release overlay, and dist storage
 - managed writes versus candidate-only outputs
 - warnings and notes
 
@@ -37,6 +37,8 @@ Example shape:
   "selected": {
     "architecture": "cross-os-dist",
     "ci_mode": "direct",
+    "ci_layout": "split",
+    "change_detection": "git-diff",
     "release_overlay": true,
     "dist_storage": "artifacts"
   },
@@ -65,7 +67,7 @@ Use it when:
 If an update result is not what you wanted:
 1. inspect `.local/harness/state.json`
 2. inspect `.local/harness/render/`
-3. adjust `--architecture`, `--ci-mode`, `--dist-storage`, or `--release-overlay`
+3. adjust `--architecture`, `--ci-mode`, `--ci-layout`, `--change-detection`, `--dist-storage`, or `--release-overlay`
 4. rerun `render` for preview
 5. rerun `update` only when the target files should be managed or remain absent
 

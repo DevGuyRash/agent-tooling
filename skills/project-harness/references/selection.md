@@ -1,8 +1,8 @@
-# Selection: Architecture, Storage, and CI
+# Selection: Architecture, Storage, CI, and Change Detection
 
 Load this file after detection.
 
-There is no single "best" harness. Pick three axes deliberately.
+There is no single "best" harness. Pick the harness axes deliberately.
 
 When signals are mixed, choose the more reversible axis value first.
 The goal is a harness that can be refined safely, not one that looks maximally
@@ -125,6 +125,37 @@ Keep the first choice reversible:
 - split direct CI is an explicit overlay, not an automatic promotion
 - path filters stay manual and fail closed when root workspace surfaces exist
 
+## Axis 4: Change detection
+
+### `none`
+
+Use when:
+- the repo's build is cheap enough that unconditional CI is simpler
+- the repo does not have a distinct expensive build lane yet
+- you want the most obvious workflow behavior first
+
+Result:
+- generated CI always runs its normal jobs
+- no extra detection job is inserted
+- best default for new harnesses
+
+### `git-diff`
+
+Use when:
+- the repo explicitly opted into split direct CI
+- there is a distinct `build` job that is materially more expensive than lint/test
+- path-based change detection is good enough and easier to explain than custom hashing
+
+Result:
+- generate a lightweight `detect-changes` job ahead of `build`
+- gate `build` on repo-relative changed-path patterns derived from the promoted runnable surfaces
+- keep `lint` and `test` unconditional unless the repo asks for a more custom overlay elsewhere
+
+Current generated scope:
+- supported only for `direct` CI with `--ci-layout split`
+- emitted as an opt-in overlay, not a default
+- intended for expensive build lanes, not as a generic skip-everything mechanism
+
 ## Mixed-signal rule
 
 If one axis is well supported and another is weak, commit only the supported one.
@@ -150,6 +181,7 @@ Usually:
 - `local-dist` or `committed-dist`
 - `git` or `git-lfs`
 - `just` for small repos, `direct` for monorepos
+- `none` first, then `git-diff` only if build minutes become material
 
 ### Agent skill that must be self-contained
 
@@ -157,6 +189,7 @@ Usually:
 - `committed-dist` or `cross-os-dist`
 - `git` for very small outputs, `git-lfs` when growth matters
 - `just` or `none`, depending on whether GitHub Actions is part of the delivery story
+- `none` unless the skill's build lane is distinct and expensive enough to justify `git-diff`
 
 ### Open-source CLI or shared public project
 
@@ -164,6 +197,7 @@ Usually:
 - `general` or `local-dist`
 - `artifacts`
 - `direct`
+- `none` first, then `git-diff` for an explicit expensive build lane
 - add a cross-OS dist/release overlay only if binaries are a public deliverable
 
 ### Unknown repo with no examples

@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+__PRE_JOBS__
 __LINT_JOB__
 __TEST_JOB__
 __BUILD_JOB__
