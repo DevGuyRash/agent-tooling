@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import platform
 import subprocess
 import sys
@@ -143,10 +144,10 @@ class PackageSkillsTests(unittest.TestCase):
 
         original_run = package_skills.run
         original_host_platform_id = package_skills.host_platform_id
-        commands: list[list[str]] = []
+        commands: list[tuple[list[str], dict[str, str] | None]] = []
 
-        def fake_run(cmd: list[str]) -> None:
-            commands.append(cmd)
+        def fake_run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
+            commands.append((cmd, env))
 
         package_skills.run = fake_run
         package_skills.host_platform_id = lambda: "linux-x86_64"
@@ -157,7 +158,7 @@ class PackageSkillsTests(unittest.TestCase):
 
         self.assertEqual(
             commands,
-            [["cargo", "build", "--workspace", "--release", "--locked", "-p", "tool"]],
+            [(["cargo", "build", "--workspace", "--release", "--locked", "-p", "tool"], package_skills.build_env())],
         )
         self.assertTrue((self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool").exists())
         self.assertFalse((self.repo / "skills" / "helper" / "dist" / "linux-x86_64" / "helper").exists())
@@ -190,6 +191,24 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertTrue(repo_payload.exists())
         self.assertFalse(stale_payload.exists())
         package_skills.compare_artifacts(artifact_root, "required")
+
+    def test_build_env_adds_reproducible_remap_flags(self) -> None:
+        original_env = os.environ.copy()
+        original_repo_root = package_skills.REPO_ROOT
+        package_skills.REPO_ROOT = Path("/workspace/repo")
+        os.environ["CARGO_HOME"] = "/custom/cargo"
+        os.environ["RUSTUP_HOME"] = "/custom/rustup"
+        os.environ["RUSTFLAGS"] = "-C target-cpu=native"
+        self.addCleanup(setattr, package_skills, "REPO_ROOT", original_repo_root)
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, original_env)
+
+        env = package_skills.build_env()
+
+        self.assertIn("--remap-path-prefix=/workspace/repo=/workspace", env["RUSTFLAGS"])
+        self.assertIn("--remap-path-prefix=/custom/cargo=/cargo-home", env["RUSTFLAGS"])
+        self.assertIn("--remap-path-prefix=/custom/rustup=/rustup-home", env["RUSTFLAGS"])
+        self.assertTrue(env["RUSTFLAGS"].endswith("-C target-cpu=native"))
 
 
 if __name__ == "__main__":

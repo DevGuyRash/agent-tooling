@@ -1,1 +1,2 @@
-- Generalized box-table renderer now lives in shared repo scripts; follow up by extracting it into its own standalone skill without relying on repo-local wrapper paths.
+- Commit the refreshed Linux `dist/` payloads, especially `skills/docker-architect/dist/linux-x86_64/*`, so `just ci` can pass the committed-artifact gate cleanly.
+- Re-check hosted GitHub Actions after the next push; local verification is green, but the authoritative CI result is still pending.

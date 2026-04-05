@@ -52,8 +52,30 @@ def binary_name(binary: str, platform_id: str) -> str:
     return binary
 
 
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+def remap_prefixes() -> list[tuple[Path, str]]:
+    prefixes: list[tuple[Path, str]] = [(REPO_ROOT, "/workspace")]
+
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo"))).resolve()
+    rustup_home = Path(os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup"))).resolve()
+
+    prefixes.append((cargo_home, "/cargo-home"))
+    prefixes.append((rustup_home, "/rustup-home"))
+    return prefixes
+
+
+def build_env() -> dict[str, str]:
+    env = os.environ.copy()
+    remap_flags = [
+        f"--remap-path-prefix={source}={dest}"
+        for source, dest in remap_prefixes()
+    ]
+    rustflags = env.get("RUSTFLAGS", "").strip()
+    env["RUSTFLAGS"] = " ".join([*remap_flags, rustflags]).strip()
+    return env
+
+
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True, env=env)
 
 
 def selected_skill_entries(
@@ -160,7 +182,7 @@ def stage_host(skill_names: list[str] | None = None) -> None:
     packages = []
     for _, skill in selected:
         packages.extend(["-p", str(skill["package"])])
-    run(["cargo", "build", "--workspace", "--release", "--locked", *packages])
+    run(["cargo", "build", "--workspace", "--release", "--locked", *packages], env=build_env())
 
     for _, skill in selected:
         skill_dir = REPO_ROOT / str(skill["skill_dir"])
