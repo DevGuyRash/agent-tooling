@@ -23,8 +23,7 @@
 
 - Wayland sessions: prefer `wl-copy` when `WAYLAND_DISPLAY` exists
 - X11 sessions: prefer `xclip` or `xsel` when `DISPLAY` exists
-- macOS: `pbcopy`
-- Windows: PowerShell `Set-Clipboard`
+- Linux clipboard helpers: prefer `wl-copy`, `xclip`, or `xsel` based on the active session
 
 ## Failure policy
 

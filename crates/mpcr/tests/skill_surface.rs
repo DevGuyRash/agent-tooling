@@ -416,11 +416,6 @@ fn shipped_wrappers_use_dist_layout() -> anyhow::Result<()> {
     let sh_wrapper = read(&root, "scripts/mpcr")?;
     ensure!(sh_wrapper.contains("/dist/"));
     ensure!(!sh_wrapper.contains("cargo build"));
-
-    let ps_wrapper = read(&root, "scripts/mpcr.ps1")?;
-    ensure!(ps_wrapper.contains("Join-Path $SkillRoot 'dist'"));
-    ensure!(ps_wrapper.contains("$PlatformId"));
-    ensure!(!ps_wrapper.contains("cargo build"));
     Ok(())
 }
 

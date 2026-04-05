@@ -10,17 +10,14 @@ hardening invariants. Run these tools after every generation pass.
 ### Install
 
 ```bash
-# Binary (Linux amd64)
-HADOLINT_VERSION=v2.12.0
+# Binary (Linux x86_64, latest stable)
+HADOLINT_VERSION="<latest stable>"
 curl -sL "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
   -o /usr/local/bin/hadolint
 chmod +x /usr/local/bin/hadolint
 curl -sL "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64.sha256" \
   -o /tmp/hadolint.sha256
 echo "$(cat /tmp/hadolint.sha256)  /usr/local/bin/hadolint" | sha256sum -c -
-
-# macOS
-brew install hadolint
 
 # Container (no install)
 docker run --rm -i hadolint/hadolint < Dockerfile
@@ -60,7 +57,7 @@ hadolint -f json Dockerfile
 
 ```bash
 # Binary (Linux)
-TRIVY_VERSION=0.51.2
+TRIVY_VERSION="<latest stable>"
 curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
 curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.pem"
 curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.sig"
@@ -68,9 +65,6 @@ curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VE
 grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
 tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy
 install -m 0755 trivy /usr/local/bin/trivy
-
-# macOS
-brew install trivy
 
 # Container
 docker run --rm aquasec/trivy image <image-name>
@@ -113,7 +107,7 @@ Docker Scout is included with Docker Desktop 4.17+. For standalone:
 
 ```bash
 # CLI plugin (Linux amd64)
-SCOUT_VERSION=1.18.1
+SCOUT_VERSION="<latest stable>"
 curl -fsSLO "https://github.com/docker/scout-cli/releases/download/v${SCOUT_VERSION}/docker-scout_${SCOUT_VERSION}_linux_amd64.tar.gz"
 curl -fsSLO "https://github.com/docker/scout-cli/releases/download/v${SCOUT_VERSION}/checksums.txt"
 grep "docker-scout_${SCOUT_VERSION}_linux_amd64.tar.gz" checksums.txt | sha256sum -c -

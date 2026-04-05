@@ -88,7 +88,7 @@ if (
   if command -v timeout >/dev/null 2>&1; then
     timeout 2 git commit --quiet --allow-empty-message -m "" 2>/dev/null
   else
-    # Fallback: use perl alarm if timeout is missing (e.g. macOS).
+    # Fallback: use perl alarm if timeout is missing.
     perl -e 'alarm 2; exec @ARGV' -- git commit --quiet --allow-empty-message -m "" 2>/dev/null
   fi
 ) 2>/dev/null; then

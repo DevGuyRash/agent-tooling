@@ -186,19 +186,6 @@ platform_asset_suffix() {
           ;;
       esac
       ;;
-    darwin)
-      case "$arch" in
-        x86_64|amd64)
-          echo "darwin_x64"
-          ;;
-        arm64)
-          echo "darwin_arm64"
-          ;;
-        *)
-          return 1
-          ;;
-      esac
-      ;;
     *)
       return 1
       ;;

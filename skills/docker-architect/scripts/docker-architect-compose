@@ -28,15 +28,10 @@ skill_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
 os_name="$(uname -s 2>/dev/null || echo unknown)"
 arch_name="$(uname -m 2>/dev/null || echo unknown)"
 
-case "$os_name" in
-  Linux) platform_os="linux" ;;
-  Darwin) platform_os="macos" ;;
-  MINGW*|MSYS*|CYGWIN*|Windows_NT) platform_os="windows" ;;
-  *)
-    echo "error: unsupported host OS for docker-architect-compose: ${os_name}" >&2
-    exit 2
-    ;;
-esac
+if [ "$os_name" != "Linux" ]; then
+  echo "error: docker-architect-compose packaged launcher supports Linux hosts only (got ${os_name})" >&2
+  exit 2
+fi
 case "$arch_name" in
   x86_64|amd64) platform_arch="x86_64" ;;
   arm64|aarch64) platform_arch="aarch64" ;;
@@ -46,9 +41,8 @@ case "$arch_name" in
     ;;
 esac
 
-platform_id="${platform_os}-${platform_arch}"
+platform_id="linux-${platform_arch}"
 bin_name="docker-architect-compose"
-[ "$platform_os" = "windows" ] && bin_name="${bin_name}.exe"
 bin="${skill_root}/dist/${platform_id}/${bin_name}"
 
 if [ ! -x "${bin}" ] || [ ! -f "${bin}" ] || [ -L "${bin}" ]; then

@@ -9,9 +9,8 @@ description: >-
   loops, or (5) Any task requiring systematic, multi-pass code review with
   per-agent report trees.
 compatibility: >-
-  Cross-platform. Primary entrypoint: `<skills-file-root>/scripts/mpcr` (POSIX)
-  or `<skills-file-root>/scripts/mpcr.cmd` (Windows; falls back to
-  `<skills-file-root>/scripts/mpcr.ps1`).
+  Linux-first packaged skill. Primary entrypoint:
+  `<skills-file-root>/scripts/mpcr`.
 ---
 
 # Code Review
@@ -61,7 +60,7 @@ or `mpcr protocol escalation --id <id>` lookups for discovery, fallback, or narr
 troubleshooting.
 
 ## Wrapper behavior
-`<skills-file-root>/scripts/mpcr` executes the packaged Rust binary in `<skills-file-root>/dist/<platform-id>/mpcr`.
+`<skills-file-root>/scripts/mpcr` executes the packaged Rust binary in `<skills-file-root>/dist/linux-<arch>/mpcr`.
 
 If the packaged binary is missing, refresh it from the repo root with `just dist-host` or retrieve refreshed `dist/` outputs from CI.
 
@@ -110,8 +109,7 @@ The following constraints apply universally across all modes:
 ## Skills debugging: error accumulation log
 At the start of each top-level invocation, create one log file for this skill.
 
-- Unix path: `/tmp/skill-errors/code-review/<yyyy-mm-dd>/<HH-MM-SS>_errors.md`
-- Windows path: `%TEMP%\\skill-errors\\code-review\\<yyyy-mm-dd>\\<HH-MM-SS>_errors.md`
+- Path: `/tmp/skill-errors/code-review/<yyyy-mm-dd>/<HH-MM-SS>_errors.md`
 
 Log skill-caused friction only: documentation drift, policy lookup mismatches, wrapper issues, missing generated fallback docs, or CLI behavior that contradicts the intended code-review workflow. Do not log user-project build or test failures.
 

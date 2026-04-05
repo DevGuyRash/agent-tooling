@@ -217,22 +217,22 @@ fn open_lock_file(lock_path: &Path) -> Result<File, AppError> {
         .map_err(|error| AppError::io(lock_path, error.to_string()))
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(target_os = "linux")]
 fn ensure_lock_identity_supported(_cache_path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-#[cfg(all(not(unix), not(windows)))]
+#[cfg(not(target_os = "linux"))]
 fn ensure_lock_identity_supported(cache_path: &Path) -> Result<(), AppError> {
     Err(AppError::InvalidInput {
         reason: format!(
-            "cache locking for {} requires supported lock-file identity checks; this platform is unsupported",
+            "cache locking for {} requires Linux lock-file identity checks; this platform is unsupported",
             cache_path.display()
         ),
     })
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, AppError> {
     use std::os::unix::fs::MetadataExt;
 
@@ -253,34 +253,6 @@ fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, Ap
     Ok(path_meta.dev() == file_meta.dev() && path_meta.ino() == file_meta.ino())
 }
 
-#[cfg(windows)]
-fn lock_path_matches_file(lock_path: &Path, lock_file: &File) -> Result<bool, AppError> {
-    use std::os::windows::fs::MetadataExt;
-
-    if path_is_symlink(lock_path)? {
-        return Err(AppError::InvalidInput {
-            reason: format!(
-                "refusing to lock cache through symlink path {}",
-                lock_path.display()
-            ),
-        });
-    }
-
-    let path_meta =
-        fs::metadata(lock_path).map_err(|error| AppError::io(lock_path, error.to_string()))?;
-    let file_meta = lock_file
-        .metadata()
-        .map_err(|error| AppError::io(lock_path, error.to_string()))?;
-    let path_volume = path_meta.volume_serial_number();
-    let file_volume = file_meta.volume_serial_number();
-    let path_index = path_meta.file_index();
-    let file_index = file_meta.file_index();
-    Ok(path_volume.is_some()
-        && path_index.is_some()
-        && path_volume == file_volume
-        && path_index == file_index)
-}
-
 fn reject_symlink_target(path: &Path) -> Result<(), AppError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -299,11 +271,11 @@ fn reject_symlink_target(path: &Path) -> Result<(), AppError> {
     }
 }
 
-#[cfg(all(not(unix), not(windows)))]
+#[cfg(not(target_os = "linux"))]
 fn lock_path_matches_file(lock_path: &Path, _lock_file: &File) -> Result<bool, AppError> {
     Err(AppError::InvalidInput {
         reason: format!(
-            "cache lock identity verification for {} requires supported platform metadata checks",
+            "cache lock identity verification for {} requires Linux platform metadata checks",
             lock_path.display()
         ),
     })
@@ -476,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn with_cache_lock_tolerates_longer_lock_contention_windows() {
+    fn with_cache_lock_tolerates_longer_lock_contention() {
         let tmp = tempdir().expect("tempdir should be created");
         let cache_path = tmp.path().join("cache.json");
         let lock_path = lock_path_for_cache(&cache_path);
@@ -497,14 +469,14 @@ mod tests {
         assert_eq!(outcome, 11);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn is_lock_contention_does_not_treat_ebusy_as_flock_contention() {
         let error = std::io::Error::from_raw_os_error(16);
         assert!(!is_lock_contention(&error));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn with_cache_lock_rejects_symlink_lock_path() {
         use std::os::unix::fs::symlink;
@@ -520,7 +492,7 @@ mod tests {
         assert!(matches!(result, Err(AppError::InvalidInput { .. })));
     }
 
-    #[cfg(all(not(unix), not(windows)))]
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn with_cache_lock_rejects_unsupported_platform() {
         let tmp = tempdir().expect("tempdir should be created");
@@ -529,7 +501,7 @@ mod tests {
         let result = with_cache_lock(&cache_path, || Ok::<usize, AppError>(9));
         match result {
             Err(AppError::InvalidInput { reason }) => {
-                assert!(reason.contains("requires supported"));
+                assert!(reason.contains("requires Linux"));
             }
             other => panic!("expected InvalidInput for unsupported platform, got {other:?}"),
         }
