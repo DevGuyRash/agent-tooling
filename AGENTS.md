@@ -805,27 +805,12 @@ File path:
 <tmp>/<skill-name>/<yyyy-mm-dd>/<HH-MM-SS>_errors.md
 ```
 
-Where `<tmp>` resolves per platform:
-
-| Platform      | Path                                                                                |
-| ------------- | ----------------------------------------------------------------------------------- |
-| Linux / macOS | `/tmp/skill-errors`                                                                 |
-| Windows       | `%TEMP%\skill-errors` (typically `C:\Users\<user>\AppData\Local\Temp\skill-errors`) |
-
-Detect the platform and use the appropriate base path:
+Use the Linux temp base path:
 
 ```bash
-# Unix (Linux / macOS)
 err_dir="/tmp/skill-errors/<skill-name>/$(date +%Y-%m-%d)"
 mkdir -p "$err_dir"
 err_file="$err_dir/$(date +%H-%M-%S)_errors.md"
-```
-
-```powershell
-# Windows (PowerShell)
-$errDir = "$env:TEMP\skill-errors\<skill-name>\$(Get-Date -Format 'yyyy-MM-dd')"
-New-Item -ItemType Directory -Force -Path $errDir | Out-Null
-$errFile = "$errDir\$(Get-Date -Format 'HH-mm-ss')_errors.md"
 ```
 
 ### Log file format

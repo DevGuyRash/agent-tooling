@@ -258,18 +258,8 @@ jobs:
           PY
 
   friction-diagnostics-smoke:
-    name: Friction diagnostics smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            shell: bash
-            script: skills/friction-diagnostics/tests/smoke-posix.sh
-          - os: windows-latest
-            shell: powershell
-            script: skills/friction-diagnostics/tests/smoke-powershell.ps1
+    name: Friction diagnostics smoke
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -283,13 +273,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Stage host packaged binaries
         shell: bash
-        run: python scripts/package_skills.py stage-host
+        run: python scripts/package_skills.py stage-host --skill friction_render_table
 
-      - name: Run friction diagnostics smoke test
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.script }}
+      - name: Run friction diagnostics smoke test (POSIX)
+        shell: bash
+        run: bash skills/friction-diagnostics/tests/smoke-posix.sh
 
   rust:
     name: Rust (fmt, clippy, test)

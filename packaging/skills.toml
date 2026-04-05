@@ -1,9 +1,17 @@
+# Single source of truth for packaged skill binaries.
+# Add one [skills.<id>] entry per packaged launcher/binary pair.
+# Repo scripts and CI both consume required_platforms/ci_platforms from this manifest.
+# Current repo policy: Linux payloads are pre-packaged and committed.
+# Other operating systems should build from source inside the target clone.
+
 [skills.code_review]
 package = "mpcr"
 binary = "mpcr"
 skill_dir = "skills/code-review"
 launcher = "scripts/mpcr"
 smoke_args = ["--help"]
+required_platforms = ["linux-x86_64"]
+ci_platforms = ["linux-x86_64"]
 
 [skills.docker_architect_compose]
 package = "docker-architect-compose"
@@ -11,6 +19,8 @@ binary = "docker-architect-compose"
 skill_dir = "skills/docker-architect"
 launcher = "scripts/docker-architect-compose"
 smoke_args = ["--help"]
+required_platforms = ["linux-x86_64"]
+ci_platforms = ["linux-x86_64"]
 
 [skills.docker_architect_image]
 package = "docker-architect-image"
@@ -18,6 +28,8 @@ binary = "docker-architect-image"
 skill_dir = "skills/docker-architect"
 launcher = "scripts/docker-architect-image"
 smoke_args = ["--help"]
+required_platforms = ["linux-x86_64"]
+ci_platforms = ["linux-x86_64"]
 
 [skills.friction_render_table]
 package = "render-table"
@@ -25,3 +37,5 @@ binary = "render-table"
 skill_dir = "skills/friction-diagnostics"
 launcher = "scripts/render-table.sh"
 smoke_args = ["--help"]
+required_platforms = ["linux-x86_64"]
+ci_platforms = ["linux-x86_64"]

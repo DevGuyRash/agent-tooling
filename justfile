@@ -4,7 +4,7 @@
 #   just verify            # run the fast local verification surface
 #   just ci                # run the pull-request verification surface for this repo
 #   just dist-host         # build and stage host-platform skill binaries into dist/
-#   just hooks-install     # install the local pre-commit gate
+#   just hooks-install     # install the local pre-push gate
 # project-harness: managed-file
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -28,9 +28,10 @@ fmt-check:
 lint:
   cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# Run the workspace test suite with the locked dependency graph
+# Run the workspace and repo-level script test suites
 test:
   cargo test --workspace --locked
+  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills
 
 # Compile the Rust workspace in the default build profile
 build:
@@ -54,6 +55,7 @@ harness-doctor:
 # Verify committed packaging policy and staged deliverables for the current host
 verify-packaging:
   python3 scripts/package_skills.py verify-host
+  python3 scripts/package_skills.py verify-complete
 
 # Smoke-test skill-local launchers against the staged dist payloads
 verify-skill-launchers:
@@ -66,14 +68,7 @@ ci: bootstrap verify
   just verify-packaging
   just verify-skill-launchers
 
-# Install a pre-commit hook that enforces the local verification surface
+# Install the committed repo-owned pre-push hook for this clone
 hooks-install:
-  mkdir -p .git/hooks
-  cat > .git/hooks/pre-commit <<'EOF'
-  #!/usr/bin/env sh
-  set -eu
-  just verify
-  just dist-host
-  just verify-packaging
-  EOF
-  chmod +x .git/hooks/pre-commit
+  chmod +x githooks/pre-push
+  git config --local core.hooksPath githooks
