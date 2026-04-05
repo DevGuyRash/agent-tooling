@@ -103,7 +103,7 @@ Use `markdown` or `list` when Unicode box drawing is undesirable, terminal-width
 - Build and staging are centralized at the repo root through `just` and `scripts/package_skills.py`.
 - `packaging/skills.toml` is the single registry for packaged skill binaries, their launcher paths, and which platforms are required in git versus built in CI.
 - Portability contract: a skill should not require runtime paths outside its own folder.
-- The committed Linux `dist/` payloads are verified in normal CI.
+- The committed Linux `dist/` payloads are verified in CI only when packaging-relevant files changed.
 - Packaged launchers in this repo support Linux hosts only.
 
 To add or update a packaged binary, append or edit one `[skills.<id>]` entry in `packaging/skills.toml` and keep these fields aligned:

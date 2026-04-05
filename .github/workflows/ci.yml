@@ -257,8 +257,59 @@ jobs:
               f.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
           PY
 
+  detect-packaging-changes:
+    name: Detect packaging changes
+    runs-on: ubuntu-latest
+    outputs:
+      packaging_changed: ${{ steps.detect.outputs.packaging_changed }}
+      friction_smoke_changed: ${{ steps.detect.outputs.friction_smoke_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect packaging-relevant changes
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          event_name="${{ github.event_name }}"
+          base_sha=""
+          head_sha="${{ github.sha }}"
+
+          if [ "$event_name" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          elif [ "$event_name" = "push" ]; then
+            base_sha="${{ github.event.before }}"
+          fi
+
+          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA for $event_name; defaulting packaging checks to true."
+            {
+              echo "packaging_changed=true"
+              echo "friction_smoke_changed=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files_file="$(mktemp)"
+          git diff --name-only "$base_sha" "$head_sha" > "$changed_files_file"
+
+          packaging_changed="$(python3 scripts/package_skills.py matches-changed-files --changed-files-file "$changed_files_file")"
+          friction_smoke_changed="$(python3 scripts/package_skills.py matches-changed-files --skill friction_render_table --include-tests --changed-files-file "$changed_files_file")"
+
+          {
+            echo "packaging_changed=$packaging_changed"
+            echo "friction_smoke_changed=$friction_smoke_changed"
+          } >> "$GITHUB_OUTPUT"
+
   friction-diagnostics-smoke:
     name: Friction diagnostics smoke
+    needs: detect-packaging-changes
+    if: needs.detect-packaging-changes.outputs.friction_smoke_changed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -286,7 +337,9 @@ jobs:
 
   rust:
     name: Rust (fmt, clippy, test)
-    needs: detect-rust
+    needs:
+      - detect-rust
+      - detect-packaging-changes
     if: needs.detect-rust.outputs.has_rust == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -484,15 +537,15 @@ jobs:
             ${{ steps.cfg.outputs.locked_flag }}
 
       - name: Stage host packaged binaries
-        if: matrix.dir == '.'
+        if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'
         run: python3 scripts/package_skills.py stage-host
 
       - name: Verify packaged binaries
-        if: matrix.dir == '.'
+        if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'
         run: python3 scripts/package_skills.py verify-host
 
       - name: Smoke packaged launchers
-        if: matrix.dir == '.'
+        if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'
         run: python3 scripts/package_skills.py smoke-launchers
 
       - name: Cargo deny (optional; auto if deny.toml exists)
