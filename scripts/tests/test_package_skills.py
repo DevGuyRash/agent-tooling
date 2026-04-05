@@ -58,6 +58,64 @@ class PackageSkillsTests(unittest.TestCase):
             + "\n",
         )
 
+    def write_workspace(self) -> None:
+        write(
+            self.repo / "Cargo.toml",
+            textwrap.dedent(
+                """
+                [workspace]
+                members = ["crates/tool", "crates/helper"]
+                resolver = "2"
+                """
+            ).strip()
+            + "\n",
+        )
+        write(
+            self.repo / "Cargo.lock",
+            "# test lockfile\n",
+        )
+        write(
+            self.repo / "rust-toolchain.toml",
+            textwrap.dedent(
+                """
+                [toolchain]
+                channel = "stable"
+                """
+            ).strip()
+            + "\n",
+        )
+        write(
+            self.repo / "crates" / "tool" / "Cargo.toml",
+            textwrap.dedent(
+                """
+                [package]
+                name = "tool"
+                version = "0.1.0"
+                edition = "2021"
+
+                [dependencies]
+                helper = { path = "../helper" }
+                """
+            ).strip()
+            + "\n",
+        )
+        write(self.repo / "crates" / "tool" / "src" / "main.rs", "fn main() {}\n")
+        write(
+            self.repo / "crates" / "helper" / "Cargo.toml",
+            textwrap.dedent(
+                """
+                [package]
+                name = "helper"
+                version = "0.1.0"
+                edition = "2021"
+                """
+            ).strip()
+            + "\n",
+        )
+        write(self.repo / "crates" / "helper" / "src" / "lib.rs", "pub fn helper() {}\n")
+        write(self.repo / "skills" / "tool" / "scripts" / "tool", "#!/bin/sh\n")
+        write(self.repo / "skills" / "tool" / "tests" / "smoke.sh", "#!/bin/sh\n")
+
     def write_multi_config(self) -> None:
         write(
             package_skills.CONFIG_PATH,
@@ -256,6 +314,57 @@ class PackageSkillsTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             package_skills.use_container_build("linux-x86_64")
         self.assertIn("docker is required", str(ctx.exception))
+
+    def test_watched_repo_paths_include_crates_launchers_and_dist(self) -> None:
+        self.write_config()
+        self.write_workspace()
+
+        watched = package_skills.watched_repo_paths(package_skills.load_config(), ["tool"])
+
+        self.assertIn("packaging/skills.toml", watched)
+        self.assertIn("scripts/package_skills.py", watched)
+        self.assertIn("Cargo.toml", watched)
+        self.assertIn("Cargo.lock", watched)
+        self.assertIn("rust-toolchain.toml", watched)
+        self.assertIn("crates/tool", watched)
+        self.assertIn("crates/helper", watched)
+        self.assertIn("skills/tool/scripts/tool", watched)
+        self.assertIn("skills/tool/dist", watched)
+
+    def test_matches_changed_files_respects_watch_prefixes_and_optional_tests(self) -> None:
+        self.write_config()
+        self.write_workspace()
+        config = package_skills.load_config()
+
+        self.assertTrue(
+            package_skills.matches_changed_files(
+                ["crates/helper/src/lib.rs"],
+                config,
+                ["tool"],
+            )
+        )
+        self.assertTrue(
+            package_skills.matches_changed_files(
+                ["skills/tool/dist/linux-x86_64/tool"],
+                config,
+                ["tool"],
+            )
+        )
+        self.assertFalse(
+            package_skills.matches_changed_files(
+                ["skills/tool/tests/smoke.sh"],
+                config,
+                ["tool"],
+            )
+        )
+        self.assertTrue(
+            package_skills.matches_changed_files(
+                ["./skills/tool/tests/smoke.sh"],
+                config,
+                ["tool"],
+                include_tests=True,
+            )
+        )
 
 
 if __name__ == "__main__":

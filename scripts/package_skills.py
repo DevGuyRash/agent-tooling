@@ -21,12 +21,24 @@ except ModuleNotFoundError:  # pragma: no cover
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "packaging" / "skills.toml"
 TOOLCHAIN_PATH = REPO_ROOT / "rust-toolchain.toml"
+ROOT_WATCH_PATHS = [
+    Path("packaging/skills.toml"),
+    Path("scripts/package_skills.py"),
+    Path("Cargo.toml"),
+    Path("Cargo.lock"),
+    Path("rust-toolchain.toml"),
+]
 
 
 def load_config() -> dict[str, dict[str, object]]:
     with open(CONFIG_PATH, "rb") as fh:
         data = tomllib.load(fh)
     return data["skills"]
+
+
+def load_toml(path: Path) -> dict[str, object]:
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
 
 
 def host_platform_id() -> str:
@@ -235,6 +247,187 @@ def selected_skill_entries(
         missing = ", ".join(sorted(unknown))
         raise SystemExit(f"unknown packaged skill(s): {missing}; expected one of: {choices}")
     return selected
+
+
+def dependency_tables(manifest: dict[str, object]) -> list[dict[str, object]]:
+    tables: list[dict[str, object]] = []
+    for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+        raw = manifest.get(key)
+        if isinstance(raw, dict):
+            tables.append(raw)
+
+    for table_name, table_value in manifest.items():
+        if not isinstance(table_name, str) or not table_name.startswith("target."):
+            continue
+        if not isinstance(table_value, dict):
+            continue
+        for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+            raw = table_value.get(key)
+            if isinstance(raw, dict):
+                tables.append(raw)
+    return tables
+
+
+def discover_workspace_manifests() -> list[Path]:
+    manifests: list[Path] = []
+    for path in sorted(REPO_ROOT.rglob("Cargo.toml")):
+        rel_parts = path.relative_to(REPO_ROOT).parts
+        if "target" in rel_parts or ".git" in rel_parts:
+            continue
+        if any(part.startswith(".local") for part in rel_parts):
+            continue
+        manifests.append(path)
+    return manifests
+
+
+def manifest_dependency_dirs(manifest_path: Path, manifest: dict[str, object]) -> list[Path]:
+    deps: list[Path] = []
+    for table in dependency_tables(manifest):
+        for spec in table.values():
+            if not isinstance(spec, dict):
+                continue
+            raw_path = spec.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            dep_path = (manifest_path.parent / raw_path).resolve()
+            dep_manifest = dep_path / "Cargo.toml" if dep_path.is_dir() else dep_path
+            if dep_manifest.name != "Cargo.toml":
+                dep_manifest = dep_manifest / "Cargo.toml"
+            if dep_manifest.is_file():
+                deps.append(dep_manifest.parent.resolve())
+    return deps
+
+
+def cargo_package_graph() -> tuple[dict[str, Path], dict[Path, list[Path]]]:
+    package_dirs: dict[str, Path] = {}
+    dependency_dirs: dict[Path, list[Path]] = {}
+
+    for manifest_path in discover_workspace_manifests():
+        manifest = load_toml(manifest_path)
+        crate_dir = manifest_path.parent.resolve()
+        dependency_dirs[crate_dir] = manifest_dependency_dirs(manifest_path, manifest)
+        package = manifest.get("package")
+        if not isinstance(package, dict):
+            continue
+        name = package.get("name")
+        if isinstance(name, str) and name.strip():
+            package_dirs[name] = crate_dir
+
+    return package_dirs, dependency_dirs
+
+
+def path_within_repo(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(REPO_ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def package_source_dirs(
+    config: dict[str, dict[str, object]],
+    skill_names: list[str] | None = None,
+) -> list[Path]:
+    selected = selected_skill_entries(config, skill_names)
+    package_dirs, dependency_dirs = cargo_package_graph()
+
+    queue: list[Path] = []
+    missing_packages: list[str] = []
+    for _, skill in selected:
+        package_name = str(skill["package"])
+        crate_dir = package_dirs.get(package_name)
+        if crate_dir is None:
+            missing_packages.append(package_name)
+            continue
+        queue.append(crate_dir)
+
+    if missing_packages:
+        missing = ", ".join(sorted(missing_packages))
+        raise SystemExit(f"packaged skill crate(s) not found in workspace: {missing}")
+
+    ordered: list[Path] = []
+    seen: set[Path] = set()
+    while queue:
+        crate_dir = queue.pop(0)
+        if crate_dir in seen or not path_within_repo(crate_dir):
+            continue
+        seen.add(crate_dir)
+        ordered.append(crate_dir)
+        for dep_dir in dependency_dirs.get(crate_dir, []):
+            if dep_dir not in seen:
+                queue.append(dep_dir)
+
+    return ordered
+
+
+def normalize_repo_path(path: str) -> str:
+    trimmed = path.strip().replace("\\", "/")
+    while trimmed.startswith("./"):
+        trimmed = trimmed[2:]
+    return trimmed.strip("/")
+
+
+def watched_repo_paths(
+    config: dict[str, dict[str, object]],
+    skill_names: list[str] | None = None,
+    *,
+    include_tests: bool = False,
+) -> list[str]:
+    selected = selected_skill_entries(config, skill_names)
+    watched: list[str] = [path.as_posix() for path in ROOT_WATCH_PATHS]
+
+    for crate_dir in package_source_dirs(config, skill_names):
+        watched.append(crate_dir.relative_to(REPO_ROOT).as_posix())
+
+    for _, skill in selected:
+        skill_dir = REPO_ROOT / str(skill["skill_dir"])
+        launcher = skill_dir / str(skill["launcher"])
+        watched.append(launcher.relative_to(REPO_ROOT).as_posix())
+        watched.append((skill_dir / "dist").relative_to(REPO_ROOT).as_posix())
+        if include_tests:
+            watched.append((skill_dir / "tests").relative_to(REPO_ROOT).as_posix())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in watched:
+        normalized = normalize_repo_path(path)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def path_matches_watch_list(changed_path: str, watched_paths: list[str]) -> bool:
+    normalized = normalize_repo_path(changed_path)
+    if not normalized:
+        return False
+    for watched in watched_paths:
+        if normalized == watched or normalized.startswith(f"{watched}/"):
+            return True
+    return False
+
+
+def matches_changed_files(
+    changed_files: list[str],
+    config: dict[str, dict[str, object]],
+    skill_names: list[str] | None = None,
+    *,
+    include_tests: bool = False,
+) -> bool:
+    watched = watched_repo_paths(config, skill_names, include_tests=include_tests)
+    for changed in changed_files:
+        if path_matches_watch_list(changed, watched):
+            return True
+    return False
+
+
+def load_changed_files(path: Path) -> list[str]:
+    return [
+        normalize_repo_path(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if normalize_repo_path(line)
+    ]
 
 
 def skill_platforms(skill: dict[str, object], key: str) -> list[str]:
@@ -450,6 +643,13 @@ def main() -> None:
     sync.add_argument("--artifacts-root", required=True)
     sync.add_argument("--platform-set", choices=["host", "required", "ci", "all"], default="ci")
     sub.add_parser("smoke-launchers")
+    watch = sub.add_parser("watch-paths")
+    watch.add_argument("--skill", action="append", default=[])
+    watch.add_argument("--include-tests", action="store_true")
+    match = sub.add_parser("matches-changed-files")
+    match.add_argument("--skill", action="append", default=[])
+    match.add_argument("--include-tests", action="store_true")
+    match.add_argument("--changed-files-file", required=True)
     args = parser.parse_args()
 
     if args.cmd == "bootstrap":
@@ -466,6 +666,18 @@ def main() -> None:
         sync_artifacts(Path(args.artifacts_root), args.platform_set)
     elif args.cmd == "smoke-launchers":
         smoke_launchers()
+    elif args.cmd == "watch-paths":
+        for path in watched_repo_paths(load_config(), args.skill, include_tests=args.include_tests):
+            print(path)
+    elif args.cmd == "matches-changed-files":
+        changed_files = load_changed_files(Path(args.changed_files_file))
+        changed = matches_changed_files(
+            changed_files,
+            load_config(),
+            args.skill,
+            include_tests=args.include_tests,
+        )
+        print("true" if changed else "false")
     else:  # pragma: no cover
         raise SystemExit(f"unknown command: {args.cmd}")
 
