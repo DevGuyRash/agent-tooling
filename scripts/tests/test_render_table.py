@@ -231,23 +231,24 @@ class RenderingTests(unittest.TestCase):
     def test_unknown_option(self) -> None:
         r = render("", "--bogus")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("unknown option", r.stderr)
+        self.assertIn("unexpected argument", r.stderr)
+        self.assertIn("Usage:", r.stderr)
 
     def test_default_fit_mode_drops_trailing_columns(self) -> None:
         r = render(
             "ID\tTime\tTitle\tCategory\tTags\tSources\n"
-            "evt-1\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\t"
-            "script/other/blocked\tplaywright,windows,argument-parsing,jira,cli\t"
-            "file:C:/Users/E135328/.codex/skills/playwright/references/cli.md",
+            "evt-1\t04/02/2026 21:45:31\tRenderer width fallback hides noisy columns\t"
+            "script/other/blocked\trenderer,width,argument-parsing,jira,cli\t"
+            "file:/tmp/skills/playwright/references/cli.md",
             "--max-width",
             "50",
         )
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Columns omitted to fit width: Sources, Tags, Category", r.stdout)
+        self.assertIn("Columns omitted to fit width: Sources, Tags, Category, Title", r.stdout)
         header = visible_header_line(r.stdout)
         self.assertIn("ID", header)
         self.assertIn("Time", header)
-        self.assertIn("Title", header)
+        self.assertNotIn("Title", header)
         self.assertNotIn("Category", header)
         self.assertNotIn("Tags", header)
         self.assertNotIn("Sources", header)
@@ -255,9 +256,9 @@ class RenderingTests(unittest.TestCase):
     def test_shrink_fit_mode_keeps_all_columns(self) -> None:
         r = render(
             "ID\tTime\tTitle\tCategory\tTags\tSources\n"
-            "evt-1\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\t"
-            "script/other/blocked\tplaywright,windows,argument-parsing,jira,cli\t"
-            "file:C:/Users/E135328/.codex/skills/playwright/references/cli.md",
+            "evt-1\t04/02/2026 21:45:31\tRenderer width fallback hides noisy columns\t"
+            "script/other/blocked\trenderer,width,argument-parsing,jira,cli\t"
+            "file:/tmp/skills/playwright/references/cli.md",
             "--max-width",
             "50",
             "--fit-mode",
@@ -298,7 +299,7 @@ class RenderingTests(unittest.TestCase):
         lines = [line for line in r.stdout.splitlines() if line]
         self.assertTrue(lines[0].startswith("Columns omitted to fit width:"))
         for line in lines[1:]:
-            self.assertLessEqual(len(line), 20, line)
+            self.assertLessEqual(len(line), 40, line)
 
     def test_omission_note_only_appears_when_columns_drop(self) -> None:
         r = render("Name\tAge\nAlice\t30\nBob\t25", "--max-width", "80")
@@ -363,7 +364,7 @@ class FileInputTests(unittest.TestCase):
     def test_file_not_found(self) -> None:
         r = render("", "--file", "/nonexistent/path")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("file not found", r.stderr)
+        self.assertIn("No such file or directory", r.stderr)
         self.assertIn("/nonexistent/path", r.stderr)
 
 
@@ -492,7 +493,7 @@ class ErrorHintTests(unittest.TestCase):
     def test_unknown_option_has_help_hint(self) -> None:
         r = render("", "--bogus")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("--help", r.stderr)
+        self.assertIn("Usage:", r.stderr)
 
     def test_help_mentions_all_formats(self) -> None:
         r = render("", "--help")

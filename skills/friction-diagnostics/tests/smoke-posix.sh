@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 REPO_ROOT=$(CDPATH='' cd -- "$ROOT/../.." && pwd)
+TEST_REPO=$(mktemp -d "${TMPDIR:-/tmp}/friction-smoke-posix.XXXXXX")
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -33,11 +34,19 @@ assert_equals() {
   [ "$expected" = "$actual" ] || fail "expected '$expected' but got '$actual'"
 }
 
-DEFAULT_EVENTS=$REPO_ROOT/.local/reports/friction/events.jsonl
-DEFAULT_INDEX=$REPO_ROOT/.local/reports/friction/INDEX.md
-rm -rf "$REPO_ROOT/.local/reports/friction"
+DEFAULT_EVENTS=$TEST_REPO/.local/reports/friction/events.jsonl
+DEFAULT_INDEX=$TEST_REPO/.local/reports/friction/INDEX.md
 
-cd "$REPO_ROOT"
+cleanup() {
+  rm -rf "$TEST_REPO"
+}
+
+trap cleanup EXIT
+
+git init -q "$TEST_REPO"
+mkdir -p "$TEST_REPO/.local"
+
+cd "$TEST_REPO"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Test 1: Basic event filing with direct flags
@@ -287,7 +296,7 @@ printf 'OK\n'
 # ═══════════════════════════════════════════════════════════════════════
 printf 'Test 14: Cross-repo report ... '
 
-CROSS_OUTPUT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$REPO_ROOT" --report-type cross-repo --format md)
+CROSS_OUTPUT=$("$ROOT/scripts/generate-report.sh" --scan-dirs "$TEST_REPO" --report-type cross-repo --format md)
 printf '%s\n' "$CROSS_OUTPUT" | grep -q "Cross-Repo Friction Index" || fail "missing cross-repo header"
 printf '%s\n' "$CROSS_OUTPUT" | grep -q "Impact Summary" || fail "missing Impact Summary section"
 
@@ -296,6 +305,4 @@ printf 'OK\n'
 # ═══════════════════════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════════════════════
-rm -rf "$REPO_ROOT/.local/reports/friction"
-
 printf '\nAll smoke tests passed.\n'

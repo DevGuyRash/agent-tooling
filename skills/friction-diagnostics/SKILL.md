@@ -10,7 +10,7 @@ description: >-
   friction or diagnostic reporting, (6) Any problem, error, or divergence
   from expected behavior during task execution. If anything goes wrong,
   it gets logged here. Do not skip this skill.
-compatibility: Designed for filesystem-capable coding agents. Deterministic helpers require POSIX sh on Unix-like systems or PowerShell on Windows. No network required.
+compatibility: Designed for filesystem-capable coding agents on Linux. Deterministic helpers require POSIX sh. No network required.
 metadata:
   author: generated-template
   version: "4.0.0"
@@ -154,10 +154,10 @@ Tag queries use substring matching: `--tag auth` matches tags containing "auth" 
 
 | Script | Purpose |
 |---|---|
-| `report-friction.sh` / `.ps1` | Append one event with tags, aliases, and impact inline; `--add-tags` / `--add-aliases` for post-hoc additions |
-| `query-friction.sh` / `.ps1` | Filter and render the event stream by impact, tags, aliases, text, dates, and sources |
-| `generate-report.sh` / `.ps1` | Generate `index`, `cross-repo`, `per-repo`, or `timeseries` reports |
-| `build-index.sh` / `.ps1` | Internal index maintenance |
+| `report-friction.sh` | Append one event with tags, aliases, and impact inline; `--add-tags` / `--add-aliases` for post-hoc additions |
+| `query-friction.sh` | Filter and render the event stream by impact, tags, aliases, text, dates, and sources |
+| `generate-report.sh` | Generate `index`, `cross-repo`, `per-repo`, or `timeseries` reports |
+| `build-index.sh` | Internal index maintenance |
 
 No `init-log` step required.
 

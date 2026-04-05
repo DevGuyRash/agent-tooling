@@ -78,13 +78,13 @@ The tool redacts common secrets and tokens before writing event text to disk.
 ## Included files
 
 - `SKILL.md` — usage guidance
-- `scripts/report-friction.*` — append one event with tags, aliases, and impact inline
-- `scripts/query-friction.*` — query the canonical event stream
-- `scripts/generate-report.*` — generate index, cross-repo, per-repo, and timeseries reports
-- `scripts/build-index.*` — tool-managed index regeneration
-- `scripts/render-table.*` — render Unicode box-drawing tables
-- `scripts/render-summary.*` — render session summaries with query footer
-- `scripts/report-friction-json.*` — thin helpers for the safe `--from-json` filing path
+- `scripts/report-friction.sh` — append one event with tags, aliases, and impact inline
+- `scripts/query-friction.sh` — query the canonical event stream
+- `scripts/generate-report.sh` — generate index, cross-repo, per-repo, and timeseries reports
+- `scripts/build-index.sh` — tool-managed index regeneration
+- `scripts/render-table.sh` — render Unicode box-drawing tables
+- `scripts/render-summary.sh` — render session summaries with query footer
+- `scripts/report-friction-json.sh` — thin helper for the safe `--from-json` filing path
 - `references/` — integration, logging spec, and examples
 - `tests/` — smoke tests
 

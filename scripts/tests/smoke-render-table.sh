@@ -242,7 +242,7 @@ pass "file_not_found_error"
 
 # ── Test 24: Default fit mode drops trailing columns on narrow width ──
 
-out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\tblocked\tplaywright,windows,jira,cli\tfile:C:/Users/E135328/.codex/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 2>&1) || true
+out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tRenderer width fallback hides noisy columns\tblocked\trenderer,width,jira,cli\tfile:/tmp/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 2>&1) || true
 assert_contains "drop_default: omission note" "Columns omitted to fit width: Sources, Tags, Category" "$out" &&
 assert_contains "drop_default: keeps title" "Title" "$out" &&
 assert_not_contains "drop_default: drops sources header" "Sources │" "$out" &&
@@ -250,7 +250,7 @@ pass "drop_default"
 
 # ── Test 25: Explicit shrink mode keeps all columns ──
 
-out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tPlaywright CLI arguments split badly on Windows cmd\tblocked\tplaywright,windows,jira,cli\tfile:C:/Users/E135328/.codex/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 --fit-mode shrink 2>&1) || true
+out=$(printf 'ID\tTime\tTitle\tCategory\tTags\tSources\nevt-0018\t04/02/2026 21:45:31\tRenderer width fallback hides noisy columns\tblocked\trenderer,width,jira,cli\tfile:/tmp/skills/playwright/references/cli.md' | sh "$RENDER" --max-width 50 --fit-mode shrink 2>&1) || true
 assert_not_contains "fit_shrink: no omission note" "Columns omitted to fit width:" "$out" &&
 assert_contains "fit_shrink: keeps title" "Title" "$out" &&
 assert_contains "fit_shrink: keeps sources" "Source" "$out" &&
