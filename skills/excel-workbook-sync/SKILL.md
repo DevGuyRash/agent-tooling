@@ -25,26 +25,42 @@ Use the unified launcher for every workflow:
 ```bash
 sh <skills-file-root>/scripts/excel-workbook-sync inspect --workbook-path /path/to/workbook.xlsm
 sh <skills-file-root>/scripts/excel-workbook-sync query --manifest-path /path/to/excel-sync.manifest.json --surface tables,names,pq,connections,model
+sh <skills-file-root>/scripts/excel-workbook-sync bootstrap --workbook-path /path/to/workbook.xlsx --output-dir /path/to/bundle
 sh <skills-file-root>/scripts/excel-workbook-sync roundtrip --manifest-path /path/to/excel-sync.manifest.json
 sh <skills-file-root>/scripts/excel-workbook-sync refresh --manifest-path /path/to/excel-sync.manifest.json --query-name MyQuery
 sh <skills-file-root>/scripts/excel-workbook-sync smoke --manifest-path /path/to/excel-sync.manifest.json
 ```
 
 Windows shell users can call `<skills-file-root>/scripts/excel-workbook-sync.cmd`
-or `<skills-file-root>/scripts/excel-workbook-sync.ps1` directly.
+or `<skills-file-root>/scripts/excel-workbook-sync.ps1` directly. The
+PowerShell entrypoint accepts the same GNU-style flags shown above and also
+accepts native PowerShell forms such as `-ManifestPath` and `-WorkbookPath`.
 
 ## Workflow
 
 1. Inspect or query the workbook first when the artifact surface is unclear.
-2. Use `pull` when the workbook is the source of truth.
-3. Use `push` when repo artifacts are the source of truth.
-4. Use `roundtrip` or `smoke` on a workbook copy before touching a canonical workbook.
-5. Hand workbook-behavior assertions to `excel-workbook-testing`.
+   `inspect` and `query` auto-fallback from Excel COM to package parsing for
+   OOXML workbooks when direct COM open fails.
+2. Use `bootstrap` to generate a starter manifest plus `workbook_structure`
+   and Power Query artifacts for an arbitrary workbook bundle. `bootstrap`
+   also auto-fallbacks to package parsing for OOXML workbooks when COM open fails.
+3. Use `pull` when the workbook is the source of truth. For OOXML workbooks
+   that are package-readable but COM-unopenable on this host, `pull` can still
+   export structure and Power Query artifacts through the package fallback path.
+4. Use `push` when repo artifacts are the source of truth. `push`,
+   `roundtrip`, and `refresh` still require a write-capable Excel COM open.
+   When COM cannot open a package-readable workbook, those mutate operations
+   fail with an explicit read-only fallback message instead of a raw COM error.
+5. Use `roundtrip` or `smoke` on a workbook copy before touching a canonical workbook.
+   `smoke` creates and uses its own isolated temp workspace copy of the
+   manifest bundle before running `roundtrip` and `inspect`.
+6. Hand workbook-behavior assertions to `excel-workbook-testing`.
 
 ## Platform Model
 
 The bash/POSIX entrypoint is a first-class CLI. The PowerShell backend is the
-Excel automation engine because Excel COM runs on Windows.
+Excel automation engine because Excel COM runs on Windows, while package
+parsing backs OOXML fallback discovery and bootstrap flows.
 
 - Windows: run the PowerShell backend directly.
 - WSL/POSIX on a Windows host: use the POSIX launcher; it owns argument
@@ -65,6 +81,16 @@ Git Bash, or another POSIX shell on Windows.
 - Explicit Power Query refresh execution with structured per-connection results
 - Structured inspect/query JSON
 - Manifest-driven push/pull/roundtrip flows
+
+## Current Fallback Boundary
+
+- `inspect`, `query`, `bootstrap`, and manifest-driven `pull` support OOXML
+  package fallback for `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, and `.xlam`.
+- Package fallback currently covers structure and Power Query export surfaces.
+  It is intended for discovery, manifest generation, and artifact pull/export.
+- Package fallback is currently read-only. It does not implement package-level
+  mutation for `push`, `roundtrip`, or `refresh`.
+- `.xls` and `.xlsb` still depend on Excel COM.
 
 ## References To Load On Demand
 

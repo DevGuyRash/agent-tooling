@@ -5,7 +5,7 @@ where bash >nul 2>nul
 if not errorlevel 1 (
     bash "%~dp0excel-workbook-sync" %*
     set "BASH_EXIT=%ERRORLEVEL%"
-    if "%BASH_EXIT%"=="0" exit /b 0
+    exit /b %BASH_EXIT%
 )
 
 where pwsh >nul 2>nul

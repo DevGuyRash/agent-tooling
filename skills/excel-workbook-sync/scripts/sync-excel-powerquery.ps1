@@ -26,7 +26,27 @@ if ($null -eq $powerQuery -or (
 }
 
 $saveChanges = $Direction -in @('push', 'roundtrip', 'refresh')
-$context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+if ($Direction -eq 'pull') {
+    try {
+        $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+    }
+    catch {
+        if (-not (Test-OoxmlPackageWorkbook -WorkbookPath $resolved.WorkbookPath)) {
+            throw
+        }
+
+        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('pq', 'connections', 'model') -Backend 'package'
+        Write-PowerQueryArtifactsFromPayload -ResolvedManifest $resolved -QueryPayload $queryPayload
+        foreach ($query in @($queryPayload.pq)) {
+            Write-Output ("PULL PQ {0}" -f $query.name)
+        }
+        return
+    }
+}
+else {
+    $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+}
+
 try {
     switch ($Direction) {
         'push' {

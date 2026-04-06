@@ -693,7 +693,33 @@ function Export-DiscoveredConditionalFormatRules {
 }
 
 $resolved = Resolve-ExcelSyncManifest -ManifestPath $ManifestPath -WorkbookPathOverride $WorkbookPath
-$context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+if ($Direction -eq 'pull') {
+    try {
+        $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+    }
+    catch {
+        if (-not (Test-OoxmlPackageWorkbook -WorkbookPath $resolved.WorkbookPath)) {
+            throw
+        }
+
+        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('tables', 'names', 'cf') -Backend 'package'
+        Write-StructureArtifactsFromQueryPayload -ResolvedManifest $resolved -QueryPayload $queryPayload
+
+        if ($resolved.Structure.TablesPath) {
+            Write-Output ("PULL TABLES => {0}" -f $resolved.Structure.TablesPath)
+        }
+        if ($resolved.Structure.NamesPath) {
+            Write-Output ("PULL NAMES => {0}" -f $resolved.Structure.NamesPath)
+        }
+        if ($resolved.Structure.ConditionalFormattingPath) {
+            Write-Output ("PULL CF => {0}" -f $resolved.Structure.ConditionalFormattingPath)
+        }
+        return
+    }
+}
+else {
+    $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+}
 
 try {
     if ($resolved.Structure.TablesPath) {

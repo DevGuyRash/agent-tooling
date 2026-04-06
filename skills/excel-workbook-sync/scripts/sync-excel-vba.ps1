@@ -16,7 +16,8 @@ $resolved = Resolve-ExcelSyncManifest -ManifestPath $ManifestPath -WorkbookPathO
 if ($resolved.VbaComponents.Count -eq 0 -and
     -not $resolved.VbaProject.ProjectPath -and
     -not $resolved.VbaProject.ReferencesPath) {
-    throw "Manifest does not define any VBA components or vbaProject artifacts: $ManifestPath"
+    Write-Output ("SKIP VBA no VBA artifacts configured in manifest: {0}" -f $ManifestPath)
+    return
 }
 
 $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible

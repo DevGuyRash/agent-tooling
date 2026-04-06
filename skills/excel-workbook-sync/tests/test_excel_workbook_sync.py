@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
+import base64
+from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
 
@@ -34,6 +37,183 @@ def run_pwsh(command: str, *, timeout: int = 30) -> subprocess.CompletedProcess[
         check=False,
         timeout=timeout,
     )
+
+
+def run_pwsh_file(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    if not HAS_PWSH:
+        raise unittest.SkipTest("pwsh not available on this host")
+    return subprocess.run(
+        ["pwsh", "-NoProfile", "-File", str(PS1), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
+    mashup_buffer = BytesIO()
+    with zipfile.ZipFile(mashup_buffer, "w", compression=zipfile.ZIP_DEFLATED) as mashup_zip:
+        mashup_zip.writestr("[Content_Types].xml", "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'/>")
+        mashup_zip.writestr("Config/Package.xml", "<Package />")
+        mashup_zip.writestr(
+            "Formulas/Section1.m",
+            dedent(
+                """\
+                section Section1;
+                shared Query1 =
+                let
+                    Source = #table({"Name","Value"}, {{"Alpha", 1}})
+                in
+                    Source;
+                """
+            ),
+        )
+    mashup_base64 = base64.b64encode(mashup_buffer.getvalue()).decode("ascii")
+
+    workbook_files = {
+        "[Content_Types].xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+              <Default Extension="xml" ContentType="application/xml"/>
+              <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+              <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+              <Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>
+              <Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/>
+              <Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/>
+              <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+              <Override PartName="/customXml/item1.xml" ContentType="application/xml"/>
+              <Override PartName="/customXml/itemProps1.xml" ContentType="application/vnd.openxmlformats-officedocument.customXmlProperties+xml"/>
+            </Types>
+            """
+        ),
+        "_rels/.rels": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+            </Relationships>
+            """
+        ),
+        "xl/workbook.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheets>
+                <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+              </sheets>
+              <definedNames>
+                <definedName name="MyValue">Sheet1!$B$2</definedName>
+              </definedNames>
+            </workbook>
+            """
+        ),
+        "xl/_rels/workbook.xml.rels": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+            </Relationships>
+            """
+        ),
+        "xl/worksheets/sheet1.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheetData>
+                <row r="1">
+                  <c r="A1" t="s"><v>0</v></c>
+                  <c r="B1" t="s"><v>1</v></c>
+                </row>
+                <row r="2">
+                  <c r="A2" t="s"><v>2</v></c>
+                  <c r="B2"><v>1</v></c>
+                </row>
+              </sheetData>
+              <conditionalFormatting sqref="B2">
+                <cfRule type="expression" priority="1">
+                  <formula>B2&gt;0</formula>
+                </cfRule>
+              </conditionalFormatting>
+              <tableParts count="1">
+                <tablePart r:id="rId1"/>
+              </tableParts>
+            </worksheet>
+            """
+        ),
+        "xl/worksheets/_rels/sheet1.xml.rels": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>
+            </Relationships>
+            """
+        ),
+        "xl/tables/table1.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="A1:B2" totalsRowShown="0">
+              <autoFilter ref="A1:B2"/>
+              <tableColumns count="2">
+                <tableColumn id="1" name="Name"/>
+                <tableColumn id="2" name="Value"/>
+              </tableColumns>
+              <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>
+            </table>
+            """
+        ),
+        "xl/tables/_rels/table1.xml.rels": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable" Target="../queryTables/queryTable1.xml"/>
+            </Relationships>
+            """
+        ),
+        "xl/queryTables/queryTable1.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <queryTable xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" connectionId="1"/>
+            """
+        ),
+        "xl/connections.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <connection id="1" name="Query - Query1" description="Connection to Query1" type="1" background="1">
+                <dbPr connection="Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=Query1;Extended Properties=&quot;&quot;;" command="SELECT * FROM [Query1]"/>
+              </connection>
+            </connections>
+            """
+        ),
+        "xl/sharedStrings.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3" uniqueCount="3">
+              <si><t>Name</t></si>
+              <si><t>Value</t></si>
+              <si><t>Alpha</t></si>
+            </sst>
+            """
+        ),
+        "customXml/item1.xml": f'<?xml version="1.0" encoding="utf-8"?><DataMashup xmlns="http://schemas.microsoft.com/DataMashup">{mashup_base64}</DataMashup>',
+        "customXml/itemProps1.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <ds:datastoreItem ds:itemID="{12345678-1234-1234-1234-1234567890AB}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml">
+              <ds:schemaRefs>
+                <ds:schemaRef ds:uri="http://schemas.microsoft.com/DataMashup"/>
+              </ds:schemaRefs>
+            </ds:datastoreItem>
+            """
+        ),
+    }
+
+    with zipfile.ZipFile(workbook_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
+        for name, content in workbook_files.items():
+            workbook_zip.writestr(name, content)
 
 
 class ExcelWorkbookSyncSkillTests(unittest.TestCase):
@@ -291,6 +471,23 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         content = (ROOT / "scripts" / "sync-excel-structure.ps1").read_text(encoding="utf-8")
         self.assertIn("$target.Value2 = $matrix", content)
 
+    def test_common_script_smoke_copies_workspace_recursively(self) -> None:
+        content = COMMON.read_text(encoding="utf-8")
+        self.assertIn("Copy-Item -LiteralPath $manifestDirectory -Destination $tempWorkspace -Recurse -Force", content)
+        self.assertIn('Remove-Item -LiteralPath $tempRoot -Recurse -Force', content)
+
+    def test_common_script_uses_retry_aware_excel_open_and_quit_cleanup(self) -> None:
+        content = COMMON.read_text(encoding="utf-8")
+        self.assertIn('Invoke-ExcelComWithRetry -Description "Opening workbook"', content)
+        self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel after failed open" -SwallowErrors', content)
+        self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel"', content)
+
+    def test_common_script_exposes_package_bootstrap_and_surface_aliases(self) -> None:
+        content = COMMON.read_text(encoding="utf-8")
+        self.assertIn("function Get-NormalizedSurfaceNames", content)
+        self.assertIn("function Invoke-ExcelWorkbookBootstrap", content)
+        self.assertIn("function Invoke-PackageWorkbookHelper", content)
+
     def test_posix_launcher_negative_path_is_concise(self) -> None:
         proc = subprocess.run(
             ["sh", str(POSIX), "inspect", "--workbook-path", "/tmp/does-not-matter.xlsm"],
@@ -315,7 +512,15 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0)
         self.assertIn("Usage:", proc.stdout)
-        self.assertIn("inspect|query|push|pull|roundtrip|smoke|refresh", proc.stdout)
+        self.assertIn("inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap", proc.stdout)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_help_is_available(self) -> None:
+        proc = run_pwsh_file("--help")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("Usage:", proc.stdout)
+        self.assertIn("bootstrap", proc.stdout)
+        self.assertIn("GNU-style and native PowerShell flags are both accepted.", proc.stdout)
 
     def test_posix_launcher_translates_gnu_flags_for_powershell_backend(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-posix-") as tmpdir:
@@ -368,6 +573,163 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(args[9].lower().endswith("test workbook.xlsm"))
             self.assertEqual(args[10:], ["-Surface", "tables,names", "-QueryName", "Matched", "-Visible"])
 
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_query_reads_minimal_ooxml_workbook(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-package-") as tmpdir:
+            workbook = Path(tmpdir) / "package-workbook.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+            proc = run_pwsh_file(
+                "query",
+                "--workbook-path",
+                str(workbook),
+                "--surface",
+                "tables,names,conditional-formatting,pq,connections,model",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["backend"], "package")
+            self.assertEqual(len(payload["tables"]), 1)
+            self.assertEqual(payload["tables"][0]["name"], "Table1")
+            self.assertEqual(len(payload["names"]), 1)
+            self.assertEqual(payload["names"][0]["name"], "MyValue")
+            self.assertEqual(len(payload["cf"]), 1)
+            self.assertEqual(len(payload["pq"]), 1)
+            self.assertEqual(payload["pq"][0]["name"], "Query1")
+            self.assertEqual(payload["pq"][0]["connectionName"], "Query - Query1")
+            self.assertEqual(payload["pq"][0]["loads"][0]["table"], "Table1")
+            self.assertEqual(len(payload["connections"]), 1)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_bootstrap_writes_manifest_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-bootstrap-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "package-workbook.xlsx"
+            output_dir = tmp / "bootstrap"
+            build_minimal_ooxml_workbook(workbook)
+            proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["backend"], "package")
+            manifest = output_dir / "excel-sync.manifest.json"
+            tables = output_dir / "workbook_structure" / "tables.json"
+            names = output_dir / "workbook_structure" / "names.json"
+            cf = output_dir / "workbook_structure" / "conditional_formatting.json"
+            pq_query = output_dir / "power_query" / "queries" / "Query1.pq"
+            pq_queries = output_dir / "power_query" / "queries.json"
+            self.assertTrue(manifest.exists())
+            self.assertTrue(tables.exists())
+            self.assertTrue(names.exists())
+            self.assertTrue(cf.exists())
+            self.assertTrue(pq_query.exists())
+            self.assertTrue(pq_queries.exists())
+            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertIn("powerQuery", manifest_payload)
+            self.assertEqual(manifest_payload["structure"]["tablesPath"], "workbook_structure/tables.json")
+            queries_payload = json.loads(pq_queries.read_text(encoding="utf-8"))
+            self.assertEqual(queries_payload["queries"][0]["name"], "Query1")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_pull_falls_back_to_package_parser_for_manifest_bundle(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-pull-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "package-workbook.xlsx"
+            output_dir = tmp / "bundle"
+            build_minimal_ooxml_workbook(workbook)
+
+            bootstrap_proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
+
+            manifest = output_dir / "excel-sync.manifest.json"
+            queries_json = output_dir / "power_query" / "queries.json"
+            query_file = output_dir / "power_query" / "queries" / "Query1.pq"
+            tables_json = output_dir / "workbook_structure" / "tables.json"
+            names_json = output_dir / "workbook_structure" / "names.json"
+            cf_json = output_dir / "workbook_structure" / "conditional_formatting.json"
+
+            for artifact in [queries_json, query_file, tables_json, names_json, cf_json]:
+                artifact.unlink()
+
+            pull_proc = run_pwsh_file(
+                "pull",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=60,
+            )
+            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            self.assertIn("PULL PQ Query1", pull_proc.stdout)
+            self.assertIn("PULL TABLES =>", pull_proc.stdout)
+            self.assertIn("PULL NAMES =>", pull_proc.stdout)
+            self.assertIn("PULL CF =>", pull_proc.stdout)
+            self.assertIn("SKIP VBA no VBA artifacts configured", pull_proc.stdout)
+
+            queries_payload = json.loads(queries_json.read_text(encoding="utf-8"))
+            tables_payload = json.loads(tables_json.read_text(encoding="utf-8"))
+            names_payload = json.loads(names_json.read_text(encoding="utf-8"))
+            cf_payload = json.loads(cf_json.read_text(encoding="utf-8"))
+
+            self.assertEqual(queries_payload["queries"][0]["name"], "Query1")
+            self.assertTrue(query_file.exists())
+            self.assertEqual(tables_payload["tables"][0]["name"], "Table1")
+            self.assertEqual(names_payload["names"][0]["name"], "MyValue")
+            self.assertEqual(cf_payload["rules"][0]["type"], "expression")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_roundtrip_reports_read_only_fallback_for_package_only_workbook(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-roundtrip-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "package-workbook.xlsx"
+            output_dir = tmp / "bundle"
+            build_minimal_ooxml_workbook(workbook)
+
+            bootstrap_proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
+
+            manifest = output_dir / "excel-sync.manifest.json"
+            proc = run_pwsh_file(
+                "roundtrip",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=60,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            combined = proc.stdout + proc.stderr
+            self.assertIn("Package fallback is currently read-only for push", combined)
+            self.assertIn("inspect/query/bootstrap/pull", combined)
+
     @unittest.skipUnless(HAS_CMD, "cmd not available on this host")
     def test_cmd_launcher_help_is_available(self) -> None:
         proc = subprocess.run(
@@ -378,6 +740,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("Usage:", proc.stdout)
+        self.assertNotIn("parameter cannot be found that matches parameter name '-help'", (proc.stdout + proc.stderr).lower())
 
     def test_posix_launcher_rejects_unknown_subcommand(self) -> None:
         proc = subprocess.run(
@@ -413,24 +776,21 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_negative_query_path_is_concise(self) -> None:
         missing = Path(tempfile.gettempdir()) / "excel-workbook-sync-missing.xlsm"
-        proc = subprocess.run(
-            ["pwsh", "-NoProfile", "-File", str(PS1), "query", "--workbook-path", str(missing), "--surface", "tables,names"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = run_pwsh_file("query", "--workbook-path", str(missing), "--surface", "tables,names")
         self.assertNotEqual(proc.returncode, 0)
         combined = (proc.stdout + proc.stderr).lower()
         self.assertIn("workbook not found", combined)
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_accepts_manifest_path_gnu_alias(self) -> None:
-        proc = subprocess.run(
-            ["pwsh", "-NoProfile", "-File", str(PS1), "push", "--manifest-path", str(FIXTURE_MANIFEST)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = run_pwsh_file("push", "--manifest-path", str(FIXTURE_MANIFEST), "--help")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("parameter cannot be found", (proc.stdout + proc.stderr).lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_accepts_gnu_flags_for_inspect(self) -> None:
+        missing = Path(tempfile.gettempdir()) / "excel-workbook-sync-missing-inspect.xlsx"
+        proc = run_pwsh_file("inspect", "--workbook-path", str(missing), "--surface", "tables,names")
         self.assertNotIn("parameter cannot be found", (proc.stdout + proc.stderr).lower())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")

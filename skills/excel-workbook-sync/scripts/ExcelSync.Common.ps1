@@ -20,6 +20,30 @@ function Resolve-AbsolutePath {
     return [System.IO.Path]::GetFullPath((Join-Path $BasePath $RelativeOrAbsolutePath))
 }
 
+function Resolve-RelativePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BasePath,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    $baseFullPath = [System.IO.Path]::GetFullPath($BasePath)
+    if (-not $baseFullPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $baseFullPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    $targetFullPath = [System.IO.Path]::GetFullPath($TargetPath)
+    $baseUri = [System.Uri]$baseFullPath
+    $targetUri = [System.Uri]$targetFullPath
+    if ($baseUri.Scheme -ne $targetUri.Scheme) {
+        return $null
+    }
+
+    $relativeUri = $baseUri.MakeRelativeUri($targetUri)
+    return [System.Uri]::UnescapeDataString($relativeUri.ToString()).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+}
+
 function Get-LateProperty {
     param(
         [Parameter(Mandatory = $true)]
@@ -157,6 +181,31 @@ function Release-ComObjectSafely {
     }
 }
 
+function Invoke-ExcelQuitSafely {
+    param(
+        $Excel,
+        [string]$Description = 'Quitting Excel',
+        [switch]$SwallowErrors,
+        [int]$MaxAttempts = 20,
+        [int]$DelayMilliseconds = 500
+    )
+
+    if ($null -eq $Excel) {
+        return
+    }
+
+    try {
+        Invoke-ExcelComWithRetry -Description $Description -MaxAttempts $MaxAttempts -DelayMilliseconds $DelayMilliseconds -Operation {
+            $Excel.Quit()
+        } | Out-Null
+    }
+    catch {
+        if (-not $SwallowErrors) {
+            throw
+        }
+    }
+}
+
 function Read-JsonFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -194,6 +243,22 @@ function Write-TextFile {
     Ensure-ParentDirectory -Path $Path
     $normalized = $Value -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
+}
+
+function ConvertTo-ObjectArray {
+    param(
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return ,@()
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        return ,@($Value)
+    }
+
+    return ,@($Value)
 }
 
 function Resolve-ExcelSyncManifest {
@@ -395,44 +460,44 @@ function Open-ExcelWorkbook {
     [void](Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value 3)
 
     try {
-        $workbook = Invoke-LateMethod -Target $excel.Workbooks -Name 'Open' -Arguments @(
-            $WorkbookPath,
-            0,
-            $false,
-            $null,
-            $null,
-            $null,
-            $true,
-            $null,
-            $null,
-            $false,
-            $false
-        )
+        $workbook = Invoke-ExcelComWithRetry -Description "Opening workbook" -MaxAttempts 20 -DelayMilliseconds 500 -Operation {
+            try {
+                return Invoke-LateMethod -Target $excel.Workbooks -Name 'Open' -Arguments @(
+                    $WorkbookPath,
+                    0,
+                    $false,
+                    $null,
+                    $null,
+                    $null,
+                    $true,
+                    $null,
+                    $null,
+                    $false,
+                    $false
+                )
+            }
+            catch {
+                return $excel.Workbooks.Open($WorkbookPath)
+            }
+        }
     }
     catch {
         try {
-            $workbook = $excel.Workbooks.Open($WorkbookPath)
+            Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel after failed open" -SwallowErrors
         }
-        catch {
-            try {
-                $excel.Quit()
+        finally {
+            if ($null -ne $excel) {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
             }
-            catch {
-            }
-            finally {
-                if ($null -ne $excel) {
-                    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
-                }
-                [gc]::Collect()
-                [gc]::WaitForPendingFinalizers()
-            }
-            throw
+            [gc]::Collect()
+            [gc]::WaitForPendingFinalizers()
         }
+        throw
     }
 
     if ($null -eq $workbook) {
         try {
-            $excel.Quit()
+            Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel after null workbook open" -SwallowErrors
         }
         catch {
         }
@@ -480,9 +545,7 @@ function Close-ExcelWorkbook {
                     }
                 }
             }
-            Invoke-ExcelComWithRetry -Description "Quitting Excel" -Operation {
-                $excel.Quit()
-            } | Out-Null
+            Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel"
         }
         Release-ComObjectSafely -Object $workbook
         Release-ComObjectSafely -Object $excel
@@ -889,6 +952,286 @@ function Test-SurfaceRequested {
     return (($Surface.Count -eq 0) -or ($Surface -contains $Name))
 }
 
+function Get-NormalizedSurfaceNames {
+    param(
+        [string]$Surface
+    )
+
+    $aliases = @{
+        'conditional-formatting' = 'cf'
+        'conditional_formatting' = 'cf'
+        'power-query' = 'pq'
+        'power_query' = 'pq'
+    }
+
+    return @(
+        $Surface -split ',' |
+            ForEach-Object { $_.Trim().ToLowerInvariant() } |
+            Where-Object { $_ } |
+            ForEach-Object {
+                if ($aliases.ContainsKey($_)) {
+                    $aliases[$_]
+                }
+                else {
+                    $_
+                }
+            }
+    )
+}
+
+function Get-PythonLauncher {
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -ne $py) {
+        return @($py.Source, '-3.12')
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $python) {
+        return @($python.Source)
+    }
+
+    throw "Python runtime is required for package workbook fallback."
+}
+
+function Test-OoxmlPackageWorkbook {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath
+    )
+
+    $extension = [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant()
+    if ($extension -notin @('.xlsx', '.xlsm', '.xltx', '.xltm', '.xlam')) {
+        return $false
+    }
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($WorkbookPath)
+        $archive.Dispose()
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Invoke-PackageWorkbookHelper {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('query', 'inspect', 'bootstrap')]
+        [string]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [string[]]$Surface = @(),
+        [string]$OutputDir,
+        [string]$ManifestPath
+    )
+
+    $pythonCommand = @(Get-PythonLauncher)
+    $scriptPath = Join-Path $PSScriptRoot 'excel_workbook_package.py'
+    $arguments = @($scriptPath, $Command, '--workbook-path', $WorkbookPath)
+    if (@($Surface).Count -gt 0) {
+        $arguments += @('--surface', (@($Surface) -join ','))
+    }
+    if ($Command -eq 'bootstrap') {
+        if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+            throw "OutputDir is required for bootstrap."
+        }
+        $arguments += @('--output-dir', $OutputDir)
+        if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
+            $arguments += @('--manifest-path', $ManifestPath)
+        }
+    }
+
+    $launcherArgs = @()
+    if ($pythonCommand.Count -gt 1) {
+        $launcherArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
+    }
+
+    $json = & $pythonCommand[0] @launcherArgs @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Package workbook helper failed for $Command."
+    }
+
+    return ($json | ConvertFrom-Json -Depth 100)
+}
+
+function Get-ManifestRelativeWorkbookPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ManifestDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath
+    )
+
+    $relative = Resolve-RelativePath -BasePath $ManifestDirectory -TargetPath $WorkbookPath
+    if ([string]::IsNullOrWhiteSpace($relative)) {
+        return [System.IO.Path]::GetFullPath($WorkbookPath)
+    }
+
+    return ($relative -replace '\\', '/')
+}
+
+function Write-ExcelWorkbookBootstrapArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [Parameter(Mandatory = $true)]
+        [string]$OutputDir,
+        [string]$ManifestPath,
+        [Parameter(Mandatory = $true)]
+        $QueryPayload
+    )
+
+    $outputRoot = [System.IO.Path]::GetFullPath($OutputDir)
+    if (-not (Test-Path -LiteralPath $outputRoot)) {
+        New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
+        $ManifestPath = Join-Path $outputRoot 'excel-sync.manifest.json'
+    }
+
+    $manifestDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ManifestPath))
+    if (-not (Test-Path -LiteralPath $manifestDirectory)) {
+        New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
+    }
+
+    $structureRoot = Join-Path $manifestDirectory 'workbook_structure'
+    $tablesPath = Join-Path $structureRoot 'tables.json'
+    $namesPath = Join-Path $structureRoot 'names.json'
+    $cfPath = Join-Path $structureRoot 'conditional_formatting.json'
+
+    Write-JsonFile -Path $tablesPath -Value ([pscustomobject]@{ tables = @($QueryPayload.tables) })
+    Write-JsonFile -Path $namesPath -Value ([pscustomobject]@{ names = @($QueryPayload.names) })
+    Write-JsonFile -Path $cfPath -Value ([pscustomobject]@{ rules = @($QueryPayload.cf) })
+
+    $manifest = [ordered]@{
+        workbookPath = Get-ManifestRelativeWorkbookPath -ManifestDirectory $manifestDirectory -WorkbookPath $WorkbookPath
+        vbaComponents = @()
+        structure = [ordered]@{
+            tablesPath = 'workbook_structure/tables.json'
+            namesPath = 'workbook_structure/names.json'
+            conditionalFormattingPath = 'workbook_structure/conditional_formatting.json'
+            tablesDiscovery = [ordered]@{ mode = 'all' }
+            namesDiscovery = [ordered]@{
+                mode = 'all'
+                excludeBuiltIn = $true
+            }
+            conditionalFormattingDiscovery = [ordered]@{ mode = 'all-major' }
+        }
+    }
+
+    $pq = @()
+    $connections = @()
+    $modelTables = @()
+    if ($null -ne $QueryPayload.PSObject.Properties['pq']) { $pq = @($QueryPayload.pq) }
+    if ($null -ne $QueryPayload.PSObject.Properties['connections']) { $connections = @($QueryPayload.connections) }
+    if ($null -ne $QueryPayload.PSObject.Properties['model'] -and $null -ne $QueryPayload.model.PSObject.Properties['modelTables']) {
+        $modelTables = @($QueryPayload.model.modelTables)
+    }
+
+    if ($pq.Count -gt 0 -or $connections.Count -gt 0 -or $modelTables.Count -gt 0) {
+        $powerQueryDirectory = Join-Path $manifestDirectory 'power_query'
+        $queryDirectory = Join-Path $powerQueryDirectory 'queries'
+        if (-not (Test-Path -LiteralPath $queryDirectory)) {
+            New-Item -ItemType Directory -Path $queryDirectory -Force | Out-Null
+        }
+
+        $usedNames = @{}
+        $queryEntries = @()
+        foreach ($query in $pq) {
+            $baseName = ConvertTo-SafeArtifactFileName -Name ([string]$query.name)
+            $fileName = "$baseName.pq"
+            $suffix = 1
+            while ($usedNames.ContainsKey($fileName)) {
+                $fileName = "{0}-{1}.pq" -f $baseName, $suffix
+                $suffix++
+            }
+            $usedNames[$fileName] = $true
+            Write-TextFile -Path (Join-Path $queryDirectory $fileName) -Value ([string]$query.formula)
+            $queryEntries += [pscustomobject]@{
+                name = [string]$query.name
+                file = $fileName
+                description = if ($null -ne $query.PSObject.Properties['description']) { [string]$query.description } else { '' }
+                connectionName = if ($null -ne $query.PSObject.Properties['connectionName']) { $query.connectionName } else { $null }
+                loads = if ($null -ne $query.PSObject.Properties['loads']) { @($query.loads) } else { @() }
+                loadToDataModel = if ($null -ne $query.PSObject.Properties['loadToDataModel']) { [bool]$query.loadToDataModel } else { $false }
+            }
+        }
+
+        Write-JsonFile -Path (Join-Path $powerQueryDirectory 'queries.json') -Value ([pscustomobject]@{ queries = $queryEntries })
+        Write-JsonFile -Path (Join-Path $powerQueryDirectory 'connections.json') -Value ([pscustomobject]@{ connections = $connections })
+        Write-JsonFile -Path (Join-Path $powerQueryDirectory 'model.json') -Value ([pscustomobject]@{ modelTables = $modelTables })
+        Write-JsonFile -Path (Join-Path $powerQueryDirectory 'refresh.json') -Value ([pscustomobject]@{
+            queries = @($pq | ForEach-Object {
+                [pscustomobject]@{
+                    name = [string]$_.name
+                    connectionName = if ($null -ne $_.PSObject.Properties['connectionName']) { $_.connectionName } else { $null }
+                }
+            })
+        })
+
+        $manifest['powerQuery'] = [ordered]@{
+            queriesDirectory = 'power_query/queries'
+            queriesPath = 'power_query/queries.json'
+            connectionsPath = 'power_query/connections.json'
+            modelPath = 'power_query/model.json'
+            refreshPath = 'power_query/refresh.json'
+        }
+    }
+
+    Write-JsonFile -Path $ManifestPath -Value $manifest
+
+    return [pscustomobject]@{
+        manifestPath = [System.IO.Path]::GetFullPath($ManifestPath)
+        outputDirectory = $outputRoot
+        backend = if ($null -ne $QueryPayload.PSObject.Properties['backend']) { [string]$QueryPayload.backend } else { 'excel' }
+        sourceFormat = [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant()
+        workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+        warnings = if ($null -ne $QueryPayload.PSObject.Properties['warnings']) { ConvertTo-ObjectArray -Value $QueryPayload.warnings } else { @() }
+        stagesTried = if ($null -ne $QueryPayload.PSObject.Properties['stagesTried']) { ConvertTo-ObjectArray -Value $QueryPayload.stagesTried } else { @() }
+    }
+}
+
+function Write-StructureArtifactsFromQueryPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        $ResolvedManifest,
+        [Parameter(Mandatory = $true)]
+        $QueryPayload
+    )
+
+    $structure = $ResolvedManifest.Structure
+    if ($null -eq $structure) {
+        return
+    }
+
+    $tables = @()
+    $names = @()
+    $rules = @()
+
+    if ($null -ne $QueryPayload.PSObject.Properties['tables']) {
+        $tables = @($QueryPayload.tables)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['names']) {
+        $names = @($QueryPayload.names)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['cf']) {
+        $rules = @($QueryPayload.cf)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($structure.TablesPath)) {
+        Write-JsonFile -Path $structure.TablesPath -Value ([pscustomobject]@{ tables = $tables })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.NamesPath)) {
+        Write-JsonFile -Path $structure.NamesPath -Value ([pscustomobject]@{ names = $names })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.ConditionalFormattingPath)) {
+        Write-JsonFile -Path $structure.ConditionalFormattingPath -Value ([pscustomobject]@{ rules = $rules })
+    }
+}
+
 function Get-ConnectionTypeName {
     param($Connection)
 
@@ -1100,12 +1443,54 @@ function Get-WorkbookPowerQueryArtifacts {
     }
 }
 
-function Export-PowerQueryArtifacts {
+function Get-PowerQueryRefreshArtifacts {
     param(
         [Parameter(Mandatory = $true)]
-        $Workbook,
+        [object[]]$Connections,
+        [object[]]$Queries = @()
+    )
+
+    $items = @()
+    foreach ($connection in @($Connections)) {
+        $oledb = $null
+        if ($null -ne $connection.PSObject.Properties['oledb']) {
+            $oledb = $connection.oledb
+        }
+
+        if ($null -eq $oledb -or $null -eq $oledb.PSObject.Properties['connection']) {
+            continue
+        }
+
+        if ([string]$oledb.connection -notlike 'OLEDB;Provider=Microsoft.Mashup.OleDb.1*') {
+            continue
+        }
+
+        $items += [pscustomobject]@{
+            connectionName = [string]$connection.name
+            backgroundQuery = if ($null -ne $oledb.PSObject.Properties['backgroundQuery']) { $oledb.backgroundQuery } else { $null }
+            refreshOnFileOpen = if ($null -ne $oledb.PSObject.Properties['refreshOnFileOpen']) { $oledb.refreshOnFileOpen } else { $null }
+            refreshWithRefreshAll = if ($null -ne $oledb.PSObject.Properties['refreshWithRefreshAll']) { $oledb.refreshWithRefreshAll } else { $null }
+        }
+    }
+
+    if ($items.Count -eq 0 -and @($Queries).Count -gt 0) {
+        $items = @($Queries | ForEach-Object {
+            [pscustomobject]@{
+                name = [string]$_.name
+                connectionName = if ($null -ne $_.PSObject.Properties['connectionName']) { $_.connectionName } else { $null }
+            }
+        })
+    }
+
+    return @($items)
+}
+
+function Write-PowerQueryArtifactsFromPayload {
+    param(
         [Parameter(Mandatory = $true)]
-        $ResolvedManifest
+        $ResolvedManifest,
+        [Parameter(Mandatory = $true)]
+        $QueryPayload
     )
 
     $powerQuery = $ResolvedManifest.PowerQuery
@@ -1113,10 +1498,23 @@ function Export-PowerQueryArtifacts {
         return
     }
 
-    $artifacts = Get-WorkbookPowerQueryArtifacts -Workbook $Workbook
+    $queries = @()
+    $connections = @()
+    $modelTables = @()
+
+    if ($null -ne $QueryPayload.PSObject.Properties['pq']) {
+        $queries = @($QueryPayload.pq)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['connections']) {
+        $connections = @($QueryPayload.connections)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['model'] -and $null -ne $QueryPayload.model.PSObject.Properties['modelTables']) {
+        $modelTables = @($QueryPayload.model.modelTables)
+    }
+
     $entries = @()
     $usedFiles = @{}
-    foreach ($query in $artifacts.queries) {
+    foreach ($query in $queries) {
         $baseName = ConvertTo-SafeArtifactFileName -Name ([string]$query.name)
         $fileName = "$baseName.pq"
         $suffix = 1
@@ -1133,10 +1531,10 @@ function Export-PowerQueryArtifacts {
         $entries += [pscustomobject]@{
             name = [string]$query.name
             file = $fileName
-            description = $query.description
-            connectionName = $query.connectionName
-            loads = @($query.loads)
-            loadToDataModel = [bool]$query.loadToDataModel
+            description = if ($null -ne $query.PSObject.Properties['description']) { $query.description } else { $null }
+            connectionName = if ($null -ne $query.PSObject.Properties['connectionName']) { $query.connectionName } else { $null }
+            loads = if ($null -ne $query.PSObject.Properties['loads']) { @($query.loads) } else { @() }
+            loadToDataModel = if ($null -ne $query.PSObject.Properties['loadToDataModel']) { [bool]$query.loadToDataModel } else { $false }
         }
     }
 
@@ -1144,25 +1542,39 @@ function Export-PowerQueryArtifacts {
         Write-JsonFile -Path $powerQuery.QueriesPath -Value ([pscustomobject]@{ queries = @($entries) })
     }
     if (-not [string]::IsNullOrWhiteSpace($powerQuery.ConnectionsPath)) {
-        Write-JsonFile -Path $powerQuery.ConnectionsPath -Value ([pscustomobject]@{ connections = @($artifacts.connections) })
+        Write-JsonFile -Path $powerQuery.ConnectionsPath -Value ([pscustomobject]@{ connections = @($connections) })
     }
     if (-not [string]::IsNullOrWhiteSpace($powerQuery.ModelPath)) {
-        Write-JsonFile -Path $powerQuery.ModelPath -Value ([pscustomobject]@{ modelTables = @($artifacts.modelTables) })
+        Write-JsonFile -Path $powerQuery.ModelPath -Value ([pscustomobject]@{ modelTables = @($modelTables) })
     }
     if (-not [string]::IsNullOrWhiteSpace($powerQuery.RefreshPath)) {
-        $items = @()
-        foreach ($connection in $artifacts.connections) {
-            if ($null -ne $connection.oledb -and [string]$connection.oledb.connection -like 'OLEDB;Provider=Microsoft.Mashup.OleDb.1*') {
-                $items += [pscustomobject]@{
-                    connectionName = $connection.name
-                    backgroundQuery = $connection.oledb.backgroundQuery
-                    refreshOnFileOpen = $connection.oledb.refreshOnFileOpen
-                    refreshWithRefreshAll = $connection.oledb.refreshWithRefreshAll
-                }
-            }
-        }
+        $items = @(Get-PowerQueryRefreshArtifacts -Connections $connections -Queries $queries)
         Write-JsonFile -Path $powerQuery.RefreshPath -Value ([pscustomobject]@{ items = @($items) })
     }
+}
+
+function Export-PowerQueryArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $ResolvedManifest
+    )
+
+    $powerQuery = $ResolvedManifest.PowerQuery
+    if ($null -eq $powerQuery) {
+        return
+    }
+
+    $artifacts = Get-WorkbookPowerQueryArtifacts -Workbook $Workbook
+    $payload = [pscustomobject]@{
+        pq = @($artifacts.queries)
+        connections = @($artifacts.connections)
+        model = [pscustomobject]@{
+            modelTables = @($artifacts.modelTables)
+        }
+    }
+    Write-PowerQueryArtifactsFromPayload -ResolvedManifest $ResolvedManifest -QueryPayload $payload
 }
 
 function Read-PowerQueryArtifacts {
@@ -1682,64 +2094,97 @@ function Get-ExcelWorkbookQuery {
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
         [string[]]$Surface = @(),
-        [switch]$Visible
+        [switch]$Visible,
+        [ValidateSet('auto', 'excel', 'package')]
+        [string]$Backend = 'auto'
     )
 
-    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
-    try {
-        $payload = [ordered]@{
-            workbookPath = $WorkbookPath
-        }
+    $normalizedSurface = @($Surface | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $stagesTried = New-Object System.Collections.Generic.List[string]
 
-        if (Test-SurfaceRequested -Surface $Surface -Name 'tables') {
-            $payload["tables"] = @(Get-TableQuery -Workbook $context.Workbook)
-        }
-        if (Test-SurfaceRequested -Surface $Surface -Name 'names') {
-            $payload["names"] = @(Get-NameQuery -Workbook $context.Workbook)
-        }
-        if (Test-SurfaceRequested -Surface $Surface -Name 'cf') {
-            $payload["cf"] = @(Get-ConditionalFormattingQuery -Workbook $context.Workbook)
-        }
-        if ((Test-SurfaceRequested -Surface $Surface -Name 'pq') -or
-            (Test-SurfaceRequested -Surface $Surface -Name 'connections') -or
-            (Test-SurfaceRequested -Surface $Surface -Name 'model')) {
-            $powerQueryInfo = Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook
-            if (Test-SurfaceRequested -Surface $Surface -Name 'pq') {
-                $payload["pq"] = @($powerQueryInfo.queries)
-            }
-            if (Test-SurfaceRequested -Surface $Surface -Name 'connections') {
-                $payload["connections"] = @($powerQueryInfo.connections)
-            }
-            if (Test-SurfaceRequested -Surface $Surface -Name 'model') {
-                $payload["model"] = [pscustomobject]@{
-                    modelTables = @($powerQueryInfo.modelTables)
+    if ($Backend -in @('auto', 'excel')) {
+        $stagesTried.Add('excel')
+        try {
+            $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+            try {
+                $payload = [ordered]@{
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    backend = 'excel'
+                    sourceFormat = [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant()
+                    workingPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    normalization = 'none'
+                    warnings = ConvertTo-ObjectArray -Value $warnings.ToArray()
+                    stagesTried = ConvertTo-ObjectArray -Value $stagesTried.ToArray()
                 }
-            }
-        }
-        if ((Test-SurfaceRequested -Surface $Surface -Name 'vba') -or
-            (Test-SurfaceRequested -Surface $Surface -Name 'project') -or
-            (Test-SurfaceRequested -Surface $Surface -Name 'references')) {
-            $projectInfo = Get-VbaProjectInfo -Workbook $context.Workbook
-            if (Test-SurfaceRequested -Surface $Surface -Name 'vba') {
-                $payload["vba"] = @($projectInfo.components)
-            }
-            if (Test-SurfaceRequested -Surface $Surface -Name 'project') {
-                $payload["project"] = [pscustomobject]@{
-                    accessible = $projectInfo.accessible
-                    error = $projectInfo.error
-                    componentCount = @($projectInfo.components).Count
-                    referenceCount = @($projectInfo.references).Count
-                }
-            }
-            if (Test-SurfaceRequested -Surface $Surface -Name 'references') {
-                $payload["references"] = @($projectInfo.references)
-            }
-        }
 
-        return [pscustomobject]$payload
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'tables') {
+                    $payload["tables"] = @(Get-TableQuery -Workbook $context.Workbook)
+                }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'names') {
+                    $payload["names"] = @(Get-NameQuery -Workbook $context.Workbook)
+                }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'cf') {
+                    $payload["cf"] = @(Get-ConditionalFormattingQuery -Workbook $context.Workbook)
+                }
+                if ((Test-SurfaceRequested -Surface $normalizedSurface -Name 'pq') -or
+                    (Test-SurfaceRequested -Surface $normalizedSurface -Name 'connections') -or
+                    (Test-SurfaceRequested -Surface $normalizedSurface -Name 'model')) {
+                    $powerQueryInfo = Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'pq') {
+                        $payload["pq"] = @($powerQueryInfo.queries)
+                    }
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'connections') {
+                        $payload["connections"] = @($powerQueryInfo.connections)
+                    }
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'model') {
+                        $payload["model"] = [pscustomobject]@{
+                            modelTables = @($powerQueryInfo.modelTables)
+                        }
+                    }
+                }
+                if ((Test-SurfaceRequested -Surface $normalizedSurface -Name 'vba') -or
+                    (Test-SurfaceRequested -Surface $normalizedSurface -Name 'project') -or
+                    (Test-SurfaceRequested -Surface $normalizedSurface -Name 'references')) {
+                    $projectInfo = Get-VbaProjectInfo -Workbook $context.Workbook
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'vba') {
+                        $payload["vba"] = @($projectInfo.components)
+                    }
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'project') {
+                        $payload["project"] = [pscustomobject]@{
+                            accessible = $projectInfo.accessible
+                            error = $projectInfo.error
+                            componentCount = @($projectInfo.components).Count
+                            referenceCount = @($projectInfo.references).Count
+                        }
+                    }
+                    if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'references') {
+                        $payload["references"] = @($projectInfo.references)
+                    }
+                }
+
+                return [pscustomobject]$payload
+            }
+            finally {
+                Close-ExcelWorkbook -Context $context -SaveChanges:$false
+            }
+        }
+        catch {
+            if ($Backend -eq 'excel' -or -not (Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath)) {
+                throw
+            }
+            $warnings.Add("Excel backend failed; falling back to package parser: $($_.Exception.Message)")
+        }
     }
-    finally {
-        Close-ExcelWorkbook -Context $context -SaveChanges:$false
+
+    if ($Backend -in @('auto', 'package')) {
+        $stagesTried.Add('package')
+        $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface $normalizedSurface
+        if ($warnings.Count -gt 0) {
+            $payload.warnings = (ConvertTo-ObjectArray -Value $payload.warnings) + (ConvertTo-ObjectArray -Value $warnings.ToArray())
+        }
+        $payload.stagesTried = ConvertTo-ObjectArray -Value $stagesTried.ToArray()
+        return $payload
     }
 }
 
@@ -1748,10 +2193,12 @@ function Get-ExcelWorkbookInspection {
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
         [string[]]$Surface = @(),
-        [switch]$Visible
+        [switch]$Visible,
+        [ValidateSet('auto', 'excel', 'package')]
+        [string]$Backend = 'auto'
     )
 
-    $query = Get-ExcelWorkbookQuery -WorkbookPath $WorkbookPath -Surface $Surface -Visible:$Visible
+    $query = Get-ExcelWorkbookQuery -WorkbookPath $WorkbookPath -Surface $Surface -Visible:$Visible -Backend $Backend
     $tables = @()
     $names = @()
     $cf = @()
@@ -1773,7 +2220,13 @@ function Get-ExcelWorkbookInspection {
     if ($null -ne $query.PSObject.Properties['project']) { $project = $query.project }
 
     return [pscustomobject]@{
-        workbookPath = $WorkbookPath
+        workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+        backend = if ($null -ne $query.PSObject.Properties['backend']) { [string]$query.backend } else { 'excel' }
+        sourceFormat = if ($null -ne $query.PSObject.Properties['sourceFormat']) { [string]$query.sourceFormat } else { [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant() }
+        workingPath = if ($null -ne $query.PSObject.Properties['workingPath']) { [string]$query.workingPath } else { [System.IO.Path]::GetFullPath($WorkbookPath) }
+        normalization = if ($null -ne $query.PSObject.Properties['normalization']) { [string]$query.normalization } else { 'none' }
+        warnings = if ($null -ne $query.PSObject.Properties['warnings']) { ConvertTo-ObjectArray -Value $query.warnings } else { @() }
+        stagesTried = if ($null -ne $query.PSObject.Properties['stagesTried']) { ConvertTo-ObjectArray -Value $query.stagesTried } else { @() }
         counts = [pscustomobject]@{
             tables = $tables.Count
             names = $names.Count
@@ -1790,6 +2243,34 @@ function Get-ExcelWorkbookInspection {
     }
 }
 
+function Invoke-ExcelWorkbookBootstrap {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [Parameter(Mandatory = $true)]
+        [string]$OutputDir,
+        [string]$ManifestPath,
+        [string[]]$Surface = @(),
+        [switch]$Visible,
+        [ValidateSet('auto', 'excel', 'package')]
+        [string]$Backend = 'auto'
+    )
+
+    $normalizedSurface = if (@($Surface).Count -gt 0) {
+        @($Surface)
+    }
+    else {
+        @('tables', 'names', 'cf', 'pq', 'connections', 'model')
+    }
+
+    if ($Backend -eq 'package') {
+        return (Invoke-PackageWorkbookHelper -Command 'bootstrap' -WorkbookPath $WorkbookPath -Surface $normalizedSurface -OutputDir $OutputDir -ManifestPath $ManifestPath)
+    }
+
+    $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $WorkbookPath -Surface $normalizedSurface -Visible:$Visible -Backend $Backend
+    return (Write-ExcelWorkbookBootstrapArtifacts -WorkbookPath $WorkbookPath -OutputDir $OutputDir -ManifestPath $ManifestPath -QueryPayload $queryPayload)
+}
+
 function Invoke-ExcelSyncSmoke {
     param(
         [Parameter(Mandatory = $true)]
@@ -1800,16 +2281,35 @@ function Invoke-ExcelSyncSmoke {
         [switch]$Visible
     )
 
-    $tempPath = Join-Path $env:TEMP ("excel_sync_smoke_{0}{1}" -f $PID, [System.IO.Path]::GetExtension($WorkbookPath))
+    $manifestDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ManifestPath))
+    $tempRoot = Join-Path $env:TEMP ("excel_sync_smoke_{0}_{1}" -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $tempWorkspace = Join-Path $tempRoot 'workspace'
+    $tempManifestPath = Join-Path $tempWorkspace (Split-Path -Leaf $ManifestPath)
+    $relativeWorkbookPath = Resolve-RelativePath -BasePath $manifestDirectory -TargetPath $WorkbookPath
+    $useWorkspaceWorkbook = -not [string]::IsNullOrWhiteSpace($relativeWorkbookPath) -and -not $relativeWorkbookPath.StartsWith('..')
+    $tempWorkbookPath = if ($useWorkspaceWorkbook) {
+        Join-Path $tempWorkspace $relativeWorkbookPath
+    }
+    else {
+        Join-Path $tempWorkspace (Split-Path -Leaf $WorkbookPath)
+    }
+
     try {
-        Copy-Item -LiteralPath $WorkbookPath -Destination $tempPath -Force
-        & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $ManifestPath -Direction 'roundtrip' -WorkbookPath $tempPath -Visible:$Visible | Out-Null
-        $inspection = Get-ExcelWorkbookInspection -WorkbookPath $tempPath -Surface $Surface -Visible:$Visible
+        Copy-Item -LiteralPath $manifestDirectory -Destination $tempWorkspace -Recurse -Force
+        if (-not $useWorkspaceWorkbook) {
+            Copy-Item -LiteralPath $WorkbookPath -Destination $tempWorkbookPath -Force
+        }
+
+        Write-Output ("SMOKE SETUP workspace={0}" -f $tempWorkspace)
+        Write-Output "SMOKE ROUNDTRIP"
+        & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $tempManifestPath -Direction 'roundtrip' -WorkbookPath $tempWorkbookPath -Visible:$Visible
+        Write-Output "SMOKE INSPECT"
+        $inspection = Get-ExcelWorkbookInspection -WorkbookPath $tempWorkbookPath -Surface $Surface -Visible:$Visible
         Write-Output ("SMOKE OK tables={0} names={1} cf={2} vba={3}" -f $inspection.counts.tables, $inspection.counts.names, $inspection.counts.cf, $inspection.counts.vba)
     }
     finally {
-        if (Test-Path -LiteralPath $tempPath) {
-            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }

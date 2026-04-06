@@ -4,13 +4,15 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke|refresh> [options]
+  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap> [options]
 
 Options:
   --manifest-path PATH
   --workbook-path PATH
+  --output-dir PATH
   --query-name NAME
   --surface LIST
+  --backend NAME
   --visible
   --help
 
@@ -82,9 +84,12 @@ case "$subcommand" in
   inspect|query|push|pull|roundtrip|smoke|refresh)
     shift
     ;;
+  bootstrap)
+    shift
+    ;;
   *)
     echo "error: unknown subcommand: $subcommand" >&2
-    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh" >&2
+    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh, bootstrap" >&2
     exit 2
     ;;
 esac
@@ -115,6 +120,14 @@ $value"
 -WorkbookPath
 $value"
       ;;
+    --output-dir|-OutputDir)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      value="$(convert_path_arg "$1")"
+      shift
+      translated="${translated}
+-OutputDir
+$value"
+      ;;
     --surface|-Surface)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       translated="${translated}
@@ -126,6 +139,13 @@ $1"
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       translated="${translated}
 -QueryName
+$1"
+      shift
+      ;;
+    --backend|-Backend)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Backend
 $1"
       shift
       ;;
