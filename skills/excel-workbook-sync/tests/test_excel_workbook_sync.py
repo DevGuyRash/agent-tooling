@@ -34,6 +34,8 @@ def run_pwsh(command: str, *, timeout: int = 30) -> subprocess.CompletedProcess[
         ["pwsh", "-NoProfile", "-Command", command],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         timeout=timeout,
     )
@@ -46,6 +48,8 @@ def run_pwsh_file(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[
         ["pwsh", "-NoProfile", "-File", str(PS1), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         timeout=timeout,
     )
@@ -844,6 +848,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=120,
         )
@@ -875,6 +881,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=120,
         )
@@ -913,6 +921,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=300,
             )
@@ -1035,7 +1045,14 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             )
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             pulled = json.loads(cf_path.read_text(encoding="utf-8"))
-            self.assertTrue(any(rule["id"] == "CF-LIVE-TEST-0001" for rule in pulled["rules"]))
+            self.assertTrue(
+                any(
+                    rule.get("sheet") == "AP_INVOICES_INTERFACE"
+                    and rule.get("address") == "$C$5:$C$9"
+                    and rule.get("formula") == "=TRUE"
+                    for rule in pulled["rules"]
+                )
+            )
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_powerquery_push_then_pull_roundtrips_formula_change(self) -> None:
