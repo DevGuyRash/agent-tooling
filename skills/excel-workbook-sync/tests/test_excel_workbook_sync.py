@@ -51,6 +51,10 @@ def run_pwsh_file(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[
     )
 
 
+def run_skill_cli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    return run_pwsh_file(*args, timeout=timeout)
+
+
 def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
     mashup_buffer = BytesIO()
     with zipfile.ZipFile(mashup_buffer, "w", compression=zipfile.ZIP_DEFLATED) as mashup_zip:
@@ -936,6 +940,142 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 payload = json.loads(artifact.read_text(encoding="utf-8"))
                 self.assertIsInstance(payload, dict)
                 self.assertTrue(payload)
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_vba_push_then_pull_roundtrips_module_change(self) -> None:
+        if not FIXTURE_WORKBOOK.exists():
+            self.skipTest("fixture workbook is unavailable")
+
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-live-vba-") as tmpdir:
+            tmp_root = Path(tmpdir) / "workspace"
+            shutil.copytree(FIXTURE_DIR, tmp_root)
+            manifest = tmp_root / "excel-sync.manifest.json"
+            workbook = tmp_root / "tr_upload_template.xlsm"
+            module_path = tmp_root / "macros" / "modules" / "modAPSync.vba"
+
+            original = module_path.read_text(encoding="utf-8")
+            marker = "' LIVE_VBA_PUSH_MARKER"
+            module_path.write_text(original + ("\n" if not original.endswith("\n") else "") + marker + "\n", encoding="utf-8")
+
+            push_proc = run_skill_cli(
+                "push",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
+            self.assertIn("PUSH VBA modAPSync", push_proc.stdout)
+
+            module_path.write_text(original, encoding="utf-8")
+
+            pull_proc = run_skill_cli(
+                "pull",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            self.assertIn(marker, module_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_cf_push_then_pull_roundtrips_new_rule(self) -> None:
+        if not FIXTURE_WORKBOOK.exists():
+            self.skipTest("fixture workbook is unavailable")
+
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-live-cf-") as tmpdir:
+            tmp_root = Path(tmpdir) / "workspace"
+            shutil.copytree(FIXTURE_DIR, tmp_root)
+            manifest = tmp_root / "excel-sync.manifest.json"
+            workbook = tmp_root / "tr_upload_template.xlsm"
+            cf_path = tmp_root / "workbook_structure" / "conditional_formatting.json"
+
+            artifact = json.loads(cf_path.read_text(encoding="utf-8"))
+            artifact["rules"].append(
+                {
+                    "id": "CF-LIVE-TEST-0001",
+                    "sheet": "AP_INVOICES_INTERFACE",
+                    "address": "$C$5:$C$9",
+                    "formula": "=TRUE",
+                    "priority": 9999,
+                    "stopIfTrue": False,
+                    "format": {
+                        "interiorColor": "#00FF00",
+                        "fontColor": "#000000",
+                        "bold": True,
+                    },
+                }
+            )
+            cf_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+
+            push_proc = run_skill_cli(
+                "push",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
+            self.assertIn("PUSH CF CF-LIVE-TEST-0001", push_proc.stdout)
+
+            baseline = json.loads((FIXTURE_DIR / "workbook_structure" / "conditional_formatting.json").read_text(encoding="utf-8"))
+            cf_path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+
+            pull_proc = run_skill_cli(
+                "pull",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            pulled = json.loads(cf_path.read_text(encoding="utf-8"))
+            self.assertTrue(any(rule["id"] == "CF-LIVE-TEST-0001" for rule in pulled["rules"]))
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_powerquery_push_then_pull_roundtrips_formula_change(self) -> None:
+        if not FIXTURE_WORKBOOK.exists():
+            self.skipTest("fixture workbook is unavailable")
+
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-live-pq-") as tmpdir:
+            tmp_root = Path(tmpdir) / "workspace"
+            shutil.copytree(FIXTURE_DIR, tmp_root)
+            manifest = tmp_root / "excel-sync.manifest.json"
+            workbook = tmp_root / "tr_upload_template.xlsm"
+            query_path = tmp_root / "power_query" / "queries" / "Matched.pq"
+
+            original = query_path.read_text(encoding="utf-8")
+            marker = "// LIVE_PQ_PUSH_MARKER"
+            query_path.write_text(marker + "\n" + original, encoding="utf-8")
+
+            push_proc = run_skill_cli(
+                "push",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
+            self.assertIn("PUSH PQ Matched", push_proc.stdout)
+
+            query_path.write_text(original, encoding="utf-8")
+
+            pull_proc = run_skill_cli(
+                "pull",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
+                timeout=300,
+            )
+            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            self.assertIn(marker, query_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
