@@ -485,6 +485,38 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(payload["supportedCfTypes"], [])
         self.assertEqual(payload["unsupportedCfTypes"], [])
 
+    def test_auto_query_prefers_package_for_package_readable_surfaces(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                function Test-OoxmlPackageWorkbook {{ param([string]$WorkbookPath) return $true }}
+                function Open-ExcelWorkbook {{ throw 'excel path should not be used' }}
+                function Invoke-PackageWorkbookHelper {{
+                    param([string]$Command, [string]$WorkbookPath, [string[]]$Surface)
+                    return [pscustomobject]@{{
+                        workbookPath = $WorkbookPath
+                        backend = 'package'
+                        sourceFormat = '.xlsm'
+                        workingPath = $WorkbookPath
+                        normalization = 'none'
+                        warnings = @()
+                        capabilities = Get-PackageBackendCapabilities
+                        unsupported = @()
+                        tables = @([pscustomobject]@{{ name = 'T1' }})
+                    }}
+                }}
+                Get-ExcelWorkbookQuery -WorkbookPath 'dummy.xlsm' -Surface @('tables','formulas','data-validation') -Backend auto |
+                    ConvertTo-Json -Compress -Depth 20
+                """
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertEqual(payload["stagesTried"], ["package"])
+        self.assertEqual(payload["tables"][0]["name"], "T1")
+
     def test_structure_script_has_optional_cf_property_guard(self) -> None:
         content = (ROOT / "scripts" / "sync-excel-structure.ps1").read_text(encoding="utf-8")
         self.assertIn('PSObject.Properties["replaceIfFormulaContains"]', content)
@@ -504,11 +536,24 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel after failed open" -SwallowErrors', content)
         self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel"', content)
 
+    def test_mutation_and_com_extract_use_common_workbook_context(self) -> None:
+        mutate = (ROOT / "scripts" / "mutate-workbook.ps1").read_text(encoding="utf-8")
+        extract = (ROOT / "scripts" / "extract-com.ps1").read_text(encoding="utf-8")
+        self.assertIn(". (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')", mutate)
+        self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible", mutate)
+        self.assertIn("Close-ExcelWorkbook -Context $context -SaveChanges:$saved", mutate)
+        self.assertIn(". (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')", extract)
+        self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible", extract)
+        self.assertIn("Close-ExcelWorkbook -Context $context -SaveChanges:$false", extract)
+
     def test_common_script_exposes_package_bootstrap_and_surface_aliases(self) -> None:
         content = COMMON.read_text(encoding="utf-8")
         self.assertIn("function Get-NormalizedSurfaceNames", content)
         self.assertIn("function Invoke-ExcelWorkbookBootstrap", content)
         self.assertIn("function Invoke-PackageWorkbookHelper", content)
+        self.assertIn("Start-Process", content)
+        self.assertIn("WaitForExit($TimeoutSeconds * 1000)", content)
+        self.assertIn("Package workbook helper timed out", content)
 
     def test_posix_launcher_negative_path_is_concise(self) -> None:
         proc = subprocess.run(

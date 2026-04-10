@@ -21,9 +21,13 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
 The generic audit output writes:
 
 - workbook structure artifacts including `table_mappings.json`
+- workbook structure metadata files for formulas, data validation,
+  protection, charts, and pivots even when those surfaces are empty
 - Power Query metadata plus per-query `.pq` files when formulas are available
 - raw and normalized parity reports, with normalized parity excluding
   clearly internal names and live-VBA-only surface counts
+- a filtered `normalized.json` for agent-facing review while
+  `workbook_structure/names.json` preserves raw extracted names
 - mutation reports for copied workbooks
 - aggregate matrix summaries for multi-workbook audits
 
@@ -37,11 +41,15 @@ Use the manifest-driven surface when repo artifacts and a committed
 `excel-sync.manifest.json` are the source of truth.
 
 Manifest `inspect`, `query`, and `bootstrap` now expose backend-aware
-capabilities and unsupported-surface diagnostics. Current generic metadata
-surfaces include tables, names, conditional formatting, formulas,
-data-validation, protection, chart metadata, pivot metadata, Power Query
-metadata, and VBA metadata.
+capabilities and unsupported-surface diagnostics. `inspect` defaults to a
+lean metadata surface so real `.xlsm` reads do not pay for Power Query
+expansion unless you request it explicitly with `query --surface ...`.
+Current generic metadata surfaces include tables, names, conditional
+formatting, formulas, data-validation, protection, chart metadata, pivot
+metadata, Power Query metadata, and VBA metadata.
 
 Write-capable flows remain explicitly Windows Excel COM only. OOXML/package
 parsing is still read-only and is used for pull/query/bootstrap coverage on
-package-readable `.xlsx` and `.xlsm` workbooks.
+package-readable `.xlsx` and `.xlsm` workbooks. Auto backend selection now
+prefers the package reader for read-only manifest queries when the requested
+surfaces do not require live VBA/project inspection.

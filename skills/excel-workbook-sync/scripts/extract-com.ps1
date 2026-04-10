@@ -8,6 +8,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')
+
+$context = $null
+
 function Convert-RangeValueToRows {
     param($Range)
 
@@ -109,17 +113,9 @@ function Complete-Phase {
 }
 
 try {
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = [bool]$Visible
-    $excel.DisplayAlerts = $false
-    $excel.ScreenUpdating = $false
-    $excel.EnableEvents = $false
-    $excel.AskToUpdateLinks = $false
-    try {
-        $excel.AutomationSecurity = 3 # msoAutomationSecurityForceDisable
-    } catch {}
-
-    $workbook = $excel.Workbooks.Open($WorkbookPath, $false, $true)
+    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+    $excel = $context.Excel
+    $workbook = $context.Workbook
     Complete-Phase -Name "openWorkbook"
     try {
         $excel.Calculation = -4135 # xlCalculationManual
@@ -331,13 +327,7 @@ try {
     $result | ConvertTo-Json -Depth 10
 }
 finally {
-    if ($workbook -ne $null) {
-        $workbook.Close($false)
+    if ($null -ne $context) {
+        Close-ExcelWorkbook -Context $context -SaveChanges:$false
     }
-    if ($excel -ne $null) {
-        $excel.Quit()
-        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
-    }
-    [gc]::Collect()
-    [gc]::WaitForPendingFinalizers()
 }

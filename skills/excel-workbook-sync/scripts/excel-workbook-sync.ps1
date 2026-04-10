@@ -63,11 +63,12 @@ function Parse-ExcelWorkbookSyncArgs {
         WorkbookPath = $null
         OutputDir = $null
         QueryName = @()
-        Surface = 'vba,tables,names,cf,project,references,pq,connections,model'
+        Surface = $null
         Backend = 'auto'
         Visible = $false
         ShowHelp = $false
     }
+    $surfaceExplicit = $false
 
     $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap')
     $index = 0
@@ -138,6 +139,7 @@ function Parse-ExcelWorkbookSyncArgs {
                     Throw-CliError -Message "error: missing value for $token"
                 }
                 $result.Surface = [string]$Tokens[$index]
+                $surfaceExplicit = $true
                 $index++
                 continue
             }
@@ -156,6 +158,13 @@ function Parse-ExcelWorkbookSyncArgs {
             default {
                 Throw-CliError -Message ("error: unknown flag or argument: {0}`nhint: run 'excel-workbook-sync.ps1 --help' for the supported CLI surface" -f $token)
             }
+        }
+    }
+
+    if (-not $surfaceExplicit) {
+        $result.Surface = switch ($result.Command) {
+            'inspect' { 'tables,names,cf,formulas,data-validation,protection,charts,pivots' }
+            default { 'vba,tables,names,cf,project,references,pq,connections,model' }
         }
     }
 

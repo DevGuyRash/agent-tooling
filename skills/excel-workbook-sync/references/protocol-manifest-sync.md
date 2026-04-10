@@ -24,9 +24,16 @@ sh <skills-file-root>/scripts/excel-workbook-sync refresh --manifest-path /path/
 ## Notes
 
 - Manifest-driven write flows still require Excel COM.
+- `inspect` defaults to a lean metadata surface. Use `query --surface ...`
+  when you need Power Query, connections, model, or other heavier read-only
+  metadata explicitly.
 - Query, inspect, and bootstrap responses include `capabilities`, `warnings`,
   and `unsupported` fields. Read them before assuming a backend can write or
   expose every requested surface.
+- In `auto` mode, manifest read flows prefer the OOXML/package backend when
+  the requested surfaces do not require live VBA/project/reference access.
+- Package-helper execution is bounded; slow package reads fail explicitly
+  instead of hanging indefinitely.
 - Formulas, data-validation, protection, chart, and pivot artifacts are
   currently pull/query metadata surfaces. They are not manifest push surfaces.
 - The generic Python CLI is additive. It does not replace this write surface.

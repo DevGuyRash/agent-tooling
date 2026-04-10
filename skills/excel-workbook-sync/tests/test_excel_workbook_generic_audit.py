@@ -248,12 +248,46 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             self.assertEqual(result["engine"], "ooxml")
             self.assertTrue((output_root / "normalized.json").exists())
             self.assertTrue((output_root / "workbook_structure" / "tables.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "formulas.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "data_validation.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "protection.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "charts.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "pivots.json").exists())
             self.assertTrue((output_root / "power_query" / "connections.json").exists())
             self.assertTrue((output_root / "power_query" / "data_mashup.xml").exists())
             self.assertTrue((output_root / "power_query" / "queries" / "Matched.pq").exists())
             self.assertTrue((output_root / "power_query" / "query_files.json").exists())
             self.assertTrue((output_root / "vba" / "vbaProject.bin").exists())
             self.assertTrue((output_root / "ooxml-parts" / "xl" / "workbook.xml").exists())
+            normalized = self.module.json.loads((output_root / "normalized.json").read_text(encoding="utf-8"))
+            self.assertEqual(normalized["nameDiagnostics"]["filteredInternalNameCount"], 0)
+
+    def test_pull_normalized_output_filters_internal_names(self) -> None:
+        normalized = self.module.build_pull_normalized_payload(
+            {
+                "names": [
+                    {"name": "InvoiceAnchor", "hidden": False, "refersTo": "=Sheet1!$B$2"},
+                    {"name": "_xlfn.SINGLE", "hidden": True, "refersTo": "=#NAME?"},
+                    {"name": "_xlpm.internal_only", "hidden": True, "refersTo": "=#NAME?"},
+                ]
+            }
+        )
+        self.assertEqual([item["name"] for item in normalized["names"]], ["InvoiceAnchor"])
+        self.assertEqual(normalized["nameDiagnostics"]["filteredInternalNameCount"], 2)
+
+    def test_package_audit_mutation_adds_defined_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_copy = Path(temp_dir) / self.fixture_path.name
+            shutil.copy2(self.fixture_path, workbook_copy)
+            package_path = ROOT / "skills" / "excel-workbook-sync" / "scripts" / "excel_workbook_package.py"
+            spec = importlib.util.spec_from_file_location("excel_workbook_package", package_path)
+            package_module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(package_module)
+            report = package_module.apply_audit_mutation(workbook_copy)
+            mutated = package_module.build_query_payload(workbook_copy, ["names"])
+            self.assertTrue(report["packageFallback"])
+            self.assertIn("ExcelSyncAuditMutation", {item["name"] for item in mutated["names"]})
 
     def test_pull_falls_back_to_ooxml_when_com_extract_times_out(self) -> None:
         original = self.module.extract_com
@@ -422,6 +456,9 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
                 self.assertTrue((Path(result["runRoot"]) / "matrix-summary.md").exists())
                 self.assertEqual(result["workbooks"][0]["scenarioCount"], 1)
                 self.assertEqual(result["workbooks"][0]["status"], "completed")
+                self.assertEqual(result["workbooks"][0]["mutationStatus"], "unchanged")
+                self.assertTrue(result["workbooks"][0]["slug"].startswith("01-"))
+                self.assertEqual(result["workbooks"][0]["relativeRoot"], result["workbooks"][0]["slug"])
         finally:
             self.module.run_audit_subprocess = original_run_audit_subprocess
 

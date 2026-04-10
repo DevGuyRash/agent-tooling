@@ -11,6 +11,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')
+
+$context = $null
 $excel = $null
 $workbook = $null
 $phaseTimer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -106,20 +109,36 @@ function New-ConditionalFormattingScenario {
 }
 
 try {
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = [bool]$Visible
-    $excel.DisplayAlerts = $false
-    $excel.ScreenUpdating = $false
-    $excel.EnableEvents = $false
-    $excel.AskToUpdateLinks = $false
+    try {
+        $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+        $excel = $context.Excel
+        $workbook = $context.Workbook
+    }
+    catch {
+        if (Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath) {
+            $pythonCommand = @(Get-PythonLauncher)
+            $launcherArgs = @()
+            if ($pythonCommand.Count -gt 1) {
+                $launcherArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
+            }
+            $scriptPath = Join-Path $PSScriptRoot 'excel_workbook_package.py'
+            $stdout = & $pythonCommand[0] @launcherArgs $scriptPath 'mutate-audit' '--workbook-path' $WorkbookPath
+            $report = $stdout | ConvertFrom-Json
+            $report.phaseDurationsMs = $phaseDurationsMs
+            $reportJson = $report | ConvertTo-Json -Depth 8
+            $reportDir = Split-Path -Parent $ReportPath
+            if (-not (Test-Path -LiteralPath $reportDir)) {
+                New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+            }
+            Set-Content -LiteralPath $ReportPath -Value $reportJson -Encoding UTF8
+            $reportJson
+            return
+        }
+        throw
+    }
     try {
         $excel.Calculation = -4135 # xlCalculationManual
     } catch {}
-    try {
-        $excel.AutomationSecurity = 3 # msoAutomationSecurityForceDisable
-    } catch {}
-
-    $workbook = $excel.Workbooks.Open($WorkbookPath)
     Complete-Phase -Name "openWorkbook"
 
     $auditSheet = $null
@@ -243,13 +262,7 @@ try {
     $reportJson
 }
 finally {
-    if ($workbook -ne $null) {
-        $workbook.Close(-not $saved)
+    if ($null -ne $context) {
+        Close-ExcelWorkbook -Context $context -SaveChanges:$saved
     }
-    if ($excel -ne $null) {
-        $excel.Quit()
-        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
-    }
-    [gc]::Collect()
-    [gc]::WaitForPendingFinalizers()
 }

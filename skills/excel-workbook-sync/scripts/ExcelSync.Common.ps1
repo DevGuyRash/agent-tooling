@@ -481,35 +481,60 @@ function Open-ExcelWorkbook {
 
     try {
         $workbook = Invoke-ExcelComWithRetry -Description "Opening workbook" -MaxAttempts 20 -DelayMilliseconds 500 -Operation {
-            try {
-                return Invoke-LateMethod -Target $excel.Workbooks -Name 'Open' -Arguments @(
-                    $WorkbookPath,
-                    0,
-                    $false,
-                    $null,
-                    $null,
-                    $null,
-                    $true,
-                    $null,
-                    $null,
-                    $false,
-                    $false
-                )
+            $openAttempts = @(
+                {
+                    Invoke-LateMethod -Target $excel.Workbooks -Name 'Open' -Arguments @(
+                        $WorkbookPath,
+                        0,
+                        $false,
+                        $null,
+                        $null,
+                        $null,
+                        $true,
+                        $null,
+                        $null,
+                        $false,
+                        $false
+                    )
+                },
+                {
+                    $excel.Workbooks.Open(
+                        $WorkbookPath,
+                        0,
+                        $false,
+                        $null,
+                        $null,
+                        $null,
+                        $true,
+                        $null,
+                        $null,
+                        $false,
+                        $false
+                    )
+                },
+                {
+                    $excel.Workbooks.Open($WorkbookPath)
+                },
+                {
+                    $excel.Workbooks.Open($WorkbookPath, 0, $false)
+                },
+                {
+                    $excel.Workbooks.Open($WorkbookPath, $false, $true)
+                }
+            )
+
+            $lastOpenError = $null
+            foreach ($openAttempt in $openAttempts) {
+                try {
+                    return (& $openAttempt)
+                }
+                catch {
+                    $lastOpenError = $_
+                }
             }
-            catch {
-                return $excel.Workbooks.Open(
-                    $WorkbookPath,
-                    0,
-                    $false,
-                    $null,
-                    $null,
-                    $null,
-                    $true,
-                    $null,
-                    $null,
-                    $false,
-                    $false
-                )
+
+            if ($null -ne $lastOpenError) {
+                throw $lastOpenError
             }
         }
     }
@@ -1090,13 +1115,14 @@ function Test-OoxmlPackageWorkbook {
 function Invoke-PackageWorkbookHelper {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('query', 'inspect', 'bootstrap')]
+        [ValidateSet('query', 'inspect', 'bootstrap', 'mutate-audit')]
         [string]$Command,
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
         [string[]]$Surface = @(),
         [string]$OutputDir,
-        [string]$ManifestPath
+        [string]$ManifestPath,
+        [int]$TimeoutSeconds = 120
     )
 
     $pythonCommand = @(Get-PythonLauncher)
@@ -1120,12 +1146,61 @@ function Invoke-PackageWorkbookHelper {
         $launcherArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
     }
 
-    $json = & $pythonCommand[0] @launcherArgs @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Package workbook helper failed for $Command."
+    $stdoutPath = Join-Path $env:TEMP ("excel_workbook_package_stdout_{0}_{1}.log" -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $stderrPath = Join-Path $env:TEMP ("excel_workbook_package_stderr_{0}_{1}.log" -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $process = $null
+    try {
+        $process = Start-Process `
+            -FilePath $pythonCommand[0] `
+            -ArgumentList @($launcherArgs + $arguments) `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -PassThru
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+            throw ("Package workbook helper timed out for {0} after {1} seconds." -f $Command, $TimeoutSeconds)
+        }
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue } else { '' }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue } else { '' }
+        $parsedPayload = $null
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            try {
+                $parsedPayload = $stdout | ConvertFrom-Json -Depth 100
+            }
+            catch {
+                $parsedPayload = $null
+            }
+        }
+        if ($process.ExitCode -ne 0) {
+            if ($null -ne $parsedPayload) {
+                return $parsedPayload
+            }
+            $details = @($stderr, $stdout) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if (@($details).Count -gt 0) {
+                throw ("Package workbook helper failed for {0}: {1}" -f $Command, (($details -join [Environment]::NewLine).Trim()))
+            }
+            throw ("Package workbook helper failed for {0}." -f $Command)
+        }
+        if ([string]::IsNullOrWhiteSpace($stdout)) {
+            throw ("Package workbook helper returned no JSON for {0}." -f $Command)
+        }
+        if ($null -ne $parsedPayload) {
+            return $parsedPayload
+        }
+        return ($stdout | ConvertFrom-Json -Depth 100)
     }
-
-    return ($json | ConvertFrom-Json -Depth 100)
+    finally {
+        foreach ($candidate in @($stdoutPath, $stderrPath)) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 function Get-ManifestRelativeWorkbookPath {
@@ -2549,6 +2624,26 @@ function Get-PackageBackendCapabilities {
     }
 }
 
+function Test-PackagePreferredQuery {
+    param(
+        [string[]]$Surface = @(),
+        [bool]$PackageReadable = $false,
+        [string]$Backend = 'auto'
+    )
+
+    if ($Backend -ne 'auto' -or -not $PackageReadable) {
+        return $false
+    }
+
+    $normalized = @($Surface | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (@($normalized).Count -eq 0) {
+        return $false
+    }
+
+    $excelOnlySurfaces = @('vba', 'project', 'references')
+    return @($normalized | Where-Object { $_ -in $excelOnlySurfaces }).Count -eq 0
+}
+
 function Get-ExcelWorkbookQuery {
     param(
         [Parameter(Mandatory = $true)]
@@ -2575,6 +2670,24 @@ function Get-ExcelWorkbookQuery {
     $stagesTried = New-Object System.Collections.Generic.List[string]
     $unsupported = New-Object System.Collections.Generic.List[object]
     $packageReadable = Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath
+
+    if (Test-PackagePreferredQuery -Surface $normalizedSurface -PackageReadable:$packageReadable -Backend $Backend) {
+        $stagesTried.Add('package')
+        $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface $normalizedSurface
+        if ($null -ne $payload.PSObject.Properties['stagesTried']) {
+            $payload.stagesTried = ConvertTo-ObjectArray -Value $stagesTried.ToArray()
+        }
+        else {
+            $payload | Add-Member -NotePropertyName stagesTried -NotePropertyValue (ConvertTo-ObjectArray -Value $stagesTried.ToArray())
+        }
+        if ($null -eq $payload.PSObject.Properties['capabilities']) {
+            $payload | Add-Member -NotePropertyName capabilities -NotePropertyValue (Get-PackageBackendCapabilities)
+        }
+        if ($null -eq $payload.PSObject.Properties['unsupported']) {
+            $payload | Add-Member -NotePropertyName unsupported -NotePropertyValue @()
+        }
+        return $payload
+    }
 
     if ($Backend -in @('auto', 'excel')) {
         $stagesTried.Add('excel')

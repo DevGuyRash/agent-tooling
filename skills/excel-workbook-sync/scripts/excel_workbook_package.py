@@ -4,9 +4,11 @@ import argparse
 import base64
 import io
 import json
+import os
 import re
 import struct
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
@@ -810,6 +812,24 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes]) -> None:
+    workbook_path = workbook_path.resolve()
+    with zipfile.ZipFile(workbook_path, "r") as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    members.update(updates)
+    fd, temp_name = tempfile.mkstemp(prefix="excel-workbook-sync-", suffix=workbook_path.suffix, dir=str(workbook_path.parent))
+    os.close(fd)
+    Path(temp_name).unlink(missing_ok=True)
+    temp_path = Path(temp_name)
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for name, payload in members.items():
+                target.writestr(name, payload)
+        temp_path.replace(workbook_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _relative_or_absolute(base_dir: Path, target_path: Path) -> str:
     try:
         return str(target_path.resolve().relative_to(base_dir.resolve()))
@@ -902,6 +922,46 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
     }
 
 
+def apply_audit_mutation(workbook_path: Path) -> dict[str, Any]:
+    workbook_path = workbook_path.resolve()
+    with zipfile.ZipFile(workbook_path, "r") as source:
+        workbook_xml = source.read("xl/workbook.xml")
+    root = ET.fromstring(workbook_xml)
+    defined_names = root.find("main:definedNames", NS)
+    if defined_names is None:
+        defined_names = ET.Element(f"{{{NS['main']}}}definedNames")
+        sheets = root.find("main:sheets", NS)
+        insert_at = list(root).index(sheets) + 1 if sheets is not None else len(list(root))
+        root.insert(insert_at, defined_names)
+    for item in list(defined_names):
+        if item.attrib.get("name") == "ExcelSyncAuditMutation":
+            defined_names.remove(item)
+    entry = ET.SubElement(defined_names, f"{{{NS['main']}}}definedName", {"name": "ExcelSyncAuditMutation"})
+    entry.text = '="ExcelSyncAuditPackageFallback"'
+    updated_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    _rewrite_workbook_package(workbook_path, {"xl/workbook.xml": updated_xml})
+    return {
+        "ran": True,
+        "packageFallback": True,
+        "workbook": str(workbook_path),
+        "createdSheet": None,
+        "createdTables": [],
+        "createdQueries": [],
+        "conditionalFormattingCount": 0,
+        "scenarios": [
+            {
+                "name": "package-defined-name-fallback",
+                "status": "completed",
+                "details": {
+                    "name": "ExcelSyncAuditMutation",
+                    "refersTo": '="ExcelSyncAuditPackageFallback"',
+                },
+            }
+        ],
+        "phaseDurationsMs": {},
+    }
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -920,6 +980,9 @@ def main(argv: list[str]) -> int:
     bootstrap_parser.add_argument("--output-dir", required=True)
     bootstrap_parser.add_argument("--manifest-path")
 
+    mutate_parser = subparsers.add_parser("mutate-audit")
+    mutate_parser.add_argument("--workbook-path", required=True)
+
     args = parser.parse_args(argv)
     workbook_path = Path(args.workbook_path)
     surfaces = normalize_surfaces(getattr(args, "surface", ""))
@@ -927,6 +990,8 @@ def main(argv: list[str]) -> int:
         payload = build_query_payload(workbook_path, surfaces)
     elif args.command == "inspect":
         payload = build_inspection_payload(build_query_payload(workbook_path, surfaces))
+    elif args.command == "mutate-audit":
+        payload = apply_audit_mutation(workbook_path)
     else:
         payload = bootstrap_bundle(
             workbook_path,

@@ -681,30 +681,51 @@ def write_query_files(queries: list[dict[str, Any]], output_root: Path) -> list[
     return written
 
 
+def build_pull_normalized_payload(normalized: dict[str, Any]) -> dict[str, Any]:
+    payload = json.loads(json.dumps(normalized))
+    filtered_names, internal_names = partition_names(payload.get("names", []))
+    payload["names"] = filtered_names
+    payload["nameDiagnostics"] = {
+        "filteredInternalNames": internal_names,
+        "filteredInternalNameCount": len(internal_names),
+        "userNameCount": len(filtered_names),
+    }
+    return payload
+
+
 def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workbook_path: Path) -> None:
     ensure_dir(output_root)
-    write_json(output_root / "normalized.json", normalized)
-    write_json(output_root / "workbook_structure" / "tables.json", {"tables": normalized["tables"]})
-    write_json(output_root / "workbook_structure" / "table_mappings.json", {"tables": normalized["tableMappings"]})
-    write_json(output_root / "workbook_structure" / "names.json", {"names": normalized["names"]})
-    write_json(output_root / "workbook_structure" / "conditional_formatting.json", {"rules": normalized["conditionalFormatting"]})
-    write_json(output_root / "power_query" / "connections.json", {"connections": normalized["connections"]})
-    write_json(output_root / "power_query" / "queries.json", {"queries": normalized["queries"]})
-    write_json(output_root / "power_query" / "query_files.json", {"files": write_query_files(normalized["queries"], output_root)})
+    pull_normalized = build_pull_normalized_payload(normalized)
+    write_json(output_root / "normalized.json", pull_normalized)
+    write_json(output_root / "workbook_structure" / "tables.json", {"tables": normalized.get("tables", [])})
+    write_json(output_root / "workbook_structure" / "table_mappings.json", {"tables": normalized.get("tableMappings", [])})
+    write_json(output_root / "workbook_structure" / "names.json", {"names": normalized.get("names", [])})
+    write_json(output_root / "workbook_structure" / "conditional_formatting.json", {"rules": normalized.get("conditionalFormatting", [])})
+    write_json(output_root / "workbook_structure" / "formulas.json", {"formulas": normalized.get("formulas", [])})
+    write_json(output_root / "workbook_structure" / "data_validation.json", {"rules": normalized.get("dataValidation", [])})
+    write_json(
+        output_root / "workbook_structure" / "protection.json",
+        normalized.get("protection", {"workbook": None, "worksheets": []}),
+    )
+    write_json(output_root / "workbook_structure" / "charts.json", {"charts": normalized.get("charts", [])})
+    write_json(output_root / "workbook_structure" / "pivots.json", {"pivots": normalized.get("pivots", [])})
+    write_json(output_root / "power_query" / "connections.json", {"connections": normalized.get("connections", [])})
+    write_json(output_root / "power_query" / "queries.json", {"queries": normalized.get("queries", [])})
+    write_json(output_root / "power_query" / "query_files.json", {"files": write_query_files(normalized.get("queries", []), output_root)})
     write_json(
         output_root / "vba" / "vba_project.json",
         {
-            "accessible": normalized["vba"].get("accessible", False),
-            "components": normalized["vba"].get("components", []),
-            "sha256": normalized["vba"].get("sha256"),
-            "size": normalized["vba"].get("size"),
+            "accessible": normalized.get("vba", {}).get("accessible", False),
+            "components": normalized.get("vba", {}).get("components", []),
+            "sha256": normalized.get("vba", {}).get("sha256"),
+            "size": normalized.get("vba", {}).get("size"),
         },
     )
     write_json(
         output_root / "vba" / "vba_references.json",
         {
-            "accessible": normalized["vba"].get("accessible", False),
-            "references": normalized["vba"].get("references", []),
+            "accessible": normalized.get("vba", {}).get("accessible", False),
+            "references": normalized.get("vba", {}).get("references", []),
         },
     )
     write_ooxml_snapshot(workbook_path, output_root)
@@ -1091,8 +1112,11 @@ def matrix_audit_workbooks(
             {
                 "workbook": str(workbook_path),
                 "workbookName": workbook_path.name,
+                "slug": workbook_root.name,
+                "relativeRoot": workbook_root.relative_to(run_root).as_posix(),
                 "reportPath": str(workbook_root / "reports" / "report.json"),
                 "status": report.get("matrixStatus", "completed"),
+                "mutationStatus": classify_delta_status(report),
                 "baselineRawMatch": report.get("baselineCompare", {}).get("raw", {}).get("match", False),
                 "baselineNormalizedMatch": report.get("baselineCompare", {}).get("normalized", {}).get("match", False),
                 "postMutationRawMatch": report.get("postMutationCompare", {}).get("raw", {}).get("match", False),

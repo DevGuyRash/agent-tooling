@@ -27,6 +27,15 @@ The generic Python CLI writes agent-readable bundles under the requested
 - `vba/vbaProject.bin` when present
 - `ooxml-parts/...`
 
+`normalized.json` is the agent-facing normalized view. It filters internal
+Excel-generated names such as `_xlfn.*`, `_xlpm.*`, and `_xlws.*`, and
+includes `nameDiagnostics.filteredInternalNames` so the removed names remain
+reviewable. Raw extracted names remain in `workbook_structure/names.json`.
+
+When one of the workbook-structure metadata surfaces is absent, `pull` still
+writes the artifact with an empty payload instead of silently omitting the
+file.
+
 ## Compare Output
 
 `compare` writes `compare.json` with:
@@ -85,3 +94,7 @@ surfaces report it under `unsupported`.
 The markdown matrix summary reports mutation delta as `changed`,
 `unchanged`, `skipped`, `timed_out`, or a subprocess status instead of a
 pass/fail label.
+
+The JSON matrix summary mirrors that machine-readable status in
+`workbooks[].mutationStatus` and also includes `slug` plus `relativeRoot` for
+each per-workbook audit directory.

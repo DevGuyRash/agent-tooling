@@ -45,10 +45,16 @@ define the generic contract.
   internal Excel-generated names, and excludes live-VBA-only capability
   counts that OOXML cannot observe, so user-facing mismatches are easier to
   see.
+- Standalone `pull` writes a filtered `normalized.json` for agent-facing name
+  review, while `workbook_structure/names.json` preserves the raw extracted
+  names.
 - Manifest-driven query payloads now include `capabilities`, `warnings`, and
   `unsupported` fields so agent decisions can follow actual backend limits.
 - Query/bootstrap coverage now includes formulas, data-validation,
   protection, chart metadata, and pivot metadata in the manifest contract.
+- Manifest read flows use bounded package-helper execution and prefer the
+  package backend automatically when the requested surfaces do not require live
+  VBA/project inspection.
 - Manifest-driven write flows still rely on Excel COM for mutation.
 - `.xls` and `.xlsb` remain COM-dependent.
 
