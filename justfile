@@ -32,6 +32,7 @@ lint:
 test:
   cargo test --workspace --locked
   python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills
+  python3 -m unittest discover -s skills/excel-workbook-sync/tests -p 'test_*.py'
 
 # Compile the Rust workspace in the default build profile
 build:

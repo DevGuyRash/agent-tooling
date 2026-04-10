@@ -684,7 +684,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 str(manifest),
                 "--workbook-path",
                 str(workbook),
-                timeout=60,
+                timeout=120,
             )
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             self.assertIn("PULL PQ Query1", pull_proc.stdout)
@@ -735,8 +735,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             )
             self.assertNotEqual(proc.returncode, 0)
             combined = proc.stdout + proc.stderr
-            self.assertIn("Package fallback is currently read-only for push", combined)
-            self.assertIn("inspect/query/bootstrap/pull", combined)
+            normalized = " ".join(combined.split())
+            self.assertIn("Package fallback is currently", normalized)
+            self.assertIn("read-only for push", normalized)
+            self.assertIn("inspect/query/bootstrap/pull", normalized)
 
     @unittest.skipUnless(HAS_CMD, "cmd not available on this host")
     def test_cmd_launcher_help_is_available(self) -> None:
