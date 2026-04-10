@@ -22,7 +22,8 @@ The generic audit output writes:
 
 - workbook structure artifacts including `table_mappings.json`
 - Power Query metadata plus per-query `.pq` files when formulas are available
-- raw and normalized parity reports
+- raw and normalized parity reports, with normalized parity excluding
+  clearly internal names and live-VBA-only surface counts
 - mutation reports for copied workbooks
 - aggregate matrix summaries for multi-workbook audits
 
@@ -34,3 +35,13 @@ sh <skills-file-root>/scripts/excel-workbook-sync --help
 
 Use the manifest-driven surface when repo artifacts and a committed
 `excel-sync.manifest.json` are the source of truth.
+
+Manifest `inspect`, `query`, and `bootstrap` now expose backend-aware
+capabilities and unsupported-surface diagnostics. Current generic metadata
+surfaces include tables, names, conditional formatting, formulas,
+data-validation, protection, chart metadata, pivot metadata, Power Query
+metadata, and VBA metadata.
+
+Write-capable flows remain explicitly Windows Excel COM only. OOXML/package
+parsing is still read-only and is used for pull/query/bootstrap coverage on
+package-readable `.xlsx` and `.xlsm` workbooks.

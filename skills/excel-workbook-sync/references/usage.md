@@ -11,10 +11,14 @@
 - `ooxml`: parse the workbook package directly
 - `com`: drive Excel through PowerShell automation helpers
 
+For the manifest-driven launcher, treat Windows Excel COM as the only
+write-capable backend. Package parsing is read-only even when `auto` falls back
+successfully.
+
 ## Generic audit CLI
 
-This CLI is intended for arbitrary Excel workbooks. Bundled TR assets are only
-fixture coverage for the repo and are not required inputs.
+This CLI is intended for arbitrary Excel workbooks. Bundled fixtures are
+verification assets for the repo and are not required inputs.
 
 ### Pull
 
@@ -49,17 +53,6 @@ python <skills-file-root>/scripts/excel_workbook_sync.py audit `
   --engine auto
 ```
 
-`audit` is generic by default. Workbook-family regression suites are opt-in and
-fixture-specific:
-
-```powershell
-python <skills-file-root>/scripts/excel_workbook_sync.py audit `
-  --workbook path\to\fixture.xlsm `
-  --output-root .local\excel-workbook-sync `
-  --engine auto `
-  --include-regressions
-```
-
 ### Generic output layout
 
 - `normalized.json`
@@ -82,7 +75,8 @@ Audit runs emit:
 
 ## Manifest-driven sync
 
-Use the existing launcher or `sync-excel.ps1` when committed repo artifacts and manifests are the source of truth.
+Use the existing launcher or `sync-excel.ps1` when committed repo artifacts and
+manifests are the source of truth.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-excel.ps1 `
@@ -90,3 +84,14 @@ powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-excel.p
   -WorkbookPath path\to\file.xlsm `
   -Direction pull
 ```
+
+Manifest `query`, `inspect`, and `bootstrap` payloads now include:
+
+- `capabilities`: read/write/backend availability flags
+- `warnings`: fallback and partial-support diagnostics
+- `unsupported`: surfaces the selected backend could not provide
+
+Current generic metadata surfaces available through query/bootstrap or pull
+bundles include tables, names, conditional formatting, formulas,
+data-validation, protection, chart metadata, pivot metadata, Power Query
+metadata, and VBA metadata where the backend supports them.

@@ -27,4 +27,10 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
 - Raw parity preserves the original extraction surfaces.
 - Normalized parity filters clearly internal Excel-generated names such as
   `_xlfn.*`, `_xlpm.*`, and `_xlws.*`.
+- Normalized parity also excludes live VBA accessibility and component-count
+  differences because OOXML only sees package state while COM sees the live
+  VBProject surface.
+- Query/bootstrap payloads should be read alongside backend `capabilities`,
+  `warnings`, and `unsupported` fields instead of assuming COM parity implies
+  write support.
 - `.xls` and `.xlsb` remain COM-dependent.

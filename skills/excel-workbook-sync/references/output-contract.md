@@ -12,6 +12,11 @@ The generic Python CLI writes agent-readable bundles under the requested
 - `workbook_structure/table_mappings.json`
 - `workbook_structure/names.json`
 - `workbook_structure/conditional_formatting.json`
+- `workbook_structure/formulas.json`
+- `workbook_structure/data_validation.json`
+- `workbook_structure/protection.json`
+- `workbook_structure/charts.json`
+- `workbook_structure/pivots.json`
 - `power_query/connections.json`
 - `power_query/queries.json`
 - `power_query/query_files.json`
@@ -28,14 +33,34 @@ The generic Python CLI writes agent-readable bundles under the requested
 
 - `raw`: direct OOXML versus COM comparison
 - `normalized`: the same comparison after filtering clearly internal
-  Excel-generated names
+  Excel-generated names and excluding live VBA accessibility/component counts
+  that OOXML cannot observe
 - `summary`, `mismatches`, and `match`: compatibility aliases for `raw`
 
 The `normalized` section also includes filtered-name diagnostics so the
 discarded names stay reviewable.
 
+Live VBA accessibility and component counts remain under diagnostics in both
+sections. They stay parity-affecting in `raw`, but are excluded from
+`normalized` because OOXML only exposes package-level VBA state while COM
+exposes the live VBProject surface.
+
 VBA binary hashes are reported under diagnostics. Missing COM-side hashes are
 diagnostics, not automatic parity failures.
+
+## Manifest Query / Inspect / Bootstrap
+
+Manifest-driven `query`, `inspect`, and `bootstrap` payloads include:
+
+- `backend`
+- `capabilities`
+- `warnings`
+- `unsupported`
+
+When the workbook is package-readable, query/bootstrap bundles can also include
+read-only metadata for formulas, data-validation, workbook or worksheet
+protection, charts, and pivots. Backends that cannot provide one of those
+surfaces report it under `unsupported`.
 
 ## Audit Output
 
@@ -56,3 +81,7 @@ diagnostics, not automatic parity failures.
 - one copied-workbook audit directory per input workbook
 - `matrix-summary.json`
 - `matrix-summary.md`
+
+The markdown matrix summary reports mutation delta as `changed`,
+`unchanged`, `skipped`, `timed_out`, or a subprocess status instead of a
+pass/fail label.
