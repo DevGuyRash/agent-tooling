@@ -26,6 +26,7 @@ REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
 CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
+INTERNAL_NAME_PREFIXES = ("_xlfn.", "_xlpm.", "_xlws.")
 
 
 def qn(namespace: str, name: str) -> str:
@@ -108,6 +109,10 @@ def rel_target(base: str, target: str) -> str:
 
 def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "workbook"
+
+
+def safe_filename(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-") or "item"
 
 
 def normalize_color(attributes: dict[str, str]) -> str | None:
@@ -594,8 +599,21 @@ def com_extract_succeeded(com_result: dict[str, Any] | None) -> bool:
     return com_extract_status(com_result) == "ok"
 
 
-def run_mutation(workbook_path: Path, report_path: Path, visible: bool = False, timeout_seconds: int = 120) -> dict[str, Any]:
-    arguments = ["-WorkbookPath", str(workbook_path.resolve()), "-ReportPath", str(report_path.resolve())]
+def run_mutation(
+    workbook_path: Path,
+    report_path: Path,
+    visible: bool = False,
+    timeout_seconds: int = 120,
+    scenario_set: str = "full",
+) -> dict[str, Any]:
+    arguments = [
+        "-WorkbookPath",
+        str(workbook_path.resolve()),
+        "-ReportPath",
+        str(report_path.resolve()),
+        "-ScenarioSet",
+        scenario_set,
+    ]
     if visible:
         arguments.append("-Visible")
     try:
@@ -619,6 +637,27 @@ def write_ooxml_snapshot(workbook_path: Path, output_root: Path) -> None:
             target.write_bytes(workbook_zip.read(name))
 
 
+def write_query_files(queries: list[dict[str, Any]], output_root: Path) -> list[str]:
+    query_root = output_root / "power_query" / "queries"
+    ensure_dir(query_root)
+    written: list[str] = []
+    used_names: dict[str, int] = {}
+    for index, query in enumerate(queries, start=1):
+        formula = query.get("formula")
+        if not isinstance(formula, str) or not formula.strip():
+            continue
+        query_name = str(query.get("name") or f"query-{index}")
+        stem = safe_filename(query_name)
+        suffix = used_names.get(stem, 0)
+        used_names[stem] = suffix + 1
+        if suffix:
+            stem = f"{stem}-{suffix + 1}"
+        target = query_root / f"{stem}.pq"
+        target.write_text(formula.rstrip() + "\n", encoding="utf-8")
+        written.append(str(target.relative_to(output_root)).replace("\\", "/"))
+    return written
+
+
 def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workbook_path: Path) -> None:
     ensure_dir(output_root)
     write_json(output_root / "normalized.json", normalized)
@@ -628,6 +667,7 @@ def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workb
     write_json(output_root / "workbook_structure" / "conditional_formatting.json", {"rules": normalized["conditionalFormatting"]})
     write_json(output_root / "power_query" / "connections.json", {"connections": normalized["connections"]})
     write_json(output_root / "power_query" / "queries.json", {"queries": normalized["queries"]})
+    write_json(output_root / "power_query" / "query_files.json", {"files": write_query_files(normalized["queries"], output_root)})
     write_json(
         output_root / "vba" / "vba_project.json",
         {
@@ -691,7 +731,33 @@ def pull_workbook(workbook_path: Path, output_root: Path, engine: str, visible: 
     return merged
 
 
-def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def normalize_name_formula(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def is_internal_name(name_item: dict[str, Any]) -> bool:
+    name = str(name_item.get("name") or "")
+    refers_to = normalize_name_formula(name_item.get("refersTo"))
+    hidden = bool(name_item.get("hidden"))
+    if name.startswith(INTERNAL_NAME_PREFIXES):
+        return True
+    if hidden and refers_to in {"", "=#NAME?", "#NAME?", "=#REF!", "#REF!"}:
+        return True
+    return False
+
+
+def partition_names(names: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    kept: list[dict[str, Any]] = []
+    filtered: list[dict[str, Any]] = []
+    for item in names:
+        if is_internal_name(item):
+            filtered.append(item)
+        else:
+            kept.append(item)
+    return kept, filtered
+
+
+def build_compare_section(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "sheetCount": [len(left.get("sheets", [])), len(right.get("sheets", []))],
         "tableCount": [len(left.get("tables", [])), len(right.get("tables", []))],
@@ -699,16 +765,95 @@ def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
         "conditionalFormattingRuleCount": [len(left.get("conditionalFormatting", [])), len(right.get("conditionalFormatting", []))],
         "connectionCount": [len(left.get("connections", [])), len(right.get("connections", []))],
         "queryCount": [len(left.get("queries", [])), len(right.get("queries", []))],
-        "vbaSha256": [left.get("vba", {}).get("sha256"), right.get("vba", {}).get("sha256")],
+        "vbaAccessible": [bool(left.get("vba", {}).get("accessible")), bool(right.get("vba", {}).get("accessible"))],
+        "vbaComponentCount": [len(left.get("vba", {}).get("components", [])), len(right.get("vba", {}).get("components", []))],
     }
     mismatches = {key: value for key, value in summary.items() if value[0] != value[1]}
+    left_vba_hash = left.get("vba", {}).get("sha256")
+    right_vba_hash = right.get("vba", {}).get("sha256")
+    vba_hash = {
+        "left": left_vba_hash,
+        "right": right_vba_hash,
+        "comparable": bool(left_vba_hash and right_vba_hash),
+    }
+    if left_vba_hash and right_vba_hash:
+        vba_hash["status"] = "match" if left_vba_hash == right_vba_hash else "mismatch"
+        if left_vba_hash != right_vba_hash:
+            mismatches["vbaSha256"] = [left_vba_hash, right_vba_hash]
+    elif left_vba_hash or right_vba_hash:
+        vba_hash["status"] = "unavailable_on_one_side"
+    else:
+        vba_hash["status"] = "unavailable_on_both_sides"
     return {
-        "leftEngine": left.get("engine"),
-        "rightEngine": right.get("engine"),
         "summary": summary,
         "mismatches": mismatches,
         "match": not mismatches,
+        "diagnostics": {
+            "vbaHash": vba_hash,
+        },
     }
+
+
+def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    raw = build_compare_section(left, right)
+    left_normalized = json.loads(json.dumps(left))
+    right_normalized = json.loads(json.dumps(right))
+    left_normalized["names"], left_filtered_names = partition_names(left_normalized.get("names", []))
+    right_normalized["names"], right_filtered_names = partition_names(right_normalized.get("names", []))
+    normalized = build_compare_section(left_normalized, right_normalized)
+    normalized["diagnostics"]["filteredNames"] = {
+        "left": left_filtered_names,
+        "right": right_filtered_names,
+        "leftCount": len(left_filtered_names),
+        "rightCount": len(right_filtered_names),
+    }
+    return {
+        "leftEngine": left.get("engine"),
+        "rightEngine": right.get("engine"),
+        "raw": raw,
+        "normalized": normalized,
+        "summary": raw["summary"],
+        "mismatches": raw["mismatches"],
+        "match": raw["match"],
+    }
+
+
+def compare_workbook(workbook_path: Path, output_root: Path, engine: str, visible: bool = False) -> dict[str, Any]:
+    ensure_dir(output_root)
+    ooxml_result = extract_ooxml(workbook_path)
+    if choose_engine(engine) == "com":
+        com_result = extract_com(workbook_path, output_root=output_root / "com", visible=visible)
+        if com_extract_succeeded(com_result):
+            result = compare_results(ooxml_result, merge_ooxml_and_com(ooxml_result, com_result))
+        else:
+            status = com_extract_status(com_result)
+            result = {
+                "leftEngine": ooxml_result.get("engine"),
+                "rightEngine": "com",
+                "raw": {
+                    "summary": {},
+                    "mismatches": {"comExtraction": ["completed", status]},
+                    "match": False,
+                    "diagnostics": {"vbaHash": {"left": ooxml_result.get("vba", {}).get("sha256"), "right": None, "comparable": False, "status": "unavailable_on_one_side"}},
+                },
+                "normalized": {
+                    "summary": {},
+                    "mismatches": {"comExtraction": ["completed", status]},
+                    "match": False,
+                    "diagnostics": {
+                        "vbaHash": {"left": ooxml_result.get("vba", {}).get("sha256"), "right": None, "comparable": False, "status": "unavailable_on_one_side"},
+                        "filteredNames": {"left": [], "right": [], "leftCount": 0, "rightCount": 0},
+                    },
+                },
+                "summary": {},
+                "mismatches": {"comExtraction": ["completed", status]},
+                "match": False,
+                "comDiagnostics": com_result,
+            }
+    else:
+        result = compare_results(ooxml_result, ooxml_result)
+    write_json(output_root / "compare.json", result)
+    return result
 
 
 def workbook_supports_tr_regressions(extracted: dict[str, Any]) -> bool:
@@ -768,16 +913,28 @@ def audit_workbook(
     engine: str,
     visible: bool = False,
     include_regressions: bool = False,
+    scenario_set: str = "full",
+    run_root: Path | None = None,
 ) -> dict[str, Any]:
-    run_root = output_root / "audits" / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{slugify(workbook_path.stem)}"
+    if run_root is None:
+        run_root = output_root / "audits" / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{slugify(workbook_path.stem)}"
     ensure_dir(run_root)
-    working_copy = run_root / workbook_path.name
+    original_copy_root = run_root / "original-copy"
+    reports_root = run_root / "reports"
+    working_copy = original_copy_root / workbook_path.name
+    ensure_dir(original_copy_root)
+    ensure_dir(reports_root)
     shutil.copy2(workbook_path, working_copy)
 
     baseline_root = run_root / "baseline"
-    mutated_root = run_root / "mutated"
+    mutated_root = run_root / "post-mutation"
     baseline = pull_workbook(working_copy, baseline_root, engine=engine, visible=visible)
-    mutation_report = run_mutation(working_copy, run_root / "mutation-report.json", visible=visible) if excel_available() else {"ran": False}
+    baseline_compare = compare_workbook(working_copy, reports_root / "baseline-compare", engine=engine, visible=visible)
+    mutation_report = (
+        run_mutation(working_copy, reports_root / "mutation-report.json", visible=visible, scenario_set=scenario_set)
+        if excel_available()
+        else {"ran": False, "skipped": True, "reason": "excel_unavailable", "scenarios": []}
+    )
     if mutation_report.get("timedOut"):
         mutated = baseline
         delta = {
@@ -787,8 +944,23 @@ def audit_workbook(
             "mismatches": {"mutation": ["completed", "timed_out"]},
             "summary": {},
         }
+        post_mutation_compare = {
+            "leftEngine": baseline.get("engine"),
+            "rightEngine": baseline.get("engine"),
+            "raw": {"summary": {}, "mismatches": {"mutation": ["completed", "timed_out"]}, "match": False, "diagnostics": {}},
+            "normalized": {
+                "summary": {},
+                "mismatches": {"mutation": ["completed", "timed_out"]},
+                "match": False,
+                "diagnostics": {"filteredNames": {"left": [], "right": [], "leftCount": 0, "rightCount": 0}},
+            },
+            "summary": {},
+            "mismatches": {"mutation": ["completed", "timed_out"]},
+            "match": False,
+        }
     else:
         mutated = pull_workbook(working_copy, mutated_root, engine=engine, visible=visible)
+        post_mutation_compare = compare_workbook(working_copy, reports_root / "post-mutation-compare", engine=engine, visible=visible)
         delta = compare_results(baseline, mutated)
     regressions = (
         run_tr_regressions(working_copy)
@@ -801,14 +973,89 @@ def audit_workbook(
         "engine": choose_engine(engine),
         "baselineRoot": str(baseline_root),
         "mutatedRoot": str(mutated_root),
+        "reportsRoot": str(reports_root),
         "baselineComStatus": baseline.get("comDiagnostics", {}).get("status", "not_attempted"),
         "mutatedComStatus": mutated.get("comDiagnostics", {}).get("status", "not_attempted"),
+        "scenarioSet": scenario_set,
+        "baselineCompare": baseline_compare,
+        "postMutationCompare": post_mutation_compare,
         "mutationReport": mutation_report,
         "delta": delta,
         "regressions": regressions,
     }
-    write_json(run_root / "report.json", report)
+    write_json(reports_root / "report.json", report)
     return report
+
+
+def render_matrix_summary(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Excel Workbook Sync Matrix Audit",
+        "",
+        f"- Generated: {summary['generatedAt']}",
+        f"- Engine: {summary['engine']}",
+        f"- Workbooks: {len(summary['workbooks'])}",
+        "",
+        "| Workbook | Raw Compare | Normalized Compare | Delta | Scenarios |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for workbook in summary["workbooks"]:
+        lines.append(
+            "| {name} | {raw} | {normalized} | {delta} | {scenarios} |".format(
+                name=workbook["workbookName"],
+                raw="pass" if workbook["baselineRawMatch"] else "fail",
+                normalized="pass" if workbook["baselineNormalizedMatch"] else "fail",
+                delta="pass" if workbook["deltaMatch"] else "fail",
+                scenarios=workbook["scenarioCount"],
+            )
+        )
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def matrix_audit_workbooks(
+    workbook_paths: list[Path],
+    output_root: Path,
+    engine: str,
+    visible: bool = False,
+    include_regressions: bool = False,
+    scenario_set: str = "full",
+) -> dict[str, Any]:
+    run_root = output_root / f"matrix-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    ensure_dir(run_root)
+    reports = []
+    for index, workbook_path in enumerate(workbook_paths, start=1):
+        workbook_root = run_root / f"{index:02d}-{slugify(workbook_path.stem)}"
+        report = audit_workbook(
+            workbook_path,
+            output_root,
+            engine,
+            visible=visible,
+            include_regressions=include_regressions,
+            scenario_set=scenario_set,
+            run_root=workbook_root,
+        )
+        reports.append(
+            {
+                "workbook": str(workbook_path),
+                "workbookName": workbook_path.name,
+                "reportPath": str(workbook_root / "reports" / "report.json"),
+                "baselineRawMatch": report["baselineCompare"]["raw"]["match"],
+                "baselineNormalizedMatch": report["baselineCompare"]["normalized"]["match"],
+                "postMutationRawMatch": report["postMutationCompare"]["raw"]["match"],
+                "postMutationNormalizedMatch": report["postMutationCompare"]["normalized"]["match"],
+                "deltaMatch": report["delta"]["match"],
+                "scenarioCount": len(report["mutationReport"].get("scenarios", [])),
+            }
+        )
+    summary = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "engine": choose_engine(engine),
+        "runRoot": str(run_root),
+        "workbooks": reports,
+    }
+    write_json(run_root / "matrix-summary.json", summary)
+    (run_root / "matrix-summary.md").write_text(render_matrix_summary(summary), encoding="utf-8")
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -832,6 +1079,15 @@ def parse_args() -> argparse.Namespace:
     add_common(audit_parser)
     audit_parser.add_argument("--output-root", required=True, type=Path)
     audit_parser.add_argument("--include-regressions", action="store_true")
+    audit_parser.add_argument("--scenario-set", choices=["full"], default="full")
+
+    matrix_parser = subparsers.add_parser("matrix-audit")
+    matrix_parser.add_argument("--workbook", required=True, action="append", type=Path)
+    matrix_parser.add_argument("--output-root", required=True, type=Path)
+    matrix_parser.add_argument("--engine", choices=["auto", "ooxml", "com"], default="auto")
+    matrix_parser.add_argument("--visible", action="store_true")
+    matrix_parser.add_argument("--include-regressions", action="store_true")
+    matrix_parser.add_argument("--scenario-set", choices=["full"], default="full")
 
     return parser.parse_args()
 
@@ -841,24 +1097,7 @@ def main() -> int:
     if args.command == "pull":
         result = pull_workbook(args.workbook, args.output_root, args.engine, visible=args.visible)
     elif args.command == "compare":
-        ooxml_result = extract_ooxml(args.workbook)
-        if choose_engine(args.engine) == "com":
-            com_result = extract_com(args.workbook, output_root=args.output_root / "com", visible=args.visible)
-            if com_extract_succeeded(com_result):
-                result = compare_results(ooxml_result, merge_ooxml_and_com(ooxml_result, com_result))
-            else:
-                status = com_extract_status(com_result)
-                result = {
-                    "leftEngine": ooxml_result.get("engine"),
-                    "rightEngine": "com",
-                    "summary": {},
-                    "mismatches": {"comExtraction": ["completed", status]},
-                    "match": False,
-                    "comDiagnostics": com_result,
-                }
-        else:
-            result = compare_results(ooxml_result, ooxml_result)
-        write_json(args.output_root / "compare.json", result)
+        result = compare_workbook(args.workbook, args.output_root, args.engine, visible=args.visible)
     elif args.command == "audit":
         result = audit_workbook(
             args.workbook,
@@ -866,6 +1105,16 @@ def main() -> int:
             args.engine,
             visible=args.visible,
             include_regressions=args.include_regressions,
+            scenario_set=args.scenario_set,
+        )
+    elif args.command == "matrix-audit":
+        result = matrix_audit_workbooks(
+            args.workbook,
+            args.output_root,
+            args.engine,
+            visible=args.visible,
+            include_regressions=args.include_regressions,
+            scenario_set=args.scenario_set,
         )
     else:
         raise AssertionError(f"unsupported command: {args.command}")

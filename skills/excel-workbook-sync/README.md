@@ -1,24 +1,36 @@
 # Excel Workbook Sync
 
-Excel workbook sync tooling for `.xlsx` and `.xlsm` files.
+Excel workbook sync tooling across two surfaces:
 
-This skill now has two complementary surfaces:
+- `scripts/excel-workbook-sync`: manifest-driven inspect/query/bootstrap/push/pull/roundtrip/refresh
+- `scripts/excel_workbook_sync.py`: generic workbook pull/compare/audit/matrix-audit on safe copies
 
-- `scripts/excel-workbook-sync`: the existing manifest-driven sync surface for push, pull, roundtrip, refresh, and bootstrap flows
-- `scripts/excel_workbook_sync.py`: a portable audit and extraction surface for generic workbook pull, compare, and mutation-based audit work
+The generic Python surface is workbook-agnostic. Fixture assets under
+`tests/fixtures/` are verification-only and do not define the public skill
+contract.
 
-The generic Python surface is workbook-agnostic. The bundled TR fixture and its
-regression scripts are repo-local verification assets, not part of the
-distributed skill contract.
-
-Use the Python CLI for generic inspection and audit work:
+## Generic Audit Commands
 
 ```powershell
-python skills/excel-workbook-sync/scripts/excel_workbook_sync.py --help
+python <skills-file-root>/scripts/excel_workbook_sync.py pull --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync\pull --engine auto
+python <skills-file-root>/scripts/excel_workbook_sync.py compare --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync\compare --engine auto
+python <skills-file-root>/scripts/excel_workbook_sync.py audit --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync --engine auto --scenario-set full
+python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook path\to\file1.xlsm --workbook path\to\file2.xlsx --output-root .local\excel-workbook-sync --engine auto --scenario-set full
 ```
 
-Use the launcher or PowerShell sync scripts when repo artifacts and workbook manifests are the source of truth:
+The generic audit output writes:
+
+- workbook structure artifacts including `table_mappings.json`
+- Power Query metadata plus per-query `.pq` files when formulas are available
+- raw and normalized parity reports
+- mutation reports for copied workbooks
+- aggregate matrix summaries for multi-workbook audits
+
+## Manifest-Driven Commands
 
 ```powershell
-sh skills/excel-workbook-sync/scripts/excel-workbook-sync --help
+sh <skills-file-root>/scripts/excel-workbook-sync --help
 ```
+
+Use the manifest-driven surface when repo artifacts and a committed
+`excel-sync.manifest.json` are the source of truth.

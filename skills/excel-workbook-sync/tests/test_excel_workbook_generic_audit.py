@@ -43,6 +43,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             self.assertTrue((output_root / "workbook_structure" / "tables.json").exists())
             self.assertTrue((output_root / "power_query" / "connections.json").exists())
             self.assertTrue((output_root / "power_query" / "data_mashup.xml").exists())
+            self.assertTrue((output_root / "power_query" / "queries" / "Matched.pq").exists())
+            self.assertTrue((output_root / "power_query" / "query_files.json").exists())
             self.assertTrue((output_root / "vba" / "vbaProject.bin").exists())
             self.assertTrue((output_root / "ooxml-parts" / "xl" / "workbook.xml").exists())
 
@@ -80,6 +82,50 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
         self.assertEqual(merged["comDiagnostics"]["status"], "failed")
         self.assertGreaterEqual(len(merged["tables"]), 8)
 
+    def test_compare_results_keeps_raw_and_adds_normalized_sections(self) -> None:
+        left = {
+            "engine": "ooxml",
+            "sheets": [{}],
+            "tables": [{}],
+            "names": [
+                {"name": "UserName", "hidden": False, "refersTo": "=Sheet1!$A$1"},
+                {"name": "_xlpm.internal_only", "hidden": True, "refersTo": "=#NAME?"},
+            ],
+            "conditionalFormatting": [],
+            "connections": [],
+            "queries": [],
+            "vba": {"accessible": False, "components": [], "sha256": "abc"},
+        }
+        right = {
+            "engine": "com",
+            "sheets": [{}],
+            "tables": [{}],
+            "names": [
+                {"name": "UserName", "hidden": False, "refersTo": "=Sheet1!$A$1"},
+            ],
+            "conditionalFormatting": [],
+            "connections": [],
+            "queries": [],
+            "vba": {"accessible": False, "components": [], "sha256": None},
+        }
+
+        result = self.module.compare_results(left, right)
+
+        self.assertFalse(result["raw"]["match"])
+        self.assertEqual(result["raw"]["mismatches"]["nameCount"], [2, 1])
+        self.assertTrue(result["normalized"]["match"])
+        self.assertEqual(result["normalized"]["diagnostics"]["filteredNames"]["leftCount"], 1)
+        self.assertEqual(result["summary"], result["raw"]["summary"])
+        self.assertEqual(result["mismatches"], result["raw"]["mismatches"])
+        self.assertEqual(result["raw"]["diagnostics"]["vbaHash"]["status"], "unavailable_on_one_side")
+
+    def test_compare_workbook_writes_rich_compare_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            result = self.module.compare_workbook(FIXTURE, output_root, engine="ooxml", visible=False)
+            self.assertTrue(result["raw"]["match"])
+            self.assertTrue((output_root / "compare.json").exists())
+
     def test_snapshot_parts_roundtrip_via_repull(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -90,6 +136,25 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             self.assertEqual(len(baseline["tables"]), len(repulled["tables"]))
             self.assertEqual(len(baseline["names"]), len(repulled["names"]))
             self.assertTrue(repulled["vba"]["present"])
+
+    def test_matrix_audit_writes_summary_for_copied_workbooks(self) -> None:
+        original_run_mutation = self.module.run_mutation
+        try:
+            self.module.run_mutation = lambda *args, **kwargs: {
+                "ran": False,
+                "skipped": True,
+                "reason": "unit-test",
+                "scenarios": [{"name": "unit-test-skip", "status": "skipped"}],
+            }
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_root = Path(temp_dir)
+                result = self.module.matrix_audit_workbooks([FIXTURE], output_root, engine="ooxml", visible=False)
+                self.assertEqual(len(result["workbooks"]), 1)
+                self.assertTrue((Path(result["runRoot"]) / "matrix-summary.json").exists())
+                self.assertTrue((Path(result["runRoot"]) / "matrix-summary.md").exists())
+                self.assertEqual(result["workbooks"][0]["scenarioCount"], 1)
+        finally:
+            self.module.run_mutation = original_run_mutation
 
     @unittest.skipUnless(load_module().excel_available(), "Excel COM not available")
     def test_com_extract_recovers_live_vba_and_queries(self) -> None:

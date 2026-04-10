@@ -227,6 +227,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
 class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_expected_files_exist(self) -> None:
         self.assertTrue((ROOT / "SKILL.md").exists())
+        self.assertTrue((ROOT / "README.md").exists())
         self.assertTrue(OPENAI_YAML.exists())
         self.assertTrue(POSIX.exists())
         self.assertTrue(CMD.exists())
@@ -234,11 +235,15 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue(FIXTURE_MANIFEST.exists())
         self.assertTrue(COMMON.exists())
         self.assertTrue(POWERQUERY.exists())
+        self.assertTrue((ROOT / "references" / "protocol-audit.md").exists())
+        self.assertTrue((ROOT / "references" / "protocol-manifest-sync.md").exists())
+        self.assertTrue((ROOT / "references" / "output-contract.md").exists())
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
         self.assertTrue(content.startswith("interface:\n"))
         self.assertNotIn("metadata:", content)
+        self.assertIn("matrix-audit", content)
 
     def test_fixture_manifest_exercises_richer_surfaces(self) -> None:
         manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
@@ -751,6 +756,16 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("Usage:", proc.stdout)
         self.assertNotIn("parameter cannot be found that matches parameter name '-help'", (proc.stdout + proc.stderr).lower())
+
+    def test_python_cli_help_mentions_matrix_audit(self) -> None:
+        proc = subprocess.run(
+            ["python", str(ROOT / "scripts" / "excel_workbook_sync.py"), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("matrix-audit", proc.stdout)
 
     def test_posix_launcher_rejects_unknown_subcommand(self) -> None:
         proc = subprocess.run(

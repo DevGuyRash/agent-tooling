@@ -1,12 +1,20 @@
 # Testing
 
-This skill ships a committed workbook fixture under `<skills-file-root>/tests/fixtures/`.
+This skill ships one committed workbook fixture under
+`<skills-file-root>/tests/fixtures/`.
 
-Use it for:
+Use the fixture for:
 
 - launcher smoke checks
-- inspect/query shape validation
-- sync smoke flows on a temp workbook copy
+- inspect and query shape validation
+- portable pull and compare tests
+- live Excel tests on temp copies when COM validation is required
 
-Use `excel-workbook-testing` when the task is validating workbook behavior,
-formula outputs, VBA-triggered business rules, or user-facing regressions.
+Use external workbooks only in local audit runs, not in committed tests.
+
+Use `matrix-audit` when the task is validating copied workbook mutations across
+multiple workbook families and you want one aggregate report root.
+
+Use workbook-family-specific regression scripts only when the task explicitly
+targets that workbook family. They are opt-in validation layers, not part of
+the generic audit default.

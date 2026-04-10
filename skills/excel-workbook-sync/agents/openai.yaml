@@ -1,4 +1,4 @@
 interface:
   display_name: "Excel Workbook Sync"
-  short_description: "Inspect, query, and sync Excel workbook artifacts across Windows and WSL"
-  default_prompt: "Use $excel-workbook-sync to inspect, query, parse, and sync Excel workbook artifacts, including VBA project components, tables, Name Manager items, and major conditional-format rule families. Support Windows directly and WSL/POSIX shells through a Windows PowerShell bridge with idempotent push/pull/roundtrip behavior."
+  short_description: "Pull, compare, audit, and sync Excel workbook artifacts on safe copies or manifest workspaces"
+  default_prompt: "Use $excel-workbook-sync when you need workbook-agnostic pull, compare, audit, or matrix-audit flows on copied `.xlsx` or `.xlsm` files, or manifest-driven inspect/query/push/pull/roundtrip/refresh flows from a committed Excel sync workspace. Extract tables, names, conditional formatting, Power Query metadata, and VBA metadata; compare raw and normalized OOXML versus COM parity; and keep fixture-specific regressions opt-in instead of treating them as the generic contract."
