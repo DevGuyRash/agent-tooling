@@ -19,6 +19,9 @@ NS = {
     "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "pkgrel": "http://schemas.openxmlformats.org/package/2006/relationships",
     "custom": "http://schemas.openxmlformats.org/officeDocument/2006/customXml",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
 }
 
 SUPPORTED_CF_TYPES = {
@@ -87,6 +90,12 @@ def _normalize_rel_target(base_path: str, target: str) -> str:
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|]+', "_", name).strip()
     return cleaned or "query"
+
+
+def _parse_bool_attr(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return value in {"1", "true", "True"}
 
 
 class WorkbookPackage:
@@ -247,6 +256,107 @@ class WorkbookPackage:
                         value = ""
                 cells[_cell_ref_to_row_col(cell_ref)] = self._convert_scalar(value, cell_type, style_id)
         return cells
+
+    def parse_formulas(self) -> list[dict[str, Any]]:
+        formulas: list[dict[str, Any]] = []
+        for sheet in self.sheets:
+            root = self._read_xml(sheet["path"])
+            sheet_data = root.find("main:sheetData", NS)
+            if sheet_data is None:
+                continue
+            for row in sheet_data.findall("main:row", NS):
+                for cell in row.findall("main:c", NS):
+                    formula_node = cell.find("main:f", NS)
+                    if formula_node is None:
+                        continue
+                    cell_ref = cell.attrib.get("r", "")
+                    cell_type = cell.attrib.get("t")
+                    style_id = None
+                    if "s" in cell.attrib:
+                        try:
+                            style_id = int(cell.attrib["s"])
+                        except ValueError:
+                            style_id = None
+                    value_node = cell.find("main:v", NS)
+                    value = self._convert_scalar(value_node.text or "", cell_type, style_id) if value_node is not None else None
+                    formulas.append(
+                        {
+                            "sheet": sheet["name"],
+                            "address": cell_ref,
+                            "formula": formula_node.text or "",
+                            "value": value,
+                            "kind": formula_node.attrib.get("t", "normal"),
+                            "reference": formula_node.attrib.get("ref"),
+                        }
+                    )
+        return sorted(formulas, key=lambda entry: (entry["sheet"], entry["address"]))
+
+    def parse_data_validation(self) -> list[dict[str, Any]]:
+        rules: list[dict[str, Any]] = []
+        for sheet in self.sheets:
+            root = self._read_xml(sheet["path"])
+            validations = root.find("main:dataValidations", NS)
+            if validations is None:
+                continue
+            for index, validation in enumerate(validations.findall("main:dataValidation", NS), start=1):
+                rules.append(
+                    {
+                        "id": f"DV-{sheet['name']}-{index:03d}",
+                        "sheet": sheet["name"],
+                        "address": (validation.attrib.get("sqref", "") or "").replace(" ", ","),
+                        "type": validation.attrib.get("type", "any"),
+                        "operator": validation.attrib.get("operator"),
+                        "allowBlank": _parse_bool_attr(validation.attrib.get("allowBlank")),
+                        "showInputMessage": _parse_bool_attr(validation.attrib.get("showInputMessage")),
+                        "showErrorMessage": _parse_bool_attr(validation.attrib.get("showErrorMessage")),
+                        "errorStyle": validation.attrib.get("errorStyle"),
+                        "formula1": (validation.findtext("main:formula1", default="", namespaces=NS) or None),
+                        "formula2": (validation.findtext("main:formula2", default="", namespaces=NS) or None),
+                    }
+                )
+        return sorted(rules, key=lambda entry: (entry["sheet"], entry["address"], entry["id"]))
+
+    def parse_protection(self) -> dict[str, Any]:
+        workbook_protection = None
+        workbook_node = self.workbook_xml.find("main:workbookProtection", NS)
+        if workbook_node is not None:
+            workbook_protection = {
+                "lockStructure": _parse_bool_attr(workbook_node.attrib.get("lockStructure")),
+                "lockWindows": _parse_bool_attr(workbook_node.attrib.get("lockWindows")),
+                "lockRevision": _parse_bool_attr(workbook_node.attrib.get("lockRevision")),
+            }
+
+        worksheets: list[dict[str, Any]] = []
+        for sheet in self.sheets:
+            root = self._read_xml(sheet["path"])
+            protection_node = root.find("main:sheetProtection", NS)
+            if protection_node is None:
+                continue
+            worksheets.append(
+                {
+                    "sheet": sheet["name"],
+                    "enabled": _parse_bool_attr(protection_node.attrib.get("sheet")),
+                    "objects": _parse_bool_attr(protection_node.attrib.get("objects")),
+                    "scenarios": _parse_bool_attr(protection_node.attrib.get("scenarios")),
+                    "formatCells": _parse_bool_attr(protection_node.attrib.get("formatCells")),
+                    "formatColumns": _parse_bool_attr(protection_node.attrib.get("formatColumns")),
+                    "formatRows": _parse_bool_attr(protection_node.attrib.get("formatRows")),
+                    "insertColumns": _parse_bool_attr(protection_node.attrib.get("insertColumns")),
+                    "insertRows": _parse_bool_attr(protection_node.attrib.get("insertRows")),
+                    "insertHyperlinks": _parse_bool_attr(protection_node.attrib.get("insertHyperlinks")),
+                    "deleteColumns": _parse_bool_attr(protection_node.attrib.get("deleteColumns")),
+                    "deleteRows": _parse_bool_attr(protection_node.attrib.get("deleteRows")),
+                    "selectLockedCells": _parse_bool_attr(protection_node.attrib.get("selectLockedCells")),
+                    "sort": _parse_bool_attr(protection_node.attrib.get("sort")),
+                    "autoFilter": _parse_bool_attr(protection_node.attrib.get("autoFilter")),
+                    "pivotTables": _parse_bool_attr(protection_node.attrib.get("pivotTables")),
+                    "selectUnlockedCells": _parse_bool_attr(protection_node.attrib.get("selectUnlockedCells")),
+                }
+            )
+        return {
+            "workbook": workbook_protection,
+            "worksheets": sorted(worksheets, key=lambda entry: entry["sheet"]),
+        }
 
     def _resolve_table_query_loads(self) -> dict[str, list[dict[str, Any]]]:
         loads: dict[str, list[dict[str, Any]]] = {}
@@ -572,6 +682,8 @@ def normalize_surfaces(surface_text: str | None) -> list[str]:
         "conditional_formatting": "cf",
         "power-query": "pq",
         "power_query": "pq",
+        "data_validation": "data-validation",
+        "datavalidation": "data-validation",
     }
     normalized = []
     for item in surface_text.split(","):
@@ -593,11 +705,29 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             "normalization": "none",
             "warnings": [],
             "stagesTried": ["package"],
+            "capabilities": {
+                "excelCom": False,
+                "packageReadable": True,
+                "canRead": True,
+                "canWrite": False,
+                "writeBackend": None,
+                "refreshAwait": False,
+                "powerQueryWrite": False,
+                "vbaProjectAccess": False,
+                "workbookReadOnly": None,
+            },
+            "unsupported": [],
         }
         if not surfaces or "tables" in surfaces:
             payload["tables"] = package.parse_tables()
         if not surfaces or "names" in surfaces:
             payload["names"] = package.parse_names()
+        if not surfaces or "formulas" in surfaces:
+            payload["formulas"] = package.parse_formulas()
+        if not surfaces or "data-validation" in surfaces:
+            payload["dataValidation"] = package.parse_data_validation()
+        if not surfaces or "protection" in surfaces:
+            payload["protection"] = package.parse_protection()
         pq_info = None
         if not surfaces or {"pq", "connections", "model"} & set(surfaces):
             pq_info = package.parse_power_query()
@@ -610,6 +740,31 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
                 payload["connections"] = pq_info["connections"]
             if not surfaces or "model" in surfaces:
                 payload["model"] = {"modelTables": pq_info["modelTables"]}
+        requested_surfaces = set(surfaces) if surfaces else {
+            "tables",
+            "names",
+            "cf",
+            "pq",
+            "connections",
+            "model",
+            "formulas",
+            "data-validation",
+            "protection",
+            "charts",
+            "pivots",
+            "vba",
+            "project",
+            "references",
+        }
+        for surface, reason in (
+            ("charts", "Package backend does not yet parse chart metadata."),
+            ("pivots", "Package backend does not yet parse pivot metadata."),
+            ("vba", "Package backend cannot inspect live VBA components."),
+            ("project", "Package backend cannot inspect VBA project metadata."),
+            ("references", "Package backend cannot inspect VBA references."),
+        ):
+            if surface in requested_surfaces:
+                payload["unsupported"].append({"surface": surface, "backend": "package", "reason": reason})
         return payload
     finally:
         package.close()
@@ -618,6 +773,7 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
 def build_inspection_payload(query_payload: dict[str, Any]) -> dict[str, Any]:
     cf = query_payload.get("cf", [])
     model = query_payload.get("model", {}) or {}
+    protection = query_payload.get("protection") or {}
     inspection = {
         "workbookPath": query_payload["workbookPath"],
         "backend": query_payload["backend"],
@@ -626,6 +782,8 @@ def build_inspection_payload(query_payload: dict[str, Any]) -> dict[str, Any]:
         "normalization": query_payload["normalization"],
         "warnings": query_payload.get("warnings", []),
         "stagesTried": query_payload.get("stagesTried", []),
+        "capabilities": query_payload.get("capabilities", {}),
+        "unsupported": query_payload.get("unsupported", []),
         "counts": {
             "tables": len(query_payload.get("tables", [])),
             "names": len(query_payload.get("names", [])),
@@ -635,6 +793,10 @@ def build_inspection_payload(query_payload: dict[str, Any]) -> dict[str, Any]:
             "modelTables": len(model.get("modelTables", [])),
             "vba": len(query_payload.get("vba", [])),
             "references": len(query_payload.get("references", [])),
+            "formulas": len(query_payload.get("formulas", [])),
+            "dataValidation": len(query_payload.get("dataValidation", [])),
+            "protectedSheets": len(protection.get("worksheets", [])),
+            "workbookProtection": 1 if protection.get("workbook") else 0,
         },
         "project": query_payload.get("project"),
         "supportedCfTypes": sorted({rule["type"] for rule in cf if rule.get("supported")}),
@@ -666,6 +828,11 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
     _write_json(structure_dir / "tables.json", {"tables": query_payload.get("tables", [])})
     _write_json(structure_dir / "names.json", {"names": query_payload.get("names", [])})
     _write_json(structure_dir / "conditional_formatting.json", {"rules": query_payload.get("cf", [])})
+    _write_json(structure_dir / "formulas.json", {"formulas": query_payload.get("formulas", [])})
+    _write_json(structure_dir / "data_validation.json", {"rules": query_payload.get("dataValidation", [])})
+    _write_json(structure_dir / "protection.json", query_payload.get("protection", {"workbook": None, "worksheets": []}))
+    _write_json(structure_dir / "charts.json", {"charts": query_payload.get("charts", [])})
+    _write_json(structure_dir / "pivots.json", {"pivots": query_payload.get("pivots", [])})
     manifest: dict[str, Any] = {
         "workbookPath": _relative_or_absolute(manifest_path.parent, workbook_path),
         "vbaComponents": [],
@@ -673,6 +840,11 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
             "tablesPath": str(PurePosixPath("workbook_structure/tables.json")),
             "namesPath": str(PurePosixPath("workbook_structure/names.json")),
             "conditionalFormattingPath": str(PurePosixPath("workbook_structure/conditional_formatting.json")),
+            "formulasPath": str(PurePosixPath("workbook_structure/formulas.json")),
+            "dataValidationPath": str(PurePosixPath("workbook_structure/data_validation.json")),
+            "protectionPath": str(PurePosixPath("workbook_structure/protection.json")),
+            "chartsPath": str(PurePosixPath("workbook_structure/charts.json")),
+            "pivotsPath": str(PurePosixPath("workbook_structure/pivots.json")),
             "tablesDiscovery": {"mode": "all"},
             "namesDiscovery": {"mode": "all", "excludeBuiltIn": True},
             "conditionalFormattingDiscovery": {"mode": "all-major"},
@@ -725,6 +897,8 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
         "workbookPath": str(workbook_path.resolve()),
         "warnings": query_payload.get("warnings", []),
         "stagesTried": query_payload.get("stagesTried", []),
+        "capabilities": query_payload.get("capabilities", {}),
+        "unsupported": query_payload.get("unsupported", []),
     }
 
 

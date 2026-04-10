@@ -346,6 +346,11 @@ function Resolve-ExcelSyncManifest {
         TablesPath = $null
         NamesPath = $null
         ConditionalFormattingPath = $null
+        FormulasPath = $null
+        DataValidationPath = $null
+        ProtectionPath = $null
+        ChartsPath = $null
+        PivotsPath = $null
         TablesDiscovery = $null
         NamesDiscovery = $null
         ConditionalFormattingDiscovery = $null
@@ -360,6 +365,21 @@ function Resolve-ExcelSyncManifest {
         }
         if ($null -ne $structure.PSObject.Properties['conditionalFormattingPath'] -and $null -ne $structure.conditionalFormattingPath) {
             $resolvedStructure.ConditionalFormattingPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.conditionalFormattingPath)
+        }
+        if ($null -ne $structure.PSObject.Properties['formulasPath'] -and $null -ne $structure.formulasPath) {
+            $resolvedStructure.FormulasPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.formulasPath)
+        }
+        if ($null -ne $structure.PSObject.Properties['dataValidationPath'] -and $null -ne $structure.dataValidationPath) {
+            $resolvedStructure.DataValidationPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.dataValidationPath)
+        }
+        if ($null -ne $structure.PSObject.Properties['protectionPath'] -and $null -ne $structure.protectionPath) {
+            $resolvedStructure.ProtectionPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.protectionPath)
+        }
+        if ($null -ne $structure.PSObject.Properties['chartsPath'] -and $null -ne $structure.chartsPath) {
+            $resolvedStructure.ChartsPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.chartsPath)
+        }
+        if ($null -ne $structure.PSObject.Properties['pivotsPath'] -and $null -ne $structure.pivotsPath) {
+            $resolvedStructure.PivotsPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.pivotsPath)
         }
         if ($null -ne $structure.PSObject.Properties['tablesDiscovery'] -and $null -ne $structure.tablesDiscovery) {
             $resolvedStructure.TablesDiscovery = $structure.tablesDiscovery
@@ -457,7 +477,7 @@ function Open-ExcelWorkbook {
     [void](Try-SetProperty -Target $excel -Name 'ScreenUpdating' -Value $false)
     [void](Try-SetProperty -Target $excel -Name 'EnableEvents' -Value $false)
     [void](Try-SetProperty -Target $excel -Name 'AskToUpdateLinks' -Value $false)
-    [void](Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value 3)
+    $automationSecurityChanged = Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value 3
 
     try {
         $workbook = Invoke-ExcelComWithRetry -Description "Opening workbook" -MaxAttempts 20 -DelayMilliseconds 500 -Operation {
@@ -477,7 +497,19 @@ function Open-ExcelWorkbook {
                 )
             }
             catch {
-                return $excel.Workbooks.Open($WorkbookPath)
+                return $excel.Workbooks.Open(
+                    $WorkbookPath,
+                    0,
+                    $false,
+                    $null,
+                    $null,
+                    $null,
+                    $true,
+                    $null,
+                    $null,
+                    $false,
+                    $false
+                )
             }
         }
     }
@@ -493,6 +525,11 @@ function Open-ExcelWorkbook {
             [gc]::WaitForPendingFinalizers()
         }
         throw
+    }
+    finally {
+        if ($automationSecurityChanged -and $null -ne $state.AutomationSecurity) {
+            [void](Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value $state.AutomationSecurity)
+        }
     }
 
     if ($null -eq $workbook) {
@@ -515,7 +552,40 @@ function Open-ExcelWorkbook {
         Excel = $excel
         Workbook = $workbook
         State = [pscustomobject]$state
+        ReadOnly = $(try { [bool]$workbook.ReadOnly } catch { $null })
     }
+}
+
+function New-UnsupportedSurfaceEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Surface,
+        [Parameter(Mandatory = $true)]
+        [string]$Backend,
+        [Parameter(Mandatory = $true)]
+        [string]$Reason
+    )
+
+    return [pscustomobject]@{
+        surface = $Surface
+        backend = $Backend
+        reason = $Reason
+    }
+}
+
+function Add-UnsupportedSurface {
+    param(
+        [Parameter(Mandatory = $true)]
+        $List,
+        [Parameter(Mandatory = $true)]
+        [string]$Surface,
+        [Parameter(Mandatory = $true)]
+        [string]$Backend,
+        [Parameter(Mandatory = $true)]
+        [string]$Reason
+    )
+
+    $List.Add((New-UnsupportedSurfaceEntry -Surface $Surface -Backend $Backend -Reason $Reason)) | Out-Null
 }
 
 function Close-ExcelWorkbook {
@@ -962,6 +1032,8 @@ function Get-NormalizedSurfaceNames {
         'conditional_formatting' = 'cf'
         'power-query' = 'pq'
         'power_query' = 'pq'
+        'data_validation' = 'data-validation'
+        'datavalidation' = 'data-validation'
     }
 
     return @(
@@ -1101,10 +1173,20 @@ function Write-ExcelWorkbookBootstrapArtifacts {
     $tablesPath = Join-Path $structureRoot 'tables.json'
     $namesPath = Join-Path $structureRoot 'names.json'
     $cfPath = Join-Path $structureRoot 'conditional_formatting.json'
+    $formulasPath = Join-Path $structureRoot 'formulas.json'
+    $dataValidationPath = Join-Path $structureRoot 'data_validation.json'
+    $protectionPath = Join-Path $structureRoot 'protection.json'
+    $chartsPath = Join-Path $structureRoot 'charts.json'
+    $pivotsPath = Join-Path $structureRoot 'pivots.json'
 
     Write-JsonFile -Path $tablesPath -Value ([pscustomobject]@{ tables = @($QueryPayload.tables) })
     Write-JsonFile -Path $namesPath -Value ([pscustomobject]@{ names = @($QueryPayload.names) })
     Write-JsonFile -Path $cfPath -Value ([pscustomobject]@{ rules = @($QueryPayload.cf) })
+    Write-JsonFile -Path $formulasPath -Value ([pscustomobject]@{ formulas = if ($null -ne $QueryPayload.PSObject.Properties['formulas']) { @($QueryPayload.formulas) } else { @() } })
+    Write-JsonFile -Path $dataValidationPath -Value ([pscustomobject]@{ rules = if ($null -ne $QueryPayload.PSObject.Properties['dataValidation']) { @($QueryPayload.dataValidation) } else { @() } })
+    Write-JsonFile -Path $protectionPath -Value ($(if ($null -ne $QueryPayload.PSObject.Properties['protection']) { $QueryPayload.protection } else { [pscustomobject]@{ workbook = $null; worksheets = @() } }))
+    Write-JsonFile -Path $chartsPath -Value ([pscustomobject]@{ charts = if ($null -ne $QueryPayload.PSObject.Properties['charts']) { @($QueryPayload.charts) } else { @() } })
+    Write-JsonFile -Path $pivotsPath -Value ([pscustomobject]@{ pivots = if ($null -ne $QueryPayload.PSObject.Properties['pivots']) { @($QueryPayload.pivots) } else { @() } })
 
     $manifest = [ordered]@{
         workbookPath = Get-ManifestRelativeWorkbookPath -ManifestDirectory $manifestDirectory -WorkbookPath $WorkbookPath
@@ -1113,6 +1195,11 @@ function Write-ExcelWorkbookBootstrapArtifacts {
             tablesPath = 'workbook_structure/tables.json'
             namesPath = 'workbook_structure/names.json'
             conditionalFormattingPath = 'workbook_structure/conditional_formatting.json'
+            formulasPath = 'workbook_structure/formulas.json'
+            dataValidationPath = 'workbook_structure/data_validation.json'
+            protectionPath = 'workbook_structure/protection.json'
+            chartsPath = 'workbook_structure/charts.json'
+            pivotsPath = 'workbook_structure/pivots.json'
             tablesDiscovery = [ordered]@{ mode = 'all' }
             namesDiscovery = [ordered]@{
                 mode = 'all'
@@ -1191,6 +1278,8 @@ function Write-ExcelWorkbookBootstrapArtifacts {
         workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
         warnings = if ($null -ne $QueryPayload.PSObject.Properties['warnings']) { ConvertTo-ObjectArray -Value $QueryPayload.warnings } else { @() }
         stagesTried = if ($null -ne $QueryPayload.PSObject.Properties['stagesTried']) { ConvertTo-ObjectArray -Value $QueryPayload.stagesTried } else { @() }
+        capabilities = if ($null -ne $QueryPayload.PSObject.Properties['capabilities']) { $QueryPayload.capabilities } else { $null }
+        unsupported = if ($null -ne $QueryPayload.PSObject.Properties['unsupported']) { ConvertTo-ObjectArray -Value $QueryPayload.unsupported } else { @() }
     }
 }
 
@@ -1210,6 +1299,14 @@ function Write-StructureArtifactsFromQueryPayload {
     $tables = @()
     $names = @()
     $rules = @()
+    $formulas = @()
+    $dataValidation = @()
+    $protection = [pscustomobject]@{
+        workbook = $null
+        worksheets = @()
+    }
+    $charts = @()
+    $pivots = @()
 
     if ($null -ne $QueryPayload.PSObject.Properties['tables']) {
         $tables = @($QueryPayload.tables)
@@ -1220,6 +1317,21 @@ function Write-StructureArtifactsFromQueryPayload {
     if ($null -ne $QueryPayload.PSObject.Properties['cf']) {
         $rules = @($QueryPayload.cf)
     }
+    if ($null -ne $QueryPayload.PSObject.Properties['formulas']) {
+        $formulas = @($QueryPayload.formulas)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['dataValidation']) {
+        $dataValidation = @($QueryPayload.dataValidation)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['protection']) {
+        $protection = $QueryPayload.protection
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['charts']) {
+        $charts = @($QueryPayload.charts)
+    }
+    if ($null -ne $QueryPayload.PSObject.Properties['pivots']) {
+        $pivots = @($QueryPayload.pivots)
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($structure.TablesPath)) {
         Write-JsonFile -Path $structure.TablesPath -Value ([pscustomobject]@{ tables = $tables })
@@ -1229,6 +1341,21 @@ function Write-StructureArtifactsFromQueryPayload {
     }
     if (-not [string]::IsNullOrWhiteSpace($structure.ConditionalFormattingPath)) {
         Write-JsonFile -Path $structure.ConditionalFormattingPath -Value ([pscustomobject]@{ rules = $rules })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.FormulasPath)) {
+        Write-JsonFile -Path $structure.FormulasPath -Value ([pscustomobject]@{ formulas = $formulas })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.DataValidationPath)) {
+        Write-JsonFile -Path $structure.DataValidationPath -Value ([pscustomobject]@{ rules = $dataValidation })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.ProtectionPath)) {
+        Write-JsonFile -Path $structure.ProtectionPath -Value $protection
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.ChartsPath)) {
+        Write-JsonFile -Path $structure.ChartsPath -Value ([pscustomobject]@{ charts = $charts })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($structure.PivotsPath)) {
+        Write-JsonFile -Path $structure.PivotsPath -Value ([pscustomobject]@{ pivots = $pivots })
     }
 }
 
@@ -1759,12 +1886,48 @@ function Ensure-PowerQueryArtifacts {
 }
 
 function Wait-ForExcelAsyncQueries {
-    param($Excel)
+    param(
+        $Excel,
+        [object[]]$Connections = @(),
+        [int]$TimeoutSeconds = 60,
+        [int]$PollMilliseconds = 250
+    )
 
     try {
         Invoke-LateMethod -Target $Excel -Name 'CalculateUntilAsyncQueriesDone' | Out-Null
     }
     catch {
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        $pending = $false
+        foreach ($connection in @($Connections)) {
+            try {
+                if ($null -ne $connection.OLEDBConnection -and [bool]$connection.OLEDBConnection.Refreshing) {
+                    $pending = $true
+                    break
+                }
+            }
+            catch {
+            }
+        }
+
+        if (-not $pending) {
+            return [pscustomobject]@{
+                completed = $true
+                timedOut = $false
+                elapsedSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
+            }
+        }
+
+        Start-Sleep -Milliseconds $PollMilliseconds
+    }
+
+    return [pscustomobject]@{
+        completed = $false
+        timedOut = $true
+        elapsedSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
     }
 }
 
@@ -1817,7 +1980,10 @@ function Invoke-WorkbookPowerQueryRefresh {
             Invoke-ExcelComWithRetry -Description ("Refreshing connection {0}" -f [string]$target.name) -Operation {
                 Invoke-LateMethod -Target $connection -Name 'Refresh' | Out-Null
             } | Out-Null
-            Wait-ForExcelAsyncQueries -Excel $Workbook.Application
+            $wait = Wait-ForExcelAsyncQueries -Excel $Workbook.Application -Connections @($connection)
+            if ($wait.timedOut) {
+                $errorText = "Timed out waiting for refresh completion."
+            }
         }
         catch {
             $errorText = $_.Exception.Message
@@ -1828,6 +1994,7 @@ function Invoke-WorkbookPowerQueryRefresh {
             success = [string]::IsNullOrWhiteSpace($errorText)
             error = $errorText
             elapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 3)
+            completed = [string]::IsNullOrWhiteSpace($errorText)
         }
     }
 
@@ -2089,6 +2256,299 @@ function Get-ConditionalFormattingQuery {
     return @($rules | Sort-Object sheet, priority, id)
 }
 
+function Get-FormulaQuery {
+    param($Workbook)
+
+    $formulas = @()
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $usedRange = $null
+        try {
+            $usedRange = $worksheet.UsedRange
+        }
+        catch {
+            continue
+        }
+        if ($null -eq $usedRange) {
+            continue
+        }
+
+        $rowCount = 0
+        $colCount = 0
+        try { $rowCount = [int]$usedRange.Rows.Count } catch { $rowCount = 0 }
+        try { $colCount = [int]$usedRange.Columns.Count } catch { $colCount = 0 }
+        if ($rowCount -lt 1 -or $colCount -lt 1) {
+            continue
+        }
+
+        for ($row = 1; $row -le $rowCount; $row++) {
+            for ($col = 1; $col -le $colCount; $col++) {
+                $cell = $usedRange.Cells.Item($row, $col)
+                $hasFormula = $false
+                try { $hasFormula = [bool]$cell.HasFormula } catch { $hasFormula = $false }
+                if (-not $hasFormula) {
+                    continue
+                }
+
+                $entry = [ordered]@{
+                    sheet = [string]$worksheet.Name
+                    address = $null
+                    formula = $null
+                    formulaR1C1 = $null
+                    value = $null
+                }
+                try { $entry.address = [string]$cell.Address($false, $false) } catch {}
+                try { $entry.formula = [string]$cell.Formula } catch {}
+                try { $entry.formulaR1C1 = [string]$cell.FormulaR1C1 } catch {}
+                try { $entry.value = $cell.Value2 } catch {}
+                $formulas += [pscustomobject]$entry
+            }
+        }
+    }
+
+    return @($formulas | Sort-Object sheet, address)
+}
+
+function Get-WorkbookProtectionArtifact {
+    param($Workbook)
+
+    $workbookProtection = $null
+    try {
+        $workbookProtection = [pscustomobject]@{
+            lockStructure = [bool]$Workbook.ProtectStructure
+            lockWindows = [bool]$Workbook.ProtectWindows
+            lockRevision = $null
+        }
+    }
+    catch {
+        $workbookProtection = $null
+    }
+
+    $worksheets = @()
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $entry = [ordered]@{
+            sheet = [string]$worksheet.Name
+            enabled = $null
+            objects = $null
+            scenarios = $null
+        }
+        $anyValue = $false
+        try { $entry.enabled = [bool]$worksheet.ProtectContents; $anyValue = $true } catch {}
+        try { $entry.objects = [bool]$worksheet.ProtectDrawingObjects; $anyValue = $true } catch {}
+        try { $entry.scenarios = [bool]$worksheet.ProtectScenarios; $anyValue = $true } catch {}
+        if ($anyValue -and ($entry.enabled -or $entry.objects -or $entry.scenarios)) {
+            $worksheets += [pscustomobject]$entry
+        }
+    }
+
+    return [pscustomobject]@{
+        workbook = $workbookProtection
+        worksheets = @($worksheets | Sort-Object sheet)
+    }
+}
+
+function Get-ChartQuery {
+    param($Workbook)
+
+    $charts = @()
+
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $chartObjects = $null
+        try { $chartObjects = $worksheet.ChartObjects() } catch { $chartObjects = $null }
+        if ($null -eq $chartObjects) {
+            continue
+        }
+
+        foreach ($chartObject in $chartObjects) {
+            $chart = $null
+            try { $chart = $chartObject.Chart } catch { $chart = $null }
+            if ($null -eq $chart) {
+                continue
+            }
+
+            $entry = [ordered]@{
+                name = $null
+                kind = 'embedded'
+                sheet = [string]$worksheet.Name
+                address = $null
+                chartType = $null
+                hasTitle = $null
+                title = $null
+                series = @()
+            }
+
+            try { $entry.name = [string]$chartObject.Name } catch {}
+            try {
+                $topLeft = $chartObject.TopLeftCell.Address($false, $false)
+                $bottomRight = $chartObject.BottomRightCell.Address($false, $false)
+                $entry.address = "{0}:{1}" -f $topLeft, $bottomRight
+            } catch {}
+            try { $entry.chartType = [string]$chart.ChartType } catch {}
+            try { $entry.hasTitle = [bool]$chart.HasTitle } catch {}
+            if ($entry.hasTitle) {
+                try { $entry.title = [string]$chart.ChartTitle.Text } catch {}
+            }
+
+            $series = @()
+            try {
+                foreach ($item in $chart.SeriesCollection()) {
+                    $seriesEntry = [ordered]@{
+                        name = $null
+                        formula = $null
+                    }
+                    try { $seriesEntry.name = [string]$item.Name } catch {}
+                    try { $seriesEntry.formula = [string]$item.Formula } catch {}
+                    $series += [pscustomobject]$seriesEntry
+                }
+            }
+            catch {
+            }
+            $entry.series = $series
+            $charts += [pscustomobject]$entry
+        }
+    }
+
+    try {
+        foreach ($chartSheet in $Workbook.Charts) {
+            $entry = [ordered]@{
+                name = $null
+                kind = 'chart-sheet'
+                sheet = $null
+                address = $null
+                chartType = $null
+                hasTitle = $null
+                title = $null
+                series = @()
+            }
+            try { $entry.name = [string]$chartSheet.Name } catch {}
+            try { $entry.sheet = [string]$chartSheet.Name } catch {}
+            try { $entry.chartType = [string]$chartSheet.ChartType } catch {}
+            try { $entry.hasTitle = [bool]$chartSheet.HasTitle } catch {}
+            if ($entry.hasTitle) {
+                try { $entry.title = [string]$chartSheet.ChartTitle.Text } catch {}
+            }
+            $series = @()
+            try {
+                foreach ($item in $chartSheet.SeriesCollection()) {
+                    $seriesEntry = [ordered]@{
+                        name = $null
+                        formula = $null
+                    }
+                    try { $seriesEntry.name = [string]$item.Name } catch {}
+                    try { $seriesEntry.formula = [string]$item.Formula } catch {}
+                    $series += [pscustomobject]$seriesEntry
+                }
+            }
+            catch {
+            }
+            $entry.series = $series
+            $charts += [pscustomobject]$entry
+        }
+    }
+    catch {
+    }
+
+    return @($charts | Sort-Object kind, sheet, name)
+}
+
+function Get-PivotQuery {
+    param($Workbook)
+
+    $pivots = @()
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $pivotTables = $null
+        try { $pivotTables = $worksheet.PivotTables() } catch { $pivotTables = $null }
+        if ($null -eq $pivotTables) {
+            continue
+        }
+
+        foreach ($pivotTable in $pivotTables) {
+            $entry = [ordered]@{
+                name = $null
+                sheet = [string]$worksheet.Name
+                topLeft = $null
+                tableRange = $null
+                sourceData = $null
+                refreshOnFileOpen = $null
+                enableRefresh = $null
+                hasConnection = $null
+                connectionName = $null
+            }
+            try { $entry.name = [string]$pivotTable.Name } catch {}
+            try { $entry.topLeft = [string]$pivotTable.TableRange2.Cells.Item(1, 1).Address($false, $false) } catch {}
+            try { $entry.tableRange = [string]$pivotTable.TableRange2.Address() } catch {}
+            try { $entry.sourceData = [string]$pivotTable.SourceData } catch {}
+
+            $cache = $null
+            try { $cache = $pivotTable.PivotCache() } catch { $cache = $null }
+            if ($null -ne $cache) {
+                try { $entry.refreshOnFileOpen = [bool]$cache.RefreshOnFileOpen } catch {}
+                try { $entry.enableRefresh = [bool]$cache.EnableRefresh } catch {}
+                try {
+                    $workbookConnection = $cache.WorkbookConnection
+                    if ($null -ne $workbookConnection) {
+                        $entry.hasConnection = $true
+                        try { $entry.connectionName = [string]$workbookConnection.Name } catch {}
+                    }
+                }
+                catch {
+                    $entry.hasConnection = $false
+                }
+            }
+
+            $pivots += [pscustomobject]$entry
+        }
+    }
+
+    return @($pivots | Sort-Object sheet, name)
+}
+
+function Get-ExcelBackendCapabilities {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Context,
+        $ProjectInfo
+    )
+
+    $readOnly = $null
+    $powerQueryWrite = $false
+    try { $readOnly = [bool]$Context.ReadOnly } catch {}
+    try {
+        $queries = Get-LateProperty -Target $Context.Workbook -Name 'Queries'
+        if ($null -ne $queries -and -not $readOnly) {
+            $powerQueryWrite = $true
+        }
+    }
+    catch {
+        $powerQueryWrite = $false
+    }
+
+    return [pscustomobject]@{
+        excelCom = $true
+        packageReadable = (Test-OoxmlPackageWorkbook -WorkbookPath $Context.Workbook.FullName)
+        canRead = $true
+        canWrite = if ($null -ne $readOnly) { -not $readOnly } else { $true }
+        writeBackend = if ($null -ne $readOnly -and -not $readOnly) { 'excel-com' } else { $null }
+        refreshAwait = $true
+        powerQueryWrite = $powerQueryWrite
+        vbaProjectAccess = if ($null -ne $ProjectInfo) { [bool]$ProjectInfo.accessible } else { $null }
+        workbookReadOnly = $readOnly
+    }
+}
+
+function Get-PackageBackendCapabilities {
+    return [pscustomobject]@{
+        excelCom = $false
+        packageReadable = $true
+        canRead = $true
+        canWrite = $false
+        writeBackend = $null
+        refreshAwait = $false
+        powerQueryWrite = $false
+        vbaProjectAccess = $false
+        workbookReadOnly = $null
+    }
+}
+
 function Get-ExcelWorkbookQuery {
     param(
         [Parameter(Mandatory = $true)]
@@ -2099,15 +2559,29 @@ function Get-ExcelWorkbookQuery {
         [string]$Backend = 'auto'
     )
 
-    $normalizedSurface = @($Surface | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    $normalizedSurface =
+        @($Surface | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ } | ForEach-Object {
+            switch ($_) {
+                'conditional-formatting' { 'cf'; break }
+                'conditional_formatting' { 'cf'; break }
+                'power-query' { 'pq'; break }
+                'power_query' { 'pq'; break }
+                'data_validation' { 'data-validation'; break }
+                'datavalidation' { 'data-validation'; break }
+                default { $_ }
+            }
+        })
     $warnings = New-Object System.Collections.Generic.List[string]
     $stagesTried = New-Object System.Collections.Generic.List[string]
+    $unsupported = New-Object System.Collections.Generic.List[object]
+    $packageReadable = Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath
 
     if ($Backend -in @('auto', 'excel')) {
         $stagesTried.Add('excel')
         try {
             $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
             try {
+                $projectInfo = $null
                 $payload = [ordered]@{
                     workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
                     backend = 'excel'
@@ -2162,6 +2636,39 @@ function Get-ExcelWorkbookQuery {
                         $payload["references"] = @($projectInfo.references)
                     }
                 }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'formulas') {
+                    $payload["formulas"] = @(Get-FormulaQuery -Workbook $context.Workbook)
+                }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'protection') {
+                    $payload["protection"] = Get-WorkbookProtectionArtifact -Workbook $context.Workbook
+                }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'charts') {
+                    $payload["charts"] = @(Get-ChartQuery -Workbook $context.Workbook)
+                }
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'pivots') {
+                    $payload["pivots"] = @(Get-PivotQuery -Workbook $context.Workbook)
+                }
+
+                $packageOnlySurfaces = @()
+                if (Test-SurfaceRequested -Surface $normalizedSurface -Name 'data-validation') {
+                    $packageOnlySurfaces += 'data-validation'
+                }
+                if (@($packageOnlySurfaces).Count -gt 0) {
+                    if ($packageReadable) {
+                        $packagePayload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface $packageOnlySurfaces
+                        if ($null -ne $packagePayload.PSObject.Properties['dataValidation']) {
+                            $payload["dataValidation"] = @($packagePayload.dataValidation)
+                        }
+                    }
+                    else {
+                        foreach ($surfaceName in $packageOnlySurfaces) {
+                            Add-UnsupportedSurface -List $unsupported -Surface $surfaceName -Backend 'excel' -Reason 'This surface currently requires an OOXML package-readable workbook.'
+                        }
+                    }
+                }
+
+                $payload["capabilities"] = Get-ExcelBackendCapabilities -Context $context -ProjectInfo $projectInfo
+                $payload["unsupported"] = ConvertTo-ObjectArray -Value $unsupported.ToArray()
 
                 return [pscustomobject]$payload
             }
@@ -2170,7 +2677,7 @@ function Get-ExcelWorkbookQuery {
             }
         }
         catch {
-            if ($Backend -eq 'excel' -or -not (Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath)) {
+            if ($Backend -eq 'excel' -or -not $packageReadable) {
                 throw
             }
             $warnings.Add("Excel backend failed; falling back to package parser: $($_.Exception.Message)")
@@ -2184,6 +2691,12 @@ function Get-ExcelWorkbookQuery {
             $payload.warnings = (ConvertTo-ObjectArray -Value $payload.warnings) + (ConvertTo-ObjectArray -Value $warnings.ToArray())
         }
         $payload.stagesTried = ConvertTo-ObjectArray -Value $stagesTried.ToArray()
+        if ($null -eq $payload.PSObject.Properties['capabilities']) {
+            $payload | Add-Member -NotePropertyName capabilities -NotePropertyValue (Get-PackageBackendCapabilities)
+        }
+        if ($null -eq $payload.PSObject.Properties['unsupported']) {
+            $payload | Add-Member -NotePropertyName unsupported -NotePropertyValue @()
+        }
         return $payload
     }
 }
@@ -2208,6 +2721,11 @@ function Get-ExcelWorkbookInspection {
     $vba = @()
     $references = @()
     $project = $null
+    $formulas = @()
+    $dataValidation = @()
+    $protection = $null
+    $charts = @()
+    $pivots = @()
 
     if ($null -ne $query.PSObject.Properties['tables']) { $tables = @($query.tables) }
     if ($null -ne $query.PSObject.Properties['names']) { $names = @($query.names) }
@@ -2218,6 +2736,11 @@ function Get-ExcelWorkbookInspection {
     if ($null -ne $query.PSObject.Properties['vba']) { $vba = @($query.vba) }
     if ($null -ne $query.PSObject.Properties['references']) { $references = @($query.references) }
     if ($null -ne $query.PSObject.Properties['project']) { $project = $query.project }
+    if ($null -ne $query.PSObject.Properties['formulas']) { $formulas = @($query.formulas) }
+    if ($null -ne $query.PSObject.Properties['dataValidation']) { $dataValidation = @($query.dataValidation) }
+    if ($null -ne $query.PSObject.Properties['protection']) { $protection = $query.protection }
+    if ($null -ne $query.PSObject.Properties['charts']) { $charts = @($query.charts) }
+    if ($null -ne $query.PSObject.Properties['pivots']) { $pivots = @($query.pivots) }
 
     return [pscustomobject]@{
         workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
@@ -2227,6 +2750,8 @@ function Get-ExcelWorkbookInspection {
         normalization = if ($null -ne $query.PSObject.Properties['normalization']) { [string]$query.normalization } else { 'none' }
         warnings = if ($null -ne $query.PSObject.Properties['warnings']) { ConvertTo-ObjectArray -Value $query.warnings } else { @() }
         stagesTried = if ($null -ne $query.PSObject.Properties['stagesTried']) { ConvertTo-ObjectArray -Value $query.stagesTried } else { @() }
+        capabilities = if ($null -ne $query.PSObject.Properties['capabilities']) { $query.capabilities } else { $null }
+        unsupported = if ($null -ne $query.PSObject.Properties['unsupported']) { ConvertTo-ObjectArray -Value $query.unsupported } else { @() }
         counts = [pscustomobject]@{
             tables = $tables.Count
             names = $names.Count
@@ -2236,6 +2761,12 @@ function Get-ExcelWorkbookInspection {
             modelTables = if ($null -ne $model -and $null -ne $model.PSObject.Properties['modelTables']) { @($model.modelTables).Count } else { 0 }
             vba = $vba.Count
             references = $references.Count
+            formulas = $formulas.Count
+            dataValidation = $dataValidation.Count
+            protectedSheets = if ($null -ne $protection -and $null -ne $protection.PSObject.Properties['worksheets']) { @($protection.worksheets).Count } else { 0 }
+            workbookProtection = if ($null -ne $protection -and $null -ne $protection.PSObject.Properties['workbook'] -and $null -ne $protection.workbook) { 1 } else { 0 }
+            charts = $charts.Count
+            pivots = $pivots.Count
         }
         project = $project
         supportedCfTypes = @($cf | Where-Object { $_.supported } | Select-Object -ExpandProperty type -Unique | Sort-Object)

@@ -109,6 +109,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
             """\
             <?xml version="1.0" encoding="UTF-8"?>
             <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <workbookProtection lockStructure="1" lockWindows="0"/>
               <sheets>
                 <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
               </sheets>
@@ -138,13 +139,21 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
                 <row r="2">
                   <c r="A2" t="s"><v>2</v></c>
                   <c r="B2"><v>1</v></c>
+                  <c r="C2"><f>SUM(B2,1)</f><v>2</v></c>
                 </row>
               </sheetData>
+              <dataValidations count="1">
+                <dataValidation type="whole" allowBlank="1" showInputMessage="1" showErrorMessage="1" operator="between" sqref="B2">
+                  <formula1>1</formula1>
+                  <formula2>10</formula2>
+                </dataValidation>
+              </dataValidations>
               <conditionalFormatting sqref="B2">
                 <cfRule type="expression" priority="1">
                   <formula>B2&gt;0</formula>
                 </cfRule>
               </conditionalFormatting>
+              <sheetProtection sheet="1" objects="1" scenarios="0"/>
               <tableParts count="1">
                 <tablePart r:id="rId1"/>
               </tableParts>
@@ -596,7 +605,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "--workbook-path",
                 str(workbook),
                 "--surface",
-                "tables,names,conditional-formatting,pq,connections,model",
+                "tables,names,conditional-formatting,pq,connections,model,formulas,data-validation,protection,charts,pivots",
                 "--backend",
                 "package",
                 timeout=60,
@@ -604,11 +613,22 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["backend"], "package")
+            self.assertFalse(payload["capabilities"]["canWrite"])
+            self.assertTrue(payload["capabilities"]["packageReadable"])
             self.assertEqual(len(payload["tables"]), 1)
             self.assertEqual(payload["tables"][0]["name"], "Table1")
             self.assertEqual(len(payload["names"]), 1)
             self.assertEqual(payload["names"][0]["name"], "MyValue")
             self.assertEqual(len(payload["cf"]), 1)
+            self.assertEqual(len(payload["formulas"]), 1)
+            self.assertEqual(payload["formulas"][0]["address"], "C2")
+            self.assertEqual(payload["formulas"][0]["formula"], "SUM(B2,1)")
+            self.assertEqual(len(payload["dataValidation"]), 1)
+            self.assertEqual(payload["dataValidation"][0]["type"], "whole")
+            self.assertTrue(payload["protection"]["workbook"]["lockStructure"])
+            self.assertEqual(len(payload["protection"]["worksheets"]), 1)
+            self.assertTrue(any(item["surface"] == "charts" for item in payload["unsupported"]))
+            self.assertTrue(any(item["surface"] == "pivots" for item in payload["unsupported"]))
             self.assertEqual(len(payload["pq"]), 1)
             self.assertEqual(payload["pq"][0]["name"], "Query1")
             self.assertEqual(payload["pq"][0]["connectionName"], "Query - Query1")
@@ -639,17 +659,32 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             tables = output_dir / "workbook_structure" / "tables.json"
             names = output_dir / "workbook_structure" / "names.json"
             cf = output_dir / "workbook_structure" / "conditional_formatting.json"
+            formulas = output_dir / "workbook_structure" / "formulas.json"
+            data_validation = output_dir / "workbook_structure" / "data_validation.json"
+            protection = output_dir / "workbook_structure" / "protection.json"
+            charts = output_dir / "workbook_structure" / "charts.json"
+            pivots = output_dir / "workbook_structure" / "pivots.json"
             pq_query = output_dir / "power_query" / "queries" / "Query1.pq"
             pq_queries = output_dir / "power_query" / "queries.json"
             self.assertTrue(manifest.exists())
             self.assertTrue(tables.exists())
             self.assertTrue(names.exists())
             self.assertTrue(cf.exists())
+            self.assertTrue(formulas.exists())
+            self.assertTrue(data_validation.exists())
+            self.assertTrue(protection.exists())
+            self.assertTrue(charts.exists())
+            self.assertTrue(pivots.exists())
             self.assertTrue(pq_query.exists())
             self.assertTrue(pq_queries.exists())
             manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertIn("powerQuery", manifest_payload)
             self.assertEqual(manifest_payload["structure"]["tablesPath"], "workbook_structure/tables.json")
+            self.assertEqual(manifest_payload["structure"]["formulasPath"], "workbook_structure/formulas.json")
+            self.assertEqual(manifest_payload["structure"]["dataValidationPath"], "workbook_structure/data_validation.json")
+            self.assertEqual(manifest_payload["structure"]["protectionPath"], "workbook_structure/protection.json")
+            self.assertEqual(manifest_payload["structure"]["chartsPath"], "workbook_structure/charts.json")
+            self.assertEqual(manifest_payload["structure"]["pivotsPath"], "workbook_structure/pivots.json")
             queries_payload = json.loads(pq_queries.read_text(encoding="utf-8"))
             self.assertEqual(queries_payload["queries"][0]["name"], "Query1")
 
@@ -679,8 +714,13 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             tables_json = output_dir / "workbook_structure" / "tables.json"
             names_json = output_dir / "workbook_structure" / "names.json"
             cf_json = output_dir / "workbook_structure" / "conditional_formatting.json"
+            formulas_json = output_dir / "workbook_structure" / "formulas.json"
+            data_validation_json = output_dir / "workbook_structure" / "data_validation.json"
+            protection_json = output_dir / "workbook_structure" / "protection.json"
+            charts_json = output_dir / "workbook_structure" / "charts.json"
+            pivots_json = output_dir / "workbook_structure" / "pivots.json"
 
-            for artifact in [queries_json, query_file, tables_json, names_json, cf_json]:
+            for artifact in [queries_json, query_file, tables_json, names_json, cf_json, formulas_json, data_validation_json, protection_json, charts_json, pivots_json]:
                 artifact.unlink()
 
             pull_proc = run_pwsh_file(
@@ -696,18 +736,61 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("PULL TABLES =>", pull_proc.stdout)
             self.assertIn("PULL NAMES =>", pull_proc.stdout)
             self.assertIn("PULL CF =>", pull_proc.stdout)
+            self.assertIn("PULL FORMULAS =>", pull_proc.stdout)
+            self.assertIn("PULL DATA-VALIDATION =>", pull_proc.stdout)
+            self.assertIn("PULL PROTECTION =>", pull_proc.stdout)
+            self.assertIn("PULL CHARTS =>", pull_proc.stdout)
+            self.assertIn("PULL PIVOTS =>", pull_proc.stdout)
             self.assertIn("SKIP VBA no VBA artifacts configured", pull_proc.stdout)
 
             queries_payload = json.loads(queries_json.read_text(encoding="utf-8"))
             tables_payload = json.loads(tables_json.read_text(encoding="utf-8"))
             names_payload = json.loads(names_json.read_text(encoding="utf-8"))
             cf_payload = json.loads(cf_json.read_text(encoding="utf-8"))
+            formulas_payload = json.loads(formulas_json.read_text(encoding="utf-8"))
+            data_validation_payload = json.loads(data_validation_json.read_text(encoding="utf-8"))
+            protection_payload = json.loads(protection_json.read_text(encoding="utf-8"))
+            charts_payload = json.loads(charts_json.read_text(encoding="utf-8"))
+            pivots_payload = json.loads(pivots_json.read_text(encoding="utf-8"))
 
             self.assertEqual(queries_payload["queries"][0]["name"], "Query1")
             self.assertTrue(query_file.exists())
             self.assertEqual(tables_payload["tables"][0]["name"], "Table1")
             self.assertEqual(names_payload["names"][0]["name"], "MyValue")
             self.assertEqual(cf_payload["rules"][0]["type"], "expression")
+            self.assertEqual(formulas_payload["formulas"][0]["address"], "C2")
+            self.assertEqual(data_validation_payload["rules"][0]["address"], "B2")
+            self.assertTrue(protection_payload["workbook"]["lockStructure"])
+            self.assertEqual(charts_payload["charts"], [])
+            self.assertEqual(pivots_payload["pivots"], [])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_inspect_reports_capabilities_and_new_counts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-package-inspect-") as tmpdir:
+            workbook = Path(tmpdir) / "package-workbook.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+            proc = run_pwsh_file(
+                "inspect",
+                "--workbook-path",
+                str(workbook),
+                "--surface",
+                "tables,names,conditional-formatting,pq,connections,model,formulas,data-validation,protection,charts,pivots,project",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["counts"]["formulas"], 1)
+            self.assertEqual(payload["counts"]["dataValidation"], 1)
+            self.assertEqual(payload["counts"]["protectedSheets"], 1)
+            self.assertEqual(payload["counts"]["workbookProtection"], 1)
+            self.assertEqual(payload["counts"]["charts"], 0)
+            self.assertEqual(payload["counts"]["pivots"], 0)
+            self.assertFalse(payload["capabilities"]["canWrite"])
+            self.assertTrue(any(item["surface"] == "charts" for item in payload["unsupported"]))
+            self.assertTrue(any(item["surface"] == "pivots" for item in payload["unsupported"]))
+            self.assertTrue(any(item["surface"] == "project" for item in payload["unsupported"]))
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_roundtrip_reports_read_only_fallback_for_package_only_workbook(self) -> None:

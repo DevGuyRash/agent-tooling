@@ -702,7 +702,7 @@ if ($Direction -eq 'pull') {
             throw
         }
 
-        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('tables', 'names', 'cf') -Backend 'package'
+        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('tables', 'names', 'cf', 'formulas', 'data-validation', 'protection', 'charts', 'pivots') -Backend 'package'
         Write-StructureArtifactsFromQueryPayload -ResolvedManifest $resolved -QueryPayload $queryPayload
 
         if ($resolved.Structure.TablesPath) {
@@ -713,6 +713,21 @@ if ($Direction -eq 'pull') {
         }
         if ($resolved.Structure.ConditionalFormattingPath) {
             Write-Output ("PULL CF => {0}" -f $resolved.Structure.ConditionalFormattingPath)
+        }
+        if ($resolved.Structure.FormulasPath) {
+            Write-Output ("PULL FORMULAS => {0}" -f $resolved.Structure.FormulasPath)
+        }
+        if ($resolved.Structure.DataValidationPath) {
+            Write-Output ("PULL DATA-VALIDATION => {0}" -f $resolved.Structure.DataValidationPath)
+        }
+        if ($resolved.Structure.ProtectionPath) {
+            Write-Output ("PULL PROTECTION => {0}" -f $resolved.Structure.ProtectionPath)
+        }
+        if ($resolved.Structure.ChartsPath) {
+            Write-Output ("PULL CHARTS => {0}" -f $resolved.Structure.ChartsPath)
+        }
+        if ($resolved.Structure.PivotsPath) {
+            Write-Output ("PULL PIVOTS => {0}" -f $resolved.Structure.PivotsPath)
         }
         return
     }
@@ -817,6 +832,61 @@ try {
             }
             Write-JsonFile -Path $resolved.Structure.ConditionalFormattingPath -Value $cfArtifact
             Write-Output ("PULL CF => {0}" -f $resolved.Structure.ConditionalFormattingPath)
+        }
+    }
+
+    if ($Direction -eq "push") {
+        if ($resolved.Structure.FormulasPath) {
+            Write-Output ("SKIP FORMULAS push is not supported for structure metadata artifacts: {0}" -f $resolved.Structure.FormulasPath)
+        }
+        if ($resolved.Structure.DataValidationPath) {
+            Write-Output ("SKIP DATA-VALIDATION push is not supported for structure metadata artifacts: {0}" -f $resolved.Structure.DataValidationPath)
+        }
+        if ($resolved.Structure.ProtectionPath) {
+            Write-Output ("SKIP PROTECTION push is not supported for structure metadata artifacts: {0}" -f $resolved.Structure.ProtectionPath)
+        }
+        if ($resolved.Structure.ChartsPath) {
+            Write-Output ("SKIP CHARTS push is not supported for structure metadata artifacts: {0}" -f $resolved.Structure.ChartsPath)
+        }
+        if ($resolved.Structure.PivotsPath) {
+            Write-Output ("SKIP PIVOTS push is not supported for structure metadata artifacts: {0}" -f $resolved.Structure.PivotsPath)
+        }
+    }
+    else {
+        $metadataSurfaces = @()
+        if ($resolved.Structure.FormulasPath) {
+            $metadataSurfaces += 'formulas'
+        }
+        if ($resolved.Structure.DataValidationPath) {
+            $metadataSurfaces += 'data-validation'
+        }
+        if ($resolved.Structure.ProtectionPath) {
+            $metadataSurfaces += 'protection'
+        }
+        if ($resolved.Structure.ChartsPath) {
+            $metadataSurfaces += 'charts'
+        }
+        if ($resolved.Structure.PivotsPath) {
+            $metadataSurfaces += 'pivots'
+        }
+        if (@($metadataSurfaces).Count -gt 0) {
+            $metadataPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface $metadataSurfaces -Backend 'auto'
+            Write-StructureArtifactsFromQueryPayload -ResolvedManifest $resolved -QueryPayload $metadataPayload
+            if ($resolved.Structure.FormulasPath) {
+                Write-Output ("PULL FORMULAS => {0}" -f $resolved.Structure.FormulasPath)
+            }
+            if ($resolved.Structure.DataValidationPath) {
+                Write-Output ("PULL DATA-VALIDATION => {0}" -f $resolved.Structure.DataValidationPath)
+            }
+            if ($resolved.Structure.ProtectionPath) {
+                Write-Output ("PULL PROTECTION => {0}" -f $resolved.Structure.ProtectionPath)
+            }
+            if ($resolved.Structure.ChartsPath) {
+                Write-Output ("PULL CHARTS => {0}" -f $resolved.Structure.ChartsPath)
+            }
+            if ($resolved.Structure.PivotsPath) {
+                Write-Output ("PULL PIVOTS => {0}" -f $resolved.Structure.PivotsPath)
+            }
         }
     }
 
