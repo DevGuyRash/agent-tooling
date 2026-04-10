@@ -168,15 +168,15 @@ try {
     }
     Complete-Phase -Name "createTables"
 
-    New-ConditionalFormattingScenario -Name "cf-single-cell" -Range $auditSheet.Range("N2") -Formula "=LEN($F$9)>0" -InteriorColor 65535 -Bold $true
-    New-ConditionalFormattingScenario -Name "cf-rectangular-range" -Range $auditSheet.Range("J2:L6") -Formula "=MOD(ROW()+COLUMN(),2)=0" -InteriorColor 15773696
-    New-ConditionalFormattingScenario -Name "cf-column-segment" -Range $auditSheet.Range("M2:M10") -Formula "=ROW()>4" -InteriorColor 13434879
-    New-ConditionalFormattingScenario -Name "cf-table-body" -Range $primaryTable.DataBodyRange -Formula "=LEN($F9)>0" -InteriorColor 10092543 -Bold $true
+    New-ConditionalFormattingScenario -Name "cf-single-cell" -Range $auditSheet.Range("N2") -Formula '=LEN($F$9)>0' -InteriorColor 65535 -Bold $true
+    New-ConditionalFormattingScenario -Name "cf-rectangular-range" -Range $auditSheet.Range("J2:L6") -Formula '=MOD(ROW()+COLUMN(),2)=0' -InteriorColor 15773696
+    New-ConditionalFormattingScenario -Name "cf-column-segment" -Range $auditSheet.Range("M2:M10") -Formula '=ROW()>4' -InteriorColor 13434879
+    New-ConditionalFormattingScenario -Name "cf-table-body" -Range $primaryTable.DataBodyRange -Formula '=LEN($F9)>0' -InteriorColor 10092543 -Bold $true
 
     $primaryKeyColumn = $null
     try { $primaryKeyColumn = $primaryTable.ListColumns.Item(1).DataBodyRange } catch {}
     if ($null -ne $primaryKeyColumn) {
-        New-ConditionalFormattingScenario -Name "cf-table-column" -Range $primaryKeyColumn -Formula "=LEFT($F9,1)=""A""" -InteriorColor 5296274 -FontColor 16777215
+        New-ConditionalFormattingScenario -Name "cf-table-column" -Range $primaryKeyColumn -Formula '=LEFT($F9,1)="A"' -InteriorColor 5296274 -FontColor 16777215
     } else {
         Add-ScenarioResult -Name "cf-table-column" -Status "skipped" -Details @{ reason = "primary-table-first-column-missing" }
     }

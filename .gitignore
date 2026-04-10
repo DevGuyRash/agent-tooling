@@ -25,5 +25,7 @@ tmp/
 .local/
 skills/gitops-workflow/.bin/
 skills/gitops-workflow/tests/artifacts/security-e2e-*.log
+~$*.xls*
+skills/excel-workbook-sync/tests/fixtures/tr_upload_sheet/tr_upload_template.xlsm
 
 __pycache__

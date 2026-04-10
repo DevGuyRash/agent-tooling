@@ -10,6 +10,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -318,6 +319,39 @@ def extract_query_blocks(formula_text: str) -> list[dict[str, Any]]:
     return queries
 
 
+def strip_duplicate_query_suffix(name: str) -> str:
+    match = re.match(r"^(.*)\((\d+)\)$", name.strip())
+    if not match:
+        return name.strip()
+    return match.group(1).rstrip()
+
+
+def merge_queries(data_mashup_queries: list[dict[str, Any]], connections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for query in data_mashup_queries:
+        name = str(query.get("name") or "").strip()
+        if not name or name in merged:
+            continue
+        merged[name] = query
+    for connection in connections:
+        connection_name = str(connection.get("name") or "")
+        if not connection_name.startswith("Query - "):
+            continue
+        query_name = connection_name.removeprefix("Query - ").strip()
+        if not query_name or query_name in merged:
+            continue
+        base_query_name = strip_duplicate_query_suffix(query_name)
+        if base_query_name != query_name and base_query_name in merged:
+            continue
+        merged[query_name] = {
+            "name": query_name,
+            "description": connection.get("description", ""),
+            "formula": None,
+            "source": "connection-name",
+        }
+    return list(merged.values())
+
+
 def extract_data_mashup(package: WorkbookPackage) -> dict[str, Any]:
     candidates = [name for name in package.names() if name.startswith("customXml/item") and name.endswith(".xml")]
     for candidate in candidates:
@@ -462,18 +496,7 @@ def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
                 )
 
         data_mashup = extract_data_mashup(package)
-        queries = data_mashup.get("queries", [])
-        if not queries:
-            queries = [
-                {
-                    "name": connection["name"].removeprefix("Query - ").strip(),
-                    "description": connection["description"],
-                    "formula": None,
-                    "source": "connection-name",
-                }
-                for connection in connections
-                if connection["name"].startswith("Query - ")
-            ]
+        queries = merge_queries(data_mashup.get("queries", []), connections)
 
         vba_present = package.exists("xl/vbaProject.bin")
         return {
@@ -757,7 +780,34 @@ def partition_names(names: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
     return kept, filtered
 
 
-def build_compare_section(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def build_live_vba_summary(left: dict[str, Any], right: dict[str, Any]) -> dict[str, list[Any]]:
+    return {
+        "vbaAccessible": [bool(left.get("vba", {}).get("accessible")), bool(right.get("vba", {}).get("accessible"))],
+        "vbaComponentCount": [len(left.get("vba", {}).get("components", [])), len(right.get("vba", {}).get("components", []))],
+    }
+
+
+def build_live_vba_diagnostics(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    excluded_from_parity: bool,
+) -> dict[str, Any]:
+    summary = build_live_vba_summary(left, right)
+    return {
+        "excludedFromParity": excluded_from_parity,
+        "reason": (
+            "OOXML exposes workbook package metadata while COM exposes a live VBProject surface; "
+            "normalized parity excludes live VBA accessibility/component counts."
+            if excluded_from_parity
+            else "Raw parity keeps live VBA accessibility/component counts for surface-level diagnostics."
+        ),
+        "summary": summary,
+        "mismatches": {key: value for key, value in summary.items() if value[0] != value[1]},
+    }
+
+
+def build_compare_section(left: dict[str, Any], right: dict[str, Any], *, exclude_live_vba: bool = False) -> dict[str, Any]:
     summary = {
         "sheetCount": [len(left.get("sheets", [])), len(right.get("sheets", []))],
         "tableCount": [len(left.get("tables", [])), len(right.get("tables", []))],
@@ -765,9 +815,9 @@ def build_compare_section(left: dict[str, Any], right: dict[str, Any]) -> dict[s
         "conditionalFormattingRuleCount": [len(left.get("conditionalFormatting", [])), len(right.get("conditionalFormatting", []))],
         "connectionCount": [len(left.get("connections", [])), len(right.get("connections", []))],
         "queryCount": [len(left.get("queries", [])), len(right.get("queries", []))],
-        "vbaAccessible": [bool(left.get("vba", {}).get("accessible")), bool(right.get("vba", {}).get("accessible"))],
-        "vbaComponentCount": [len(left.get("vba", {}).get("components", [])), len(right.get("vba", {}).get("components", []))],
     }
+    if not exclude_live_vba:
+        summary.update(build_live_vba_summary(left, right))
     mismatches = {key: value for key, value in summary.items() if value[0] != value[1]}
     left_vba_hash = left.get("vba", {}).get("sha256")
     right_vba_hash = right.get("vba", {}).get("sha256")
@@ -790,6 +840,7 @@ def build_compare_section(left: dict[str, Any], right: dict[str, Any]) -> dict[s
         "match": not mismatches,
         "diagnostics": {
             "vbaHash": vba_hash,
+            "liveVba": build_live_vba_diagnostics(left, right, excluded_from_parity=exclude_live_vba),
         },
     }
 
@@ -800,7 +851,7 @@ def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
     right_normalized = json.loads(json.dumps(right))
     left_normalized["names"], left_filtered_names = partition_names(left_normalized.get("names", []))
     right_normalized["names"], right_filtered_names = partition_names(right_normalized.get("names", []))
-    normalized = build_compare_section(left_normalized, right_normalized)
+    normalized = build_compare_section(left_normalized, right_normalized, exclude_live_vba=True)
     normalized["diagnostics"]["filteredNames"] = {
         "left": left_filtered_names,
         "right": right_filtered_names,
@@ -995,7 +1046,7 @@ def render_matrix_summary(summary: dict[str, Any]) -> str:
         f"- Engine: {summary['engine']}",
         f"- Workbooks: {len(summary['workbooks'])}",
         "",
-        "| Workbook | Raw Compare | Normalized Compare | Delta | Scenarios |",
+        "| Workbook | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |",
         "| --- | --- | --- | --- | --- |",
     ]
     for workbook in summary["workbooks"]:
@@ -1004,7 +1055,7 @@ def render_matrix_summary(summary: dict[str, Any]) -> str:
                 name=workbook["workbookName"],
                 raw="pass" if workbook["baselineRawMatch"] else "fail",
                 normalized="pass" if workbook["baselineNormalizedMatch"] else "fail",
-                delta="pass" if workbook["deltaMatch"] else "fail",
+                delta=workbook["deltaStatus"],
                 scenarios=workbook["scenarioCount"],
             )
         )
@@ -1019,32 +1070,37 @@ def matrix_audit_workbooks(
     visible: bool = False,
     include_regressions: bool = False,
     scenario_set: str = "full",
+    audit_timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     run_root = output_root / f"matrix-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     ensure_dir(run_root)
     reports = []
     for index, workbook_path in enumerate(workbook_paths, start=1):
         workbook_root = run_root / f"{index:02d}-{slugify(workbook_path.stem)}"
-        report = audit_workbook(
+        report = run_audit_subprocess(
             workbook_path,
             output_root,
+            workbook_root,
             engine,
             visible=visible,
             include_regressions=include_regressions,
             scenario_set=scenario_set,
-            run_root=workbook_root,
+            timeout_seconds=audit_timeout_seconds,
         )
         reports.append(
             {
                 "workbook": str(workbook_path),
                 "workbookName": workbook_path.name,
                 "reportPath": str(workbook_root / "reports" / "report.json"),
-                "baselineRawMatch": report["baselineCompare"]["raw"]["match"],
-                "baselineNormalizedMatch": report["baselineCompare"]["normalized"]["match"],
-                "postMutationRawMatch": report["postMutationCompare"]["raw"]["match"],
-                "postMutationNormalizedMatch": report["postMutationCompare"]["normalized"]["match"],
-                "deltaMatch": report["delta"]["match"],
-                "scenarioCount": len(report["mutationReport"].get("scenarios", [])),
+                "status": report.get("matrixStatus", "completed"),
+                "baselineRawMatch": report.get("baselineCompare", {}).get("raw", {}).get("match", False),
+                "baselineNormalizedMatch": report.get("baselineCompare", {}).get("normalized", {}).get("match", False),
+                "postMutationRawMatch": report.get("postMutationCompare", {}).get("raw", {}).get("match", False),
+                "postMutationNormalizedMatch": report.get("postMutationCompare", {}).get("normalized", {}).get("match", False),
+                "deltaMatch": report.get("delta", {}).get("match", False),
+                "deltaStatus": classify_delta_status(report),
+                "scenarioCount": len(report.get("mutationReport", {}).get("scenarios", [])),
+                "error": report.get("matrixError"),
             }
         )
     summary = {
@@ -1056,6 +1112,85 @@ def matrix_audit_workbooks(
     write_json(run_root / "matrix-summary.json", summary)
     (run_root / "matrix-summary.md").write_text(render_matrix_summary(summary), encoding="utf-8")
     return summary
+
+
+def classify_delta_status(report: dict[str, Any]) -> str:
+    if report.get("matrixStatus") not in {None, "completed"}:
+        return report["matrixStatus"]
+    mutation_report = report.get("mutationReport", {})
+    if mutation_report.get("timedOut"):
+        return "timed_out"
+    if mutation_report.get("skipped"):
+        return "skipped"
+    if not mutation_report.get("ran", True) and not mutation_report.get("scenarios"):
+        return "not_run"
+    return "unchanged" if report.get("delta", {}).get("match", False) else "changed"
+
+
+def run_audit_subprocess(
+    workbook_path: Path,
+    output_root: Path,
+    run_root: Path,
+    engine: str,
+    visible: bool = False,
+    include_regressions: bool = False,
+    scenario_set: str = "full",
+    timeout_seconds: int = 600,
+) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "audit",
+        "--workbook",
+        str(workbook_path),
+        "--output-root",
+        str(output_root),
+        "--engine",
+        engine,
+        "--scenario-set",
+        scenario_set,
+        "--run-root",
+        str(run_root),
+    ]
+    if visible:
+        command.append("--visible")
+    if include_regressions:
+        command.append("--include-regressions")
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "workbook": str(workbook_path),
+            "workingCopy": str(run_root / "original-copy" / workbook_path.name),
+            "matrixStatus": "timed_out",
+            "matrixError": f"audit timed out after {timeout_seconds} seconds",
+            "stdout": (exc.stdout or "").strip(),
+            "stderr": (exc.stderr or "").strip(),
+            "mutationReport": {"scenarios": []},
+            "delta": {"match": False},
+        }
+    if completed.returncode != 0:
+        return {
+            "workbook": str(workbook_path),
+            "workingCopy": str(run_root / "original-copy" / workbook_path.name),
+            "matrixStatus": "failed",
+            "matrixError": completed.stderr.strip() or completed.stdout.strip() or "audit subprocess failed",
+            "stdout": completed.stdout.strip(),
+            "stderr": completed.stderr.strip(),
+            "mutationReport": {"scenarios": []},
+            "delta": {"match": False},
+        }
+    payload = json.loads(completed.stdout)
+    payload["matrixStatus"] = "completed"
+    return payload
 
 
 def parse_args() -> argparse.Namespace:
@@ -1080,6 +1215,7 @@ def parse_args() -> argparse.Namespace:
     audit_parser.add_argument("--output-root", required=True, type=Path)
     audit_parser.add_argument("--include-regressions", action="store_true")
     audit_parser.add_argument("--scenario-set", choices=["full"], default="full")
+    audit_parser.add_argument("--run-root", type=Path)
 
     matrix_parser = subparsers.add_parser("matrix-audit")
     matrix_parser.add_argument("--workbook", required=True, action="append", type=Path)
@@ -1088,6 +1224,7 @@ def parse_args() -> argparse.Namespace:
     matrix_parser.add_argument("--visible", action="store_true")
     matrix_parser.add_argument("--include-regressions", action="store_true")
     matrix_parser.add_argument("--scenario-set", choices=["full"], default="full")
+    matrix_parser.add_argument("--audit-timeout-seconds", type=int, default=600)
 
     return parser.parse_args()
 
@@ -1106,6 +1243,7 @@ def main() -> int:
             visible=args.visible,
             include_regressions=args.include_regressions,
             scenario_set=args.scenario_set,
+            run_root=args.run_root,
         )
     elif args.command == "matrix-audit":
         result = matrix_audit_workbooks(
@@ -1115,6 +1253,7 @@ def main() -> int:
             visible=args.visible,
             include_regressions=args.include_regressions,
             scenario_set=args.scenario_set,
+            audit_timeout_seconds=args.audit_timeout_seconds,
         )
     else:
         raise AssertionError(f"unsupported command: {args.command}")
