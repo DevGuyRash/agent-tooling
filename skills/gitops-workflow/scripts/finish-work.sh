@@ -4,11 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-state.sh
+source "$SCRIPT_DIR/lib/git-state.sh"
+# shellcheck source=lib/router.sh
+source "$SCRIPT_DIR/lib/router.sh"
 
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/finish-work.sh [--branch <name>] [--base <branch>] [--dry-run]
+  bash scripts/finish-work.sh [--branch <name>] [--base <branch>] [--dry-run] [--no-detached-recovery] [--json]
 
 Behavior:
   - Verifies the target branch is safe to clean up.
@@ -21,26 +25,37 @@ Options:
   --branch <name>     Branch to clean up (default: current branch).
   --base <branch>     Base branch to verify against (default: detect origin/HEAD, fallback main).
   --dry-run           Print planned cleanup actions without mutating local git state.
+  --no-detached-recovery
+                      Refuse detached HEAD instead of attempting safe recovery.
+  --json              Emit machine-readable JSON on success.
   -h, --help          Show help.
 USAGE
 }
 
-resolve_default_base() {
-  local base=""
-  base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
-  if [[ -n "$base" ]]; then
-    echo "$base"
-    return 0
+emit_result() {
+  local status="$1"
+  local branch="$2"
+  local base="$3"
+  local next_workdir="$4"
+  local mode="$5"
+  local dry_run="$6"
+  local detached="$7"
+  if [[ "$JSON" == "true" ]]; then
+    python3 - "$status" "$branch" "$base" "$next_workdir" "$mode" "$dry_run" "$detached" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "status": sys.argv[1],
+    "branch": sys.argv[2],
+    "base": sys.argv[3],
+    "next_workdir": sys.argv[4],
+    "mode": sys.argv[5],
+    "dry_run": sys.argv[6] == "true",
+    "detached_recovery": sys.argv[7],
+}))
+PY
   fi
-  if git show-ref --verify --quiet refs/heads/main; then
-    echo "main"
-    return 0
-  fi
-  if git show-ref --verify --quiet refs/heads/master; then
-    echo "master"
-    return 0
-  fi
-  echo "main"
 }
 
 git_path_resolves_branch() {
@@ -141,6 +156,8 @@ fi
 BRANCH=""
 BASE=""
 DRY_RUN="false"
+DETACHED_MODE="recover"
+JSON="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -156,6 +173,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN="true"
+      shift
+      ;;
+    --no-detached-recovery)
+      DETACHED_MODE="off"
+      shift
+      ;;
+    --json)
+      JSON="true"
       shift
       ;;
     -h|--help)
@@ -175,23 +200,33 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   die "current directory is not a git repository"
 fi
 
-if [[ -z "$BRANCH" ]]; then
-  BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+gitops_prepare_repo_for_stateful_command "." "$DETACHED_MODE" || {
+  code=$?
+  if [[ $code -eq 10 ]]; then
+    die "detached HEAD was recovered into rescue branch '$GITOPS_RECOVERED_BRANCH'; re-run finish-work from that branch or pass --no-detached-recovery to opt out"
+  fi
+  if [[ $code -eq 20 ]]; then
+    die "$GITOPS_RECOVERY_NEXT_ACTION"
+  fi
+  exit "$code"
+}
+if [[ "$GITOPS_FETCH_STATUS" == "warning" ]]; then
+  echo "Warning: git fetch origin --prune failed; continuing with local refs." >&2
+  echo "Warning: git fetch details: $GITOPS_FETCH_NOTE" >&2
 fi
-[[ "$BRANCH" != "HEAD" ]] || die "detached HEAD cannot be cleaned up automatically; pass --branch explicitly from a branch checkout"
+
+if [[ -z "$BRANCH" ]]; then
+  BRANCH="$GITOPS_RECOVERED_BRANCH"
+fi
 
 if [[ -z "$BASE" ]]; then
-  BASE="$(resolve_default_base)"
+  BASE="$(resolve_default_base "." || true)"
 fi
+[[ -n "$BASE" ]] || die "failed to resolve the default branch; pass --base explicitly"
 
 [[ "$BRANCH" != "$BASE" ]] || die "refusing to clean up the default branch '$BASE'"
 git_path_resolves_branch "$BRANCH" || die "local branch not found: $BRANCH"
 git rev-parse --verify "$BASE" >/dev/null 2>&1 || die "base branch/ref not found: $BASE"
-
-if ! FETCH_OUTPUT="$(git fetch origin --prune 2>&1)"; then
-  echo "Warning: git fetch origin --prune failed; continuing with local refs." >&2
-  echo "Warning: git fetch details: $FETCH_OUTPUT" >&2
-fi
 
 if remote_branch_exists "$BRANCH"; then
   die "remote branch still exists at origin/$BRANCH; finish remote cleanup before removing local state"
@@ -199,17 +234,18 @@ fi
 
 branch_is_merged "$BRANCH" "$BASE" || die "branch '$BRANCH' is not confirmed on '$BASE'; refusing cleanup"
 
-TOPLEVEL="$(git rev-parse --show-toplevel)"
-COMMON_DIR="$(git rev-parse --git-common-dir)"
-MAIN_CHECKOUT="$(cd "$COMMON_DIR/.." && pwd -P)"
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+TOPLEVEL="$(repo_root_path ".")"
+MAIN_CHECKOUT="$(main_checkout_path ".")"
+CURRENT_BRANCH="$(current_branch_name "." || true)"
 IN_LINKED_WORKTREE="false"
 if [[ "$TOPLEVEL" != "$MAIN_CHECKOUT" ]]; then
   IN_LINKED_WORKTREE="true"
 fi
 
-echo "Base branch: $BASE"
-echo "Branch cleanup target: $BRANCH"
+if [[ "$JSON" != "true" ]]; then
+  echo "Base branch: $BASE"
+  echo "Branch cleanup target: $BRANCH"
+fi
 
 if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
   TARGET_WORKTREE="$(worktree_path_for_branch "$BRANCH")"
@@ -223,29 +259,63 @@ if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
     fi
     TARGET_WORKTREE="$TOPLEVEL"
   fi
-  echo "Main checkout: $MAIN_CHECKOUT"
+  if [[ "$JSON" != "true" ]]; then
+    echo "Main checkout: $MAIN_CHECKOUT"
+  fi
   if [[ "$TARGET_IN_MAIN_CHECKOUT" == "true" ]]; then
+    recover_repo_for_stateful_command "$MAIN_CHECKOUT" "$DETACHED_MODE" || {
+      code=$?
+      if [[ $code -eq 10 ]]; then
+        die "main checkout recovered into rescue branch '$GITOPS_RECOVERED_BRANCH'; review it before cleanup"
+      fi
+      if [[ $code -eq 20 ]]; then
+        die "$GITOPS_RECOVERY_NEXT_ACTION"
+      fi
+      exit "$code"
+    }
     require_clean_checkout "$MAIN_CHECKOUT" "main checkout '$MAIN_CHECKOUT'"
-    echo "Target branch is checked out in the main checkout."
+    if [[ "$JSON" != "true" ]]; then
+      echo "Target branch is checked out in the main checkout."
+    fi
     if [[ "$DRY_RUN" == "true" ]]; then
-      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
-      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\""
+      if [[ "$JSON" != "true" ]]; then
+        echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
+        echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\""
+      fi
     else
       git -C "$MAIN_CHECKOUT" checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE' in main checkout"
       git -C "$MAIN_CHECKOUT" branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH' from main checkout"
     fi
-    echo ""
-    echo "✅ Cleaned branch: $BRANCH"
-    echo "Next workdir: $MAIN_CHECKOUT"
-    echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
+    if [[ "$JSON" == "true" ]]; then
+      emit_result "cleaned" "$BRANCH" "$BASE" "$MAIN_CHECKOUT" "main-checkout" "$DRY_RUN" "$GITOPS_DETACHED_STATUS"
+    else
+      echo ""
+      echo "✅ Cleaned branch: $BRANCH"
+      echo "Next workdir: $MAIN_CHECKOUT"
+      echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
+    fi
     exit 0
   fi
+  recover_repo_for_stateful_command "$TARGET_WORKTREE" "$DETACHED_MODE" || {
+    code=$?
+    if [[ $code -eq 10 ]]; then
+      die "linked worktree recovered into rescue branch '$GITOPS_RECOVERED_BRANCH'; review it before cleanup"
+    fi
+    if [[ $code -eq 20 ]]; then
+      die "$GITOPS_RECOVERY_NEXT_ACTION"
+    fi
+    exit "$code"
+  }
   require_clean_checkout "$TARGET_WORKTREE" "linked worktree '$TARGET_WORKTREE'"
-  echo "Linked worktree detected: $TARGET_WORKTREE"
+  if [[ "$JSON" != "true" ]]; then
+    echo "Linked worktree detected: $TARGET_WORKTREE"
+  fi
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
-    echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" worktree remove \"$TARGET_WORKTREE\""
-    echo "DRY-RUN: if git show-ref --verify --quiet \"refs/heads/$BRANCH\"; then git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\"; fi"
+    if [[ "$JSON" != "true" ]]; then
+      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" checkout \"$BASE\""
+      echo "DRY-RUN: git -C \"$MAIN_CHECKOUT\" worktree remove \"$TARGET_WORKTREE\""
+      echo "DRY-RUN: if git show-ref --verify --quiet \"refs/heads/$BRANCH\"; then git -C \"$MAIN_CHECKOUT\" branch -D \"$BRANCH\"; fi"
+    fi
   else
     git -C "$MAIN_CHECKOUT" checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE' in main checkout"
     git -C "$MAIN_CHECKOUT" worktree remove "$TARGET_WORKTREE" || die "failed to remove linked worktree '$TARGET_WORKTREE'"
@@ -253,24 +323,32 @@ if [[ "$IN_LINKED_WORKTREE" == "true" ]]; then
       git -C "$MAIN_CHECKOUT" branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH' from main checkout"
     fi
   fi
-  echo ""
-  echo "✅ Cleaned worktree for: $BRANCH"
-  echo "Next workdir: $MAIN_CHECKOUT"
-  echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
+  if [[ "$JSON" == "true" ]]; then
+    emit_result "cleaned" "$BRANCH" "$BASE" "$MAIN_CHECKOUT" "linked-worktree" "$DRY_RUN" "$GITOPS_DETACHED_STATUS"
+  else
+    echo ""
+    echo "✅ Cleaned worktree for: $BRANCH"
+    echo "Next workdir: $MAIN_CHECKOUT"
+    echo "Next command: cd $(printf '%q' "$MAIN_CHECKOUT")"
+  fi
   exit 0
 fi
 
 if [[ "$CURRENT_BRANCH" == "$BASE" && "$BRANCH" != "$BASE" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "DRY-RUN: git branch -D \"$BRANCH\""
+    if [[ "$JSON" != "true" ]]; then
+      echo "DRY-RUN: git branch -D \"$BRANCH\""
+    fi
   else
     git branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH'"
   fi
 elif [[ "$CURRENT_BRANCH" == "$BRANCH" ]]; then
   require_clean_checkout "$TOPLEVEL" "current checkout '$TOPLEVEL'"
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "DRY-RUN: git checkout \"$BASE\""
-    echo "DRY-RUN: git branch -D \"$BRANCH\""
+    if [[ "$JSON" != "true" ]]; then
+      echo "DRY-RUN: git checkout \"$BASE\""
+      echo "DRY-RUN: git branch -D \"$BRANCH\""
+    fi
   else
     git checkout "$BASE" >/dev/null 2>&1 || die "failed to checkout '$BASE'"
     git branch -D "$BRANCH" >/dev/null 2>&1 || die "failed to delete branch '$BRANCH'"
@@ -279,6 +357,10 @@ else
   die "current checkout '$CURRENT_BRANCH' is neither '$BASE' nor '$BRANCH'; rerun from the base branch or the target branch"
 fi
 
-echo ""
-echo "✅ Cleaned branch: $BRANCH"
-echo "Next workdir: $(git rev-parse --show-toplevel)"
+if [[ "$JSON" == "true" ]]; then
+  emit_result "cleaned" "$BRANCH" "$BASE" "$TOPLEVEL" "branch" "$DRY_RUN" "$GITOPS_DETACHED_STATUS"
+else
+  echo ""
+  echo "✅ Cleaned branch: $BRANCH"
+  echo "Next workdir: $(git rev-parse --show-toplevel)"
+fi

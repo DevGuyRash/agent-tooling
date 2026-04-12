@@ -33,6 +33,11 @@ require_numeric_id() {
   [[ "$val" =~ ^[0-9]+$ ]] || die "invalid <$label>: must be numeric"
 }
 
+compact_text() {
+  local text="${1:-}"
+  printf '%s' "$text" | tr '\t\r\n' '   ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
+}
+
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
     base64 --decode

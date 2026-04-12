@@ -238,7 +238,7 @@ install_version() {
   local tag_no_v suffix asset base_url tmpdir archive checksums expected actual bin_source managed_hash
 
   tag_no_v="${tag#v}"
-  suffix="$(platform_asset_suffix)" || die "unsupported platform for gitleaks auto-install ($(uname -s)/$(uname -m))" "$EXIT_SETUP"
+  suffix="$(platform_asset_suffix)" || die "unsupported platform for gitleaks auto-install ($(uname -s)/$(uname -m)); this scanner is Linux-first and native Windows is out of scope" "$EXIT_SETUP"
   asset="gitleaks_${tag_no_v}_${suffix}.tar.gz"
   base_url="https://github.com/gitleaks/gitleaks/releases/download/${tag}"
 

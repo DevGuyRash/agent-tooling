@@ -20,6 +20,8 @@ REPO_PATH="$(pwd -P)"
 FORCE="false"
 SETUP_HOOKS="true"
 SETUP_CI="true"
+JSON="false"
+declare -a INSTALLED_ITEMS=()
 
 die() {
   echo "Error: $1" >&2
@@ -41,15 +43,41 @@ require_opt_value() {
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/setup-security.sh [--repo <path>] [--force] [--no-hooks] [--no-ci]
+  bash scripts/setup-security.sh [--repo <path>] [--force] [--no-hooks] [--no-ci] [--json]
 
 Options:
   --repo <path>  Target git repository path (default: current directory)
   --force        Overwrite existing differing files and replace non-managed hook
   --no-hooks     Skip managed pre-commit hook installation
   --no-ci        Skip .github workflow/config installation
+  --json         Emit machine-readable JSON on success
   -h, --help     Show this help text
 USAGE
+}
+
+emit_result() {
+  local repo="$1"
+  local force="$2"
+  local hooks="$3"
+  local ci="$4"
+  if [[ "$JSON" == "true" ]]; then
+    python3 - "$repo" "$force" "$hooks" "$ci" "${INSTALLED_ITEMS[@]}" <<'PY'
+import json
+import sys
+
+repo, force, hooks, ci, *items = sys.argv[1:]
+print(json.dumps({
+    "status": "completed",
+    "repo": repo,
+    "force": force == "true",
+    "hooks": hooks == "true",
+    "ci": ci == "true",
+    "items": items,
+}))
+PY
+  else
+    echo "✅ security bootstrap complete for repo: $repo"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -69,6 +97,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-ci)
       SETUP_CI="false"
+      shift
+      ;;
+    --json)
+      JSON="true"
       shift
       ;;
     -h|--help)
@@ -95,7 +127,9 @@ copy_managed_file() {
   mkdir -p "$(dirname "$dst")"
   if [[ -f "$dst" ]]; then
     if cmp -s "$src" "$dst"; then
-      echo "✓ $label already up to date: $dst"
+      if [[ "$JSON" != "true" ]]; then
+        echo "✓ $label already up to date: $dst"
+      fi
       return 0
     fi
     if [[ "$FORCE" != "true" ]]; then
@@ -104,7 +138,10 @@ copy_managed_file() {
   fi
 
   cp "$src" "$dst"
-  echo "Installed $label: $dst"
+  INSTALLED_ITEMS+=("$label:$dst")
+  if [[ "$JSON" != "true" ]]; then
+    echo "Installed $label: $dst"
+  fi
 }
 
 if [[ "$SETUP_HOOKS" == "true" ]]; then
@@ -112,7 +149,12 @@ if [[ "$SETUP_HOOKS" == "true" ]]; then
   if [[ "$FORCE" == "true" ]]; then
     HOOK_ARGS+=(--force)
   fi
-  "${HOOK_ARGS[@]}"
+  if [[ "$JSON" == "true" ]]; then
+    "${HOOK_ARGS[@]}" >/dev/null
+  else
+    "${HOOK_ARGS[@]}"
+  fi
+  INSTALLED_ITEMS+=("hook")
 fi
 
 if [[ "$SETUP_CI" == "true" ]]; then
@@ -128,4 +170,4 @@ if [[ "$SETUP_CI" == "true" ]]; then
   copy_managed_file "$SRC_WORKFLOW" "$DST_WORKFLOW" "sensitive-scan workflow"
 fi
 
-echo "✅ security bootstrap complete for repo: $REPO_PATH"
+emit_result "$REPO_PATH" "$FORCE" "$SETUP_HOOKS" "$SETUP_CI"

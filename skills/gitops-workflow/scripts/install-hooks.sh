@@ -18,17 +18,41 @@ SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 REPO_PATH="$(pwd -P)"
 FORCE="false"
+JSON="false"
 
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/install-hooks.sh [--repo <path>] [--force]
+  bash scripts/install-hooks.sh [--repo <path>] [--force] [--json]
 
 Options:
   --repo <path>   Target git repository path (default: current directory)
   --force         Overwrite existing non-managed pre-commit hook
+  --json          Emit machine-readable JSON on success
   -h, --help      Show this help text
 USAGE
+}
+
+emit_result() {
+  local status="$1"
+  local repo="$2"
+  local hook_path="$3"
+  local force="$4"
+  if [[ "$JSON" == "true" ]]; then
+    python3 - "$status" "$repo" "$hook_path" "$force" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "status": sys.argv[1],
+    "repo": sys.argv[2],
+    "hook_path": sys.argv[3],
+    "force": sys.argv[4] == "true",
+}))
+PY
+  else
+    echo "Installed managed pre-commit hook at: $hook_path"
+  fi
 }
 
 die() {
@@ -66,6 +90,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force)
       FORCE="true"
+      shift
+      ;;
+    --json)
+      JSON="true"
       shift
       ;;
     -h|--help)
@@ -120,4 +148,4 @@ EOF_HOOK
 
 chmod +x "$HOOK_PATH"
 
-echo "Installed managed pre-commit hook at: $HOOK_PATH"
+emit_result "installed" "$REPO_PATH" "$HOOK_PATH" "$FORCE"
