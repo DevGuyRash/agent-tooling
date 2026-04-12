@@ -331,6 +331,60 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertIn("api graphql", calls)
             self.assertNotIn("pr create", calls)
 
+    def test_ship_sync_runs_sync_only_and_preserves_dirty_tree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self.init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+
+            (work / "README.md").write_text("base\nremote\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote advance"], cwd=work)
+            run(["git", "push"], cwd=work)
+
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "sync", "--json"],
+                cwd=clone,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["mode"], "sync")
+            self.assertEqual(payload["stop"], "sync")
+            self.assertTrue(payload["continued"])
+            stages = payload["results"]
+            self.assertEqual([item["stage"] for item in stages], ["preflight", "sync"])
+            self.assertEqual(stages[1]["status"], "ok")
+            self.assertEqual(stages[1]["details"]["status"], "synced-with-fallback")
+            self.assertEqual(stages[1]["details"]["restore_action"], "snapshot-fallback")
+            self.assertEqual(
+                run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone).stdout.strip(),
+                "main",
+            )
+            self.assertEqual(run(["git", "stash", "list"], cwd=clone).stdout.strip(), "")
+            content = (clone / "README.md").read_text(encoding="utf-8")
+            self.assertIn("remote", content)
+            self.assertIn("local", content)
+            self.assertNotIn("batch_commit", {item["stage"] for item in stages})
+            self.assertNotIn("push", {item["stage"] for item in stages})
+            self.assertNotIn("pr", {item["stage"] for item in stages})
+
     def test_ship_raw_reports_pr_readiness_snapshot_when_pr_exists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"

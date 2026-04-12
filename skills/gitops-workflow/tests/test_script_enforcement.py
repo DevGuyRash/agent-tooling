@@ -906,6 +906,11 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
 
+    def _clone_with_identity(self, origin: Path, clone: Path, temp_dir: Path):
+        run(["git", "clone", str(origin), str(clone)], cwd=temp_dir)
+        run(["git", "config", "user.name", "Test User"], cwd=clone)
+        run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+
     def test_sync_raw_blocks_dirty_checkout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"
@@ -966,6 +971,140 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             self.assertIn("remote", content)
             self.assertIn("local", content)
             self.assertEqual(run(["git", "stash", "list"], cwd=clone).stdout.strip(), "")
+
+    def test_sync_raw_pushes_ahead_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "pushed")
+            self.assertEqual(result["history_action"], "noop")
+            self.assertEqual(result["push_action"], "push")
+            self.assertEqual(result["ahead_before"], 1)
+            self.assertEqual(result["ahead_after"], 0)
+            self.assertEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
+            )
+
+    def test_sync_raw_rebases_diverged_branch_and_pushes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+
+            (work / "remote.txt").write_text("remote\n", encoding="utf-8")
+            run(["git", "add", "remote.txt"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote advance"], cwd=work)
+            run(["git", "push"], cwd=work)
+
+            (clone / "local.txt").write_text("local\n", encoding="utf-8")
+            run(["git", "add", "local.txt"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "rebased-and-pushed")
+            self.assertEqual(result["history_action"], "rebase")
+            self.assertEqual(result["push_action"], "push")
+            self.assertEqual(result["ahead_before"], 1)
+            self.assertEqual(result["behind_before"], 1)
+            self.assertEqual(result["ahead_after"], 0)
+            self.assertEqual(result["behind_after"], 0)
+            log_subjects = run(["git", "log", "--pretty=%s", "-2"], cwd=clone).stdout
+            self.assertIn("feat: local advance", log_subjects)
+            self.assertIn("feat: remote advance", log_subjects)
+            self.assertEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
+            )
+
+    def test_sync_raw_publishes_branch_without_upstream(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+            run(["git", "checkout", "-b", "feat/publish-me"], cwd=clone)
+            (clone / "feature.txt").write_text("feature\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=clone)
+            run(["git", "commit", "-m", "feat: publish branch"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "published")
+            self.assertEqual(result["history_action"], "publish")
+            self.assertEqual(result["push_action"], "push-set-upstream")
+            self.assertEqual(
+                run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=clone).stdout.strip(),
+                "origin/feat/publish-me",
+            )
+            self.assertEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/feat/publish-me"], cwd=temp_path).stdout.strip(),
+            )
 
     def test_reconcile_tree_creates_isolated_gitlink_commit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1150,7 +1289,7 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
-            self.assertEqual(payload["results"][0]["status"], "synced")
+            self.assertEqual(payload["results"][0]["status"], "pushed")
             self.assertFalse((clone / ".git" / "MERGE_HEAD").exists())
 
 
@@ -2732,6 +2871,7 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("sync raw", skill.lower())
         self.assertIn("raw sync", skill.lower())
         self.assertIn("ship raw", skill.lower())
+        self.assertIn("ship sync", skill.lower())
         self.assertIn("doctor", skill.lower())
         self.assertIn("ensure-worktree.sh", skill)
         self.assertIn("windows", skill.lower())
