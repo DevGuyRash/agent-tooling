@@ -76,7 +76,12 @@ Update existing PR body deterministically:
 bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> --repo <owner/repo> --body-file /tmp/pr-body.md
 ```
 
-Convert draft PR to ready only after strict gates:
+Audit draft PR readiness first:
+```bash
+python3 "$SKILL_ROOT/scripts/pr-readiness-report.py" <pr_number> --repo <owner/repo> --watch-checks --json
+```
+
+Convert draft PR to ready only after the readiness report is clear:
 ```bash
 bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo> --watch-checks
 ```

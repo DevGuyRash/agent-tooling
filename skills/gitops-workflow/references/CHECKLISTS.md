@@ -15,9 +15,24 @@ SKILL_ROOT=<absolute-path-to-gitops-workflow>
 
 ---
 
+## 0) Diagnose / recover checklist
+
+- [ ] if repo state is unclear, start with:
+  - `bash "$SKILL_ROOT/scripts/repo-state.sh" --json`
+- [ ] use `bash "$SKILL_ROOT/scripts/doctor.sh" --json` for a report-first health summary; add `fix` only when safe recovery/sync should be attempted
+- [ ] doctor, recover, raw sync, and reconcile-style checks inspect the full related tree by default
+- [ ] start-work, commit/push, and cleanup flows stay on the current repo by default unless root/tree/all intent is explicit
+- [ ] safe sequencer/detached recovery may continue automatically; rescue-grade recovery must still be reviewed before continuing
+- [ ] parent gitlinks remain authoritative for tree reconciliation; branch-name matching is only a hint
+
+---
+
 ## A) Start work checklist (worktree default)
 
 - [ ] default mode creates a linked worktree; use `--no-worktree` to stay in the current checkout
+- [ ] when a non-raw workflow starts on a feature branch in the main checkout, auto-adopt the linked worktree before continuing
+- [ ] use `--json` on local workflow helpers when the next step depends on a returned path or status
+- [ ] start helper refreshes refs when `origin` exists and auto-recovers safe local sequencer/detached state before branch work
 - [ ] if worktree mode and working tree is dirty, dirty files are migrated to the new worktree automatically
 - [ ] if branch mode (`--no-worktree`) and worktree is dirty, start helper auto-stashes tracked + untracked and restores safely
 - [ ] branch helper auto-installs managed pre-commit hook unless `--no-install-hooks` is used
@@ -33,6 +48,7 @@ Recommended:
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
 bash "$SKILL_ROOT/scripts/start-branch.sh" chore --issue 789 --stash-name "carry-local-wip"
+bash "$SKILL_ROOT/scripts/ensure-worktree.sh" --json
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --no-worktree
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 ```
@@ -48,13 +64,28 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 - [ ] checked repo commit style (`git log --oneline -10`) and adapted tone/conventions
 - [ ] commit subject matches: `type(scope): description`
 - [ ] subject is imperative + lowercase + no trailing period
-- [ ] commit body included (explains **why**, not a mechanical description of the diff); if omitted, justification noted (headline-only for zero-behavioral-impact only)
+- [ ] commit body included as a mandatory bullet list (explains **why**, not a mechanical description of the diff)
+- [ ] use `python3 "$SKILL_ROOT/scripts/commit-message.py" ...` when you need a deterministic body template
 - [ ] commit is atomic (one logical change)
 - [ ] scope is used when it reduces ambiguity (e.g., `cli`, `api`, `docs`)
 - [ ] tests/docs included in same commit when they are part of the same logical change
 - [ ] if asked to "commit worktree"/"commit changes", split into batched Conventional Commits by logical unit
 - [ ] do not use one catch-all commit unless user explicitly asks for a single commit
 - [ ] if scanner allowlist/config is changed, include explicit rationale in commit/PR description
+
+## I) Raw sync checklist
+
+- [ ] `sync raw` stays on the current branch; it does not create branches or worktrees
+- [ ] `ship raw` is the higher-level one-liner that syncs, batches Conventional Commits, pushes in place, and reports PR readiness when a PR already tracks the branch
+- [ ] plain `ship` syncs first, then follows the normal branch/worktree/push/PR flow, reuses an existing PR when one already tracks the branch, and reports a readiness snapshot after the PR exists
+- [ ] `ship ready` is audit-only; it checks the current branch PR readiness without creating a PR or marking one ready
+- [ ] raw sync inspects the full related tree by default; use `--no-recurse-related` to stay on the current repo only
+- [ ] raw sync refreshes refs when `origin` exists and auto-recovers safe sequencer/detached state before syncing
+- [ ] when the checkout is dirty, raw sync may stash tracked + untracked changes, fast-forward from upstream, and then restore the dirty tree
+- [ ] if direct stash replay conflicts, raw sync resets that failed replay and falls back to a deterministic union-merge restore when safe
+- [ ] if fast-forward sync is not possible or the dirty-tree restore is not safe, raw sync preserves the stash and reports a blocked state instead of rebasing by default
+- [ ] when the next step depends on exact status, use:
+  - `bash "$SKILL_ROOT/scripts/sync-raw.sh" --json`
 
 ---
 

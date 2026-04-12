@@ -19,20 +19,46 @@ When bypassing, record:
 
 ## Routing table
 
+- Repo/tree diagnosis:
+  - `bash "$SKILL_ROOT/scripts/repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-fetch]`
+  - Default scope is the full related tree; use `--no-recurse-related` to stay on the current repo only.
+- Safe repo-state recovery:
+  - `bash "$SKILL_ROOT/scripts/recover-repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-detached-recovery]`
+  - Default scope is the full related tree; safe sequencer/detached recovery continues automatically, rescue-grade recovery stops and reports next action.
+- High-level doctor entrypoint:
+  - `bash "$SKILL_ROOT/scripts/doctor.sh" [fix] [--repo <path>] [--scope current|tree] [--json] [--no-fetch] [--no-detached-recovery]`
+  - `doctor` is report-first; `doctor fix` applies safe recovery/sync and reports remaining reconciliation work without creating commits, pushes, or PRs.
 - Branch/worktree creation (worktree default):
-  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]`
+  - `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks] [--no-detached-recovery] [--json]`
+  - Default scope is the current repo only; helper refreshes refs and auto-recovers safe local sequencer/detached state before branch work.
+- Non-raw worktree enforcement for an existing feature branch:
+  - `bash "$SKILL_ROOT/scripts/ensure-worktree.sh" [--repo <path>] [--branch <name>] [--json]`
+  - Default scope is the current repo only; helper refreshes refs and auto-recovers safe local sequencer/detached state before worktree adoption.
 - Security bootstrap (hooks + CI files):
-  - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]`
+  - `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci] [--json]`
 - Governance capability preflight (required before governance enforce):
   - `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]`
 - Hook installation:
-  - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]`
+  - `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force] [--json]`
 - Commit signing detection (check before committing):
   - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
 - Sensitive-data pre-commit gate (required before `git commit`):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact [--repo <path>]`
 - Sensitive-data full repo scan (CI/manual parity):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
+- Raw in-place sync on the current branch and related tree:
+  - `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]`
+  - Default scope is the full related tree; use `--no-recurse-related` to stay on the current repo only.
+  - JSON statuses distinguish plain fast-forward sync, stash-backed dirty sync, deterministic fallback restore, and blocked restore cases.
+- High-level ship entrypoint:
+  - `bash "$SKILL_ROOT/scripts/ship.sh" [raw] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]`
+  - `ship` syncs first, then uses the normal branch/worktree/PR flow and reports a readiness snapshot after the PR exists; `ship raw` syncs, batches Conventional Commits, pushes in place, and reports a snapshot when a PR already exists.
+  - `ship ready` is audit-only: it reports readiness for the current branch PR and never creates a PR or flips draft state.
+- Parent/submodule tree reconciliation after sync/merge/submodule commits:
+  - `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]`
+  - Default scope is the full related tree; parent gitlinks remain authoritative.
+- Deterministic Conventional Commit message generation:
+  - `python3 "$SKILL_ROOT/scripts/commit-message.py" --type <type> [--scope <scope>] --subject "<subject>" --bullet "<line>" [--bullet "<line>" ...] [--footer "<line>" ...] [--out <path>]`
 - PR creation:
   - `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]`
   - `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]`
@@ -42,6 +68,9 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> [--repo owner/repo] (--body-file <path> | --body "<text>") [--dry-run]`
 - PR hygiene snapshot:
   - `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>`
+- PR readiness report:
+  - `python3 "$SKILL_ROOT/scripts/pr-readiness-report.py" <pr_number> [--repo owner/repo] [--local-repo <path>] [--scope current|tree] [--watch-checks] [--json]`
+  - Reports required checks, review state, and local/tree git state in one deterministic snapshot.
 - Strict PR update gate:
   - `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks] [--full-comments]`
 - Top-level PR comment (deterministic; avoids literal `\n` rendering):
@@ -50,6 +79,7 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]`
 - Mark draft PR ready after strict gates:
   - `bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> [--repo owner/repo] [--watch-checks]`
+  - This wrapper now runs `pr-readiness-report.py` first and refuses to mutate when the draft PR is not safe to flip.
 - Unresolved inline thread check:
   - `bash "$SKILL_ROOT/scripts/pr-unresolved-threads.sh" <pr_number> [--repo owner/repo] [--fail-on-unresolved]`
 - Resolve unresolved inline threads:
@@ -68,7 +98,8 @@ When bypassing, record:
   - Default generates a skeleton with deterministic Commits/Refs and `<!-- AGENT: -->` placeholders for prose sections. Use `--deterministic` for fully mechanical bodies (legacy).
   - Recommended flow: (1) run with `--body-out <path> --dry-run`, (2) fill placeholders with natural prose, then (3) rerun with `--body-file <path>`.
 - Post-merge local cleanup:
-  - `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]`
+  - `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run] [--no-detached-recovery] [--json]`
+  - Default scope is the current repo only; helper refreshes refs and auto-recovers safe local sequencer/detached state before cleanup checks.
 - Receipt generation:
   - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]`
 - Governance enforcement:

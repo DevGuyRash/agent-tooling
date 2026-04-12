@@ -45,6 +45,7 @@ Use this skill when the user asks you to:
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
 - commit and push raw — skip all branch/worktree/PR creation (**push-only** mode; requires **"raw"** keyword)
+- `ship`, `ship raw`, `doctor`, or `doctor fix` for higher-level deterministic workflow routing
 
 ---
 
@@ -57,6 +58,10 @@ Optional helpers:
 
 - `python3` (for generator scripts)
 - `jq` (some `gh` JSON queries are easier with it, but not required)
+
+Sensitive scan platform note:
+- local `sensitive-scan.sh` support is Linux-first; native Windows is out of scope for this skill
+- use Linux, WSL, or another POSIX environment when the scan must run locally
 
 ---
 
@@ -116,15 +121,24 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
-| Start branch (worktree default) or adopt existing | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks]` |
-| Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci]` |
-| Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force]` |
+| Start branch (worktree default) or adopt existing | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks] [--no-detached-recovery] [--json]` |
+| Auto-adopt linked worktree for non-raw feature branch work | `bash "$SKILL_ROOT/scripts/ensure-worktree.sh" [--repo <path>] [--branch <name>] [--json]` |
+| Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci] [--json]` |
+| Install managed pre-commit hook | `bash "$SKILL_ROOT/scripts/install-hooks.sh" [--repo <path>] [--force] [--json]` |
+| Diagnose current repo or related tree state | `bash "$SKILL_ROOT/scripts/repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-fetch]` |
+| Recover safe sequencer/detached state before continuing work | `bash "$SKILL_ROOT/scripts/recover-repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-detached-recovery]` |
+| High-level repo/tree doctor report | `bash "$SKILL_ROOT/scripts/doctor.sh" [fix] [--repo <path>] [--scope current|tree] [--json] [--no-fetch] [--no-detached-recovery]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
+| Raw in-place sync of current branch and related repo tree | `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]` |
+| High-level ship workflow (draft-first by default; `raw` stays in place) | `bash "$SKILL_ROOT/scripts/ship.sh" [raw] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]` |
+| Reconcile parent/submodule gitlinks and clean child checkouts | `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]` |
+| Generate Conventional Commit message with mandatory bullet body | `python3 "$SKILL_ROOT/scripts/commit-message.py" --type <type> [--scope <scope>] --subject "<subject>" --bullet "<line>" [--bullet "<line>" ...] [--footer "<line>" ...] [--out <path>]` |
 | List available PR labels (names + descriptions) | `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]` |
 | Discover remote PR templates | `bash "$SKILL_ROOT/scripts/pr-template-discover.sh" [--repo owner/repo] [--format text|json]` |
 | Create PR body + PR (draft-first) | `bash "$SKILL_ROOT/scripts/pr-create.sh" --title \"<title>\" [--create --force-create] [--ready] [--base <branch>] [--head <branch>] [--repo owner/repo] [label args] [--template-id <path>]` |
 | Update existing PR body | `bash "$SKILL_ROOT/scripts/pr-update-body.sh" <pr_number> [--repo owner/repo] (--body-file <path> | --body "<text>") [--dry-run]` |
 | PR hygiene audit | `bash "$SKILL_ROOT/scripts/pr-audit.sh" <pr_number>` |
+| PR readiness audit (CI + review + local/tree state) | `python3 "$SKILL_ROOT/scripts/pr-readiness-report.py" <pr_number> [--repo owner/repo] [--local-repo <path>] [--scope current|tree] [--watch-checks] [--json]` |
 | Strict PR workflow (metadata + unresolved threads + checks) | `bash "$SKILL_ROOT/scripts/pr-workflow.sh" <pr_number> [--repo owner/repo] [--watch-checks] [--full-comments]` |
 | Add top-level PR comment (newline-safe) | `bash "$SKILL_ROOT/scripts/pr-comment.sh" <pr_number> --body "<text>" [--repo owner/repo]` |
 | Request bot re-review deterministically | `bash "$SKILL_ROOT/scripts/pr-request-review.sh" <pr_number> [--repo owner/repo] [--note "<text>"]` |
@@ -136,7 +150,7 @@ Path resolution (mandatory):
 | Discover remote issue templates | `bash "$SKILL_ROOT/scripts/issue-template-discover.sh" [--repo owner/repo] [--format text|json] [--template-id <path>]` |
 | Create issue with deterministic body/template flow | `bash "$SKILL_ROOT/scripts/issue-create.sh" --title \"<title>\" [--create --force-create] [--repo owner/repo] [--body-file <path> | --body \"<text>\"] [--template-id <path>] [issue args]` |
 | Squash merge a PR (auto-deletes source branch) | `bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> [--repo owner/repo] [--summary \"<desc override>\"] [--body-file <path> \| --body-out <path>] [--deterministic] [--admin] [--dry-run]` |
-| Clean up merged branch or worktree and return to base | `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run]` |
+| Clean up merged branch or worktree and return to base | `bash "$SKILL_ROOT/scripts/finish-work.sh" [--branch <name>] [--base <branch>] [--dry-run] [--no-detached-recovery] [--json]` |
 | Detect commit signing availability | `bash "$SKILL_ROOT/scripts/detect-signing.sh"` |
 | Receipt generation | `python3 "$SKILL_ROOT/scripts/receipt.py" --branch <branch> --base <base> [--pr-url <url>]` |
 | Governance capability preflight | `bash "$SKILL_ROOT/scripts/gh-scope-check.sh" --repo <owner/repo> [--format text|json]` |
@@ -147,6 +161,11 @@ Exception protocol:
 - Valid blockers are limited to missing script capability, incompatible inputs, or script runtime failure.
 
 Detailed routing notes: [references/SCRIPT_ROUTING.md](references/SCRIPT_ROUTING.md)
+
+Default scope heuristics:
+- `repo-state.sh`, `recover-repo-state.sh`, `sync-raw.sh`, and `reconcile-tree.sh` inspect the full related tree by default.
+- `start-branch.sh`, `ensure-worktree.sh`, commit/push flows, and `finish-work.sh` stay on the current repo by default unless the user explicitly asks for root/tree/all behavior.
+- Parent gitlinks are authoritative for reconciliation; branch-name matching is only a recovery/diagnostic hint.
 
 ---
 
@@ -166,7 +185,7 @@ When you are asked to “do Git work” in a repo, do this first:
    - update PR → PR update playbook (D)
    - merge PR → Merge playbook (E)
    - release notes → Release notes playbook (F)
-   - commit and push **raw** → Push-only playbook (I) — only when "raw" is explicit
+   - `sync raw` / `raw sync` / commit and push **raw** → Push-only playbook (I) — only when "raw" is explicit
 
 Detailed checklists live in:
 
@@ -190,6 +209,7 @@ Minimal deterministic command path (progressive-disclosure entrypoint):
 
 ```bash
 bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output
+bash "$SKILL_ROOT/scripts/ensure-worktree.sh" --json
 # or stay in current checkout instead of creating a worktree:
 # bash "$SKILL_ROOT/scripts/start-branch.sh" feat add-json-output --no-worktree
 bash "$SKILL_ROOT/scripts/setup-security.sh"
@@ -201,8 +221,10 @@ bash "$SKILL_ROOT/scripts/pr-template-discover.sh" --repo <owner/repo>
 # edit generated body file if needed, then explicitly create PR
 # draft by default; pass --ready for non-draft
 # bash "$SKILL_ROOT/scripts/pr-create.sh" --title "feat(cli): add json output" --create --force-create --repo <owner/repo> --label bug --label enhancement
-# after checks/threads are clean:
-# bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo>
+# audit readiness first:
+# python3 "$SKILL_ROOT/scripts/pr-readiness-report.py" <pr_number> --repo <owner/repo> --watch-checks --json
+# then, only when the report is clear:
+# bash "$SKILL_ROOT/scripts/pr-mark-ready.sh" <pr_number> --repo <owner/repo> --watch-checks
 # draft merge body for optional edits:
 # bash "$SKILL_ROOT/scripts/pr-merge-squash.sh" <pr_number> --body-out /tmp/squash-body.md --dry-run
 # edit /tmp/squash-body.md if desired, then:
@@ -218,7 +240,7 @@ python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref 
 
 ### Goal
 
-Create a correctly named branch from the default branch, without accidentally working on `main`. Default behavior creates a clean linked worktree at `<repo>.worktrees/<type>/<slug>` (GitKraken-compatible layout); add `--no-worktree` to stay in the current checkout instead.
+Create a correctly named branch from the default branch, without accidentally working on `main`. Default behavior creates a clean linked worktree at `<repo>.worktrees/<type>/<slug>` (GitKraken-compatible layout); add `--no-worktree` to stay in the current checkout instead. For later non-raw work on an existing feature branch, run `ensure-worktree.sh` so the workflow auto-adopts the linked worktree instead of continuing from the main checkout.
 
 ### Steps
 
@@ -227,6 +249,7 @@ Create a correctly named branch from the default branch, without accidentally wo
    - **Branch mode (`--no-worktree`):** tracked + untracked changes are stashed with deterministic metadata and restored after branch switch.
    - `scripts/start-branch.sh` handles both cases automatically.
    - It also auto-installs the managed pre-commit sensitive-scan hook (use `--no-install-hooks` to skip).
+   - Before branch discovery, the helper refreshes local refs when `origin` exists and auto-recovers safe sequencer/detached state; rescue-grade recovery still stops for review.
 2. Sync the default branch for the mode you are using:
    - branch mode: `git checkout <default-branch> && git pull`
    - linked worktree mode: let `start-branch.sh` resolve from the default branch without switching the current checkout
@@ -234,6 +257,7 @@ Create a correctly named branch from the default branch, without accidentally wo
    - a linked worktree at `<main-checkout>.worktrees/<type>/<slug>` (default), or
    - a local branch in the current checkout when `--no-worktree` is passed.
 4. To adopt an existing branch instead of creating a new one, use `--existing`.
+5. When a non-raw workflow starts on a feature branch that is not already in a linked worktree, run `bash "$SKILL_ROOT/scripts/ensure-worktree.sh" --json` and continue from the returned `path`.
 
 **Recommended helper** (handles default-branch detection + naming validation):
 
@@ -260,7 +284,7 @@ Use:
 ```md
 <type>(<scope>): <description>
 
-<body>
+<bullet-list body>
 
 [optional footer]
 ```
@@ -268,7 +292,8 @@ Use:
 - imperative mood, lowercase, no trailing period
 - scope is optional but preferred when it adds clarity
 - keep commits atomic and logically grouped
-- you SHALL include a commit body explaining **why** the change was made, not a mechanical description of the diff; WHEN you omit the body THEN you SHALL note the justification internally — headline-only is acceptable only for zero-behavioral-impact changes; before writing commits, check `git log --oneline -10` and adapt to the project's conventions (see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md) for body guidelines)
+- you SHALL include a mandatory bullet-list body explaining **why** the change was made; before writing commits, check `git log --oneline -10` and adapt to the project's conventions (see [references/CONVENTIONAL_COMMITS.md](references/CONVENTIONAL_COMMITS.md) for body guidelines)
+- use `python3 "$SKILL_ROOT/scripts/commit-message.py" ...` when you need a deterministic commit body skeleton
 - run sensitive-data gate before commit:
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 - when asked to "commit worktree"/"commit things", batch commits by logical units; single all-in-one commit is exception-only (explicit request required)
@@ -361,7 +386,7 @@ Guidance for handling automated reviewer feedback:
 
 Draft-ready lifecycle:
 - `pr-create.sh --create` always creates draft PRs unless `--ready` is set.
-- Use `pr-mark-ready.sh` after unresolved threads and required checks are green.
+- Use `ship ready` or `pr-readiness-report.py` for a non-mutating readiness audit, then use `pr-mark-ready.sh` only when the report is clear.
 
 ---
 
@@ -477,31 +502,44 @@ Commit and push to the current branch without creating branches, worktrees, or P
 
 ### Trigger
 
-This playbook requires the keyword **"raw"** — e.g., **"commit and push raw"**, **"push raw"**, **"raw push"**. Without "raw", "commit and push" follows the normal flow (create worktree if needed, then commit, then push).
+This playbook requires the keyword **"raw"** — e.g., **"sync raw"**, **"raw sync"**, **"commit and push raw"**, **"push raw"**, **"raw push"**, or **"ship raw"**. Without "raw", normal feature-branch work first auto-adopts the linked worktree when needed, then continues with commit/push/update steps.
 
-WHEN the user includes **"raw"** in a commit/push request THEN you SHALL use this playbook.
+WHEN the user includes **"raw"** in a sync/commit/push request THEN you SHALL use this playbook.
 
 WHEN the user says "commit and push" without "raw" THEN you SHALL follow the normal flow:
 - on the default branch → Playbook A (create worktree/branch first)
-- on a feature branch not in a worktree → create a worktree for the branch, then commit and push
+- on a feature branch not in a worktree → auto-adopt the linked worktree for the branch, then commit and push
 - on a feature branch in a worktree → Playbook B (commit), then push
 
 ### Steps
 
 1. Detect repo context (same as Quick Start step 1).
-2. Run sensitive-data gate:
+2. For sync requests, use `bash "$SKILL_ROOT/scripts/sync-raw.sh"` and keep every repo on its current branch.
+   - Raw sync inspects the full related tree by default; use `--no-recurse-related` to stay on the current repo only.
+   - Before syncing, the helper refreshes local refs when `origin` exists and auto-recovers safe sequencer/detached state; rescue-grade recovery still stops for review.
+   - When a repo is dirty, raw sync may stash tracked + untracked changes, fast-forward from upstream, and then restore the dirty tree.
+   - When direct stash replay conflicts after the fast-forward, raw sync resets the failed replay attempt and falls back to a deterministic union-merge restore when safe.
+   - Raw sync does not rebase by default; if fast-forward is not possible or the dirty-tree restore is not safe, it preserves the stash and reports a blocked state.
+3. Run sensitive-data gate:
    - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
-3. Create batched Conventional Commits with bodies (per Playbook B).
-4. Check signing availability:
+4. Create batched Conventional Commits with mandatory bullet-list bodies (per Playbook B).
+5. Check signing availability:
    - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
    - WHEN signing is configured but unavailable (exit 1) THEN you SHALL commit with `--no-gpg-sign` and warn the user.
-5. Push to current branch: `git push`
-6. Emit commit receipt:
+6. Push to current branch: `git push`
+7. Emit commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base <default-branch>`
 
 WHEN push-only mode is active THEN you SHALL NOT create branches, worktrees, or PRs.
 
 WHEN push-only mode is active THEN you SHALL still follow Conventional Commits, the sensitive-data gate, and receipts.
+
+High-level shortcuts:
+- `ship` syncs the current scope, batches commits in a linked worktree when needed, pushes, and stops at a draft PR by default.
+- `ship ready` audits the current branch PR readiness only; it does not create a PR or mark one ready.
+- `ship raw` keeps work on the current branch, syncs in place, batches Conventional Commits, and pushes without branch/worktree/PR creation.
+- `doctor` reports repo and related-tree health.
+- `doctor fix` applies safe recovery and sync, then reports remaining reconciliation work without creating commits, pushes, or PRs.
 
 ---
 

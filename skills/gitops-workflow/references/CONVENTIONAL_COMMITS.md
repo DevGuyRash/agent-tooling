@@ -7,7 +7,7 @@ This skill assumes **Conventional Commits** style commit messages.
 ```text
 <type>(<scope>): <description>
 
-<body>
+<bullet-list body>
 
 [optional footer]
 ```
@@ -33,16 +33,14 @@ Extended types (allowed for tooling/workflow):
 
 ## Body guidelines
 
-You SHALL include a commit body explaining **why** the change was made and **what** it achieves at a high level.
+You SHALL include a mandatory bullet-list body explaining **why** the change was made and **what** it achieves at a high level.
 
 You SHALL NOT repeat the subject line in the body or describe the diff mechanically (no "changed line 42 of foo.py"). Instead explain intent and context.
 
-WHEN you omit the body THEN you SHALL note the justification internally (e.g., "headline-only: typo fix, no behavioral change"). Headline-only is acceptable only for changes with zero behavioral impact — typo fixes, whitespace formatting, or dependency bumps with no code change.
-
 Rules:
 - separate body from subject with one blank line
-- wrap body lines at ≈72 characters
-- use paragraphs or bullet lists as appropriate
+- use one or more `- ` bullets in the body
+- wrap body lines at ≈72 characters when practical
 
 ## Pre-commit conventions
 
@@ -53,18 +51,13 @@ When the request is generic (for example, "commit worktree" or "commit changes")
 Before creating commits, run the sensitive-data gate:
 - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 
-Examples (headline-only — justify omission; zero behavioral impact only):
-- `docs: fix typo in README`
-- `style: reformat imports`
-
 Examples (with body):
 
 ```text
 feat(cli): add --json output
 
-The CLI previously only supported human-readable table output.
-Machine consumers need structured data for piping into jq and
-downstream tooling. Adds --json flag to all list commands.
+- the cli previously only supported human-readable table output
+- machine consumers need structured output for jq and downstream tooling
 
 Closes #234
 ```
@@ -72,18 +65,15 @@ Closes #234
 ```text
 fix(api): handle empty payload in webhook handler
 
-Incoming webhooks from the legacy integration occasionally send
-an empty body instead of an empty JSON object. This caused a
-500 on the deserialization path. Return 204 No Content instead.
+- legacy integrations occasionally send an empty body instead of an object
+- return 204 no content instead of raising a 500 on deserialization
 ```
 
 ```text
 refactor(auth): extract token validation into shared middleware
 
-Three separate route handlers duplicated the same JWT validation
-logic with slightly different error messages. Consolidating into
-a single middleware reduces drift and makes the auth surface
-easier to audit.
+- three handlers duplicated jwt validation with drifting error behavior
+- consolidate validation to reduce drift and simplify auth auditing
 ```
 
 ## Scopes
