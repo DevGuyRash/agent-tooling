@@ -236,6 +236,28 @@ ensure_tracking_branch_if_remote_exists() {
   return 1
 }
 
+repo_remote_branch_exists() {
+  local repo="${1:-.}"
+  local branch="$2"
+  git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"
+}
+
+gitops_noninteractive_ssh_command() {
+  local ssh_cmd="${GIT_SSH_COMMAND:-ssh}"
+  if [[ "$ssh_cmd" != *BatchMode=yes* ]]; then
+    ssh_cmd="$ssh_cmd -oBatchMode=yes"
+  fi
+  printf '%s\n' "$ssh_cmd"
+}
+
+gitops_git_noninteractive() {
+  local repo="${1:-.}"
+  shift
+  local ssh_cmd=""
+  ssh_cmd="$(gitops_noninteractive_ssh_command)"
+  env     GIT_TERMINAL_PROMPT=0     GIT_ASKPASS=/bin/true     SSH_ASKPASS=/bin/true     GIT_SSH_COMMAND="$ssh_cmd"     git -C "$repo" "$@"
+}
+
 _detached_candidate_branches() {
   local repo="${1:-.}"
   {

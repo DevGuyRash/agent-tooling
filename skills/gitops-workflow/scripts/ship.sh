@@ -14,19 +14,21 @@ JSON="false"
 DETACHED_MODE="recover"
 SCOPE="current"
 RAW="false"
+SYNC_ONLY="false"
 STOP=""
 RESULTS_FILE=""
 
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/ship.sh [raw] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]
+  bash scripts/ship.sh [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]
 
 Behavior:
   - `ship` defaults to the normal workflow and stops after PR create/update in draft mode.
   - `ship ready` audits the current branch PR readiness only; it does not create a PR or mark one ready.
   - `ship raw` syncs, batch-commits current repo changes, pushes the current branch in place, and reports PR readiness when one already exists.
-  - `raw` may appear before or after `ship` stop tokens; invalid combinations fail fast.
+  - `ship sync` runs sync-only mode on the current branch and stops after the bidirectional raw sync stage.
+  - `raw` or `sync` may appear before or after `ship` stop tokens when compatible; invalid combinations fail fast.
 
 Options:
   --repo <path>              Repository path (default: current directory).
@@ -39,7 +41,7 @@ USAGE
 
 emit_json() {
   local file="$1"
-  python3 - "$file" "$RAW" "$STOP" "$SCOPE" <<'PY'
+  python3 - "$file" "$RAW" "$SYNC_ONLY" "$STOP" "$SCOPE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -58,9 +60,9 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
             item["details_raw"] = parts[3]
     items.append(item)
 print(json.dumps({
-    "mode": "raw" if sys.argv[2] == "true" else "normal",
-    "stop": sys.argv[3],
-    "scope": sys.argv[4],
+    "mode": "sync" if sys.argv[3] == "true" else ("raw" if sys.argv[2] == "true" else "normal"),
+    "stop": sys.argv[4],
+    "scope": sys.argv[5],
     "continued": all(item["status"] not in {"blocked", "error"} for item in items),
     "results": items,
 }, indent=2))
@@ -98,9 +100,21 @@ normalize_tokens() {
   for token in "$@"; do
     case "$token" in
       raw)
+        if [[ "$SYNC_ONLY" == "true" ]]; then
+          die "invalid ship syntax: 'raw' and 'sync' are mutually exclusive ship modes"
+        fi
         RAW="true"
         ;;
+      sync)
+        if [[ "$RAW" == "true" || -n "$STOP" ]]; then
+          die "invalid ship syntax: 'sync' cannot be combined with raw or stop tokens"
+        fi
+        SYNC_ONLY="true"
+        ;;
       push|pr|ready)
+        if [[ "$SYNC_ONLY" == "true" ]]; then
+          die "invalid ship syntax: sync-only ship does not accept additional stop tokens"
+        fi
         if [[ -n "$STOP" && "$STOP" != "$token" ]]; then
           die "invalid ship syntax: conflicting stop tokens '$STOP' and '$token'"
         fi
@@ -253,12 +267,12 @@ push_current_branch() {
   local out_file=""
   out_file="$(mktemp)"
   if [[ -z "$(current_upstream_ref "$repo")" ]] && repo_has_origin "$repo"; then
-    if git -C "$repo" push -u origin "$branch" >"$out_file" 2>"$out_file.err"; then
+    if gitops_git_noninteractive "$repo" push -u origin "$branch" >"$out_file" 2>"$out_file.err"; then
       record_result "push" "ok" "pushed branch '$branch' and set upstream"
       rm -f "$out_file" "$out_file.err"
       return 0
     fi
-  elif git -C "$repo" push >"$out_file" 2>"$out_file.err"; then
+  elif gitops_git_noninteractive "$repo" push >"$out_file" 2>"$out_file.err"; then
     record_result "push" "ok" "pushed branch '$branch'"
     rm -f "$out_file" "$out_file.err"
     return 0
@@ -404,6 +418,11 @@ record_existing_pr_snapshot() {
   read -r pr_number pr_url pr_is_draft pr_title < <(parse_pr_info "$pr_payload" | paste -sd ' ' -)
   record_result "pr" "ok" "existing PR #$pr_number already tracks branch '$(current_branch_name "$repo" || true)' ($pr_url)"
   record_readiness_snapshot "$repo" "$pr_number" snapshot || true
+}
+
+handle_sync_only_mode() {
+  local repo="$1"
+  run_sync_stage "$repo"
 }
 
 handle_raw_mode() {
@@ -577,9 +596,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$SCOPE" == "current" || "$SCOPE" == "tree" ]] || die "invalid --scope '$SCOPE'"
+if [[ "$RAW" == "true" && "$SYNC_ONLY" == "true" ]]; then
+  die "invalid ship syntax: raw and sync modes are mutually exclusive"
+fi
 if [[ "$RAW" == "true" ]]; then
   [[ -z "$STOP" || "$STOP" == "push" ]] || die "raw ship supports only the 'push' stop"
   STOP="push"
+elif [[ "$SYNC_ONLY" == "true" ]]; then
+  STOP="sync"
 else
   if [[ -z "$STOP" ]]; then
     STOP="pr"
@@ -596,10 +620,18 @@ fi
 RESULTS_FILE="$(mktemp)"
 trap 'rm -f "$RESULTS_FILE"' EXIT
 
-record_result "preflight" "ok" "ship mode is $( [[ "$RAW" == "true" ]] && printf raw || printf normal ) with stop '$STOP'"
+SHIP_MODE="normal"
+if [[ "$RAW" == "true" ]]; then
+  SHIP_MODE="raw"
+elif [[ "$SYNC_ONLY" == "true" ]]; then
+  SHIP_MODE="sync"
+fi
+record_result "preflight" "ok" "ship mode is $SHIP_MODE with stop '$STOP'"
 
 if [[ "$RAW" == "true" ]]; then
   handle_raw_mode "$REPO_PATH" || true
+elif [[ "$SYNC_ONLY" == "true" ]]; then
+  handle_sync_only_mode "$REPO_PATH" || true
 elif [[ "$STOP" == "ready" ]]; then
   handle_readiness_mode "$REPO_PATH" || true
 else

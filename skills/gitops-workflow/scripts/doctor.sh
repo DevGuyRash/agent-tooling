@@ -178,10 +178,20 @@ for item in state.get("results", []):
         syn = sync_map.get(item["repo"])
         if rec and rec.get("outcome") == "recovered" and level != "blocked":
             level = "fixed"
-        if syn and str(syn.get("status", "")).startswith("synced") and level != "blocked":
-            level = "fixed"
-        if syn and str(syn.get("status", "")).startswith("blocked"):
-            level = "blocked"
+        if syn:
+            sync_status = str(syn.get("status", ""))
+            if sync_status.startswith("blocked"):
+                level = "blocked"
+            elif sync_status in {
+                "synced-with-fallback",
+                "published",
+                "rebased-and-pushed",
+                "pulled-and-pushed",
+                "pulled",
+                "pushed",
+                "up-to-date",
+            } and level != "blocked":
+                level = "fixed"
 
     results.append(
         {
