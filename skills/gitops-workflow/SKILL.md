@@ -45,7 +45,7 @@ Use this skill when the user asks you to:
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
 - commit and push raw — skip all branch/worktree/PR creation (**push-only** mode; requires **"raw"** keyword)
-- `ship`, `ship raw`, `doctor`, or `doctor fix` for higher-level deterministic workflow routing
+- `ship`, `ship raw`, `ship sync`, `doctor`, or `doctor fix` for higher-level deterministic workflow routing
 
 ---
 
@@ -130,7 +130,7 @@ Path resolution (mandatory):
 | High-level repo/tree doctor report | `bash "$SKILL_ROOT/scripts/doctor.sh" [fix] [--repo <path>] [--scope current|tree] [--json] [--no-fetch] [--no-detached-recovery]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
 | Raw in-place sync of current branch and related repo tree | `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]` |
-| High-level ship workflow (draft-first by default; `raw` stays in place) | `bash "$SKILL_ROOT/scripts/ship.sh" [raw] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]` |
+| High-level ship workflow (draft-first by default; `raw` stays in place; `sync` is sync-only mode) | `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]` |
 | Reconcile parent/submodule gitlinks and clean child checkouts | `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]` |
 | Generate Conventional Commit message with mandatory bullet body | `python3 "$SKILL_ROOT/scripts/commit-message.py" --type <type> [--scope <scope>] --subject "<subject>" --bullet "<line>" [--bullet "<line>" ...] [--footer "<line>" ...] [--out <path>]` |
 | List available PR labels (names + descriptions) | `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]` |
@@ -185,7 +185,7 @@ When you are asked to “do Git work” in a repo, do this first:
    - update PR → PR update playbook (D)
    - merge PR → Merge playbook (E)
    - release notes → Release notes playbook (F)
-   - `sync raw` / `raw sync` / commit and push **raw** → Push-only playbook (I) — only when "raw" is explicit
+   - `sync raw` / `raw sync` / `ship sync` / commit and push **raw** → Raw-mode playbook (I) — `ship sync` is sync-only; other raw wording continues through the requested raw steps
 
 Detailed checklists live in:
 
@@ -494,15 +494,17 @@ Helper references:
 
 ---
 
-## Playbook I: Push-only mode (commit and push raw)
+## Playbook I: Raw mode (sync-only or commit/push raw)
 
 ### Goal
 
-Commit and push to the current branch without creating branches, worktrees, or PRs. This is an explicit override of the normal workflow.
+Run explicit raw in-place work on the current branch without creating branches or worktrees. Sync-only raw flows stop after raw sync; raw commit/push flows continue through the requested commit and push steps.
 
 ### Trigger
 
-This playbook requires the keyword **"raw"** — e.g., **"sync raw"**, **"raw sync"**, **"commit and push raw"**, **"push raw"**, **"raw push"**, or **"ship raw"**. Without "raw", normal feature-branch work first auto-adopts the linked worktree when needed, then continues with commit/push/update steps.
+This playbook handles explicit raw in-place flows. **"ship sync"** is the sync-only `ship.sh` mode and stops after the raw sync step. Other raw wording such as **"sync raw"**, **"raw sync"**, **"commit and push raw"**, **"push raw"**, **"raw push"**, or **"ship raw"** continues through the requested raw commit/push steps. Without raw wording, normal feature-branch work first auto-adopts the linked worktree when needed, then continues with commit/push/update steps.
+
+WHEN the user says **"ship sync"** THEN you SHALL run `bash "$SKILL_ROOT/scripts/ship.sh" sync ...` and SHALL NOT continue into commit, push, or PR steps after the raw sync stage.
 
 WHEN the user includes **"raw"** in a sync/commit/push request THEN you SHALL use this playbook.
 
@@ -515,11 +517,15 @@ WHEN the user says "commit and push" without "raw" THEN you SHALL follow the nor
 
 1. Detect repo context (same as Quick Start step 1).
 2. For sync requests, use `bash "$SKILL_ROOT/scripts/sync-raw.sh"` and keep every repo on its current branch.
+   - If the original wording was **"ship sync"**, run the sync-only `ship.sh` mode and stop after this step.
    - Raw sync inspects the full related tree by default; use `--no-recurse-related` to stay on the current repo only.
    - Before syncing, the helper refreshes local refs when `origin` exists and auto-recovers safe sequencer/detached state; rescue-grade recovery still stops for review.
-   - When a repo is dirty, raw sync may stash tracked + untracked changes, fast-forward from upstream, and then restore the dirty tree.
-   - When direct stash replay conflicts after the fast-forward, raw sync resets the failed replay attempt and falls back to a deterministic union-merge restore when safe.
-   - Raw sync does not rebase by default; if fast-forward is not possible or the dirty-tree restore is not safe, it preserves the stash and reports a blocked state.
+   - When a repo is dirty, raw sync may stash tracked + untracked changes, integrate upstream history, and then restore the dirty tree.
+   - When direct stash replay conflicts after integration, raw sync resets that failed replay attempt and falls back to a deterministic union-merge restore when safe.
+   - When the branch is behind only, raw sync fast-forwards from upstream.
+   - When the branch has diverged, raw sync rebases onto upstream by default and then pushes when needed.
+   - When the branch has local commits but no upstream, raw sync publishes the branch and sets upstream.
+   - When the dirty-tree restore is not safe or history integration fails, raw sync preserves the stash and reports a blocked state.
 3. Run sensitive-data gate:
    - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --staged --redact`
 4. Create batched Conventional Commits with mandatory bullet-list bodies (per Playbook B).
@@ -530,14 +536,15 @@ WHEN the user says "commit and push" without "raw" THEN you SHALL follow the nor
 7. Emit commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base <default-branch>`
 
-WHEN push-only mode is active THEN you SHALL NOT create branches, worktrees, or PRs.
+WHEN raw mode is active THEN you SHALL NOT create branches, worktrees, or PRs.
 
-WHEN push-only mode is active THEN you SHALL still follow Conventional Commits, the sensitive-data gate, and receipts.
+WHEN raw mode continues into commit/push steps THEN you SHALL still follow Conventional Commits, the sensitive-data gate, and receipts.
 
 High-level shortcuts:
 - `ship` syncs the current scope, batches commits in a linked worktree when needed, pushes, and stops at a draft PR by default.
 - `ship ready` audits the current branch PR readiness only; it does not create a PR or mark one ready.
 - `ship raw` keeps work on the current branch, syncs in place, batches Conventional Commits, and pushes without branch/worktree/PR creation.
+- `ship sync` is the sync-only `ship.sh` mode; it stops after the in-place raw sync path.
 - `doctor` reports repo and related-tree health.
 - `doctor fix` applies safe recovery and sync, then reports remaining reconciliation work without creating commits, pushes, or PRs.
 

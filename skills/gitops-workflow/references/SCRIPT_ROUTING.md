@@ -48,11 +48,14 @@ When bypassing, record:
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
 - Raw in-place sync on the current branch and related tree:
   - `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]`
+  - Recognized phrases `sync raw` and `raw sync` route here directly.
   - Default scope is the full related tree; use `--no-recurse-related` to stay on the current repo only.
-  - JSON statuses distinguish plain fast-forward sync, stash-backed dirty sync, deterministic fallback restore, and blocked restore cases.
+  - Raw sync now behaves like a bidirectional branch sync: it fetches, fast-forwards when behind, rebases when diverged, publishes branches without upstream, pushes local commits when safe, and preserves dirty work via stash-plus-fallback restore.
+  - JSON statuses distinguish fast-forward pull, push-only, rebased-and-pushed, published, deterministic fallback restore, and blocked recovery cases.
 - High-level ship entrypoint:
-  - `bash "$SKILL_ROOT/scripts/ship.sh" [raw] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]`
+  - `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]`
   - `ship` syncs first, then uses the normal branch/worktree/PR flow and reports a readiness snapshot after the PR exists; `ship raw` syncs, batches Conventional Commits, pushes in place, and reports a snapshot when a PR already exists.
+  - `ship sync` is the sync-only `ship.sh` mode; it runs the raw sync stage and stops before commit, push, or PR stages.
   - `ship ready` is audit-only: it reports readiness for the current branch PR and never creates a PR or flips draft state.
 - Parent/submodule tree reconciliation after sync/merge/submodule commits:
   - `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]`

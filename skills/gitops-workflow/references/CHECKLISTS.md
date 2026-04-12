@@ -77,13 +77,17 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 
 - [ ] `sync raw` stays on the current branch; it does not create branches or worktrees
 - [ ] `ship raw` is the higher-level one-liner that syncs, batches Conventional Commits, pushes in place, and reports PR readiness when a PR already tracks the branch
+- [ ] `ship sync` is the sync-only `ship.sh` mode; it runs the raw sync stage and stops before commit, push, or PR stages
 - [ ] plain `ship` syncs first, then follows the normal branch/worktree/push/PR flow, reuses an existing PR when one already tracks the branch, and reports a readiness snapshot after the PR exists
 - [ ] `ship ready` is audit-only; it checks the current branch PR readiness without creating a PR or marking one ready
 - [ ] raw sync inspects the full related tree by default; use `--no-recurse-related` to stay on the current repo only
 - [ ] raw sync refreshes refs when `origin` exists and auto-recovers safe sequencer/detached state before syncing
-- [ ] when the checkout is dirty, raw sync may stash tracked + untracked changes, fast-forward from upstream, and then restore the dirty tree
+- [ ] when the checkout is dirty, raw sync may stash tracked + untracked changes, integrate upstream history, and then restore the dirty tree
 - [ ] if direct stash replay conflicts, raw sync resets that failed replay and falls back to a deterministic union-merge restore when safe
-- [ ] if fast-forward sync is not possible or the dirty-tree restore is not safe, raw sync preserves the stash and reports a blocked state instead of rebasing by default
+- [ ] if the branch is behind only, raw sync fast-forwards from upstream
+- [ ] if the branch has diverged, raw sync rebases onto upstream by default and then pushes when needed
+- [ ] if the branch has local commits but no upstream, raw sync publishes the branch and sets upstream
+- [ ] if history integration or dirty-tree restore is not safe, raw sync preserves the stash and reports a blocked state
 - [ ] when the next step depends on exact status, use:
   - `bash "$SKILL_ROOT/scripts/sync-raw.sh" --json`
 
