@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -171,6 +172,23 @@ class HookInstallerTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn(MANAGED_MARKER, text)
             self.assertIn("sensitive-scan.sh", text)
+
+    def test_install_json_output_is_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            proc = run(
+                ["bash", str(INSTALL_SCRIPT), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "installed")
+            self.assertEqual(payload["repo"], str(repo))
+            self.assertTrue(payload["hook_path"])
 
 
 if __name__ == "__main__":

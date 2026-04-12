@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -93,7 +94,24 @@ class SetupSecurityScriptTests(unittest.TestCase):
             text = (repo / ".github" / "gitleaks.toml").read_text(encoding="utf-8")
             self.assertIn('title = "gitops-workflow gitleaks config"', text)
 
+    def test_bootstrap_json_output_is_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir(parents=True, exist_ok=True)
+            init_repo(repo)
+
+            proc = run(
+                ["bash", str(SETUP_SCRIPT), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["repo"], str(repo))
+            self.assertTrue(payload["hooks"])
+            self.assertTrue(payload["ci"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

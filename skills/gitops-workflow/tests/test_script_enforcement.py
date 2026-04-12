@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -33,7 +34,14 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "install-hooks.sh",
             SCRIPTS_DIR / "setup-security.sh",
             SCRIPTS_DIR / "gh-scope-check.sh",
+            SCRIPTS_DIR / "ensure-worktree.sh",
+            SCRIPTS_DIR / "reconcile-tree.sh",
+            SCRIPTS_DIR / "recover-repo-state.sh",
+            SCRIPTS_DIR / "repo-state.sh",
             SCRIPTS_DIR / "sensitive-scan.sh",
+            SCRIPTS_DIR / "sync-raw.sh",
+            SCRIPTS_DIR / "ship.sh",
+            SCRIPTS_DIR / "doctor.sh",
             SCRIPTS_DIR / "pr-create.sh",
             SCRIPTS_DIR / "pr-update-body.sh",
             SCRIPTS_DIR / "pr-labels-list.sh",
@@ -41,6 +49,8 @@ class ScriptSyntaxTests(unittest.TestCase):
             SCRIPTS_DIR / "issue-template-discover.sh",
             SCRIPTS_DIR / "issue-create.sh",
             SCRIPTS_DIR / "lib" / "common.sh",
+            SCRIPTS_DIR / "lib" / "git-state.sh",
+            SCRIPTS_DIR / "lib" / "router.sh",
             SCRIPTS_DIR / "pr-comment.sh",
             SCRIPTS_DIR / "pr-request-review.sh",
             SCRIPTS_DIR / "pr-mark-ready.sh",
@@ -54,6 +64,17 @@ class ScriptSyntaxTests(unittest.TestCase):
         for target in targets:
             proc = run(["bash", "-n", str(target)], cwd=ROOT)
             self.assertEqual(proc.returncode, 0, f"bash -n failed for {target}\n{proc.stderr}")
+
+
+class PythonScriptCompileTests(unittest.TestCase):
+    def test_python_scripts_compile(self):
+        targets = [
+            SCRIPTS_DIR / "batch-commit.py",
+            SCRIPTS_DIR / "commit-message.py",
+            SCRIPTS_DIR / "pr-readiness-report.py",
+        ]
+        proc = run(["python3", "-m", "py_compile", *(str(target) for target in targets)], cwd=ROOT)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
@@ -730,6 +751,408 @@ class StartBranchScriptTests(unittest.TestCase):
             self.assertNotEqual(proc_base.returncode, 0)
             self.assertIn("option '--base' requires a value", proc_base.stderr)
 
+    def test_start_branch_uses_trunk_when_origin_head_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "trunk"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "trunk-based", "--no-worktree"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("Base branch: trunk", proc.stdout)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "feat/trunk-based")
+
+    def test_start_branch_adopts_remote_existing_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+            run(["git", "checkout", "-b", "feat/remote-only"], cwd=work)
+            (work / "feature.txt").write_text("remote\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote branch"], cwd=work)
+            run(["git", "push", "-u", "origin", "feat/remote-only"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "remote-only", "--existing", "--no-worktree"],
+                cwd=clone,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone).stdout.strip(), "feat/remote-only")
+            upstream = run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd=clone).stdout.strip()
+            self.assertEqual(upstream, "origin/feat/remote-only")
+
+    def test_start_branch_recovers_detached_head_before_branch_creation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "checkout", "HEAD^0"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "from-detached", "--base", "main", "--no-worktree"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "feat/from-detached")
+
+    def test_start_branch_json_output_is_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "json-mode", "--base", "main", "--json"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "created")
+            self.assertEqual(payload["branch"], "feat/json-mode")
+            self.assertEqual(payload["mode"], "worktree")
+
+
+class EnsureWorktreeScriptTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "checkout", "-b", "main"], cwd=repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        run(["git", "add", "README.md"], cwd=repo)
+        run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+    def test_ensure_worktree_creates_linked_checkout_for_current_feature_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "feat/in-place"], cwd=repo)
+            (repo / "local.txt").write_text("work\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ensure-worktree.sh"), "--json"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "created")
+            worktree_path = Path(payload["path"])
+            self.assertTrue(worktree_path.exists())
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "main")
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path).stdout.strip(), "feat/in-place")
+            self.assertTrue((worktree_path / "local.txt").exists())
+
+    def test_ensure_worktree_reuses_existing_linked_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+            create_proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "existing", "--worktree"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ensure-worktree.sh"), "--repo", str(repo), "--branch", "feat/existing", "--json"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "adopted")
+            self.assertTrue(Path(payload["path"]).exists())
+
+
+class SyncAndReconcileScriptTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+
+    def test_sync_raw_blocks_dirty_checkout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            (repo / "README.md").write_text("dirty\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(repo), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["results"][0]["status"], "skipped-no-origin")
+            self.assertEqual((repo / "README.md").read_text(encoding="utf-8"), "dirty\n")
+
+    def test_sync_raw_dirty_checkout_uses_stash_then_restores(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+
+            (work / "README.md").write_text("base\nremote\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote advance"], cwd=work)
+            run(["git", "push"], cwd=work)
+
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["results"][0]["status"], "synced-with-fallback")
+            content = (clone / "README.md").read_text(encoding="utf-8")
+            self.assertIn("remote", content)
+            self.assertIn("local", content)
+            self.assertEqual(run(["git", "stash", "list"], cwd=clone).stdout.strip(), "")
+
+    def test_reconcile_tree_creates_isolated_gitlink_commit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent = Path(temp_dir) / "parent"
+            child_src = Path(temp_dir) / "child-src"
+            child_origin = Path(temp_dir) / "child-origin.git"
+
+            child_src.mkdir()
+            self._init_repo(child_src)
+            run(["git", "checkout", "-b", "main"], cwd=child_src)
+            (child_src / "README.md").write_text("child\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=child_src)
+            run(["git", "commit", "-m", "chore: child base"], cwd=child_src)
+            run(["git", "init", "--bare", str(child_origin)], cwd=Path(temp_dir))
+            run(["git", "remote", "add", "origin", str(child_origin)], cwd=child_src)
+            run(["git", "push", "-u", "origin", "main"], cwd=child_src)
+
+            parent.mkdir()
+            self._init_repo(parent)
+            run(["git", "checkout", "-b", "main"], cwd=parent)
+            (parent / "README.md").write_text("parent\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=parent)
+            run(["git", "commit", "-m", "chore: parent base"], cwd=parent)
+            run(["git", "config", "protocol.file.allow", "always"], cwd=parent)
+            run(["git", "-c", "protocol.file.allow=always", "submodule", "add", str(child_origin), "deps/child"], cwd=parent)
+            run(["git", "commit", "-m", "chore: add submodule"], cwd=parent)
+
+            child_checkout = parent / "deps" / "child"
+            run(["git", "config", "user.name", "Test User"], cwd=child_checkout)
+            run(["git", "config", "user.email", "test@example.com"], cwd=child_checkout)
+            (parent / "notes.txt").write_text("keep me dirty\n", encoding="utf-8")
+            (child_checkout / "feature.txt").write_text("next\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=child_checkout)
+            run(["git", "commit", "-m", "feat: advance submodule"], cwd=child_checkout)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "reconcile-tree.sh"), "--repo", str(parent), "--mode", "apply"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            log = run(["git", "log", "-1", "--pretty=%B"], cwd=parent).stdout
+            self.assertIn("chore(submodules): update gitlinks", log)
+            self.assertIn("- update deps/child to", log)
+            parent_status = run(["git", "status", "--short"], cwd=parent).stdout
+            self.assertIn("?? notes.txt", parent_status)
+            self.assertNotIn("M  deps/child", parent_status)
+
+
+class RepoStateAndRecoveryScriptTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "checkout", "-b", "main"], cwd=repo)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        run(["git", "add", "README.md"], cwd=repo)
+        run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
+    def test_repo_state_json_reports_tree_scope_from_submodule(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent = Path(temp_dir) / "parent"
+            child_src = Path(temp_dir) / "child-src"
+            child_origin = Path(temp_dir) / "child-origin.git"
+
+            child_src.mkdir()
+            self._init_repo(child_src)
+            run(["git", "init", "--bare", str(child_origin)], cwd=Path(temp_dir))
+            run(["git", "remote", "add", "origin", str(child_origin)], cwd=child_src)
+            run(["git", "push", "-u", "origin", "main"], cwd=child_src)
+
+            parent.mkdir()
+            self._init_repo(parent)
+            run(["git", "config", "protocol.file.allow", "always"], cwd=parent)
+            run(["git", "-c", "protocol.file.allow=always", "submodule", "add", str(child_origin), "deps/child"], cwd=parent)
+            run(["git", "commit", "-m", "chore: add submodule"], cwd=parent)
+
+            child_checkout = parent / "deps" / "child"
+            run(["git", "config", "user.name", "Test User"], cwd=child_checkout)
+            run(["git", "config", "user.email", "test@example.com"], cwd=child_checkout)
+            (child_checkout / "feature.txt").write_text("next\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=child_checkout)
+            run(["git", "commit", "-m", "feat: advance child"], cwd=child_checkout)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "repo-state.sh"), "--repo", str(child_checkout), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["scope"], "tree")
+            roles = {item["repo"]: item["role"] for item in payload["results"]}
+            self.assertEqual(roles[str(parent)], "root")
+            self.assertEqual(roles[str(child_checkout)], "current")
+            child_item = next(item for item in payload["results"] if item["repo"] == str(child_checkout))
+            self.assertEqual(child_item["gitlink_status"], "child-ahead")
+            self.assertEqual(child_item["recovery_class"], "none")
+
+    def test_recover_repo_state_aborts_merge_and_reports_recovered(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feature"], cwd=repo)
+            (repo / "README.md").write_text("feature\n", encoding="utf-8")
+            run(["git", "commit", "-am", "feat: feature change"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            (repo / "README.md").write_text("main\n", encoding="utf-8")
+            run(["git", "commit", "-am", "fix: main change"], cwd=repo)
+            merge_proc = run(["git", "merge", "feature"], cwd=repo, check=False)
+            self.assertNotEqual(merge_proc.returncode, 0, merge_proc.stdout + merge_proc.stderr)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "recover-repo-state.sh"), "--repo", str(repo), "--json", "--no-recurse-related"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertTrue(payload["continued"])
+            result = payload["results"][0]
+            self.assertEqual(result["recovery_action"], "abort-merge")
+            self.assertEqual(result["outcome"], "recovered")
+            self.assertFalse((repo / ".git" / "MERGE_HEAD").exists())
+            self.assertEqual(run(["git", "status", "--short"], cwd=repo).stdout.strip(), "")
+
+    def test_start_branch_aborts_rebase_and_continues(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feature"], cwd=repo)
+            (repo / "README.md").write_text("feature\n", encoding="utf-8")
+            run(["git", "commit", "-am", "feat: feature change"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            (repo / "README.md").write_text("main\n", encoding="utf-8")
+            run(["git", "commit", "-am", "fix: main change"], cwd=repo)
+            run(["git", "checkout", "feature"], cwd=repo)
+            rebase_proc = run(["git", "rebase", "main"], cwd=repo, check=False)
+            self.assertNotEqual(rebase_proc.returncode, 0, rebase_proc.stdout + rebase_proc.stderr)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "after-rebase-recovery", "--base", "main", "--no-worktree"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).stdout.strip(), "feat/after-rebase-recovery")
+            self.assertFalse((repo / ".git" / "rebase-merge").exists())
+            self.assertFalse((repo / ".git" / "rebase-apply").exists())
+
+    def test_sync_raw_aborts_merge_and_continues(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+
+            run(["git", "checkout", "-b", "topic"], cwd=clone)
+            (clone / "README.md").write_text("topic\n", encoding="utf-8")
+            run(["git", "commit", "-am", "feat: topic change"], cwd=clone)
+            run(["git", "checkout", "main"], cwd=clone)
+            (clone / "README.md").write_text("main\n", encoding="utf-8")
+            run(["git", "commit", "-am", "fix: main change"], cwd=clone)
+            merge_proc = run(["git", "merge", "topic"], cwd=clone, check=False)
+            self.assertNotEqual(merge_proc.returncode, 0, merge_proc.stdout + merge_proc.stderr)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["results"][0]["status"], "synced")
+            self.assertFalse((clone / ".git" / "MERGE_HEAD").exists())
+
 
 class FinishWorkScriptTests(unittest.TestCase):
     def _init_repo(self, repo: Path):
@@ -1197,6 +1620,29 @@ class FinishWorkScriptTests(unittest.TestCase):
             self.assertNotIn(f'worktree remove "{repo}"', proc.stdout)
             self.assertTrue(repo.exists())
             self.assertTrue(worktree_path.exists())
+
+    def test_finish_work_json_output_is_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            run(["git", "checkout", "-b", "feat/json-cleanup"], cwd=repo)
+            (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+            run(["git", "add", "feature.txt"], cwd=repo)
+            run(["git", "commit", "-m", "feat: json cleanup"], cwd=repo)
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", "feat/json-cleanup", "-m", "merge feat/json-cleanup"], cwd=repo)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "finish-work.sh"), "--branch", "feat/json-cleanup", "--base", "main", "--json"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "cleaned")
+            self.assertEqual(payload["branch"], "feat/json-cleanup")
+            self.assertEqual(payload["base"], "main")
 
 
 class MergeSquashScriptTests(unittest.TestCase):
@@ -2216,6 +2662,17 @@ class PrMarkReadyScriptTests(unittest.TestCase):
     def test_pr_mark_ready_runs_gates_then_marks_ready(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo)
+            run(["git", "config", "user.name", "Test User"], cwd=repo)
+            run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+
             fake_bin = temp_path / "bin"
             fake_bin.mkdir(parents=True, exist_ok=True)
             log_file = temp_path / "calls.log"
@@ -2224,36 +2681,22 @@ class PrMarkReadyScriptTests(unittest.TestCase):
             fake_gh.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"view\" ]]; then\n"
-                "  echo \"true\"\n"
+                "echo \"$*\" >> \"${FAKE_LOG}\"\n"
+                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"checks\" ]]; then\n"
+                "  echo '[{\"bucket\":\"pass\",\"completedAt\":null,\"description\":\"\",\"event\":\"push\",\"link\":\"https://example.test/check/1\",\"name\":\"ci\",\"startedAt\":null,\"state\":\"SUCCESS\",\"workflow\":\"CI\"}]'\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"${1:-}\" == \"api\" && \"${2:-}\" == \"graphql\" ]]; then\n"
-                "  jq_expr=\"\"\n"
-                "  for ((i=1; i<=$#; i++)); do\n"
-                "    if [[ \"${!i}\" == \"--jq\" ]]; then\n"
-                "      next=$((i+1))\n"
-                "      jq_expr=\"${!next}\"\n"
-                "      break\n"
-                "    fi\n"
-                "  done\n"
-                "  if [[ \"$jq_expr\" == *\".data.repository.pullRequest.reviewThreads\"* ]]; then\n"
-                "    echo '{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}'\n"
-                "    exit 0\n"
-                "  fi\n"
-                "  echo ''\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"checks\" ]]; then\n"
-                "  echo \"checks ok\"\n"
+                "  cat <<'JSON'\n"
+                "{\"data\":{\"repository\":{\"pullRequest\":{\"number\":7,\"title\":\"feat: ready\",\"url\":\"https://example.test/pr/7\",\"state\":\"OPEN\",\"isDraft\":true,\"baseRefName\":\"main\",\"headRefName\":\"feat/ready\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"reviewRequests\":{\"nodes\":[]},\"latestReviews\":{\"nodes\":[]},\"reviewThreads\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":[]}}}}}\n"
+                "JSON\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"${1:-}\" == \"pr\" && \"${2:-}\" == \"ready\" ]]; then\n"
-                "  echo \"$*\" >> \"${FAKE_LOG}\"\n"
                 "  exit 0\n"
                 "fi\n"
-                "echo \"$*\" >> \"${FAKE_LOG}\"\n"
-                "exit 0\n",
+                "echo \"unexpected gh command: $*\" >&2\n"
+                "exit 1\n",
                 encoding="utf-8",
             )
             fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IXUSR)
@@ -2270,13 +2713,35 @@ class PrMarkReadyScriptTests(unittest.TestCase):
                     "--repo",
                     "acme/widget",
                 ],
-                cwd=ROOT,
+                cwd=repo,
                 env=env,
                 check=False,
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             calls = log_file.read_text(encoding="utf-8")
             self.assertIn("pr ready 7 --repo acme/widget", calls)
+
+
+class SkillDocumentationTests(unittest.TestCase):
+    def test_skill_docs_cover_raw_sync_worktrees_and_commit_bodies(self):
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        checks = (ROOT / "references" / "CHECKLISTS.md").read_text(encoding="utf-8")
+        conventional = (ROOT / "references" / "CONVENTIONAL_COMMITS.md").read_text(encoding="utf-8")
+        routing = (ROOT / "references" / "SCRIPT_ROUTING.md").read_text(encoding="utf-8")
+
+        self.assertIn("sync raw", skill.lower())
+        self.assertIn("raw sync", skill.lower())
+        self.assertIn("ship raw", skill.lower())
+        self.assertIn("doctor", skill.lower())
+        self.assertIn("ensure-worktree.sh", skill)
+        self.assertIn("windows", skill.lower())
+        self.assertIn("mandatory bullet-list body", conventional.lower())
+        self.assertNotIn("headline-only is acceptable", conventional.lower())
+        self.assertIn("auto-adopt the linked worktree", checks.lower())
+        self.assertIn("sync-raw.sh", routing)
+        self.assertIn("ship.sh", routing)
+        self.assertIn("doctor.sh", routing)
+        self.assertIn("reconcile-tree.sh", routing)
 
 if __name__ == "__main__":
     unittest.main()
