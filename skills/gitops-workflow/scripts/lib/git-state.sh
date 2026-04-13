@@ -82,6 +82,11 @@ repo_git_common_dir() {
   git -C "$repo" rev-parse --path-format=absolute --git-common-dir
 }
 
+gitops_ship_state_path() {
+  local repo="${1:-.}"
+  printf '%s/gitops-workflow/ship-state.json\n' "$(repo_git_common_dir "$repo")"
+}
+
 main_checkout_path() {
   local repo="${1:-.}"
   local common_dir=""

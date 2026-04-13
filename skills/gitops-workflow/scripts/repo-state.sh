@@ -65,10 +65,14 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
         superproject,
         gitlink_status,
         recovery_class,
+        raw_ship_state,
+        raw_ship_local_commit_sha,
+        raw_ship_resume_eligible,
+        raw_ship_next_action,
         next_action,
         fetch_status,
         fetch_note,
-    ) = line.split("\t", 21)
+    ) = line.split("\t", 25)
     items.append(
         {
             "repo": repo,
@@ -90,6 +94,10 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
             "superproject": superproject,
             "gitlink_status": gitlink_status,
             "recovery_class": recovery_class,
+            "raw_ship_state": raw_ship_state,
+            "raw_ship_local_commit_sha": raw_ship_local_commit_sha,
+            "raw_ship_resume_eligible": raw_ship_resume_eligible == "true",
+            "raw_ship_next_action": raw_ship_next_action,
             "next_action": next_action,
             "fetch_status": fetch_status,
             "fetch_note": fetch_note,
@@ -100,15 +108,38 @@ PY
 }
 
 record_result() {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" "${21}" "${22}" >> "$RESULTS_FILE"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" "${21}" "${22}" "${23}" "${24}" "${25}" "${26}" >> "$RESULTS_FILE"
+}
+
+raw_ship_fields_for_repo() {
+  local repo="$1"
+  local branch="$2"
+  local head_oid="$3"
+  local tracked="$4"
+  local untracked="$5"
+  local sequencer="$6"
+  local path=""
+  local repo_root=""
+
+  path="$(gitops_ship_state_path "$repo")"
+  repo_root="$(repo_root_path "$repo")"
+  python3 "$SCRIPT_DIR/lib/raw_ship_state.py" probe \
+    --path "$path" \
+    --repo-root "$repo_root" \
+    --branch "$branch" \
+    --head-oid "$head_oid" \
+    --tracked "$tracked" \
+    --untracked "$untracked" \
+    --sequencer "$sequencer" \
+    --format lines | awk 'NR==1 || NR==10 || NR==14 || NR==16 { print }'
 }
 
 render_human() {
   local file="$1"
   echo "Scope: $SCOPE"
   echo "Root repo: $ROOT_REPO"
-  while IFS=$'\t' read -r repo role branch head_oid detached detached_candidates default_base upstream ahead behind dirty_tracked dirty_untracked sequencer_state in_linked_worktree main_checkout worktree_path superproject gitlink_status recovery_class next_action fetch_status fetch_note; do
+  while IFS=$'\t' read -r repo role branch head_oid detached detached_candidates default_base upstream ahead behind dirty_tracked dirty_untracked sequencer_state in_linked_worktree main_checkout worktree_path superproject gitlink_status recovery_class raw_ship_state raw_ship_local_commit_sha raw_ship_resume_eligible raw_ship_next_action next_action fetch_status fetch_note; do
     echo ""
     echo "$role: $repo"
     echo "  branch: $branch"
@@ -119,6 +150,11 @@ render_human() {
     echo "  sequencer: ${sequencer_state:-none}"
     echo "  gitlink: $gitlink_status"
     echo "  recovery: $recovery_class"
+    if [[ "$raw_ship_state" != "none" ]]; then
+      echo "  raw ship: $raw_ship_state"
+      [[ -n "$raw_ship_local_commit_sha" ]] && echo "  raw ship commit: $raw_ship_local_commit_sha"
+      echo "  raw ship next: $raw_ship_next_action"
+    fi
     echo "  next: $next_action"
     [[ "$fetch_status" != "not-run" ]] && echo "  fetch: $fetch_status"
     [[ -n "$fetch_note" ]] && echo "  fetch note: $fetch_note"
@@ -205,13 +241,23 @@ for repo in "${repos[@]}"; do
   superproject="$(repo_superproject_path "$repo")"
   gitlink_status="$(gitlink_status_against_parent "$repo")"
   recovery_class="$(repo_recovery_class "$repo")"
+  head_oid="$(repo_head_oid "$repo")"
+  mapfile -t raw_ship_meta < <(raw_ship_fields_for_repo "$repo" "$branch" "$head_oid" "$tracked" "$untracked" "$sequencer")
+  raw_ship_state="${raw_ship_meta[0]:-none}"
+  raw_ship_local_commit_sha="${raw_ship_meta[1]:-}"
+  raw_ship_resume_eligible="${raw_ship_meta[2]:-false}"
+  raw_ship_next_action="${raw_ship_meta[3]:-continue with the requested workflow}"
   next_action="continue with the requested workflow"
-  if [[ "$recovery_class" == safe-sequencer-abort* || "$recovery_class" == "safe-detached-reattach" ]]; then
+  if [[ "$raw_ship_state" == "resume-eligible" ]]; then
+    next_action="$raw_ship_next_action"
+  elif [[ "$recovery_class" == safe-sequencer-abort* || "$recovery_class" == "safe-detached-reattach" ]]; then
     next_action="safe automatic recovery is available"
   elif [[ "$recovery_class" == *rescue-detached* ]]; then
     next_action="run recover-repo-state or review detached work before continuing"
   elif [[ "$recovery_class" == blocked-* ]]; then
     next_action="finish or abort the in-progress git operation before continuing"
+  elif [[ "$raw_ship_state" == "stale" ]]; then
+    next_action="$raw_ship_next_action"
   elif [[ "$gitlink_status" == "child-ahead" ]]; then
     next_action="run reconcile-tree after validating the child repo changes"
   elif [[ "$gitlink_status" == "parent-ahead" ]]; then
@@ -221,7 +267,7 @@ for repo in "${repos[@]}"; do
     "$repo" \
     "$(gitops_role_for_repo "$REPO_PATH" "$repo")" \
     "$branch" \
-    "$(repo_head_oid "$repo")" \
+    "$head_oid" \
     "$detached" \
     "$candidates" \
     "$default_base" \
@@ -237,6 +283,10 @@ for repo in "${repos[@]}"; do
     "$superproject" \
     "$gitlink_status" \
     "$recovery_class" \
+    "$raw_ship_state" \
+    "$raw_ship_local_commit_sha" \
+    "$raw_ship_resume_eligible" \
+    "$raw_ship_next_action" \
     "$next_action" \
     "$fetch_status" \
     "$fetch_note"

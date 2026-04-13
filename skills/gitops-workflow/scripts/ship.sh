@@ -18,6 +18,43 @@ SYNC_ONLY="false"
 STOP=""
 RESULTS_FILE=""
 
+RAW_SHIP_STATE_PATH=""
+RAW_SHIP_RESUMED="false"
+RAW_SHIP_BRANCH=""
+RAW_SHIP_HEAD_BEFORE=""
+RAW_SHIP_HEAD_AFTER=""
+RAW_SHIP_SYNC_STATUS="not-run"
+RAW_SHIP_BATCH_COMMIT_STATUS="not-run"
+RAW_SHIP_LOCAL_COMMIT_CREATED="false"
+RAW_SHIP_LOCAL_COMMIT_SHA=""
+RAW_SHIP_PUSH_STARTED="false"
+RAW_SHIP_PUSH_COMPLETED="false"
+RAW_SHIP_PUSH_SUCCEEDED="false"
+RAW_SHIP_RESUME_ELIGIBLE="false"
+RAW_SHIP_LAST_ERROR_SUMMARY=""
+
+RAW_SHIP_PROBE_STATE="none"
+RAW_SHIP_PROBE_MODE=""
+RAW_SHIP_PROBE_REPO=""
+RAW_SHIP_PROBE_BRANCH=""
+RAW_SHIP_PROBE_HEAD_BEFORE=""
+RAW_SHIP_PROBE_HEAD_AFTER=""
+RAW_SHIP_PROBE_SYNC_STATUS=""
+RAW_SHIP_PROBE_BATCH_COMMIT_STATUS=""
+RAW_SHIP_PROBE_LOCAL_COMMIT_CREATED="false"
+RAW_SHIP_PROBE_LOCAL_COMMIT_SHA=""
+RAW_SHIP_PROBE_PUSH_STARTED="false"
+RAW_SHIP_PROBE_PUSH_COMPLETED="false"
+RAW_SHIP_PROBE_PUSH_SUCCEEDED="false"
+RAW_SHIP_PROBE_RESUME_ELIGIBLE="false"
+RAW_SHIP_PROBE_LAST_ERROR_SUMMARY=""
+RAW_SHIP_PROBE_NEXT_ACTION="continue with the requested workflow"
+
+GITOPS_PUSH_LEVEL="ok"
+GITOPS_PUSH_NOTE=""
+GITOPS_PUSH_ACTION="noop"
+GITOPS_SYNC_STAGE_STATUS="not-run"
+
 print_help() {
   cat <<'USAGE'
 Usage:
@@ -26,7 +63,7 @@ Usage:
 Behavior:
   - `ship` defaults to the normal workflow and stops after PR create/update in draft mode.
   - `ship ready` audits the current branch PR readiness only; it does not create a PR or mark one ready.
-  - `ship raw` syncs, batch-commits current repo changes, pushes the current branch in place, and reports PR readiness when one already exists.
+  - `ship raw` syncs, batch-commits current repo changes, pushes the current branch in place, and resumes a previously interrupted raw push when the checkpoint is still compatible.
   - `ship sync` runs sync-only mode on the current branch and stops after the bidirectional raw sync stage.
   - `raw` or `sync` may appear before or after `ship` stop tokens when compatible; invalid combinations fail fast.
 
@@ -261,32 +298,188 @@ branch_ahead_of_upstream() {
   fi
 }
 
+raw_ship_timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+clear_raw_ship_state() {
+  local repo="$1"
+  local path=""
+  path="$(gitops_ship_state_path "$repo")"
+  rm -f "$path"
+}
+
+persist_raw_ship_state() {
+  local repo="$1"
+  RAW_SHIP_STATE_PATH="$(gitops_ship_state_path "$repo")"
+  mkdir -p "$(dirname "$RAW_SHIP_STATE_PATH")"
+  REPO_ROOT="$(repo_root_path "$repo")" \
+  UPDATED_AT="$(raw_ship_timestamp)" \
+  RAW_SHIP_STATE_PATH="$RAW_SHIP_STATE_PATH" \
+  RAW_SHIP_BRANCH="$RAW_SHIP_BRANCH" \
+  RAW_SHIP_HEAD_BEFORE="$RAW_SHIP_HEAD_BEFORE" \
+  RAW_SHIP_HEAD_AFTER="$RAW_SHIP_HEAD_AFTER" \
+  RAW_SHIP_SYNC_STATUS="$RAW_SHIP_SYNC_STATUS" \
+  RAW_SHIP_BATCH_COMMIT_STATUS="$RAW_SHIP_BATCH_COMMIT_STATUS" \
+  RAW_SHIP_LOCAL_COMMIT_CREATED="$RAW_SHIP_LOCAL_COMMIT_CREATED" \
+  RAW_SHIP_LOCAL_COMMIT_SHA="$RAW_SHIP_LOCAL_COMMIT_SHA" \
+  RAW_SHIP_PUSH_STARTED="$RAW_SHIP_PUSH_STARTED" \
+  RAW_SHIP_PUSH_COMPLETED="$RAW_SHIP_PUSH_COMPLETED" \
+  RAW_SHIP_PUSH_SUCCEEDED="$RAW_SHIP_PUSH_SUCCEEDED" \
+  RAW_SHIP_RESUME_ELIGIBLE="$RAW_SHIP_RESUME_ELIGIBLE" \
+  RAW_SHIP_LAST_ERROR_SUMMARY="$RAW_SHIP_LAST_ERROR_SUMMARY" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+
+def as_bool(value: str) -> bool:
+    return value.lower() == "true"
+
+payload = {
+    "mode": "raw",
+    "repo": os.environ["REPO_ROOT"],
+    "branch": os.environ["RAW_SHIP_BRANCH"],
+    "head_before": os.environ["RAW_SHIP_HEAD_BEFORE"],
+    "head_after": os.environ["RAW_SHIP_HEAD_AFTER"],
+    "sync_status": os.environ["RAW_SHIP_SYNC_STATUS"],
+    "batch_commit_status": os.environ["RAW_SHIP_BATCH_COMMIT_STATUS"],
+    "local_commit_created": as_bool(os.environ["RAW_SHIP_LOCAL_COMMIT_CREATED"]),
+    "local_commit_sha": os.environ["RAW_SHIP_LOCAL_COMMIT_SHA"],
+    "push_started": as_bool(os.environ["RAW_SHIP_PUSH_STARTED"]),
+    "push_completed": as_bool(os.environ["RAW_SHIP_PUSH_COMPLETED"]),
+    "push_succeeded": as_bool(os.environ["RAW_SHIP_PUSH_SUCCEEDED"]),
+    "resume_eligible": as_bool(os.environ["RAW_SHIP_RESUME_ELIGIBLE"]),
+    "last_error_summary": os.environ["RAW_SHIP_LAST_ERROR_SUMMARY"],
+    "updated_at": os.environ["UPDATED_AT"],
+}
+Path(os.environ["RAW_SHIP_STATE_PATH"]).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+PY
+}
+
+probe_raw_ship_resume_state() {
+  local repo="$1"
+  local path=""
+  local repo_root=""
+  local branch=""
+  local head_oid=""
+  local tracked="0"
+  local untracked="0"
+  local sequencer=""
+
+  path="$(gitops_ship_state_path "$repo")"
+  repo_root="$(repo_root_path "$repo")"
+  branch="$(current_branch_name "$repo" || true)"
+  head_oid="$(repo_head_oid "$repo" 2>/dev/null || true)"
+  tracked="$(repo_dirty_tracked_count "$repo")"
+  untracked="$(repo_dirty_untracked_count "$repo")"
+  sequencer="$(repo_sequencer_state "$repo")"
+
+  python3 "$SCRIPT_DIR/lib/raw_ship_state.py" probe \
+    --path "$path" \
+    --repo-root "$repo_root" \
+    --branch "$branch" \
+    --head-oid "$head_oid" \
+    --tracked "$tracked" \
+    --untracked "$untracked" \
+    --sequencer "$sequencer" \
+    --format lines
+}
+
+load_raw_ship_probe() {
+  local repo="$1"
+  local probe=()
+  mapfile -t probe < <(probe_raw_ship_resume_state "$repo")
+  RAW_SHIP_PROBE_STATE="${probe[0]:-none}"
+  RAW_SHIP_PROBE_MODE="${probe[1]:-}"
+  RAW_SHIP_PROBE_REPO="${probe[2]:-}"
+  RAW_SHIP_PROBE_BRANCH="${probe[3]:-}"
+  RAW_SHIP_PROBE_HEAD_BEFORE="${probe[4]:-}"
+  RAW_SHIP_PROBE_HEAD_AFTER="${probe[5]:-}"
+  RAW_SHIP_PROBE_SYNC_STATUS="${probe[6]:-}"
+  RAW_SHIP_PROBE_BATCH_COMMIT_STATUS="${probe[7]:-}"
+  RAW_SHIP_PROBE_LOCAL_COMMIT_CREATED="${probe[8]:-false}"
+  RAW_SHIP_PROBE_LOCAL_COMMIT_SHA="${probe[9]:-}"
+  RAW_SHIP_PROBE_PUSH_STARTED="${probe[10]:-false}"
+  RAW_SHIP_PROBE_PUSH_COMPLETED="${probe[11]:-false}"
+  RAW_SHIP_PROBE_PUSH_SUCCEEDED="${probe[12]:-false}"
+  RAW_SHIP_PROBE_RESUME_ELIGIBLE="${probe[13]:-false}"
+  RAW_SHIP_PROBE_LAST_ERROR_SUMMARY="${probe[14]:-}"
+  RAW_SHIP_PROBE_NEXT_ACTION="${probe[15]:-continue with the requested workflow}"
+}
+
+reset_push_result() {
+  GITOPS_PUSH_LEVEL="ok"
+  GITOPS_PUSH_NOTE=""
+  GITOPS_PUSH_ACTION="noop"
+}
+
 push_current_branch() {
   local repo="$1"
   local branch="$2"
   local out_file=""
+  local err_text=""
+
+  reset_push_result
   out_file="$(mktemp)"
   if [[ -z "$(current_upstream_ref "$repo")" ]] && repo_has_origin "$repo"; then
+    GITOPS_PUSH_ACTION="push-set-upstream"
     if gitops_git_noninteractive "$repo" push -u origin "$branch" >"$out_file" 2>"$out_file.err"; then
-      record_result "push" "ok" "pushed branch '$branch' and set upstream"
+      GITOPS_PUSH_NOTE="pushed branch '$branch' and set upstream"
       rm -f "$out_file" "$out_file.err"
       return 0
     fi
-  elif gitops_git_noninteractive "$repo" push >"$out_file" 2>"$out_file.err"; then
-    record_result "push" "ok" "pushed branch '$branch'"
-    rm -f "$out_file" "$out_file.err"
-    return 0
+  else
+    GITOPS_PUSH_ACTION="push"
+    if gitops_git_noninteractive "$repo" push >"$out_file" 2>"$out_file.err"; then
+      GITOPS_PUSH_NOTE="pushed branch '$branch'"
+      rm -f "$out_file" "$out_file.err"
+      return 0
+    fi
   fi
 
-  local err_text=""
   err_text="$(compact_text "$(cat "$out_file" "$out_file.err" 2>/dev/null)")"
   if printf '%s' "$err_text" | grep -qi 'non-fast-forward'; then
-    record_result "push" "blocked" "push rejected as non-fast-forward; fetch and review remote drift before retrying"
+    GITOPS_PUSH_LEVEL="blocked"
+    GITOPS_PUSH_NOTE="push rejected as non-fast-forward; fetch and review remote drift before retrying"
   else
-    record_result "push" "error" "${err_text:-git push failed}"
+    GITOPS_PUSH_LEVEL="error"
+    GITOPS_PUSH_NOTE="${err_text:-git push failed}"
   fi
   rm -f "$out_file" "$out_file.err"
   return 1
+}
+
+build_raw_push_details() {
+  local next_action="$1"
+  RAW_SHIP_RESUMED="$RAW_SHIP_RESUMED" \
+  RAW_SHIP_LOCAL_COMMIT_CREATED="$RAW_SHIP_LOCAL_COMMIT_CREATED" \
+  RAW_SHIP_LOCAL_COMMIT_SHA="$RAW_SHIP_LOCAL_COMMIT_SHA" \
+  RAW_SHIP_PUSH_COMPLETED="$RAW_SHIP_PUSH_COMPLETED" \
+  RAW_SHIP_PUSH_SUCCEEDED="$RAW_SHIP_PUSH_SUCCEEDED" \
+  RAW_SHIP_RESUME_ELIGIBLE="$RAW_SHIP_RESUME_ELIGIBLE" \
+  GITOPS_PUSH_ACTION="$GITOPS_PUSH_ACTION" \
+  NEXT_ACTION="$next_action" \
+  python3 - <<'PY'
+import json
+import os
+
+
+def as_bool(value: str) -> bool:
+    return value.lower() == "true"
+
+print(json.dumps({
+    "resumed": as_bool(os.environ["RAW_SHIP_RESUMED"]),
+    "local_commit_created": as_bool(os.environ["RAW_SHIP_LOCAL_COMMIT_CREATED"]),
+    "local_commit_sha": os.environ["RAW_SHIP_LOCAL_COMMIT_SHA"],
+    "push_completed": as_bool(os.environ["RAW_SHIP_PUSH_COMPLETED"]),
+    "push_succeeded": as_bool(os.environ["RAW_SHIP_PUSH_SUCCEEDED"]),
+    "resume_eligible": as_bool(os.environ["RAW_SHIP_RESUME_ELIGIBLE"]),
+    "next_action": os.environ["NEXT_ACTION"],
+    "push_action": os.environ["GITOPS_PUSH_ACTION"],
+}, separators=(",", ":")))
+PY
 }
 
 receipt_note() {
@@ -301,9 +494,12 @@ receipt_note() {
 run_sync_stage() {
   local repo="$1"
   local sync_json=""
+  local sync_summary=""
   local sync_status=""
+  local primary_status=""
   local -a sync_args=(bash "$SCRIPT_DIR/sync-raw.sh" --repo "$repo" --json)
 
+  GITOPS_SYNC_STAGE_STATUS="not-run"
   if [[ "$SCOPE" == "current" ]]; then
     sync_args+=(--no-recurse-related)
   fi
@@ -317,14 +513,21 @@ run_sync_stage() {
     err_text="$(compact_file_text "$sync_json.err")"
     rm -f "$sync_json" "$sync_json.err"
     record_result "sync" "error" "${err_text:-raw sync failed}"
+    GITOPS_SYNC_STAGE_STATUS="error"
     return 1
   fi
-  sync_status="$(python3 - "$sync_json" "$RESULTS_FILE" <<'PY'
+  mapfile -t sync_summary < <(python3 - "$sync_json" "$RESULTS_FILE" "$repo" <<'PY'
 import json
+import os
 import sys
+from pathlib import Path
+
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
+out_path = Path(sys.argv[2])
+target_repo = os.path.realpath(sys.argv[3])
 blocked = False
-with open(sys.argv[2], "a", encoding="utf-8") as out:
+primary_status = "not-run"
+with out_path.open("a", encoding="utf-8") as out:
     for item in payload.get("results", []):
         status = item["status"]
         note = item.get("note", "")
@@ -336,10 +539,19 @@ with open(sys.argv[2], "a", encoding="utf-8") as out:
             level = "warn"
         details = json.dumps(item, separators=(",", ":"))
         out.write(f"sync\t{level}\t{status}: {note}\t{details}\n")
+        repo_value = os.path.realpath(item.get("repo", ""))
+        if repo_value == target_repo and primary_status == "not-run":
+            primary_status = status
+if primary_status == "not-run" and payload.get("results"):
+    primary_status = str(payload["results"][0].get("status", "not-run"))
 print("blocked" if blocked else "ok")
+print(primary_status)
 PY
-)"
+)
   rm -f "$sync_json" "$sync_json.err"
+  sync_status="${sync_summary[0]:-blocked}"
+  primary_status="${sync_summary[1]:-not-run}"
+  GITOPS_SYNC_STAGE_STATUS="$primary_status"
   [[ "$sync_status" != "blocked" ]]
 }
 
@@ -420,6 +632,42 @@ record_existing_pr_snapshot() {
   record_readiness_snapshot "$repo" "$pr_number" snapshot || true
 }
 
+resume_raw_ship_if_possible() {
+  local repo="$1"
+  load_raw_ship_probe "$repo"
+  if [[ "$RAW_SHIP_PROBE_STATE" == "stale" ]]; then
+    clear_raw_ship_state "$repo"
+    return 1
+  fi
+  if [[ "$RAW_SHIP_PROBE_STATE" != "resume-eligible" ]]; then
+    return 1
+  fi
+
+  RAW_SHIP_STATE_PATH="$(gitops_ship_state_path "$repo")"
+  RAW_SHIP_RESUMED="true"
+  RAW_SHIP_BRANCH="$RAW_SHIP_PROBE_BRANCH"
+  RAW_SHIP_HEAD_BEFORE="$RAW_SHIP_PROBE_HEAD_BEFORE"
+  RAW_SHIP_HEAD_AFTER="$RAW_SHIP_PROBE_HEAD_AFTER"
+  RAW_SHIP_SYNC_STATUS="$RAW_SHIP_PROBE_SYNC_STATUS"
+  RAW_SHIP_BATCH_COMMIT_STATUS="$RAW_SHIP_PROBE_BATCH_COMMIT_STATUS"
+  RAW_SHIP_LOCAL_COMMIT_CREATED="$RAW_SHIP_PROBE_LOCAL_COMMIT_CREATED"
+  RAW_SHIP_LOCAL_COMMIT_SHA="$RAW_SHIP_PROBE_LOCAL_COMMIT_SHA"
+  RAW_SHIP_PUSH_STARTED="$RAW_SHIP_PROBE_PUSH_STARTED"
+  RAW_SHIP_PUSH_COMPLETED="$RAW_SHIP_PROBE_PUSH_COMPLETED"
+  RAW_SHIP_PUSH_SUCCEEDED="$RAW_SHIP_PROBE_PUSH_SUCCEEDED"
+  RAW_SHIP_RESUME_ELIGIBLE="$RAW_SHIP_PROBE_RESUME_ELIGIBLE"
+  RAW_SHIP_LAST_ERROR_SUMMARY="$RAW_SHIP_PROBE_LAST_ERROR_SUMMARY"
+
+  record_result "sync" "ok" "resumed prior raw ship checkpoint; skipped raw sync"
+  record_result "batch_commit" "ok" "reused local Conventional Commit batch at $RAW_SHIP_LOCAL_COMMIT_SHA"
+  return 0
+}
+
+record_raw_push_result() {
+  local next_action="$1"
+  record_result "push" "$GITOPS_PUSH_LEVEL" "$GITOPS_PUSH_NOTE" "$(build_raw_push_details "$next_action")"
+}
+
 handle_sync_only_mode() {
   local repo="$1"
   run_sync_stage "$repo"
@@ -429,35 +677,105 @@ handle_raw_mode() {
   local repo="$1"
   local branch=""
   local need_push="false"
+  local receipt=""
 
-  if ! run_sync_stage "$repo"; then
-    return 1
-  fi
-
-  branch="$(current_branch_name "$repo" || true)"
-  [[ -n "$branch" ]] || die "failed to resolve current branch after raw sync"
-
-  if has_uncommitted_changes "$repo"; then
-    if ! run_batch_commit "$repo"; then
+  if ! resume_raw_ship_if_possible "$repo"; then
+    if ! run_sync_stage "$repo"; then
       return 1
     fi
-    need_push="true"
-  elif branch_ahead_of_upstream "$repo" || [[ -z "$(current_upstream_ref "$repo")" ]]; then
-    record_result "batch_commit" "ok" "no new local changes to commit; branch will still be pushed"
-    need_push="true"
+
+    branch="$(current_branch_name "$repo" || true)"
+    [[ -n "$branch" ]] || die "failed to resolve current branch after raw sync"
+
+    RAW_SHIP_STATE_PATH="$(gitops_ship_state_path "$repo")"
+    RAW_SHIP_RESUMED="false"
+    RAW_SHIP_BRANCH="$branch"
+    RAW_SHIP_HEAD_BEFORE="$(repo_head_oid "$repo")"
+    RAW_SHIP_HEAD_AFTER="$RAW_SHIP_HEAD_BEFORE"
+    RAW_SHIP_SYNC_STATUS="$GITOPS_SYNC_STAGE_STATUS"
+    RAW_SHIP_BATCH_COMMIT_STATUS="no-op"
+    RAW_SHIP_LOCAL_COMMIT_CREATED="false"
+    RAW_SHIP_LOCAL_COMMIT_SHA=""
+    RAW_SHIP_PUSH_STARTED="false"
+    RAW_SHIP_PUSH_COMPLETED="false"
+    RAW_SHIP_PUSH_SUCCEEDED="false"
+    RAW_SHIP_RESUME_ELIGIBLE="false"
+    RAW_SHIP_LAST_ERROR_SUMMARY=""
+
+    if has_uncommitted_changes "$repo"; then
+      RAW_SHIP_BATCH_COMMIT_STATUS="created"
+      if ! run_batch_commit "$repo"; then
+        return 1
+      fi
+      RAW_SHIP_HEAD_AFTER="$(repo_head_oid "$repo")"
+      if [[ "$RAW_SHIP_HEAD_AFTER" != "$RAW_SHIP_HEAD_BEFORE" ]]; then
+        RAW_SHIP_LOCAL_COMMIT_CREATED="true"
+        RAW_SHIP_LOCAL_COMMIT_SHA="$RAW_SHIP_HEAD_AFTER"
+        RAW_SHIP_RESUME_ELIGIBLE="true"
+        persist_raw_ship_state "$repo"
+      else
+        RAW_SHIP_BATCH_COMMIT_STATUS="no-op"
+      fi
+      need_push="true"
+    elif branch_ahead_of_upstream "$repo" || [[ -z "$(current_upstream_ref "$repo")" ]]; then
+      record_result "batch_commit" "ok" "no new local changes to commit; branch will still be pushed"
+      RAW_SHIP_BATCH_COMMIT_STATUS="no-op"
+      need_push="true"
+    else
+      record_result "batch_commit" "ok" "no local changes required a commit"
+      RAW_SHIP_BATCH_COMMIT_STATUS="no-op"
+    fi
   else
-    record_result "batch_commit" "ok" "no local changes required a commit"
+    branch="$RAW_SHIP_BRANCH"
+    need_push="true"
   fi
+
+  [[ -n "$branch" ]] || branch="$(current_branch_name "$repo" || true)"
+  [[ -n "$branch" ]] || die "failed to resolve current branch for raw ship"
 
   if [[ "$need_push" == "true" ]]; then
+    if [[ "$RAW_SHIP_LOCAL_COMMIT_CREATED" == "true" ]]; then
+      RAW_SHIP_PUSH_STARTED="true"
+      RAW_SHIP_PUSH_COMPLETED="false"
+      RAW_SHIP_PUSH_SUCCEEDED="false"
+      RAW_SHIP_RESUME_ELIGIBLE="true"
+      persist_raw_ship_state "$repo"
+    fi
     if ! push_current_branch "$repo" "$branch"; then
+      RAW_SHIP_PUSH_COMPLETED="true"
+      RAW_SHIP_PUSH_SUCCEEDED="false"
+      RAW_SHIP_LAST_ERROR_SUMMARY="$GITOPS_PUSH_NOTE"
+      if [[ "$RAW_SHIP_LOCAL_COMMIT_CREATED" == "true" ]]; then
+        RAW_SHIP_RESUME_ELIGIBLE="true"
+        persist_raw_ship_state "$repo"
+      else
+        RAW_SHIP_RESUME_ELIGIBLE="false"
+      fi
+      if [[ "$RAW_SHIP_RESUME_ELIGIBLE" == "true" ]]; then
+        record_raw_push_result "rerun 'ship raw' to resume the pending push"
+      else
+        record_raw_push_result "review the push failure and retry when ready"
+      fi
       return 1
     fi
-    local receipt=""
+    RAW_SHIP_PUSH_COMPLETED="true"
+    RAW_SHIP_PUSH_SUCCEEDED="true"
+    RAW_SHIP_RESUME_ELIGIBLE="false"
+    RAW_SHIP_LAST_ERROR_SUMMARY=""
+    if [[ "$RAW_SHIP_LOCAL_COMMIT_CREATED" == "true" ]]; then
+      clear_raw_ship_state "$repo"
+    fi
+    record_raw_push_result "continue with the requested workflow"
     receipt="$(receipt_note "$repo" "$branch")"
     [[ -n "$receipt" ]] && record_result "receipt" "ok" "$receipt"
   else
-    record_result "push" "ok" "branch '$branch' is already in sync with its upstream"
+    GITOPS_PUSH_LEVEL="ok"
+    GITOPS_PUSH_NOTE="branch '$branch' is already in sync with its upstream"
+    GITOPS_PUSH_ACTION="noop"
+    RAW_SHIP_PUSH_COMPLETED="true"
+    RAW_SHIP_PUSH_SUCCEEDED="true"
+    RAW_SHIP_RESUME_ELIGIBLE="false"
+    record_raw_push_result "continue with the requested workflow"
   fi
 
   record_existing_pr_snapshot "$repo"
@@ -523,8 +841,10 @@ handle_normal_mode() {
   fi
   if branch_ahead_of_upstream "$workdir" || [[ -z "$(current_upstream_ref "$workdir")" ]]; then
     if ! push_current_branch "$workdir" "$branch"; then
+      record_result "push" "$GITOPS_PUSH_LEVEL" "$GITOPS_PUSH_NOTE"
       return 1
     fi
+    record_result "push" "$GITOPS_PUSH_LEVEL" "$GITOPS_PUSH_NOTE"
     pushed="true"
   else
     record_result "push" "ok" "branch '$branch' is already in sync with its upstream"
