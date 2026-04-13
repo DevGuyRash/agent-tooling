@@ -8,6 +8,7 @@ If a script exists for the operation, use the script first.
 Resolve script paths from the skill directory, not the target repository directory.
 Set `SKILL_ROOT` to the absolute path of the `gitops-workflow` skill folder (the folder containing `SKILL.md`), then call scripts via `"$SKILL_ROOT/scripts/..."`.
 If you are editing `gitops-workflow` itself inside a worktree/checkout of the skill repository, set `SKILL_ROOT` from the active worktree copy under review so helper behavior matches the branch contents rather than a separate source checkout.
+When you need to discover the supported top-level gitops commands or aliases, prefer `bash "$SKILL_ROOT/scripts/gitops-help.sh" --json` before loading broader docs.
 
 Only bypass when:
 - script cannot express required inputs,
@@ -19,6 +20,9 @@ When bypassing, record:
 
 ## Routing table
 
+- Help / capability discovery:
+  - `bash "$SKILL_ROOT/scripts/gitops-help.sh" [--json] [--verbose] [--topic <ship|sync|doctor|branch|pr|issue|governance|all>]`
+  - Prefer `--json` for agents and wrappers so routing can stay lean and avoid loading larger docs.
 - Repo/tree diagnosis:
   - `bash "$SKILL_ROOT/scripts/repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-fetch]`
   - Default scope is the full related tree; use `--no-recurse-related` to stay on the current repo only.

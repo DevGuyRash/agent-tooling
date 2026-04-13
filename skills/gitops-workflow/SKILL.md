@@ -71,6 +71,21 @@ Sensitive scan platform note:
 - **Local git operations** (branching, staging, committing, worktrees, history): always `git`.
 - **Script dispatch**: bundled scripts first, ad-hoc command sequences fallback-only (see [Script-first dispatch](#script-first-dispatch-mandatory) below).
 
+## Minimal Load Path
+
+Keep the agent context narrow by loading only what the current request needs.
+
+1. When command discovery is needed, run `bash "$SKILL_ROOT/scripts/gitops-help.sh" --json` first instead of loading large prose sections.
+2. Route the request to one script.
+3. Load the matching playbook or reference only when the selected script output leaves ambiguity.
+
+Preferred short-path routing:
+- `gitops-help.sh --json` is the primary capability-discovery surface for agents and wrappers; invoke it as `bash "$SKILL_ROOT/scripts/gitops-help.sh" --json`.
+- `ship`, `ship raw`, `ship sync`, `ship ready`, `doctor`, and `doctor fix` should route directly to their bundled scripts with `--json`.
+- `sync raw` / `raw sync` should route to `sync-raw.sh` with `--json`.
+- `commit and push raw` / `push raw` should route to `ship.sh raw --json`.
+- Use JSON receipts from the scripts as the primary machine-readable status surface instead of adding more natural-language policy text.
+
 ---
 
 ## Non‑negotiable invariants
@@ -121,6 +136,7 @@ Path resolution (mandatory):
 
 | Task | Required script |
 | --- | --- |
+| Help / capability discovery | `bash "$SKILL_ROOT/scripts/gitops-help.sh" [--json] [--verbose] [--topic <ship\|sync\|doctor\|branch\|pr\|issue\|governance\|all>]` |
 | Start branch (worktree default) or adopt existing | `bash "$SKILL_ROOT/scripts/start-branch.sh" <type> [<slug>] [--issue <id>] [--base <branch>] [--stash-name <note>] [--no-worktree] [--existing] [--no-install-hooks] [--no-detached-recovery] [--json]` |
 | Auto-adopt linked worktree for non-raw feature branch work | `bash "$SKILL_ROOT/scripts/ensure-worktree.sh" [--repo <path>] [--branch <name>] [--json]` |
 | Bootstrap security setup in repo | `bash "$SKILL_ROOT/scripts/setup-security.sh" [--repo <path>] [--force] [--no-hooks] [--no-ci] [--json]` |

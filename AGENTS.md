@@ -66,6 +66,15 @@ from agents.**
 
 When writing or editing a skill, use `<skills-file-root>` as the path prefix for all references to files within the skill directory (scripts, references, assets). It resolves to the directory containing the skill's `SKILL.md`.
 
+## GitOps Workflow drift control
+
+WHEN you edit files under `skills/gitops-workflow/` AND the change affects top-level commands, aliases, routing modes, or help discovery THEN you SHALL update the same change in `scripts/gitops-help.sh`, `SKILL.md`, `references/SCRIPT_ROUTING.md`, and the targeted tests.
+
+WHEN command discovery is needed for `skills/gitops-workflow/` THEN you SHALL treat `scripts/gitops-help.sh --json` as the canonical agent-facing discovery surface.
+
+You SHALL NOT add another manually maintained command catalog or alias inventory for `skills/gitops-workflow/` unless runtime behavior requires it.
+
+
 ---
 
 ## Skill authoring: frontmatter and naming
