@@ -29,6 +29,7 @@ def run(cmd, *, cwd: Path, env=None, check=True):
 class ScriptSyntaxTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         targets = [
+            SCRIPTS_DIR / "gitops-help.sh",
             SCRIPTS_DIR / "start-branch.sh",
             SCRIPTS_DIR / "finish-work.sh",
             SCRIPTS_DIR / "install-hooks.sh",
@@ -72,6 +73,7 @@ class PythonScriptCompileTests(unittest.TestCase):
             SCRIPTS_DIR / "batch-commit.py",
             SCRIPTS_DIR / "commit-message.py",
             SCRIPTS_DIR / "pr-readiness-report.py",
+            SCRIPTS_DIR / "lib" / "raw_ship_state.py",
         ]
         proc = run(["python3", "-m", "py_compile", *(str(target) for target in targets)], cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -1203,6 +1205,55 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
             child_item = next(item for item in payload["results"] if item["repo"] == str(child_checkout))
             self.assertEqual(child_item["gitlink_status"], "child-ahead")
             self.assertEqual(child_item["recovery_class"], "none")
+
+    def test_repo_state_json_reports_resume_eligible_raw_ship_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            self._init_repo(repo)
+
+            head = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+            common_dir = run(
+                ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cwd=repo,
+            ).stdout.strip()
+            state_path = Path(common_dir) / "gitops-workflow" / "ship-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "mode": "raw",
+                        "repo": str(repo.resolve()),
+                        "branch": "main",
+                        "head_before": head,
+                        "head_after": head,
+                        "sync_status": "up-to-date",
+                        "batch_commit_status": "created",
+                        "local_commit_created": True,
+                        "local_commit_sha": head,
+                        "push_started": True,
+                        "push_completed": True,
+                        "push_succeeded": False,
+                        "resume_eligible": True,
+                        "last_error_summary": "timed out before push completed",
+                        "updated_at": "2026-04-12T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "repo-state.sh"), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            item = payload["results"][0]
+            self.assertEqual(item["raw_ship_state"], "resume-eligible")
+            self.assertTrue(item["raw_ship_resume_eligible"])
+            self.assertEqual(item["raw_ship_local_commit_sha"], head)
+            self.assertEqual(item["raw_ship_next_action"], "rerun 'ship raw' to resume the pending push")
+            self.assertEqual(item["next_action"], "rerun 'ship raw' to resume the pending push")
 
     def test_recover_repo_state_aborts_merge_and_reports_recovered(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2882,6 +2933,65 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("ship.sh", routing)
         self.assertIn("doctor.sh", routing)
         self.assertIn("reconcile-tree.sh", routing)
+        self.assertIn("gitops-help.sh --json", skill)
+        self.assertIn("gitops-help.sh", routing)
+
+
+class GitOpsHelpScriptTests(unittest.TestCase):
+    def test_default_help_lists_common_commands(self):
+        proc = run(["bash", str(SCRIPTS_DIR / "gitops-help.sh")], cwd=ROOT, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        text = proc.stdout
+        self.assertIn("ship raw", text)
+        self.assertIn("ship sync", text)
+        self.assertIn("ship ready", text)
+        self.assertIn("sync raw", text)
+        self.assertIn("doctor fix", text)
+        self.assertIn("start work", text)
+
+    def test_json_help_returns_stable_catalog(self):
+        proc = run(["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--json"], cwd=ROOT, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["topic"], "all")
+        self.assertGreater(len(payload["entries"]), 5)
+        item = next(entry for entry in payload["entries"] if entry["id"] == "ship-raw")
+        self.assertEqual(item["topic"], "ship")
+        self.assertIn("ship raw", item["phrases"])
+        self.assertEqual(item["script"], "ship.sh")
+        self.assertIn("bash scripts/ship.sh", item["usage"])
+        self.assertIn("details_source", item)
+        self.assertTrue(item["supports_json"])
+        self.assertTrue(item["stays_on_current_branch"])
+
+    def test_topic_help_limits_output(self):
+        proc = run(["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--topic", "ship"], cwd=ROOT, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        text = proc.stdout
+        self.assertIn("Ship Workflows", text)
+        self.assertIn("ship raw", text)
+        self.assertNotIn("doctor fix", text)
+
+    def test_verbose_help_includes_backing_script_help(self):
+        proc = run(
+            ["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--topic", "ship", "--verbose"],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        text = proc.stdout
+        self.assertIn("== ship.sh ==", text)
+        self.assertIn("Usage:", text)
+        self.assertIn("ship raw", text)
+
+    def test_invalid_topic_fails_cleanly(self):
+        proc = run(
+            ["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--topic", "unknown"],
+            cwd=ROOT,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("invalid --topic", proc.stderr)
 
 if __name__ == "__main__":
     unittest.main()

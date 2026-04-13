@@ -24,6 +24,10 @@ def run(cmd, *, cwd: Path, env=None, check=True):
         check=check,
     )
 
+def raw_ship_state_path(repo: Path) -> Path:
+    proc = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=repo)
+    return Path(proc.stdout.strip()) / "gitops-workflow" / "ship-state.json"
+
 
 class GitOpsScriptTestCase(unittest.TestCase):
     def init_repo(self, repo: Path):
@@ -424,6 +428,71 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             calls = log_file.read_text(encoding="utf-8")
             self.assertIn("pr checks 7 --required --json", calls)
             self.assertNotIn("pr create", calls)
+
+    def test_ship_raw_resumes_pending_checkpoint_and_clears_it_after_push(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            repo = Path(temp_dir) / "repo"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            repo.mkdir()
+            self.init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "push", "-u", "origin", "main"], cwd=repo)
+
+            (repo / "README.md").write_text("base\nresume\n", encoding="utf-8")
+            run(
+                ["git", "commit", "-am", "docs: resume pending raw ship\n\n- keep the local raw ship commit intact\n"],
+                cwd=repo,
+            )
+            head = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+            state_path = raw_ship_state_path(repo)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "mode": "raw",
+                        "repo": str(repo.resolve()),
+                        "branch": "main",
+                        "head_before": head,
+                        "head_after": head,
+                        "sync_status": "up-to-date",
+                        "batch_commit_status": "created",
+                        "local_commit_created": True,
+                        "local_commit_sha": head,
+                        "push_started": True,
+                        "push_completed": True,
+                        "push_succeeded": False,
+                        "resume_eligible": True,
+                        "last_error_summary": "timed out before push completed",
+                        "updated_at": "2026-04-12T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=repo,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            stages = {item["stage"]: item for item in payload["results"]}
+            self.assertEqual(stages["sync"]["note"], "resumed prior raw ship checkpoint; skipped raw sync")
+            self.assertIn("reused local Conventional Commit batch", stages["batch_commit"]["note"])
+            self.assertTrue(stages["push"]["details"]["resumed"])
+            self.assertTrue(stages["push"]["details"]["push_succeeded"])
+            self.assertFalse(stages["push"]["details"]["resume_eligible"])
+            self.assertFalse(state_path.exists())
+            self.assertEqual(
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
+                head,
+            )
 
     def test_ship_ready_audits_existing_pr_without_marking_ready(self):
         with tempfile.TemporaryDirectory() as temp_dir:
