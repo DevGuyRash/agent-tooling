@@ -551,7 +551,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("function Get-NormalizedSurfaceNames", content)
         self.assertIn("function Invoke-ExcelWorkbookBootstrap", content)
         self.assertIn("function Invoke-PackageWorkbookHelper", content)
-        self.assertIn("Start-Process", content)
+        self.assertIn("[System.Diagnostics.ProcessStartInfo]::new()", content)
+        self.assertIn("$startInfo.ArgumentList.Add", content)
         self.assertIn("WaitForExit($TimeoutSeconds * 1000)", content)
         self.assertIn("Package workbook helper timed out", content)
 
@@ -732,6 +733,47 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(manifest_payload["structure"]["pivotsPath"], "workbook_structure/pivots.json")
             queries_payload = json.loads(pq_queries.read_text(encoding="utf-8"))
             self.assertEqual(queries_payload["queries"][0]["name"], "Query1")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_inspect_preserves_workbook_paths_with_spaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-package-space-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "package workbook with spaces.xlsm"
+            build_minimal_ooxml_workbook(workbook)
+            proc = run_pwsh_file(
+                "inspect",
+                "--workbook-path",
+                str(workbook),
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
+            self.assertEqual(payload["backend"], "package")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_bootstrap_preserves_workbook_paths_with_spaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-bootstrap-space-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "package workbook with spaces.xlsm"
+            output_dir = tmp / "bootstrap output with spaces"
+            build_minimal_ooxml_workbook(workbook)
+            proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
+            self.assertTrue((output_dir / "excel-sync.manifest.json").exists())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_pull_falls_back_to_package_parser_for_manifest_bundle(self) -> None:

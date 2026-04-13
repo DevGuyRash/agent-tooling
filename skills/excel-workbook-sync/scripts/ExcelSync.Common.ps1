@@ -1146,27 +1146,36 @@ function Invoke-PackageWorkbookHelper {
         $launcherArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
     }
 
-    $stdoutPath = Join-Path $env:TEMP ("excel_workbook_package_stdout_{0}_{1}.log" -f $PID, [System.Guid]::NewGuid().ToString('N'))
-    $stderrPath = Join-Path $env:TEMP ("excel_workbook_package_stderr_{0}_{1}.log" -f $PID, [System.Guid]::NewGuid().ToString('N'))
     $process = $null
     try {
-        $process = Start-Process `
-            -FilePath $pythonCommand[0] `
-            -ArgumentList @($launcherArgs + $arguments) `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -NoNewWindow `
-            -PassThru
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $pythonCommand[0]
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        foreach ($argument in @($launcherArgs + $arguments)) {
+            [void]$startInfo.ArgumentList.Add([string]$argument)
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw ("Package workbook helper failed to start for {0}." -f $Command)
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try {
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                $process.Kill($true)
             }
             catch {
             }
             throw ("Package workbook helper timed out for {0} after {1} seconds." -f $Command, $TimeoutSeconds)
         }
-        $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue } else { '' }
-        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue } else { '' }
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
         $parsedPayload = $null
         if (-not [string]::IsNullOrWhiteSpace($stdout)) {
             try {
@@ -1195,10 +1204,8 @@ function Invoke-PackageWorkbookHelper {
         return ($stdout | ConvertFrom-Json -Depth 100)
     }
     finally {
-        foreach ($candidate in @($stdoutPath, $stderrPath)) {
-            if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
-                Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
-            }
+        if ($null -ne $process) {
+            $process.Dispose()
         }
     }
 }
