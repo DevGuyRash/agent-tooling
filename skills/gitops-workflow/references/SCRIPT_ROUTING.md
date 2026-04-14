@@ -51,16 +51,22 @@ When bypassing, record:
 - Sensitive-data full repo scan (CI/manual parity):
   - `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" --all --redact [--repo <path>]`
 - Raw in-place sync on the current branch and related tree:
-  - `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]`
+  - `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--pull-strategy <rebase|merge|ff-only>] [--no-push] [--no-detached-recovery] [--no-recurse-related] [--no-reconcile]`
   - Recognized phrases `sync raw` and `raw sync` route here directly.
   - Default scope is the full related tree; use `--no-recurse-related` to stay on the current repo only.
   - Raw sync now behaves like a bidirectional branch sync: it fetches, fast-forwards when behind, rebases when diverged, publishes branches without upstream, pushes local commits when safe, and preserves dirty work via stash-plus-fallback restore.
-  - JSON statuses distinguish fast-forward pull, push-only, rebased-and-pushed, published, deterministic fallback restore, and blocked recovery cases.
+  - JSON statuses distinguish fast-forward pull, push-only, rebased-and-pushed, published, deterministic fallback restore, blocked recovery cases, and blocked push receipts may expose opt-in `manual_bypass_*` helper fields for a one-off HTTPS `--no-verify` publish path.
 - High-level ship entrypoint:
-  - `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]`
-  - `ship` syncs first, then uses the normal branch/worktree/PR flow and reports a readiness snapshot after the PR exists; `ship raw` syncs, batches Conventional Commits, pushes in place, and reports a snapshot when a PR already exists.
+  - `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--fallback-deterministic] [--no-detached-recovery]`
+  - `ship` syncs first, then uses the normal branch/worktree/PR flow and reports a readiness snapshot after the PR exists; `ship raw` syncs first, then emits internal inventory so the agent can choose the final Conventional Commit groupings and messages before continuing the same raw flow.
   - `ship sync` is the sync-only `ship.sh` mode; it runs the raw sync stage and stops before commit, push, or PR stages.
   - `ship ready` is audit-only: it reports readiness for the current branch PR and never creates a PR or flips draft state.
+  - When push is blocked, ship JSON may expose opt-in `manual_bypass_*` helper fields for a one-off HTTPS `--no-verify` publish path.
+- Agent-authored commit batching:
+  - `python3 "$SKILL_ROOT/scripts/batch-commit.py" plan --repo <path> [--scope current|tree] [--mode normal|raw] [--json]`
+  - `python3 "$SKILL_ROOT/scripts/batch-commit.py" apply --plan <path> [--mode normal|raw] [--json]`
+  - `python3 "$SKILL_ROOT/scripts/batch-commit.py" fallback --repo <path> [--scope current|tree] [--mode normal|raw] [--json]`
+  - `plan` returns inventory only; the agent owns grouping and message prose. `fallback` is maintained for explicit opt-in only.
 - Parent/submodule tree reconciliation after sync/merge/submodule commits:
   - `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]`
   - Default scope is the full related tree; parent gitlinks remain authoritative.

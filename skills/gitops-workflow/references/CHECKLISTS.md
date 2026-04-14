@@ -76,7 +76,7 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 ## I) Raw sync checklist
 
 - [ ] `sync raw` stays on the current branch; it does not create branches or worktrees
-- [ ] `ship raw` is the higher-level one-liner that syncs, batches Conventional Commits, pushes in place, and reports PR readiness when a PR already tracks the branch
+- [ ] `ship raw` syncs in place, emits inventory for the agent, and then the agent continues the same raw flow with agent-authored Conventional Commit groupings and messages; deterministic fallback is opt-in
 - [ ] `ship sync` is the sync-only `ship.sh` mode; it runs the raw sync stage and stops before commit, push, or PR stages
 - [ ] plain `ship` syncs first, then follows the normal branch/worktree/push/PR flow, reuses an existing PR when one already tracks the branch, and reports a readiness snapshot after the PR exists
 - [ ] `ship ready` is audit-only; it checks the current branch PR readiness without creating a PR or marking one ready
@@ -90,6 +90,7 @@ bash "$SKILL_ROOT/scripts/start-branch.sh" feat existing-branch --existing
 - [ ] if history integration or dirty-tree restore is not safe, raw sync preserves the stash and reports a blocked state
 - [ ] when the next step depends on exact status, use:
   - `bash "$SKILL_ROOT/scripts/sync-raw.sh" --json`
+- [ ] when a raw push is blocked and JSON includes `manual_bypass_*`, treat it as opt-in guidance only and ask before using the one-off HTTPS `--no-verify` publish path
 
 ---
 

@@ -44,8 +44,8 @@ Use this skill when the user asks you to:
 - check unresolved PR review threads and CI status
 - set up or improve GitHub repo workflow enforcement (templates, CI, branch protections)
 - reconcile deterministic GitHub governance state (rulesets, required checks, CODEOWNERS, labels)
-- commit and push raw — skip all branch/worktree/PR creation (**push-only** mode; requires **"raw"** keyword)
-- `ship`, `ship raw`, `ship sync`, `doctor`, or `doctor fix` for higher-level deterministic workflow routing
+- commit and push raw — stay in place, sync first, emit commit inventory for the agent, then let the agent create the in-place Conventional Commit batches without branch/worktree/PR creation unless the user explicitly opts into deterministic fallback (**raw** keyword required)
+- `ship`, `ship raw`, `ship sync`, `doctor`, or `doctor fix` for higher-level workflow routing
 
 ---
 
@@ -84,6 +84,7 @@ Preferred short-path routing:
 - `ship`, `ship raw`, `ship sync`, `ship ready`, `doctor`, and `doctor fix` should route directly to their bundled scripts with `--json`.
 - `sync raw` / `raw sync` should route to `sync-raw.sh` with `--json`.
 - `commit and push raw` / `push raw` should route to `ship.sh raw --json`.
+- When `ship.sh` or `batch-commit.py plan` returns commit inventory, the agent is responsible for choosing the final commit groupings and writing Conventional Commit messages with mandatory bullet bodies.
 - Use JSON receipts from the scripts as the primary machine-readable status surface instead of adding more natural-language policy text.
 - WHEN a push-blocked receipt exposes `manual_bypass_*` helper fields THEN you SHALL treat them as opt-in guidance only and ask the user before using the bypass command.
 
@@ -93,7 +94,7 @@ Preferred short-path routing:
 
 Unless the repo explicitly defines otherwise, follow these rules:
 
-1. **Never commit directly to the default branch** (`main`/`master`/etc.).
+1. **Never commit directly to the default branch** (`main`/`master`/etc.) **unless the user explicitly requested in-place raw work on that branch**.
 2. **Always branch from the default branch** (or explicitly designated base).
 3. **Use descriptive branch names**:  
    `feat/<short-desc>`, `fix/<short-desc>`, `docs/<short-desc>`, `refactor/<short-desc>`, `test/<short-desc>`  
@@ -146,8 +147,11 @@ Path resolution (mandatory):
 | Recover safe sequencer/detached state before continuing work | `bash "$SKILL_ROOT/scripts/recover-repo-state.sh" [--repo <path>] [--json] [--no-recurse-related] [--no-detached-recovery]` |
 | High-level repo/tree doctor report | `bash "$SKILL_ROOT/scripts/doctor.sh" [fix] [--repo <path>] [--scope current|tree] [--json] [--no-fetch] [--no-detached-recovery]` |
 | Sensitive-data pre-commit gate | `bash "$SKILL_ROOT/scripts/sensitive-scan.sh" [--staged] [--all] [--repo <path>] [--format <fmt>] [--redact] [--no-download]` |
-| Raw in-place sync of current branch and related repo tree | `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related]` |
-| High-level ship workflow (draft-first by default; `raw` stays in place; `sync` is sync-only mode) | `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--no-detached-recovery]` |
+| Raw in-place sync of current branch and related repo tree | `bash "$SKILL_ROOT/scripts/sync-raw.sh" [--repo <path>] [--json] [--pull-strategy <rebase\|merge\|ff-only>] [--no-push] [--no-detached-recovery] [--no-recurse-related] [--no-reconcile]` |
+| High-level ship workflow (draft-first by default; `raw` stays in place; `sync` is sync-only mode) | `bash "$SKILL_ROOT/scripts/ship.sh" [raw|sync] [push|pr|ready] [--repo <path>] [--scope current|tree] [--json] [--fallback-deterministic] [--no-detached-recovery]` |
+| Plan agent-authored Conventional Commit batches | `python3 "$SKILL_ROOT/scripts/batch-commit.py" plan --repo <path> [--scope current|tree] [--mode normal|raw] [--json]` |
+| Apply agent-authored Conventional Commit batches | `python3 "$SKILL_ROOT/scripts/batch-commit.py" apply --plan <path> [--mode normal|raw] [--json]` |
+| Deterministic commit fallback (opt-in only) | `python3 "$SKILL_ROOT/scripts/batch-commit.py" fallback --repo <path> [--scope current|tree] [--mode normal|raw] [--json]` |
 | Reconcile parent/submodule gitlinks and clean child checkouts | `bash "$SKILL_ROOT/scripts/reconcile-tree.sh" [--repo <path>] [--json] [--mode check|apply]` |
 | Generate Conventional Commit message with mandatory bullet body | `python3 "$SKILL_ROOT/scripts/commit-message.py" --type <type> [--scope <scope>] --subject "<subject>" --bullet "<line>" [--bullet "<line>" ...] [--footer "<line>" ...] [--out <path>]` |
 | List available PR labels (names + descriptions) | `bash "$SKILL_ROOT/scripts/pr-labels-list.sh" [--repo owner/repo] [--format text|json]` |
@@ -181,7 +185,7 @@ Detailed routing notes: [references/SCRIPT_ROUTING.md](references/SCRIPT_ROUTING
 
 Default scope heuristics:
 - `repo-state.sh`, `recover-repo-state.sh`, `sync-raw.sh`, and `reconcile-tree.sh` inspect the full related tree by default.
-- `start-branch.sh`, `ensure-worktree.sh`, commit/push flows, and `finish-work.sh` stay on the current repo by default unless the user explicitly asks for root/tree/all behavior.
+- `start-branch.sh`, `ensure-worktree.sh`, agent-authored commit batching, and `finish-work.sh` stay on the current repo by default unless the user explicitly asks for root/tree/all behavior.
 - Parent gitlinks are authoritative for reconciliation; branch-name matching is only a recovery/diagnostic hint.
 
 ---
@@ -202,7 +206,7 @@ When you are asked to “do Git work” in a repo, do this first:
    - update PR → PR update playbook (D)
    - merge PR → Merge playbook (E)
    - release notes → Release notes playbook (F)
-   - `sync raw` / `raw sync` / `ship sync` / commit and push **raw** → Raw-mode playbook (I) — `ship sync` is sync-only; other raw wording continues through the requested raw steps
+   - `sync raw` / `raw sync` / `ship sync` / commit and push **raw** → Raw-mode playbook (I) — `ship sync` is sync-only; other raw wording emits internal inventory for the agent and then continues through the requested raw steps
 
 Detailed checklists live in:
 
@@ -521,7 +525,7 @@ Run explicit raw in-place work on the current branch without creating branches o
 
 ### Trigger
 
-This playbook handles explicit raw in-place flows. **"ship sync"** is the sync-only `ship.sh` mode and stops after the raw sync step. Other raw wording such as **"sync raw"**, **"raw sync"**, **"commit and push raw"**, **"push raw"**, **"raw push"**, or **"ship raw"** continues through the requested raw commit/push steps. Without raw wording, normal feature-branch work first auto-adopts the linked worktree when needed, then continues with commit/push/update steps.
+This playbook handles explicit raw in-place flows. **"ship sync"** is the sync-only `ship.sh` mode and stops after the raw sync step. Other raw wording such as **"sync raw"**, **"raw sync"**, **"commit and push raw"**, **"push raw"**, **"raw push"**, or **"ship raw"** syncs in place first, then emits internal inventory so the agent can decide commit groupings and messages before continuing the same raw flow. Use deterministic fallback only when the user explicitly approves it.
 
 WHEN the user says **"ship sync"** THEN you SHALL run `bash "$SKILL_ROOT/scripts/ship.sh" sync ...` and SHALL NOT continue into commit, push, or PR steps after the raw sync stage.
 
@@ -536,7 +540,8 @@ WHEN the user says "commit and push" without "raw" THEN you SHALL follow the nor
 
 1. Detect repo context (same as Quick Start step 1).
 2. For sync requests, use `bash "$SKILL_ROOT/scripts/sync-raw.sh"` and keep every repo on its current branch.
-   - If the original wording was **"ship sync"**, run the sync-only `ship.sh` mode and stop after this step.
+  - If the original wording was **"ship sync"**, run the sync-only `ship.sh` mode and stop after this step.
+  - If the original wording was another raw command and the repo is dirty, let `ship.sh raw --json` emit the inventory, then write the commit plan yourself, apply it with `batch-commit.py apply`, and continue the same raw flow without asking the user again unless consent or tree-scope choice is required.
    - Raw sync inspects the full related tree by default; use `--no-recurse-related` to stay on the current repo only.
    - Before syncing, the helper refreshes local refs when `origin` exists and auto-recovers safe sequencer/detached state; rescue-grade recovery still stops for review.
    - When a repo is dirty, raw sync may stash tracked + untracked changes, integrate upstream history, and then restore the dirty tree.
@@ -550,8 +555,9 @@ WHEN the user says "commit and push" without "raw" THEN you SHALL follow the nor
 4. Create batched Conventional Commits with mandatory bullet-list bodies (per Playbook B).
 5. Check signing availability:
    - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
-   - WHEN signing is configured but unavailable (exit 1) THEN you SHALL commit with `--no-gpg-sign` and warn the user.
+   - WHEN commit signing fails and the batch-commit receipt exposes `unsigned_retry_available` THEN you SHALL surface the helper text and ask the user before enabling the unsigned retry path.
 6. Push to current branch: `git push`
+   - Blocked push JSON may expose opt-in `manual_bypass_*` helper fields for a one-off HTTPS `--no-verify` publish path; ask before using it.
 7. Emit commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base <default-branch>`
 
@@ -562,7 +568,7 @@ WHEN raw mode continues into commit/push steps THEN you SHALL still follow Conve
 High-level shortcuts:
 - `ship` syncs the current scope, batches commits in a linked worktree when needed, pushes, and stops at a draft PR by default.
 - `ship ready` audits the current branch PR readiness only; it does not create a PR or mark one ready.
-- `ship raw` keeps work on the current branch, syncs in place, batches Conventional Commits, and pushes without branch/worktree/PR creation.
+- `ship raw` keeps work on the current branch, syncs in place, emits inventory for the agent, and the agent writes the actual Conventional Commit batches and messages before resuming the same raw flow.
 - `ship sync` is the sync-only `ship.sh` mode; it stops after the in-place raw sync path.
 - `doctor` reports repo and related-tree health.
 - `doctor fix` applies safe recovery and sync, then reports remaining reconciliation work without creating commits, pushes, or PRs.
