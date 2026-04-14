@@ -11,7 +11,9 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
 CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
 INTERNAL_NAME_PREFIXES = ("_xlfn.", "_xlpm.", "_xlws.")
+PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
 
 
 def qn(namespace: str, name: str) -> str:
@@ -533,6 +536,16 @@ def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
         package.close()
 
 
+def package_readable_workbook(workbook_path: Path) -> bool:
+    if workbook_path.suffix.lower() not in PACKAGE_READABLE_EXTENSIONS:
+        return False
+    try:
+        with zipfile.ZipFile(workbook_path):
+            return True
+    except (FileNotFoundError, zipfile.BadZipFile, OSError):
+        return False
+
+
 def excel_available() -> bool:
     return os.name == "nt" and shutil.which("powershell") is not None
 
@@ -574,6 +587,34 @@ def powershell_json(script: Path, arguments: list[str], timeout: int | None = No
         if json_start >= 0 and json_end > json_start:
             return json.loads(stdout[json_start : json_end + 1])
         raise
+
+
+@contextmanager
+def com_workbook_copy(workbook_path: Path):
+    suffix = workbook_path.suffix or ".xlsx"
+    with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-com-") as temp_dir:
+        working_copy = Path(temp_dir) / f"{safe_filename(workbook_path.stem)}{suffix}"
+        shutil.copy2(workbook_path, working_copy)
+        yield working_copy
+
+
+def normalize_com_result_workbook_paths(
+    com_result: dict[str, Any],
+    *,
+    original_path: Path,
+    working_copy_path: Path,
+) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(com_result))
+    normalized["requestedWorkbookPath"] = str(original_path)
+    normalized["workingWorkbookPath"] = str(working_copy_path)
+    workbook_info = normalized.get("workbook")
+    if isinstance(workbook_info, dict):
+        workbook_info["path"] = str(original_path)
+        workbook_info["name"] = original_path.name
+        workbook_info["workingPath"] = str(working_copy_path)
+    elif "workbook" in normalized:
+        normalized["workbook"] = str(original_path)
+    return normalized
 
 
 def extract_com(
@@ -620,6 +661,100 @@ def com_extract_status(com_result: dict[str, Any] | None) -> str:
 
 def com_extract_succeeded(com_result: dict[str, Any] | None) -> bool:
     return com_extract_status(com_result) == "ok"
+
+
+def compare_status_from_com_result(com_result: dict[str, Any] | None) -> str:
+    if not com_result:
+        return "com_unavailable"
+    if com_result.get("timedOut"):
+        return "com_timed_out"
+    if com_result.get("failed"):
+        error_text = str(com_result.get("error") or "").lower()
+        if "unavailable" in error_text:
+            return "com_unavailable"
+        return "com_open_failed"
+    return "ok"
+
+
+def unavailable_compare_payload(
+    baseline_result: dict[str, Any],
+    com_result: dict[str, Any],
+    *,
+    comparison_status: str | None = None,
+) -> dict[str, Any]:
+    if comparison_status is None:
+        comparison_status = compare_status_from_com_result(com_result)
+    left_vba_hash = baseline_result.get("vba", {}).get("sha256")
+    return {
+        "leftEngine": baseline_result.get("engine"),
+        "rightEngine": "com",
+        "comparisonAvailable": False,
+        "comparisonStatus": comparison_status,
+        "raw": {
+            "summary": {},
+            "mismatches": {},
+            "match": None,
+            "diagnostics": {
+                "vbaHash": {
+                    "left": left_vba_hash,
+                    "right": None,
+                    "comparable": False,
+                    "status": "unavailable_on_one_side",
+                },
+                "liveVba": {
+                    "excludedFromParity": False,
+                    "reason": "Comparison is unavailable because COM extraction did not complete.",
+                    "summary": {},
+                    "mismatches": {},
+                },
+            },
+        },
+        "normalized": {
+            "summary": {},
+            "mismatches": {},
+            "match": None,
+            "diagnostics": {
+                "vbaHash": {
+                    "left": left_vba_hash,
+                    "right": None,
+                    "comparable": False,
+                    "status": "unavailable_on_one_side",
+                },
+                "liveVba": {
+                    "excludedFromParity": True,
+                    "reason": "Comparison is unavailable because COM extraction did not complete.",
+                    "summary": {},
+                    "mismatches": {},
+                },
+                "filteredNames": {"left": [], "right": [], "leftCount": 0, "rightCount": 0},
+            },
+        },
+        "summary": {},
+        "mismatches": {},
+        "match": None,
+        "comDiagnostics": com_result,
+    }
+
+
+def extract_com_for_read(
+    workbook_path: Path,
+    *,
+    output_root: Path | None = None,
+    visible: bool = False,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    with com_workbook_copy(workbook_path) as working_copy:
+        com_result = extract_com(
+            working_copy,
+            output_root=output_root,
+            visible=visible,
+            timeout_seconds=timeout_seconds,
+        )
+        return normalize_com_result_workbook_paths(
+            com_result,
+            original_path=workbook_path.resolve(),
+            working_copy_path=working_copy.resolve(),
+        )
 
 
 def run_mutation(
@@ -728,24 +863,25 @@ def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workb
             "references": normalized.get("vba", {}).get("references", []),
         },
     )
-    write_ooxml_snapshot(workbook_path, output_root)
-    with zipfile.ZipFile(workbook_path) as workbook_zip:
-        for candidate in [name for name in workbook_zip.namelist() if name.startswith("customXml/item") and name.endswith(".xml")]:
-            raw = workbook_zip.read(candidate)
-            for encoding in ("utf-16", "utf-8"):
-                try:
-                    text = raw.decode(encoding)
-                except UnicodeDecodeError:
-                    continue
-                if "<DataMashup" in text:
-                    target = output_root / "power_query" / "data_mashup.xml"
-                    ensure_dir(target.parent)
-                    target.write_text(text, encoding="utf-8")
-                    break
-        if "xl/vbaProject.bin" in workbook_zip.namelist():
-            target = output_root / "vba" / "vbaProject.bin"
-            ensure_dir(target.parent)
-            target.write_bytes(workbook_zip.read("xl/vbaProject.bin"))
+    if package_readable_workbook(workbook_path):
+        write_ooxml_snapshot(workbook_path, output_root)
+        with zipfile.ZipFile(workbook_path) as workbook_zip:
+            for candidate in [name for name in workbook_zip.namelist() if name.startswith("customXml/item") and name.endswith(".xml")]:
+                raw = workbook_zip.read(candidate)
+                for encoding in ("utf-16", "utf-8"):
+                    try:
+                        text = raw.decode(encoding)
+                    except UnicodeDecodeError:
+                        continue
+                    if "<DataMashup" in text:
+                        target = output_root / "power_query" / "data_mashup.xml"
+                        ensure_dir(target.parent)
+                        target.write_text(text, encoding="utf-8")
+                        break
+            if "xl/vbaProject.bin" in workbook_zip.namelist():
+                target = output_root / "vba" / "vbaProject.bin"
+                ensure_dir(target.parent)
+                target.write_bytes(workbook_zip.read("xl/vbaProject.bin"))
 
 
 def merge_ooxml_and_com(ooxml_result: dict[str, Any], com_result: dict[str, Any]) -> dict[str, Any]:
@@ -765,12 +901,26 @@ def merge_ooxml_and_com(ooxml_result: dict[str, Any], com_result: dict[str, Any]
 
 
 def pull_workbook(workbook_path: Path, output_root: Path, engine: str, visible: bool = False) -> dict[str, Any]:
-    ooxml_result = extract_ooxml(workbook_path)
     chosen_engine = choose_engine(engine)
-    merged = ooxml_result
+    package_readable = package_readable_workbook(workbook_path)
+    if chosen_engine == "ooxml" or package_readable:
+        base_result = extract_ooxml(workbook_path)
+    else:
+        base_result = None
+
+    merged = base_result
     if chosen_engine == "com":
-        com_result = extract_com(workbook_path, output_root=output_root, visible=visible)
-        merged = merge_ooxml_and_com(ooxml_result, com_result)
+        com_result = extract_com_for_read(workbook_path, output_root=output_root, visible=visible)
+        if base_result is not None:
+            merged = merge_ooxml_and_com(base_result, com_result)
+        else:
+            merged = json.loads(json.dumps(com_result))
+            merged["comDiagnostics"] = {
+                "status": com_extract_status(com_result),
+                "details": json.loads(json.dumps(com_result)),
+            }
+    elif merged is None:
+        raise RuntimeError(f"OOXML extraction is unavailable for workbook format: {workbook_path.suffix.lower()}")
     write_default_artifacts(merged, output_root, workbook_path)
     return merged
 
@@ -882,6 +1032,8 @@ def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
     return {
         "leftEngine": left.get("engine"),
         "rightEngine": right.get("engine"),
+        "comparisonAvailable": True,
+        "comparisonStatus": "ok",
         "raw": raw,
         "normalized": normalized,
         "summary": raw["summary"],
@@ -892,37 +1044,28 @@ def compare_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
 
 def compare_workbook(workbook_path: Path, output_root: Path, engine: str, visible: bool = False) -> dict[str, Any]:
     ensure_dir(output_root)
-    ooxml_result = extract_ooxml(workbook_path)
+    package_readable = package_readable_workbook(workbook_path)
+    ooxml_result = extract_ooxml(workbook_path) if package_readable else None
     if choose_engine(engine) == "com":
-        com_result = extract_com(workbook_path, output_root=output_root / "com", visible=visible)
-        if com_extract_succeeded(com_result):
-            result = compare_results(ooxml_result, merge_ooxml_and_com(ooxml_result, com_result))
-        else:
-            status = com_extract_status(com_result)
-            result = {
-                "leftEngine": ooxml_result.get("engine"),
-                "rightEngine": "com",
-                "raw": {
-                    "summary": {},
-                    "mismatches": {"comExtraction": ["completed", status]},
-                    "match": False,
-                    "diagnostics": {"vbaHash": {"left": ooxml_result.get("vba", {}).get("sha256"), "right": None, "comparable": False, "status": "unavailable_on_one_side"}},
-                },
-                "normalized": {
-                    "summary": {},
-                    "mismatches": {"comExtraction": ["completed", status]},
-                    "match": False,
-                    "diagnostics": {
-                        "vbaHash": {"left": ooxml_result.get("vba", {}).get("sha256"), "right": None, "comparable": False, "status": "unavailable_on_one_side"},
-                        "filteredNames": {"left": [], "right": [], "leftCount": 0, "rightCount": 0},
-                    },
-                },
-                "summary": {},
-                "mismatches": {"comExtraction": ["completed", status]},
-                "match": False,
-                "comDiagnostics": com_result,
+        com_result = extract_com_for_read(workbook_path, output_root=output_root / "com", visible=visible)
+        if ooxml_result is None:
+            baseline_result = com_result if com_extract_succeeded(com_result) else {
+                "engine": None,
+                "vba": {"sha256": None},
             }
+            result = unavailable_compare_payload(
+                baseline_result,
+                com_result,
+                comparison_status="package_unavailable" if com_extract_succeeded(com_result) else compare_status_from_com_result(com_result),
+            )
+        elif com_extract_succeeded(com_result):
+            result = compare_results(ooxml_result, merge_ooxml_and_com(ooxml_result, com_result))
+            result["comDiagnostics"] = com_result
+        else:
+            result = unavailable_compare_payload(ooxml_result, com_result)
     else:
+        if ooxml_result is None:
+            raise RuntimeError(f"OOXML comparison is unavailable for workbook format: {workbook_path.suffix.lower()}")
         result = compare_results(ooxml_result, ooxml_result)
     write_json(output_root / "compare.json", result)
     return result
@@ -1060,6 +1203,11 @@ def audit_workbook(
 
 
 def render_matrix_summary(summary: dict[str, Any]) -> str:
+    def render_compare_cell(value: Any) -> str:
+        if value is None:
+            return "n/a"
+        return "pass" if value else "fail"
+
     lines = [
         "# Excel Workbook Sync Matrix Audit",
         "",
@@ -1074,8 +1222,8 @@ def render_matrix_summary(summary: dict[str, Any]) -> str:
         lines.append(
             "| {name} | {raw} | {normalized} | {delta} | {scenarios} |".format(
                 name=workbook["workbookName"],
-                raw="pass" if workbook["baselineRawMatch"] else "fail",
-                normalized="pass" if workbook["baselineNormalizedMatch"] else "fail",
+                raw=render_compare_cell(workbook["baselineRawMatch"]),
+                normalized=render_compare_cell(workbook["baselineNormalizedMatch"]),
                 delta=workbook["deltaStatus"],
                 scenarios=workbook["scenarioCount"],
             )

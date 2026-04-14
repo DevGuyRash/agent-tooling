@@ -245,6 +245,135 @@ function Write-TextFile {
     [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Normalize-ExcelFormulaForComparison {
+    param(
+        [AllowNull()]
+        [string]$Formula
+    )
+
+    if ($null -eq $Formula) {
+        return ""
+    }
+
+    $normalized = $Formula -replace "`r`n?", "`n"
+    $normalized = (($normalized -split "`n") -join ' ') -replace '\s+', ' '
+    return $normalized.Trim().ToUpperInvariant()
+}
+
+function Normalize-ConditionalFormatHexColor {
+    param(
+        [AllowNull()]
+        [string]$Color
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Color)) {
+        return $null
+    }
+
+    $trimmed = $Color.Trim().ToUpperInvariant()
+    if (-not $trimmed.StartsWith('#')) {
+        $trimmed = "#$trimmed"
+    }
+    return $trimmed
+}
+
+function Get-ConditionalFormatComparableStyle {
+    param(
+        $Rule
+    )
+
+    $format = $null
+    if ($null -ne $Rule -and $null -ne $Rule.PSObject.Properties['format']) {
+        $format = $Rule.format
+    }
+
+    return [pscustomobject]@{
+        interiorColor = if ($null -ne $format -and $null -ne $format.PSObject.Properties['interiorColor']) { Normalize-ConditionalFormatHexColor -Color ([string]$format.interiorColor) } else { $null }
+        fontColor = if ($null -ne $format -and $null -ne $format.PSObject.Properties['fontColor']) { Normalize-ConditionalFormatHexColor -Color ([string]$format.fontColor) } else { $null }
+        bold = if ($null -ne $format -and $null -ne $format.PSObject.Properties['bold']) { [Nullable[bool]]([bool]$format.bold) } else { $null }
+    }
+}
+
+function Test-ConditionalFormatRuleSemanticMatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        $RuleSpec,
+        [Parameter(Mandatory = $true)]
+        $Candidate
+    )
+
+    if ([string]$Candidate.sheet -ne [string]$RuleSpec.sheet) {
+        return $false
+    }
+    if ([string]$Candidate.address -ne [string]$RuleSpec.address) {
+        return $false
+    }
+    if ($null -ne $RuleSpec.PSObject.Properties['type'] -and -not [string]::IsNullOrWhiteSpace([string]$RuleSpec.type)) {
+        if (([string]$Candidate.type).Trim().ToLowerInvariant() -ne ([string]$RuleSpec.type).Trim().ToLowerInvariant()) {
+            return $false
+        }
+    }
+    if ($null -ne $RuleSpec.PSObject.Properties['formula']) {
+        $candidateFormula = Normalize-ExcelFormulaForComparison -Formula ([string]$Candidate.formula)
+        $ruleFormula = Normalize-ExcelFormulaForComparison -Formula ([string]$RuleSpec.formula)
+        if ($candidateFormula -ne $ruleFormula) {
+            return $false
+        }
+    }
+
+    $candidateStyle = Get-ConditionalFormatComparableStyle -Rule $Candidate
+    $ruleStyle = Get-ConditionalFormatComparableStyle -Rule $RuleSpec
+    foreach ($styleProperty in @('interiorColor', 'fontColor', 'bold')) {
+        $ruleValue = $ruleStyle.$styleProperty
+        if ($null -eq $ruleValue) {
+            continue
+        }
+        if ($candidateStyle.$styleProperty -ne $ruleValue) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Resolve-ConditionalFormatRuleMatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        $RuleSpec,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Candidates
+    )
+
+    $matches = @($Candidates | Where-Object { Test-ConditionalFormatRuleSemanticMatch -RuleSpec $RuleSpec -Candidate $_ })
+    if ($matches.Count -eq 0) {
+        throw "Managed conditional formatting rule not found for $($RuleSpec.id)"
+    }
+    if ($matches.Count -eq 1) {
+        return $matches[0]
+    }
+
+    $preferred = @($matches)
+    if ($null -ne $RuleSpec.PSObject.Properties['priority'] -and $null -ne $RuleSpec.priority) {
+        $targetPriority = [int]$RuleSpec.priority
+        $preferred =
+            @($matches |
+                Sort-Object @{ Expression = { [Math]::Abs(([int]$_.priority) - $targetPriority) } }, @{ Expression = { [int]$_.priority } }, @{ Expression = { [string]$_.id } })
+        if ($preferred.Count -gt 1) {
+            $firstDistance = [Math]::Abs(([int]$preferred[0].priority) - $targetPriority)
+            $secondDistance = [Math]::Abs(([int]$preferred[1].priority) - $targetPriority)
+            if ($firstDistance -lt $secondDistance) {
+                return $preferred[0]
+            }
+        }
+    }
+
+    $candidateSummary =
+        @($preferred | ForEach-Object {
+            "{0}|{1}|{2}|{3}" -f [string]$_.sheet, [string]$_.address, [string]$_.priority, (Normalize-ExcelFormulaForComparison -Formula ([string]$_.formula))
+        }) -join "; "
+    throw "Managed conditional formatting rule is ambiguous for $($RuleSpec.id): $candidateSummary"
+}
+
 function ConvertTo-ObjectArray {
     param(
         $Value
@@ -1077,6 +1206,10 @@ function Get-NormalizedSurfaceNames {
 }
 
 function Get-PythonLauncher {
+    if (-not [string]::IsNullOrWhiteSpace($env:EXCEL_WORKBOOK_SYNC_PYTHON)) {
+        return @($env:EXCEL_WORKBOOK_SYNC_PYTHON)
+    }
+
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($null -ne $py) {
         return @($py.Source, '-3.12')
@@ -2240,12 +2373,21 @@ function Get-ConditionalFormattingQuery {
 
     $rules = @()
     foreach ($worksheet in $Workbook.Worksheets) {
-        $usedRange = $worksheet.UsedRange
-        if ($null -eq $usedRange) {
+        $formatConditions = $null
+        try {
+            $formatConditions = $worksheet.Cells.FormatConditions
+        }
+        catch {
+            try {
+                $formatConditions = $worksheet.UsedRange.FormatConditions
+            }
+            catch {
+                $formatConditions = $null
+            }
+        }
+        if ($null -eq $formatConditions) {
             continue
         }
-
-        $formatConditions = $usedRange.FormatConditions
         $count = 0
         try {
             $count = [int]$formatConditions.Count

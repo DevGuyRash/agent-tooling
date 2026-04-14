@@ -589,17 +589,7 @@ function Export-ConditionalFormatRule {
         $_.address -eq [string]$RuleSpec.address
     } | Sort-Object priority, id)
 
-    $match =
-        if ($null -ne $RuleSpec.PSObject.Properties["priority"] -and $null -ne $RuleSpec.priority) {
-            $allRules | Where-Object { $_.priority -eq [int]$RuleSpec.priority } | Select-Object -First 1
-        }
-        else {
-            $allRules | Select-Object -First 1
-        }
-
-    if ($null -eq $match) {
-        throw "Managed conditional formatting rule not found for $($RuleSpec.id)"
-    }
+    $match = Resolve-ConditionalFormatRuleMatch -RuleSpec $RuleSpec -Candidates $allRules
 
     $match.id = [string]$RuleSpec.id
     return $match
@@ -794,21 +784,20 @@ try {
     if ($resolved.Structure.ConditionalFormattingPath) {
         $cfArtifact = Read-JsonFile -Path $resolved.Structure.ConditionalFormattingPath
         if ($Direction -eq "push") {
-            $groupedRules = @{}
-            foreach ($rule in @($cfArtifact.rules | Sort-Object sheet, address, priority, id)) {
-                $key = "{0}|{1}" -f [string]$rule.sheet, [string]$rule.address
-                if (-not $groupedRules.ContainsKey($key)) {
-                    $groupedRules[$key] = New-Object System.Collections.Generic.List[object]
+            $rulesBySheet = @{}
+            foreach ($rule in @($cfArtifact.rules | Sort-Object sheet, priority, address, id)) {
+                $sheetName = [string]$rule.sheet
+                if (-not $rulesBySheet.ContainsKey($sheetName)) {
+                    $rulesBySheet[$sheetName] = New-Object System.Collections.Generic.List[object]
                 }
-                $groupedRules[$key].Add($rule)
+                $rulesBySheet[$sheetName].Add($rule)
             }
 
-            foreach ($entry in $groupedRules.GetEnumerator()) {
-                $first = $entry.Value[0]
-                $cleared = $false
+            foreach ($entry in $rulesBySheet.GetEnumerator()) {
+                $worksheet = Get-WorksheetByName -Workbook $context.Workbook -WorksheetName $entry.Key
+                Remove-SupportedFormatConditions -TargetRange $worksheet.Cells
                 foreach ($rule in $entry.Value) {
-                    Ensure-ConditionalFormatRule -Workbook $context.Workbook -RuleSpec $rule -ClearExisting:(-not $cleared)
-                    $cleared = $true
+                    Ensure-ConditionalFormatRule -Workbook $context.Workbook -RuleSpec $rule
                     Write-Output ("PUSH CF {0}" -f $rule.id)
                 }
             }
