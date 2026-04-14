@@ -796,6 +796,8 @@ class StartBranchScriptTests(unittest.TestCase):
             run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
             run(["git", "config", "user.name", "Test User"], cwd=clone)
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
 
             proc = run(
                 ["bash", str(SCRIPTS_DIR / "start-branch.sh"), "feat", "remote-only", "--existing", "--no-worktree"],
@@ -852,6 +854,8 @@ class EnsureWorktreeScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
         run(["git", "checkout", "-b", "main"], cwd=repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         run(["git", "add", "README.md"], cwd=repo)
@@ -907,11 +911,34 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
 
     def _clone_with_identity(self, origin: Path, clone: Path, temp_dir: Path):
         run(["git", "clone", str(origin), str(clone)], cwd=temp_dir)
         run(["git", "config", "user.name", "Test User"], cwd=clone)
         run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
+
+    def _write_fetch_git_wrapper(
+        self,
+        temp_dir: Path,
+        *,
+        ssh_stderr: str,
+        https_exit: int,
+        https_stderr: str,
+        https_exec_target: Path | None = None,
+    ) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        wrapper = Path(temp_dir) / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport json\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nHTTPS_URL = "https://github.com/example/example.git"\nHTTPS_EXEC_TARGET = {https_exec_target!r}\nargs = sys.argv[1:]\nlog_path = os.environ.get("FAKE_GIT_LOG")\nif log_path:\n    with open(log_path, "a", encoding="utf-8") as handle:\n        handle.write(json.dumps(args) + "\\n")\nif "fetch" in args and "--prune" in args:\n    if "origin" in args:\n        sys.stderr.write({ssh_stderr!r})\n        raise SystemExit(255)\n    if HTTPS_URL in args:\n        if HTTPS_EXEC_TARGET:\n            rewritten = [HTTPS_EXEC_TARGET if arg == HTTPS_URL else arg for arg in args]\n            os.execv(REAL_GIT, [REAL_GIT, *rewritten])\n        sys.stderr.write({https_stderr!r})\n        raise SystemExit({https_exit})\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git, ssh_stderr=ssh_stderr, https_exit=https_exit, https_stderr=https_stderr, https_exec_target=str(https_exec_target) if https_exec_target else ""),
+            encoding="utf-8",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        return wrapper
 
     def test_sync_raw_blocks_dirty_checkout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -925,7 +952,7 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             (repo / "README.md").write_text("dirty\n", encoding="utf-8")
 
             proc = run(
-                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(repo), "--no-recurse-related", "--json"],
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(repo), "--json"],
                 cwd=ROOT,
                 check=False,
             )
@@ -933,6 +960,110 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["results"][0]["status"], "skipped-no-origin")
             self.assertEqual((repo / "README.md").read_text(encoding="utf-8"), "dirty\n")
+
+    def test_repo_state_uses_https_fallback_after_ssh_fetch_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            seed = Path(temp_dir) / "seed"
+            repo = Path(temp_dir) / "repo"
+            log_file = Path(temp_dir) / "git.log"
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            seed.mkdir()
+            self._init_repo(seed)
+            run(["git", "checkout", "-b", "main"], cwd=seed)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=seed)
+            (seed / "README.md").write_text("remote\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=seed)
+            run(["git", "commit", "-m", "chore: remote base"], cwd=seed)
+            run(["git", "push", "-u", "origin", "main"], cwd=seed)
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "remote", "add", "origin", "git@github.com:example/example.git"], cwd=repo)
+            run(["git", "remote", "set-url", "--push", "origin", "git@github.com:example/example.git"], cwd=repo)
+            self._write_fetch_git_wrapper(
+                Path(temp_dir),
+                ssh_stderr="Permission denied (publickey).\n",
+                https_exit=0,
+                https_stderr="",
+                https_exec_target=origin,
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{Path(temp_dir)}:{env['PATH']}"
+            env["FAKE_GIT_LOG"] = str(log_file)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "repo-state.sh"), "--repo", str(repo), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["fetch_status"], "fetched")
+            self.assertEqual(result["fetch_transport_attempts"], ["ssh", "https"])
+            self.assertEqual(result["fetch_transport_used"], "https")
+            self.assertEqual(result["fetch_fallback_reason"], "ssh-publickey-auth-failed")
+            self.assertEqual(result["fetch_remote_url_kind"], "ssh")
+            self.assertEqual(
+                run(["git", "remote", "get-url", "origin"], cwd=repo).stdout.strip(),
+                "git@github.com:example/example.git",
+            )
+            self.assertEqual(
+                run(["git", "remote", "get-url", "--push", "origin"], cwd=repo).stdout.strip(),
+                "git@github.com:example/example.git",
+            )
+            self.assertEqual(
+                run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=repo).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
+            )
+            log_lines = log_file.read_text(encoding="utf-8").splitlines()
+            self.assertTrue(any('"https://github.com/example/example.git"' in line for line in log_lines))
+            self.assertFalse(any("remote.origin.url=https://github.com/example/example.git" in line for line in log_lines))
+
+    def test_sync_raw_blocks_fetch_without_https_fallback_on_host_verification_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            log_file = Path(temp_dir) / "git.log"
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "remote", "add", "origin", "git@github.com:example/example.git"], cwd=repo)
+            self._write_fetch_git_wrapper(
+                Path(temp_dir),
+                ssh_stderr="Host key verification failed.\n",
+                https_exit=97,
+                https_stderr="unexpected https fallback\n",
+            )
+            env = os.environ.copy()
+            env["PATH"] = f"{Path(temp_dir)}:{env['PATH']}"
+            env["FAKE_GIT_LOG"] = str(log_file)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(repo), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "blocked-fetch")
+            self.assertEqual(result["fetch_status"], "warning")
+            self.assertEqual(result["fetch_transport_attempts"], ["ssh"])
+            self.assertEqual(result["fetch_transport_used"], "")
+            self.assertEqual(result["fetch_fallback_reason"], "ssh-host-verification-failed")
+            self.assertEqual(result["fetch_remote_url_kind"], "ssh")
+            self.assertIn("Host key verification failed", result["fetch_note"])
+            log_lines = log_file.read_text(encoding="utf-8").splitlines()
+            self.assertFalse(any('"https://github.com/example/example.git"' in line for line in log_lines))
 
     def test_sync_raw_dirty_checkout_uses_stash_then_restores(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -953,6 +1084,8 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
             run(["git", "config", "user.name", "Test User"], cwd=clone)
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
 
             (work / "README.md").write_text("base\nremote\n", encoding="utf-8")
             run(["git", "add", "README.md"], cwd=work)
@@ -1065,6 +1198,129 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
             )
 
+    def test_sync_raw_no_push_defers_publish_for_ahead_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--no-push", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "push-deferred")
+            self.assertEqual(result["push_action"], "deferred")
+            self.assertEqual(result["ahead_after"], 1)
+            self.assertNotEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
+            )
+
+    def test_sync_raw_merge_strategy_merges_diverged_branch_and_pushes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+
+            (work / "remote.txt").write_text("remote\n", encoding="utf-8")
+            run(["git", "add", "remote.txt"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote advance"], cwd=work)
+            run(["git", "push"], cwd=work)
+
+            (clone / "local.txt").write_text("local\n", encoding="utf-8")
+            run(["git", "add", "local.txt"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--pull-strategy", "merge", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "merged-and-pushed")
+            self.assertEqual(result["history_action"], "merge")
+            self.assertEqual(result["push_action"], "push")
+            self.assertEqual(result["ahead_after"], 0)
+            self.assertEqual(result["behind_after"], 0)
+            self.assertIn("Merge", run(["git", "log", "--pretty=%s", "-1"], cwd=clone).stdout)
+
+    def test_sync_raw_ff_only_blocks_diverged_branch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+
+            (work / "remote.txt").write_text("remote\n", encoding="utf-8")
+            run(["git", "add", "remote.txt"], cwd=work)
+            run(["git", "commit", "-m", "feat: remote advance"], cwd=work)
+            run(["git", "push"], cwd=work)
+
+            (clone / "local.txt").write_text("local\n", encoding="utf-8")
+            run(["git", "add", "local.txt"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--pull-strategy", "ff-only", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "blocked-fast-forward")
+            self.assertEqual(result["history_action"], "blocked")
+            self.assertEqual(result["push_action"], "noop")
+            self.assertEqual(result["ahead_before"], 1)
+            self.assertEqual(result["behind_before"], 1)
+
     def test_sync_raw_publishes_branch_without_upstream(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1137,6 +1393,8 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             child_checkout = parent / "deps" / "child"
             run(["git", "config", "user.name", "Test User"], cwd=child_checkout)
             run(["git", "config", "user.email", "test@example.com"], cwd=child_checkout)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=child_checkout)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=child_checkout)
             (parent / "notes.txt").write_text("keep me dirty\n", encoding="utf-8")
             (child_checkout / "feature.txt").write_text("next\n", encoding="utf-8")
             run(["git", "add", "feature.txt"], cwd=child_checkout)
@@ -1161,6 +1419,8 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
         run(["git", "init"], cwd=repo)
         run(["git", "config", "user.name", "Test User"], cwd=repo)
         run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
         run(["git", "checkout", "-b", "main"], cwd=repo)
         (repo / "README.md").write_text("base\n", encoding="utf-8")
         run(["git", "add", "README.md"], cwd=repo)
@@ -1187,6 +1447,8 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
             child_checkout = parent / "deps" / "child"
             run(["git", "config", "user.name", "Test User"], cwd=child_checkout)
             run(["git", "config", "user.email", "test@example.com"], cwd=child_checkout)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=child_checkout)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=child_checkout)
             (child_checkout / "feature.txt").write_text("next\n", encoding="utf-8")
             run(["git", "add", "feature.txt"], cwd=child_checkout)
             run(["git", "commit", "-m", "feat: advance child"], cwd=child_checkout)
@@ -1252,6 +1514,7 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
             self.assertEqual(item["raw_ship_state"], "resume-eligible")
             self.assertTrue(item["raw_ship_resume_eligible"])
             self.assertEqual(item["raw_ship_local_commit_sha"], head)
+            self.assertEqual(item["raw_ship_last_error_summary"], "timed out before push completed")
             self.assertEqual(item["raw_ship_next_action"], "rerun 'ship raw' to resume the pending push")
             self.assertEqual(item["next_action"], "rerun 'ship raw' to resume the pending push")
 
@@ -1323,6 +1586,8 @@ class RepoStateAndRecoveryScriptTests(unittest.TestCase):
             run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
             run(["git", "config", "user.name", "Test User"], cwd=clone)
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
 
             run(["git", "checkout", "-b", "topic"], cwd=clone)
             (clone / "README.md").write_text("topic\n", encoding="utf-8")

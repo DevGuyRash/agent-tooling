@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -261,6 +263,8 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
             run(["git", "config", "user.name", "Test User"], cwd=clone)
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
             (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
 
             fake_bin = Path(temp_dir) / "bin"
@@ -354,6 +358,8 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
             run(["git", "config", "user.name", "Test User"], cwd=clone)
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
 
             (work / "README.md").write_text("base\nremote\n", encoding="utf-8")
             run(["git", "add", "README.md"], cwd=work)
@@ -388,6 +394,184 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertNotIn("batch_commit", {item["stage"] for item in stages})
             self.assertNotIn("push", {item["stage"] for item in stages})
             self.assertNotIn("pr", {item["stage"] for item in stages})
+
+    def test_sync_raw_streams_push_hook_progress_to_stderr(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self.init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+            run(["git", "commit", "-am", "docs: local change\n\n- keep a local commit ready to push\n"], cwd=clone)
+
+            hook = clone / ".git" / "hooks" / "pre-push"
+            hook.write_text(
+                "#!/usr/bin/env sh\n"
+                "set -eu\n"
+                "echo 'hook: push progress visible' >&2\n",
+                encoding="utf-8",
+            )
+            hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--json"],
+                cwd=clone,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["results"][0]["status"], "pushed")
+            self.assertIn("hook: push progress visible", proc.stderr)
+
+    def test_ship_raw_interrupt_during_push_persists_resumeable_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            repo = Path(temp_dir) / "repo"
+            marker = Path(temp_dir) / "hook-started"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            repo.mkdir()
+            self.init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\ninterrupted\n", encoding="utf-8")
+
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            fake_gitleaks = self.write_fake_gitleaks(fake_bin)
+            env = os.environ.copy()
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
+
+            hook = repo / ".git" / "hooks" / "pre-push"
+            hook.write_text(
+                "#!/usr/bin/env sh\n"
+                "set -eu\n"
+                f"echo started > {json.dumps(str(marker))}\n"
+                "echo 'hook: waiting for termination' >&2\n"
+                "while :; do sleep 1; done\n",
+                encoding="utf-8",
+            )
+            hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+
+            proc = subprocess.Popen(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=str(repo),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            deadline = time.monotonic() + 15
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertTrue(marker.exists(), "pre-push hook did not start")
+            os.killpg(proc.pid, signal.SIGTERM)
+            stdout, stderr = proc.communicate(timeout=15)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(stdout, "")
+            self.assertIn("hook: waiting for termination", stderr)
+
+            state_path = raw_ship_state_path(repo)
+            self.assertTrue(state_path.exists())
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertTrue(state["push_started"])
+            self.assertFalse(state["push_completed"])
+            self.assertFalse(state["push_succeeded"])
+            self.assertTrue(state["resume_eligible"])
+            self.assertEqual(state["last_error_summary"], "push interrupted before completion")
+
+            repo_state_proc = run(
+                ["bash", str(SCRIPTS_DIR / "repo-state.sh"), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(repo_state_proc.returncode, 0, repo_state_proc.stdout + repo_state_proc.stderr)
+            repo_state = json.loads(repo_state_proc.stdout)
+            item = repo_state["results"][0]
+            self.assertEqual(item["raw_ship_state"], "resume-eligible")
+            self.assertEqual(item["raw_ship_last_error_summary"], "push interrupted before completion")
+            self.assertEqual(item["raw_ship_next_action"], "rerun 'ship raw' to resume the pending push")
+
+    def test_ship_raw_defers_sync_publish_until_final_push(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            work = Path(temp_dir) / "work"
+            clone = Path(temp_dir) / "clone"
+            hook_log = Path(temp_dir) / "push-hook.log"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            work.mkdir()
+            self.init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            run(["git", "clone", str(origin), str(clone)], cwd=Path(temp_dir))
+            run(["git", "config", "user.name", "Test User"], cwd=clone)
+            run(["git", "config", "user.email", "test@example.com"], cwd=clone)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
+            (clone / "existing.txt").write_text("ahead\n", encoding="utf-8")
+            run(["git", "add", "existing.txt"], cwd=clone)
+            run(["git", "commit", "-m", "feat: existing ahead commit"], cwd=clone)
+            (clone / "README.md").write_text("base\ndirty\n", encoding="utf-8")
+
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            fake_gitleaks = self.write_fake_gitleaks(fake_bin)
+            env = os.environ.copy()
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
+
+            hook = clone / ".git" / "hooks" / "pre-push"
+            hook.write_text(
+                "#!/usr/bin/env sh\n"
+                "set -eu\n"
+                f"printf 'hook\\n' >> {json.dumps(str(hook_log))}\n",
+                encoding="utf-8",
+            )
+            hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=clone,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            stages = {item["stage"]: item for item in payload["results"]}
+            self.assertEqual(stages["sync"]["details"]["push_action"], "deferred")
+            self.assertTrue(stages["push"]["details"]["push_succeeded"])
+            self.assertEqual(hook_log.read_text(encoding="utf-8").splitlines(), ["hook"])
+            self.assertEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
+            )
 
     def test_ship_raw_reports_pr_readiness_snapshot_when_pr_exists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -669,6 +853,8 @@ class DoctorWorkflowTests(GitOpsScriptTestCase):
             child_checkout = parent / "deps" / "child"
             run(["git", "config", "user.name", "Test User"], cwd=child_checkout)
             run(["git", "config", "user.email", "test@example.com"], cwd=child_checkout)
+            run(["git", "config", "commit.gpgsign", "false"], cwd=child_checkout)
+            run(["git", "config", "tag.gpgsign", "false"], cwd=child_checkout)
             (child_checkout / "feature.txt").write_text("next\n", encoding="utf-8")
             run(["git", "add", "feature.txt"], cwd=child_checkout)
             run(["git", "commit", "-m", "feat: advance child"], cwd=child_checkout)
