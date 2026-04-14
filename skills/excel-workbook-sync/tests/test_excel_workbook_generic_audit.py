@@ -241,6 +241,16 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
         self.assertTrue(result["powerQuery"]["dataMashupPresent"])
         self.assertTrue(result["vba"]["present"])
 
+    def test_package_readable_workbook_recognizes_zip_backed_formats(self) -> None:
+        self.assertTrue(self.module.package_readable_workbook(self.fixture_path))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            legacy = Path(temp_dir) / "legacy.xls"
+            legacy.write_bytes(b"not-a-zip")
+            binary = Path(temp_dir) / "legacy.xlsb"
+            binary.write_bytes(b"not-a-zip")
+            self.assertFalse(self.module.package_readable_workbook(legacy))
+            self.assertFalse(self.module.package_readable_workbook(binary))
+
     def test_pull_writes_expected_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir)
@@ -290,8 +300,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             self.assertIn("ExcelSyncAuditMutation", {item["name"] for item in mutated["names"]})
 
     def test_pull_falls_back_to_ooxml_when_com_extract_times_out(self) -> None:
-        original = self.module.extract_com
-        self.module.extract_com = lambda *args, **kwargs: {
+        original = self.module.extract_com_for_read
+        self.module.extract_com_for_read = lambda *args, **kwargs: {
             "engine": "com",
             "available": False,
             "timedOut": True,
@@ -305,6 +315,32 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
                 self.assertEqual(result["engine"], "ooxml")
                 self.assertEqual(result["comDiagnostics"]["status"], "timed_out")
                 self.assertTrue((output_root / "normalized.json").exists())
+        finally:
+            self.module.extract_com_for_read = original
+
+    def test_pull_uses_temp_copy_for_com_reads(self) -> None:
+        original = self.module.extract_com
+        seen_path: Path | None = None
+
+        def fake_extract(path: Path, *args, **kwargs):
+            nonlocal seen_path
+            seen_path = Path(path)
+            return {
+                "engine": "com",
+                "available": False,
+                "timedOut": True,
+                "timeoutSeconds": 120,
+                "workbook": str(path),
+            }
+
+        self.module.extract_com = fake_extract
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                self.module.pull_workbook(self.fixture_path, Path(temp_dir), engine="com", visible=False)
+            self.assertIsNotNone(seen_path)
+            assert seen_path is not None
+            self.assertNotEqual(seen_path.resolve(), self.fixture_path.resolve())
+            self.assertEqual(seen_path.suffix, self.fixture_path.suffix)
         finally:
             self.module.extract_com = original
 
@@ -352,6 +388,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
 
         result = self.module.compare_results(left, right)
 
+        self.assertTrue(result["comparisonAvailable"])
+        self.assertEqual(result["comparisonStatus"], "ok")
         self.assertFalse(result["raw"]["match"])
         self.assertEqual(result["raw"]["mismatches"]["nameCount"], [2, 1])
         self.assertEqual(result["raw"]["mismatches"]["vbaAccessible"], [False, True])
@@ -419,12 +457,106 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
         self.assertIn("| Workbook | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |", rendered)
         self.assertIn("| sample.xlsx | fail | pass | changed | 9 |", rendered)
 
+    def test_render_matrix_summary_uses_na_for_unavailable_compare(self) -> None:
+        summary = {
+            "generatedAt": "2026-04-10T00:00:00+00:00",
+            "engine": "com",
+            "workbooks": [
+                {
+                    "workbookName": "sample.xlsb",
+                    "baselineRawMatch": None,
+                    "baselineNormalizedMatch": None,
+                    "deltaMatch": False,
+                    "deltaStatus": "changed",
+                    "scenarioCount": 3,
+                }
+            ],
+        }
+
+        rendered = self.module.render_matrix_summary(summary)
+
+        self.assertIn("| sample.xlsb | n/a | n/a | changed | 3 |", rendered)
+
     def test_compare_workbook_writes_rich_compare_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir)
             result = self.module.compare_workbook(self.fixture_path, output_root, engine="ooxml", visible=False)
             self.assertTrue(result["raw"]["match"])
             self.assertTrue((output_root / "compare.json").exists())
+
+    def test_compare_workbook_reports_unavailable_when_com_extract_times_out(self) -> None:
+        original = self.module.extract_com_for_read
+        self.module.extract_com_for_read = lambda *args, **kwargs: {
+            "engine": "com",
+            "available": False,
+            "timedOut": True,
+            "timeoutSeconds": 120,
+            "workbook": str(self.fixture_path),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_root = Path(temp_dir)
+                result = self.module.compare_workbook(self.fixture_path, output_root, engine="com", visible=False)
+                self.assertFalse(result["comparisonAvailable"])
+                self.assertEqual(result["comparisonStatus"], "com_timed_out")
+                self.assertIsNone(result["raw"]["match"])
+                self.assertEqual(result["raw"]["mismatches"], {})
+                self.assertEqual(result["comDiagnostics"]["timeoutSeconds"], 120)
+        finally:
+            self.module.extract_com_for_read = original
+
+    def test_pull_workbook_uses_com_only_for_xlsb(self) -> None:
+        original = self.module.extract_com_for_read
+        try:
+            self.module.extract_com_for_read = lambda *args, **kwargs: {
+                "engine": "com",
+                "sheets": [{"name": "Sheet1"}],
+                "tables": [],
+                "tableMappings": [],
+                "names": [],
+                "conditionalFormatting": [],
+                "connections": [],
+                "queries": [],
+                "powerQuery": {"dataMashupPresent": False, "dataMashupSha256": None, "packageEntries": []},
+                "vba": {"present": False, "sha256": None, "size": 0, "accessible": False, "components": [], "references": []},
+            }
+            with tempfile.TemporaryDirectory() as temp_dir:
+                workbook = Path(temp_dir) / "legacy.xlsb"
+                workbook.write_bytes(b"legacy-binary")
+                output_root = Path(temp_dir) / "out"
+                result = self.module.pull_workbook(workbook, output_root, engine="com", visible=False)
+                self.assertEqual(result["engine"], "com")
+                self.assertFalse((output_root / "ooxml-parts").exists())
+                self.assertTrue((output_root / "normalized.json").exists())
+        finally:
+            self.module.extract_com_for_read = original
+
+    def test_compare_workbook_reports_package_unavailable_for_xlsb(self) -> None:
+        original = self.module.extract_com_for_read
+        try:
+            self.module.extract_com_for_read = lambda *args, **kwargs: {
+                "engine": "com",
+                "sheets": [{"name": "Sheet1"}],
+                "tables": [],
+                "tableMappings": [],
+                "names": [],
+                "conditionalFormatting": [],
+                "connections": [],
+                "queries": [],
+                "powerQuery": {"dataMashupPresent": False, "dataMashupSha256": None, "packageEntries": []},
+                "vba": {"present": False, "sha256": None, "size": 0, "accessible": False, "components": [], "references": []},
+            }
+            with tempfile.TemporaryDirectory() as temp_dir:
+                workbook = Path(temp_dir) / "legacy.xlsb"
+                workbook.write_bytes(b"legacy-binary")
+                output_root = Path(temp_dir) / "out"
+                result = self.module.compare_workbook(workbook, output_root, engine="com", visible=False)
+                self.assertFalse(result["comparisonAvailable"])
+                self.assertEqual(result["comparisonStatus"], "package_unavailable")
+                self.assertIsNone(result["match"])
+                self.assertEqual(result["leftEngine"], "com")
+        finally:
+            self.module.extract_com_for_read = original
 
     def test_snapshot_parts_roundtrip_via_repull(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -59,6 +59,29 @@ def run_skill_cli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[
     return run_pwsh_file(*args, timeout=timeout)
 
 
+def save_workbook_as_format(source_path: Path, target_path: Path, file_format: int) -> None:
+    proc = run_pwsh(
+        dedent(
+            f"""
+            . '{COMMON}'
+            $context = $null
+            try {{
+                $context = Open-ExcelWorkbook -WorkbookPath '{source_path}' -Visible:$false
+                $context.Workbook.SaveAs('{target_path}', {file_format})
+            }}
+            finally {{
+                if ($null -ne $context) {{
+                    Close-ExcelWorkbook -Context $context -SaveChanges:$false
+                }}
+            }}
+            """
+        ),
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(proc.stdout + proc.stderr)
+
+
 def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
     mashup_buffer = BytesIO()
     with zipfile.ZipFile(mashup_buffer, "w", compression=zipfile.ZIP_DEFLATED) as mashup_zip:
@@ -521,6 +544,11 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         content = (ROOT / "scripts" / "sync-excel-structure.ps1").read_text(encoding="utf-8")
         self.assertIn('PSObject.Properties["replaceIfFormulaContains"]', content)
 
+    def test_structure_script_rebuilds_cf_per_sheet(self) -> None:
+        content = (ROOT / "scripts" / "sync-excel-structure.ps1").read_text(encoding="utf-8")
+        self.assertIn("$rulesBySheet", content)
+        self.assertIn("Remove-SupportedFormatConditions -TargetRange $worksheet.Cells", content)
+
     def test_structure_script_uses_bulk_table_writes(self) -> None:
         content = (ROOT / "scripts" / "sync-excel-structure.ps1").read_text(encoding="utf-8")
         self.assertIn("$target.Value2 = $matrix", content)
@@ -551,10 +579,160 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("function Get-NormalizedSurfaceNames", content)
         self.assertIn("function Invoke-ExcelWorkbookBootstrap", content)
         self.assertIn("function Invoke-PackageWorkbookHelper", content)
+        self.assertIn("EXCEL_WORKBOOK_SYNC_PYTHON", content)
         self.assertIn("[System.Diagnostics.ProcessStartInfo]::new()", content)
         self.assertIn("$startInfo.ArgumentList.Add", content)
         self.assertIn("WaitForExit($TimeoutSeconds * 1000)", content)
         self.assertIn("Package workbook helper timed out", content)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_helper_timeout_is_behavioral(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-timeout-") as tmpdir:
+            tmp = Path(tmpdir)
+            fake_python = tmp / "fake-python.cmd"
+            fake_python.write_text(
+                "@echo off\r\n"
+                "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\"\r\n",
+                encoding="utf-8",
+            )
+            workbook = tmp / "package-workbook.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+            env = os.environ.copy()
+            env["EXCEL_WORKBOOK_SYNC_PYTHON"] = str(fake_python)
+            proc = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        f". '{COMMON}'; "
+                        f"Invoke-PackageWorkbookHelper -Command inspect -WorkbookPath '{workbook}' -TimeoutSeconds 1 | Out-Null"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                env=env,
+                timeout=30,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Package workbook helper timed out", proc.stderr + proc.stdout)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_common_script_normalizes_excel_formulas_for_comparison(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                [pscustomobject]@{{
+                    left = Normalize-ExcelFormulaForComparison -Formula " =True "
+                    right = Normalize-ExcelFormulaForComparison -Formula "= true"
+                    multiline = Normalize-ExcelFormulaForComparison -Formula "=IF(A1>0,`r`n TRUE, FALSE)"
+                }} | ConvertTo-Json -Compress
+                """
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["left"], "=TRUE")
+        self.assertEqual(payload["right"], "= TRUE")
+        self.assertEqual(payload["multiline"], "=IF(A1>0, TRUE, FALSE)")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_common_script_matches_conditional_format_rules_semantically(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $rule = [pscustomobject]@{{
+                    id = 'CF-1'
+                    sheet = 'AP_INVOICES_INTERFACE'
+                    address = '$C$5:$C$9'
+                    type = 'expression'
+                    formula = '=TRUE'
+                    priority = 9999
+                    format = [pscustomobject]@{{
+                        interiorColor = '#00ff00'
+                    }}
+                }}
+                $candidate = [pscustomobject]@{{
+                    id = 'LIVE'
+                    sheet = 'AP_INVOICES_INTERFACE'
+                    address = '$C$5:$C$9'
+                    type = 'expression'
+                    formula = ' =true '
+                    priority = 4
+                    format = [pscustomobject]@{{
+                        interiorColor = '#00FF00'
+                        fontColor = '#000000'
+                        bold = $true
+                    }}
+                }}
+                [pscustomobject]@{{
+                    match = Test-ConditionalFormatRuleSemanticMatch -RuleSpec $rule -Candidate $candidate
+                }} | ConvertTo-Json -Compress
+                """
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertTrue(payload["match"])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_common_script_resolves_conditional_format_match_by_closest_priority(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $rule = [pscustomobject]@{{
+                    id = 'CF-1'
+                    sheet = 'AP_INVOICES_INTERFACE'
+                    address = '$C$5:$C$9'
+                    type = 'expression'
+                    formula = '=TRUE'
+                    priority = 8
+                    format = [pscustomobject]@{{ interiorColor = '#00FF00' }}
+                }}
+                $candidates = @(
+                    [pscustomobject]@{{ id='A'; sheet='AP_INVOICES_INTERFACE'; address='$C$5:$C$9'; type='expression'; formula='=TRUE'; priority=3; format=[pscustomobject]@{{ interiorColor = '#00FF00' }} }},
+                    [pscustomobject]@{{ id='B'; sheet='AP_INVOICES_INTERFACE'; address='$C$5:$C$9'; type='expression'; formula='=TRUE'; priority=7; format=[pscustomobject]@{{ interiorColor = '#00FF00' }} }}
+                )
+                $match = Resolve-ConditionalFormatRuleMatch -RuleSpec $rule -Candidates $candidates
+                [pscustomobject]@{{ id = $match.id }} | ConvertTo-Json -Compress
+                """
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["id"], "B")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_common_script_reports_ambiguous_conditional_format_matches(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $rule = [pscustomobject]@{{
+                    id = 'CF-AMBIG'
+                    sheet = 'AP_INVOICES_INTERFACE'
+                    address = '$C$5:$C$9'
+                    type = 'expression'
+                    formula = '=TRUE'
+                    priority = 8
+                    format = [pscustomobject]@{{ interiorColor = '#00FF00' }}
+                }}
+                $candidates = @(
+                    [pscustomobject]@{{ id='A'; sheet='AP_INVOICES_INTERFACE'; address='$C$5:$C$9'; type='expression'; formula='=TRUE'; priority=7; format=[pscustomobject]@{{ interiorColor = '#00FF00' }} }},
+                    [pscustomobject]@{{ id='B'; sheet='AP_INVOICES_INTERFACE'; address='$C$5:$C$9'; type='expression'; formula='=TRUE'; priority=9; format=[pscustomobject]@{{ interiorColor = '#00FF00' }} }}
+                )
+                Resolve-ConditionalFormatRuleMatch -RuleSpec $rule -Candidates $candidates | Out-Null
+                """
+            )
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ambiguous", (proc.stdout + proc.stderr).lower())
 
     def test_posix_launcher_negative_path_is_concise(self) -> None:
         proc = subprocess.run(
@@ -1280,6 +1458,86 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             )
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             self.assertIn(marker, query_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_generic_pull_supports_xls_and_xlsb(self) -> None:
+        if not FIXTURE_WORKBOOK.exists():
+            self.skipTest("fixture workbook is unavailable")
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-live-legacy-") as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "source.xlsm"
+            shutil.copy2(FIXTURE_WORKBOOK, source)
+            legacy_xls = tmp / "legacy.xls"
+            binary_xlsb = tmp / "legacy.xlsb"
+            save_workbook_as_format(source, legacy_xls, 56)
+            save_workbook_as_format(source, binary_xlsb, 50)
+
+            for workbook in [legacy_xls, binary_xlsb]:
+                output_root = tmp / workbook.stem
+                proc = subprocess.run(
+                    [
+                        "python",
+                        str(ROOT / "scripts" / "excel_workbook_sync.py"),
+                        "pull",
+                        "--workbook",
+                        str(workbook),
+                        "--output-root",
+                        str(output_root),
+                        "--engine",
+                        "com",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=300,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                payload = json.loads(proc.stdout)
+                self.assertEqual(payload["engine"], "com")
+                self.assertTrue((output_root / "normalized.json").exists())
+                self.assertFalse((output_root / "ooxml-parts").exists())
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_compare_reports_package_unavailable_for_xls_and_xlsb(self) -> None:
+        if not FIXTURE_WORKBOOK.exists():
+            self.skipTest("fixture workbook is unavailable")
+        with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-live-legacy-compare-") as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "source.xlsm"
+            shutil.copy2(FIXTURE_WORKBOOK, source)
+            legacy_xls = tmp / "legacy.xls"
+            binary_xlsb = tmp / "legacy.xlsb"
+            save_workbook_as_format(source, legacy_xls, 56)
+            save_workbook_as_format(source, binary_xlsb, 50)
+
+            for workbook in [legacy_xls, binary_xlsb]:
+                output_root = tmp / f"{workbook.stem}-compare"
+                proc = subprocess.run(
+                    [
+                        "python",
+                        str(ROOT / "scripts" / "excel_workbook_sync.py"),
+                        "compare",
+                        "--workbook",
+                        str(workbook),
+                        "--output-root",
+                        str(output_root),
+                        "--engine",
+                        "com",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=300,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                payload = json.loads(proc.stdout)
+                self.assertFalse(payload["comparisonAvailable"])
+                self.assertEqual(payload["comparisonStatus"], "package_unavailable")
+                self.assertIsNone(payload["match"])
 
 
 if __name__ == "__main__":
