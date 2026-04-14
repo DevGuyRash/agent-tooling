@@ -79,6 +79,22 @@ class PythonScriptCompileTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
+class PushTransportHelperTests(unittest.TestCase):
+    def test_noninteractive_ssh_command_adds_connection_bounds(self):
+        env = os.environ.copy()
+        env["GIT_SSH_COMMAND"] = "ssh"
+        proc = run(
+            ["bash", "-lc", f"source {json.dumps(str(SCRIPTS_DIR / 'lib' / 'git-state.sh'))}; gitops_noninteractive_ssh_command"],
+            cwd=ROOT,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("-oBatchMode=yes", proc.stdout)
+        self.assertIn("-oConnectTimeout=20", proc.stdout)
+        self.assertIn("-oConnectionAttempts=1", proc.stdout)
+
+
 class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
     def test_workflow_extracts_gitleaks_in_temp_dir_without_repo_cleanup(self):
         workflow = (ROOT / "assets" / "github" / "workflows" / "sensitive-scan.yml").read_text(encoding="utf-8")
@@ -940,6 +956,17 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
         return wrapper
 
+    def _write_push_success_without_remote_update_wrapper(self, temp_dir: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        wrapper = Path(temp_dir) / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nargs = sys.argv[1:]\nif "push" in args and "--dry-run" not in args:\n    raise SystemExit(0)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git),
+            encoding="utf-8",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        return wrapper
+
     def test_sync_raw_blocks_dirty_checkout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"
@@ -1234,6 +1261,50 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             self.assertNotEqual(
                 run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
+            )
+
+    def test_sync_raw_blocks_push_when_remote_head_does_not_move_after_nominal_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            self._write_push_success_without_remote_update_wrapper(temp_path)
+            env = os.environ.copy()
+            env["PATH"] = f"{temp_path}:{env['PATH']}"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "blocked-push")
+            self.assertFalse(result["push_verified"])
+            self.assertEqual(result["push_verification_transport_used"], "other")
+            self.assertIn("instead of local HEAD", result["push_verification_note"])
+            self.assertEqual(
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
+                run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.strip(),
             )
 
     def test_sync_raw_merge_strategy_merges_diverged_branch_and_pushes(self):

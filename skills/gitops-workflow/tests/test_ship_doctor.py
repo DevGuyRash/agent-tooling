@@ -57,6 +57,17 @@ class GitOpsScriptTestCase(unittest.TestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         return fake
 
+    def write_fake_git_push_success_without_remote_update(self, bin_dir: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        fake = bin_dir / "git"
+        fake.write_text(
+            '#!/usr/bin/env python3\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nargs = sys.argv[1:]\nif "push" in args and "--dry-run" not in args:\n    raise SystemExit(0)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git),
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        return fake
+
     def write_fake_gh(self, bin_dir: Path) -> Path:
         fake = bin_dir / "gh"
         fake.write_text(
@@ -612,6 +623,53 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             calls = log_file.read_text(encoding="utf-8")
             self.assertIn("pr checks 7 --required --json", calls)
             self.assertNotIn("pr create", calls)
+
+    def test_ship_raw_blocks_when_push_reports_success_but_remote_head_does_not_move(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            repo = Path(temp_dir) / "repo"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            repo.mkdir()
+            self.init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\nraw\n", encoding="utf-8")
+
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            self.write_fake_git_push_success_without_remote_update(fake_bin)
+            fake_gitleaks = self.write_fake_gitleaks(fake_bin)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertFalse(payload["continued"])
+            stages = {item["stage"]: item for item in payload["results"]}
+            self.assertEqual(stages["push"]["status"], "blocked")
+            self.assertFalse(stages["push"]["details"]["push_succeeded"])
+            self.assertFalse(stages["push"]["details"]["push_verified"])
+            self.assertEqual(stages["push"]["details"]["push_verification_transport_used"], "other")
+            self.assertIn("instead of local HEAD", stages["push"]["details"]["push_verification_note"])
+            self.assertTrue(stages["push"]["details"]["resume_eligible"])
+            self.assertTrue(raw_ship_state_path(repo).exists())
+            self.assertEqual(
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
+                run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=repo).stdout.strip(),
+            )
 
     def test_ship_raw_resumes_pending_checkpoint_and_clears_it_after_push(self):
         with tempfile.TemporaryDirectory() as temp_dir:
