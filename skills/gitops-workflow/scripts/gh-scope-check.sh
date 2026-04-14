@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"governance-check","topic":"governance","command":"governance check","phrases":["governance check","gh scope check"],"summary":"Check GitHub governance capabilities before applying policy changes.","script":"gh-scope-check.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":true}
 set -euo pipefail
 
 # gh-scope-check.sh - Deterministic GitHub capability preflight for governance flows.

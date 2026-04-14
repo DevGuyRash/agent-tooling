@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"continue-worktree","topic":"branch","command":"continue worktree","phrases":["continue worktree","adopt worktree","ensure worktree"],"summary":"Adopt the linked worktree for an existing non-raw feature branch.","script":"ensure-worktree.sh","creates_branch":false,"creates_worktree":true,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":false,"supports_json":true}
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

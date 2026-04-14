@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"issue-create","topic":"issue","command":"create issue","phrases":["create issue","open issue"],"summary":"Create deterministic GitHub issues from body-file-safe flows.","script":"issue-create.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":false}
 set -euo pipefail
 
 # issue-create.sh - Deterministic GitHub issue creation with body-file-safe flow.

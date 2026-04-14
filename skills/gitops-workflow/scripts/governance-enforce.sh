@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"governance-apply","topic":"governance","command":"governance apply","phrases":["governance apply","enforce governance"],"summary":"Run deterministic governance reconciliation in validate -> plan -> apply -> audit order.","script":"governance-enforce.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":false}
 set -euo pipefail
 
 # governance-enforce.sh - Deterministic governance reconciliation sequence.

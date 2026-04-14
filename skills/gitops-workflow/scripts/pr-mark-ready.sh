@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"pr-ready","topic":"pr","command":"mark pr ready","phrases":["mark pr ready","pr ready"],"summary":"Run strict readiness gates before moving a draft PR to ready.","script":"pr-mark-ready.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":false}
 set -euo pipefail
 
 # pr-mark-ready.sh - Deterministically mark a draft PR as ready after a strict readiness audit.

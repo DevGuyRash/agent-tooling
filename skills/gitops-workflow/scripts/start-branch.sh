@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"start-work","topic":"branch","command":"start work","phrases":["start work","start branch","new branch","new worktree"],"summary":"Create or adopt a work branch with a linked worktree by default.","script":"start-branch.sh","creates_branch":true,"creates_worktree":true,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":false,"supports_json":true}
 set -euo pipefail
 
 # start-branch.sh - Create a new work branch or linked worktree from the default branch using repo policy.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"doctor","topic":"doctor","command":"doctor","phrases":["doctor"],"summary":"Report repo and related-tree health without creating commits, pushes, or PRs.","script":"doctor.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":true}
+# gitops-catalog: {"id":"doctor-fix","topic":"doctor","command":"doctor fix","phrases":["doctor fix"],"summary":"Apply safe recovery and sync, then report remaining reconciliation work without commit, push, or PR mutations.","script":"doctor.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":true,"stays_on_current_branch":true,"supports_json":true}
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

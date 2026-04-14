@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"pr-update","topic":"pr","command":"update pr body","phrases":["update pr body","edit pr body"],"summary":"Update an existing PR body using deterministic body-file-safe flow.","script":"pr-update-body.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":false,"stays_on_current_branch":true,"supports_json":false}
 set -euo pipefail
 
 # pr-update-body.sh - Deterministically update an existing PR body using body-file flow.

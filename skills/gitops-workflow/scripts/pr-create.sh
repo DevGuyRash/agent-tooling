@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"pr-create","topic":"pr","command":"create pr","phrases":["create pr","open pr"],"summary":"Prepare deterministic PR metadata and create a PR when explicitly requested.","script":"pr-create.sh","creates_branch":false,"creates_worktree":false,"creates_pr":true,"mutates_history":false,"stays_on_current_branch":true,"supports_json":false}
 set -euo pipefail
 
 # pr-create.sh - Create a PR using deterministic context and repository-aware defaults.
