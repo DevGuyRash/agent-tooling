@@ -5,7 +5,7 @@ Excel workbook sync tooling across two surfaces:
 - `scripts/excel-workbook-sync`: manifest-driven inspect/query/bootstrap/push/pull/roundtrip/refresh
 - `scripts/excel_workbook_sync.py`: generic workbook pull/compare/audit/matrix-audit on safe copies
 
-The generic Python surface is workbook-agnostic. Fixture assets under
+The generic Python surface is designed for arbitrary workbook use. Fixture assets under
 `tests/fixtures/` are verification-only and do not define the public skill
 contract.
 
@@ -26,6 +26,9 @@ The generic audit output writes:
 - Power Query metadata plus per-query `.pq` files when formulas are available
 - raw and normalized parity reports, with normalized parity excluding
   clearly internal names and live-VBA-only surface counts
+- explicit compare availability reporting via `comparisonAvailable` and
+  `comparisonStatus`, so COM open or timeout failures are distinguishable
+  from content mismatches
 - a filtered `normalized.json` for agent-facing review while
   `workbook_structure/names.json` preserves raw extracted names
 - mutation reports for copied workbooks
@@ -52,4 +55,6 @@ Write-capable flows remain explicitly Windows Excel COM only. OOXML/package
 parsing is still read-only and is used for pull/query/bootstrap coverage on
 package-readable `.xlsx` and `.xlsm` workbooks. Auto backend selection now
 prefers the package reader for read-only manifest queries when the requested
-surfaces do not require live VBA/project inspection.
+surfaces do not require live VBA/project inspection. Generic COM-backed read
+flows now use isolated workbook copies so read reliability does not depend on
+the original workbook path staying directly openable by Excel.

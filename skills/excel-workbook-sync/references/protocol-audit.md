@@ -1,6 +1,6 @@
 # Generic Audit Protocol
 
-Use the Python CLI for workbook-agnostic extraction and copied-workbook audit.
+Use the Python CLI for arbitrary-workbook extraction and copied-workbook audit.
 
 ## Commands
 
@@ -30,6 +30,8 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
 - Normalized parity also excludes live VBA accessibility and component-count
   differences because OOXML only sees package state while COM sees the live
   VBProject surface.
+- Compare results report `comparisonAvailable` and `comparisonStatus`.
+  Treat `match: null` as "comparison unavailable", not as a workbook mismatch.
 - Query/bootstrap payloads should be read alongside backend `capabilities`,
   `warnings`, and `unsupported` fields instead of assuming COM parity implies
   write support.

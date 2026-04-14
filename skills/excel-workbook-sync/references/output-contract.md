@@ -40,11 +40,17 @@ file.
 
 `compare` writes `compare.json` with:
 
+- `comparisonAvailable`
+- `comparisonStatus`
 - `raw`: direct OOXML versus COM comparison
 - `normalized`: the same comparison after filtering clearly internal
   Excel-generated names and excluding live VBA accessibility/component counts
   that OOXML cannot observe
 - `summary`, `mismatches`, and `match`: compatibility aliases for `raw`
+
+When COM extraction does not complete, `comparisonAvailable` is `false`,
+`comparisonStatus` reports the failure class, and `raw.match`,
+`normalized.match`, plus top-level `match` are `null`.
 
 The `normalized` section also includes filtered-name diagnostics so the
 discarded names stay reviewable.
@@ -94,6 +100,8 @@ surfaces report it under `unsupported`.
 The markdown matrix summary reports mutation delta as `changed`,
 `unchanged`, `skipped`, `timed_out`, or a subprocess status instead of a
 pass/fail label.
+
+Raw and normalized compare cells render as `pass`, `fail`, or `n/a`.
 
 The JSON matrix summary mirrors that machine-readable status in
 `workbooks[].mutationStatus` and also includes `slug` plus `relativeRoot` for

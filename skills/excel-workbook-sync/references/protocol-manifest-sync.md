@@ -34,6 +34,9 @@ sh <skills-file-root>/scripts/excel-workbook-sync refresh --manifest-path /path/
   the requested surfaces do not require live VBA/project/reference access.
 - Package-helper execution is bounded; slow package reads fail explicitly
   instead of hanging indefinitely.
+- Generic compare and audit outputs distinguish unavailable COM comparison from
+  true parity mismatches through `comparisonAvailable`, `comparisonStatus`, and
+  nullable `match` fields.
 - Formulas, data-validation, protection, chart, and pivot artifacts are
   currently pull/query metadata surfaces. They are not manifest push surfaces.
 - The generic Python CLI is additive. It does not replace this write surface.
