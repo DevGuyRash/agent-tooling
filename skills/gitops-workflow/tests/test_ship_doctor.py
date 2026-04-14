@@ -720,6 +720,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertFalse(stages["push"]["details"]["push_verified"])
             self.assertEqual(stages["push"]["details"]["push_verification_transport_used"], "other")
             self.assertIn("instead of local HEAD", stages["push"]["details"]["push_verification_note"])
+            self.assertFalse(stages["push"]["details"]["manual_bypass_available"])
             self.assertTrue(stages["push"]["details"]["resume_eligible"])
             self.assertTrue(raw_ship_state_path(repo).exists())
             self.assertEqual(

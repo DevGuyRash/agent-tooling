@@ -94,6 +94,82 @@ class PushTransportHelperTests(unittest.TestCase):
         self.assertIn("-oConnectTimeout=20", proc.stdout)
         self.assertIn("-oConnectionAttempts=1", proc.stdout)
 
+    def test_push_bypass_hint_for_ssh_auth_failure_uses_one_off_https_push(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo)
+            run(["git", "remote", "add", "origin", "git@github.com:example/example.git"], cwd=repo)
+            proc = run(
+                [
+                    "bash",
+                    "-lc",
+                    (
+                        f"source {json.dumps(str(SCRIPTS_DIR / 'lib' / 'router.sh'))}; "
+                        f"gitops_set_push_bypass_hint {json.dumps(str(repo))} main $'Permission denied (publickey).\\n'; "
+                        "python3 - \"$GITOPS_PUSH_BYPASS_AVAILABLE\" \"$GITOPS_PUSH_BYPASS_REASON\" \"$GITOPS_PUSH_BYPASS_COMMAND\" \"$GITOPS_PUSH_BYPASS_SUMMARY\" \"$GITOPS_PUSH_BYPASS_TRANSPORT\" \"$GITOPS_PUSH_BYPASS_SKIPS_HOOKS\" \"$GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG\" <<'PY'\n"
+                        "import json, sys\n"
+                        "print(json.dumps({\n"
+                        "  'available': sys.argv[1],\n"
+                        "  'reason': sys.argv[2],\n"
+                        "  'command': sys.argv[3],\n"
+                        "  'summary': sys.argv[4],\n"
+                        "  'transport': sys.argv[5],\n"
+                        "  'skips_hooks': sys.argv[6],\n"
+                        "  'preserves_remote_config': sys.argv[7],\n"
+                        "}))\n"
+                        "PY"
+                    ),
+                ],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["available"], "true")
+            self.assertEqual(payload["reason"], "ssh-auth-unavailable")
+            self.assertIn("push --no-verify", payload["command"])
+            self.assertIn("https://github.com/example/example.git", payload["command"])
+            self.assertIn("HEAD:main", payload["command"])
+            self.assertEqual(payload["transport"], "https")
+            self.assertEqual(payload["skips_hooks"], "true")
+            self.assertEqual(payload["preserves_remote_config"], "true")
+
+    def test_push_bypass_hint_for_pre_push_failure_uses_https_without_mutating_remote(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo)
+            run(["git", "remote", "add", "origin", "https://github.com/example/example.git"], cwd=repo)
+            proc = run(
+                [
+                    "bash",
+                    "-lc",
+                    (
+                        f"source {json.dumps(str(SCRIPTS_DIR / 'lib' / 'router.sh'))}; "
+                        f"gitops_set_push_bypass_hint {json.dumps(str(repo))} main $'error: Recipe `dist-host` was terminated on line 43 by signal 15\\n'; "
+                        "python3 - \"$GITOPS_PUSH_BYPASS_AVAILABLE\" \"$GITOPS_PUSH_BYPASS_REASON\" \"$GITOPS_PUSH_BYPASS_COMMAND\" \"$GITOPS_PUSH_BYPASS_TRANSPORT\" <<'PY'\n"
+                        "import json, sys\n"
+                        "print(json.dumps({\n"
+                        "  'available': sys.argv[1],\n"
+                        "  'reason': sys.argv[2],\n"
+                        "  'command': sys.argv[3],\n"
+                        "  'transport': sys.argv[4],\n"
+                        "}))\n"
+                        "PY"
+                    ),
+                ],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["available"], "true")
+            self.assertEqual(payload["reason"], "pre-push-hook-blocked")
+            self.assertIn("push --no-verify", payload["command"])
+            self.assertIn("https://github.com/example/example.git", payload["command"])
+            self.assertEqual(payload["transport"], "https")
+
 
 class BatchCommitSigningTests(unittest.TestCase):
     def _init_repo(self, repo: Path):
@@ -1391,6 +1467,7 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
             self.assertFalse(result["push_verified"])
             self.assertEqual(result["push_verification_transport_used"], "other")
             self.assertIn("instead of local HEAD", result["push_verification_note"])
+            self.assertFalse(result["manual_bypass_available"])
             self.assertEqual(
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
                 run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.strip(),
