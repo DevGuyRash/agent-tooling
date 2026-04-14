@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -49,6 +50,15 @@ CI_PREFIXES = (
 TEST_PREFIXES = ("tests/", "test/", "__tests__/", "spec/")
 DOC_PREFIXES = ("docs/", "doc/", "references/", "context/", ".local/context/")
 BUCKET_ORDER = ["submodules", "docs", "tests", "ci", "deps", "chore"]
+TRUTHY = {"1", "true", "yes", "on"}
+COMMIT_SIGNING_FAILURE_PATTERNS = (
+    "gpg failed to sign the data",
+    "failed to write commit object",
+    "no secret key",
+    "could not open a connection to your authentication agent",
+    "error: no pinentry",
+    "signing failed",
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +141,12 @@ def output_text(proc: subprocess.CompletedProcess[str]) -> str:
     return ((proc.stdout or "") + (proc.stderr or "")).strip()
 
 
+class BatchCommitFailure(Exception):
+    def __init__(self, payload: dict[str, object]):
+        super().__init__(str(payload.get("error", "batch commit failed")))
+        self.payload = payload
+
+
 def changed_paths(repo: str) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
@@ -210,14 +226,59 @@ def build_message(repo: str, bucket: str, paths: list[str], message_script: str)
         return out.read_text(encoding="utf-8")
 
 
-def signing_disabled(repo: str, signing_script: str) -> bool:
-    if not Path(signing_script).exists():
-        return False
-    proc = run(["bash", signing_script], cwd=repo, check=False)
-    return proc.returncode == 1
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY
 
 
-def stage_and_commit(repo: str, paths: list[str], message: str, sensitive_scan: str, signing_off: bool) -> str:
+def classify_commit_failure(text: str) -> str | None:
+    lower = text.lower()
+    for pattern in COMMIT_SIGNING_FAILURE_PATTERNS:
+        if pattern in lower:
+            return "commit-signing-unavailable"
+    return None
+
+
+def commit_failure_payload(
+    *,
+    bucket: str,
+    paths: list[str],
+    output: str,
+    allow_unsigned_retry: bool,
+    unsigned_retry_attempted: bool,
+) -> dict[str, object]:
+    failure_class = classify_commit_failure(output)
+    payload: dict[str, object] = {
+        "status": "blocked" if failure_class == "commit-signing-unavailable" else "error",
+        "bucket": bucket,
+        "paths": paths,
+        "error": output or "git commit failed",
+        "failure_class": failure_class or "commit-failed",
+        "unsigned_retry_available": failure_class == "commit-signing-unavailable",
+        "unsigned_retry_enabled": allow_unsigned_retry,
+        "unsigned_retry_attempted": unsigned_retry_attempted,
+        "unsigned_retry_used": False,
+    }
+    if failure_class == "commit-signing-unavailable":
+        payload["helper_text"] = (
+            "Commit signing appears unavailable. If the user approves, rerun with "
+            "GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1 to allow one unsigned commit retry."
+        )
+        payload["next_action"] = (
+            "Ask the user whether to rerun with GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1 "
+            "to allow one unsigned commit retry."
+        )
+    return payload
+
+
+def stage_and_commit(
+    repo: str,
+    bucket: str,
+    paths: list[str],
+    message: str,
+    sensitive_scan: str,
+    signing_off: bool,
+    allow_unsigned_retry: bool,
+) -> tuple[str, bool]:
     add_proc = run(["git", "-C", repo, "add", "--", *paths], cwd=repo, check=False)
     if add_proc.returncode != 0:
         raise SystemExit(output_text(add_proc) or "failed to stage paths")
@@ -235,12 +296,38 @@ def stage_and_commit(repo: str, paths: list[str], message: str, sensitive_scan: 
         cmd.extend(["commit", "--only", "-F", str(msg_file), "--", *paths])
         commit_proc = run(cmd, cwd=repo, check=False)
         if commit_proc.returncode != 0:
-            raise SystemExit(output_text(commit_proc) or "git commit failed")
+            commit_output = output_text(commit_proc) or "git commit failed"
+            if classify_commit_failure(commit_output) == "commit-signing-unavailable" and allow_unsigned_retry:
+                retry_cmd = ["git", "-C", repo, "-c", "commit.gpgsign=false", "commit", "--only", "-F", str(msg_file), "--", *paths]
+                retry_proc = run(retry_cmd, cwd=repo, check=False)
+                if retry_proc.returncode == 0:
+                    sha_proc = run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], cwd=repo, check=False)
+                    if sha_proc.returncode != 0:
+                        raise SystemExit(output_text(sha_proc) or "failed to resolve commit sha")
+                    return (sha_proc.stdout or "").strip(), True
+                raise BatchCommitFailure(
+                    commit_failure_payload(
+                        bucket=bucket,
+                        paths=paths,
+                        output=output_text(retry_proc) or commit_output,
+                        allow_unsigned_retry=allow_unsigned_retry,
+                        unsigned_retry_attempted=True,
+                    )
+                )
+            raise BatchCommitFailure(
+                commit_failure_payload(
+                    bucket=bucket,
+                    paths=paths,
+                    output=commit_output,
+                    allow_unsigned_retry=allow_unsigned_retry,
+                    unsigned_retry_attempted=False,
+                )
+            )
 
     sha_proc = run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], cwd=repo, check=False)
     if sha_proc.returncode != 0:
         raise SystemExit(output_text(sha_proc) or "failed to resolve commit sha")
-    return (sha_proc.stdout or "").strip()
+    return (sha_proc.stdout or "").strip(), False
 
 
 def main() -> int:
@@ -249,6 +336,11 @@ def main() -> int:
     )
     parser.add_argument("--repo", default=".", help="Repository path (default: current directory).")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--allow-unsigned-commit-retry",
+        action="store_true",
+        help="Allow one unsigned retry when commit signing is unavailable.",
+    )
     args = parser.parse_args()
 
     repo = str(Path(args.repo).resolve())
@@ -258,7 +350,6 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     message_script = str(script_dir / "commit-message.py")
     sensitive_scan = str(script_dir / "sensitive-scan.sh")
-    signing_script = str(script_dir / "detect-signing.sh")
 
     paths = changed_paths(repo)
     if not paths:
@@ -273,14 +364,42 @@ def main() -> int:
     for path in paths:
         buckets[bucket_for_path(repo, path)].append(path)
 
-    signing_off = signing_disabled(repo, signing_script)
+    allow_unsigned_retry = args.allow_unsigned_commit_retry or env_flag("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY")
+    signing_off = False
+    unsigned_retry_used = False
     commits = []
     for bucket in BUCKET_ORDER:
         bucket_paths = sorted(set(buckets.get(bucket, [])))
         if not bucket_paths:
             continue
         message = build_message(repo, bucket, bucket_paths, message_script)
-        sha = stage_and_commit(repo, bucket_paths, message, sensitive_scan, signing_off)
+        try:
+            sha, used_unsigned_retry = stage_and_commit(
+                repo,
+                bucket,
+                bucket_paths,
+                message,
+                sensitive_scan,
+                signing_off,
+                allow_unsigned_retry,
+            )
+        except BatchCommitFailure as exc:
+            payload = {
+                "status": exc.payload["status"],
+                "signing_disabled": signing_off,
+                "unsigned_retry_enabled": allow_unsigned_retry,
+                "unsigned_retry_used": unsigned_retry_used,
+                "commits": commits,
+                **exc.payload,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print(payload.get("helper_text") or payload.get("error") or "batch commit failed")
+            return 1
+        if used_unsigned_retry:
+            signing_off = True
+            unsigned_retry_used = True
         commits.append(
             {
                 "bucket": bucket,
@@ -290,7 +409,13 @@ def main() -> int:
             }
         )
 
-    payload = {"status": "committed", "signing_disabled": signing_off, "commits": commits}
+    payload = {
+        "status": "committed",
+        "signing_disabled": signing_off,
+        "unsigned_retry_enabled": allow_unsigned_retry,
+        "unsigned_retry_used": unsigned_retry_used,
+        "commits": commits,
+    }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:

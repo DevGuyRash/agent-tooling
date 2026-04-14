@@ -260,6 +260,26 @@ run_batch_commit() {
   out_file="$(mktemp)"
   if ! python3 "$SCRIPT_DIR/batch-commit.py" --repo "$repo" --json >"$out_file" 2>"$out_file.err"; then
     local err_text=""
+    local details=""
+    local failure_status="error"
+    local failure_note=""
+    if details="$(compact_json_file "$out_file" 2>/dev/null)"; then
+      mapfile -t batch_failure < <(python3 - "$out_file" <<'PY'
+import json
+import sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+status = "blocked" if payload.get("failure_class") == "commit-signing-unavailable" else "error"
+note = payload.get("helper_text") or payload.get("error") or "batch commit failed"
+print(status)
+print(note.replace("\t", " ").replace("\n", " "))
+PY
+)
+      failure_status="${batch_failure[0]:-error}"
+      failure_note="${batch_failure[1]:-batch commit failed}"
+      rm -f "$out_file" "$out_file.err"
+      record_result "batch_commit" "$failure_status" "$failure_note" "$details"
+      return 1
+    fi
     err_text="$(compact_file_text "$out_file.err")"
     rm -f "$out_file" "$out_file.err"
     record_result "batch_commit" "error" "${err_text:-batch commit failed}"
@@ -273,6 +293,8 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 commits = payload.get("commits", [])
 if not commits:
     print("no local changes required a commit")
+elif payload.get("unsigned_retry_used"):
+    print(f"created {len(commits)} Conventional Commit batch(es) after one unsigned retry")
 else:
     print(f"created {len(commits)} Conventional Commit batch(es)")
 PY
