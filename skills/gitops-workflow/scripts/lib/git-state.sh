@@ -3,6 +3,9 @@ set -euo pipefail
 
 : "${GITOPS_DETACHED_STATUS:=attached}"
 : "${GITOPS_STASHED_REF:=}"
+: "${GITOPS_PUSH_EXIT_CODE:=0}"
+: "${GITOPS_PUSH_OUTPUT:=}"
+: "${GITOPS_PUSH_INTERRUPTED:=false}"
 
 gitops_now_stamp() {
   date '+%Y%m%d-%H%M%S'
@@ -261,6 +264,27 @@ gitops_git_noninteractive() {
   local ssh_cmd=""
   ssh_cmd="$(gitops_noninteractive_ssh_command)"
   env     GIT_TERMINAL_PROMPT=0     GIT_ASKPASS=/bin/true     SSH_ASKPASS=/bin/true     GIT_SSH_COMMAND="$ssh_cmd"     git -C "$repo" "$@"
+}
+
+gitops_run_noninteractive_logged() {
+  local repo="${1:-.}"
+  local capture_file="$2"
+  shift 2
+  : > "$capture_file"
+  if gitops_git_noninteractive "$repo" "$@" > >(tee -a "$capture_file" >&2) 2> >(tee -a "$capture_file" >&2); then
+    GITOPS_PUSH_EXIT_CODE=0
+    GITOPS_PUSH_OUTPUT=""
+    GITOPS_PUSH_INTERRUPTED="false"
+    return 0
+  fi
+  GITOPS_PUSH_EXIT_CODE=$?
+  GITOPS_PUSH_OUTPUT="$(compact_text "$(cat "$capture_file" 2>/dev/null)")"
+  if [[ "$GITOPS_PUSH_EXIT_CODE" -eq 130 || "$GITOPS_PUSH_EXIT_CODE" -eq 143 ]]; then
+    GITOPS_PUSH_INTERRUPTED="true"
+  else
+    GITOPS_PUSH_INTERRUPTED="false"
+  fi
+  return "$GITOPS_PUSH_EXIT_CODE"
 }
 
 _detached_candidate_branches() {

@@ -68,11 +68,16 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
         raw_ship_state,
         raw_ship_local_commit_sha,
         raw_ship_resume_eligible,
+        raw_ship_last_error_summary,
         raw_ship_next_action,
         next_action,
         fetch_status,
         fetch_note,
-    ) = line.split("\t", 25)
+        fetch_transport_attempts,
+        fetch_transport_used,
+        fetch_fallback_reason,
+        fetch_remote_url_kind,
+    ) = line.split("\t", 30)
     items.append(
         {
             "repo": repo,
@@ -97,10 +102,15 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
             "raw_ship_state": raw_ship_state,
             "raw_ship_local_commit_sha": raw_ship_local_commit_sha,
             "raw_ship_resume_eligible": raw_ship_resume_eligible == "true",
+            "raw_ship_last_error_summary": raw_ship_last_error_summary,
             "raw_ship_next_action": raw_ship_next_action,
             "next_action": next_action,
             "fetch_status": fetch_status,
             "fetch_note": fetch_note,
+            "fetch_transport_attempts": [x for x in fetch_transport_attempts.split(",") if x],
+            "fetch_transport_used": fetch_transport_used,
+            "fetch_fallback_reason": fetch_fallback_reason,
+            "fetch_remote_url_kind": fetch_remote_url_kind,
         }
     )
 print(json.dumps({"scope": sys.argv[2], "root_repo": sys.argv[3], "results": items}, indent=2))
@@ -108,10 +118,10 @@ PY
 }
 
 record_result() {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" "${21}" "${22}" "${23}" "${24}" "${25}" "${26}" >> "$RESULTS_FILE"
+  printf '%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s	%s
+' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" "${14}" "${15}" "${16}" "${17}" "${18}" "${19}" "${20}" "${21}" "${22}" "${23}" "${24}" "${25}" "${26}" "${27}" "${28}" "${29}" "${30}" "${31}" >> "$RESULTS_FILE"
 }
-
 raw_ship_fields_for_repo() {
   local repo="$1"
   local branch="$2"
@@ -132,14 +142,14 @@ raw_ship_fields_for_repo() {
     --tracked "$tracked" \
     --untracked "$untracked" \
     --sequencer "$sequencer" \
-    --format lines | awk 'NR==1 || NR==10 || NR==14 || NR==16 { print }'
+    --format lines | awk 'NR==1 || NR==10 || NR==14 || NR==15 || NR==16 { print }'
 }
 
 render_human() {
   local file="$1"
   echo "Scope: $SCOPE"
   echo "Root repo: $ROOT_REPO"
-  while IFS=$'\t' read -r repo role branch head_oid detached detached_candidates default_base upstream ahead behind dirty_tracked dirty_untracked sequencer_state in_linked_worktree main_checkout worktree_path superproject gitlink_status recovery_class raw_ship_state raw_ship_local_commit_sha raw_ship_resume_eligible raw_ship_next_action next_action fetch_status fetch_note; do
+  while IFS=$'\t' read -r repo role branch head_oid detached detached_candidates default_base upstream ahead behind dirty_tracked dirty_untracked sequencer_state in_linked_worktree main_checkout worktree_path superproject gitlink_status recovery_class raw_ship_state raw_ship_local_commit_sha raw_ship_resume_eligible raw_ship_last_error_summary raw_ship_next_action next_action fetch_status fetch_note; do
     echo ""
     echo "$role: $repo"
     echo "  branch: $branch"
@@ -153,10 +163,13 @@ render_human() {
     if [[ "$raw_ship_state" != "none" ]]; then
       echo "  raw ship: $raw_ship_state"
       [[ -n "$raw_ship_local_commit_sha" ]] && echo "  raw ship commit: $raw_ship_local_commit_sha"
+      [[ -n "$raw_ship_last_error_summary" ]] && echo "  raw ship error: $raw_ship_last_error_summary"
       echo "  raw ship next: $raw_ship_next_action"
     fi
     echo "  next: $next_action"
     [[ "$fetch_status" != "not-run" ]] && echo "  fetch: $fetch_status"
+    [[ -n "$fetch_transport_attempts" ]] && echo "  fetch transport: ${fetch_transport_used:-none} (attempts ${fetch_transport_attempts})"
+    [[ -n "$fetch_fallback_reason" ]] && echo "  fetch fallback: $fetch_fallback_reason"
     [[ -n "$fetch_note" ]] && echo "  fetch note: $fetch_note"
   done < "$file"
 }
@@ -210,10 +223,18 @@ fi
 for repo in "${repos[@]}"; do
   fetch_status="not-run"
   fetch_note=""
+  fetch_transport_attempts=""
+  fetch_transport_used=""
+  fetch_fallback_reason=""
+  fetch_remote_url_kind=""
   if [[ "$FETCH" == "true" ]]; then
     gitops_fetch_prune_repo "$repo" || true
     fetch_status="$GITOPS_FETCH_STATUS"
     fetch_note="$GITOPS_FETCH_NOTE"
+    fetch_transport_attempts="${GITOPS_FETCH_TRANSPORT_ATTEMPTS:-}"
+    fetch_transport_used="${GITOPS_FETCH_TRANSPORT_USED:-}"
+    fetch_fallback_reason="${GITOPS_FETCH_FALLBACK_REASON:-}"
+    fetch_remote_url_kind="${GITOPS_FETCH_REMOTE_URL_KIND:-}"
   fi
   branch="$(current_branch_name "$repo" || true)"
   detached="false"
@@ -246,7 +267,8 @@ for repo in "${repos[@]}"; do
   raw_ship_state="${raw_ship_meta[0]:-none}"
   raw_ship_local_commit_sha="${raw_ship_meta[1]:-}"
   raw_ship_resume_eligible="${raw_ship_meta[2]:-false}"
-  raw_ship_next_action="${raw_ship_meta[3]:-continue with the requested workflow}"
+  raw_ship_last_error_summary="${raw_ship_meta[3]:-}"
+  raw_ship_next_action="${raw_ship_meta[4]:-continue with the requested workflow}"
   next_action="continue with the requested workflow"
   if [[ "$raw_ship_state" == "resume-eligible" ]]; then
     next_action="$raw_ship_next_action"
@@ -286,10 +308,15 @@ for repo in "${repos[@]}"; do
     "$raw_ship_state" \
     "$raw_ship_local_commit_sha" \
     "$raw_ship_resume_eligible" \
+    "$raw_ship_last_error_summary" \
     "$raw_ship_next_action" \
     "$next_action" \
     "$fetch_status" \
-    "$fetch_note"
+    "$fetch_note" \
+    "$fetch_transport_attempts" \
+    "$fetch_transport_used" \
+    "$fetch_fallback_reason" \
+    "$fetch_remote_url_kind"
 done
 
 if [[ "$JSON" == "true" ]]; then

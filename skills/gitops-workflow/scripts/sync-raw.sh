@@ -23,21 +23,29 @@ SYNC_RESTORE_NOTE=""
 PUSH_ERROR_TEXT=""
 REBASE_ERROR_TEXT=""
 FAST_FORWARD_ERROR_TEXT=""
+MERGE_ERROR_TEXT=""
+PULL_STRATEGY="rebase"
+NO_PUSH="false"
+RECONCILE_READY="true"
 
 print_help() {
   cat <<'USAGE'
 Usage:
-  bash scripts/sync-raw.sh [--repo <path>] [--json] [--no-detached-recovery] [--no-recurse-related] [--no-reconcile]
+  bash scripts/sync-raw.sh [--repo <path>] [--json] [--pull-strategy <rebase|merge|ff-only>] [--no-push] [--no-detached-recovery] [--no-recurse-related] [--no-reconcile]
 
 Behavior:
   - Syncs the current branch in-place without creating branches or worktrees.
-  - Fetches and integrates upstream changes, then pushes local branch commits when safe.
+  - Fetches and integrates upstream changes first, then pushes local branch commits when safe unless --no-push is set.
+  - Default pull strategy is rebase; fast-forward is used automatically when rebase is unnecessary.
   - When related repositories exist, walks the full parent/submodule tree by default.
-  - Runs tree reconciliation after syncing and pushes reconcile-created branch commits bottom-up.
+  - Runs tree reconciliation after syncing and pushes reconcile-created branch commits bottom-up unless --no-push is set.
+  - Push and pre-push hook progress streams to stderr; stdout stays clean for --json.
 
 Options:
   --repo <path>              Repository path to inspect (default: current directory).
   --json                     Emit machine-readable JSON.
+  --pull-strategy <name>     rebase (default), merge, or ff-only.
+  --no-push                  Integrate remote state but defer publishing local commits.
   --no-detached-recovery     Refuse detached HEAD instead of attempting safe recovery.
   --no-recurse-related       Only sync the specified repo, not the related tree.
   --no-reconcile             Skip the final reconcile-tree apply step.
@@ -319,6 +327,7 @@ sync_details_json() {
 import json
 import sys
 
+attempts = [item for item in sys.argv[15].split(",") if item]
 print(json.dumps({
     "kind": sys.argv[1],
     "upstream": sys.argv[2],
@@ -334,10 +343,13 @@ print(json.dumps({
     "reconcile_commit_created": sys.argv[12] == "true",
     "fetch_status": sys.argv[13],
     "fetch_note": sys.argv[14],
+    "fetch_transport_attempts": attempts,
+    "fetch_transport_used": sys.argv[16],
+    "fetch_fallback_reason": sys.argv[17],
+    "fetch_remote_url_kind": sys.argv[18],
 }, separators=(",", ":")))
 PY
 }
-
 append_restore_note() {
   local note="$1"
   local had_dirty="$2"
@@ -360,18 +372,23 @@ push_branch_noninteractive() {
   local out_file=""
   out_file="$(mktemp)"
   if [[ "$mode" == "set-upstream" ]]; then
-    if gitops_git_noninteractive "$repo" push -u origin "$branch" >"$out_file" 2>"$out_file.err"; then
-      rm -f "$out_file" "$out_file.err"
+    if gitops_run_noninteractive_logged "$repo" "$out_file" push -u origin "$branch"; then
+      rm -f "$out_file"
       return 0
     fi
   else
-    if gitops_git_noninteractive "$repo" push >"$out_file" 2>"$out_file.err"; then
-      rm -f "$out_file" "$out_file.err"
+    if gitops_run_noninteractive_logged "$repo" "$out_file" push; then
+      rm -f "$out_file"
       return 0
     fi
   fi
-  PUSH_ERROR_TEXT="$(compact_text "$(cat "$out_file" "$out_file.err" 2>/dev/null)")"
-  rm -f "$out_file" "$out_file.err"
+  PUSH_ERROR_TEXT="$GITOPS_PUSH_OUTPUT"
+  if [[ -z "$PUSH_ERROR_TEXT" && "$GITOPS_PUSH_INTERRUPTED" == "true" ]]; then
+    PUSH_ERROR_TEXT="push interrupted before completion"
+  elif [[ -z "$PUSH_ERROR_TEXT" ]]; then
+    PUSH_ERROR_TEXT="git push failed"
+  fi
+  rm -f "$out_file"
   return 1
 }
 
@@ -386,6 +403,21 @@ rebase_branch_onto_upstream() {
   fi
   REBASE_ERROR_TEXT="$(compact_text "$(cat "$out_file" "$out_file.err" 2>/dev/null)")"
   git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+  rm -f "$out_file" "$out_file.err"
+  return 1
+}
+
+merge_branch_with_upstream() {
+  local repo="$1"
+  local upstream="$2"
+  local out_file=""
+  out_file="$(mktemp)"
+  if git -C "$repo" merge --no-edit "$upstream" >"$out_file" 2>"$out_file.err"; then
+    rm -f "$out_file" "$out_file.err"
+    return 0
+  fi
+  MERGE_ERROR_TEXT="$(compact_text "$(cat "$out_file" "$out_file.err" 2>/dev/null)")"
+  git -C "$repo" merge --abort >/dev/null 2>&1 || true
   rm -f "$out_file" "$out_file.err"
   return 1
 }
@@ -423,7 +455,12 @@ record_sync_outcome() {
   local fetch_status="${16}"
   local fetch_note="${17}"
   local details=""
-  details="$(sync_details_json "sync" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "$history_action" "$push_action" "$restore_action" "$reconciled" "$reconcile_commit_created" "$fetch_status" "$fetch_note")"
+  details="$(sync_details_json "sync" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "$history_action" "$push_action" "$restore_action" "$reconciled" "$reconcile_commit_created" "$fetch_status" "$fetch_note" "${GITOPS_FETCH_TRANSPORT_ATTEMPTS:-}" "${GITOPS_FETCH_TRANSPORT_USED:-}" "${GITOPS_FETCH_FALLBACK_REASON:-}" "${GITOPS_FETCH_REMOTE_URL_KIND:-}")"
+  case "$status" in
+    blocked-*)
+      RECONCILE_READY="false"
+      ;;
+  esac
   record_result "$repo" "$branch" "$status" "$note" "$details"
 }
 
@@ -445,6 +482,7 @@ sync_one_repo() {
   PUSH_ERROR_TEXT=""
   REBASE_ERROR_TEXT=""
   FAST_FORWARD_ERROR_TEXT=""
+  MERGE_ERROR_TEXT=""
   SYNC_STASH_REF=""
   SYNC_STASHED="false"
   SYNC_RESTORE_KIND="none"
@@ -517,21 +555,56 @@ sync_one_repo() {
       fi
       history_action="fast-forward"
     elif [[ "$ahead_before" -gt 0 && "$behind_before" -gt 0 ]]; then
-      if ! rebase_branch_onto_upstream "$repo" "$upstream"; then
-        if [[ "$had_dirty" == "true" ]] && restore_sync_stash "$repo"; then
-          case "$SYNC_RESTORE_KIND" in
-            stash) restore_action="stash-pop" ;;
-            fallback) restore_action="snapshot-fallback" ;;
-            blocked) restore_action="blocked" ;;
-          esac
-        elif [[ "$had_dirty" == "true" ]]; then
-          restore_action="blocked"
-        fi
-        note="$(append_restore_note "${REBASE_ERROR_TEXT:-failed to rebase onto upstream}" "$had_dirty" "$SYNC_RESTORE_NOTE")"
-        record_sync_outcome "$repo" "$branch" "blocked-rebase" "$note" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "blocked" "$push_action" "$restore_action" "false" "false" "$GITOPS_FETCH_STATUS" "${GITOPS_FETCH_NOTE:-}"
-        return 0
-      fi
-      history_action="rebase"
+      case "$PULL_STRATEGY" in
+        rebase)
+          if ! rebase_branch_onto_upstream "$repo" "$upstream"; then
+            if [[ "$had_dirty" == "true" ]] && restore_sync_stash "$repo"; then
+              case "$SYNC_RESTORE_KIND" in
+                stash) restore_action="stash-pop" ;;
+                fallback) restore_action="snapshot-fallback" ;;
+                blocked) restore_action="blocked" ;;
+              esac
+            elif [[ "$had_dirty" == "true" ]]; then
+              restore_action="blocked"
+            fi
+            note="$(append_restore_note "${REBASE_ERROR_TEXT:-failed to rebase onto upstream}" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+            record_sync_outcome "$repo" "$branch" "blocked-rebase" "$note" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "blocked" "$push_action" "$restore_action" "false" "false" "$GITOPS_FETCH_STATUS" "${GITOPS_FETCH_NOTE:-}"
+            return 0
+          fi
+          history_action="rebase"
+          ;;
+        merge)
+          if ! merge_branch_with_upstream "$repo" "$upstream"; then
+            if [[ "$had_dirty" == "true" ]] && restore_sync_stash "$repo"; then
+              case "$SYNC_RESTORE_KIND" in
+                stash) restore_action="stash-pop" ;;
+                fallback) restore_action="snapshot-fallback" ;;
+                blocked) restore_action="blocked" ;;
+              esac
+            elif [[ "$had_dirty" == "true" ]]; then
+              restore_action="blocked"
+            fi
+            note="$(append_restore_note "${MERGE_ERROR_TEXT:-failed to merge upstream changes}" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+            record_sync_outcome "$repo" "$branch" "blocked-merge" "$note" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "blocked" "$push_action" "$restore_action" "false" "false" "$GITOPS_FETCH_STATUS" "${GITOPS_FETCH_NOTE:-}"
+            return 0
+          fi
+          history_action="merge"
+          ;;
+        ff-only)
+          if [[ "$had_dirty" == "true" ]] && restore_sync_stash "$repo"; then
+            case "$SYNC_RESTORE_KIND" in
+              stash) restore_action="stash-pop" ;;
+              fallback) restore_action="snapshot-fallback" ;;
+              blocked) restore_action="blocked" ;;
+            esac
+          elif [[ "$had_dirty" == "true" ]]; then
+            restore_action="blocked"
+          fi
+          note="$(append_restore_note "fast-forward only sync blocked because branch '$branch' diverged from '$upstream'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+          record_sync_outcome "$repo" "$branch" "blocked-fast-forward" "$note" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "blocked" "$push_action" "$restore_action" "false" "false" "$GITOPS_FETCH_STATUS" "${GITOPS_FETCH_NOTE:-}"
+          return 0
+          ;;
+      esac
     fi
   fi
 
@@ -549,6 +622,46 @@ sync_one_repo() {
   upstream="$(current_upstream_ref "$repo")"
   if [[ -n "$upstream" ]]; then
     read -r ahead_after behind_after < <(read_ahead_behind_counts "$repo" "$upstream")
+  fi
+
+  if [[ "$NO_PUSH" == "true" ]]; then
+    push_action="noop"
+    if [[ -z "$upstream" ]]; then
+      push_action="deferred"
+      status="publish-deferred"
+      note="$(append_restore_note "branch '$branch' is ready to publish to origin; push was deferred" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+    elif [[ "$ahead_after" -gt 0 ]]; then
+      push_action="deferred"
+      case "$history_action" in
+        rebase)
+          status="rebased"
+          note="$(append_restore_note "rebased onto '$upstream'; push deferred for branch '$branch'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+          ;;
+        merge)
+          status="merged"
+          note="$(append_restore_note "merged '$upstream' into '$branch'; push deferred for branch '$branch'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+          ;;
+        *)
+          status="push-deferred"
+          note="$(append_restore_note "local commits for branch '$branch' are ready to push; publish was deferred" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+          ;;
+      esac
+    elif [[ "$restore_action" == "snapshot-fallback" ]]; then
+      status="synced-with-fallback"
+      note="$(append_restore_note "branch '$branch' is in sync with its upstream" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+    elif [[ "$history_action" == "fast-forward" ]]; then
+      status="pulled"
+      note="$(append_restore_note "fast-forwarded from '$upstream'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+    else
+      status="up-to-date"
+      if [[ "$history_action" == "set-upstream" && -n "$upstream" ]]; then
+        note="$(append_restore_note "attached upstream '$upstream' for branch '$branch'; branch is already in sync" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+      else
+        note="$(append_restore_note "branch '$branch' is already in sync with its upstream" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+      fi
+    fi
+    record_sync_outcome "$repo" "$branch" "$status" "$note" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "$history_action" "$push_action" "$restore_action" "false" "false" "$GITOPS_FETCH_STATUS" "${GITOPS_FETCH_NOTE:-}"
+    return 0
   fi
 
   if [[ -z "$upstream" ]]; then
@@ -577,6 +690,8 @@ sync_one_repo() {
     status="synced-with-fallback"
   elif [[ "$push_action" == "push-set-upstream" ]]; then
     status="published"
+  elif [[ "$history_action" == "merge" && "$push_action" == "push" ]]; then
+    status="merged-and-pushed"
   elif [[ "$history_action" == "rebase" && "$push_action" == "push" ]]; then
     status="rebased-and-pushed"
   elif [[ "$history_action" == "fast-forward" && "$push_action" == "push" ]]; then
@@ -593,6 +708,8 @@ sync_one_repo() {
     synced-with-fallback)
       if [[ "$push_action" == "push-set-upstream" ]]; then
         note="published branch '$branch' to origin and set upstream"
+      elif [[ "$history_action" == "merge" && "$push_action" == "push" ]]; then
+        note="merged '$upstream' into '$branch' and pushed branch '$branch'"
       elif [[ "$history_action" == "rebase" && "$push_action" == "push" ]]; then
         note="rebased onto '$upstream' and pushed branch '$branch'"
       elif [[ "$history_action" == "fast-forward" && "$push_action" == "push" ]]; then
@@ -608,6 +725,9 @@ sync_one_repo() {
       ;;
     published)
       note="$(append_restore_note "published branch '$branch' to origin and set upstream" "$had_dirty" "$SYNC_RESTORE_NOTE")"
+      ;;
+    merged-and-pushed)
+      note="$(append_restore_note "merged '$upstream' into '$branch' and pushed branch '$branch'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
       ;;
     rebased-and-pushed)
       note="$(append_restore_note "rebased onto '$upstream' and pushed branch '$branch'" "$had_dirty" "$SYNC_RESTORE_NOTE")"
@@ -644,7 +764,7 @@ record_reconcile_result() {
   case "$status" in
     published|reconcile-pushed) push_action="push" ;;
   esac
-  details="$(sync_details_json "reconcile-followup" "$(current_upstream_ref "$repo")" "false" "0" "0" "0" "0" "noop" "$push_action" "noop" "true" "$reconcile_commit_created" "not-run" "")"
+  details="$(sync_details_json "reconcile-followup" "$(current_upstream_ref "$repo")" "false" "0" "0" "0" "0" "noop" "$push_action" "noop" "true" "$reconcile_commit_created" "not-run" "" "" "" "" "")"
   record_result "$repo" "$branch" "$status" "$note" "$details"
 }
 
@@ -741,6 +861,15 @@ while [[ $# -gt 0 ]]; do
       JSON="true"
       shift
       ;;
+    --pull-strategy)
+      require_opt_value "--pull-strategy" "${2:-}"
+      PULL_STRATEGY="${2:-}"
+      shift 2
+      ;;
+    --no-push)
+      NO_PUSH="true"
+      shift
+      ;;
     --no-detached-recovery)
       DETACHED_MODE="off"
       shift
@@ -766,6 +895,18 @@ done
 require_cmd git
 require_cmd python3
 
+case "$PULL_STRATEGY" in
+  rebase|merge|ff-only)
+    ;;
+  *)
+    die "invalid --pull-strategy '$PULL_STRATEGY'"
+    ;;
+esac
+
+if [[ "$NO_PUSH" == "true" ]]; then
+  NO_RECONCILE="true"
+fi
+
 if ! git -C "$REPO_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   die "--repo is not a git repository: $REPO_PATH"
 fi
@@ -784,7 +925,7 @@ for repo in "${repos[@]}"; do
 done
 
 ROOT_REPO="$(outermost_superproject_path "$REPO_PATH")"
-if [[ "$RECURSE_RELATED" == "true" && "$NO_RECONCILE" != "true" ]]; then
+if [[ "$RECURSE_RELATED" == "true" && "$NO_RECONCILE" != "true" && "$RECONCILE_READY" == "true" ]]; then
   RECONCILE_JSON="$(mktemp)"
   if bash "$SCRIPT_DIR/reconcile-tree.sh" --repo "$ROOT_REPO" --mode apply --json >"$RECONCILE_JSON" 2>"$RECONCILE_JSON.err"; then
     run_reconcile_followups "$RECONCILE_JSON"

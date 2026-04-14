@@ -46,7 +46,7 @@ items = []
 for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     if not line.strip():
         continue
-    repo, prior_state, recovery_action, outcome, continued, next_action, branch, fetch_status, fetch_note = line.split("\t", 8)
+    repo, prior_state, recovery_action, outcome, continued, next_action, branch, fetch_status, fetch_note, fetch_transport_attempts, fetch_transport_used, fetch_fallback_reason, fetch_remote_url_kind = line.split("\t", 12)
     items.append(
         {
             "repo": repo,
@@ -58,6 +58,10 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
             "branch": branch,
             "fetch_status": fetch_status,
             "fetch_note": fetch_note,
+            "fetch_transport_attempts": [x for x in fetch_transport_attempts.split(",") if x],
+            "fetch_transport_used": fetch_transport_used,
+            "fetch_fallback_reason": fetch_fallback_reason,
+            "fetch_remote_url_kind": fetch_remote_url_kind,
         }
     )
 print(json.dumps({"scope": sys.argv[2], "continued": sys.argv[3] == "true", "results": items}, indent=2))
@@ -65,7 +69,7 @@ PY
 }
 
 record_result() {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" >> "$RESULTS_FILE"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13}" >> "$RESULTS_FILE"
 }
 
 render_human() {
@@ -73,7 +77,7 @@ render_human() {
   local overall="$2"
   echo "Scope: $SCOPE"
   echo "Continued: $overall"
-  while IFS=$'\t' read -r repo prior_state recovery_action outcome continued next_action branch fetch_status fetch_note; do
+  while IFS=$'\t' read -r repo prior_state recovery_action outcome continued next_action branch fetch_status fetch_note fetch_transport_attempts fetch_transport_used fetch_fallback_reason fetch_remote_url_kind; do
     echo ""
     echo "$repo"
     echo "  prior: ${prior_state:-clean}"
@@ -81,6 +85,8 @@ render_human() {
     echo "  outcome: $outcome"
     [[ -n "$branch" ]] && echo "  branch: $branch"
     [[ "$fetch_status" != "not-run" ]] && echo "  fetch: $fetch_status"
+    [[ -n "$fetch_transport_attempts" ]] && echo "  fetch transport: ${fetch_transport_used:-none} (attempts ${fetch_transport_attempts})"
+    [[ -n "$fetch_fallback_reason" ]] && echo "  fetch fallback: $fetch_fallback_reason"
     [[ -n "$fetch_note" ]] && echo "  fetch note: $fetch_note"
     echo "  next: $next_action"
   done < "$file"
@@ -150,7 +156,11 @@ for repo in "${repos[@]}"; do
     "$next_action" \
     "$branch" \
     "$GITOPS_FETCH_STATUS" \
-    "$GITOPS_FETCH_NOTE"
+    "$GITOPS_FETCH_NOTE" \
+    "${GITOPS_FETCH_TRANSPORT_ATTEMPTS:-}" \
+    "${GITOPS_FETCH_TRANSPORT_USED:-}" \
+    "${GITOPS_FETCH_FALLBACK_REASON:-}" \
+    "${GITOPS_FETCH_REMOTE_URL_KIND:-}"
 done
 
 if [[ "$JSON" == "true" ]]; then
