@@ -438,6 +438,7 @@ reset_push_result() {
   GITOPS_PUSH_NOTE=""
   GITOPS_PUSH_ACTION="noop"
   reset_gitops_push_verify_state
+  reset_gitops_push_bypass_state
 }
 
 push_current_branch() {
@@ -490,6 +491,7 @@ push_current_branch() {
     GITOPS_PUSH_LEVEL="error"
     GITOPS_PUSH_NOTE="${err_text:-git push failed}"
   fi
+  gitops_set_push_bypass_hint "$repo" "$branch" "$err_text"
   rm -f "$out_file"
   return 1
 }
@@ -511,6 +513,14 @@ build_raw_push_details() {
   GITOPS_PUSH_VERIFY_NOTE="${GITOPS_PUSH_VERIFY_NOTE:-}" \
   GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID="${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" \
   GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID="${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}" \
+  GITOPS_PUSH_BYPASS_AVAILABLE="${GITOPS_PUSH_BYPASS_AVAILABLE:-false}" \
+  GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION="${GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION:-true}" \
+  GITOPS_PUSH_BYPASS_REASON="${GITOPS_PUSH_BYPASS_REASON:-}" \
+  GITOPS_PUSH_BYPASS_SUMMARY="${GITOPS_PUSH_BYPASS_SUMMARY:-}" \
+  GITOPS_PUSH_BYPASS_COMMAND="${GITOPS_PUSH_BYPASS_COMMAND:-}" \
+  GITOPS_PUSH_BYPASS_TRANSPORT="${GITOPS_PUSH_BYPASS_TRANSPORT:-}" \
+  GITOPS_PUSH_BYPASS_SKIPS_HOOKS="${GITOPS_PUSH_BYPASS_SKIPS_HOOKS:-false}" \
+  GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG="${GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG:-true}" \
   NEXT_ACTION="$next_action" \
   python3 - <<'PY'
 import json
@@ -537,6 +547,14 @@ print(json.dumps({
     "push_verification_note": os.environ["GITOPS_PUSH_VERIFY_NOTE"],
     "remote_head_oid": os.environ["GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID"],
     "local_head_oid": os.environ["GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID"],
+    "manual_bypass_available": as_bool(os.environ["GITOPS_PUSH_BYPASS_AVAILABLE"]),
+    "manual_bypass_requires_user_confirmation": as_bool(os.environ["GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION"]),
+    "manual_bypass_reason": os.environ["GITOPS_PUSH_BYPASS_REASON"],
+    "manual_bypass_summary": os.environ["GITOPS_PUSH_BYPASS_SUMMARY"],
+    "manual_bypass_command": os.environ["GITOPS_PUSH_BYPASS_COMMAND"],
+    "manual_bypass_transport": os.environ["GITOPS_PUSH_BYPASS_TRANSPORT"],
+    "manual_bypass_skips_hooks": as_bool(os.environ["GITOPS_PUSH_BYPASS_SKIPS_HOOKS"]),
+    "manual_bypass_preserves_remote_config": as_bool(os.environ["GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG"]),
 }, separators=(",", ":")))
 PY
 }

@@ -53,6 +53,11 @@ Options:
 USAGE
 }
 
+reset_push_helper_state() {
+  reset_gitops_push_verify_state
+  reset_gitops_push_bypass_state
+}
+
 emit_json() {
   local file="$1"
   python3 - "$file" <<'PY'
@@ -354,6 +359,14 @@ print(json.dumps({
     "push_verification_note": sys.argv[22],
     "remote_head_oid": sys.argv[23],
     "local_head_oid": sys.argv[24],
+    "manual_bypass_available": sys.argv[25] == "true",
+    "manual_bypass_requires_user_confirmation": sys.argv[26] == "true",
+    "manual_bypass_reason": sys.argv[27],
+    "manual_bypass_summary": sys.argv[28],
+    "manual_bypass_command": sys.argv[29],
+    "manual_bypass_transport": sys.argv[30],
+    "manual_bypass_skips_hooks": sys.argv[31] == "true",
+    "manual_bypass_preserves_remote_config": sys.argv[32] == "true",
 }, separators=(",", ":")))
 PY
 }
@@ -379,7 +392,7 @@ push_branch_noninteractive() {
   local out_file=""
   local local_head_oid=""
   out_file="$(mktemp)"
-  reset_gitops_push_verify_state
+  reset_push_helper_state
   if [[ "$mode" == "set-upstream" ]]; then
     if gitops_run_noninteractive_logged "$repo" "$out_file" push -u origin "$branch"; then
       local_head_oid="$(repo_head_oid "$repo")"
@@ -409,6 +422,7 @@ push_branch_noninteractive() {
   elif [[ -z "$PUSH_ERROR_TEXT" ]]; then
     PUSH_ERROR_TEXT="git push failed"
   fi
+  gitops_set_push_bypass_hint "$repo" "$branch" "$PUSH_ERROR_TEXT"
   rm -f "$out_file"
   return 1
 }
@@ -476,7 +490,7 @@ record_sync_outcome() {
   local fetch_status="${16}"
   local fetch_note="${17}"
   local details=""
-  details="$(sync_details_json "sync" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "$history_action" "$push_action" "$restore_action" "$reconciled" "$reconcile_commit_created" "$fetch_status" "$fetch_note" "${GITOPS_FETCH_TRANSPORT_ATTEMPTS:-}" "${GITOPS_FETCH_TRANSPORT_USED:-}" "${GITOPS_FETCH_FALLBACK_REASON:-}" "${GITOPS_FETCH_REMOTE_URL_KIND:-}" "${GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS:-}" "${GITOPS_PUSH_VERIFY_MATCHED:-false}" "${GITOPS_PUSH_VERIFY_TRANSPORT_USED:-}" "${GITOPS_PUSH_VERIFY_NOTE:-}" "${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" "${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}")"
+  details="$(sync_details_json "sync" "$upstream" "$had_dirty" "$ahead_before" "$behind_before" "$ahead_after" "$behind_after" "$history_action" "$push_action" "$restore_action" "$reconciled" "$reconcile_commit_created" "$fetch_status" "$fetch_note" "${GITOPS_FETCH_TRANSPORT_ATTEMPTS:-}" "${GITOPS_FETCH_TRANSPORT_USED:-}" "${GITOPS_FETCH_FALLBACK_REASON:-}" "${GITOPS_FETCH_REMOTE_URL_KIND:-}" "${GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS:-}" "${GITOPS_PUSH_VERIFY_MATCHED:-false}" "${GITOPS_PUSH_VERIFY_TRANSPORT_USED:-}" "${GITOPS_PUSH_VERIFY_NOTE:-}" "${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" "${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}" "${GITOPS_PUSH_BYPASS_AVAILABLE:-false}" "${GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION:-true}" "${GITOPS_PUSH_BYPASS_REASON:-}" "${GITOPS_PUSH_BYPASS_SUMMARY:-}" "${GITOPS_PUSH_BYPASS_COMMAND:-}" "${GITOPS_PUSH_BYPASS_TRANSPORT:-}" "${GITOPS_PUSH_BYPASS_SKIPS_HOOKS:-false}" "${GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG:-true}")"
   case "$status" in
     blocked-*)
       RECONCILE_READY="false"
@@ -504,7 +518,7 @@ sync_one_repo() {
   REBASE_ERROR_TEXT=""
   FAST_FORWARD_ERROR_TEXT=""
   MERGE_ERROR_TEXT=""
-  reset_gitops_push_verify_state
+  reset_push_helper_state
   SYNC_STASH_REF=""
   SYNC_STASHED="false"
   SYNC_RESTORE_KIND="none"
@@ -786,7 +800,7 @@ record_reconcile_result() {
   case "$status" in
     published|reconcile-pushed) push_action="push" ;;
   esac
-  details="$(sync_details_json "reconcile-followup" "$(current_upstream_ref "$repo")" "false" "0" "0" "0" "0" "noop" "$push_action" "noop" "true" "$reconcile_commit_created" "not-run" "" "" "" "" "" "${GITOPS_PUSH_VERIFY_MATCHED:-false}" "${GITOPS_PUSH_VERIFY_TRANSPORT_USED:-}" "${GITOPS_PUSH_VERIFY_NOTE:-}" "${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" "${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}")"
+  details="$(sync_details_json "reconcile-followup" "$(current_upstream_ref "$repo")" "false" "0" "0" "0" "0" "noop" "$push_action" "noop" "true" "$reconcile_commit_created" "not-run" "" "" "" "" "" "${GITOPS_PUSH_VERIFY_MATCHED:-false}" "${GITOPS_PUSH_VERIFY_TRANSPORT_USED:-}" "${GITOPS_PUSH_VERIFY_NOTE:-}" "${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" "${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}" "${GITOPS_PUSH_BYPASS_AVAILABLE:-false}" "${GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION:-true}" "${GITOPS_PUSH_BYPASS_REASON:-}" "${GITOPS_PUSH_BYPASS_SUMMARY:-}" "${GITOPS_PUSH_BYPASS_COMMAND:-}" "${GITOPS_PUSH_BYPASS_TRANSPORT:-}" "${GITOPS_PUSH_BYPASS_SKIPS_HOOKS:-false}" "${GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG:-true}")"
   record_result "$repo" "$branch" "$status" "$note" "$details"
 }
 
@@ -803,7 +817,7 @@ run_reconcile_followups() {
 
   while IFS=$'\t' read -r repo action note; do
     [[ -n "$repo" ]] || continue
-    reset_gitops_push_verify_state
+    reset_push_helper_state
     branch="$(current_branch_name "$repo" || echo DETACHED)"
     reconcile_commit_created="false"
     [[ "$action" == "parent-gitlink-commit" ]] && reconcile_commit_created="true"

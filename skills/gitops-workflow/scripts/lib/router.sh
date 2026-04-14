@@ -58,6 +58,17 @@ reset_gitops_push_verify_state() {
   GITOPS_PUSH_VERIFY_TRANSPORT_USED=""
 }
 
+reset_gitops_push_bypass_state() {
+  GITOPS_PUSH_BYPASS_AVAILABLE="false"
+  GITOPS_PUSH_BYPASS_REQUIRES_USER_CONFIRMATION="true"
+  GITOPS_PUSH_BYPASS_REASON=""
+  GITOPS_PUSH_BYPASS_SUMMARY=""
+  GITOPS_PUSH_BYPASS_COMMAND=""
+  GITOPS_PUSH_BYPASS_TRANSPORT=""
+  GITOPS_PUSH_BYPASS_SKIPS_HOOKS="false"
+  GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG="true"
+}
+
 gitops_remote_url_kind() {
   local remote_url="$1"
   case "$remote_url" in
@@ -89,6 +100,11 @@ gitops_https_fallback_url() {
   [[ -n "$host" && -n "$path" ]] || return 1
   printf 'https://%s/%s
 ' "$host" "$path"
+}
+
+gitops_write_remote_url() {
+  local repo="$1"
+  git -C "$repo" remote get-url --push origin 2>/dev/null || git -C "$repo" remote get-url origin 2>/dev/null || true
 }
 
 gitops_classify_ssh_read_failure() {
@@ -132,6 +148,86 @@ gitops_classify_ssh_read_failure() {
       echo "none"
       ;;
   esac
+}
+
+gitops_classify_push_bypass_reason() {
+  local output="$1"
+  local lower=""
+  lower="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *"permission denied (publickey)"*|*"sign_and_send_pubkey:"*|*"agent refused operation"*|*"could not open a connection to your authentication agent"*)
+      echo "ssh-auth-unavailable"
+      ;;
+    *"pre-push hook"*|*"hook declined"*|*"error: recipe "*|*"signal 15"*|*"exit code 143"*)
+      echo "pre-push-hook-blocked"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+gitops_set_push_bypass_hint() {
+  local repo="$1"
+  local branch="$2"
+  local output="${3:-}"
+  local remote_url=""
+  local target_url=""
+  local reason=""
+  local summary=""
+
+  reset_gitops_push_bypass_state
+  remote_url="$(gitops_write_remote_url "$repo")"
+  [[ -n "$remote_url" ]] || return 0
+
+  case "$(gitops_remote_url_kind "$remote_url")" in
+    ssh)
+      target_url="$(gitops_https_fallback_url "$remote_url" || true)"
+      ;;
+    https)
+      target_url="$remote_url"
+      ;;
+    *)
+      target_url=""
+      ;;
+  esac
+  [[ -n "$target_url" ]] || return 0
+
+  reason="$(gitops_classify_push_bypass_reason "$output")"
+  [[ -n "$reason" ]] || return 0
+
+  case "$reason" in
+    ssh-auth-unavailable)
+      summary="SSH push auth is unavailable; if the user explicitly approves it, a one-off HTTPS push that skips pre-push hooks can be offered."
+      ;;
+    pre-push-hook-blocked)
+      summary="Local pre-push hooks blocked publish; if the user explicitly approves it, a one-off HTTPS push that skips pre-push hooks can be offered."
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  GITOPS_PUSH_BYPASS_AVAILABLE="true"
+  GITOPS_PUSH_BYPASS_REASON="$reason"
+  GITOPS_PUSH_BYPASS_SUMMARY="$summary"
+  GITOPS_PUSH_BYPASS_TRANSPORT="https"
+  GITOPS_PUSH_BYPASS_SKIPS_HOOKS="true"
+  GITOPS_PUSH_BYPASS_PRESERVES_REMOTE_CONFIG="true"
+  GITOPS_PUSH_BYPASS_COMMAND="$(python3 - "$repo" "$target_url" "$branch" <<'PY'
+import shlex
+import sys
+
+repo, url, branch = sys.argv[1:4]
+print(
+    "git -C {repo} push --no-verify {url} HEAD:{branch}".format(
+        repo=shlex.quote(repo),
+        url=shlex.quote(url),
+        branch=shlex.quote(branch),
+    )
+)
+PY
+)"
 }
 
 gitops_run_git_read_capture() {
