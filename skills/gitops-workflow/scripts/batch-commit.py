@@ -51,6 +51,7 @@ TEST_PREFIXES = ("tests/", "test/", "__tests__/", "spec/")
 DOC_PREFIXES = ("docs/", "doc/", "references/", "context/", ".local/context/")
 BUCKET_ORDER = ["submodules", "docs", "tests", "ci", "deps", "chore"]
 TRUTHY = {"1", "true", "yes", "on"}
+HEADER_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 COMMIT_SIGNING_FAILURE_PATTERNS = (
     "gpg failed to sign the data",
     "failed to write commit object",
@@ -147,6 +148,144 @@ class BatchCommitFailure(Exception):
         self.payload = payload
 
 
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY
+
+
+def git_success(repo: str, *args: str) -> bool:
+    return run(["git", "-C", repo, *args], cwd=repo, check=False).returncode == 0
+
+
+def repo_root(repo: str) -> str:
+    proc = run(["git", "-C", repo, "rev-parse", "--show-toplevel"], cwd=repo, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(output_text(proc) or f"--repo is not a git repository: {repo}")
+    return str(Path(proc.stdout.strip()).resolve())
+
+
+def repo_superproject_path(repo: str) -> str:
+    proc = run(["git", "-C", repo, "rev-parse", "--show-superproject-working-tree"], cwd=repo, check=False)
+    return (proc.stdout or "").strip()
+
+
+def outermost_superproject_path(repo: str) -> str:
+    current = repo_root(repo)
+    while True:
+        parent = repo_superproject_path(current)
+        if not parent:
+            return current
+        current = str(Path(parent).resolve())
+
+
+def list_child_submodule_paths(repo: str) -> list[str]:
+    root = repo_root(repo)
+    gitmodules = Path(root) / ".gitmodules"
+    if not gitmodules.is_file():
+        return []
+    proc = run(
+        ["git", "-C", root, "config", "-f", str(gitmodules), "--get-regexp", r"^submodule\..*\.path$"],
+        cwd=root,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        child = str((Path(root) / parts[1]).resolve())
+        if git_success(child, "rev-parse", "--is-inside-work-tree"):
+            paths.append(child)
+    return paths
+
+
+def list_related_repos(repo: str) -> list[tuple[int, str]]:
+    root = outermost_superproject_path(repo)
+    results: list[tuple[int, str]] = []
+
+    def walk(path: str, depth: int) -> None:
+        results.append((depth, path))
+        for child in list_child_submodule_paths(path):
+            walk(child, depth + 1)
+
+    walk(root, 0)
+    return results
+
+
+def related_repos(repo: str, scope: str) -> list[tuple[int, str]]:
+    current = repo_root(repo)
+    if scope == "current":
+        return [(0, current)]
+    return sorted(list_related_repos(repo), key=lambda item: (-item[0], item[1]))
+
+
+def current_branch(repo: str) -> str | None:
+    proc = run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, check=False)
+    branch = (proc.stdout or "").strip()
+    if proc.returncode != 0 or branch in {"", "HEAD"}:
+        return None
+    return branch
+
+
+def current_upstream_ref(repo: str) -> str:
+    proc = run(
+        ["git", "-C", repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        cwd=repo,
+        check=False,
+    )
+    return (proc.stdout or "").strip()
+
+
+def resolve_default_base(repo: str) -> str:
+    proc = run(["git", "-C", repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=repo, check=False)
+    branch = (proc.stdout or "").strip().removeprefix("origin/")
+    if branch:
+        return branch
+    for candidate in ("main", "master", "trunk"):
+        if git_success(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{candidate}"):
+            return candidate
+    return ""
+
+
+def repo_ahead_behind(repo: str, upstream: str) -> tuple[int, int]:
+    if not upstream:
+        return (0, 0)
+    proc = run(["git", "-C", repo, "rev-list", "--left-right", "--count", f"HEAD...{upstream}"], cwd=repo, check=False)
+    if proc.returncode != 0:
+        return (0, 0)
+    parts = (proc.stdout or "").split()
+    if len(parts) != 2:
+        return (0, 0)
+    return (int(parts[0]), int(parts[1]))
+
+
+def repo_dirty_tracked_count(repo: str) -> int:
+    proc = run(["git", "-C", repo, "status", "--porcelain"], cwd=repo, check=False)
+    return sum(1 for line in (proc.stdout or "").splitlines() if line[:2] != "??")
+
+
+def repo_dirty_untracked_count(repo: str) -> int:
+    proc = run(["git", "-C", repo, "ls-files", "--others", "--exclude-standard"], cwd=repo, check=False)
+    return len([line for line in (proc.stdout or "").splitlines() if line])
+
+
+def repo_sequencer_state(repo: str) -> list[str]:
+    git_dir = Path(run(["git", "-C", repo, "rev-parse", "--git-dir"], cwd=repo).stdout.strip())
+    states: list[str] = []
+    if (git_dir / "MERGE_HEAD").exists():
+        states.append("merge")
+    if (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists() or (git_dir / "REBASE_HEAD").exists():
+        states.append("rebase")
+    if (git_dir / "CHERRY_PICK_HEAD").exists():
+        states.append("cherry-pick")
+    if (git_dir / "REVERT_HEAD").exists():
+        states.append("revert")
+    if (git_dir / "BISECT_LOG").exists():
+        states.append("bisect")
+    return states
+
+
 def changed_paths(repo: str) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
@@ -156,7 +295,7 @@ def changed_paths(repo: str) -> list[str]:
         ["ls-files", "--others", "--exclude-standard", "-z"],
     ]
     for args in sources:
-        proc = run(["git", "-C", repo, *args], cwd=repo)
+        proc = run(["git", "-C", repo, *args], cwd=repo, check=False)
         raw = proc.stdout
         if not raw:
             continue
@@ -171,9 +310,7 @@ def changed_paths(repo: str) -> list[str]:
 def is_submodule(repo: str, path: str) -> bool:
     proc = run(["git", "-C", repo, "ls-files", "-s", "--", path], cwd=repo, check=False)
     line = (proc.stdout or "").strip()
-    if not line:
-        return False
-    return line.split()[0] == "160000"
+    return bool(line and line.split()[0] == "160000")
 
 
 def bucket_for_path(repo: str, path: str) -> str:
@@ -202,32 +339,56 @@ def path_summary(paths: list[str]) -> str:
     return f"{', '.join(display[:3])}, and {len(display) - 3} more paths"
 
 
-def build_message(repo: str, bucket: str, paths: list[str], message_script: str) -> str:
-    spec = BUCKET_SPECS[bucket]
-    with tempfile.TemporaryDirectory() as temp_dir:
-        out = Path(temp_dir) / "commit-message.txt"
-        cmd = [
-            "python3",
-            message_script,
-            "--type",
-            spec.commit_type,
-            "--subject",
-            spec.subject,
-        ]
-        if spec.scope:
-            cmd.extend(["--scope", spec.scope])
-        for bullet in spec.bullets:
-            cmd.extend(["--bullet", bullet])
-        cmd.extend(["--bullet", f"touch the following surfaces: {path_summary(paths)}"])
-        cmd.extend(["--out", str(out)])
-        proc = run(cmd, cwd=repo, check=False)
-        if proc.returncode != 0:
-            raise SystemExit(output_text(proc) or "failed to generate commit message")
-        return out.read_text(encoding="utf-8")
+def role_for_repo(requested_repo: str, candidate_repo: str) -> str:
+    current_root = repo_root(requested_repo)
+    outer_root = outermost_superproject_path(requested_repo)
+    if candidate_repo == current_root == outer_root:
+        return "current-root"
+    if candidate_repo == current_root:
+        return "current"
+    if candidate_repo == outer_root:
+        return "root"
+    return "submodule"
 
 
-def env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in TRUTHY
+def repo_commit_safety(repo: str, mode: str) -> tuple[bool, str]:
+    branch = current_branch(repo)
+    sequencer = repo_sequencer_state(repo)
+    if sequencer:
+        return (False, f"repo is mid-{','.join(sequencer)}")
+    if branch is None:
+        return (False, "repo is detached")
+    return (True, "ready")
+
+
+def inventory_entry(requested_repo: str, repo: str, mode: str) -> dict[str, object]:
+    branch = current_branch(repo)
+    default_base = resolve_default_base(repo)
+    upstream = current_upstream_ref(repo)
+    ahead, behind = repo_ahead_behind(repo, upstream)
+    changed = changed_paths(repo)
+    safe_to_commit, commit_note = repo_commit_safety(repo, mode)
+    entry: dict[str, object] = {
+        "repo": repo,
+        "role": role_for_repo(requested_repo, repo),
+        "branch": branch or "DETACHED",
+        "default_base": default_base,
+        "upstream": upstream,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty_tracked": repo_dirty_tracked_count(repo),
+        "dirty_untracked": repo_dirty_untracked_count(repo),
+        "sequencer_state": repo_sequencer_state(repo),
+        "changed_paths": changed,
+        "changed_path_count": len(changed),
+        "safe_to_commit": safe_to_commit,
+        "commit_safety_note": commit_note,
+    }
+    if repo == outermost_superproject_path(requested_repo):
+        entry["tree_order_hint"] = "push parent last after child commits and gitlink reconciliation"
+    else:
+        entry["tree_order_hint"] = "commit and push children before parents"
+    return entry
 
 
 def classify_commit_failure(text: str) -> str | None:
@@ -240,7 +401,8 @@ def classify_commit_failure(text: str) -> str | None:
 
 def commit_failure_payload(
     *,
-    bucket: str,
+    commit_index: int | None,
+    repo: str,
     paths: list[str],
     output: str,
     allow_unsigned_retry: bool,
@@ -249,7 +411,8 @@ def commit_failure_payload(
     failure_class = classify_commit_failure(output)
     payload: dict[str, object] = {
         "status": "blocked" if failure_class == "commit-signing-unavailable" else "error",
-        "bucket": bucket,
+        "commit_index": commit_index,
+        "repo": repo,
         "paths": paths,
         "error": output or "git commit failed",
         "failure_class": failure_class or "commit-failed",
@@ -270,14 +433,40 @@ def commit_failure_payload(
     return payload
 
 
+def render_commit_message(
+    message_script: str,
+    *,
+    commit_type: str,
+    scope: str | None,
+    subject: str,
+    bullets: list[str],
+    footers: list[str],
+    cwd: str,
+) -> str:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        out = Path(temp_dir) / "commit-message.txt"
+        cmd = ["python3", message_script, "--type", commit_type, "--subject", subject]
+        if scope:
+            cmd.extend(["--scope", scope])
+        for bullet in bullets:
+            cmd.extend(["--bullet", bullet])
+        for footer in footers:
+            cmd.extend(["--footer", footer])
+        cmd.extend(["--out", str(out)])
+        proc = run(cmd, cwd=cwd, check=False)
+        if proc.returncode != 0:
+            raise SystemExit(output_text(proc) or "failed to generate commit message")
+        return out.read_text(encoding="utf-8")
+
+
 def stage_and_commit(
     repo: str,
-    bucket: str,
     paths: list[str],
     message: str,
     sensitive_scan: str,
     signing_off: bool,
     allow_unsigned_retry: bool,
+    commit_index: int | None,
 ) -> tuple[str, bool]:
     add_proc = run(["git", "-C", repo, "add", "--", *paths], cwd=repo, check=False)
     if add_proc.returncode != 0:
@@ -304,10 +493,11 @@ def stage_and_commit(
                     sha_proc = run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], cwd=repo, check=False)
                     if sha_proc.returncode != 0:
                         raise SystemExit(output_text(sha_proc) or "failed to resolve commit sha")
-                    return (sha_proc.stdout or "").strip(), True
+                    return ((sha_proc.stdout or "").strip(), True)
                 raise BatchCommitFailure(
                     commit_failure_payload(
-                        bucket=bucket,
+                        commit_index=commit_index,
+                        repo=repo,
                         paths=paths,
                         output=output_text(retry_proc) or commit_output,
                         allow_unsigned_retry=allow_unsigned_retry,
@@ -316,7 +506,8 @@ def stage_and_commit(
                 )
             raise BatchCommitFailure(
                 commit_failure_payload(
-                    bucket=bucket,
+                    commit_index=commit_index,
+                    repo=repo,
                     paths=paths,
                     output=commit_output,
                     allow_unsigned_retry=allow_unsigned_retry,
@@ -327,61 +518,167 @@ def stage_and_commit(
     sha_proc = run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], cwd=repo, check=False)
     if sha_proc.returncode != 0:
         raise SystemExit(output_text(sha_proc) or "failed to resolve commit sha")
-    return (sha_proc.stdout or "").strip(), False
+    return ((sha_proc.stdout or "").strip(), False)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Batch current repository changes into deterministic Conventional Commit groups."
-    )
-    parser.add_argument("--repo", default=".", help="Repository path (default: current directory).")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
-    parser.add_argument(
-        "--allow-unsigned-commit-retry",
-        action="store_true",
-        help="Allow one unsigned retry when commit signing is unavailable.",
-    )
-    args = parser.parse_args()
+def normalize_repo_path(path: str, cwd: str) -> str:
+    return str((Path(cwd) / path).resolve()) if not Path(path).is_absolute() else str(Path(path).resolve())
 
-    repo = str(Path(args.repo).resolve())
-    if run(["git", "-C", repo, "rev-parse", "--is-inside-work-tree"], cwd=repo, check=False).returncode != 0:
-        raise SystemExit(f"--repo is not a git repository: {repo}")
+
+def validate_commit_spec(spec: dict[str, object]) -> None:
+    if not isinstance(spec, dict):
+        raise SystemExit("each commit entry must be an object")
+    commit_type = str(spec.get("type", "")).strip()
+    if not HEADER_RE.match(commit_type):
+        raise SystemExit(f"invalid commit type '{commit_type}'")
+    scope = str(spec.get("scope", "")).strip()
+    if scope and not HEADER_RE.match(scope):
+        raise SystemExit(f"invalid commit scope '{scope}'")
+    subject = str(spec.get("subject", "")).strip()
+    if not subject:
+        raise SystemExit("commit subject must not be empty")
+    if subject.endswith("."):
+        raise SystemExit("commit subject must not end with a period")
+    if subject != subject.lower():
+        raise SystemExit("commit subject must be lowercase")
+    bullets = spec.get("bullets", [])
+    if not isinstance(bullets, list) or not bullets or not all(str(item).strip() for item in bullets):
+        raise SystemExit("each commit must include at least one non-empty bullet")
+    footers = spec.get("footers", [])
+    if not isinstance(footers, list) or not all(str(item).strip() for item in footers):
+        raise SystemExit("commit footers must be a list of non-empty strings")
+    paths = spec.get("paths", [])
+    if not isinstance(paths, list) or not paths or not all(str(item).strip() for item in paths):
+        raise SystemExit("each commit must include at least one non-empty path")
+
+
+def plan_command(args: argparse.Namespace) -> int:
+    repo = repo_root(args.repo)
+    entries = [inventory_entry(repo, entry_repo, args.mode) for _, entry_repo in related_repos(repo, args.scope)]
+    payload = {
+        "status": "no-changes" if all(item["changed_path_count"] == 0 for item in entries) else "planned",
+        "mode": args.mode,
+        "scope": args.scope,
+        "root_repo": outermost_superproject_path(repo),
+        "requested_repo": repo,
+        "related_repos_detected": len(entries) > 1,
+        "order_hint": "children first for commit/push; parent gitlinks last",
+        "repos": entries,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        if payload["status"] == "no-changes":
+            print("No changes to plan.")
+        else:
+            for item in payload["repos"]:
+                if item["changed_path_count"]:
+                    print(f"{item['repo']}: {item['changed_path_count']} changed path(s)")
+    return 0
+
+
+def apply_command(args: argparse.Namespace) -> int:
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    commits = plan.get("commits", [])
+    deferred = plan.get("deferred", [])
+    if not isinstance(commits, list):
+        raise SystemExit("plan file must contain a 'commits' list")
+    if not isinstance(deferred, list):
+        raise SystemExit("plan file 'deferred' field must be a list when present")
 
     script_dir = Path(__file__).resolve().parent
     message_script = str(script_dir / "commit-message.py")
     sensitive_scan = str(script_dir / "sensitive-scan.sh")
+    cwd = os.getcwd()
 
-    paths = changed_paths(repo)
-    if not paths:
-        payload = {"status": "no-changes", "commits": []}
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            print("No changes to commit.")
-        return 0
+    normalized_commits: list[dict[str, object]] = []
+    assigned_paths: dict[str, set[str]] = defaultdict(set)
+    deferred_paths: dict[str, set[str]] = defaultdict(set)
+    repos_seen: set[str] = set()
 
-    buckets: dict[str, list[str]] = defaultdict(list)
-    for path in paths:
-        buckets[bucket_for_path(repo, path)].append(path)
+    for item in deferred:
+        if not isinstance(item, dict):
+            raise SystemExit("each deferred entry must be an object")
+        repo = normalize_repo_path(str(item.get("repo", "")), cwd)
+        paths = item.get("paths", [])
+        if not isinstance(paths, list):
+            raise SystemExit("deferred paths must be a list")
+        deferred_paths[repo].update(str(path).strip() for path in paths if str(path).strip())
+
+    for index, spec in enumerate(commits, start=1):
+        validate_commit_spec(spec)
+        repo = normalize_repo_path(str(spec.get("repo", ".")), cwd)
+        repos_seen.add(repo)
+        paths = [str(path).strip() for path in spec["paths"]]
+        if args.mode == "raw":
+            safe_to_commit, note = repo_commit_safety(repo, "raw")
+            if not safe_to_commit:
+                payload = {
+                    "status": "blocked",
+                    "failure_class": "raw-commit-unsafe",
+                    "commit_index": index,
+                    "repo": repo,
+                    "paths": paths,
+                    "error": note,
+                    "commits": [],
+                }
+                if args.json:
+                    print(json.dumps(payload, indent=2))
+                else:
+                    print(note)
+                return 1
+        overlap = assigned_paths[repo].intersection(paths)
+        if overlap:
+            raise SystemExit(f"duplicate path assignment in repo {repo}: {', '.join(sorted(overlap))}")
+        assigned_paths[repo].update(paths)
+        normalized_commits.append(
+            {
+                "repo": repo,
+                "type": str(spec["type"]).strip(),
+                "scope": str(spec.get("scope", "")).strip() or None,
+                "subject": str(spec["subject"]).strip(),
+                "bullets": [str(item).strip() for item in spec["bullets"]],
+                "footers": [str(item).strip() for item in spec.get("footers", [])],
+                "paths": paths,
+            }
+        )
+
+    repos_to_validate = set(repos_seen) | set(deferred_paths)
+    for repo in repos_to_validate:
+        actual = set(changed_paths(repo))
+        assigned = assigned_paths.get(repo, set())
+        deferred_repo = deferred_paths.get(repo, set())
+        unknown = (assigned | deferred_repo) - actual
+        if unknown:
+            raise SystemExit(f"plan references paths that are not currently changed in {repo}: {', '.join(sorted(unknown))}")
+        unassigned = actual - assigned - deferred_repo
+        if unassigned:
+            raise SystemExit(f"plan leaves changed paths unassigned in {repo}: {', '.join(sorted(unassigned))}")
 
     allow_unsigned_retry = args.allow_unsigned_commit_retry or env_flag("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY")
     signing_off = False
     unsigned_retry_used = False
-    commits = []
-    for bucket in BUCKET_ORDER:
-        bucket_paths = sorted(set(buckets.get(bucket, [])))
-        if not bucket_paths:
-            continue
-        message = build_message(repo, bucket, bucket_paths, message_script)
+    created: list[dict[str, object]] = []
+
+    for index, spec in enumerate(normalized_commits, start=1):
+        message = render_commit_message(
+            message_script,
+            commit_type=str(spec["type"]),
+            scope=spec["scope"],
+            subject=str(spec["subject"]),
+            bullets=list(spec["bullets"]),
+            footers=list(spec["footers"]),
+            cwd=str(spec["repo"]),
+        )
         try:
             sha, used_unsigned_retry = stage_and_commit(
-                repo,
-                bucket,
-                bucket_paths,
+                str(spec["repo"]),
+                list(spec["paths"]),
                 message,
                 sensitive_scan,
                 signing_off,
                 allow_unsigned_retry,
+                index,
             )
         except BatchCommitFailure as exc:
             payload = {
@@ -389,7 +686,7 @@ def main() -> int:
                 "signing_disabled": signing_off,
                 "unsigned_retry_enabled": allow_unsigned_retry,
                 "unsigned_retry_used": unsigned_retry_used,
-                "commits": commits,
+                "commits": created,
                 **exc.payload,
             }
             if args.json:
@@ -400,17 +697,122 @@ def main() -> int:
         if used_unsigned_retry:
             signing_off = True
             unsigned_retry_used = True
-        commits.append(
+        created.append(
             {
-                "bucket": bucket,
+                "index": index,
+                "repo": spec["repo"],
                 "sha": sha,
                 "subject": message.splitlines()[0],
-                "paths": bucket_paths,
+                "paths": spec["paths"],
             }
         )
 
     payload = {
         "status": "committed",
+        "mode": args.mode,
+        "signing_disabled": signing_off,
+        "unsigned_retry_enabled": allow_unsigned_retry,
+        "unsigned_retry_used": unsigned_retry_used,
+        "commits": created,
+        "deferred": [{"repo": repo, "paths": sorted(paths)} for repo, paths in sorted(deferred_paths.items()) if paths],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for item in created:
+            print(f"{item['sha']} {item['subject']}")
+    return 0
+
+
+def fallback_command(args: argparse.Namespace) -> int:
+    script_dir = Path(__file__).resolve().parent
+    message_script = str(script_dir / "commit-message.py")
+    sensitive_scan = str(script_dir / "sensitive-scan.sh")
+    allow_unsigned_retry = args.allow_unsigned_commit_retry or env_flag("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY")
+    signing_off = False
+    unsigned_retry_used = False
+    commits: list[dict[str, object]] = []
+
+    for _, repo in related_repos(args.repo, args.scope):
+        safe_to_commit, note = repo_commit_safety(repo, args.mode)
+        paths = changed_paths(repo)
+        if not paths:
+            continue
+        if not safe_to_commit:
+            payload = {
+                "status": "blocked",
+                "mode": args.mode,
+                "scope": args.scope,
+                "repo": repo,
+                "failure_class": "fallback-commit-unsafe",
+                "error": note,
+                "commits": commits,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print(note)
+            return 1
+        buckets: dict[str, list[str]] = defaultdict(list)
+        for path in paths:
+            buckets[bucket_for_path(repo, path)].append(path)
+        for bucket in BUCKET_ORDER:
+            bucket_paths = sorted(set(buckets.get(bucket, [])))
+            if not bucket_paths:
+                continue
+            spec = BUCKET_SPECS[bucket]
+            message = render_commit_message(
+                message_script,
+                commit_type=spec.commit_type,
+                scope=spec.scope,
+                subject=spec.subject,
+                bullets=[*spec.bullets, f"touch the following surfaces: {path_summary(bucket_paths)}"],
+                footers=[],
+                cwd=repo,
+            )
+            try:
+                sha, used_unsigned_retry = stage_and_commit(
+                    repo,
+                    bucket_paths,
+                    message,
+                    sensitive_scan,
+                    signing_off,
+                    allow_unsigned_retry,
+                    len(commits) + 1,
+                )
+            except BatchCommitFailure as exc:
+                payload = {
+                    "status": exc.payload["status"],
+                    "mode": args.mode,
+                    "scope": args.scope,
+                    "signing_disabled": signing_off,
+                    "unsigned_retry_enabled": allow_unsigned_retry,
+                    "unsigned_retry_used": unsigned_retry_used,
+                    "commits": commits,
+                    **exc.payload,
+                }
+                if args.json:
+                    print(json.dumps(payload, indent=2))
+                else:
+                    print(payload.get("helper_text") or payload.get("error") or "batch commit failed")
+                return 1
+            if used_unsigned_retry:
+                signing_off = True
+                unsigned_retry_used = True
+            commits.append(
+                {
+                    "repo": repo,
+                    "bucket": bucket,
+                    "sha": sha,
+                    "subject": message.splitlines()[0],
+                    "paths": bucket_paths,
+                }
+            )
+
+    payload = {
+        "status": "no-changes" if not commits else "committed",
+        "mode": args.mode,
+        "scope": args.scope,
         "signing_disabled": signing_off,
         "unsigned_retry_enabled": allow_unsigned_retry,
         "unsigned_retry_used": unsigned_retry_used,
@@ -419,9 +821,62 @@ def main() -> int:
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
-        for item in commits:
-            print(f"{item['sha']} {item['subject']}")
+        if not commits:
+            print("No changes to commit.")
+        else:
+            for item in commits:
+                print(f"{item['sha']} {item['subject']}")
     return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Plan, apply, or fallback Conventional Commit batching for gitops-workflow."
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    plan_parser = subparsers.add_parser("plan", help="Emit repo/path inventory for agent-authored commit planning.")
+    plan_parser.add_argument("--repo", default=".", help="Repository path (default: current directory).")
+    plan_parser.add_argument("--scope", choices=("current", "tree"), default="current")
+    plan_parser.add_argument("--mode", choices=("normal", "raw"), default="normal")
+    plan_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    plan_parser.set_defaults(handler=plan_command)
+
+    apply_parser = subparsers.add_parser("apply", help="Apply an agent-authored batch commit plan.")
+    apply_parser.add_argument("--plan", required=True, help="Path to JSON plan file.")
+    apply_parser.add_argument("--mode", choices=("normal", "raw"), default="normal")
+    apply_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    apply_parser.add_argument(
+        "--allow-unsigned-commit-retry",
+        action="store_true",
+        help="Allow one unsigned retry when commit signing is unavailable.",
+    )
+    apply_parser.set_defaults(handler=apply_command)
+
+    fallback_parser = subparsers.add_parser("fallback", help="Use the maintained deterministic fallback commit splitter.")
+    fallback_parser.add_argument("--repo", default=".", help="Repository path (default: current directory).")
+    fallback_parser.add_argument("--scope", choices=("current", "tree"), default="current")
+    fallback_parser.add_argument("--mode", choices=("normal", "raw"), default="normal")
+    fallback_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    fallback_parser.add_argument(
+        "--allow-unsigned-commit-retry",
+        action="store_true",
+        help="Allow one unsigned retry when commit signing is unavailable.",
+    )
+    fallback_parser.set_defaults(handler=fallback_command)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(argv or os.sys.argv[1:])
+    if not argv or argv[0] not in {"plan", "apply", "fallback", "-h", "--help"}:
+        argv = ["plan", *argv]
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "command", None):
+        raise SystemExit("missing subcommand (expected: plan, apply, or fallback)")
+    return args.handler(args)
 
 
 if __name__ == "__main__":

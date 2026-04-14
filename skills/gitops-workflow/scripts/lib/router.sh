@@ -39,6 +39,97 @@ gitops_role_for_repo() {
   echo "submodule"
 }
 
+gitops_scope_details_json() {
+  local requested_repo="${1:-.}"
+  local scope="${2:-current}"
+  REQUESTED_REPO="$requested_repo" \
+  REQUESTED_SCOPE="$scope" \
+  python3 - <<'PY'
+import json
+import os
+import subprocess
+from pathlib import Path
+
+requested_repo = os.environ["REQUESTED_REPO"]
+requested_scope = os.environ["REQUESTED_SCOPE"]
+
+def git(repo: str, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", repo, *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit((proc.stdout or "") + (proc.stderr or ""))
+    return (proc.stdout or "").strip()
+
+def repo_root(repo: str) -> str:
+    return str(Path(git(repo, "rev-parse", "--show-toplevel")).resolve())
+
+def superproject(repo: str) -> str:
+    return git(repo, "rev-parse", "--show-superproject-working-tree")
+
+def outermost(repo: str) -> str:
+    current = repo_root(repo)
+    while True:
+        parent = superproject(current)
+        if not parent:
+            return current
+        current = str(Path(parent).resolve())
+
+def child_submodules(repo: str) -> list[str]:
+    root = repo_root(repo)
+    gitmodules = Path(root) / ".gitmodules"
+    if not gitmodules.is_file():
+        return []
+    proc = subprocess.run(
+        ["git", "-C", root, "config", "-f", str(gitmodules), "--get-regexp", r"^submodule\..*\.path$"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    results = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        child = str((Path(root) / parts[1]).resolve())
+        ok = subprocess.run(
+            ["git", "-C", child, "rev-parse", "--is-inside-work-tree"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if ok.returncode == 0:
+            results.append(child)
+    return results
+
+def walk(repo: str, depth: int, results: list[tuple[int, str]]) -> None:
+    results.append((depth, repo))
+    for child in child_submodules(repo):
+        walk(child, depth + 1, results)
+
+current_repo = repo_root(requested_repo)
+root_repo = outermost(requested_repo)
+repos: list[tuple[int, str]] = []
+walk(root_repo, 0, repos)
+tree_repos = [path for _, path in sorted(repos, key=lambda item: (-item[0], item[1]))]
+
+print(json.dumps({
+    "requested_repo": current_repo,
+    "root_repo": root_repo,
+    "resolved_scope": requested_scope,
+    "related_repos_detected": len(tree_repos) > 1,
+    "requires_agent_confirmation": len(tree_repos) > 1,
+    "repo_order": tree_repos if requested_scope == "tree" else [current_repo],
+    "order_hint": "children first for commit/push; parent gitlinks last",
+}))
+PY
+}
+
 reset_gitops_remote_read_state() {
   GITOPS_REMOTE_READ_OUTPUT=""
   GITOPS_REMOTE_READ_EXIT_CODE=0

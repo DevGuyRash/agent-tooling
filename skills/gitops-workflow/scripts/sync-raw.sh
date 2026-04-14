@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gitops-catalog: {"id":"sync-raw","topic":"sync","command":"sync raw","phrases":["sync raw","raw sync"],"summary":"Run bidirectional in-place branch sync across the current repo or related tree; blocked push JSON may expose opt-in bypass guidance.","script":"sync-raw.sh","creates_branch":false,"creates_worktree":false,"creates_pr":false,"mutates_history":true,"stays_on_current_branch":true,"supports_json":true}
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -40,6 +41,7 @@ Behavior:
   - When related repositories exist, walks the full parent/submodule tree by default.
   - Runs tree reconciliation after syncing and pushes reconcile-created branch commits bottom-up unless --no-push is set.
   - Push and pre-push hook progress streams to stderr; stdout stays clean for --json.
+  - Blocked push JSON may include opt-in `manual_bypass_*` helper fields for a one-off HTTPS `--no-verify` publish path; ask before using it.
 
 Options:
   --repo <path>              Repository path to inspect (default: current directory).
@@ -60,7 +62,13 @@ reset_push_helper_state() {
 
 emit_json() {
   local file="$1"
-  python3 - "$file" <<'PY'
+  local scope_details=""
+  if [[ "$RECURSE_RELATED" == "true" ]]; then
+    scope_details="$(gitops_scope_details_json "$REPO_PATH" tree)"
+  else
+    scope_details="$(gitops_scope_details_json "$REPO_PATH" current)"
+  fi
+  python3 - "$file" "$scope_details" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -78,7 +86,7 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
         except json.JSONDecodeError:
             item["details_raw"] = parts[4]
     items.append(item)
-print(json.dumps({"results": items}, indent=2))
+print(json.dumps({"scope": json.loads(sys.argv[2]), "results": items}, indent=2))
 PY
 }
 
@@ -401,6 +409,7 @@ push_branch_noninteractive() {
         return 0
       fi
       PUSH_ERROR_TEXT="${GITOPS_PUSH_VERIFY_NOTE:-failed to verify remote branch after push}"
+      gitops_set_push_bypass_hint "$repo" "$branch" "$GITOPS_PUSH_OUTPUT"
       rm -f "$out_file"
       return 1
     fi
@@ -412,6 +421,7 @@ push_branch_noninteractive() {
         return 0
       fi
       PUSH_ERROR_TEXT="${GITOPS_PUSH_VERIFY_NOTE:-failed to verify remote branch after push}"
+      gitops_set_push_bypass_hint "$repo" "$branch" "$GITOPS_PUSH_OUTPUT"
       rm -f "$out_file"
       return 1
     fi

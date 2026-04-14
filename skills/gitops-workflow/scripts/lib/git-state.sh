@@ -279,7 +279,7 @@ gitops_run_noninteractive_logged() {
   : > "$capture_file"
   if gitops_git_noninteractive "$repo" "$@" > >(tee -a "$capture_file" >&2) 2> >(tee -a "$capture_file" >&2); then
     GITOPS_PUSH_EXIT_CODE=0
-    GITOPS_PUSH_OUTPUT=""
+    GITOPS_PUSH_OUTPUT="$(compact_text "$(cat "$capture_file" 2>/dev/null)")"
     GITOPS_PUSH_INTERRUPTED="false"
     return 0
   fi
