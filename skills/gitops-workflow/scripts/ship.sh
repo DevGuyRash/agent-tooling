@@ -93,6 +93,11 @@ record_result() {
   local status="$2"
   local note="$3"
   local details="${4:-}"
+  case "$status" in
+    blocked|error)
+      FLOW_COMPLETED="false"
+      ;;
+  esac
   printf '%s\t%s\t%s\t%s\n' "$stage" "$status" "$note" "$details" >> "$RESULTS_FILE"
 }
 
@@ -537,6 +542,9 @@ PY
   sync_status="${sync_summary[0]:-blocked}"
   primary_status="${sync_summary[1]:-not-run}"
   GITOPS_SYNC_STAGE_STATUS="$primary_status"
+  if [[ "$sync_status" == "blocked" ]]; then
+    FLOW_COMPLETED="false"
+  fi
   [[ "$sync_status" != "blocked" ]]
 }
 

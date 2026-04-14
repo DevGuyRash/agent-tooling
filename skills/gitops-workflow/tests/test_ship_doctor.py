@@ -733,6 +733,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertFalse(payload["continued"])
+            self.assertFalse(payload["completed"])
             stages = {item["stage"]: item for item in payload["results"]}
             self.assertEqual(stages["batch_commit"]["status"], "blocked")
             self.assertEqual(stages["batch_commit"]["details"]["failure_class"], "commit-signing-unavailable")
@@ -779,6 +780,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertFalse(payload["continued"])
+            self.assertFalse(payload["completed"])
             sync_items = [item for item in payload["results"] if item["stage"] == "sync"]
             self.assertEqual(sync_items[-1]["status"], "blocked")
             self.assertFalse(sync_items[-1]["details"]["push_verified"])
@@ -826,6 +828,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
+            self.assertFalse(payload["completed"])
             sync_items = [item for item in payload["results"] if item["stage"] == "sync"]
             self.assertEqual(sync_items[-1]["status"], "blocked")
             self.assertTrue(sync_items[-1]["details"]["manual_bypass_available"])
@@ -943,6 +946,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertFalse(payload["continued"])
+            self.assertFalse(payload["completed"])
             pr_item = next(item for item in payload["results"] if item["stage"] == "pr")
             self.assertEqual(pr_item["status"], "blocked")
             self.assertIn("ship ready audits an existing PR only", pr_item["note"])
