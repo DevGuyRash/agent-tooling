@@ -68,6 +68,17 @@ class GitOpsScriptTestCase(unittest.TestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         return fake
 
+    def write_fake_git_push_success_with_auth_error_without_remote_update(self, bin_dir: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        fake = bin_dir / "git"
+        fake.write_text(
+            '#!/usr/bin/env python3\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nargs = sys.argv[1:]\nif "push" in args and "--dry-run" not in args:\n    sys.stderr.write("sign_and_send_pubkey: signing failed for RSA \\"/home/test/.ssh/id_rsa\\" from agent: agent refused operation\\n")\n    sys.stderr.write("git@github.com: Permission denied (publickey).\\n")\n    sys.stderr.write("fatal: Could not read from remote repository.\\n")\n    raise SystemExit(0)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git),
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        return fake
+
     def write_fake_git_commit_signing_failure(self, bin_dir: Path, log_file: Path) -> Path:
         real_git = shutil.which("git")
         self.assertIsNotNone(real_git)
@@ -266,11 +277,12 @@ class StartBranchFallbackTests(GitOpsScriptTestCase):
 
 
 class ShipWorkflowTests(GitOpsScriptTestCase):
-    def test_ship_raw_syncs_commits_and_pushes(self):
+    def test_ship_raw_agent_orchestration_completes_after_apply(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             work = Path(temp_dir) / "work"
             clone = Path(temp_dir) / "clone"
+            plan_path = Path(temp_dir) / "agent-plan.json"
 
             run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
             work.mkdir()
@@ -306,12 +318,73 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["mode"], "raw")
             self.assertTrue(payload["continued"])
+            self.assertFalse(payload["completed"])
+            self.assertTrue(payload["agent_handoff_required"])
+            self.assertEqual(payload["agent_handoff_kind"], "commit-apply")
             stages = {item["stage"]: item for item in payload["results"]}
-            self.assertIn("batch_commit", stages)
-            self.assertIn("push", stages)
+            self.assertIn("scope", stages)
+            self.assertIn("batch_plan", stages)
+            self.assertIn("agent_handoff", stages)
+            self.assertNotIn("batch_commit", stages)
+            self.assertNotIn("push", stages)
+            self.assertEqual(stages["batch_plan"]["details"]["status"], "planned")
+            self.assertEqual(stages["batch_plan"]["details"]["repos"][0]["changed_paths"], ["README.md"])
+            self.assertFalse(stages["agent_handoff"]["details"]["user_prompt_required"])
+            self.assertEqual(
+                run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
+                run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.strip(),
+            )
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "commits": [
+                            {
+                                "repo": str(clone),
+                                "type": "docs",
+                                "subject": "update gitops workflow guidance",
+                                "bullets": [
+                                    "switch commit batching defaults to agent-authored plans",
+                                    "keep raw workflows internal-handoff driven instead of deterministic by default",
+                                ],
+                                "paths": ["README.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            apply_proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "apply", "--plan", str(plan_path), "--mode", "raw", "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(apply_proc.returncode, 0, apply_proc.stdout + apply_proc.stderr)
+
+            final_proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=clone,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(final_proc.returncode, 0, final_proc.stdout + final_proc.stderr)
+            final_payload = json.loads(final_proc.stdout)
+            self.assertTrue(final_payload["continued"])
+            self.assertTrue(final_payload["completed"])
+            self.assertFalse(final_payload["agent_handoff_required"])
+            final_stages = {item["stage"]: item for item in final_payload["results"]}
+            self.assertIn("sync", final_stages)
+            self.assertNotIn("push", final_stages)
+            self.assertEqual(final_stages["sync"]["status"], "ok")
+            self.assertEqual(final_stages["sync"]["details"]["status"], "pushed")
+            self.assertEqual(final_stages["sync"]["details"]["push_action"], "push")
+            self.assertTrue(final_stages["sync"]["details"]["push_verified"])
+            self.assertNotIn("batch_plan", final_stages)
             commit_body = run(["git", "log", "-1", "--pretty=%B"], cwd=clone).stdout
-            self.assertIn("docs: update documentation", commit_body)
-            self.assertIn("- refresh the documented workflow", commit_body)
+            self.assertIn("docs: update gitops workflow guidance", commit_body)
+            self.assertIn("- switch commit batching defaults to agent-authored plans", commit_body)
             self.assertEqual(
                 run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
@@ -349,10 +422,14 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             pr_items = [item for item in payload["results"] if item["stage"] == "pr"]
+            push_items = [item for item in payload["results"] if item["stage"] == "push"]
             readiness_items = [item for item in payload["results"] if item["stage"] == "readiness"]
             self.assertEqual(len(pr_items), 1)
+            self.assertEqual(len(push_items), 1)
             self.assertEqual(len(readiness_items), 1)
             self.assertIn("existing PR #7", pr_items[0]["note"])
+            self.assertIn("details", push_items[0])
+            self.assertFalse(push_items[0]["details"]["manual_bypass_available"])
             self.assertEqual(readiness_items[0]["status"], "ok")
             self.assertEqual(readiness_items[0]["details"]["readiness"]["status"], "ready")
             calls = log_file.read_text(encoding="utf-8")
@@ -401,10 +478,12 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(payload["stop"], "sync")
             self.assertTrue(payload["continued"])
             stages = payload["results"]
-            self.assertEqual([item["stage"] for item in stages], ["preflight", "sync"])
+            self.assertEqual([item["stage"] for item in stages], ["preflight", "scope", "sync"])
             self.assertEqual(stages[1]["status"], "ok")
-            self.assertEqual(stages[1]["details"]["status"], "synced-with-fallback")
-            self.assertEqual(stages[1]["details"]["restore_action"], "snapshot-fallback")
+            self.assertTrue(stages[1]["details"]["requires_agent_confirmation"] is False)
+            self.assertEqual(stages[2]["status"], "ok")
+            self.assertEqual(stages[2]["details"]["status"], "synced-with-fallback")
+            self.assertEqual(stages[2]["details"]["restore_action"], "snapshot-fallback")
             self.assertEqual(
                 run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone).stdout.strip(),
                 "main",
@@ -460,7 +539,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(payload["results"][0]["status"], "pushed")
             self.assertIn("hook: push progress visible", proc.stderr)
 
-    def test_ship_raw_interrupt_during_push_persists_resumeable_checkpoint(self):
+    def test_ship_raw_default_does_not_start_pre_push_hook_before_agent_plan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             repo = Path(temp_dir) / "repo"
@@ -495,47 +574,24 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             )
             hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
 
-            proc = subprocess.Popen(
+            proc = run(
                 ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
-                cwd=str(repo),
+                cwd=repo,
                 env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-            deadline = time.monotonic() + 15
-            while not marker.exists() and time.monotonic() < deadline:
-                time.sleep(0.1)
-            self.assertTrue(marker.exists(), "pre-push hook did not start")
-            os.killpg(proc.pid, signal.SIGTERM)
-            stdout, stderr = proc.communicate(timeout=15)
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertEqual(stdout, "")
-            self.assertIn("hook: waiting for termination", stderr)
-
-            state_path = raw_ship_state_path(repo)
-            self.assertTrue(state_path.exists())
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertTrue(state["push_started"])
-            self.assertFalse(state["push_completed"])
-            self.assertFalse(state["push_succeeded"])
-            self.assertTrue(state["resume_eligible"])
-            self.assertEqual(state["last_error_summary"], "push interrupted before completion")
-
-            repo_state_proc = run(
-                ["bash", str(SCRIPTS_DIR / "repo-state.sh"), "--repo", str(repo), "--json"],
-                cwd=ROOT,
                 check=False,
             )
-            self.assertEqual(repo_state_proc.returncode, 0, repo_state_proc.stdout + repo_state_proc.stderr)
-            repo_state = json.loads(repo_state_proc.stdout)
-            item = repo_state["results"][0]
-            self.assertEqual(item["raw_ship_state"], "resume-eligible")
-            self.assertEqual(item["raw_ship_last_error_summary"], "push interrupted before completion")
-            self.assertEqual(item["raw_ship_next_action"], "rerun 'ship raw' to resume the pending push")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertTrue(payload["continued"])
+            self.assertFalse(payload["completed"])
+            self.assertTrue(payload["agent_handoff_required"])
+            self.assertFalse(marker.exists(), "pre-push hook should not run before the agent applies the commit plan")
+            stages = {item["stage"]: item for item in payload["results"]}
+            self.assertIn("batch_plan", stages)
+            self.assertIn("agent_handoff", stages)
+            self.assertNotIn("batch_commit", stages)
 
-    def test_ship_raw_defers_sync_publish_until_final_push(self):
+    def test_ship_raw_fallback_deterministic_publishes_after_opt_in(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             work = Path(temp_dir) / "work"
@@ -557,6 +613,8 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             run(["git", "config", "user.email", "test@example.com"], cwd=clone)
             run(["git", "config", "commit.gpgsign", "false"], cwd=clone)
             run(["git", "config", "tag.gpgsign", "false"], cwd=clone)
+            run(["git", "checkout", "-b", "feat/raw"], cwd=clone)
+            run(["git", "push", "-u", "origin", "feat/raw"], cwd=clone)
             (clone / "existing.txt").write_text("ahead\n", encoding="utf-8")
             run(["git", "add", "existing.txt"], cwd=clone)
             run(["git", "commit", "-m", "feat: existing ahead commit"], cwd=clone)
@@ -579,23 +637,25 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
 
             proc = run(
-                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--fallback-deterministic", "--json"],
                 cwd=clone,
                 env=env,
                 check=False,
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
-            stages = {item["stage"]: item for item in payload["results"]}
-            self.assertEqual(stages["sync"]["details"]["push_action"], "deferred")
-            self.assertTrue(stages["push"]["details"]["push_succeeded"])
+            self.assertTrue(payload["continued"])
+            self.assertIn("batch_commit", {item["stage"] for item in payload["results"]})
+            sync_items = [item for item in payload["results"] if item["stage"] == "sync"]
+            self.assertEqual(sync_items[0]["details"]["push_action"], "deferred")
+            self.assertIn(sync_items[-1]["details"]["status"], {"published", "rebased-and-pushed", "pulled-and-pushed", "pushed"})
             self.assertEqual(hook_log.read_text(encoding="utf-8").splitlines(), ["hook"])
             self.assertEqual(
                 run(["git", "rev-parse", "HEAD"], cwd=clone).stdout.strip(),
-                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/feat/raw"], cwd=Path(temp_dir)).stdout.strip(),
             )
 
-    def test_ship_raw_reports_pr_readiness_snapshot_when_pr_exists(self):
+    def test_ship_raw_stops_before_pr_readiness_when_dirty_work_needs_agent_plan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             repo = Path(temp_dir) / "repo"
@@ -626,16 +686,17 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
+            self.assertTrue(payload["continued"])
+            self.assertFalse(payload["completed"])
+            self.assertTrue(payload["agent_handoff_required"])
             stages = {item["stage"]: item for item in payload["results"]}
-            self.assertIn("pr", stages)
-            self.assertIn("readiness", stages)
-            self.assertEqual(stages["readiness"]["status"], "ok")
-            self.assertEqual(stages["readiness"]["details"]["pr"]["head_branch"], "feat/existing")
-            calls = log_file.read_text(encoding="utf-8")
-            self.assertIn("pr checks 7 --required --json", calls)
-            self.assertNotIn("pr create", calls)
+            self.assertIn("batch_plan", stages)
+            self.assertIn("agent_handoff", stages)
+            self.assertNotIn("pr", stages)
+            self.assertNotIn("readiness", stages)
+            self.assertFalse(log_file.exists())
 
-    def test_ship_raw_surfaces_unsigned_retry_helper_after_commit_signing_failure(self):
+    def test_ship_raw_fallback_surfaces_unsigned_retry_helper_after_commit_signing_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             repo = Path(temp_dir) / "repo"
@@ -650,6 +711,8 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             run(["git", "add", "README.md"], cwd=repo)
             run(["git", "commit", "-m", "chore: base"], cwd=repo)
             run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            run(["git", "checkout", "-b", "feat/raw"], cwd=repo)
+            run(["git", "push", "-u", "origin", "feat/raw"], cwd=repo)
             (repo / "README.md").write_text("base\nraw\n", encoding="utf-8")
 
             fake_bin = Path(temp_dir) / "bin"
@@ -662,7 +725,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
 
             proc = run(
-                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--fallback-deterministic", "--json"],
                 cwd=repo,
                 env=env,
                 check=False,
@@ -676,11 +739,11 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertTrue(stages["batch_commit"]["details"]["unsigned_retry_available"])
             self.assertFalse(stages["batch_commit"]["details"]["unsigned_retry_enabled"])
             self.assertIn("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1", stages["batch_commit"]["details"]["helper_text"])
-            self.assertNotIn("push", stages)
+            self.assertNotIn("pr", stages)
             log_lines = log_file.read_text(encoding="utf-8").splitlines()
             self.assertEqual(sum('"commit"' in line and '"--only"' in line for line in log_lines), 1)
 
-    def test_ship_raw_blocks_when_push_reports_success_but_remote_head_does_not_move(self):
+    def test_ship_raw_fallback_blocks_when_publish_verification_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             repo = Path(temp_dir) / "repo"
@@ -694,6 +757,8 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             run(["git", "add", "README.md"], cwd=repo)
             run(["git", "commit", "-m", "chore: base"], cwd=repo)
             run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            run(["git", "checkout", "-b", "feat/raw"], cwd=repo)
+            run(["git", "push", "-u", "origin", "feat/raw"], cwd=repo)
             (repo / "README.md").write_text("base\nraw\n", encoding="utf-8")
 
             fake_bin = Path(temp_dir) / "bin"
@@ -706,7 +771,7 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
 
             proc = run(
-                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--fallback-deterministic", "--json"],
                 cwd=repo,
                 env=env,
                 check=False,
@@ -714,21 +779,62 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertFalse(payload["continued"])
-            stages = {item["stage"]: item for item in payload["results"]}
-            self.assertEqual(stages["push"]["status"], "blocked")
-            self.assertFalse(stages["push"]["details"]["push_succeeded"])
-            self.assertFalse(stages["push"]["details"]["push_verified"])
-            self.assertEqual(stages["push"]["details"]["push_verification_transport_used"], "other")
-            self.assertIn("instead of local HEAD", stages["push"]["details"]["push_verification_note"])
-            self.assertFalse(stages["push"]["details"]["manual_bypass_available"])
-            self.assertTrue(stages["push"]["details"]["resume_eligible"])
-            self.assertTrue(raw_ship_state_path(repo).exists())
+            sync_items = [item for item in payload["results"] if item["stage"] == "sync"]
+            self.assertEqual(sync_items[-1]["status"], "blocked")
+            self.assertFalse(sync_items[-1]["details"]["push_verified"])
+            self.assertEqual(sync_items[-1]["details"]["push_verification_transport_used"], "other")
+            self.assertIn("instead of local HEAD", sync_items[-1]["details"]["push_verification_note"])
+            self.assertFalse(sync_items[-1]["details"]["manual_bypass_available"])
             self.assertEqual(
-                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
-                run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=repo).stdout.strip(),
+                run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/feat/raw"], cwd=Path(temp_dir)).stdout.strip(),
+                run(["git", "rev-parse", "refs/remotes/origin/feat/raw"], cwd=repo).stdout.strip(),
             )
 
-    def test_ship_raw_resumes_pending_checkpoint_and_clears_it_after_push(self):
+    def test_ship_raw_fallback_surfaces_manual_bypass_when_publish_logs_ssh_auth_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            repo = Path(temp_dir) / "repo"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            repo.mkdir()
+            self.init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            run(["git", "checkout", "-b", "feat/raw"], cwd=repo)
+            run(["git", "push", "-u", "origin", "feat/raw"], cwd=repo)
+            run(["git", "remote", "set-url", "--push", "origin", "git@github.com:example/example.git"], cwd=repo)
+            (repo / "README.md").write_text("base\nraw\n", encoding="utf-8")
+
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            self.write_fake_git_push_success_with_auth_error_without_remote_update(fake_bin)
+            fake_gitleaks = self.write_fake_gitleaks(fake_bin)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--fallback-deterministic", "--json"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            sync_items = [item for item in payload["results"] if item["stage"] == "sync"]
+            self.assertEqual(sync_items[-1]["status"], "blocked")
+            self.assertTrue(sync_items[-1]["details"]["manual_bypass_available"])
+            self.assertEqual(sync_items[-1]["details"]["manual_bypass_reason"], "ssh-auth-unavailable")
+            self.assertEqual(sync_items[-1]["details"]["manual_bypass_transport"], "https")
+            self.assertTrue(sync_items[-1]["details"]["manual_bypass_skips_hooks"])
+            self.assertIn("push --no-verify", sync_items[-1]["details"]["manual_bypass_command"])
+
+    def test_ship_raw_pushes_existing_local_commit_when_repo_is_already_clean(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             origin = Path(temp_dir) / "origin.git"
             repo = Path(temp_dir) / "repo"
@@ -749,30 +855,6 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
                 cwd=repo,
             )
             head = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
-            state_path = raw_ship_state_path(repo)
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_text(
-                json.dumps(
-                    {
-                        "mode": "raw",
-                        "repo": str(repo.resolve()),
-                        "branch": "main",
-                        "head_before": head,
-                        "head_after": head,
-                        "sync_status": "up-to-date",
-                        "batch_commit_status": "created",
-                        "local_commit_created": True,
-                        "local_commit_sha": head,
-                        "push_started": True,
-                        "push_completed": True,
-                        "push_succeeded": False,
-                        "resume_eligible": True,
-                        "last_error_summary": "timed out before push completed",
-                        "updated_at": "2026-04-12T00:00:00Z",
-                    }
-                ),
-                encoding="utf-8",
-            )
 
             proc = run(
                 ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
@@ -781,13 +863,11 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
+            self.assertTrue(payload["continued"])
             stages = {item["stage"]: item for item in payload["results"]}
-            self.assertEqual(stages["sync"]["note"], "resumed prior raw ship checkpoint; skipped raw sync")
-            self.assertIn("reused local Conventional Commit batch", stages["batch_commit"]["note"])
-            self.assertTrue(stages["push"]["details"]["resumed"])
-            self.assertTrue(stages["push"]["details"]["push_succeeded"])
-            self.assertFalse(stages["push"]["details"]["resume_eligible"])
-            self.assertFalse(state_path.exists())
+            self.assertNotIn("batch_plan", stages)
+            self.assertNotIn("batch_commit", stages)
+            self.assertNotIn("next_action", stages)
             self.assertEqual(
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=Path(temp_dir)).stdout.strip(),
                 head,

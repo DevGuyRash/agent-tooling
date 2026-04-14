@@ -179,6 +179,17 @@ class BatchCommitSigningTests(unittest.TestCase):
         run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
         run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
 
+    def _write_fake_gitleaks(self, bin_dir: Path) -> Path:
+        fake = bin_dir / "gitleaks"
+        fake.write_text(
+            "#!/usr/bin/env sh\n"
+            "set -eu\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        return fake
+
     def _write_commit_signing_wrapper(self, temp_dir: Path, log_file: Path) -> Path:
         real_git = shutil.which("git")
         self.assertIsNotNone(real_git)
@@ -207,7 +218,7 @@ class BatchCommitSigningTests(unittest.TestCase):
             self._write_commit_signing_wrapper(fake_bin, log_file)
 
             proc = run(
-                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "--repo", str(repo), "--json"],
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "fallback", "--repo", str(repo), "--json"],
                 cwd=ROOT,
                 env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
                 check=False,
@@ -243,7 +254,7 @@ class BatchCommitSigningTests(unittest.TestCase):
 
             env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY": "1"}
             proc = run(
-                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "--repo", str(repo), "--json"],
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "fallback", "--repo", str(repo), "--json"],
                 cwd=ROOT,
                 env=env,
                 check=False,
@@ -258,6 +269,121 @@ class BatchCommitSigningTests(unittest.TestCase):
             log_lines = log_file.read_text(encoding="utf-8").splitlines()
             self.assertEqual(sum('"commit"' in line and '"--only"' in line for line in log_lines), 2)
             self.assertTrue(any("commit.gpgsign=false" in line for line in log_lines))
+
+
+class BatchCommitPlanApplyTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
+
+    def _write_fake_gitleaks(self, bin_dir: Path) -> Path:
+        fake = bin_dir / "gitleaks"
+        fake.write_text(
+            "#!/usr/bin/env sh\n"
+            "set -eu\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        return fake
+
+    def test_batch_commit_plan_returns_inventory_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            (repo / "README.md").write_text("base\nplanned\n", encoding="utf-8")
+
+            proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "plan", "--repo", str(repo), "--mode", "raw", "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "planned")
+            self.assertEqual(payload["mode"], "raw")
+            self.assertEqual(payload["repos"][0]["changed_paths"], ["README.md"])
+            self.assertTrue(payload["repos"][0]["safe_to_commit"])
+
+    def test_batch_commit_without_subcommand_defaults_to_plan(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir) / "repo"
+            repo.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            (repo / "README.md").write_text("base\nplanned\n", encoding="utf-8")
+
+            proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "planned")
+            self.assertIn("repos", payload)
+
+    def test_batch_commit_apply_uses_agent_authored_commit_plan(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            fake_bin = temp_path / "bin"
+            plan_path = temp_path / "plan.json"
+            repo.mkdir()
+            fake_bin.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "checkout", "-b", "feat/agent-plan"], cwd=repo)
+            (repo / "README.md").write_text("base\nplanned\n", encoding="utf-8")
+            fake_gitleaks = self._write_fake_gitleaks(fake_bin)
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "commits": [
+                            {
+                                "repo": str(repo),
+                                "type": "docs",
+                                "subject": "update readme workflow notes",
+                                "bullets": [
+                                    "document the new plan-first raw ship behavior",
+                                    "keep commit bodies mandatory for agent-authored commits",
+                                ],
+                                "paths": ["README.md"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "apply", "--plan", str(plan_path), "--mode", "raw", "--json"],
+                cwd=ROOT,
+                env={**os.environ, "GITLEAKS_BIN": str(fake_gitleaks), "SENSITIVE_SCAN_DISABLE_UPDATE": "1"},
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "committed")
+            self.assertEqual(len(payload["commits"]), 1)
+            body = run(["git", "log", "-1", "--pretty=%B"], cwd=repo).stdout
+            self.assertIn("docs: update readme workflow notes", body)
+            self.assertIn("- document the new plan-first raw ship behavior", body)
 
 
 class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
@@ -1132,6 +1258,17 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
         return wrapper
 
+    def _write_push_success_with_auth_error_without_remote_update_wrapper(self, temp_dir: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        wrapper = Path(temp_dir) / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nargs = sys.argv[1:]\nif "push" in args and "--dry-run" not in args:\n    sys.stderr.write("sign_and_send_pubkey: signing failed for RSA \\"/home/test/.ssh/id_rsa\\" from agent: agent refused operation\\n")\n    sys.stderr.write("git@github.com: Permission denied (publickey).\\n")\n    sys.stderr.write("fatal: Could not read from remote repository.\\n")\n    raise SystemExit(0)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git),
+            encoding="utf-8",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        return wrapper
+
     def test_sync_raw_blocks_dirty_checkout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir) / "repo"
@@ -1472,6 +1609,49 @@ class SyncAndReconcileScriptTests(unittest.TestCase):
                 run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], cwd=temp_path).stdout.strip(),
                 run(["git", "rev-parse", "refs/remotes/origin/main"], cwd=clone).stdout.strip(),
             )
+
+    def test_sync_raw_surfaces_manual_bypass_when_nominal_push_logs_ssh_auth_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            origin = temp_path / "origin.git"
+            work = temp_path / "work"
+            clone = temp_path / "clone"
+
+            run(["git", "init", "--bare", str(origin)], cwd=temp_path)
+            work.mkdir()
+            self._init_repo(work)
+            run(["git", "checkout", "-b", "main"], cwd=work)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=work)
+            (work / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=work)
+            run(["git", "commit", "-m", "chore: base"], cwd=work)
+            run(["git", "push", "-u", "origin", "main"], cwd=work)
+
+            self._clone_with_identity(origin, clone, temp_path)
+            run(["git", "remote", "set-url", "--push", "origin", "git@github.com:example/example.git"], cwd=clone)
+            (clone / "README.md").write_text("base\nlocal\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=clone)
+            run(["git", "commit", "-m", "feat: local advance"], cwd=clone)
+
+            self._write_push_success_with_auth_error_without_remote_update_wrapper(temp_path)
+            env = os.environ.copy()
+            env["PATH"] = f"{temp_path}:{env['PATH']}"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "sync-raw.sh"), "--repo", str(clone), "--no-recurse-related", "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            result = payload["results"][0]
+            self.assertEqual(result["status"], "blocked-push")
+            self.assertTrue(result["manual_bypass_available"])
+            self.assertEqual(result["manual_bypass_reason"], "ssh-auth-unavailable")
+            self.assertEqual(result["manual_bypass_transport"], "https")
+            self.assertTrue(result["manual_bypass_skips_hooks"])
+            self.assertIn("push --no-verify", result["manual_bypass_command"])
 
     def test_sync_raw_merge_strategy_merges_diverged_branch_and_pushes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3450,6 +3630,7 @@ class GitOpsHelpScriptTests(unittest.TestCase):
         self.assertIn("sync raw", text)
         self.assertIn("doctor fix", text)
         self.assertIn("start work", text)
+        self.assertIn("manual_bypass_*", text)
 
     def test_json_help_returns_stable_catalog(self):
         proc = run(["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--json"], cwd=ROOT, check=False)
@@ -3457,6 +3638,8 @@ class GitOpsHelpScriptTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["topic"], "all")
         self.assertGreater(len(payload["entries"]), 5)
+        self.assertIn("notes", payload)
+        self.assertTrue(any(note["id"] == "manual-push-bypass" for note in payload["notes"]))
         item = next(entry for entry in payload["entries"] if entry["id"] == "ship-raw")
         self.assertEqual(item["topic"], "ship")
         self.assertIn("ship raw", item["phrases"])
@@ -3465,6 +3648,7 @@ class GitOpsHelpScriptTests(unittest.TestCase):
         self.assertIn("details_source", item)
         self.assertTrue(item["supports_json"])
         self.assertTrue(item["stays_on_current_branch"])
+        self.assertIn("bypass guidance", item["summary"])
 
     def test_topic_help_limits_output(self):
         proc = run(["bash", str(SCRIPTS_DIR / "gitops-help.sh"), "--topic", "ship"], cwd=ROOT, check=False)
@@ -3485,6 +3669,7 @@ class GitOpsHelpScriptTests(unittest.TestCase):
         self.assertIn("== ship.sh ==", text)
         self.assertIn("Usage:", text)
         self.assertIn("ship raw", text)
+        self.assertIn("manual_bypass_*", text)
 
     def test_invalid_topic_fails_cleanly(self):
         proc = run(
