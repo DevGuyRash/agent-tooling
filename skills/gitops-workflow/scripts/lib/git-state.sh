@@ -255,6 +255,12 @@ gitops_noninteractive_ssh_command() {
   if [[ "$ssh_cmd" != *BatchMode=yes* ]]; then
     ssh_cmd="$ssh_cmd -oBatchMode=yes"
   fi
+  if [[ "$ssh_cmd" != *ConnectTimeout=* ]]; then
+    ssh_cmd="$ssh_cmd -oConnectTimeout=${GITOPS_SSH_CONNECT_TIMEOUT_SECONDS:-20}"
+  fi
+  if [[ "$ssh_cmd" != *ConnectionAttempts=* ]]; then
+    ssh_cmd="$ssh_cmd -oConnectionAttempts=${GITOPS_SSH_CONNECTION_ATTEMPTS:-1}"
+  fi
   printf '%s\n' "$ssh_cmd"
 }
 

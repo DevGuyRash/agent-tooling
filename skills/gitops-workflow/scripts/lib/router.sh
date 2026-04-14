@@ -49,6 +49,15 @@ reset_gitops_remote_read_state() {
   GITOPS_REMOTE_READ_REMOTE_URL=""
 }
 
+reset_gitops_push_verify_state() {
+  GITOPS_PUSH_VERIFY_MATCHED="false"
+  GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID=""
+  GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID=""
+  GITOPS_PUSH_VERIFY_NOTE=""
+  GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS=""
+  GITOPS_PUSH_VERIFY_TRANSPORT_USED=""
+}
+
 gitops_remote_url_kind() {
   local remote_url="$1"
   case "$remote_url" in
@@ -140,6 +149,9 @@ gitops_run_git_read_capture() {
   if [[ -n "$override_url" && "$#" -ge 2 && "$1" == "fetch" && "$2" == "origin" ]]; then
     shift 2
     read_args=(fetch "$@" "$override_url" "+refs/heads/*:refs/remotes/origin/*")
+  elif [[ -n "$override_url" && "$#" -ge 2 && "$1" == "ls-remote" && "$2" == "origin" ]]; then
+    shift 2
+    read_args=(ls-remote "$override_url" "$@")
   else
     read_args=("$@")
   fi
@@ -268,6 +280,63 @@ gitops_fetch_prune_repo() {
   GITOPS_FETCH_TRANSPORT_USED="$GITOPS_REMOTE_READ_TRANSPORT_USED"
   GITOPS_FETCH_FALLBACK_REASON="$GITOPS_REMOTE_READ_FALLBACK_REASON"
   GITOPS_FETCH_REMOTE_URL_KIND="$GITOPS_REMOTE_READ_REMOTE_URL_KIND"
+  return 0
+}
+
+gitops_verify_remote_branch_matches_local_head() {
+  local repo="$1"
+  local branch="$2"
+  local local_head_oid="${3:-}"
+  local timeout_seconds="${4:-${GITOPS_PUSH_VERIFY_TIMEOUT_SECONDS:-20}}"
+  local remote_oid=""
+  local ref_name="refs/heads/$branch"
+
+  reset_gitops_push_verify_state
+  GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID="$local_head_oid"
+
+  if [[ -z "$local_head_oid" ]]; then
+    GITOPS_PUSH_VERIFY_NOTE="local HEAD OID is unavailable for push verification"
+    return 1
+  fi
+
+  if ! gitops_run_origin_read_command "$repo" "$timeout_seconds" ls-remote origin "refs/heads/$branch"; then
+    GITOPS_PUSH_VERIFY_NOTE="${GITOPS_REMOTE_READ_OUTPUT:-failed to verify remote branch after push}"
+    GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS="${GITOPS_REMOTE_READ_TRANSPORT_ATTEMPTS:-}"
+    GITOPS_PUSH_VERIFY_TRANSPORT_USED="${GITOPS_REMOTE_READ_TRANSPORT_USED:-}"
+    return 1
+  fi
+
+  remote_oid="$(python3 - "$ref_name" "$GITOPS_REMOTE_READ_OUTPUT" <<'PY'
+import re
+import sys
+
+ref_name = sys.argv[1]
+tokens = sys.argv[2].split()
+for index, token in enumerate(tokens):
+    if token != ref_name or index == 0:
+        continue
+    candidate = tokens[index - 1]
+    if re.fullmatch(r"[0-9a-fA-F]{40,}", candidate):
+        print(candidate)
+        break
+PY
+)"
+  GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID="$remote_oid"
+  GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS="${GITOPS_REMOTE_READ_TRANSPORT_ATTEMPTS:-}"
+  GITOPS_PUSH_VERIFY_TRANSPORT_USED="${GITOPS_REMOTE_READ_TRANSPORT_USED:-}"
+
+  if [[ -z "$remote_oid" ]]; then
+    GITOPS_PUSH_VERIFY_NOTE="remote branch '$branch' was not visible after push"
+    return 1
+  fi
+
+  if [[ "$remote_oid" != "$local_head_oid" ]]; then
+    GITOPS_PUSH_VERIFY_NOTE="remote branch '$branch' resolved to '$remote_oid' instead of local HEAD '$local_head_oid'"
+    return 1
+  fi
+
+  GITOPS_PUSH_VERIFY_MATCHED="true"
+  GITOPS_PUSH_VERIFY_NOTE="remote branch '$branch' matches local HEAD '$local_head_oid'"
   return 0
 }
 

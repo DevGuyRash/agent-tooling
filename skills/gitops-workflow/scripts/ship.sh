@@ -415,6 +415,7 @@ reset_push_result() {
   GITOPS_PUSH_LEVEL="ok"
   GITOPS_PUSH_NOTE=""
   GITOPS_PUSH_ACTION="noop"
+  reset_gitops_push_verify_state
 }
 
 push_current_branch() {
@@ -422,22 +423,37 @@ push_current_branch() {
   local branch="$2"
   local out_file=""
   local err_text=""
+  local local_head_oid=""
 
   reset_push_result
   out_file="$(mktemp)"
   if [[ -z "$(current_upstream_ref "$repo")" ]] && repo_has_origin "$repo"; then
     GITOPS_PUSH_ACTION="push-set-upstream"
     if gitops_run_noninteractive_logged "$repo" "$out_file" push -u origin "$branch"; then
-      GITOPS_PUSH_NOTE="pushed branch '$branch' and set upstream"
+      local_head_oid="$(repo_head_oid "$repo")"
+      if gitops_verify_remote_branch_matches_local_head "$repo" "$branch" "$local_head_oid"; then
+        GITOPS_PUSH_NOTE="pushed branch '$branch' and set upstream"
+        rm -f "$out_file"
+        return 0
+      fi
+      GITOPS_PUSH_LEVEL="blocked"
+      GITOPS_PUSH_NOTE="${GITOPS_PUSH_VERIFY_NOTE:-failed to verify remote branch after push}"
       rm -f "$out_file"
-      return 0
+      return 1
     fi
   else
     GITOPS_PUSH_ACTION="push"
     if gitops_run_noninteractive_logged "$repo" "$out_file" push; then
-      GITOPS_PUSH_NOTE="pushed branch '$branch'"
+      local_head_oid="$(repo_head_oid "$repo")"
+      if gitops_verify_remote_branch_matches_local_head "$repo" "$branch" "$local_head_oid"; then
+        GITOPS_PUSH_NOTE="pushed branch '$branch'"
+        rm -f "$out_file"
+        return 0
+      fi
+      GITOPS_PUSH_LEVEL="blocked"
+      GITOPS_PUSH_NOTE="${GITOPS_PUSH_VERIFY_NOTE:-failed to verify remote branch after push}"
       rm -f "$out_file"
-      return 0
+      return 1
     fi
   fi
 
@@ -467,6 +483,12 @@ build_raw_push_details() {
   RAW_SHIP_LAST_ERROR_SUMMARY="$RAW_SHIP_LAST_ERROR_SUMMARY" \
   GITOPS_PUSH_ACTION="$GITOPS_PUSH_ACTION" \
   GITOPS_PUSH_INTERRUPTED="$GITOPS_PUSH_INTERRUPTED" \
+  GITOPS_PUSH_VERIFY_MATCHED="${GITOPS_PUSH_VERIFY_MATCHED:-false}" \
+  GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS="${GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS:-}" \
+  GITOPS_PUSH_VERIFY_TRANSPORT_USED="${GITOPS_PUSH_VERIFY_TRANSPORT_USED:-}" \
+  GITOPS_PUSH_VERIFY_NOTE="${GITOPS_PUSH_VERIFY_NOTE:-}" \
+  GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID="${GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID:-}" \
+  GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID="${GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID:-}" \
   NEXT_ACTION="$next_action" \
   python3 - <<'PY'
 import json
@@ -487,6 +509,12 @@ print(json.dumps({
     "last_error_summary": os.environ["RAW_SHIP_LAST_ERROR_SUMMARY"],
     "next_action": os.environ["NEXT_ACTION"],
     "push_action": os.environ["GITOPS_PUSH_ACTION"],
+    "push_verified": as_bool(os.environ["GITOPS_PUSH_VERIFY_MATCHED"]),
+    "push_verification_transport_attempts": [item for item in os.environ["GITOPS_PUSH_VERIFY_TRANSPORT_ATTEMPTS"].split(",") if item],
+    "push_verification_transport_used": os.environ["GITOPS_PUSH_VERIFY_TRANSPORT_USED"],
+    "push_verification_note": os.environ["GITOPS_PUSH_VERIFY_NOTE"],
+    "remote_head_oid": os.environ["GITOPS_PUSH_VERIFY_REMOTE_HEAD_OID"],
+    "local_head_oid": os.environ["GITOPS_PUSH_VERIFY_LOCAL_HEAD_OID"],
 }, separators=(",", ":")))
 PY
 }
