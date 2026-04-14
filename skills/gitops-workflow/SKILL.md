@@ -321,11 +321,13 @@ See:
 
 ### Commit signing
 
-WHEN committing, the agent SHOULD run `detect-signing.sh` to check whether signing is available:
+WHEN committing, the agent MAY run `detect-signing.sh` to diagnose whether signing is available:
 
 - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
 
-WHEN signing is configured but unavailable (exit code 1 — e.g., remote SSH session with no agent forwarding) THEN you SHALL commit with `--no-gpg-sign` and warn the user that commits are unsigned.
+WHEN a commit fails because signing is unavailable THEN you SHALL surface the workflow helper text that explains an unsigned retry exists and that the user can be asked whether to enable it.
+
+WHEN the user has explicitly enabled `GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1` THEN you MAY retry the failed commit once with `commit.gpgsign=false`.
 
 WHEN signing is not configured (exit code 2) THEN you SHALL commit normally without signing flags.
 
