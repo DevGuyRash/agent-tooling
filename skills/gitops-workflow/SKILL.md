@@ -86,6 +86,7 @@ Preferred short-path routing:
 - `commit and push raw` / `push raw` should route to `ship.sh raw --json`.
 - When `ship.sh` or `batch-commit.py plan` returns commit inventory, the agent is responsible for choosing the final commit groupings and writing Conventional Commit messages with mandatory bullet bodies.
 - Use JSON receipts from the scripts as the primary machine-readable status surface instead of adding more natural-language policy text.
+- WHEN a push-blocked receipt exposes `manual_bypass_*` helper fields THEN you SHALL explicitly tell the user that a bypass option exists, what it will do, and that it requires approval before use.
 - WHEN a push-blocked receipt exposes `manual_bypass_*` helper fields THEN you SHALL treat them as opt-in guidance only and ask the user before using the bypass command.
 
 ---
@@ -330,6 +331,7 @@ WHEN committing, the agent MAY run `detect-signing.sh` to diagnose whether signi
 
 - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
 
+WHEN a commit fails because signing is unavailable THEN you SHALL explicitly tell the user that an unsigned retry option exists, what it will do, and that it requires approval before use.
 WHEN a commit fails because signing is unavailable THEN you SHALL surface the workflow helper text that explains an unsigned retry exists and that the user can be asked whether to enable it.
 
 WHEN the user has explicitly enabled `GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1` THEN you MAY retry the failed commit once with `commit.gpgsign=false`.
@@ -555,8 +557,10 @@ WHEN the user says "commit and push" without "raw" THEN you SHALL follow the nor
 4. Create batched Conventional Commits with mandatory bullet-list bodies (per Playbook B).
 5. Check signing availability:
    - `bash "$SKILL_ROOT/scripts/detect-signing.sh"`
+   - WHEN commit signing fails and the batch-commit receipt exposes `unsigned_retry_available` THEN you SHALL explicitly tell the user that an unsigned retry option exists, what it will do, and that it requires approval before use.
    - WHEN commit signing fails and the batch-commit receipt exposes `unsigned_retry_available` THEN you SHALL surface the helper text and ask the user before enabling the unsigned retry path.
 6. Push to current branch: `git push`
+   - WHEN blocked push JSON exposes `manual_bypass_*` helper fields THEN you SHALL explicitly tell the user that a bypass option exists, what it will do, and that it requires approval before use.
    - Blocked push JSON may expose opt-in `manual_bypass_*` helper fields for a one-off HTTPS `--no-verify` publish path; ask before using it.
 7. Emit commit receipt:
    - `python3 "$SKILL_ROOT/scripts/receipt.py" --branch "$(git rev-parse --abbrev-ref HEAD)" --base <default-branch>`

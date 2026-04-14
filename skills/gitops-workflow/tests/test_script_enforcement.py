@@ -3617,6 +3617,9 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("reconcile-tree.sh", routing)
         self.assertIn("gitops-help.sh --json", skill)
         self.assertIn("gitops-help.sh", routing)
+        self.assertIn("explicitly tell the user that a bypass option exists", skill)
+        self.assertIn("requires approval before use", skill)
+        self.assertIn("explicitly tell the user that an unsigned retry option exists", skill)
 
 
 class GitOpsHelpScriptTests(unittest.TestCase):
