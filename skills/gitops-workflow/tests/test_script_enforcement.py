@@ -95,6 +95,95 @@ class PushTransportHelperTests(unittest.TestCase):
         self.assertIn("-oConnectionAttempts=1", proc.stdout)
 
 
+class BatchCommitSigningTests(unittest.TestCase):
+    def _init_repo(self, repo: Path):
+        run(["git", "init"], cwd=repo)
+        run(["git", "config", "user.name", "Test User"], cwd=repo)
+        run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+        run(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+        run(["git", "config", "tag.gpgsign", "false"], cwd=repo)
+
+    def _write_commit_signing_wrapper(self, temp_dir: Path, log_file: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        wrapper = temp_dir / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env python3\nimport json\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nLOG_FILE = {log_file!r}\nargs = sys.argv[1:]\nwith open(LOG_FILE, "a", encoding="utf-8") as handle:\n    handle.write(json.dumps(args) + "\\n")\nif "commit" in args and "--only" in args:\n    if "commit.gpgsign=false" in args:\n        os.execv(REAL_GIT, [REAL_GIT, *args])\n    sys.stderr.write("error: gpg failed to sign the data\\nfatal: failed to write commit object\\n")\n    raise SystemExit(1)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git, log_file=str(log_file)),
+            encoding="utf-8",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        return wrapper
+
+    def test_batch_commit_reports_signing_failure_with_helper_when_unsigned_retry_disabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            fake_bin = temp_path / "bin"
+            log_file = temp_path / "git.log"
+            repo.mkdir()
+            fake_bin.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            (repo / "README.md").write_text("base\nupdated\n", encoding="utf-8")
+            self._write_commit_signing_wrapper(fake_bin, log_file)
+
+            proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["failure_class"], "commit-signing-unavailable")
+            self.assertTrue(payload["unsigned_retry_available"])
+            self.assertFalse(payload["unsigned_retry_enabled"])
+            self.assertFalse(payload["unsigned_retry_used"])
+            self.assertIn("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1", payload["helper_text"])
+            self.assertEqual(payload["commits"], [])
+            log_lines = log_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum('"commit"' in line and '"--only"' in line for line in log_lines), 1)
+            self.assertFalse(any("commit.gpgsign=false" in line for line in log_lines))
+
+    def test_batch_commit_retries_once_unsigned_when_enabled_after_signing_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo = temp_path / "repo"
+            fake_bin = temp_path / "bin"
+            log_file = temp_path / "git.log"
+            repo.mkdir()
+            fake_bin.mkdir()
+            self._init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            (repo / "README.md").write_text("base\nupdated\n", encoding="utf-8")
+            self._write_commit_signing_wrapper(fake_bin, log_file)
+
+            env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY": "1"}
+            proc = run(
+                ["python3", str(SCRIPTS_DIR / "batch-commit.py"), "--repo", str(repo), "--json"],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "committed")
+            self.assertTrue(payload["signing_disabled"])
+            self.assertTrue(payload["unsigned_retry_enabled"])
+            self.assertTrue(payload["unsigned_retry_used"])
+            self.assertEqual(len(payload["commits"]), 1)
+            log_lines = log_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum('"commit"' in line and '"--only"' in line for line in log_lines), 2)
+            self.assertTrue(any("commit.gpgsign=false" in line for line in log_lines))
+
+
 class SensitiveScanWorkflowSafetyTests(unittest.TestCase):
     def test_workflow_extracts_gitleaks_in_temp_dir_without_repo_cleanup(self):
         workflow = (ROOT / "assets" / "github" / "workflows" / "sensitive-scan.yml").read_text(encoding="utf-8")

@@ -68,6 +68,17 @@ class GitOpsScriptTestCase(unittest.TestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         return fake
 
+    def write_fake_git_commit_signing_failure(self, bin_dir: Path, log_file: Path) -> Path:
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        fake = bin_dir / "git"
+        fake.write_text(
+            '#!/usr/bin/env python3\nimport json\nimport os\nimport sys\n\nREAL_GIT = {real_git!r}\nLOG_FILE = {log_file!r}\nargs = sys.argv[1:]\nwith open(LOG_FILE, "a", encoding="utf-8") as handle:\n    handle.write(json.dumps(args) + "\\n")\nif "commit" in args and "--only" in args:\n    if "commit.gpgsign=false" in args:\n        os.execv(REAL_GIT, [REAL_GIT, *args])\n    sys.stderr.write("error: gpg failed to sign the data\\nfatal: failed to write commit object\\n")\n    raise SystemExit(1)\nos.execv(REAL_GIT, [REAL_GIT, *args])\n'.format(real_git=real_git, log_file=str(log_file)),
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        return fake
+
     def write_fake_gh(self, bin_dir: Path) -> Path:
         fake = bin_dir / "gh"
         fake.write_text(
@@ -623,6 +634,51 @@ class ShipWorkflowTests(GitOpsScriptTestCase):
             calls = log_file.read_text(encoding="utf-8")
             self.assertIn("pr checks 7 --required --json", calls)
             self.assertNotIn("pr create", calls)
+
+    def test_ship_raw_surfaces_unsigned_retry_helper_after_commit_signing_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            origin = Path(temp_dir) / "origin.git"
+            repo = Path(temp_dir) / "repo"
+            log_file = Path(temp_dir) / "git.log"
+
+            run(["git", "init", "--bare", str(origin)], cwd=Path(temp_dir))
+            repo.mkdir()
+            self.init_repo(repo)
+            run(["git", "checkout", "-b", "main"], cwd=repo)
+            run(["git", "remote", "add", "origin", str(origin)], cwd=repo)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "chore: base"], cwd=repo)
+            run(["git", "push", "-u", "origin", "main"], cwd=repo)
+            (repo / "README.md").write_text("base\nraw\n", encoding="utf-8")
+
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            self.write_fake_git_commit_signing_failure(fake_bin, log_file)
+            fake_gitleaks = self.write_fake_gitleaks(fake_bin)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["GITLEAKS_BIN"] = str(fake_gitleaks)
+            env["SENSITIVE_SCAN_DISABLE_UPDATE"] = "1"
+
+            proc = run(
+                ["bash", str(SCRIPTS_DIR / "ship.sh"), "raw", "--json"],
+                cwd=repo,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertFalse(payload["continued"])
+            stages = {item["stage"]: item for item in payload["results"]}
+            self.assertEqual(stages["batch_commit"]["status"], "blocked")
+            self.assertEqual(stages["batch_commit"]["details"]["failure_class"], "commit-signing-unavailable")
+            self.assertTrue(stages["batch_commit"]["details"]["unsigned_retry_available"])
+            self.assertFalse(stages["batch_commit"]["details"]["unsigned_retry_enabled"])
+            self.assertIn("GITOPS_ALLOW_UNSIGNED_COMMIT_RETRY=1", stages["batch_commit"]["details"]["helper_text"])
+            self.assertNotIn("push", stages)
+            log_lines = log_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum('"commit"' in line and '"--only"' in line for line in log_lines), 1)
 
     def test_ship_raw_blocks_when_push_reports_success_but_remote_head_does_not_move(self):
         with tempfile.TemporaryDirectory() as temp_dir:
