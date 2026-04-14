@@ -85,6 +85,7 @@ Preferred short-path routing:
 - `sync raw` / `raw sync` should route to `sync-raw.sh` with `--json`.
 - `commit and push raw` / `push raw` should route to `ship.sh raw --json`.
 - Use JSON receipts from the scripts as the primary machine-readable status surface instead of adding more natural-language policy text.
+- WHEN a push-blocked receipt exposes `manual_bypass_*` helper fields THEN you SHALL treat them as opt-in guidance only and ask the user before using the bypass command.
 
 ---
 
