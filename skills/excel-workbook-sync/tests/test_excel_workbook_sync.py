@@ -560,7 +560,9 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
 
     def test_common_script_uses_retry_aware_excel_open_and_quit_cleanup(self) -> None:
         content = COMMON.read_text(encoding="utf-8")
-        self.assertIn('Invoke-ExcelComWithRetry -Description "Opening workbook"', content)
+        self.assertIn('Invoke-ExcelComWithRetry -Description $openDescription', content)
+        self.assertIn("direct-open-readonly-repair", content)
+        self.assertIn("direct-open-readonly-extract", content)
         self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel after failed open" -SwallowErrors', content)
         self.assertIn('Invoke-ExcelQuitSafely -Excel $excel -Description "Quitting Excel"', content)
 
@@ -571,8 +573,12 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible", mutate)
         self.assertIn("Close-ExcelWorkbook -Context $context -SaveChanges:$saved", mutate)
         self.assertIn(". (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')", extract)
-        self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible", extract)
+        self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent", extract)
         self.assertIn("Close-ExcelWorkbook -Context $context -SaveChanges:$false", extract)
+
+    def test_query_path_uses_read_only_excel_open_intent(self) -> None:
+        content = COMMON.read_text(encoding="utf-8")
+        self.assertIn("Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent", content)
 
     def test_common_script_exposes_package_bootstrap_and_surface_aliases(self) -> None:
         content = COMMON.read_text(encoding="utf-8")

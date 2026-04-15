@@ -113,7 +113,22 @@ function Complete-Phase {
 }
 
 try {
-    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+    try {
+        $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent
+    } catch {
+        @{
+            engine = "com"
+            available = $false
+            failed = $true
+            error = [string]$_.Exception.Message
+            workbook = $WorkbookPath
+            openDiagnostics = $script:ExcelSyncLastOpenDiagnostics
+            diagnostics = @{
+                phaseDurationsMs = $phaseDurationsMs
+            }
+        } | ConvertTo-Json -Depth 10
+        return
+    }
     $excel = $context.Excel
     $workbook = $context.Workbook
     Complete-Phase -Name "openWorkbook"
@@ -322,9 +337,23 @@ try {
         diagnostics = @{
             phaseDurationsMs = $phaseDurationsMs
         }
+        openDiagnostics = $context.OpenDiagnostics
     }
 
     $result | ConvertTo-Json -Depth 10
+}
+catch {
+    @{
+        engine = "com"
+        available = $false
+        failed = $true
+        error = [string]$_.Exception.Message
+        workbook = $WorkbookPath
+        openDiagnostics = if ($null -ne $context -and $null -ne $context.OpenDiagnostics) { $context.OpenDiagnostics } else { $script:ExcelSyncLastOpenDiagnostics }
+        diagnostics = @{
+            phaseDurationsMs = $phaseDurationsMs
+        }
+    } | ConvertTo-Json -Depth 10
 }
 finally {
     if ($null -ne $context) {

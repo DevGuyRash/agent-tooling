@@ -443,6 +443,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             "workbooks": [
                 {
                     "workbookName": "sample.xlsx",
+                    "baselineComparisonStatus": "ok",
+                    "postMutationComparisonStatus": "ok",
                     "baselineRawMatch": False,
                     "baselineNormalizedMatch": True,
                     "deltaMatch": False,
@@ -454,8 +456,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
 
         rendered = self.module.render_matrix_summary(summary)
 
-        self.assertIn("| Workbook | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |", rendered)
-        self.assertIn("| sample.xlsx | fail | pass | changed | 9 |", rendered)
+        self.assertIn("| Workbook | Baseline Status | Post-Mutation Status | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |", rendered)
+        self.assertIn("| sample.xlsx | ok | ok | fail | pass | changed | 9 |", rendered)
 
     def test_render_matrix_summary_uses_na_for_unavailable_compare(self) -> None:
         summary = {
@@ -464,6 +466,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             "workbooks": [
                 {
                     "workbookName": "sample.xlsb",
+                    "baselineComparisonStatus": "package_unavailable",
+                    "postMutationComparisonStatus": "package_unavailable",
                     "baselineRawMatch": None,
                     "baselineNormalizedMatch": None,
                     "deltaMatch": False,
@@ -475,7 +479,7 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
 
         rendered = self.module.render_matrix_summary(summary)
 
-        self.assertIn("| sample.xlsb | n/a | n/a | changed | 3 |", rendered)
+        self.assertIn("| sample.xlsb | package_unavailable | package_unavailable | n/a | n/a | changed | 3 |", rendered)
 
     def test_compare_workbook_writes_rich_compare_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -502,6 +506,35 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
                 self.assertIsNone(result["raw"]["match"])
                 self.assertEqual(result["raw"]["mismatches"], {})
                 self.assertEqual(result["comDiagnostics"]["timeoutSeconds"], 120)
+                self.assertTrue(result["comDiagnostics"]["packageReadable"])
+                self.assertEqual(result["comDiagnostics"]["workbookFormat"], ".xlsm")
+        finally:
+            self.module.extract_com_for_read = original
+
+    def test_compare_workbook_captures_open_attempt_diagnostics_for_com_failures(self) -> None:
+        original = self.module.extract_com_for_read
+        self.module.extract_com_for_read = lambda *args, **kwargs: {
+            "engine": "com",
+            "available": False,
+            "failed": True,
+            "error": "Unable to get the Open property of the Workbooks class",
+            "openDiagnostics": {
+                "readOnlyIntent": True,
+                "attempts": [
+                    {"label": "direct-open-readonly-default", "succeeded": False},
+                    {"label": "direct-open-readonly-repair", "succeeded": False},
+                ],
+            },
+            "workbook": str(self.fixture_path),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_root = Path(temp_dir)
+                result = self.module.compare_workbook(self.fixture_path, output_root, engine="com", visible=False)
+                self.assertFalse(result["comparisonAvailable"])
+                self.assertEqual(result["comparisonStatus"], "com_open_failed")
+                self.assertEqual(result["comDiagnostics"]["openDiagnostics"]["attemptCount"], 2)
+                self.assertTrue(result["comDiagnostics"]["openDiagnostics"]["readOnlyIntent"])
         finally:
             self.module.extract_com_for_read = original
 
@@ -589,6 +622,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
                 self.assertEqual(result["workbooks"][0]["scenarioCount"], 1)
                 self.assertEqual(result["workbooks"][0]["status"], "completed")
                 self.assertEqual(result["workbooks"][0]["mutationStatus"], "unchanged")
+                self.assertIsNone(result["workbooks"][0]["baselineComparisonStatus"])
+                self.assertIsNone(result["workbooks"][0]["postMutationComparisonStatus"])
                 self.assertTrue(result["workbooks"][0]["slug"].startswith("01-"))
                 self.assertEqual(result["workbooks"][0]["relativeRoot"], result["workbooks"][0]["slug"])
         finally:

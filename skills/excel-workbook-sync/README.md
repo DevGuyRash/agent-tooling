@@ -5,9 +5,12 @@ Excel workbook sync tooling across two surfaces:
 - `scripts/excel-workbook-sync`: manifest-driven inspect/query/bootstrap/push/pull/roundtrip/refresh
 - `scripts/excel_workbook_sync.py`: generic workbook pull/compare/audit/matrix-audit on safe copies
 
-The generic Python surface is designed for arbitrary workbook use. Fixture assets under
-`tests/fixtures/` are verification-only and do not define the public skill
-contract.
+The generic Python surface accepts arbitrary workbook inputs for pull, audit,
+and copied-workbook reporting. Package-backed read flows are broadly
+workbook-agnostic for package-readable `.xlsx` and `.xlsm`, while COM-backed
+compare remains dependent on Excel being able to open the workbook on the
+current host. Fixture assets under `tests/fixtures/` are verification-only and
+do not define the public skill contract.
 
 ## Generic Audit Commands
 
@@ -27,7 +30,8 @@ The generic audit output writes:
 - raw and normalized parity reports, with normalized parity excluding
   clearly internal names and live-VBA-only surface counts
 - explicit compare availability reporting via `comparisonAvailable` and
-  `comparisonStatus`, so COM open or timeout failures are distinguishable
+  `comparisonStatus`, so COM open or timeout failures are distinguishable and
+  do not get misreported as parity success
   from content mismatches
 - a filtered `normalized.json` for agent-facing review while
   `workbook_structure/names.json` preserves raw extracted names

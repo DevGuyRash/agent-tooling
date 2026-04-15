@@ -37,6 +37,9 @@ sh <skills-file-root>/scripts/excel-workbook-sync refresh --manifest-path /path/
 - Generic compare and audit outputs distinguish unavailable COM comparison from
   true parity mismatches through `comparisonAvailable`, `comparisonStatus`, and
   nullable `match` fields.
+- Read-only manifest inspection/query paths use read-only Excel open intent
+  when they need COM, but a workbook that Excel cannot open still reports a
+  bounded explicit failure instead of a synthetic parity success.
 - Formulas, data-validation, protection, chart, and pivot artifacts are
   currently pull/query metadata surfaces. They are not manifest push surfaces.
 - The generic Python CLI is additive. It does not replace this write surface.

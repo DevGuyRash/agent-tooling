@@ -32,6 +32,9 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
   VBProject surface.
 - Compare results report `comparisonAvailable` and `comparisonStatus`.
   Treat `match: null` as "comparison unavailable", not as a workbook mismatch.
+- `compare --engine auto` stays honest when Excel cannot open the workbook for
+  COM extraction. It reports comparison unavailability instead of silently
+  downgrading to package-vs-package parity.
 - Query/bootstrap payloads should be read alongside backend `capabilities`,
   `warnings`, and `unsupported` fields instead of assuming COM parity implies
   write support.

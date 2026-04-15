@@ -22,7 +22,10 @@ Use this skill for one of two explicit workflows:
 - Generic workbook audit on safe copied workbooks
 - Manifest-driven sync where repo artifacts are the source of truth
 
-The skill is designed for arbitrary workbook use by default. Assets under
+The generic pull, audit, and reporting flows accept arbitrary workbook inputs.
+Package-backed read flows are broadly workbook-agnostic for package-readable
+`.xlsx` and `.xlsm`, while COM-backed compare remains contingent on Excel being
+able to open the workbook on the current host. Assets under
 `<skills-file-root>/tests/fixtures/` are verification fixtures only and do not
 define the generic contract.
 
@@ -60,8 +63,10 @@ define the generic contract.
   workbook path.
 - Manifest-driven write flows still rely on Excel COM for mutation.
 - `.xls` and `.xlsb` remain COM-dependent.
-- Compare output now distinguishes unavailable COM comparison from true parity
-  mismatches through `comparisonAvailable` and `comparisonStatus`.
+- Compare output distinguishes unavailable COM comparison from true parity
+  mismatches through `comparisonAvailable` and `comparisonStatus`. When Excel
+  cannot open a workbook for COM extraction, the compare stays successful but
+  reports comparison unavailability instead of synthesizing parity.
 
 ## Bundled Commands
 

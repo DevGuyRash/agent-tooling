@@ -676,11 +676,33 @@ def compare_status_from_com_result(com_result: dict[str, Any] | None) -> str:
     return "ok"
 
 
+def build_compare_com_diagnostics(
+    com_result: dict[str, Any] | None,
+    *,
+    workbook_path: Path | None = None,
+    package_readable: bool | None = None,
+) -> dict[str, Any]:
+    diagnostics = json.loads(json.dumps(com_result or {}))
+    if workbook_path is not None:
+        diagnostics.setdefault("requestedWorkbookPath", str(workbook_path.resolve()))
+        diagnostics.setdefault("workbookFormat", workbook_path.suffix.lower())
+    if package_readable is not None:
+        diagnostics.setdefault("packageReadable", package_readable)
+    open_diagnostics = diagnostics.get("openDiagnostics")
+    if isinstance(open_diagnostics, dict):
+        attempts = open_diagnostics.get("attempts")
+        if isinstance(attempts, list):
+            open_diagnostics["attemptCount"] = len(attempts)
+    return diagnostics
+
+
 def unavailable_compare_payload(
     baseline_result: dict[str, Any],
     com_result: dict[str, Any],
     *,
     comparison_status: str | None = None,
+    workbook_path: Path | None = None,
+    package_readable: bool | None = None,
 ) -> dict[str, Any]:
     if comparison_status is None:
         comparison_status = compare_status_from_com_result(com_result)
@@ -732,7 +754,11 @@ def unavailable_compare_payload(
         "summary": {},
         "mismatches": {},
         "match": None,
-        "comDiagnostics": com_result,
+        "comDiagnostics": build_compare_com_diagnostics(
+            com_result,
+            workbook_path=workbook_path,
+            package_readable=package_readable,
+        ),
     }
 
 
@@ -1057,12 +1083,23 @@ def compare_workbook(workbook_path: Path, output_root: Path, engine: str, visibl
                 baseline_result,
                 com_result,
                 comparison_status="package_unavailable" if com_extract_succeeded(com_result) else compare_status_from_com_result(com_result),
+                workbook_path=workbook_path,
+                package_readable=package_readable,
             )
         elif com_extract_succeeded(com_result):
             result = compare_results(ooxml_result, merge_ooxml_and_com(ooxml_result, com_result))
-            result["comDiagnostics"] = com_result
+            result["comDiagnostics"] = build_compare_com_diagnostics(
+                com_result,
+                workbook_path=workbook_path,
+                package_readable=package_readable,
+            )
         else:
-            result = unavailable_compare_payload(ooxml_result, com_result)
+            result = unavailable_compare_payload(
+                ooxml_result,
+                com_result,
+                workbook_path=workbook_path,
+                package_readable=package_readable,
+            )
     else:
         if ooxml_result is None:
             raise RuntimeError(f"OOXML comparison is unavailable for workbook format: {workbook_path.suffix.lower()}")
@@ -1162,6 +1199,8 @@ def audit_workbook(
         post_mutation_compare = {
             "leftEngine": baseline.get("engine"),
             "rightEngine": baseline.get("engine"),
+            "comparisonAvailable": False,
+            "comparisonStatus": "mutation_timed_out",
             "raw": {"summary": {}, "mismatches": {"mutation": ["completed", "timed_out"]}, "match": False, "diagnostics": {}},
             "normalized": {
                 "summary": {},
@@ -1215,13 +1254,15 @@ def render_matrix_summary(summary: dict[str, Any]) -> str:
         f"- Engine: {summary['engine']}",
         f"- Workbooks: {len(summary['workbooks'])}",
         "",
-        "| Workbook | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |",
-        "| --- | --- | --- | --- | --- |",
+        "| Workbook | Baseline Status | Post-Mutation Status | Raw Compare | Normalized Compare | Mutation Delta | Scenarios |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for workbook in summary["workbooks"]:
         lines.append(
-            "| {name} | {raw} | {normalized} | {delta} | {scenarios} |".format(
+            "| {name} | {baseline_status} | {post_status} | {raw} | {normalized} | {delta} | {scenarios} |".format(
                 name=workbook["workbookName"],
+                baseline_status=workbook.get("baselineComparisonStatus", "unknown"),
+                post_status=workbook.get("postMutationComparisonStatus", "unknown"),
                 raw=render_compare_cell(workbook["baselineRawMatch"]),
                 normalized=render_compare_cell(workbook["baselineNormalizedMatch"]),
                 delta=workbook["deltaStatus"],
@@ -1265,8 +1306,12 @@ def matrix_audit_workbooks(
                 "reportPath": str(workbook_root / "reports" / "report.json"),
                 "status": report.get("matrixStatus", "completed"),
                 "mutationStatus": classify_delta_status(report),
+                "baselineComparisonStatus": report.get("baselineCompare", {}).get("comparisonStatus"),
+                "baselineComparisonAvailable": report.get("baselineCompare", {}).get("comparisonAvailable"),
                 "baselineRawMatch": report.get("baselineCompare", {}).get("raw", {}).get("match", False),
                 "baselineNormalizedMatch": report.get("baselineCompare", {}).get("normalized", {}).get("match", False),
+                "postMutationComparisonStatus": report.get("postMutationCompare", {}).get("comparisonStatus"),
+                "postMutationComparisonAvailable": report.get("postMutationCompare", {}).get("comparisonAvailable"),
                 "postMutationRawMatch": report.get("postMutationCompare", {}).get("raw", {}).get("match", False),
                 "postMutationNormalizedMatch": report.get("postMutationCompare", {}).get("normalized", {}).get("match", False),
                 "deltaMatch": report.get("delta", {}).get("match", False),

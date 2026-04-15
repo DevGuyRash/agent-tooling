@@ -17,7 +17,10 @@ successfully.
 
 ## Generic audit CLI
 
-This CLI is intended for arbitrary Excel workbooks. Bundled fixtures are
+This CLI accepts arbitrary Excel workbook inputs for pull, audit, and copied
+workbook reporting. Package-backed reads are broadly workbook-agnostic for
+package-readable `.xlsx` and `.xlsm`; COM-backed compare still depends on Excel
+being able to open the workbook on the current host. Bundled fixtures are
 verification assets for the repo and are not required inputs.
 
 ### Pull
@@ -69,9 +72,13 @@ python <skills-file-root>/scripts/excel_workbook_sync.py audit `
 
 Audit runs emit:
 
+- `original-copy/`
 - `baseline/`
-- `mutated/`
-- `report.json`
+- `post-mutation/`
+- `reports/baseline-compare/compare.json`
+- `reports/post-mutation-compare/compare.json`
+- `reports/mutation-report.json`
+- `reports/report.json`
 
 ## Manifest-driven sync
 

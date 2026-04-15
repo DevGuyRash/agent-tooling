@@ -566,7 +566,8 @@ function Open-ExcelWorkbook {
     param(
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
-        [switch]$Visible
+        [switch]$Visible,
+        [switch]$ReadOnlyIntent
     )
 
     if (-not (Test-Path -LiteralPath $WorkbookPath)) {
@@ -575,6 +576,7 @@ function Open-ExcelWorkbook {
 
     $excel = $null
     $workbook = $null
+    $script:ExcelSyncLastOpenDiagnostics = $null
 
     try {
         $excel = New-Object -ComObject Excel.Application
@@ -607,59 +609,89 @@ function Open-ExcelWorkbook {
     [void](Try-SetProperty -Target $excel -Name 'EnableEvents' -Value $false)
     [void](Try-SetProperty -Target $excel -Name 'AskToUpdateLinks' -Value $false)
     $automationSecurityChanged = Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value 3
+    $openDescription = if ($ReadOnlyIntent) { "Opening workbook for read-only inspection" } else { "Opening workbook" }
 
     try {
-        $workbook = Invoke-ExcelComWithRetry -Description "Opening workbook" -MaxAttempts 20 -DelayMilliseconds 500 -Operation {
+        $workbook = Invoke-ExcelComWithRetry -Description $openDescription -MaxAttempts 20 -DelayMilliseconds 500 -Operation {
+            $openAttemptResults = New-Object System.Collections.Generic.List[object]
             $openAttempts = @(
-                {
-                    Invoke-LateMethod -Target $excel.Workbooks -Name 'Open' -Arguments @(
-                        $WorkbookPath,
-                        0,
-                        $false,
-                        $null,
-                        $null,
-                        $null,
-                        $true,
-                        $null,
-                        $null,
-                        $false,
-                        $false
-                    )
-                },
-                {
-                    $excel.Workbooks.Open(
-                        $WorkbookPath,
-                        0,
-                        $false,
-                        $null,
-                        $null,
-                        $null,
-                        $true,
-                        $null,
-                        $null,
-                        $false,
-                        $false
-                    )
-                },
-                {
-                    $excel.Workbooks.Open($WorkbookPath)
-                },
-                {
-                    $excel.Workbooks.Open($WorkbookPath, 0, $false)
-                },
-                {
-                    $excel.Workbooks.Open($WorkbookPath, $false, $true)
+                @{
+                    Label = if ($ReadOnlyIntent) { 'direct-open-readonly-default' } else { 'direct-open-default' }
+                    Operation = { $excel.Workbooks.Open($WorkbookPath, 0, [bool]$ReadOnlyIntent, $null, $null, $null, $true, $null, $null, $false, $false) }
                 }
             )
+            if ($ReadOnlyIntent) {
+                $readOnlyRecoveryAttempts = @(
+                    @{
+                        Label = 'direct-open-readonly-basic'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, 0, $true) }
+                    },
+                    @{
+                        Label = 'direct-open-readonly-local'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, 0, $true, $null, $null, $null, $true, $null, $null, $false, $false, $null, $false, $true) }
+                    },
+                    @{
+                        Label = 'direct-open-readonly-repair'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, 0, $true, $null, $null, $null, $true, $null, $null, $false, $false, $null, $false, $true, 1) }
+                    },
+                    @{
+                        Label = 'direct-open-readonly-extract'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, 0, $true, $null, $null, $null, $true, $null, $null, $false, $false, $null, $false, $true, 2) }
+                    }
+                )
+                $openAttempts += $readOnlyRecoveryAttempts
+            }
+            else {
+                $openAttempts += @(
+                    @{
+                        Label = 'direct-open-no-args'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath) }
+                    },
+                    @{
+                        Label = 'direct-open-standard'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, 0, $false) }
+                    },
+                    @{
+                        Label = 'direct-open-readonly'
+                        Operation = { $excel.Workbooks.Open($WorkbookPath, $false, $true) }
+                    }
+                )
+            }
 
             $lastOpenError = $null
+            $openedWorkbook = $null
             foreach ($openAttempt in $openAttempts) {
                 try {
-                    return (& $openAttempt)
+                    $openedWorkbook = & $openAttempt.Operation
+                    $openAttemptResults.Add([pscustomobject]@{
+                        label = [string]$openAttempt.Label
+                        succeeded = $true
+                    }) | Out-Null
+                    break
                 }
                 catch {
                     $lastOpenError = $_
+                    $hresult = $null
+                    try { $hresult = [int]$_.Exception.HResult } catch {}
+                    $openAttemptResults.Add([pscustomobject]@{
+                        label = [string]$openAttempt.Label
+                        succeeded = $false
+                        error = [string]$_.Exception.Message
+                        exceptionType = [string]$_.Exception.GetType().FullName
+                        hresult = $hresult
+                        retriable = [bool](Test-IsRetriableExcelComException -Exception $_.Exception)
+                    }) | Out-Null
                 }
+            }
+
+            $script:ExcelSyncLastOpenDiagnostics = [pscustomobject]@{
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                readOnlyIntent = [bool]$ReadOnlyIntent
+                attempts = @($openAttemptResults.ToArray())
+            }
+
+            if ($null -ne $openedWorkbook) {
+                return $openedWorkbook
             }
 
             if ($null -ne $lastOpenError) {
@@ -707,6 +739,7 @@ function Open-ExcelWorkbook {
         Workbook = $workbook
         State = [pscustomobject]$state
         ReadOnly = $(try { [bool]$workbook.ReadOnly } catch { $null })
+        OpenDiagnostics = $script:ExcelSyncLastOpenDiagnostics
     }
 }
 
@@ -2841,7 +2874,7 @@ function Get-ExcelWorkbookQuery {
     if ($Backend -in @('auto', 'excel')) {
         $stagesTried.Add('excel')
         try {
-            $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+            $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent
             try {
                 $projectInfo = $null
                 $payload = [ordered]@{

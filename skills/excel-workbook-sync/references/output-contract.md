@@ -52,6 +52,10 @@ When COM extraction does not complete, `comparisonAvailable` is `false`,
 `comparisonStatus` reports the failure class, and `raw.match`,
 `normalized.match`, plus top-level `match` are `null`.
 
+`comDiagnostics` preserves the COM-side failure context. For failed opens this
+includes requested and working workbook paths, package-readability context, and
+structured read-only open-attempt diagnostics when available.
+
 The `normalized` section also includes filtered-name diagnostics so the
 discarded names stay reviewable.
 
@@ -101,8 +105,11 @@ The markdown matrix summary reports mutation delta as `changed`,
 `unchanged`, `skipped`, `timed_out`, or a subprocess status instead of a
 pass/fail label.
 
-Raw and normalized compare cells render as `pass`, `fail`, or `n/a`.
+The markdown matrix summary also reports baseline and post-mutation comparison
+status strings alongside raw and normalized compare cells. Raw and normalized
+compare cells render as `pass`, `fail`, or `n/a`.
 
 The JSON matrix summary mirrors that machine-readable status in
-`workbooks[].mutationStatus` and also includes `slug` plus `relativeRoot` for
-each per-workbook audit directory.
+`workbooks[].mutationStatus` and explicit baseline/post-mutation comparison
+status plus availability fields. It also includes `slug` plus `relativeRoot`
+for each per-workbook audit directory.

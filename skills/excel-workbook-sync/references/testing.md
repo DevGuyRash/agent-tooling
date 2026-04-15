@@ -16,3 +16,19 @@ Use external workbooks only in local audit runs, not in committed tests.
 
 Use `matrix-audit` when the task is validating copied workbook mutations across
 multiple workbooks and you want one aggregate report root.
+
+For opt-in external corpus smoke coverage, set `EXCEL_SYNC_EXTERNAL_ROOTS` to
+an `os.pathsep`-separated list of workbook roots and run:
+
+```bash
+python -m unittest discover -s <skills-file-root>/tests -p 'test_excel_workbook_external_smoke.py'
+```
+
+Optional tuning:
+
+- `EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT=3` limits how many discovered workbooks run
+  through live `audit` and `matrix-audit` smoke.
+
+The external smoke harness recursively discovers only Excel files, runs
+invariant-based assertions, and avoids workbook-specific counts or content
+expectations.
