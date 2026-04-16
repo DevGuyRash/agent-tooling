@@ -5,10 +5,10 @@ Use the Python CLI for arbitrary-workbook extraction and copied-workbook audit.
 ## Commands
 
 ```powershell
-python <skills-file-root>/scripts/excel_workbook_sync.py pull --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync\pull --engine auto
-python <skills-file-root>/scripts/excel_workbook_sync.py compare --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync\compare --engine auto
-python <skills-file-root>/scripts/excel_workbook_sync.py audit --workbook path\to\file.xlsm --output-root .local\excel-workbook-sync --engine auto --scenario-set full
-python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook path\to\file1.xlsm --workbook path\to\file2.xlsx --output-root .local\excel-workbook-sync --engine auto --scenario-set full
+python <skills-file-root>/scripts/excel_workbook_sync.py pull --workbook path\to\file.xlsm --output-root .local\excel-foundry\pull --engine auto
+python <skills-file-root>/scripts/excel_workbook_sync.py compare --workbook path\to\file.xlsm --output-root .local\excel-foundry\compare --engine auto
+python <skills-file-root>/scripts/excel_workbook_sync.py audit --workbook path\to\file.xlsm --output-root .local\excel-foundry --engine auto --scenario-set full
+python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook path\to\file1.xlsm --workbook path\to\file2.xlsx --output-root .local\excel-foundry --engine auto --scenario-set full
 ```
 
 ## Default Flow

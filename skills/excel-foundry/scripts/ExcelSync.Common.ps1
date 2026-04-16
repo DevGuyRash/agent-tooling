@@ -472,6 +472,7 @@ function Resolve-ExcelSyncManifest {
 
     $structure = $manifest.structure
     $resolvedStructure = [pscustomobject]@{
+        SheetsPath = $null
         TablesPath = $null
         NamesPath = $null
         ConditionalFormattingPath = $null
@@ -486,6 +487,9 @@ function Resolve-ExcelSyncManifest {
     }
 
     if ($null -ne $structure) {
+        if ($null -ne $structure.PSObject.Properties['sheetsPath'] -and $null -ne $structure.sheetsPath) {
+            $resolvedStructure.SheetsPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.sheetsPath)
+        }
         if ($null -ne $structure.PSObject.Properties['tablesPath'] -and $null -ne $structure.tablesPath) {
             $resolvedStructure.TablesPath = Resolve-AbsolutePath -BasePath $manifestDir -RelativeOrAbsolutePath ([string]$structure.tablesPath)
         }
@@ -1281,30 +1285,101 @@ function Test-OoxmlPackageWorkbook {
 function Invoke-PackageWorkbookHelper {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('query', 'inspect', 'bootstrap', 'mutate-audit')]
+        [ValidateSet('query', 'inspect', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')]
         [string]$Command,
-        [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
+        [string]$OtherWorkbookPath,
+        [string]$ManifestPath,
         [string[]]$Surface = @(),
         [string]$OutputDir,
-        [string]$ManifestPath,
+        [ValidateSet('push', 'pull', 'roundtrip')]
+        [string]$Mode = 'push',
+        [string[]]$Sheet = @(),
+        [string[]]$Table = @(),
+        [string[]]$Name = @(),
+        [string[]]$NamePrefix = @(),
+        [string[]]$QueryName = @(),
+        [string]$Address,
+        [string]$RangeRef,
+        [string]$ValueJson,
+        [string]$ValuesJson,
+        [string]$SpecJson,
+        [string]$SpecFile,
+        [string]$RefersTo,
+        [switch]$Hidden,
+        [string]$StateRoot,
+        [switch]$Apply,
         [int]$TimeoutSeconds = 120
     )
 
     $pythonCommand = @(Get-PythonLauncher)
     $scriptPath = Join-Path $PSScriptRoot 'excel_workbook_package.py'
-    $arguments = @($scriptPath, $Command, '--workbook-path', $WorkbookPath)
+    $arguments = @($scriptPath, $Command)
+    if (-not [string]::IsNullOrWhiteSpace($WorkbookPath)) {
+        $arguments += @('--workbook-path', $WorkbookPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OtherWorkbookPath)) {
+        $arguments += @('--other-workbook-path', $OtherWorkbookPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
+        $arguments += @('--manifest-path', $ManifestPath)
+    }
     if (@($Surface).Count -gt 0) {
         $arguments += @('--surface', (@($Surface) -join ','))
+    }
+    if ($Command -in @('plan', 'sync')) {
+        $arguments += @('--mode', $Mode)
+    }
+    foreach ($sheetName in @($Sheet)) {
+        $arguments += @('--sheet', $sheetName)
+    }
+    foreach ($tableName in @($Table)) {
+        $arguments += @('--table', $tableName)
+    }
+    foreach ($nameEntry in @($Name)) {
+        $arguments += @('--name', $nameEntry)
+    }
+    foreach ($prefix in @($NamePrefix)) {
+        $arguments += @('--name-prefix', $prefix)
+    }
+    foreach ($queryEntry in @($QueryName)) {
+        $arguments += @('--query-name', $queryEntry)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Address)) {
+        $arguments += @('--address', $Address)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RangeRef)) {
+        $arguments += @('--range-ref', $RangeRef)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ValueJson)) {
+        $arguments += @('--value-json', $ValueJson)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ValuesJson)) {
+        $arguments += @('--values-json', $ValuesJson)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SpecJson)) {
+        $arguments += @('--spec-json', $SpecJson)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SpecFile)) {
+        $arguments += @('--spec-file', $SpecFile)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RefersTo)) {
+        $arguments += @('--refers-to', $RefersTo)
+    }
+    if ($Hidden) {
+        $arguments += '--hidden'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($StateRoot)) {
+        $arguments += @('--state-root', $StateRoot)
+    }
+    if ($Apply) {
+        $arguments += '--apply'
     }
     if ($Command -eq 'bootstrap') {
         if ([string]::IsNullOrWhiteSpace($OutputDir)) {
             throw "OutputDir is required for bootstrap."
         }
         $arguments += @('--output-dir', $OutputDir)
-        if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
-            $arguments += @('--manifest-path', $ManifestPath)
-        }
     }
 
     $launcherArgs = @()
@@ -1418,6 +1493,7 @@ function Write-ExcelWorkbookBootstrapArtifacts {
     }
 
     $structureRoot = Join-Path $manifestDirectory 'workbook_structure'
+    $sheetsPath = Join-Path $structureRoot 'sheets.json'
     $tablesPath = Join-Path $structureRoot 'tables.json'
     $namesPath = Join-Path $structureRoot 'names.json'
     $cfPath = Join-Path $structureRoot 'conditional_formatting.json'
@@ -1427,6 +1503,7 @@ function Write-ExcelWorkbookBootstrapArtifacts {
     $chartsPath = Join-Path $structureRoot 'charts.json'
     $pivotsPath = Join-Path $structureRoot 'pivots.json'
 
+    Write-JsonFile -Path $sheetsPath -Value ([pscustomobject]@{ sheets = if ($null -ne $QueryPayload.PSObject.Properties['sheets']) { @($QueryPayload.sheets) } else { @() } })
     Write-JsonFile -Path $tablesPath -Value ([pscustomobject]@{ tables = @($QueryPayload.tables) })
     Write-JsonFile -Path $namesPath -Value ([pscustomobject]@{ names = @($QueryPayload.names) })
     Write-JsonFile -Path $cfPath -Value ([pscustomobject]@{ rules = @($QueryPayload.cf) })
@@ -1440,6 +1517,7 @@ function Write-ExcelWorkbookBootstrapArtifacts {
         workbookPath = Get-ManifestRelativeWorkbookPath -ManifestDirectory $manifestDirectory -WorkbookPath $WorkbookPath
         vbaComponents = @()
         structure = [ordered]@{
+            sheetsPath = 'workbook_structure/sheets.json'
             tablesPath = 'workbook_structure/tables.json'
             namesPath = 'workbook_structure/names.json'
             conditionalFormattingPath = 'workbook_structure/conditional_formatting.json'
@@ -1544,6 +1622,7 @@ function Write-StructureArtifactsFromQueryPayload {
         return
     }
 
+    $sheets = @()
     $tables = @()
     $names = @()
     $rules = @()
@@ -1556,6 +1635,9 @@ function Write-StructureArtifactsFromQueryPayload {
     $charts = @()
     $pivots = @()
 
+    if ($null -ne $QueryPayload.PSObject.Properties['sheets']) {
+        $sheets = @($QueryPayload.sheets)
+    }
     if ($null -ne $QueryPayload.PSObject.Properties['tables']) {
         $tables = @($QueryPayload.tables)
     }
@@ -1581,6 +1663,9 @@ function Write-StructureArtifactsFromQueryPayload {
         $pivots = @($QueryPayload.pivots)
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($structure.SheetsPath)) {
+        Write-JsonFile -Path $structure.SheetsPath -Value ([pscustomobject]@{ sheets = $sheets })
+    }
     if (-not [string]::IsNullOrWhiteSpace($structure.TablesPath)) {
         Write-JsonFile -Path $structure.TablesPath -Value ([pscustomobject]@{ tables = $tables })
     }
@@ -2038,6 +2123,1303 @@ function Find-WorkbookConnectionByName {
     }
 
     return $null
+}
+
+function Read-JsonSpecValue {
+    param(
+        [string]$SpecJson,
+        [string]$SpecFile
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($SpecJson) -and -not [string]::IsNullOrWhiteSpace($SpecFile)) {
+        throw "Provide either SpecJson or SpecFile, not both."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SpecJson)) {
+        return ($SpecJson | ConvertFrom-Json -Depth 100)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SpecFile)) {
+        return Read-JsonFile -Path $SpecFile
+    }
+
+    return $null
+}
+
+function Get-DirectWorkbookItemByName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Items,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    foreach ($item in @($Items)) {
+        if ([string]$item.name -eq $Name) {
+            return $item
+        }
+    }
+
+    return $null
+}
+
+function Get-RangeFromAddress {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Worksheet,
+        [Parameter(Mandatory = $true)]
+        [string]$Address
+    )
+
+    return $Worksheet.Range($Address)
+}
+
+function Set-RangeValues {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Range,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Values
+    )
+
+    $rowCount = $Values.Count
+    $colCount = $Values[0].Count
+    $target = $Range.Resize($rowCount, $colCount)
+    $matrix = New-Object 'object[,]' $rowCount, $colCount
+    for ($r = 0; $r -lt $rowCount; $r++) {
+        for ($c = 0; $c -lt $colCount; $c++) {
+            $matrix[$r, $c] = $Values[$r][$c]
+        }
+    }
+    $target.Value2 = $matrix
+
+    return $target
+}
+
+function Ensure-DirectTableDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $TableSpec,
+        [ValidateSet('create', 'update', 'set')]
+        [string]$Mode = 'set'
+    )
+
+    $tableName = [string]$TableSpec.name
+    if ([string]::IsNullOrWhiteSpace($tableName)) {
+        throw "Table spec requires a name."
+    }
+    $sheetName = [string]$TableSpec.sheet
+    if ([string]::IsNullOrWhiteSpace($sheetName)) {
+        throw "Table spec requires a sheet."
+    }
+    $topLeft = [string]$TableSpec.topLeft
+    if ([string]::IsNullOrWhiteSpace($topLeft)) {
+        throw "Table spec requires topLeft."
+    }
+
+    $worksheet = Get-WorksheetByName -Workbook $Workbook -WorksheetName $sheetName
+    $headerValues = [object[]]@($TableSpec.headers | ForEach-Object { [string]$_ })
+    if ($headerValues.Count -lt 1) {
+        throw "Table spec requires at least one header."
+    }
+    $rows = @($TableSpec.rows)
+    if ($rows.Count -lt 1) {
+        $rows = ,(@("") * $headerValues.Count)
+    }
+
+    $allRows = New-Object System.Collections.Generic.List[object[]]
+    $allRows.Add($headerValues)
+    foreach ($row in $rows) {
+        $allRows.Add([object[]]@($row | ForEach-Object { $_ }))
+    }
+
+    $existing = Find-ListObjectByName -Worksheet $worksheet -TableName $tableName
+    if ($Mode -eq 'create' -and $null -ne $existing) {
+        throw "Table already exists: $tableName"
+    }
+    if ($Mode -eq 'update' -and $null -eq $existing) {
+        throw "Table not found: $tableName"
+    }
+
+    if ($null -eq $existing) {
+        $start = Get-RangeFromAddress -Worksheet $worksheet -Address $topLeft
+        $targetRange = Set-RangeValues -Range $start -Values $allRows
+        $listObject = $worksheet.ListObjects.Add(1, $targetRange, $null, 1)
+        $listObject.Name = $tableName
+        return
+    }
+
+    $start = $worksheet.Range($topLeft)
+    $targetRange = $start.Resize($allRows.Count, $headerValues.Count)
+    $existing.Resize($targetRange)
+    for ($col = 1; $col -le $headerValues.Count; $col++) {
+        $existing.ListColumns.Item($col).Name = [string]$headerValues[$col - 1]
+    }
+
+    $bodyRows = @($allRows | Select-Object -Skip 1)
+    if ($bodyRows.Count -gt 0) {
+        [void](Set-RangeValues -Range $start.Offset(1, 0) -Values $bodyRows)
+    }
+}
+
+function Remove-DirectTableDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$TableName
+    )
+
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $listObject = Find-ListObjectByName -Worksheet $worksheet -TableName $TableName
+        if ($null -ne $listObject) {
+            $listObject.Delete()
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Remove-WorkbookQueryDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$QueryName
+    )
+
+    foreach ($query in $Workbook.Queries) {
+        if ([string]$query.Name -ne $QueryName) {
+            continue
+        }
+
+        Invoke-LateMethod -Target $query -Name 'Delete' | Out-Null
+        return $true
+    }
+
+    return $false
+}
+
+function Get-DirectWorkbookQueryPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook
+    )
+
+    return Get-WorkbookPowerQueryArtifacts -Workbook $Workbook
+}
+
+function Resolve-ExcelSaveFormatSpec {
+    param(
+        [string]$SourcePath,
+        [string]$TargetPath,
+        [string]$TargetFormat
+    )
+
+    $normalized = $null
+    if (-not [string]::IsNullOrWhiteSpace($TargetFormat)) {
+        $normalized = $TargetFormat.Trim().ToLowerInvariant()
+        if (-not $normalized.StartsWith('.')) {
+            $normalized = ".$normalized"
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($TargetPath)) {
+        $normalized = [System.IO.Path]::GetExtension($TargetPath).ToLowerInvariant()
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($SourcePath)) {
+        $normalized = [System.IO.Path]::GetExtension($SourcePath).ToLowerInvariant()
+    }
+
+    switch ($normalized) {
+        '.xlsx' {
+            return [pscustomobject]@{
+                extension = '.xlsx'
+                format = 'xlsx'
+                description = 'Excel workbook'
+                fileFormat = 51
+                packageReadable = $true
+                macroContainer = $false
+                flatText = $false
+                singleSheetOnly = $false
+                legacy = $false
+                openDocument = $false
+            }
+        }
+        '.xlsm' {
+            return [pscustomobject]@{
+                extension = '.xlsm'
+                format = 'xlsm'
+                description = 'Excel macro-enabled workbook'
+                fileFormat = 52
+                packageReadable = $true
+                macroContainer = $true
+                flatText = $false
+                singleSheetOnly = $false
+                legacy = $false
+                openDocument = $false
+            }
+        }
+        '.xlsb' {
+            return [pscustomobject]@{
+                extension = '.xlsb'
+                format = 'xlsb'
+                description = 'Excel binary workbook'
+                fileFormat = 50
+                packageReadable = $false
+                macroContainer = $true
+                flatText = $false
+                singleSheetOnly = $false
+                legacy = $false
+                openDocument = $false
+            }
+        }
+        '.xls' {
+            return [pscustomobject]@{
+                extension = '.xls'
+                format = 'xls'
+                description = 'Excel 97-2003 workbook'
+                fileFormat = 56
+                packageReadable = $false
+                macroContainer = $true
+                flatText = $false
+                singleSheetOnly = $false
+                legacy = $true
+                openDocument = $false
+            }
+        }
+        '.csv' {
+            return [pscustomobject]@{
+                extension = '.csv'
+                format = 'csv'
+                description = 'UTF-8 CSV'
+                fileFormat = 62
+                packageReadable = $false
+                macroContainer = $false
+                flatText = $true
+                singleSheetOnly = $true
+                legacy = $false
+                openDocument = $false
+            }
+        }
+        '.txt' {
+            return [pscustomobject]@{
+                extension = '.txt'
+                format = 'txt'
+                description = 'Windows text'
+                fileFormat = 20
+                packageReadable = $false
+                macroContainer = $false
+                flatText = $true
+                singleSheetOnly = $true
+                legacy = $false
+                openDocument = $false
+            }
+        }
+        '.ods' {
+            return [pscustomobject]@{
+                extension = '.ods'
+                format = 'ods'
+                description = 'OpenDocument spreadsheet'
+                fileFormat = 60
+                packageReadable = $false
+                macroContainer = $false
+                flatText = $false
+                singleSheetOnly = $false
+                legacy = $false
+                openDocument = $true
+            }
+        }
+        default {
+            throw "Unsupported target workbook format: $normalized"
+        }
+    }
+}
+
+function Resolve-WorkbookTargetPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourcePath,
+        [string]$TargetPath,
+        [string]$TargetFormat,
+        [string]$Suffix = ''
+    )
+
+    $formatSpec = Resolve-ExcelSaveFormatSpec -SourcePath $SourcePath -TargetPath $TargetPath -TargetFormat $TargetFormat
+    if (-not [string]::IsNullOrWhiteSpace($TargetPath)) {
+        return [pscustomobject]@{
+            path = [System.IO.Path]::GetFullPath($TargetPath)
+            format = $formatSpec
+        }
+    }
+
+    $sourceFullPath = [System.IO.Path]::GetFullPath($SourcePath)
+    $sourceDirectory = Split-Path -Parent $sourceFullPath
+    $sourceStem = [System.IO.Path]::GetFileNameWithoutExtension($sourceFullPath)
+    $targetLeaf = '{0}{1}{2}' -f $sourceStem, $Suffix, $formatSpec.extension
+    return [pscustomobject]@{
+        path = [System.IO.Path]::Combine($sourceDirectory, $targetLeaf)
+        format = $formatSpec
+    }
+}
+
+function Get-WorkbookCompatibilityReport {
+    param(
+        [Parameter(Mandatory = $true)]
+        $InspectionPayload,
+        [string]$TargetPath,
+        [string]$TargetFormat
+    )
+
+    $formatSpec = Resolve-ExcelSaveFormatSpec `
+        -SourcePath ([string]$InspectionPayload.workbookPath) `
+        -TargetPath $TargetPath `
+        -TargetFormat $TargetFormat
+
+    $counts = $InspectionPayload.counts
+    $workbookMetadata = $null
+    if ($null -ne $InspectionPayload.PSObject.Properties['workbook']) {
+        $workbookMetadata = $InspectionPayload.workbook
+    }
+
+    $sourceFormat = [string]$InspectionPayload.sourceFormat
+    $hasVbaProject = $false
+    if ($null -ne $workbookMetadata -and $null -ne $workbookMetadata.PSObject.Properties['hasVbaProject']) {
+        $hasVbaProject = [bool]$workbookMetadata.hasVbaProject
+    }
+    elseif ($sourceFormat -in @('.xlsm', '.xlsb', '.xlam', '.xltm', '.xls')) {
+        $hasVbaProject = $true
+    }
+
+    $findings = New-Object System.Collections.Generic.List[object]
+    $overallRisk = 'low'
+
+    function Add-CompatibilityFinding {
+        param(
+            [string]$Severity,
+            [string]$Area,
+            [string]$Message
+        )
+
+        $currentRisk = Get-Variable -Name overallRisk -Scope 1 -ValueOnly
+        $nextRisk = switch ($currentRisk) {
+            'high' { 'high' }
+            'medium' { if ($Severity -eq 'high') { 'high' } else { 'medium' } }
+            default {
+                if ($Severity -eq 'high') { 'high' }
+                elseif ($Severity -eq 'medium') { 'medium' }
+                else { 'low' }
+            }
+        }
+        Set-Variable -Name overallRisk -Scope 1 -Value $nextRisk
+        $findings.Add([pscustomobject]@{
+            severity = $Severity
+            area = $Area
+            message = $Message
+        }) | Out-Null
+    }
+
+    if ($formatSpec.flatText) {
+        if ($counts.sheets -gt 1) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'worksheets' -Message 'Flat-text exports preserve only one worksheet per file. Use a per-sheet export plan before converting.'
+        }
+        if ($counts.formulas -gt 0) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'formulas' -Message 'Formulas will be written as current displayed values in flat-text formats; formula logic will not survive.'
+        }
+        foreach ($surface in @(
+                @{ name = 'tables'; count = $counts.tables; message = 'Tables and structured references do not survive CSV/TXT export.' },
+                @{ name = 'names'; count = $counts.names; message = 'Defined names are discarded by CSV/TXT export.' },
+                @{ name = 'comments'; count = $counts.comments; message = 'Comments and notes are discarded by CSV/TXT export.' },
+                @{ name = 'hyperlinks'; count = $counts.hyperlinks; message = 'Hyperlink objects are not preserved as workbook objects in CSV/TXT export.' },
+                @{ name = 'charts'; count = $counts.charts; message = 'Charts are lost when exporting to CSV/TXT.' },
+                @{ name = 'pivots'; count = $counts.pivots; message = 'PivotTables and PivotCharts are lost when exporting to CSV/TXT.' },
+                @{ name = 'power-query'; count = $counts.pq; message = 'Power Query definitions are not preserved in flat-text exports.' },
+                @{ name = 'connections'; count = $counts.connections; message = 'Workbook connections are not preserved in flat-text exports.' },
+                @{ name = 'data-model'; count = $counts.modelTables; message = 'The Data Model is not preserved in flat-text exports.' }
+            )) {
+            if ([int]$surface.count -gt 0) {
+                Add-CompatibilityFinding -Severity 'high' -Area $surface.name -Message $surface.message
+            }
+        }
+        Add-CompatibilityFinding -Severity 'medium' -Area 'formatting' -Message 'Cell formats, workbook themes, print settings, and metadata do not round-trip through CSV/TXT.'
+    }
+    elseif ($formatSpec.extension -eq '.xlsx') {
+        if ($hasVbaProject) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'vba' -Message 'Saving to .xlsx removes VBA project content because .xlsx is a macro-free container.'
+        }
+    }
+    elseif ($formatSpec.extension -eq '.ods') {
+        if ($hasVbaProject) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'vba' -Message 'VBA projects do not round-trip to .ods.'
+        }
+        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'data-integration' -Message 'Power Query, workbook connections, and Data Model artifacts are not reliable in .ods exports.'
+        }
+        if ($counts.pivots -gt 0 -or $counts.charts -gt 0) {
+            Add-CompatibilityFinding -Severity 'medium' -Area 'analytics' -Message 'Pivot and chart fidelity may degrade when exporting to .ods; validate layouts after conversion.'
+        }
+    }
+    elseif ($formatSpec.extension -eq '.xls') {
+        Add-CompatibilityFinding -Severity 'medium' -Area 'legacy' -Message 'Legacy .xls compatibility is heuristic here; modern Excel features can degrade even when the file saves successfully.'
+        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+            Add-CompatibilityFinding -Severity 'high' -Area 'modern-data-stack' -Message 'Power Query, workbook connections, and Data Model artifacts are not safe targets for legacy .xls.'
+        }
+        if ($counts.formulas -gt 0) {
+            Add-CompatibilityFinding -Severity 'medium' -Area 'formulas' -Message 'Modern formulas and dynamic-array behavior may not round-trip to .xls; validate calc results after conversion.'
+        }
+    }
+    elseif ($formatSpec.extension -eq '.xlsb') {
+        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+            Add-CompatibilityFinding -Severity 'low' -Area 'refresh' -Message 'Binary workbooks usually preserve refresh artifacts, but post-conversion refresh should still be validated.'
+        }
+    }
+
+    return [pscustomobject]@{
+        targetFormat = $formatSpec.format
+        targetExtension = $formatSpec.extension
+        targetPath = if ([string]::IsNullOrWhiteSpace($TargetPath)) { $null } else { [System.IO.Path]::GetFullPath($TargetPath) }
+        heuristic = $true
+        overallRisk = $overallRisk
+        findings = @($findings.ToArray())
+        recommendedPlan = switch ($formatSpec.extension) {
+            '.csv' { 'Export one worksheet at a time, capture workbook logic separately in manifests, and treat the result as a downstream data extract rather than a workbook round-trip.' }
+            '.txt' { 'Export one worksheet at a time, preserve schema and workbook logic outside the text file, and treat the result as a flat interchange artifact.' }
+            '.xlsx' { 'Use .xlsx only for macro-free destinations. If VBA must survive, prefer .xlsm or .xlsb.' }
+            '.xls' { 'Create a compatibility copy, recalculate, and verify formulas, queries, and row/column limits before replacing the source workbook.' }
+            '.ods' { 'Use .ods only when OpenDocument interoperability matters more than Excel-specific automation, queries, or VBA.' }
+            default { 'Save a copy, refresh/recalculate, and inspect the converted workbook before promoting it.' }
+        }
+    }
+}
+
+function Invoke-WorkbookRepairOpen {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [switch]$Visible,
+        [ValidateSet(1, 2)]
+        [int]$CorruptLoad = 1
+    )
+
+    if (-not (Test-Path -LiteralPath $WorkbookPath)) {
+        throw "Workbook not found: $WorkbookPath"
+    }
+
+    $excel = $null
+    $workbook = $null
+    try {
+        $excel = New-Object -ComObject Excel.Application
+    }
+    catch {
+        throw "Excel COM automation is unavailable on this host."
+    }
+
+    [void](Try-SetProperty -Target $excel -Name 'Visible' -Value ([bool]$Visible))
+    [void](Try-SetProperty -Target $excel -Name 'DisplayAlerts' -Value $false)
+    [void](Try-SetProperty -Target $excel -Name 'ScreenUpdating' -Value $false)
+    [void](Try-SetProperty -Target $excel -Name 'EnableEvents' -Value $false)
+    [void](Try-SetProperty -Target $excel -Name 'AskToUpdateLinks' -Value $false)
+    [void](Try-SetProperty -Target $excel -Name 'AutomationSecurity' -Value 3)
+
+    try {
+        $workbook = Invoke-ExcelComWithRetry -Description 'Opening workbook in recovery mode' -MaxAttempts 10 -DelayMilliseconds 500 -Operation {
+            $excel.Workbooks.Open($WorkbookPath, 0, $true, $null, $null, $null, $true, $null, $null, $false, $false, $null, $false, $true, $CorruptLoad)
+        }
+        return [pscustomobject]@{
+            Excel = $excel
+            Workbook = $workbook
+            ReadOnly = $true
+            Visible = [bool]$Visible
+            RecoveryMode = $CorruptLoad
+        }
+    }
+    catch {
+        try {
+            Invoke-ExcelQuitSafely -Excel $excel -Description 'Quitting Excel after failed recovery open' -SwallowErrors
+        }
+        finally {
+            Release-ComObjectSafely -Object $workbook
+            Release-ComObjectSafely -Object $excel
+            [gc]::Collect()
+            [gc]::WaitForPendingFinalizers()
+        }
+        throw
+    }
+}
+
+function Invoke-WorkbookDocumentInspection {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $InspectionPayload,
+        [switch]$Apply
+    )
+
+    $modules = New-Object System.Collections.Generic.List[object]
+    try {
+        $inspectors = $Workbook.DocumentInspectors
+        if ($null -ne $inspectors) {
+            for ($index = 1; $index -le [int]$inspectors.Count; $index++) {
+                $inspector = $inspectors.Item($index)
+                $status = 0
+                $result = ''
+                $fixStatus = $null
+                $fixResult = $null
+                $inspectorName = "Inspector $index"
+                $inspectorDescription = $null
+                try {
+                    $statusRef = [ref]$status
+                    $resultRef = [ref]$result
+                    $inspector.Inspect($statusRef, $resultRef) | Out-Null
+                    try { $inspectorName = [string]$inspector.Name } catch {}
+                    try { $inspectorDescription = [string]$inspector.Description } catch {}
+                    if ($Apply -and [int]$status -ne 0) {
+                        $fixStatus = 0
+                        $fixResult = ''
+                        $fixStatusRef = [ref]$fixStatus
+                        $fixResultRef = [ref]$fixResult
+                        $inspector.Fix($fixStatusRef, $fixResultRef) | Out-Null
+                    }
+                }
+                catch {
+                    $result = $_.Exception.Message
+                }
+
+                $modules.Add([pscustomobject]@{
+                    name = $inspectorName
+                    description = $inspectorDescription
+                    status = [int]$status
+                    result = [string]$result
+                    fixStatus = if ($null -ne $fixStatus) { [int]$fixStatus } else { $null }
+                    fixResult = $fixResult
+                }) | Out-Null
+            }
+        }
+    }
+    catch {
+        $modules.Add([pscustomobject]@{
+            name = 'DocumentInspectors'
+            description = $null
+            status = -1
+            result = $_.Exception.Message
+            fixStatus = $null
+            fixResult = $null
+        }) | Out-Null
+    }
+
+    $manualFindings = New-Object System.Collections.Generic.List[object]
+    $workbookMetadata = if ($null -ne $InspectionPayload.PSObject.Properties['workbook']) { $InspectionPayload.workbook } else { $null }
+    $customPropertiesCount = 0
+    if ($null -ne $workbookMetadata -and
+        $null -ne $workbookMetadata.PSObject.Properties['properties'] -and
+        $null -ne $workbookMetadata.properties.PSObject.Properties['custom']) {
+        $customPropertiesCount = @($workbookMetadata.properties.custom.PSObject.Properties).Count
+    }
+    $commentsCount = if ($null -ne $InspectionPayload.counts.PSObject.Properties['comments']) { [int]$InspectionPayload.counts.comments } else { 0 }
+    $hyperlinksCount = if ($null -ne $InspectionPayload.counts.PSObject.Properties['hyperlinks']) { [int]$InspectionPayload.counts.hyperlinks } else { 0 }
+    $externalLinks = if ($null -ne $workbookMetadata -and $null -ne $workbookMetadata.PSObject.Properties['hasExternalLinks']) { [bool]$workbookMetadata.hasExternalLinks } else { $false }
+    $hiddenSheets = @()
+    if ($null -ne $InspectionPayload.PSObject.Properties['sheets']) {
+        $hiddenSheets = @($InspectionPayload.sheets | Where-Object { [string]$_.visibility -ne 'visible' } | ForEach-Object { [string]$_.name })
+    }
+
+    if ($commentsCount -gt 0) {
+        $manualFindings.Add([pscustomobject]@{
+            area = 'comments'
+            status = 'review'
+            message = "Workbook contains $commentsCount comment or note object(s) that should be reviewed before external sharing."
+        }) | Out-Null
+    }
+    if ($customPropertiesCount -gt 0) {
+        $propertyNoun = if ($customPropertiesCount -eq 1) { 'property' } else { 'properties' }
+        $manualFindings.Add([pscustomobject]@{
+            area = 'metadata'
+            status = 'review'
+            message = "Workbook contains $customPropertiesCount custom document $propertyNoun."
+        }) | Out-Null
+    }
+    if ($hiddenSheets.Count -gt 0) {
+        $manualFindings.Add([pscustomobject]@{
+            area = 'hidden-sheets'
+            status = 'review'
+            message = "Workbook contains hidden or very-hidden sheets: $($hiddenSheets -join ', ')."
+        }) | Out-Null
+    }
+    if ($externalLinks) {
+        $manualFindings.Add([pscustomobject]@{
+            area = 'external-links'
+            status = 'review'
+            message = 'Workbook contains external links or linked sources that should be validated before distribution.'
+        }) | Out-Null
+    }
+    if ($hyperlinksCount -gt 0) {
+        $manualFindings.Add([pscustomobject]@{
+            area = 'hyperlinks'
+            status = 'review'
+            message = "Workbook contains $hyperlinksCount hyperlink object(s); validate whether outbound destinations are share-safe."
+        }) | Out-Null
+    }
+
+    return [pscustomobject]@{
+        applied = [bool]$Apply
+        modules = @($modules.ToArray())
+        manualFindings = @($manualFindings.ToArray())
+    }
+}
+
+function Get-WorkbookLinkInventory {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook
+    )
+
+    $typeMap = @(
+        @{ id = 1; name = 'excel'; label = 'excel-links'; canBreak = $true; canRepoint = $true },
+        @{ id = 2; name = 'ole'; label = 'ole-links'; canBreak = $true; canRepoint = $true }
+    )
+
+    $links = New-Object System.Collections.Generic.List[object]
+    foreach ($typeSpec in $typeMap) {
+        $sources = $null
+        try {
+            $sources = $Workbook.LinkSources($typeSpec.id)
+        }
+        catch {
+            $sources = $null
+        }
+        if ($null -eq $sources) {
+            continue
+        }
+
+        foreach ($source in @($sources)) {
+            if ($null -eq $source) {
+                continue
+            }
+            $links.Add([pscustomobject]@{
+                name = [string]$source
+                type = [string]$typeSpec.name
+                typeLabel = [string]$typeSpec.label
+                typeId = [int]$typeSpec.id
+                canBreak = [bool]$typeSpec.canBreak
+                canRepoint = [bool]$typeSpec.canRepoint
+            }) | Out-Null
+        }
+    }
+
+    return @($links.ToArray() | Sort-Object type, name -Unique)
+}
+
+function Invoke-WorkbookBreakLinks {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [string[]]$Names = @(),
+        [switch]$All
+    )
+
+    $inventory = @(Get-WorkbookLinkInventory -Workbook $Workbook)
+    $targets = if ($All -or @($Names).Count -eq 0) {
+        @($inventory)
+    }
+    else {
+        @($inventory | Where-Object { [string]$_.name -in @($Names) })
+    }
+
+    $broken = New-Object System.Collections.Generic.List[object]
+    foreach ($target in @($targets)) {
+        $Workbook.BreakLink([string]$target.name, [int]$target.typeId)
+        $broken.Add([pscustomobject]@{
+            name = [string]$target.name
+            type = [string]$target.type
+        }) | Out-Null
+    }
+
+    return [pscustomobject]@{
+        requestedAll = [bool]$All
+        requestedNames = @($Names)
+        broken = @($broken.ToArray())
+        remaining = @(Get-WorkbookLinkInventory -Workbook $Workbook)
+    }
+}
+
+function Invoke-WorkbookRepointLinks {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Mappings
+    )
+
+    $applied = New-Object System.Collections.Generic.List[object]
+    foreach ($mapping in @($Mappings)) {
+        $from = if ($null -ne $mapping.PSObject.Properties['from']) { [string]$mapping.from } else { $null }
+        $to = if ($null -ne $mapping.PSObject.Properties['to']) { [string]$mapping.to } else { $null }
+        if ([string]::IsNullOrWhiteSpace($from) -or [string]::IsNullOrWhiteSpace($to)) {
+            throw "Each link mapping requires from/to values."
+        }
+        $typeId = if ($null -ne $mapping.PSObject.Properties['typeId']) {
+            [int]$mapping.typeId
+        }
+        elseif ($null -ne $mapping.PSObject.Properties['type']) {
+            switch ([string]$mapping.type) {
+                'excel' { 1 }
+                'ole' { 2 }
+                default { 1 }
+            }
+        }
+        else {
+            1
+        }
+
+        $Workbook.ChangeLink($from, $to, $typeId)
+        $applied.Add([pscustomobject]@{
+            from = $from
+            to = $to
+            typeId = $typeId
+        }) | Out-Null
+    }
+
+    return [pscustomobject]@{
+        applied = @($applied.ToArray())
+        links = @(Get-WorkbookLinkInventory -Workbook $Workbook)
+    }
+}
+
+function Invoke-WorkbookRemoveDocumentInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [int[]]$Types = @(99)
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($typeId in @($Types | Where-Object { $null -ne $_ })) {
+        try {
+            $Workbook.RemoveDocumentInformation([int]$typeId)
+            $results.Add([pscustomobject]@{
+                typeId = [int]$typeId
+                removed = $true
+                error = $null
+            }) | Out-Null
+        }
+        catch {
+            $results.Add([pscustomobject]@{
+                typeId = [int]$typeId
+                removed = $false
+                error = $_.Exception.Message
+            }) | Out-Null
+        }
+    }
+
+    return @($results.ToArray())
+}
+
+function Invoke-WorkbookSafeExport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [string]$TargetPath,
+        [string]$TargetFormat,
+        [string]$SpecJson,
+        [string]$SpecFile,
+        [switch]$Visible
+    )
+
+    $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+    $breakLinks = $true
+    $linkNames = @()
+    $removeDocInfoTypes = @(99)
+    $runDocumentInspectors = $true
+    if ($null -ne $spec) {
+        if ($null -ne $spec.PSObject.Properties['breakLinks']) { $breakLinks = [bool]$spec.breakLinks }
+        if ($null -ne $spec.PSObject.Properties['linkNames']) { $linkNames = @($spec.linkNames) }
+        if ($null -ne $spec.PSObject.Properties['removeDocumentInfoTypes']) { $removeDocInfoTypes = @($spec.removeDocumentInfoTypes | ForEach-Object { [int]$_ }) }
+        if ($null -ne $spec.PSObject.Properties['runDocumentInspectors']) { $runDocumentInspectors = [bool]$spec.runDocumentInspectors }
+    }
+
+    $target = Resolve-WorkbookTargetPath `
+        -SourcePath $WorkbookPath `
+        -TargetPath $TargetPath `
+        -TargetFormat $TargetFormat `
+        -Suffix '.share-safe'
+
+    Ensure-ParentDirectory -Path $target.path
+    $sourceContext = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+    try {
+        $sourceContext.Workbook.SaveCopyAs($target.path)
+    }
+    finally {
+        Close-ExcelWorkbook -Context $sourceContext -SaveChanges:$false
+    }
+
+    $copyContext = Open-ExcelWorkbook -WorkbookPath $target.path -Visible:$Visible
+    try {
+        $inspection = Get-ExcelWorkbookInspection `
+            -WorkbookPath $target.path `
+            -Surface @('workbook', 'sheets', 'comments', 'hyperlinks', 'connections', 'pq', 'model', 'charts', 'pivots') `
+            -Visible:$Visible `
+            -Backend 'auto'
+        $documentInspection = if ($runDocumentInspectors) {
+            Invoke-WorkbookDocumentInspection -Workbook $copyContext.Workbook -InspectionPayload $inspection -Apply
+        }
+        else {
+            [pscustomobject]@{ applied = $false; modules = @(); manualFindings = @() }
+        }
+        $docInfoResults = Invoke-WorkbookRemoveDocumentInfo -Workbook $copyContext.Workbook -Types $removeDocInfoTypes
+        $beforeLinks = @(Get-WorkbookLinkInventory -Workbook $copyContext.Workbook)
+        $brokenLinks = if ($breakLinks) {
+            Invoke-WorkbookBreakLinks -Workbook $copyContext.Workbook -Names $linkNames -All:($linkNames.Count -eq 0)
+        }
+        else {
+            [pscustomobject]@{ requestedAll = $false; requestedNames = @($linkNames); broken = @(); remaining = $beforeLinks }
+        }
+
+        if ($target.format.extension -ne [System.IO.Path]::GetExtension($target.path).ToLowerInvariant()) {
+            $target.path = [System.IO.Path]::ChangeExtension($target.path, $target.format.extension)
+        }
+        $copyContext.Workbook.SaveAs($target.path, $target.format.fileFormat)
+
+        return [pscustomobject]@{
+            command = 'workbook-safe-export'
+            backend = 'excel'
+            workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            targetPath = [string]$target.path
+            targetFormat = [string]$target.format.format
+            documentInspection = $documentInspection
+            removedDocumentInfo = @($docInfoResults)
+            linksBefore = $beforeLinks
+            linkOperations = $brokenLinks
+        }
+    }
+    finally {
+        Close-ExcelWorkbook -Context $copyContext -SaveChanges:$false
+    }
+}
+
+function Invoke-DirectExcelWorkbookCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')]
+        [string]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [string[]]$Table = @(),
+        [string[]]$QueryName = @(),
+        [string[]]$Connection = @(),
+        [string[]]$Chart = @(),
+        [string[]]$Pivot = @(),
+        [string]$TargetPath,
+        [string]$TargetFormat,
+        [string]$SpecJson,
+        [string]$SpecFile,
+        [ValidateSet('repair', 'extract')]
+        [string]$Mode = 'repair',
+        [switch]$Apply,
+        [switch]$Visible
+    )
+
+    if ($Command -eq 'workbook-compatibility') {
+        if ([string]::IsNullOrWhiteSpace($TargetPath) -and [string]::IsNullOrWhiteSpace($TargetFormat)) {
+            throw "workbook compatibility requires --target-path or --target-format"
+        }
+        $inspection = Get-ExcelWorkbookInspection `
+            -WorkbookPath $WorkbookPath `
+            -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
+            -Visible:$Visible `
+            -Backend 'auto'
+        return [pscustomobject]@{
+            command = $Command
+            backend = 'multi-engine'
+            workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            compatibility = Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetPath $TargetPath -TargetFormat $TargetFormat
+        }
+    }
+
+    if ($Command -eq 'workbook-repair') {
+        $recoveryMode = if ($Mode -eq 'extract') { 2 } else { 1 }
+        $repairTargetFormat = if ([string]::IsNullOrWhiteSpace($TargetFormat)) { [System.IO.Path]::GetExtension($WorkbookPath) } else { $TargetFormat }
+        $repairSuffix = if ($Mode -eq 'extract') { '.extracted' } else { '.repaired' }
+        $target = Resolve-WorkbookTargetPath `
+            -SourcePath $WorkbookPath `
+            -TargetPath $TargetPath `
+            -TargetFormat $repairTargetFormat `
+            -Suffix $repairSuffix
+        $context = Invoke-WorkbookRepairOpen -WorkbookPath $WorkbookPath -Visible:$Visible -CorruptLoad $recoveryMode
+        try {
+            Ensure-ParentDirectory -Path $target.path
+            $context.Workbook.SaveAs($target.path, $target.format.fileFormat)
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'excel'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                targetPath = [string]$target.path
+                targetFormat = [string]$target.format.format
+                recoveryMode = if ($Mode -eq 'extract') { 'extract-data' } else { 'repair' }
+                openDiagnostics = $script:ExcelSyncLastOpenDiagnostics
+                saved = $true
+            }
+        }
+        finally {
+            Close-ExcelWorkbook -Context $context -SaveChanges:$false
+        }
+    }
+
+    if ($Command -eq 'workbook-safe-export') {
+        if ([string]::IsNullOrWhiteSpace($TargetPath) -and [string]::IsNullOrWhiteSpace($TargetFormat)) {
+            throw "workbook safe-export requires --target-path or --target-format"
+        }
+        return Invoke-WorkbookSafeExport `
+            -WorkbookPath $WorkbookPath `
+            -TargetPath $TargetPath `
+            -TargetFormat $TargetFormat `
+            -SpecJson $SpecJson `
+            -SpecFile $SpecFile `
+            -Visible:$Visible
+    }
+
+    if ($Command -in @('workbook-save-as', 'workbook-convert') -and
+        [string]::IsNullOrWhiteSpace($TargetPath) -and
+        [string]::IsNullOrWhiteSpace($TargetFormat)) {
+        throw ("{0} requires --target-path or --target-format" -f (($Command -replace '^workbook-', 'workbook ') -replace '-', ' '))
+    }
+
+    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+    $saveChanges = $false
+    try {
+        switch ($Command) {
+            'workbook-save-as' {
+                if ([string]::IsNullOrWhiteSpace($TargetPath) -and [string]::IsNullOrWhiteSpace($TargetFormat)) {
+                    throw "workbook save-as requires --target-path or --target-format"
+                }
+                $target = Resolve-WorkbookTargetPath -SourcePath $WorkbookPath -TargetPath $TargetPath -TargetFormat $TargetFormat -Suffix ''
+                $inspection = Get-ExcelWorkbookInspection `
+                    -WorkbookPath $WorkbookPath `
+                    -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
+                    -Visible:$Visible `
+                    -Backend 'auto'
+                $compatibility = Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetPath $target.path -TargetFormat $target.format.extension
+                Ensure-ParentDirectory -Path $target.path
+                $context.Workbook.SaveAs($target.path, $target.format.fileFormat)
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    targetPath = [string]$target.path
+                    targetFormat = [string]$target.format.format
+                    compatibility = $compatibility
+                    saved = $true
+                }
+            }
+            'workbook-convert' {
+                if ([string]::IsNullOrWhiteSpace($TargetPath) -and [string]::IsNullOrWhiteSpace($TargetFormat)) {
+                    throw "workbook convert requires --target-path or --target-format"
+                }
+                $target = Resolve-WorkbookTargetPath -SourcePath $WorkbookPath -TargetPath $TargetPath -TargetFormat $TargetFormat -Suffix '.converted'
+                $inspection = Get-ExcelWorkbookInspection `
+                    -WorkbookPath $WorkbookPath `
+                    -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
+                    -Visible:$Visible `
+                    -Backend 'auto'
+                $compatibility = Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetPath $target.path -TargetFormat $target.format.extension
+                Ensure-ParentDirectory -Path $target.path
+                $context.Workbook.SaveCopyAs($target.path)
+                $copyContext = Open-ExcelWorkbook -WorkbookPath $target.path -Visible:$Visible
+                try {
+                    $copyContext.Workbook.SaveAs($target.path, $target.format.fileFormat)
+                }
+                finally {
+                    Close-ExcelWorkbook -Context $copyContext -SaveChanges:$false
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    targetPath = [string]$target.path
+                    targetFormat = [string]$target.format.format
+                    compatibility = $compatibility
+                    saved = $true
+                }
+            }
+            'workbook-document-inspect' {
+                $inspection = Get-ExcelWorkbookInspection `
+                    -WorkbookPath $WorkbookPath `
+                    -Surface @('workbook', 'sheets', 'comments', 'hyperlinks', 'connections', 'pq', 'model', 'charts', 'pivots') `
+                    -Visible:$Visible `
+                    -Backend 'auto'
+                $documentInspection = Invoke-WorkbookDocumentInspection -Workbook $context.Workbook -InspectionPayload $inspection -Apply:$Apply
+                if ($Apply -and -not [string]::IsNullOrWhiteSpace($TargetPath)) {
+                    Ensure-ParentDirectory -Path $TargetPath
+                    $context.Workbook.SaveAs([System.IO.Path]::GetFullPath($TargetPath))
+                }
+                elseif ($Apply) {
+                    $context.Workbook.Save()
+                    $saveChanges = $true
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    targetPath = if ([string]::IsNullOrWhiteSpace($TargetPath)) { $null } else { [System.IO.Path]::GetFullPath($TargetPath) }
+                    inspection = $documentInspection
+                }
+            }
+            'workbook-links' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    links = @(Get-WorkbookLinkInventory -Workbook $context.Workbook)
+                }
+            }
+            'workbook-break-links' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                $linkNames = @()
+                $breakAll = $true
+                if ($null -ne $spec) {
+                    if ($null -ne $spec.PSObject.Properties['names']) { $linkNames = @($spec.names) }
+                    if ($null -ne $spec.PSObject.Properties['all']) { $breakAll = [bool]$spec.all }
+                }
+                elseif (@($Name).Count -gt 0) {
+                    $linkNames = @($Name)
+                    $breakAll = $false
+                }
+                $result = Invoke-WorkbookBreakLinks -Workbook $context.Workbook -Names $linkNames -All:$breakAll
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    links = $result
+                }
+            }
+            'workbook-repoint-links' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec -or $null -eq $spec.PSObject.Properties['mappings']) {
+                    throw "workbook repoint-links requires --spec-json or --spec-file with a mappings array"
+                }
+                $result = Invoke-WorkbookRepointLinks -Workbook $context.Workbook -Mappings @($spec.mappings)
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    links = $result
+                }
+            }
+            'table-get' {
+                if (@($Table).Count -lt 1) {
+                    throw "table get requires --table"
+                }
+                $tables = @(Get-TableQuery -Workbook $context.Workbook)
+                $item = Get-DirectWorkbookItemByName -Items $tables -Name ([string]$Table[0])
+                if ($null -eq $item) {
+                    throw "Table not found: $($Table[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    table = $item
+                }
+            }
+            'table-create' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "table create requires --spec-json or --spec-file"
+                }
+                Ensure-DirectTableDefinition -Workbook $context.Workbook -TableSpec $spec -Mode 'create'
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $tables = @(Get-TableQuery -Workbook $context.Workbook)
+                $item = Get-DirectWorkbookItemByName -Items $tables -Name ([string]$spec.name)
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    table = $item
+                }
+            }
+            'table-update' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "table update requires --spec-json or --spec-file"
+                }
+                Ensure-DirectTableDefinition -Workbook $context.Workbook -TableSpec $spec -Mode 'update'
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $tables = @(Get-TableQuery -Workbook $context.Workbook)
+                $item = Get-DirectWorkbookItemByName -Items $tables -Name ([string]$spec.name)
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    table = $item
+                }
+            }
+            'table-delete' {
+                if (@($Table).Count -lt 1) {
+                    throw "table delete requires --table"
+                }
+                $removed = Remove-DirectTableDefinition -Workbook $context.Workbook -TableName ([string]$Table[0])
+                if (-not $removed) {
+                    throw "Table not found: $($Table[0])"
+                }
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    deleted = $true
+                    table = [string]$Table[0]
+                }
+            }
+            'query-get' {
+                if (@($QueryName).Count -lt 1) {
+                    throw "query get requires --query-name"
+                }
+                $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
+                $item = Get-DirectWorkbookItemByName -Items $payload.queries -Name ([string]$QueryName[0])
+                if ($null -eq $item) {
+                    throw "Power Query not found: $($QueryName[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    query = $item
+                }
+            }
+            'query-set' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "query set requires --spec-json or --spec-file"
+                }
+                Ensure-PowerQueryDefinition -Workbook $context.Workbook -QuerySpec $spec
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
+                $item = Get-DirectWorkbookItemByName -Items $payload.queries -Name ([string]$spec.name)
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    query = $item
+                }
+            }
+            'query-delete' {
+                if (@($QueryName).Count -lt 1) {
+                    throw "query delete requires --query-name"
+                }
+                $removed = Remove-WorkbookQueryDefinition -Workbook $context.Workbook -QueryName ([string]$QueryName[0])
+                if (-not $removed) {
+                    throw "Power Query not found: $($QueryName[0])"
+                }
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    deleted = $true
+                    query = [string]$QueryName[0]
+                }
+            }
+            'query-refresh' {
+                $results = @(Invoke-WorkbookPowerQueryRefresh -Workbook $context.Workbook -QueryNames $QueryName)
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    results = @($results)
+                }
+            }
+            'connection-list' {
+                $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    connections = @($payload.connections)
+                }
+            }
+            'connection-get' {
+                if (@($Connection).Count -lt 1) {
+                    throw "connection get requires --connection"
+                }
+                $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
+                $item = Get-DirectWorkbookItemByName -Items $payload.connections -Name ([string]$Connection[0])
+                if ($null -eq $item) {
+                    throw "Connection not found: $($Connection[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    connection = $item
+                }
+            }
+            'chart-list' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    charts = @(Get-ChartQuery -Workbook $context.Workbook)
+                }
+            }
+            'chart-get' {
+                if (@($Chart).Count -lt 1) {
+                    throw "chart get requires --chart"
+                }
+                $charts = @(Get-ChartQuery -Workbook $context.Workbook)
+                $item = Get-DirectWorkbookItemByName -Items $charts -Name ([string]$Chart[0])
+                if ($null -eq $item) {
+                    throw "Chart not found: $($Chart[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    chart = $item
+                }
+            }
+            'pivot-list' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    pivots = @(Get-PivotQuery -Workbook $context.Workbook)
+                }
+            }
+            'pivot-get' {
+                if (@($Pivot).Count -lt 1) {
+                    throw "pivot get requires --pivot"
+                }
+                $pivots = @(Get-PivotQuery -Workbook $context.Workbook)
+                $item = Get-DirectWorkbookItemByName -Items $pivots -Name ([string]$Pivot[0])
+                if ($null -eq $item) {
+                    throw "Pivot not found: $($Pivot[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    pivot = $item
+                }
+            }
+        }
+    }
+    finally {
+        Close-ExcelWorkbook -Context $context -SaveChanges:$saveChanges
+    }
 }
 
 function Ensure-PowerQueryDefinition {
@@ -2789,6 +4171,13 @@ function Get-ExcelBackendCapabilities {
         powerQueryWrite = $powerQueryWrite
         vbaProjectAccess = if ($null -ne $ProjectInfo) { [bool]$ProjectInfo.accessible } else { $null }
         workbookReadOnly = $readOnly
+        lifecycle = [pscustomobject]@{
+            saveAs = $true
+            convert = $true
+            repair = $true
+            compatibilityCheck = $true
+            documentInspector = $true
+        }
     }
 }
 
@@ -2803,6 +4192,13 @@ function Get-PackageBackendCapabilities {
         powerQueryWrite = $false
         vbaProjectAccess = $false
         workbookReadOnly = $null
+        lifecycle = [pscustomobject]@{
+            saveAs = $false
+            convert = $false
+            repair = $false
+            compatibilityCheck = $true
+            documentInspector = $false
+        }
     }
 }
 
@@ -3013,6 +4409,7 @@ function Get-ExcelWorkbookInspection {
     $pq = @()
     $connections = @()
     $model = $null
+    $sheets = @()
     $vba = @()
     $references = @()
     $project = $null
@@ -3022,6 +4419,7 @@ function Get-ExcelWorkbookInspection {
     $charts = @()
     $pivots = @()
 
+    if ($null -ne $query.PSObject.Properties['sheets']) { $sheets = @($query.sheets) }
     if ($null -ne $query.PSObject.Properties['tables']) { $tables = @($query.tables) }
     if ($null -ne $query.PSObject.Properties['names']) { $names = @($query.names) }
     if ($null -ne $query.PSObject.Properties['cf']) { $cf = @($query.cf) }
@@ -3048,6 +4446,7 @@ function Get-ExcelWorkbookInspection {
         capabilities = if ($null -ne $query.PSObject.Properties['capabilities']) { $query.capabilities } else { $null }
         unsupported = if ($null -ne $query.PSObject.Properties['unsupported']) { ConvertTo-ObjectArray -Value $query.unsupported } else { @() }
         counts = [pscustomobject]@{
+            sheets = $sheets.Count
             tables = $tables.Count
             names = $names.Count
             cf = $cf.Count

@@ -7,6 +7,8 @@ Use the fixture for:
 - launcher smoke checks
 - inspect and query shape validation
 - capability, warning, and unsupported-surface validation
+- per-surface plan and compare validation
+- dry-run and apply-mode package sync validation for the supported OOXML surfaces
 - portable pull and compare tests
 - live Excel tests on temp copies when COM validation is required
 - repeated live roundtrip checks where semantic matching matters more than

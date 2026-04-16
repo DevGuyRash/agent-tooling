@@ -4,7 +4,8 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  excel-workbook-sync <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap> [options]
+  excel-foundry <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap|plan|compare|sync> [options]
+  excel-foundry <sheet|name|table|query|cell|range> <action> [options]
 
 Options:
   --manifest-path PATH
@@ -13,6 +14,19 @@ Options:
   --query-name NAME
   --surface LIST
   --backend NAME
+  --mode NAME
+  --sheet NAME
+  --table NAME
+  --name NAME
+  --name-prefix NAME
+  --address A1
+  --range-ref A1:B2
+  --value-json JSON
+  --values-json JSON
+  --refers-to FORMULA
+  --hidden
+  --state-root PATH
+  --apply
   --visible
   --help
 
@@ -40,7 +54,7 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd)"
-ps1="${script_dir}/excel-workbook-sync.ps1"
+ps1="${script_dir}/excel-foundry.ps1"
 
 detect_powershell() {
   if [ "${EXCEL_WORKBOOK_SYNC_POWERSHELL:-}" ]; then
@@ -81,15 +95,37 @@ case "$subcommand" in
     usage
     exit 0
     ;;
-  inspect|query|push|pull|roundtrip|smoke|refresh)
+  query)
+    if [ "${2:-}" = "list" ]; then
+      subcommand="query-list"
+      shift 2
+    else
+      shift
+    fi
+    ;;
+  inspect|push|pull|roundtrip|smoke|refresh|plan|compare|sync)
     shift
     ;;
   bootstrap)
     shift
     ;;
+  sheet|name|table|cell|range)
+    action="${2:-}"
+    [ -n "$action" ] || { echo "error: missing action for resource command: $subcommand" >&2; exit 2; }
+    case "${subcommand}:${action}" in
+      sheet:list|sheet:create|name:list|name:set|name:delete|table:list|table:read|cell:get|cell:set|range:get|range:set)
+        subcommand="${subcommand}-${action}"
+        shift 2
+        ;;
+      *)
+        echo "error: unknown action '$action' for resource '$subcommand'" >&2
+        exit 2
+        ;;
+    esac
+    ;;
   *)
     echo "error: unknown subcommand: $subcommand" >&2
-    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh, bootstrap" >&2
+    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh, bootstrap, plan, compare, sync, or resource commands like 'sheet list'" >&2
     exit 2
     ;;
 esac
@@ -135,12 +171,98 @@ $value"
 $1"
       shift
       ;;
+    --mode|-Mode)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Mode
+$1"
+      shift
+      ;;
+    --sheet|-Sheet)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Sheet
+$1"
+      shift
+      ;;
+    --table|-Table)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Table
+$1"
+      shift
+      ;;
+    --name|-Name)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Name
+$1"
+      shift
+      ;;
+    --name-prefix|-NamePrefix)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-NamePrefix
+$1"
+      shift
+      ;;
+    --address|-Address)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-Address
+$1"
+      shift
+      ;;
+    --range-ref|-RangeRef)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-RangeRef
+$1"
+      shift
+      ;;
+    --value-json|-ValueJson)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-ValueJson
+$1"
+      shift
+      ;;
+    --values-json|-ValuesJson)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-ValuesJson
+$1"
+      shift
+      ;;
+    --refers-to|-RefersTo)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      translated="${translated}
+-RefersTo
+$1"
+      shift
+      ;;
+    --state-root|-StateRoot)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      value="$(convert_path_arg "$1")"
+      shift
+      translated="${translated}
+-StateRoot
+$value"
+      ;;
     --query-name|-QueryName)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       translated="${translated}
 -QueryName
 $1"
       shift
+      ;;
+    --apply|-Apply)
+      translated="${translated}
+-Apply"
+      ;;
+    --hidden|-Hidden)
+      translated="${translated}
+-Hidden"
       ;;
     --backend|-Backend)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
@@ -155,7 +277,7 @@ $1"
       ;;
     *)
       echo "error: unknown flag or argument: $arg" >&2
-      echo "hint: run 'excel-workbook-sync --help' for the supported CLI surface" >&2
+      echo "hint: run 'excel-foundry --help' for the supported CLI surface" >&2
       exit 2
       ;;
   esac

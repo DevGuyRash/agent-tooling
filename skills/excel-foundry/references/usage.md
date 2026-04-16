@@ -3,7 +3,8 @@
 ## Surfaces
 
 - `scripts/excel_workbook_sync.py`: generic extraction, parity compare, and mutation-based audit
-- `scripts/excel-workbook-sync` or `scripts/sync-excel.ps1`: manifest-driven sync for push, pull, roundtrip, refresh, and bootstrap
+- `scripts/excel-foundry`: manifest-driven inspect/query/bootstrap plus plan/compare/sync and the legacy push/pull/roundtrip/refresh wrappers
+- `scripts/sync-excel.ps1`: legacy manifest-driven COM sync for push, pull, roundtrip, and refresh
 
 ## Engines
 
@@ -11,9 +12,11 @@
 - `ooxml`: parse the workbook package directly
 - `com`: drive Excel through PowerShell automation helpers
 
-For the manifest-driven launcher, treat Windows Excel COM as the only
-write-capable backend. Package parsing is read-only even when `auto` falls back
-successfully.
+For the manifest-driven launcher, treat Windows Excel COM as the live backend
+for legacy mutation, `.xls`, and `.xlsb`. The package backend now supports
+planning, per-surface compare, dry-run sync, and apply mode for the safe OOXML
+write surfaces on package-readable `.xlsx` and `.xlsm`: names, formulas,
+data-validation, conditional formatting, and protection.
 
 ## Generic audit CLI
 
@@ -52,7 +55,7 @@ Copy the workbook into a gitignored work area, mutate the copy, and emit a repor
 ```powershell
 python <skills-file-root>/scripts/excel_workbook_sync.py audit `
   --workbook path\to\file.xlsx `
-  --output-root .local\excel-workbook-sync `
+  --output-root .local\excel-foundry `
   --engine auto
 ```
 
@@ -86,19 +89,61 @@ Use the existing launcher or `sync-excel.ps1` when committed repo artifacts and
 manifests are the source of truth.
 
 ```powershell
+sh <skills-file-root>/scripts/excel-foundry plan `
+  --manifest-path path\to\excel-sync.manifest.json `
+  --surface all-supported `
+  --mode push
+
+sh <skills-file-root>/scripts/excel-foundry compare `
+  --manifest-path path\to\excel-sync.manifest.json `
+  --surface names,formulas,protection
+
+sh <skills-file-root>/scripts/excel-foundry sync `
+  --manifest-path path\to\excel-sync.manifest.json `
+  --surface names,formulas,protection `
+  --mode push
+
+sh <skills-file-root>/scripts/excel-foundry sync `
+  --manifest-path path\to\excel-sync.manifest.json `
+  --surface names,formulas,protection `
+  --mode push `
+  --sheet Sheet1 `
+  --name MyValue `
+  --apply
+```
+
+```powershell
 powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-excel.ps1 `
   -ManifestPath path\to\excel-sync.manifest.json `
   -WorkbookPath path\to\file.xlsm `
   -Direction pull
 ```
 
-Manifest `query`, `inspect`, and `bootstrap` payloads now include:
+Manifest `query`, `inspect`, and `bootstrap` payloads include:
 
 - `capabilities`: read/write/backend availability flags
 - `warnings`: fallback and partial-support diagnostics
 - `unsupported`: surfaces the selected backend could not provide
 
+The plan-centric package path adds:
+
+- `plan`: per-surface capability, compare, merge, and intended write counts
+- `compare`: per-surface `strict`, `normalized`, and `intent` results
+- `sync`: dry-run by default with `--apply` required for mutation
+- selectors: `--sheet`, `--table`, `--name`, `--name-prefix`, `--query-name`
+
 Current generic metadata surfaces available through query/bootstrap or pull
 bundles include tables, names, conditional formatting, formulas,
 data-validation, protection, chart metadata, pivot metadata, Power Query
 metadata, and VBA metadata where the backend supports them.
+
+Current package-backed write surfaces available through `sync --apply` are:
+
+- names
+- formulas
+- data-validation
+- conditional formatting
+- protection
+
+Charts, pivots, Power Query, connections, model, and tables still plan and
+compare cleanly in the package path, but remain unsupported for package writes.

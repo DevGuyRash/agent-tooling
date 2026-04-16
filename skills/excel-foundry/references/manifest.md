@@ -7,6 +7,7 @@ The skill accepts the current manifest shape used by the workbook repo:
 - `structure.tablesPath`
 - `structure.namesPath`
 - `structure.conditionalFormattingPath`
+- `structure.sheetsPath`
 - `structure.tablesDiscovery`
 - `structure.namesDiscovery`
 - `structure.conditionalFormattingDiscovery`
@@ -20,6 +21,11 @@ Optional project extensions used by this skill:
 - `powerQuery.connectionsPath`
 - `powerQuery.modelPath`
 - `powerQuery.refreshPath`
+- `structure.formulasPath`
+- `structure.dataValidationPath`
+- `structure.protectionPath`
+- `structure.chartsPath`
+- `structure.pivotsPath`
 
 `vbaProject.projectPath` stores queryable project/component metadata.
 
@@ -42,12 +48,29 @@ The CLI normalizes these inputs into logical surfaces:
 
 - `vba`
 - `tables`
+- `sheets`
 - `names`
 - `cf`
+- `formulas`
+- `data-validation`
+- `protection`
+- `charts`
+- `pivots`
 - `pq`
 - `connections`
 - `model`
 - `project`
 - `references`
 
-Use `query` or `inspect` without a manifest when only workbook discovery is needed.
+For the plan-centric package path, `plan`, `compare`, and `sync` consume the
+same committed manifest and treat the listed artifact paths as per-surface repo
+inputs. Current package-backed write surfaces are:
+
+- `names`
+- `formulas`
+- `data-validation`
+- `cf`
+- `protection`
+
+Use `query` or `inspect` without a manifest when only workbook discovery is
+needed.

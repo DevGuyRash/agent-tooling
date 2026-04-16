@@ -8,6 +8,8 @@ The generic Python CLI writes agent-readable bundles under the requested
 `pull` writes:
 
 - `normalized.json`
+- `workbook_structure/sheets.json`
+- `workbook_structure/workbook.json`
 - `workbook_structure/tables.json`
 - `workbook_structure/table_mappings.json`
 - `workbook_structure/names.json`
@@ -17,6 +19,10 @@ The generic Python CLI writes agent-readable bundles under the requested
 - `workbook_structure/protection.json`
 - `workbook_structure/charts.json`
 - `workbook_structure/pivots.json`
+- `workbook_structure/dimensions.json`
+- `workbook_structure/hyperlinks.json`
+- `workbook_structure/comments.json`
+- `workbook_structure/print.json`
 - `power_query/connections.json`
 - `power_query/queries.json`
 - `power_query/query_files.json`
@@ -32,7 +38,12 @@ Excel-generated names such as `_xlfn.*`, `_xlpm.*`, and `_xlws.*`, and
 includes `nameDiagnostics.filteredInternalNames` so the removed names remain
 reviewable. Raw extracted names remain in `workbook_structure/names.json`.
 
-When one of the workbook-structure metadata surfaces is absent, `pull` still
+The generic Python CLI now defaults to concise stdout summaries. Use
+`--stdout full` when you need the full payload on stdout, or `--result-path`
+to persist the full JSON result separately while keeping stdout narrow.
+
+When one of the workbook-structure metadata surfaces is absent, `pull` or
+package `bootstrap` still
 writes the artifact with an empty payload instead of silently omitting the
 file.
 
@@ -77,9 +88,11 @@ Manifest-driven `query`, `inspect`, and `bootstrap` payloads include:
 - `unsupported`
 
 When the workbook is package-readable, query/bootstrap bundles can also include
-read-only metadata for formulas, data-validation, workbook or worksheet
-protection, charts, and pivots. Backends that cannot provide one of those
-surfaces report it under `unsupported`.
+metadata for formulas, data-validation, workbook or worksheet protection,
+charts, and pivots. In the current package path, formulas, data-validation,
+and protection are also write-capable through `sync --apply`, while charts and
+pivots remain compare or plan-only surfaces. Backends that cannot provide one
+of those surfaces report it under `unsupported`.
 
 ## Audit Output
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +32,8 @@ SKILL_ROOT = SCRIPT_DIR.parent
 CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
 INTERNAL_NAME_PREFIXES = ("_xlfn.", "_xlpm.", "_xlws.")
 PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
+PACKAGE_MODULE_PATH = SCRIPT_DIR / "excel_workbook_package.py"
+_PACKAGE_MODULE: Any | None = None
 
 
 def qn(namespace: str, name: str) -> str:
@@ -60,6 +63,18 @@ def normalize_json(value: Any) -> Any:
 def write_json(path: Path, payload: Any) -> None:
     ensure_dir(path.parent)
     path.write_text(json.dumps(normalize_json(payload), indent=2) + "\n", encoding="utf-8")
+
+
+def load_package_module() -> Any:
+    global _PACKAGE_MODULE
+    if _PACKAGE_MODULE is None:
+        spec = importlib.util.spec_from_file_location("excel_workbook_package", PACKAGE_MODULE_PATH)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load package module from {PACKAGE_MODULE_PATH}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _PACKAGE_MODULE = module
+    return _PACKAGE_MODULE
 
 
 def col_to_index(label: str) -> int:
@@ -391,6 +406,8 @@ def extract_data_mashup(package: WorkbookPackage) -> dict[str, Any]:
 
 
 def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
+    package_module = load_package_module()
+    package_reader = package_module.WorkbookPackage(workbook_path)
     package = WorkbookPackage(workbook_path)
     try:
         workbook_tree = package.workbook_tree
@@ -500,6 +517,11 @@ def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
 
         data_mashup = extract_data_mashup(package)
         queries = merge_queries(data_mashup.get("queries", []), connections)
+        formulas = package_reader.parse_formulas()
+        data_validation = package_reader.parse_data_validation()
+        protection = package_reader.parse_protection()
+        pivot_metadata = package_reader.parse_pivots()
+        sheet_summaries = package_reader.parse_sheets()
 
         vba_present = package.exists("xl/vbaProject.bin")
         return {
@@ -511,11 +533,16 @@ def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
                 "format": workbook_path.suffix.lower(),
                 "sha256": sha256_file(workbook_path),
             },
-            "sheets": sheets,
+            "sheets": sheet_summaries or sheets,
             "tables": tables,
             "tableMappings": mappings,
             "names": names,
             "conditionalFormatting": conditional_rules,
+            "formulas": formulas,
+            "dataValidation": data_validation,
+            "protection": protection,
+            "charts": [],
+            "pivots": pivot_metadata,
             "connections": connections,
             "queries": queries,
             "powerQuery": {
@@ -533,6 +560,7 @@ def extract_ooxml(workbook_path: Path) -> dict[str, Any]:
             },
         }
     finally:
+        package_reader.close()
         package.close()
 
 
@@ -553,7 +581,48 @@ def excel_available() -> bool:
 def choose_engine(engine: str) -> str:
     if engine != "auto":
         return engine
-    return "com" if excel_available() else "ooxml"
+    return "ooxml"
+
+
+def summarize_result(command: str, payload: dict[str, Any], *, output_root: Path | None = None) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "command": command,
+        "engine": payload.get("engine"),
+    }
+    workbook = payload.get("workbook")
+    if isinstance(workbook, dict):
+        summary["workbook"] = {
+            "path": workbook.get("path"),
+            "name": workbook.get("name"),
+            "format": workbook.get("format"),
+        }
+    if output_root is not None:
+        summary["artifacts"] = {
+            "root": str(output_root.resolve()),
+            "normalized": str((output_root / "normalized.json").resolve()) if (output_root / "normalized.json").exists() else None,
+        }
+    if command == "pull":
+        name_diagnostics = payload.get("nameDiagnostics", {})
+        summary["counts"] = {
+            "sheets": len(payload.get("sheets", [])),
+            "tables": len(payload.get("tables", [])),
+            "names": len(payload.get("names", [])),
+            "filteredInternalNames": name_diagnostics.get("filteredInternalNameCount", 0),
+            "conditionalFormatting": len(payload.get("conditionalFormatting", [])),
+            "formulas": len(payload.get("formulas", [])),
+            "dataValidation": len(payload.get("dataValidation", [])),
+            "connections": len(payload.get("connections", [])),
+            "queries": len(payload.get("queries", [])),
+            "charts": len(payload.get("charts", [])),
+            "pivots": len(payload.get("pivots", [])),
+        }
+    elif command == "compare":
+        summary["comparisonAvailable"] = payload.get("comparisonAvailable")
+        summary["comparisonStatus"] = payload.get("comparisonStatus")
+        summary["match"] = payload.get("match")
+    else:
+        summary["status"] = "ok"
+    return summary
 
 
 def powershell_json(script: Path, arguments: list[str], timeout: int | None = None) -> dict[str, Any]:
@@ -592,7 +661,7 @@ def powershell_json(script: Path, arguments: list[str], timeout: int | None = No
 @contextmanager
 def com_workbook_copy(workbook_path: Path):
     suffix = workbook_path.suffix or ".xlsx"
-    with tempfile.TemporaryDirectory(prefix="excel-workbook-sync-com-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="excel-foundry-com-") as temp_dir:
         working_copy = Path(temp_dir) / f"{safe_filename(workbook_path.stem)}{suffix}"
         shutil.copy2(workbook_path, working_copy)
         yield working_copy
@@ -858,6 +927,7 @@ def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workb
     ensure_dir(output_root)
     pull_normalized = build_pull_normalized_payload(normalized)
     write_json(output_root / "normalized.json", pull_normalized)
+    write_json(output_root / "workbook_structure" / "sheets.json", {"sheets": normalized.get("sheets", [])})
     write_json(output_root / "workbook_structure" / "tables.json", {"tables": normalized.get("tables", [])})
     write_json(output_root / "workbook_structure" / "table_mappings.json", {"tables": normalized.get("tableMappings", [])})
     write_json(output_root / "workbook_structure" / "names.json", {"names": normalized.get("names", [])})
@@ -908,6 +978,27 @@ def write_default_artifacts(normalized: dict[str, Any], output_root: Path, workb
                 target = output_root / "vba" / "vbaProject.bin"
                 ensure_dir(target.parent)
                 target.write_bytes(workbook_zip.read("xl/vbaProject.bin"))
+
+
+def emit_result(
+    command: str,
+    payload: dict[str, Any],
+    *,
+    output_root: Path | None = None,
+    stdout_mode: str = "summary",
+    result_path: Path | None = None,
+) -> None:
+    normalized_payload = normalize_json(payload)
+    if result_path is not None:
+        write_json(result_path, normalized_payload)
+    if stdout_mode == "full":
+        print(json.dumps(normalized_payload, indent=2))
+        return
+    summary = summarize_result(command, payload, output_root=output_root)
+    if result_path is not None:
+        summary.setdefault("artifacts", {})
+        summary["artifacts"]["result"] = str(result_path.resolve())
+    print(json.dumps(normalize_json(summary), indent=2))
 
 
 def merge_ooxml_and_com(ooxml_result: dict[str, Any], com_result: dict[str, Any]) -> dict[str, Any]:
@@ -1248,7 +1339,7 @@ def render_matrix_summary(summary: dict[str, Any]) -> str:
         return "pass" if value else "fail"
 
     lines = [
-        "# Excel Workbook Sync Matrix Audit",
+        "# Excel Foundry Matrix Audit",
         "",
         f"- Generated: {summary['generatedAt']}",
         f"- Engine: {summary['engine']}",
@@ -1418,6 +1509,8 @@ def parse_args() -> argparse.Namespace:
         subparser.add_argument("--workbook", required=True, type=Path)
         subparser.add_argument("--engine", choices=["auto", "ooxml", "com"], default="auto")
         subparser.add_argument("--visible", action="store_true")
+        subparser.add_argument("--stdout", choices=["summary", "full"], default="summary")
+        subparser.add_argument("--result-path", type=Path)
 
     pull_parser = subparsers.add_parser("pull")
     add_common(pull_parser)
@@ -1450,8 +1543,12 @@ def main() -> int:
     args = parse_args()
     if args.command == "pull":
         result = pull_workbook(args.workbook, args.output_root, args.engine, visible=args.visible)
+        emit_result(args.command, result, output_root=args.output_root, stdout_mode=args.stdout, result_path=args.result_path)
+        return
     elif args.command == "compare":
         result = compare_workbook(args.workbook, args.output_root, args.engine, visible=args.visible)
+        emit_result(args.command, result, output_root=args.output_root, stdout_mode=args.stdout, result_path=args.result_path)
+        return
     elif args.command == "audit":
         result = audit_workbook(
             args.workbook,
@@ -1462,6 +1559,8 @@ def main() -> int:
             scenario_set=args.scenario_set,
             run_root=args.run_root,
         )
+        emit_result(args.command, result, output_root=result.get("runRoot") and Path(result["runRoot"]), stdout_mode=args.stdout, result_path=args.result_path)
+        return
     elif args.command == "matrix-audit":
         result = matrix_audit_workbooks(
             args.workbook,
@@ -1472,9 +1571,10 @@ def main() -> int:
             scenario_set=args.scenario_set,
             audit_timeout_seconds=args.audit_timeout_seconds,
         )
+        emit_result(args.command, result, output_root=result.get("runRoot") and Path(result["runRoot"]), stdout_mode=args.stdout, result_path=args.result_path)
+        return
     else:
         raise AssertionError(f"unsupported command: {args.command}")
-    print(json.dumps(normalize_json(result), indent=2))
     return 0
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PS1 = ROOT / "scripts" / "excel-workbook-sync.ps1"
+PS1 = ROOT / "scripts" / "excel-foundry.ps1"
 PYTHON_CLI = ROOT / "scripts" / "excel_workbook_sync.py"
 PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
 EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlam"}
@@ -155,7 +155,7 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                     self.assertIn("capabilities", inspect_payload)
                     self.assertIn("warnings", inspect_payload)
                     self.assertIn("unsupported", inspect_payload)
-                    self.assertFalse(inspect_payload["capabilities"]["canWrite"])
+                    self.assertTrue(inspect_payload["capabilities"]["canWrite"])
 
                     query_proc = subprocess.run(
                         [

@@ -3,20 +3,20 @@ setlocal
 
 where bash >nul 2>nul
 if not errorlevel 1 (
-    bash "%~dp0excel-workbook-sync" %*
+    bash "%~dp0excel-foundry" %*
     set "BASH_EXIT=%ERRORLEVEL%"
     exit /b %BASH_EXIT%
 )
 
 where pwsh >nul 2>nul
 if not errorlevel 1 (
-    pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0excel-workbook-sync.ps1" %*
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0excel-foundry.ps1" %*
     exit /b %ERRORLEVEL%
 )
 
 where powershell >nul 2>nul
 if not errorlevel 1 (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0excel-workbook-sync.ps1" %*
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0excel-foundry.ps1" %*
     exit /b %ERRORLEVEL%
 )
 

@@ -692,9 +692,12 @@ if ($Direction -eq 'pull') {
             throw
         }
 
-        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('tables', 'names', 'cf', 'formulas', 'data-validation', 'protection', 'charts', 'pivots') -Backend 'package'
+        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('sheets', 'tables', 'names', 'cf', 'formulas', 'data-validation', 'protection', 'charts', 'pivots') -Backend 'package'
         Write-StructureArtifactsFromQueryPayload -ResolvedManifest $resolved -QueryPayload $queryPayload
 
+        if ($resolved.Structure.SheetsPath) {
+            Write-Output ("PULL SHEETS => {0}" -f $resolved.Structure.SheetsPath)
+        }
         if ($resolved.Structure.TablesPath) {
             Write-Output ("PULL TABLES => {0}" -f $resolved.Structure.TablesPath)
         }

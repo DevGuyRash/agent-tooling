@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -12,8 +15,8 @@ from textwrap import dedent
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_PATH = ROOT / "skills" / "excel-workbook-sync" / "scripts" / "excel_workbook_sync.py"
-LOCAL_FIXTURE = ROOT / "skills" / "excel-workbook-sync" / "tests" / "fixtures" / "tr_upload_sheet" / "tr_upload_template.xlsm"
+SCRIPT_PATH = ROOT / "skills" / "excel-foundry" / "scripts" / "excel_workbook_sync.py"
+LOCAL_FIXTURE = ROOT / "skills" / "excel-foundry" / "tests" / "fixtures" / "tr_upload_sheet" / "tr_upload_template.xlsm"
 
 
 def load_module():
@@ -224,7 +227,7 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.module = load_module()
-        cls.fixture_dir = tempfile.TemporaryDirectory(prefix="excel-workbook-sync-generic-")
+        cls.fixture_dir = tempfile.TemporaryDirectory(prefix="excel-foundry-generic-")
         cls.fixture_path = Path(cls.fixture_dir.name) / "generic-test.xlsm"
         build_generic_test_workbook(cls.fixture_path)
 
@@ -257,6 +260,7 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             result = self.module.pull_workbook(self.fixture_path, output_root, engine="ooxml", visible=False)
             self.assertEqual(result["engine"], "ooxml")
             self.assertTrue((output_root / "normalized.json").exists())
+            self.assertTrue((output_root / "workbook_structure" / "sheets.json").exists())
             self.assertTrue((output_root / "workbook_structure" / "tables.json").exists())
             self.assertTrue((output_root / "workbook_structure" / "formulas.json").exists())
             self.assertTrue((output_root / "workbook_structure" / "data_validation.json").exists())
@@ -271,6 +275,39 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
             self.assertTrue((output_root / "ooxml-parts" / "xl" / "workbook.xml").exists())
             normalized = self.module.json.loads((output_root / "normalized.json").read_text(encoding="utf-8"))
             self.assertEqual(normalized["nameDiagnostics"]["filteredInternalNameCount"], 0)
+
+    def test_python_cli_pull_defaults_to_summary_stdout_and_writes_full_result_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "pull"
+            result_path = Path(temp_dir) / "result.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "pull",
+                    "--workbook",
+                    str(self.fixture_path),
+                    "--output-root",
+                    str(output_root),
+                    "--engine",
+                    "ooxml",
+                    "--result-path",
+                    str(result_path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            summary = json.loads(proc.stdout)
+            self.assertEqual(summary["command"], "pull")
+            self.assertEqual(summary["counts"]["sheets"], 2)
+            self.assertTrue(result_path.exists())
+            full_payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(full_payload["engine"], "ooxml")
 
     def test_pull_normalized_output_filters_internal_names(self) -> None:
         normalized = self.module.build_pull_normalized_payload(
@@ -289,7 +326,7 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workbook_copy = Path(temp_dir) / self.fixture_path.name
             shutil.copy2(self.fixture_path, workbook_copy)
-            package_path = ROOT / "skills" / "excel-workbook-sync" / "scripts" / "excel_workbook_package.py"
+            package_path = ROOT / "skills" / "excel-foundry" / "scripts" / "excel_workbook_package.py"
             spec = importlib.util.spec_from_file_location("excel_workbook_package", package_path)
             package_module = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
