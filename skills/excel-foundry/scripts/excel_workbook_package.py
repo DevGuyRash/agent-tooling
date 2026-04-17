@@ -114,6 +114,13 @@ def _parse_bool_attr(value: str | None) -> bool | None:
     return value in {"1", "true", "True"}
 
 
+def _excel_formula_literal(value: str | None) -> str:
+    if value is None:
+        return ""
+    escaped = value.replace('"', '""')
+    return f'"{escaped}"'
+
+
 class WorkbookPackage:
     def __init__(self, workbook_path: Path) -> None:
         self.workbook_path = workbook_path.resolve()
@@ -208,12 +215,28 @@ class WorkbookPackage:
             rel = self.workbook_rels.get(rel_id or "")
             if not rel:
                 continue
+            target_path = rel["target"]
+            target_name = PurePosixPath(target_path).name
+            target_parent = PurePosixPath(target_path).parent
+            if str(target_parent) in {"", "."}:
+                rels_path = f"_rels/{target_name}.rels"
+            else:
+                rels_path = f"{target_parent}/_rels/{target_name}.rels"
+            sheet_type = "worksheet"
+            if "/chartsheets/" in target_path:
+                sheet_type = "chartsheet"
+            elif "/dialogsheets/" in target_path:
+                sheet_type = "dialogsheet"
+            elif "/macrosheets/" in target_path:
+                sheet_type = "macrosheet"
             sheets.append(
                 {
                     "name": sheet.attrib.get("name", ""),
                     "sheetId": sheet.attrib.get("sheetId", ""),
-                    "path": rel["target"],
-                    "rels": self._read_relationships(f"xl/worksheets/_rels/{PurePosixPath(rel['target']).name}.rels"),
+                    "path": target_path,
+                    "rels": self._read_relationships(rels_path),
+                    "visibility": sheet.attrib.get("state", "visible"),
+                    "sheetType": sheet_type,
                 }
             )
         return sheets
@@ -294,12 +317,209 @@ class WorkbookPackage:
                     "name": sheet["name"],
                     "sheetId": sheet["sheetId"],
                     "path": sheet["path"],
+                    "sheetType": sheet.get("sheetType", "worksheet"),
                     "dimension": dimension.attrib.get("ref") if dimension is not None else None,
                     "tableCount": table_count,
-                    "visibility": "hidden" if root.attrib.get("state") == "hidden" else "visible",
+                    "visibility": sheet.get("visibility", "visible"),
                 }
             )
         return sheets
+
+    def _count_defined_names(self) -> int:
+        defined_names = self.workbook_xml.find("main:definedNames", NS)
+        if defined_names is None:
+            return 0
+        count = 0
+        for defined in defined_names.findall("main:definedName", NS):
+            name = defined.attrib.get("name", "")
+            if name.startswith("_xlnm."):
+                continue
+            count += 1
+        return count
+
+    def _count_power_query_inventory(self) -> dict[str, int]:
+        try:
+            connections_root = self._read_xml("xl/connections.xml")
+        except KeyError:
+            connection_count = 0
+        else:
+            connection_count = len(connections_root.findall("main:connection", NS))
+
+        query_count = 0
+        for name in self._zip.namelist():
+            if not name.startswith("customXml/item") or not name.endswith(".xml"):
+                continue
+            try:
+                root = self._read_xml(name)
+            except ET.ParseError:
+                continue
+            if _local_name(root.tag) != "DataMashup":
+                continue
+            payload_text = "".join(root.itertext()).strip()
+            if not payload_text:
+                break
+            try:
+                payload_bytes = base64.b64decode(payload_text)
+            except Exception:
+                break
+            zip_bytes = self._extract_embedded_zip_bytes(payload_bytes)
+            if not zip_bytes:
+                break
+            try:
+                with zipfile.ZipFile(io.BytesIO(zip_bytes)) as mashup_zip:
+                    query_count = len(
+                        [
+                            item
+                            for item in mashup_zip.namelist()
+                            if item.lower().startswith("formulas/") and item.lower().endswith(".m")
+                        ]
+                    )
+            except zipfile.BadZipFile:
+                query_count = len(
+                    [
+                        item
+                        for item in self._parse_local_zip_entries(zip_bytes)
+                        if item.lower().startswith("formulas/") and item.lower().endswith(".m")
+                    ]
+                )
+            break
+
+        return {"queries": query_count, "connections": connection_count, "modelTables": 0}
+
+    def build_inventory(self) -> dict[str, Any]:
+        capability_matrix = _workbook_engine_capabilities(self.workbook_path)
+        workbook = self.parse_workbook_metadata()
+        sheets = self.parse_sheets()
+        names_count = self._count_defined_names()
+        pq_counts = self._count_power_query_inventory()
+        workbook_protection = self.workbook_xml.find("main:workbookProtection", NS) is not None
+
+        formulas_count = 0
+        tables_count = 0
+        data_validation_count = 0
+        cf_count = 0
+        hyperlinks_count = 0
+        comments_count = 0
+        pivots_count = 0
+        charts_count = 0
+        protected_sheets_count = 0
+        supported_cf_types: set[str] = set()
+        unsupported_cf_types: set[str] = set()
+
+        for sheet in self.sheets:
+            root = self._read_xml(sheet["path"])
+            table_parts = root.find("main:tableParts", NS)
+            if table_parts is not None:
+                tables_count += len(table_parts.findall("main:tablePart", NS))
+
+            sheet_data = root.find("main:sheetData", NS)
+            if sheet_data is not None:
+                for row in sheet_data.findall("main:row", NS):
+                    for cell in row.findall("main:c", NS):
+                        if cell.find("main:f", NS) is not None:
+                            formulas_count += 1
+
+            validations = root.find("main:dataValidations", NS)
+            if validations is not None:
+                data_validation_count += len(validations.findall("main:dataValidation", NS))
+
+            if root.find("main:sheetProtection", NS) is not None:
+                protected_sheets_count += 1
+
+            hyperlinks_count += len(root.findall("main:hyperlinks/main:hyperlink", NS))
+
+            for cf_group in root.findall("main:conditionalFormatting", NS):
+                for rule in cf_group.findall("main:cfRule", NS):
+                    cf_count += 1
+                    raw_type = rule.attrib.get("type", "expression")
+                    mapped_type = {
+                        "expression": "expression",
+                        "cellIs": "cell-value",
+                        "duplicateValues": "unique-values",
+                        "uniqueValues": "unique-values",
+                        "top10": "top10",
+                        "aboveAverage": "above-average",
+                        "colorScale": "color-scale",
+                        "dataBar": "data-bar",
+                        "iconSet": "icon-set",
+                    }.get(raw_type, raw_type)
+                    if mapped_type in SUPPORTED_CF_TYPES:
+                        supported_cf_types.add(mapped_type)
+                    else:
+                        unsupported_cf_types.add(mapped_type)
+
+            pivots_count += len([rel for rel in sheet["rels"].values() if rel["type"].endswith("/pivotTable")])
+            charts_count += len([rel for rel in sheet["rels"].values() if rel["type"].endswith("/chart")])
+
+            comments_rel = next((rel for rel in sheet["rels"].values() if rel["type"].endswith("/comments")), None)
+            if comments_rel is not None:
+                try:
+                    comments_root = self._read_xml(comments_rel["target"])
+                except KeyError:
+                    comments_root = None
+                if comments_root is not None:
+                    comments_count += len(comments_root.findall("main:commentList/main:comment", NS))
+
+            if sheet.get("sheetType") == "chartsheet":
+                charts_count += 1
+
+        return {
+            "workbookPath": str(self.workbook_path.resolve()),
+            "backend": "package",
+            "sourceFormat": self.workbook_path.suffix.lower(),
+            "workingPath": str(self.workbook_path.resolve()),
+            "normalization": "none",
+            "warnings": [],
+            "stagesTried": ["package"],
+            "capabilities": {
+                "excelCom": capability_matrix["desktop"]["available"],
+                "packageReadable": True,
+                "canRead": True,
+                "canWrite": True,
+                "writeBackend": "package",
+                "refreshAwait": False,
+                "powerQueryWrite": False,
+                "vbaProjectAccess": False,
+                "workbookReadOnly": None,
+                "recommendedReadBackend": capability_matrix["recommendedReadBackend"],
+                "recommendedWriteBackend": capability_matrix["recommendedWriteBackend"],
+                "supportedReadSurfaces": capability_matrix["package"]["supportedReadSurfaces"],
+                "writableSurfaces": capability_matrix["package"]["supportedWriteSurfaces"],
+                "engines": capability_matrix,
+            },
+            "unsupported": [
+                {"surface": "vba", "backend": "package", "reason": "Package backend cannot inspect live VBA components."},
+                {"surface": "project", "backend": "package", "reason": "Package backend cannot inspect VBA project metadata."},
+                {"surface": "references", "backend": "package", "reason": "Package backend cannot inspect VBA references."},
+            ],
+            "counts": {
+                "workbook": 1,
+                "sheets": len(sheets),
+                "tables": tables_count,
+                "names": names_count,
+                "cf": cf_count,
+                "pq": pq_counts["queries"],
+                "connections": pq_counts["connections"],
+                "modelTables": pq_counts["modelTables"],
+                "vba": 0,
+                "references": 0,
+                "formulas": formulas_count,
+                "dataValidation": data_validation_count,
+                "charts": charts_count,
+                "pivots": pivots_count,
+                "hyperlinks": hyperlinks_count,
+                "comments": comments_count,
+                "dimensionSheets": len(sheets),
+                "printSheets": len(sheets),
+                "protectedSheets": protected_sheets_count,
+                "workbookProtection": 1 if workbook_protection else 0,
+            },
+            "workbook": workbook,
+            "sheets": sheets,
+            "project": None,
+            "supportedCfTypes": sorted(supported_cf_types),
+            "unsupportedCfTypes": sorted(unsupported_cf_types),
+        }
 
     def parse_workbook_metadata(self) -> dict[str, Any]:
         workbook_name = self.workbook_path.name
@@ -733,6 +953,182 @@ class WorkbookPackage:
                 )
         return sorted(tables, key=lambda entry: (entry["sheet"], entry["name"]))
 
+    def _drawing_relationships_path(self, drawing_path: str) -> str:
+        drawing_name = PurePosixPath(drawing_path).name
+        drawing_parent = PurePosixPath(drawing_path).parent
+        if str(drawing_parent) in {"", "."}:
+            return f"_rels/{drawing_name}.rels"
+        return f"{drawing_parent}/_rels/{drawing_name}.rels"
+
+    def _chart_title_text(self, chart_root: ET.Element) -> str | None:
+        title_node = chart_root.find("c:chart/c:title", NS)
+        if title_node is None:
+            return None
+        rich_text = [node.text or "" for node in title_node.findall(".//a:t", NS)]
+        if rich_text:
+            return "".join(rich_text)
+        value_text = [node.text or "" for node in title_node.findall(".//c:v", NS)]
+        if value_text:
+            return "".join(value_text)
+        return None
+
+    def _chart_series_name_expression(self, series_node: ET.Element) -> tuple[str | None, str | None]:
+        tx_node = series_node.find("c:tx", NS)
+        if tx_node is None:
+            return None, None
+        formula = tx_node.findtext(".//c:f", default="", namespaces=NS) or None
+        literal = tx_node.findtext(".//c:v", default="", namespaces=NS) or None
+        if literal is None:
+            literal = "".join(node.text or "" for node in tx_node.findall(".//a:t", NS)) or None
+        expression = formula if formula else (_excel_formula_literal(literal) if literal else None)
+        return literal or formula, expression
+
+    def _chart_series_axis_expression(self, series_node: ET.Element, *axis_names: str) -> str | None:
+        for axis_name in axis_names:
+            axis_node = series_node.find(f"c:{axis_name}", NS)
+            if axis_node is None:
+                continue
+            formula = axis_node.findtext(".//c:f", default="", namespaces=NS) or None
+            if formula:
+                return formula
+            literal_values = [node.text or "" for node in axis_node.findall(".//c:v", NS)]
+            if literal_values:
+                return "{" + ",".join(_excel_formula_literal(item) for item in literal_values) + "}"
+        return None
+
+    def _chart_type_name(self, chart_root: ET.Element) -> str | None:
+        plot_area = chart_root.find("c:chart/c:plotArea", NS)
+        if plot_area is None:
+            return None
+        for child in list(plot_area):
+            local_name = _local_name(child.tag)
+            if local_name.endswith("Chart"):
+                return local_name
+        return None
+
+    def _chart_series_payload(self, chart_root: ET.Element) -> list[dict[str, Any]]:
+        series_payload: list[dict[str, Any]] = []
+        for series_node in chart_root.findall(".//c:ser", NS):
+            name, name_expr = self._chart_series_name_expression(series_node)
+            categories_expr = self._chart_series_axis_expression(series_node, "cat", "xVal")
+            values_expr = self._chart_series_axis_expression(series_node, "val", "yVal")
+            bubble_expr = self._chart_series_axis_expression(series_node, "bubbleSize")
+            order = series_node.find("c:order", NS)
+            order_value = order.attrib.get("val") if order is not None else ""
+            formula_parts = [
+                name_expr or "",
+                categories_expr or "",
+                values_expr or bubble_expr or "",
+                order_value,
+            ]
+            formula = None
+            if any(part != "" for part in formula_parts):
+                formula = "=SERIES(" + ",".join(formula_parts) + ")"
+            series_payload.append(
+                {
+                    "name": name,
+                    "formula": formula,
+                }
+            )
+        return series_payload
+
+    def _embedded_chart_address(self, anchor_node: ET.Element) -> str | None:
+        from_node = anchor_node.find("xdr:from", NS)
+        to_node = anchor_node.find("xdr:to", NS)
+        if from_node is None or to_node is None:
+            return None
+        try:
+            start_col = int(from_node.findtext("xdr:col", default="0", namespaces=NS)) + 1
+            start_row = int(from_node.findtext("xdr:row", default="0", namespaces=NS)) + 1
+            end_col = int(to_node.findtext("xdr:col", default="0", namespaces=NS)) + 1
+            end_row = int(to_node.findtext("xdr:row", default="0", namespaces=NS)) + 1
+        except ValueError:
+            return None
+        return f"{_row_col_to_cell_ref(start_row, start_col)}:{_row_col_to_cell_ref(end_row, end_col)}"
+
+    def _chart_entry_from_part(
+        self,
+        chart_path: str,
+        *,
+        kind: str,
+        sheet_name: str,
+        name: str | None,
+        address: str | None,
+    ) -> dict[str, Any]:
+        chart_root = self._read_xml(chart_path)
+        title = self._chart_title_text(chart_root)
+        series = self._chart_series_payload(chart_root)
+        return {
+            "name": name,
+            "kind": kind,
+            "sheet": sheet_name,
+            "address": address,
+            "chartType": self._chart_type_name(chart_root),
+            "hasTitle": title is not None,
+            "title": title,
+            "series": series,
+        }
+
+    def parse_charts(self) -> list[dict[str, Any]]:
+        charts: list[dict[str, Any]] = []
+        for sheet in self.sheets:
+            if sheet.get("sheetType") == "worksheet":
+                for rel in sheet["rels"].values():
+                    if not rel["type"].endswith("/drawing"):
+                        continue
+                    drawing_path = rel["target"]
+                    drawing_root = self._read_xml(drawing_path)
+                    drawing_rels = self._read_relationships(self._drawing_relationships_path(drawing_path))
+                    for anchor_node in drawing_root.findall("xdr:twoCellAnchor", NS):
+                        chart_node = anchor_node.find("xdr:graphicFrame/a:graphic/a:graphicData/c:chart", NS)
+                        if chart_node is None:
+                            continue
+                        chart_rel_id = chart_node.attrib.get(f"{{{NS['rel']}}}id")
+                        chart_rel = drawing_rels.get(chart_rel_id or "")
+                        if not chart_rel:
+                            continue
+                        c_nv_pr = anchor_node.find("xdr:graphicFrame/xdr:nvGraphicFramePr/xdr:cNvPr", NS)
+                        name = c_nv_pr.attrib.get("name") if c_nv_pr is not None else None
+                        charts.append(
+                            self._chart_entry_from_part(
+                                chart_rel["target"],
+                                kind="embedded",
+                                sheet_name=sheet["name"],
+                                name=name,
+                                address=self._embedded_chart_address(anchor_node),
+                            )
+                        )
+            elif sheet.get("sheetType") == "chartsheet":
+                root = self._read_xml(sheet["path"])
+                drawing_node = root.find("main:drawing", NS)
+                if drawing_node is None:
+                    continue
+                drawing_rel_id = drawing_node.attrib.get(f"{{{NS['rel']}}}id")
+                drawing_rel = sheet["rels"].get(drawing_rel_id or "")
+                if not drawing_rel:
+                    continue
+                drawing_path = drawing_rel["target"]
+                drawing_root = self._read_xml(drawing_path)
+                drawing_rels = self._read_relationships(self._drawing_relationships_path(drawing_path))
+                chart_rel = next((rel for rel in drawing_rels.values() if rel["type"].endswith("/chart")), None)
+                if chart_rel is None:
+                    chart_node = drawing_root.find(".//c:chart", NS)
+                    if chart_node is not None:
+                        chart_rel_id = chart_node.attrib.get(f"{{{NS['rel']}}}id")
+                        chart_rel = drawing_rels.get(chart_rel_id or "")
+                if chart_rel is None:
+                    continue
+                charts.append(
+                    self._chart_entry_from_part(
+                        chart_rel["target"],
+                        kind="chart-sheet",
+                        sheet_name=sheet["name"],
+                        name=sheet["name"],
+                        address=None,
+                    )
+                )
+        return sorted(charts, key=lambda entry: ((entry["kind"] or ""), (entry["sheet"] or ""), (entry["name"] or "")))
+
     def parse_pivots(self) -> list[dict[str, Any]]:
         workbook_pivot_caches: dict[str, str] = {}
         pivot_caches = self.workbook_xml.find("main:pivotCaches", NS)
@@ -1095,7 +1491,7 @@ def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
             "available": package_readable,
             "canRead": package_readable,
             "canWrite": package_readable,
-            "supportedReadSurfaces": [
+        "supportedReadSurfaces": [
                 "workbook",
                 "sheets",
                 "tables",
@@ -1104,6 +1500,7 @@ def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
                 "data-validation",
                 "protection",
                 "cf",
+                "charts",
                 "pivots",
                 "pq",
                 "connections",
@@ -1173,6 +1570,8 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             payload["dataValidation"] = package.parse_data_validation()
         if not surfaces or "protection" in surfaces:
             payload["protection"] = package.parse_protection()
+        if not surfaces or "charts" in surfaces:
+            payload["charts"] = package.parse_charts()
         if not surfaces or "pivots" in surfaces:
             payload["pivots"] = package.parse_pivots()
         if not surfaces or "dimensions" in surfaces:
@@ -1218,7 +1617,6 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             "references",
         }
         for surface, reason in (
-            ("charts", "Package backend does not yet parse chart metadata."),
             ("vba", "Package backend cannot inspect live VBA components."),
             ("project", "Package backend cannot inspect VBA project metadata."),
             ("references", "Package backend cannot inspect VBA references."),
@@ -1226,6 +1624,14 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             if surface in requested_surfaces:
                 payload["unsupported"].append({"surface": surface, "backend": "package", "reason": reason})
         return payload
+    finally:
+        package.close()
+
+
+def build_inventory_payload(workbook_path: Path) -> dict[str, Any]:
+    package = WorkbookPackage(workbook_path)
+    try:
+        return package.build_inventory()
     finally:
         package.close()
 
@@ -3093,6 +3499,8 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "workbook-inspect":
         workbook_path = Path(args.workbook_path)
         surfaces = normalize_surfaces(getattr(args, "surface", ""))
+        if not surfaces:
+            return build_inventory_payload(workbook_path)
         return build_inspection_payload(build_query_payload(workbook_path, surfaces))
     if args.command == "workbook-diff":
         return compare_workbook_payloads(Path(args.workbook_path), Path(args.other_workbook_path), normalize_surfaces(getattr(args, "surface", "")))
@@ -3218,6 +3626,9 @@ def main(argv: list[str]) -> int:
     inspect_parser = subparsers.add_parser("inspect")
     inspect_parser.add_argument("--workbook-path", required=True)
     inspect_parser.add_argument("--surface", default="")
+
+    inspect_lite_parser = subparsers.add_parser("inspect-lite")
+    inspect_lite_parser.add_argument("--workbook-path", required=True)
 
     bootstrap_parser = subparsers.add_parser("bootstrap")
     bootstrap_parser.add_argument("--workbook-path", required=True)
@@ -3397,7 +3808,12 @@ def main(argv: list[str]) -> int:
     if args.command == "query":
         payload = build_query_payload(workbook_path, surfaces)
     elif args.command == "inspect":
-        payload = build_inspection_payload(build_query_payload(workbook_path, surfaces))
+        if surfaces:
+            payload = build_inspection_payload(build_query_payload(workbook_path, surfaces))
+        else:
+            payload = build_inventory_payload(workbook_path)
+    elif args.command == "inspect-lite":
+        payload = build_inventory_payload(workbook_path)
     elif args.command == "mutate-audit":
         payload = apply_audit_mutation(workbook_path)
     else:

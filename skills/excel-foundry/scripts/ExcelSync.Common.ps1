@@ -1215,7 +1215,7 @@ function Test-SurfaceRequested {
 
 function Get-NormalizedSurfaceNames {
     param(
-        [string]$Surface
+        [string[]]$Surface = @()
     )
 
     $aliases = @{
@@ -1228,7 +1228,8 @@ function Get-NormalizedSurfaceNames {
     }
 
     return @(
-        $Surface -split ',' |
+        @($Surface) |
+            ForEach-Object { $_ -split ',' } |
             ForEach-Object { $_.Trim().ToLowerInvariant() } |
             Where-Object { $_ } |
             ForEach-Object {
@@ -1272,9 +1273,20 @@ function Test-OoxmlPackageWorkbook {
     }
 
     try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
-        $archive = [System.IO.Compression.ZipFile]::OpenRead($WorkbookPath)
-        $archive.Dispose()
+        Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue | Out-Null
+        $stream = [System.IO.File]::Open(
+            $WorkbookPath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite
+        )
+        try {
+            $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Read, $false)
+            $archive.Dispose()
+        }
+        finally {
+            $stream.Dispose()
+        }
         return $true
     }
     catch {
@@ -1285,7 +1297,7 @@ function Test-OoxmlPackageWorkbook {
 function Invoke-PackageWorkbookHelper {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('query', 'inspect', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')]
+        [ValidateSet('query', 'inspect', 'inspect-lite', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')]
         [string]$Command,
         [string]$WorkbookPath,
         [string]$OtherWorkbookPath,
@@ -2478,7 +2490,7 @@ function Get-WorkbookCompatibilityReport {
         -TargetPath $TargetPath `
         -TargetFormat $TargetFormat
 
-    $counts = $InspectionPayload.counts
+    $counts = if ($null -ne $InspectionPayload.PSObject.Properties['counts']) { $InspectionPayload.counts } else { [pscustomobject]@{} }
     $workbookMetadata = $null
     if ($null -ne $InspectionPayload.PSObject.Properties['workbook']) {
         $workbookMetadata = $InspectionPayload.workbook
@@ -2521,23 +2533,55 @@ function Get-WorkbookCompatibilityReport {
         }) | Out-Null
     }
 
+    function Get-CompatibilityCount {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name
+        )
+
+        $countObject = Get-Variable -Name counts -Scope 1 -ValueOnly
+        if ($null -eq $countObject) {
+            return 0
+        }
+        if ($null -eq $countObject.PSObject.Properties[$Name]) {
+            return 0
+        }
+        $rawValue = $countObject.$Name
+        if ($null -eq $rawValue -or [string]::IsNullOrWhiteSpace([string]$rawValue)) {
+            return 0
+        }
+        return [int]$rawValue
+    }
+
+    $sheetsCount = Get-CompatibilityCount -Name 'sheets'
+    $formulasCount = Get-CompatibilityCount -Name 'formulas'
+    $tablesCount = Get-CompatibilityCount -Name 'tables'
+    $namesCount = Get-CompatibilityCount -Name 'names'
+    $commentsCount = Get-CompatibilityCount -Name 'comments'
+    $hyperlinksCount = Get-CompatibilityCount -Name 'hyperlinks'
+    $chartsCount = Get-CompatibilityCount -Name 'charts'
+    $pivotsCount = Get-CompatibilityCount -Name 'pivots'
+    $pqCount = Get-CompatibilityCount -Name 'pq'
+    $connectionsCount = Get-CompatibilityCount -Name 'connections'
+    $modelTablesCount = Get-CompatibilityCount -Name 'modelTables'
+
     if ($formatSpec.flatText) {
-        if ($counts.sheets -gt 1) {
+        if ($sheetsCount -gt 1) {
             Add-CompatibilityFinding -Severity 'high' -Area 'worksheets' -Message 'Flat-text exports preserve only one worksheet per file. Use a per-sheet export plan before converting.'
         }
-        if ($counts.formulas -gt 0) {
+        if ($formulasCount -gt 0) {
             Add-CompatibilityFinding -Severity 'high' -Area 'formulas' -Message 'Formulas will be written as current displayed values in flat-text formats; formula logic will not survive.'
         }
         foreach ($surface in @(
-                @{ name = 'tables'; count = $counts.tables; message = 'Tables and structured references do not survive CSV/TXT export.' },
-                @{ name = 'names'; count = $counts.names; message = 'Defined names are discarded by CSV/TXT export.' },
-                @{ name = 'comments'; count = $counts.comments; message = 'Comments and notes are discarded by CSV/TXT export.' },
-                @{ name = 'hyperlinks'; count = $counts.hyperlinks; message = 'Hyperlink objects are not preserved as workbook objects in CSV/TXT export.' },
-                @{ name = 'charts'; count = $counts.charts; message = 'Charts are lost when exporting to CSV/TXT.' },
-                @{ name = 'pivots'; count = $counts.pivots; message = 'PivotTables and PivotCharts are lost when exporting to CSV/TXT.' },
-                @{ name = 'power-query'; count = $counts.pq; message = 'Power Query definitions are not preserved in flat-text exports.' },
-                @{ name = 'connections'; count = $counts.connections; message = 'Workbook connections are not preserved in flat-text exports.' },
-                @{ name = 'data-model'; count = $counts.modelTables; message = 'The Data Model is not preserved in flat-text exports.' }
+                @{ name = 'tables'; count = $tablesCount; message = 'Tables and structured references do not survive CSV/TXT export.' },
+                @{ name = 'names'; count = $namesCount; message = 'Defined names are discarded by CSV/TXT export.' },
+                @{ name = 'comments'; count = $commentsCount; message = 'Comments and notes are discarded by CSV/TXT export.' },
+                @{ name = 'hyperlinks'; count = $hyperlinksCount; message = 'Hyperlink objects are not preserved as workbook objects in CSV/TXT export.' },
+                @{ name = 'charts'; count = $chartsCount; message = 'Charts are lost when exporting to CSV/TXT.' },
+                @{ name = 'pivots'; count = $pivotsCount; message = 'PivotTables and PivotCharts are lost when exporting to CSV/TXT.' },
+                @{ name = 'power-query'; count = $pqCount; message = 'Power Query definitions are not preserved in flat-text exports.' },
+                @{ name = 'connections'; count = $connectionsCount; message = 'Workbook connections are not preserved in flat-text exports.' },
+                @{ name = 'data-model'; count = $modelTablesCount; message = 'The Data Model is not preserved in flat-text exports.' }
             )) {
             if ([int]$surface.count -gt 0) {
                 Add-CompatibilityFinding -Severity 'high' -Area $surface.name -Message $surface.message
@@ -2554,24 +2598,24 @@ function Get-WorkbookCompatibilityReport {
         if ($hasVbaProject) {
             Add-CompatibilityFinding -Severity 'high' -Area 'vba' -Message 'VBA projects do not round-trip to .ods.'
         }
-        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+        if ($pqCount -gt 0 -or $connectionsCount -gt 0 -or $modelTablesCount -gt 0) {
             Add-CompatibilityFinding -Severity 'high' -Area 'data-integration' -Message 'Power Query, workbook connections, and Data Model artifacts are not reliable in .ods exports.'
         }
-        if ($counts.pivots -gt 0 -or $counts.charts -gt 0) {
+        if ($pivotsCount -gt 0 -or $chartsCount -gt 0) {
             Add-CompatibilityFinding -Severity 'medium' -Area 'analytics' -Message 'Pivot and chart fidelity may degrade when exporting to .ods; validate layouts after conversion.'
         }
     }
     elseif ($formatSpec.extension -eq '.xls') {
         Add-CompatibilityFinding -Severity 'medium' -Area 'legacy' -Message 'Legacy .xls compatibility is heuristic here; modern Excel features can degrade even when the file saves successfully.'
-        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+        if ($pqCount -gt 0 -or $connectionsCount -gt 0 -or $modelTablesCount -gt 0) {
             Add-CompatibilityFinding -Severity 'high' -Area 'modern-data-stack' -Message 'Power Query, workbook connections, and Data Model artifacts are not safe targets for legacy .xls.'
         }
-        if ($counts.formulas -gt 0) {
+        if ($formulasCount -gt 0) {
             Add-CompatibilityFinding -Severity 'medium' -Area 'formulas' -Message 'Modern formulas and dynamic-array behavior may not round-trip to .xls; validate calc results after conversion.'
         }
     }
     elseif ($formatSpec.extension -eq '.xlsb') {
-        if ($counts.pq -gt 0 -or $counts.connections -gt 0 -or $counts.modelTables -gt 0) {
+        if ($pqCount -gt 0 -or $connectionsCount -gt 0 -or $modelTablesCount -gt 0) {
             Add-CompatibilityFinding -Severity 'low' -Area 'refresh' -Message 'Binary workbooks usually preserve refresh artifacts, but post-conversion refresh should still be validated.'
         }
     }
@@ -2957,9 +3001,8 @@ function Invoke-WorkbookSafeExport {
 
     $copyContext = Open-ExcelWorkbook -WorkbookPath $target.path -Visible:$Visible
     try {
-        $inspection = Get-ExcelWorkbookInspection `
+        $inspection = Get-ExcelWorkbookLifecycleInspection `
             -WorkbookPath $target.path `
-            -Surface @('workbook', 'sheets', 'comments', 'hyperlinks', 'connections', 'pq', 'model', 'charts', 'pivots') `
             -Visible:$Visible `
             -Backend 'auto'
         $documentInspection = if ($runDocumentInspectors) {
@@ -3025,9 +3068,8 @@ function Invoke-DirectExcelWorkbookCommand {
         if ([string]::IsNullOrWhiteSpace($TargetPath) -and [string]::IsNullOrWhiteSpace($TargetFormat)) {
             throw "workbook compatibility requires --target-path or --target-format"
         }
-        $inspection = Get-ExcelWorkbookInspection `
+        $inspection = Get-ExcelWorkbookLifecycleInspection `
             -WorkbookPath $WorkbookPath `
-            -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
             -Visible:$Visible `
             -Backend 'auto'
         return [pscustomobject]@{
@@ -3086,7 +3128,31 @@ function Invoke-DirectExcelWorkbookCommand {
         throw ("{0} requires --target-path or --target-format" -f (($Command -replace '^workbook-', 'workbook ') -replace '-', ' '))
     }
 
-    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+    $readOnlyDirectCommands = @('workbook-links', 'table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')
+    $packageFallbackCommands = @('table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')
+    $context = $null
+    try {
+        if ($Command -in $readOnlyDirectCommands) {
+            $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent
+        }
+        else {
+            $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible
+        }
+    }
+    catch {
+        if ($Command -in $packageFallbackCommands -and (Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath)) {
+            return Invoke-DirectPackageReadFallback `
+                -Command $Command `
+                -WorkbookPath $WorkbookPath `
+                -Table $Table `
+                -QueryName $QueryName `
+                -Connection $Connection `
+                -Chart $Chart `
+                -Pivot $Pivot
+        }
+        throw
+    }
+
     $saveChanges = $false
     try {
         switch ($Command) {
@@ -3095,9 +3161,8 @@ function Invoke-DirectExcelWorkbookCommand {
                     throw "workbook save-as requires --target-path or --target-format"
                 }
                 $target = Resolve-WorkbookTargetPath -SourcePath $WorkbookPath -TargetPath $TargetPath -TargetFormat $TargetFormat -Suffix ''
-                $inspection = Get-ExcelWorkbookInspection `
+                $inspection = Get-ExcelWorkbookLifecycleInspection `
                     -WorkbookPath $WorkbookPath `
-                    -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
                     -Visible:$Visible `
                     -Backend 'auto'
                 $compatibility = Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetPath $target.path -TargetFormat $target.format.extension
@@ -3118,9 +3183,8 @@ function Invoke-DirectExcelWorkbookCommand {
                     throw "workbook convert requires --target-path or --target-format"
                 }
                 $target = Resolve-WorkbookTargetPath -SourcePath $WorkbookPath -TargetPath $TargetPath -TargetFormat $TargetFormat -Suffix '.converted'
-                $inspection = Get-ExcelWorkbookInspection `
+                $inspection = Get-ExcelWorkbookLifecycleInspection `
                     -WorkbookPath $WorkbookPath `
-                    -Surface @('workbook', 'sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'cf', 'pivots', 'hyperlinks', 'comments', 'print', 'dimensions', 'pq', 'connections', 'model', 'charts') `
                     -Visible:$Visible `
                     -Backend 'auto'
                 $compatibility = Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetPath $target.path -TargetFormat $target.format.extension
@@ -3144,9 +3208,8 @@ function Invoke-DirectExcelWorkbookCommand {
                 }
             }
             'workbook-document-inspect' {
-                $inspection = Get-ExcelWorkbookInspection `
+                $inspection = Get-ExcelWorkbookLifecycleInspection `
                     -WorkbookPath $WorkbookPath `
-                    -Surface @('workbook', 'sheets', 'comments', 'hyperlinks', 'connections', 'pq', 'model', 'charts', 'pivots') `
                     -Visible:$Visible `
                     -Backend 'auto'
                 $documentInspection = Invoke-WorkbookDocumentInspection -Workbook $context.Workbook -InspectionPayload $inspection -Apply:$Apply
@@ -4465,6 +4528,359 @@ function Get-ExcelWorkbookInspection {
         project = $project
         supportedCfTypes = @($cf | Where-Object { $_.supported } | Select-Object -ExpandProperty type -Unique | Sort-Object)
         unsupportedCfTypes = @($cf | Where-Object { -not $_.supported } | Select-Object -ExpandProperty type -Unique | Sort-Object)
+    }
+}
+
+function Convert-ExcelSheetTypeName {
+    param(
+        $Sheet
+    )
+
+    $sheetType = $null
+    try { $sheetType = [int]$Sheet.Type } catch {}
+
+    switch ($sheetType) {
+        -4167 { return 'worksheet' }
+        -4109 { return 'chartsheet' }
+        -4116 { return 'dialogsheet' }
+        3 { return 'macrosheet' }
+        default { return 'sheet' }
+    }
+}
+
+function Convert-ExcelSheetVisibilityName {
+    param(
+        $Sheet
+    )
+
+    $visibleValue = $null
+    try { $visibleValue = [int]$Sheet.Visible } catch {}
+
+    switch ($visibleValue) {
+        2 { return 'veryHidden' }
+        0 { return 'hidden' }
+        default { return 'visible' }
+    }
+}
+
+function Get-ExcelWorkbookLifecycleInspection {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [switch]$Visible,
+        [ValidateSet('auto', 'excel', 'package')]
+        [string]$Backend = 'auto'
+    )
+
+    $packageReadable = Test-OoxmlPackageWorkbook -WorkbookPath $WorkbookPath
+    if ($Backend -ne 'excel' -and $packageReadable) {
+        return (Invoke-PackageWorkbookHelper -Command 'inspect-lite' -WorkbookPath $WorkbookPath)
+    }
+
+    $context = Open-ExcelWorkbook -WorkbookPath $WorkbookPath -Visible:$Visible -ReadOnlyIntent
+    try {
+        $sheetPayload = New-Object System.Collections.Generic.List[object]
+        $tablesCount = 0
+        $namesCount = 0
+        $cfCount = 0
+        $formulasCount = 0
+        $hyperlinksCount = 0
+        $commentsCount = 0
+        $chartsCount = 0
+        $pivotsCount = 0
+        $protectedSheetsCount = 0
+        $dataValidationCount = 0
+
+        try { $namesCount = [int]$context.Workbook.Names.Count } catch {}
+
+        foreach ($sheet in @($context.Workbook.Sheets)) {
+            $sheetType = Convert-ExcelSheetTypeName -Sheet $sheet
+            $sheetPayload.Add([pscustomobject]@{
+                name = [string]$sheet.Name
+                sheetType = $sheetType
+                visibility = Convert-ExcelSheetVisibilityName -Sheet $sheet
+            }) | Out-Null
+
+            if ($sheetType -eq 'chartsheet') {
+                $chartsCount += 1
+                continue
+            }
+
+            $usedRange = $null
+            $formulaCells = $null
+            $chartObjects = $null
+            $pivotTables = $null
+            $comments = $null
+            $threadedComments = $null
+            try {
+                try { $tablesCount += [int]$sheet.ListObjects.Count } catch {}
+                try { $hyperlinksCount += [int]$sheet.Hyperlinks.Count } catch {}
+                try {
+                    $chartObjects = $sheet.ChartObjects()
+                    if ($null -ne $chartObjects) {
+                        $chartsCount += [int]$chartObjects.Count
+                    }
+                }
+                catch {}
+                try {
+                    $pivotTables = $sheet.PivotTables()
+                    if ($null -ne $pivotTables) {
+                        $pivotsCount += [int]$pivotTables.Count
+                    }
+                }
+                catch {}
+                try {
+                    if ([bool]$sheet.ProtectContents) {
+                        $protectedSheetsCount += 1
+                    }
+                }
+                catch {}
+                try {
+                    $comments = $sheet.Comments
+                    if ($null -ne $comments) {
+                        $commentsCount += [int]$comments.Count
+                    }
+                }
+                catch {}
+                try {
+                    $threadedComments = Get-LateProperty -Target $sheet -Name 'CommentsThreaded'
+                    if ($null -ne $threadedComments) {
+                        $commentsCount += [int]$threadedComments.Count
+                    }
+                }
+                catch {}
+                try {
+                    $usedRange = $sheet.UsedRange
+                    if ($null -ne $usedRange) {
+                        try {
+                            $formulaCells = $usedRange.SpecialCells(-4123)
+                            if ($null -ne $formulaCells) {
+                                try { $formulasCount += [int64]$formulaCells.CountLarge } catch { $formulasCount += [int]$formulaCells.Count }
+                            }
+                        }
+                        catch {}
+                        try { $cfCount += [int]$usedRange.FormatConditions.Count } catch {}
+                    }
+                }
+                catch {}
+                try {
+                    $validation = Get-LateProperty -Target $sheet -Name 'Cells'
+                    if ($null -ne $validation) {
+                        $validationCount = $null
+                        try { $validationCount = [int]$validation.Validation.Count } catch {}
+                        if ($null -ne $validationCount) {
+                            $dataValidationCount += $validationCount
+                        }
+                    }
+                }
+                catch {}
+            }
+            finally {
+                Release-ComObjectSafely -Object $formulaCells
+                Release-ComObjectSafely -Object $usedRange
+                Release-ComObjectSafely -Object $chartObjects
+                Release-ComObjectSafely -Object $pivotTables
+                Release-ComObjectSafely -Object $comments
+                Release-ComObjectSafely -Object $threadedComments
+                Release-ComObjectSafely -Object $sheet
+            }
+        }
+
+        $customProperties = [ordered]@{}
+        try {
+            foreach ($property in @($context.Workbook.CustomDocumentProperties)) {
+                try {
+                    $customProperties[[string]$property.Name] = $property.Value
+                }
+                finally {
+                    Release-ComObjectSafely -Object $property
+                }
+            }
+        }
+        catch {}
+
+        $powerQueryInfo = Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook
+        $links = @(Get-WorkbookLinkInventory -Workbook $context.Workbook)
+        $hasExternalLinks = @($links).Count -gt 0
+
+        return [pscustomobject]@{
+            workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            backend = 'excel'
+            sourceFormat = [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant()
+            workingPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            normalization = 'none'
+            warnings = @()
+            stagesTried = @('excel')
+            capabilities = (Get-ExcelBackendCapabilities -Context $context)
+            unsupported = @()
+            counts = [pscustomobject]@{
+                workbook = 1
+                sheets = $sheetPayload.Count
+                tables = $tablesCount
+                names = $namesCount
+                cf = $cfCount
+                pq = @($powerQueryInfo.queries).Count
+                connections = @($powerQueryInfo.connections).Count
+                modelTables = @($powerQueryInfo.modelTables).Count
+                vba = 0
+                references = 0
+                formulas = $formulasCount
+                dataValidation = $dataValidationCount
+                charts = $chartsCount
+                pivots = $pivotsCount
+                hyperlinks = $hyperlinksCount
+                comments = $commentsCount
+                dimensionSheets = $sheetPayload.Count
+                printSheets = $sheetPayload.Count
+                protectedSheets = $protectedSheetsCount
+                workbookProtection = if ([bool]$context.Workbook.ProtectStructure) { 1 } else { 0 }
+            }
+            workbook = [pscustomobject]@{
+                name = [System.IO.Path]::GetFileName($WorkbookPath)
+                path = [System.IO.Path]::GetFullPath($WorkbookPath)
+                format = [System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant()
+                packageReadable = $packageReadable
+                hasVbaProject = ([System.IO.Path]::GetExtension($WorkbookPath).ToLowerInvariant() -in @('.xlsm', '.xlsb', '.xlam', '.xltm', '.xls'))
+                hasExternalLinks = $hasExternalLinks
+                properties = [pscustomobject]@{
+                    core = [pscustomobject]@{}
+                    app = [pscustomobject]@{}
+                    custom = [pscustomobject]$customProperties
+                }
+            }
+            sheets = @($sheetPayload.ToArray())
+            project = $null
+            supportedCfTypes = @()
+            unsupportedCfTypes = @()
+        }
+    }
+    finally {
+        Close-ExcelWorkbook -Context $context -SaveChanges:$false
+    }
+}
+
+function Invoke-DirectPackageReadFallback {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')]
+        [string]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [string[]]$Table = @(),
+        [string[]]$QueryName = @(),
+        [string[]]$Connection = @(),
+        [string[]]$Chart = @(),
+        [string[]]$Pivot = @()
+    )
+
+    switch ($Command) {
+        'table-get' {
+            if (@($Table).Count -lt 1) {
+                throw "table get requires --table"
+            }
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('tables')
+            $item = Get-DirectWorkbookItemByName -Items @($payload.tables) -Name ([string]$Table[0])
+            if ($null -eq $item) {
+                throw "Table not found: $($Table[0])"
+            }
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                table = $item
+            }
+        }
+        'query-get' {
+            if (@($QueryName).Count -lt 1) {
+                throw "query get requires --query-name"
+            }
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('pq')
+            $item = Get-DirectWorkbookItemByName -Items @($payload.pq) -Name ([string]$QueryName[0])
+            if ($null -eq $item) {
+                throw "Power Query not found: $($QueryName[0])"
+            }
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                query = $item
+            }
+        }
+        'connection-list' {
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('connections')
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                connections = @($payload.connections)
+            }
+        }
+        'connection-get' {
+            if (@($Connection).Count -lt 1) {
+                throw "connection get requires --connection"
+            }
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('connections')
+            $item = Get-DirectWorkbookItemByName -Items @($payload.connections) -Name ([string]$Connection[0])
+            if ($null -eq $item) {
+                throw "Connection not found: $($Connection[0])"
+            }
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                connection = $item
+            }
+        }
+        'chart-list' {
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('charts')
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                charts = @($payload.charts)
+            }
+        }
+        'chart-get' {
+            if (@($Chart).Count -lt 1) {
+                throw "chart get requires --chart"
+            }
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('charts')
+            $item = Get-DirectWorkbookItemByName -Items @($payload.charts) -Name ([string]$Chart[0])
+            if ($null -eq $item) {
+                throw "Chart not found: $($Chart[0])"
+            }
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                chart = $item
+            }
+        }
+        'pivot-list' {
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('pivots')
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                pivots = @($payload.pivots)
+            }
+        }
+        'pivot-get' {
+            if (@($Pivot).Count -lt 1) {
+                throw "pivot get requires --pivot"
+            }
+            $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface @('pivots')
+            $item = Get-DirectWorkbookItemByName -Items @($payload.pivots) -Name ([string]$Pivot[0])
+            if ($null -eq $item) {
+                throw "Pivot not found: $($Pivot[0])"
+            }
+            return [pscustomobject]@{
+                command = $Command
+                backend = 'package'
+                workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                pivot = $item
+            }
+        }
     }
 }
 

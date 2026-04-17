@@ -103,7 +103,7 @@ function Parse-ExcelWorkbookSyncArgs {
         SpecFile = $null
         RefersTo = $null
         Hidden = $false
-        Surface = $null
+        Surface = @()
         Backend = 'auto'
         Mode = 'push'
         StateRoot = $null
@@ -345,7 +345,7 @@ function Parse-ExcelWorkbookSyncArgs {
                 if ($index -ge $Tokens.Count) {
                     Throw-CliError -Message "error: missing value for $token"
                 }
-                $result.Surface = [string]$Tokens[$index]
+                $result.Surface += [string]$Tokens[$index]
                 $surfaceExplicit = $true
                 $index++
                 continue
@@ -393,12 +393,12 @@ function Parse-ExcelWorkbookSyncArgs {
     }
 
     if (-not $surfaceExplicit) {
-        $result.Surface = switch ($result.Command) {
-            'inspect' { 'tables,names,cf,formulas,data-validation,protection,charts,pivots' }
+        $result.Surface += switch ($result.Command) {
+            'inspect' { '' }
             'plan' { 'all-supported' }
             'compare' { 'all-supported' }
             'sync' { 'all-supported' }
-            'workbook-inspect' { 'workbook,sheets,tables,names,formulas,data-validation,protection,cf,pivots,hyperlinks,comments,print,dimensions,pq,connections,model' }
+            'workbook-inspect' { '' }
             'workbook-capabilities' { '' }
             'workbook-create' { '' }
             'workbook-diff' { 'workbook,sheets,tables,names,formulas,data-validation,protection,cf,pivots,hyperlinks,comments,print,dimensions,pq,connections,model' }
@@ -580,7 +580,12 @@ try {
             break
         }
         'inspect' {
-            $payload = Get-ExcelWorkbookInspection -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible -Surface $surfaceNames -Backend $parsed.Backend
+            if (@($surfaceNames).Count -eq 0) {
+                $payload = Get-ExcelWorkbookLifecycleInspection -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible -Backend $parsed.Backend
+            }
+            else {
+                $payload = Get-ExcelWorkbookInspection -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible -Surface $surfaceNames -Backend $parsed.Backend
+            }
             $payload | ConvertTo-Json -Depth 100
             break
         }
