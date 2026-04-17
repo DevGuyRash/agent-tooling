@@ -82,7 +82,7 @@ def save_workbook_as_format(source_path: Path, target_path: Path, file_format: i
         raise AssertionError(proc.stdout + proc.stderr)
 
 
-def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
+def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = False) -> None:
     mashup_buffer = BytesIO()
     with zipfile.ZipFile(mashup_buffer, "w", compression=zipfile.ZIP_DEFLATED) as mashup_zip:
         mashup_zip.writestr("[Content_Types].xml", "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'/>")
@@ -102,9 +102,93 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
         )
     mashup_base64 = base64.b64encode(mashup_buffer.getvalue()).decode("ascii")
 
+    sheet_drawing = ""
+    drawing_rel = ""
+    drawing_part = {}
+    chart_part = {}
+    chart_content_types = ""
+    if include_chart:
+        sheet_drawing = '\n              <drawing r:id="rId4"/>'
+        drawing_rel = '\n              <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'
+        chart_content_types = (
+            '              <Override PartName="/xl/drawings/drawing1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>\n'
+            '              <Override PartName="/xl/charts/chart1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>\n'
+        )
+        drawing_part = {
+            "xl/drawings/drawing1.xml": dedent(
+                """\
+                <?xml version="1.0" encoding="UTF-8"?>
+                <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <xdr:twoCellAnchor>
+                    <xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+                    <xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+                    <xdr:graphicFrame macro="">
+                      <xdr:nvGraphicFramePr>
+                        <xdr:cNvPr id="2" name="Chart 1"/>
+                        <xdr:cNvGraphicFramePr/>
+                      </xdr:nvGraphicFramePr>
+                      <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>
+                      <a:graphic>
+                        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                          <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/>
+                        </a:graphicData>
+                      </a:graphic>
+                    </xdr:graphicFrame>
+                    <xdr:clientData/>
+                  </xdr:twoCellAnchor>
+                </xdr:wsDr>
+                """
+            ),
+            "xl/drawings/_rels/drawing1.xml.rels": dedent(
+                """\
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+                </Relationships>
+                """
+            ),
+        }
+        chart_part = {
+            "xl/charts/chart1.xml": dedent(
+                """\
+                <?xml version="1.0" encoding="UTF-8"?>
+                <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <c:chart>
+                    <c:title>
+                      <c:tx>
+                        <c:rich>
+                          <a:bodyPr/>
+                          <a:lstStyle/>
+                          <a:p><a:r><a:t>Sales</a:t></a:r></a:p>
+                        </c:rich>
+                      </c:tx>
+                      <c:overlay val="0"/>
+                    </c:title>
+                    <c:plotArea>
+                      <c:layout/>
+                      <c:barChart>
+                        <c:barDir val="col"/>
+                        <c:grouping val="clustered"/>
+                        <c:ser>
+                          <c:idx val="0"/>
+                          <c:order val="0"/>
+                          <c:tx><c:strRef><c:f>Sheet1!$B$1</c:f></c:strRef></c:tx>
+                          <c:cat><c:strRef><c:f>Sheet1!$A$2</c:f></c:strRef></c:cat>
+                          <c:val><c:numRef><c:f>Sheet1!$B$2</c:f></c:numRef></c:val>
+                        </c:ser>
+                      </c:barChart>
+                    </c:plotArea>
+                  </c:chart>
+                </c:chartSpace>
+                """
+            )
+        }
+
     workbook_files = {
         "[Content_Types].xml": dedent(
-            """\
+            f"""\
             <?xml version="1.0" encoding="UTF-8"?>
             <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
               <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -121,6 +205,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
               <Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>
               <Override PartName="/customXml/item1.xml" ContentType="application/xml"/>
               <Override PartName="/customXml/itemProps1.xml" ContentType="application/vnd.openxmlformats-officedocument.customXmlProperties+xml"/>
+{chart_content_types.rstrip()}
             </Types>
             """
         ),
@@ -161,7 +246,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
             """
         ),
         "xl/worksheets/sheet1.xml": dedent(
-            """\
+            f"""\
             <?xml version="1.0" encoding="UTF-8"?>
             <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
               <cols>
@@ -189,6 +274,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
                   <formula>B2&gt;0</formula>
                 </cfRule>
               </conditionalFormatting>
+{sheet_drawing}
               <hyperlinks>
                 <hyperlink ref="A2" r:id="rId2" tooltip="Go to example"/>
               </hyperlinks>
@@ -204,12 +290,13 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
             """
         ),
         "xl/worksheets/_rels/sheet1.xml.rels": dedent(
-            """\
+            f"""\
             <?xml version="1.0" encoding="UTF-8"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
               <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>
               <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/report" TargetMode="External"/>
               <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>
+{drawing_rel.rstrip()}
             </Relationships>
             """
         ),
@@ -310,6 +397,8 @@ def build_minimal_ooxml_workbook(workbook_path: Path) -> None:
             """
         ),
     }
+    workbook_files.update(drawing_part)
+    workbook_files.update(chart_part)
 
     with zipfile.ZipFile(workbook_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
         for name, content in workbook_files.items():
@@ -921,12 +1010,43 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(payload["dataValidation"][0]["type"], "whole")
             self.assertTrue(payload["protection"]["workbook"]["lockStructure"])
             self.assertEqual(len(payload["protection"]["worksheets"]), 1)
-            self.assertTrue(any(item["surface"] == "charts" for item in payload["unsupported"]))
+            self.assertEqual(payload["charts"], [])
             self.assertEqual(len(payload["pq"]), 1)
             self.assertEqual(payload["pq"][0]["name"], "Query1")
             self.assertEqual(payload["pq"][0]["connectionName"], "Query - Query1")
             self.assertEqual(payload["pq"][0]["loads"][0]["table"], "Table1")
             self.assertEqual(len(payload["connections"]), 1)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_query_reads_chart_metadata_from_ooxml_workbook(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-package-chart-") as tmpdir:
+            workbook = Path(tmpdir) / "package-chart-workbook.xlsx"
+            build_minimal_ooxml_workbook(workbook, include_chart=True)
+            proc = run_pwsh_file(
+                "query",
+                "--workbook-path",
+                str(workbook),
+                "--surface",
+                "charts",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["backend"], "package")
+            self.assertEqual(len(payload["charts"]), 1)
+            chart = payload["charts"][0]
+            self.assertEqual(chart["name"], "Chart 1")
+            self.assertEqual(chart["kind"], "embedded")
+            self.assertEqual(chart["sheet"], "Sheet1")
+            self.assertEqual(chart["address"], "E2:K16")
+            self.assertEqual(chart["chartType"], "barChart")
+            self.assertTrue(chart["hasTitle"])
+            self.assertEqual(chart["title"], "Sales")
+            self.assertEqual(chart["series"][0]["name"], "Sheet1!$B$1")
+            self.assertEqual(chart["series"][0]["formula"], "=SERIES(Sheet1!$B$1,Sheet1!$A$2,Sheet1!$B$2,0)")
+            self.assertFalse(any(item["surface"] == "charts" for item in payload["unsupported"]))
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_direct_package_commands_support_core_workbook_ops(self) -> None:
@@ -1621,7 +1741,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["charts"], 0)
             self.assertEqual(payload["counts"]["pivots"], 0)
             self.assertTrue(payload["capabilities"]["canWrite"])
-            self.assertTrue(any(item["surface"] == "charts" for item in payload["unsupported"]))
+            self.assertFalse(any(item["surface"] == "charts" for item in payload["unsupported"]))
             self.assertTrue(any(item["surface"] == "project" for item in payload["unsupported"]))
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
@@ -1774,6 +1894,28 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("--target-format", combined)
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_accumulates_repeated_surface_flags_for_workbook_diff(self) -> None:
+        proc = run_pwsh_file(
+            "workbook",
+            "diff",
+            "--workbook-path",
+            str(FIXTURE_WORKBOOK),
+            "--other-workbook-path",
+            str(FIXTURE_WORKBOOK),
+            "--surface",
+            "workbook",
+            "--surface",
+            "sheets",
+            "--surface",
+            "names",
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        surfaces = [entry["surface"] for entry in payload["surfaces"]]
+        self.assertEqual(surfaces, ["workbook", "sheets", "names"])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_resolve_excel_save_format_supports_major_target_formats(self) -> None:
         proc = run_pwsh(
             dedent(
@@ -1857,6 +1999,183 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("formulas will be written as current displayed values", messages.lower())
         self.assertIn("power query definitions", messages.lower())
         self.assertIn("charts are lost", messages.lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_workbook_compatibility_report_handles_sparse_counts(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $inspection = [pscustomobject]@{{
+                    workbookPath = 'C:\\temp\\report.xlsx'
+                    sourceFormat = '.xlsx'
+                    workbook = [pscustomobject]@{{
+                        hasVbaProject = $false
+                    }}
+                    counts = [pscustomobject]@{{
+                        sheets = 1
+                        formulas = 0
+                    }}
+                }}
+                Get-WorkbookCompatibilityReport -InspectionPayload $inspection -TargetFormat 'csv' | ConvertTo-Json -Compress -Depth 20
+                """
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["targetFormat"], "csv")
+        self.assertIsInstance(payload["findings"], list)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_helper_inspect_lite_returns_inventory_payload(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $payload = Invoke-PackageWorkbookHelper -Command 'inspect-lite' -WorkbookPath '{FIXTURE_WORKBOOK}'
+                $payload | ConvertTo-Json -Compress -Depth 50
+                """
+            ),
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertEqual(Path(payload["workbookPath"]), FIXTURE_WORKBOOK.resolve())
+        self.assertGreaterEqual(payload["counts"]["sheets"], 1)
+        self.assertIn("workbook", payload)
+        self.assertIn("sheets", payload)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_workbook_lifecycle_inspection_prefers_package_backend_for_ooxml(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $payload = Get-ExcelWorkbookLifecycleInspection -WorkbookPath '{FIXTURE_WORKBOOK}' -Backend 'auto'
+                $payload | ConvertTo-Json -Compress -Depth 50
+                """
+            ),
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertEqual(payload["sourceFormat"], ".xlsm")
+        self.assertGreaterEqual(payload["counts"]["tables"], 1)
+        self.assertTrue(payload["workbook"]["hasVbaProject"])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_workbook_inspect_defaults_to_compact_inventory(self) -> None:
+        proc = run_pwsh_file(
+            "workbook",
+            "inspect",
+            "--workbook-path",
+            str(FIXTURE_WORKBOOK),
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertIn("counts", payload)
+        self.assertIn("workbook", payload)
+        self.assertIn("sheets", payload)
+        self.assertNotIn("tables", payload)
+        self.assertNotIn("formulas", payload)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_inspect_defaults_to_compact_inventory(self) -> None:
+        proc = run_pwsh_file(
+            "inspect",
+            "--workbook-path",
+            str(FIXTURE_WORKBOOK),
+            "--backend",
+            "package",
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertIn("counts", payload)
+        self.assertIn("workbook", payload)
+        self.assertIn("sheets", payload)
+        self.assertNotIn("tables", payload)
+        self.assertNotIn("formulas", payload)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_direct_package_read_fallback_supports_query_and_connection_get(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $query = Invoke-DirectPackageReadFallback -Command 'query-get' -WorkbookPath '{FIXTURE_WORKBOOK}' -QueryName @('AP_INVOICES_INTERFACE')
+                $connection = Invoke-DirectPackageReadFallback -Command 'connection-get' -WorkbookPath '{FIXTURE_WORKBOOK}' -Connection @('Query - AP_INVOICES_INTERFACE')
+                [pscustomobject]@{{
+                    queryBackend = $query.backend
+                    queryName = $query.query.name
+                    connectionBackend = $connection.backend
+                    connectionName = $connection.connection.name
+                }} | ConvertTo-Json -Compress -Depth 20
+                """
+            ),
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["queryBackend"], "package")
+        self.assertEqual(payload["queryName"], "AP_INVOICES_INTERFACE")
+        self.assertEqual(payload["connectionBackend"], "package")
+        self.assertEqual(payload["connectionName"], "Query - AP_INVOICES_INTERFACE")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_direct_package_read_fallback_supports_table_get(self) -> None:
+        proc = run_pwsh(
+            dedent(
+                f"""
+                . '{COMMON}'
+                $table = Invoke-DirectPackageReadFallback -Command 'table-get' -WorkbookPath '{FIXTURE_WORKBOOK}' -Table @('tbl_invoices')
+                [pscustomobject]@{{
+                    backend = $table.backend
+                    name = $table.table.name
+                }} | ConvertTo-Json -Compress -Depth 20
+                """
+            ),
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["backend"], "package")
+        self.assertEqual(payload["name"], "tbl_invoices")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_direct_package_read_fallback_supports_chart_list_and_get(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-chart-fallback-") as tmpdir:
+            workbook = Path(tmpdir) / "package-chart-workbook.xlsx"
+            build_minimal_ooxml_workbook(workbook, include_chart=True)
+            proc = run_pwsh(
+                dedent(
+                    f"""
+                    . '{COMMON}'
+                    $list = Invoke-DirectPackageReadFallback -Command 'chart-list' -WorkbookPath '{workbook}'
+                    $chart = Invoke-DirectPackageReadFallback -Command 'chart-get' -WorkbookPath '{workbook}' -Chart @('Chart 1')
+                    [pscustomobject]@{{
+                        listBackend = $list.backend
+                        listCount = @($list.charts).Count
+                        chartBackend = $chart.backend
+                        chartName = $chart.chart.name
+                        chartTitle = $chart.chart.title
+                    }} | ConvertTo-Json -Compress -Depth 20
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["listBackend"], "package")
+            self.assertEqual(payload["listCount"], 1)
+            self.assertEqual(payload["chartBackend"], "package")
+            self.assertEqual(payload["chartName"], "Chart 1")
+            self.assertEqual(payload["chartTitle"], "Sales")
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_workbook_document_inspection_reports_manual_findings_without_excel(self) -> None:

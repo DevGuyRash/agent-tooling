@@ -27,6 +27,15 @@ def discover_external_workbooks(roots: list[Path]) -> list[Path]:
     for root in roots:
         if not root.exists():
             continue
+        if root.is_file():
+            if root.suffix.lower() not in EXCEL_EXTENSIONS:
+                continue
+            resolved = root.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            discovered.append(resolved)
+            continue
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
@@ -43,6 +52,18 @@ def discover_external_workbooks(roots: list[Path]) -> list[Path]:
 def safe_slug(path: Path) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", str(path))
     return normalized.strip(".-") or path.stem
+
+
+class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
+    def test_discover_external_workbooks_accepts_explicit_file_roots(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-sync-external-root-file-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "single.xlsx"
+            workbook.write_text("placeholder", encoding="utf-8")
+
+            discovered = discover_external_workbooks([workbook])
+
+            self.assertEqual(discovered, [workbook.resolve()])
 
 
 class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
@@ -115,12 +136,21 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                     self.assertIn("comparisonStatus", compare_payload)
                     if compare_payload["comparisonAvailable"]:
                         self.assertIn(compare_payload["comparisonStatus"], {"ok"})
-                        self.assertIn(compare_payload["raw"]["match"], {True, False})
-                        self.assertIn(compare_payload["normalized"]["match"], {True, False})
+                        self.assertIn(compare_payload["match"], {True, False})
+                        raw_payload = compare_payload.get("raw")
+                        normalized_payload = compare_payload.get("normalized")
+                        if raw_payload is not None:
+                            self.assertIn(raw_payload["match"], {True, False})
+                        if normalized_payload is not None:
+                            self.assertIn(normalized_payload["match"], {True, False})
                     else:
                         self.assertIsNone(compare_payload["match"])
-                        self.assertIsNone(compare_payload["raw"]["match"])
-                        self.assertIsNone(compare_payload["normalized"]["match"])
+                        raw_payload = compare_payload.get("raw")
+                        normalized_payload = compare_payload.get("normalized")
+                        if raw_payload is not None:
+                            self.assertIsNone(raw_payload["match"])
+                        if normalized_payload is not None:
+                            self.assertIsNone(normalized_payload["match"])
                         self.assertIn(compare_payload["comparisonStatus"], {"com_open_failed", "com_timed_out", "com_unavailable", "package_unavailable"})
 
     @unittest.skipUnless(shutil.which("pwsh") is not None, "pwsh not available on this host")
