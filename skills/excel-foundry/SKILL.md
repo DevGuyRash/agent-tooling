@@ -69,7 +69,7 @@ define the generic contract.
   `unsupported` fields so agent decisions can follow actual backend limits.
 - Query/bootstrap coverage now includes sheets, formulas, data-validation,
   protection, workbook metadata, comments, hyperlinks, dimensions, print
-  settings, and pivot metadata in the manifest contract.
+  settings, chart metadata, and pivot metadata in the manifest contract.
 - The plan-centric package path now supports per-surface planning, per-surface
   compare, targeted selectors, dry-run sync, and apply mode for package-safe
   OOXML writes.

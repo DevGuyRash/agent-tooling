@@ -7,9 +7,9 @@ manifest are the source of truth.
 
 ```bash
 sh <skills-file-root>/scripts/excel-foundry inspect --workbook-path /path/to/workbook.xlsm
-sh <skills-file-root>/scripts/excel-foundry workbook inspect --workbook-path /path/to/workbook.xlsx --surface workbook,comments,hyperlinks,print,dimensions
+sh <skills-file-root>/scripts/excel-foundry workbook inspect --workbook-path /path/to/workbook.xlsx --surface 'workbook,comments,hyperlinks,print,dimensions'
 sh <skills-file-root>/scripts/excel-foundry workbook capabilities --workbook-path /path/to/workbook.xlsb
-sh <skills-file-root>/scripts/excel-foundry workbook diff --workbook-path /path/to/left.xlsx --other-workbook-path /path/to/right.xlsx --surface workbook,sheets,names
+sh <skills-file-root>/scripts/excel-foundry workbook diff --workbook-path /path/to/left.xlsx --other-workbook-path /path/to/right.xlsx --surface 'workbook,sheets,names'
 sh <skills-file-root>/scripts/excel-foundry workbook save-as --workbook-path /path/to/source.xlsm --target-path /path/to/copy.xlsb
 sh <skills-file-root>/scripts/excel-foundry workbook convert --workbook-path /path/to/source.xlsx --target-format csv
 sh <skills-file-root>/scripts/excel-foundry workbook repair --workbook-path /path/to/damaged.xlsx --mode repair --target-path /path/to/damaged.repaired.xlsx
@@ -22,12 +22,12 @@ sh <skills-file-root>/scripts/excel-foundry workbook safe-export --workbook-path
 sh <skills-file-root>/scripts/excel-foundry manifest validate --manifest-path /path/to/excel-sync.manifest.json
 sh <skills-file-root>/scripts/excel-foundry manifest doctor --manifest-path /path/to/excel-sync.manifest.json
 sh <skills-file-root>/scripts/excel-foundry manifest migrate --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry query --manifest-path /path/to/excel-sync.manifest.json --surface tables,names,formulas,data-validation,protection,charts,pivots,pq,connections,model
+sh <skills-file-root>/scripts/excel-foundry query --manifest-path /path/to/excel-sync.manifest.json --surface 'tables,names,formulas,data-validation,protection,charts,pivots,pq,connections,model'
 sh <skills-file-root>/scripts/excel-foundry bootstrap --workbook-path /path/to/workbook.xlsx --output-dir /path/to/bundle
 sh <skills-file-root>/scripts/excel-foundry plan --manifest-path /path/to/excel-sync.manifest.json --surface all-supported --mode push
-sh <skills-file-root>/scripts/excel-foundry compare --manifest-path /path/to/excel-sync.manifest.json --surface names,formulas,protection
-sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface names,formulas --mode push
-sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface names,formulas --mode push --apply
+sh <skills-file-root>/scripts/excel-foundry compare --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas,protection'
+sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas' --mode push
+sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas' --mode push --apply
 sh <skills-file-root>/scripts/excel-foundry push --manifest-path /path/to/excel-sync.manifest.json
 sh <skills-file-root>/scripts/excel-foundry pull --manifest-path /path/to/excel-sync.manifest.json
 sh <skills-file-root>/scripts/excel-foundry roundtrip --manifest-path /path/to/excel-sync.manifest.json

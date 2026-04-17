@@ -8,15 +8,17 @@
 
 ## Engines
 
-- `auto`: prefer COM on Windows when Excel is available, otherwise fall back to OOXML
+- `auto`: currently resolves to the OOXML path in the generic Python helper
 - `ooxml`: parse the workbook package directly
 - `com`: drive Excel through PowerShell automation helpers
 
 For the manifest-driven launcher, treat Windows Excel COM as the live backend
 for legacy mutation, `.xls`, and `.xlsb`. The package backend now supports
 planning, per-surface compare, dry-run sync, and apply mode for the safe OOXML
-write surfaces on package-readable `.xlsx` and `.xlsm`: names, formulas,
-data-validation, conditional formatting, and protection.
+write surfaces on package-readable `.xlsx` and `.xlsm`: workbook metadata or
+calculation settings, names, formulas, data-validation, conditional
+formatting, protection, existing table definitions and table-backed cell
+regions, row and column dimensions, hyperlinks, comments, and print settings.
 
 ## Generic audit CLI
 
@@ -96,16 +98,16 @@ sh <skills-file-root>/scripts/excel-foundry plan `
 
 sh <skills-file-root>/scripts/excel-foundry compare `
   --manifest-path path\to\excel-sync.manifest.json `
-  --surface names,formulas,protection
+  --surface 'names,formulas,protection'
 
 sh <skills-file-root>/scripts/excel-foundry sync `
   --manifest-path path\to\excel-sync.manifest.json `
-  --surface names,formulas,protection `
+  --surface 'names,formulas,protection' `
   --mode push
 
 sh <skills-file-root>/scripts/excel-foundry sync `
   --manifest-path path\to\excel-sync.manifest.json `
-  --surface names,formulas,protection `
+  --surface 'names,formulas,protection' `
   --mode push `
   --sheet Sheet1 `
   --name MyValue `
@@ -139,11 +141,17 @@ metadata, and VBA metadata where the backend supports them.
 
 Current package-backed write surfaces available through `sync --apply` are:
 
+- workbook metadata or calculation settings
+- tables
 - names
 - formulas
 - data-validation
 - conditional formatting
 - protection
+- dimensions
+- hyperlinks
+- comments
+- print
 
-Charts, pivots, Power Query, connections, model, and tables still plan and
-compare cleanly in the package path, but remain unsupported for package writes.
+Charts, pivots, Power Query, connections, and model still plan and compare
+cleanly in the package path, but remain unsupported for package writes.

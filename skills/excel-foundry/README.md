@@ -47,11 +47,10 @@ sh <skills-file-root>/scripts/excel-foundry --help
 Use the launcher for both direct workbook operations and manifest/workspace
 sync flows.
 
-Direct workbook commands currently include package-backed:
+Direct workbook commands currently include package-backed or package-fallback
+reads and package-backed direct edits for package-readable `.xlsx` and `.xlsm`:
 
 - `workbook inspect|capabilities|create|diff`
-- `workbook save-as|convert|repair|compatibility|document-inspect`
-- `workbook links|break-links|repoint-links|safe-export`
 - `manifest validate|doctor|migrate`
 - `sheet list|create`
 - `name list|set|delete`
@@ -60,7 +59,11 @@ Direct workbook commands currently include package-backed:
 - `cell get|set`
 - `range get|set`
 
-Direct workbook commands now also include Excel COM-backed advanced verbs:
+Direct workbook commands now also include Excel COM-backed lifecycle and
+advanced verbs:
+
+- `workbook save-as|convert|repair|compatibility|document-inspect`
+- `workbook links|break-links|repoint-links|safe-export`
 
 - `table get|create|update|delete`
 - `query get|set|delete|refresh`
@@ -83,8 +86,7 @@ safe OOXML surfaces.
 Current package/generic metadata surfaces include sheets, tables, names,
 conditional formatting, formulas, data-validation, protection, workbook
 metadata, dimensions, hyperlinks, comments, print settings, pivot metadata,
-Power Query metadata, and VBA metadata. Chart metadata remains an explicit
-unsupported package read surface today.
+chart metadata, Power Query metadata, and VBA metadata.
 
 Write-capable COM flows still exist for the legacy manifest sync scripts.
 OOXML/package parsing now also supports manifest-driven `plan`, `compare`,
@@ -104,7 +106,8 @@ Desktop-backed lifecycle commands now add:
 - document-inspector style scans that combine Excel `DocumentInspectors` with manual checks for comments, hidden sheets, hyperlinks, custom properties, and external links
 - outbound link inventory, selective link breaking/repointing, and share-safe export copies that sanitize document information on a copy
 
-Auto engine selection on the generic Python helper now prefers the package
-path for package-readable workbooks. Generic COM-backed read flows still use
-isolated workbook copies so read reliability does not depend on the original
-workbook path staying directly openable by Excel.
+Generic `excel_workbook_sync.py --engine auto` currently resolves to the OOXML
+path first. COM remains available when explicitly requested, and generic
+COM-backed read flows still use isolated workbook copies so read reliability
+does not depend on the original workbook path staying directly openable by
+Excel.

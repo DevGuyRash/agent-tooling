@@ -40,7 +40,7 @@ Common flags:
 - `--other-workbook-path`
 - `--manifest-path`
 - `--surface all-supported`
-- `--surface sheets,tables,names,cf,formulas,data-validation,protection,charts,pivots,pq,connections,model,vba,project,references`
+- `--surface 'sheets,tables,names,cf,formulas,data-validation,protection,charts,pivots,pq,connections,model,vba,project,references'`
 - `--sheet`
 - `--table`
 - `--name`
@@ -71,3 +71,5 @@ artifact drift instead of one coarse workbook result.
 - `workbook break-links --workbook-path /path/to/book.xlsx --spec-json '{"all":true}'`
 - `workbook repoint-links --workbook-path /path/to/book.xlsx --spec-file /path/to/link-map.json`
 - `workbook safe-export --workbook-path /path/to/book.xlsx --target-path /path/to/book.share-safe.xlsx`
+
+When you pass a comma-separated `--surface` value from PowerShell, quote it as one argument. Repeating `--surface` also works.

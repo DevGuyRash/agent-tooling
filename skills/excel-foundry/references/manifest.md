@@ -66,11 +66,17 @@ For the plan-centric package path, `plan`, `compare`, and `sync` consume the
 same committed manifest and treat the listed artifact paths as per-surface repo
 inputs. Current package-backed write surfaces are:
 
+- `workbook`
+- `tables`
 - `names`
 - `formulas`
 - `data-validation`
 - `cf`
 - `protection`
+- `dimensions`
+- `hyperlinks`
+- `comments`
+- `print`
 
 Use `query` or `inspect` without a manifest when only workbook discovery is
 needed.
