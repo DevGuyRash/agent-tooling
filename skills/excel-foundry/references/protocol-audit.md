@@ -39,3 +39,4 @@ python <skills-file-root>/scripts/excel_workbook_sync.py matrix-audit --workbook
   `warnings`, and `unsupported` fields instead of assuming COM parity implies
   write support.
 - `.xls` and `.xlsb` remain COM-dependent.
+

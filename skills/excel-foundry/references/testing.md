@@ -16,6 +16,9 @@ Use the fixture for:
 
 Use external workbooks only in local audit runs, not in committed tests.
 
+If you are adding or changing fixtures, tests, or local corpus behavior for
+this skill, first read `<skills-file-root>/DEVELOPMENT.md`.
+
 Use `matrix-audit` when the task is validating copied workbook mutations across
 multiple workbooks and you want one aggregate report root.
 

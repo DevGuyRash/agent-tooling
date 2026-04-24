@@ -86,13 +86,20 @@ Manifest-driven `query`, `inspect`, and `bootstrap` payloads include:
 - `capabilities`
 - `warnings`
 - `unsupported`
+- `engineRoutes`
+- `capabilityLedger` when `workbook capabilities --deep` is requested
 
 When the workbook is package-readable, query/bootstrap bundles can also include
 metadata for formulas, data-validation, workbook or worksheet protection,
-charts, and pivots. In the current package path, formulas, data-validation,
-and protection are also write-capable through `sync --apply`, while charts and
-pivots remain compare or plan-only surfaces. Backends that cannot provide one
-of those surfaces report it under `unsupported`.
+charts, pivots, Power Query, connections, and Data Model artifacts. Package
+plans use `engineRoutes` to distinguish package-safe writes from
+`desktop-write` surfaces that are inspectable and diffable in package mode but
+mutated through desktop Excel.
+
+The deep capability ledger is the generic max-write contract. Each surface has
+`readLane`, `writeLane`, `route`, `verify`, `risk`, `canReadHere`,
+`canWriteHere`, and `canPreserveHere` so agents can select the strongest safe
+write path without hard-coded workbook assumptions.
 
 ## Audit Output
 

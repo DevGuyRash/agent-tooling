@@ -19,8 +19,9 @@ Behavior:
 - `plan` and per-surface `compare` can include `pq`, `connections`, and `model`
   in the package path so callers can see capability and drift without invoking
   COM mutation.
-- Package-backed `sync` currently treats `pq`, `connections`, and `model` as
-  unsupported write surfaces and reports them as plan or compare only.
+- Package-backed `sync` treats `pq`, `connections`, and `model` as
+  `desktop-write` surfaces: it inventories, plans, and compares them without
+  invoking desktop Excel, then routes mutation to the desktop backend.
 
 Credential boundary:
 

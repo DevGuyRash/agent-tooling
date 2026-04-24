@@ -9,13 +9,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'ExcelSync.Common.ps1')
+. (Join-Path $PSScriptRoot 'ExcelFoundry.Common.ps1')
 
 function Show-ExcelWorkbookSyncUsage {
     @"
 Usage:
   excel-foundry.ps1 <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap|plan|compare|sync> [options]
-  excel-foundry.ps1 <workbook|manifest|sheet|name|table|query|connection|chart|pivot|cell|range> <action> [options]
+  excel-foundry.ps1 <workbook|manifest|sheet|name|table|query|connection|chart|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range> <action> [options]
   excel-foundry.ps1 [options]
 
 Options:
@@ -34,6 +34,9 @@ Options:
   --connection NAME    | -Connection NAME
   --chart NAME         | -Chart NAME
   --pivot NAME         | -Pivot NAME
+  --slicer NAME        | -Slicer NAME
+  --timeline NAME      | -Timeline NAME
+  --automation-type NAME | -AutomationType NAME
   --address A1         | -Address A1
   --range-ref A1:B2    | -RangeRef A1:B2
   --value-json JSON    | -ValueJson JSON
@@ -46,6 +49,8 @@ Options:
   --hidden             | -Hidden
   --state-root PATH    | -StateRoot PATH
   --apply              | -Apply
+  --destructive        | -Destructive
+  --deep               | -Deep
   --visible            | -Visible
   --help | -help | -h | -? 
 
@@ -93,6 +98,8 @@ function Parse-ExcelWorkbookSyncArgs {
         Connection = @()
         Chart = @()
         Pivot = @()
+        Slicer = @()
+        Timeline = @()
         Address = $null
         RangeRef = $null
         ValueJson = $null
@@ -102,28 +109,40 @@ function Parse-ExcelWorkbookSyncArgs {
         SpecJson = $null
         SpecFile = $null
         RefersTo = $null
+        AutomationType = $null
         Hidden = $false
         Surface = @()
         Backend = 'auto'
         Mode = 'push'
         StateRoot = $null
         Apply = $false
+        Destructive = $false
+        Deep = $false
         Visible = $false
         ShowHelp = $false
     }
     $surfaceExplicit = $false
 
-    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get', 'cell-get', 'cell-set', 'range-get', 'range-set')
+    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'automation-inspect', 'automation-generate', 'automation-run', 'cell-get', 'cell-set', 'range-get', 'range-set')
     $resourceCommands = @{
         'workbook' = @('inspect', 'capabilities', 'create', 'diff', 'save-as', 'convert', 'repair', 'compatibility', 'document-inspect', 'links', 'break-links', 'repoint-links', 'safe-export')
         'manifest' = @('validate', 'doctor', 'migrate')
-        'sheet' = @('list', 'create')
+        'sheet' = @('list', 'create', 'hide', 'unhide', 'very-hide', 'reorder', 'delete')
         'name' = @('list', 'set', 'delete')
         'table' = @('list', 'read', 'get', 'create', 'update', 'delete')
         'query' = @('list', 'get', 'set', 'delete', 'refresh')
         'connection' = @('list', 'get')
-        'chart' = @('list', 'get')
-        'pivot' = @('list', 'get')
+        'chart' = @('list', 'get', 'create', 'update', 'delete')
+        'pivot' = @('list', 'get', 'create', 'update', 'delete', 'refresh')
+        'slicer' = @('list', 'get', 'create', 'update', 'delete', 'clear', 'set-filter')
+        'timeline' = @('list', 'get', 'create', 'update', 'delete', 'clear', 'set-range')
+        'model' = @('inspect')
+        'measure' = @('list', 'get', 'set', 'delete')
+        'relationship' = @('list', 'get', 'set', 'delete')
+        'hierarchy' = @('list', 'get', 'set', 'delete')
+        'kpi' = @('list', 'get', 'set', 'delete')
+        'perspective' = @('list', 'get', 'set', 'delete')
+        'automation' = @('inspect', 'generate', 'run')
         'cell' = @('get', 'set')
         'range' = @('get', 'set')
     }
@@ -269,6 +288,22 @@ function Parse-ExcelWorkbookSyncArgs {
                 $index++
                 continue
             }
+            { $_ -in @('--slicer', '-Slicer', '-slicer') } {
+                if ($index -ge $Tokens.Count) {
+                    Throw-CliError -Message "error: missing value for $token"
+                }
+                $result.Slicer += [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--timeline', '-Timeline', '-timeline') } {
+                if ($index -ge $Tokens.Count) {
+                    Throw-CliError -Message "error: missing value for $token"
+                }
+                $result.Timeline += [string]$Tokens[$index]
+                $index++
+                continue
+            }
             { $_ -in @('--address', '-Address', '-address') } {
                 if ($index -ge $Tokens.Count) {
                     Throw-CliError -Message "error: missing value for $token"
@@ -341,6 +376,14 @@ function Parse-ExcelWorkbookSyncArgs {
                 $index++
                 continue
             }
+            { $_ -in @('--automation-type', '-AutomationType', '-automation-type') } {
+                if ($index -ge $Tokens.Count) {
+                    Throw-CliError -Message "error: missing value for $token"
+                }
+                $result.AutomationType = [string]$Tokens[$index]
+                $index++
+                continue
+            }
             { $_ -in @('--surface', '-Surface', '-surface') } {
                 if ($index -ge $Tokens.Count) {
                     Throw-CliError -Message "error: missing value for $token"
@@ -376,6 +419,14 @@ function Parse-ExcelWorkbookSyncArgs {
             }
             { $_ -in @('--apply', '-Apply', '-apply') } {
                 $result.Apply = $true
+                continue
+            }
+            { $_ -in @('--destructive', '-Destructive', '-destructive') } {
+                $result.Destructive = $true
+                continue
+            }
+            { $_ -in @('--deep', '-Deep', '-deep') } {
+                $result.Deep = $true
                 continue
             }
             { $_ -in @('--hidden', '-Hidden', '-hidden') } {
@@ -415,6 +466,12 @@ function Parse-ExcelWorkbookSyncArgs {
             'manifest-doctor' { '' }
             'manifest-migrate' { '' }
             'sheet-list' { 'sheets' }
+            'sheet-create' { 'sheets' }
+            'sheet-hide' { 'sheets' }
+            'sheet-unhide' { 'sheets' }
+            'sheet-very-hide' { 'sheets' }
+            'sheet-reorder' { 'sheets' }
+            'sheet-delete' { 'sheets' }
             'table-list' { 'tables' }
             'table-read' { 'tables' }
             'table-get' { 'tables' }
@@ -423,8 +480,53 @@ function Parse-ExcelWorkbookSyncArgs {
             'connection-list' { 'connections' }
             'chart-list' { 'charts' }
             'chart-get' { 'charts' }
+            'chart-create' { 'charts' }
+            'chart-update' { 'charts' }
+            'chart-delete' { 'charts' }
             'pivot-list' { 'pivots' }
             'pivot-get' { 'pivots' }
+            'pivot-create' { 'pivots' }
+            'pivot-update' { 'pivots' }
+            'pivot-delete' { 'pivots' }
+            'pivot-refresh' { 'pivots' }
+            'slicer-list' { 'slicers' }
+            'slicer-get' { 'slicers' }
+            'slicer-create' { 'slicers' }
+            'slicer-update' { 'slicers' }
+            'slicer-delete' { 'slicers' }
+            'slicer-clear' { 'slicers' }
+            'slicer-set-filter' { 'slicers' }
+            'timeline-list' { 'timelines' }
+            'timeline-get' { 'timelines' }
+            'timeline-create' { 'timelines' }
+            'timeline-update' { 'timelines' }
+            'timeline-delete' { 'timelines' }
+            'timeline-clear' { 'timelines' }
+            'timeline-set-range' { 'timelines' }
+            'model-inspect' { 'model' }
+            'measure-list' { 'model' }
+            'measure-get' { 'model' }
+            'measure-set' { 'model' }
+            'measure-delete' { 'model' }
+            'relationship-list' { 'model' }
+            'relationship-get' { 'model' }
+            'relationship-set' { 'model' }
+            'relationship-delete' { 'model' }
+            'hierarchy-list' { 'model' }
+            'hierarchy-get' { 'model' }
+            'hierarchy-set' { 'model' }
+            'hierarchy-delete' { 'model' }
+            'kpi-list' { 'model' }
+            'kpi-get' { 'model' }
+            'kpi-set' { 'model' }
+            'kpi-delete' { 'model' }
+            'perspective-list' { 'model' }
+            'perspective-get' { 'model' }
+            'perspective-set' { 'model' }
+            'perspective-delete' { 'model' }
+            'automation-inspect' { '' }
+            'automation-generate' { '' }
+            'automation-run' { '' }
             default { 'vba,tables,names,cf,project,references,pq,connections,model' }
         }
     }
@@ -440,8 +542,8 @@ try {
     }
 
     $surfaceNames = @(Get-NormalizedSurfaceNames -Surface $parsed.Surface)
-    if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')) {
-        if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'sheet-list', 'sheet-create', 'name-list', 'name-set', 'name-delete', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set') -and [string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
+    if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')) {
+        if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set') -and [string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
             Throw-CliError -Message "error: direct workbook commands require --workbook-path"
         }
         if ($parsed.Command -eq 'workbook-diff' -and [string]::IsNullOrWhiteSpace($parsed.OtherWorkbookPath)) {
@@ -472,11 +574,13 @@ try {
             -SpecFile $parsed.SpecFile `
             -RefersTo $parsed.RefersTo `
             -Hidden:$parsed.Hidden `
-            -Apply:$parsed.Apply
+            -Apply:$parsed.Apply `
+            -Destructive:$parsed.Destructive `
+            -Deep:$parsed.Deep
         $payload | ConvertTo-Json -Depth 100
         exit 0
     }
-    if ($parsed.Command -in @('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')) {
+    if ($parsed.Command -in @('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete')) {
         if ([string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
             Throw-CliError -Message "error: direct workbook commands require --workbook-path"
         }
@@ -489,6 +593,9 @@ try {
             -Connection $parsed.Connection `
             -Chart $parsed.Chart `
             -Pivot $parsed.Pivot `
+            -Slicer $parsed.Slicer `
+            -Timeline $parsed.Timeline `
+            -Name $parsed.Name `
             -TargetPath $parsed.TargetPath `
             -TargetFormat $parsed.TargetFormat `
             -SpecJson $parsed.SpecJson `
@@ -499,12 +606,31 @@ try {
         $payload | ConvertTo-Json -Depth 100
         exit 0
     }
+    if ($parsed.Command -in @('automation-inspect', 'automation-generate', 'automation-run')) {
+        if ($parsed.Command -eq 'automation-inspect' -and [string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
+            Throw-CliError -Message "error: automation inspect requires --workbook-path"
+        }
+        if ($parsed.Command -eq 'automation-generate' -and [string]::IsNullOrWhiteSpace($parsed.TargetPath)) {
+            Throw-CliError -Message "error: automation generate requires --target-path"
+        }
+        $payload = Invoke-ExcelAutomationCommand `
+            -Command $parsed.Command `
+            -WorkbookPath $parsed.WorkbookPath `
+            -TargetPath $parsed.TargetPath `
+            -AutomationType $parsed.AutomationType `
+            -SpecJson $parsed.SpecJson `
+            -SpecFile $parsed.SpecFile `
+            -Backend $parsed.Backend `
+            -Visible:$parsed.Visible
+        $payload | ConvertTo-Json -Depth 100
+        exit 0
+    }
 
     $resolved = if ($parsed.Command -eq 'bootstrap') {
-        Resolve-ExcelSyncManifest -WorkbookPathOverride $parsed.WorkbookPath -AllowMissingManifestForInspectQuery
+        Resolve-ExcelFoundryManifest -WorkbookPathOverride $parsed.WorkbookPath -AllowMissingManifestForInspectQuery
     }
     else {
-        Resolve-ExcelSyncManifest `
+        Resolve-ExcelFoundryManifest `
             -ManifestPath $parsed.ManifestPath `
             -WorkbookPathOverride $parsed.WorkbookPath `
             -AllowMissingManifestForInspectQuery:($parsed.Command -in @('inspect', 'query'))
@@ -512,19 +638,19 @@ try {
 
     switch ($parsed.Command) {
         'push' {
-            & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'push' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
+            & (Join-Path $PSScriptRoot 'sync-foundry.ps1') -ManifestPath $resolved.ManifestPath -Direction 'push' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
             break
         }
         'pull' {
-            & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'pull' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
+            & (Join-Path $PSScriptRoot 'sync-foundry.ps1') -ManifestPath $resolved.ManifestPath -Direction 'pull' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
             break
         }
         'roundtrip' {
-            & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'roundtrip' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
+            & (Join-Path $PSScriptRoot 'sync-foundry.ps1') -ManifestPath $resolved.ManifestPath -Direction 'roundtrip' -WorkbookPath $resolved.WorkbookPath -Visible:$parsed.Visible
             break
         }
         'refresh' {
-            & (Join-Path $PSScriptRoot 'sync-excel.ps1') -ManifestPath $resolved.ManifestPath -Direction 'refresh' -WorkbookPath $resolved.WorkbookPath -QueryName $parsed.QueryName -Visible:$parsed.Visible
+            & (Join-Path $PSScriptRoot 'sync-foundry.ps1') -ManifestPath $resolved.ManifestPath -Direction 'refresh' -WorkbookPath $resolved.WorkbookPath -QueryName $parsed.QueryName -Visible:$parsed.Visible
             break
         }
         'plan' {

@@ -58,8 +58,8 @@ sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/exc
 - `sync` selectors currently support `--sheet`, `--table`, `--name`,
   `--name-prefix`, and `--query-name`.
 - Query, inspect, and bootstrap responses include `capabilities`, `warnings`,
-  and `unsupported` fields. Read them before assuming a backend can write or
-  expose every requested surface.
+  `unsupported`, and `engineRoutes` fields. Read them before assuming a
+  backend can write or expose every requested surface.
 - In `auto` mode, manifest read flows prefer the OOXML/package backend when
   the requested surfaces do not require live VBA/project/reference access.
 - Package-helper execution is bounded; slow package reads fail explicitly
@@ -75,9 +75,10 @@ sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/exc
   protection, row and column dimensions, hyperlinks, comments, print settings,
   and updates to existing tables for package-readable `.xlsx` and `.xlsm`
   workbooks.
-- Charts, pivots, Power Query, connections, and model remain compare or plan
-  surfaces in the package path and continue to report as unsupported for
-  package writes.
+- Charts, pivots, slicers, timelines, Power Query, connections, and model
+  remain compare or plan surfaces in the package path. When a write requires
+  desktop Excel, the package plan reports a `desktop-write` route instead of
+  attempting a lossy rewrite.
 - The generic Python CLI is additive. It does not replace this write surface.
 - Load the narrower reference for the domain you are changing when needed:
   `manifest.md`, `query.md`, `power-query.md`, `vba-project.md`, or

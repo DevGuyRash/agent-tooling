@@ -52,7 +52,7 @@ reads and package-backed direct edits for package-readable `.xlsx` and `.xlsm`:
 
 - `workbook inspect|capabilities|create|diff`
 - `manifest validate|doctor|migrate`
-- `sheet list|create`
+- `sheet list|create|delete`
 - `name list|set|delete`
 - `table list|read`
 - `query list`
@@ -68,8 +68,17 @@ advanced verbs:
 - `table get|create|update|delete`
 - `query get|set|delete|refresh`
 - `connection list|get`
-- `chart list|get`
-- `pivot list|get`
+- `chart list|get|create|update|delete`
+- `pivot list|get|create|update|delete|refresh`
+- `slicer list|get|create|update|delete|clear|set-filter`
+- `timeline list|get|create|update|delete|clear|set-range`
+- `model inspect`
+- `measure list|get|set|delete`
+- `relationship list|get|set|delete`
+- `hierarchy list|get|set|delete`
+- `kpi list|get|set|delete`
+- `perspective list|get|set|delete`
+- `automation inspect|generate|run` with `vba`, `office-script`, `excel-js-api`, `office-addin`, or `artifact-workbook`
 
 Use `--spec-json` or `--spec-file` with the mutating advanced verbs.
 
@@ -77,9 +86,13 @@ Use manifest/workspace commands when repo artifacts and a committed
 `excel-sync.manifest.json` are the source of truth.
 
 Manifest `inspect`, `query`, and `bootstrap` now expose backend-aware
-capabilities and unsupported-surface diagnostics. `inspect` defaults to a
+capabilities, engine-route metadata, and unavailable-surface diagnostics. `inspect` defaults to a
 lean metadata surface so real `.xlsm` reads do not pay for Power Query
 expansion unless you request it explicitly with `query --surface ...`.
+Use `workbook capabilities --deep` to emit the canonical capability ledger:
+every major workbook surface gets a category, read lane, write lane, route,
+verification method, risk class, and host requirements. Routes include
+`package-write`, `desktop-write`, `automation-write`, and `preserve-only`.
 The plan-centric commands add package-backed capability planning,
 per-surface compare, dry-run sync, targeted selectors, and apply mode for
 safe OOXML surfaces.
@@ -97,7 +110,14 @@ data validation, conditional formatting, workbook or worksheet protection,
 row and column dimensions, hyperlinks, comments, print settings, and updates
 to existing table definitions and table-backed cell regions. Direct
 package-backed workbook edits now also support workbook create, workbook diff,
-sheet create, named range edits, cell writes, and range writes.
+sheet create/delete with `--destructive`, named range edits, cell writes, and
+range writes. Package responses include `engineRoutes`; Power Query,
+connections, pivots, slicers, timelines, and Data Model surfaces route
+write-back to desktop Excel while remaining inspectable, diffable, and
+plan-visible from package mode. Automation generation can emit VBA, Office
+Scripts, Excel JS/Add-in scaffolds, and Codex artifact-workbook builders;
+non-VBA runs return an explicit runner plan rather than trying to execute in
+the wrong host.
 Desktop-backed lifecycle commands now add:
 
 - structured `save-as` / `convert` flows for `.xlsx`, `.xlsm`, `.xlsb`, `.xls`, `.csv`, `.txt`, and `.ods`

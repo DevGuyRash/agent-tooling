@@ -1,0 +1,36 @@
+{
+  "queries": [
+    {
+      "name": "Matched",
+      "file": "Matched.pq",
+      "description": "",
+      "connectionName": "Query - Matched",
+      "loads": [],
+      "loadToDataModel": false
+    },
+    {
+      "name": "DATA_RECORDS",
+      "file": "DATA_RECORDS.pq",
+      "description": "",
+      "connectionName": "Query - DATA_RECORDS",
+      "loads": [],
+      "loadToDataModel": false
+    },
+    {
+      "name": "DATA_RECORD_LINES",
+      "file": "DATA_RECORD_LINES.pq",
+      "description": "",
+      "connectionName": "Query - DATA_RECORD_LINES",
+      "loads": [],
+      "loadToDataModel": false
+    },
+    {
+      "name": "UnMatched",
+      "file": "UnMatched.pq",
+      "description": "",
+      "connectionName": "Query - UnMatched",
+      "loads": [],
+      "loadToDataModel": false
+    }
+  ]
+}

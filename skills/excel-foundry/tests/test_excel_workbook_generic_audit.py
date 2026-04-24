@@ -16,7 +16,7 @@ from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = ROOT / "skills" / "excel-foundry" / "scripts" / "excel_workbook_sync.py"
-LOCAL_FIXTURE = ROOT / "skills" / "excel-foundry" / "tests" / "fixtures" / "tr_upload_sheet" / "tr_upload_template.xlsm"
+LOCAL_FIXTURE = ROOT / "skills" / "excel-foundry" / "tests" / "fixtures" / "generic_workbook_fixture" / "workflow_fixture.xlsm"
 
 
 def load_module():
@@ -38,22 +38,22 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
                 section Section1;
                 shared Matched =
                 let
-                    Source = #table({"Invoice","Amount"}, {{"INV-001", 10}})
+                    Source = #table({"Record","Amount"}, {{"INV-001", 10}})
                 in
                     Source;
                 shared UnMatched =
                 let
-                    Source = #table({"Invoice","Amount"}, {{"INV-002", 20}})
+                    Source = #table({"Record","Amount"}, {{"INV-002", 20}})
                 in
                     Source;
-                shared AP_INVOICES_INTERFACE =
+                shared DATA_RECORDS =
                 let
-                    Source = #table({"Invoice","Amount"}, {{"INV-003", 30}})
+                    Source = #table({"Record","Amount"}, {{"INV-003", 30}})
                 in
                     Source;
-                shared AP_INVOICE_LINES_INTERFACE =
+                shared DATA_RECORD_LINES =
                 let
-                    Source = #table({"Invoice","LineAmount"}, {{"INV-003", 30}})
+                    Source = #table({"Record","LineAmount"}, {{"INV-003", 30}})
                 in
                     Source;
                 """
@@ -93,11 +93,11 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
             <?xml version="1.0" encoding="UTF-8"?>
             <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
               <sheets>
-                <sheet name="AP_INVOICES_INTERFACE" sheetId="1" r:id="rId1"/>
-                <sheet name="AP_INVOICE_LINES_INTERFACE" sheetId="2" r:id="rId2"/>
+                <sheet name="DATA_RECORDS" sheetId="1" r:id="rId1"/>
+                <sheet name="DATA_RECORD_LINES" sheetId="2" r:id="rId2"/>
               </sheets>
               <definedNames>
-                <definedName name="InvoiceAnchor">AP_INVOICES_INTERFACE!$B$2</definedName>
+                <definedName name="RecordAnchor">DATA_RECORDS!$B$2</definedName>
               </definedNames>
             </workbook>
             """
@@ -170,10 +170,10 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
         "xl/tables/table1.xml": dedent(
             """\
             <?xml version="1.0" encoding="UTF-8"?>
-            <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="tbl_invoices" displayName="tbl_invoices" ref="A1:B2" totalsRowShown="0">
+            <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="tbl_records" displayName="tbl_records" ref="A1:B2" totalsRowShown="0">
               <autoFilter ref="A1:B2"/>
               <tableColumns count="2">
-                <tableColumn id="1" name="Invoice"/>
+                <tableColumn id="1" name="Record"/>
                 <tableColumn id="2" name="Amount"/>
               </tableColumns>
             </table>
@@ -182,10 +182,10 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
         "xl/tables/table2.xml": dedent(
             """\
             <?xml version="1.0" encoding="UTF-8"?>
-            <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="tbl_invoice_lines" displayName="tbl_invoice_lines" ref="A1:B2" totalsRowShown="0">
+            <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="tbl_record_lines" displayName="tbl_record_lines" ref="A1:B2" totalsRowShown="0">
               <autoFilter ref="A1:B2"/>
               <tableColumns count="2">
-                <tableColumn id="1" name="Invoice"/>
+                <tableColumn id="1" name="Record"/>
                 <tableColumn id="2" name="LineAmount"/>
               </tableColumns>
             </table>
@@ -197,8 +197,8 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
             <connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
               <connection id="1" name="Query - Matched" description="Matched query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [Matched]"/></connection>
               <connection id="2" name="Query - UnMatched" description="UnMatched query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [UnMatched]"/></connection>
-              <connection id="3" name="Query - AP_INVOICES_INTERFACE" description="Invoices query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [AP_INVOICES_INTERFACE]"/></connection>
-              <connection id="4" name="Query - AP_INVOICE_LINES_INTERFACE" description="Lines query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [AP_INVOICE_LINES_INTERFACE]"/></connection>
+              <connection id="3" name="Query - DATA_RECORDS" description="Records query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [DATA_RECORDS]"/></connection>
+              <connection id="4" name="Query - DATA_RECORD_LINES" description="Lines query" type="1" background="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;" command="SELECT * FROM [DATA_RECORD_LINES]"/></connection>
             </connections>
             """
         ),
@@ -206,10 +206,10 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
             """\
             <?xml version="1.0" encoding="UTF-8"?>
             <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="5" uniqueCount="5">
-              <si><t>Invoice</t></si>
+              <si><t>Record</t></si>
               <si><t>Amount</t></si>
               <si><t>INV-001</t></si>
-              <si><t>Invoice</t></si>
+              <si><t>Record</t></si>
               <si><t>LineAmount</t></si>
             </sst>
             """
@@ -238,8 +238,8 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
     def test_ooxml_extract_reads_fixture_surface(self) -> None:
         result = self.module.extract_ooxml(self.fixture_path)
         table_names = {item["name"] for item in result["tables"]}
-        self.assertIn("tbl_invoices", table_names)
-        self.assertIn("tbl_invoice_lines", table_names)
+        self.assertIn("tbl_records", table_names)
+        self.assertIn("tbl_record_lines", table_names)
         self.assertGreaterEqual(len(result["queries"]), 4)
         self.assertTrue(result["powerQuery"]["dataMashupPresent"])
         self.assertTrue(result["vba"]["present"])
@@ -313,13 +313,13 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
         normalized = self.module.build_pull_normalized_payload(
             {
                 "names": [
-                    {"name": "InvoiceAnchor", "hidden": False, "refersTo": "=Sheet1!$B$2"},
+                    {"name": "RecordAnchor", "hidden": False, "refersTo": "=Sheet1!$B$2"},
                     {"name": "_xlfn.SINGLE", "hidden": True, "refersTo": "=#NAME?"},
                     {"name": "_xlpm.internal_only", "hidden": True, "refersTo": "=#NAME?"},
                 ]
             }
         )
-        self.assertEqual([item["name"] for item in normalized["names"]], ["InvoiceAnchor"])
+        self.assertEqual([item["name"] for item in normalized["names"]], ["RecordAnchor"])
         self.assertEqual(normalized["nameDiagnostics"]["filteredInternalNameCount"], 2)
 
     def test_package_audit_mutation_adds_defined_name(self) -> None:

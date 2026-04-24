@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "connectionName": "Query - DATA_RECORD_LINES",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - DATA_RECORDS",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - Matched",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    },
+    {
+      "connectionName": "Query - UnMatched",
+      "backgroundQuery": true,
+      "refreshOnFileOpen": false,
+      "refreshWithRefreshAll": false
+    }
+  ]
+}

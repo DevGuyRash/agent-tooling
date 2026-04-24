@@ -1,0 +1,43 @@
+{
+  "workbookPath": "workflow_fixture.xlsm",
+  "vbaComponents": [
+    {
+      "name": "modAPSync",
+      "path": "macros/modules/modAPSync.vba"
+    },
+    {
+      "name": "DATA_RECORD_LINES",
+      "path": "macros/sheets/DATA_RECORD_LINES.vba"
+    },
+    {
+      "name": "csvGenerator",
+      "path": "macros/modules/csvGenerator.vba"
+    }
+  ],
+  "vbaProject": {
+    "projectPath": "workbook_structure/vba_project.json",
+    "referencesPath": "workbook_structure/vba_references.json"
+  },
+  "powerQuery": {
+    "queriesDirectory": "power_query/queries",
+    "queriesPath": "power_query/queries.json",
+    "connectionsPath": "power_query/connections.json",
+    "modelPath": "power_query/model.json",
+    "refreshPath": "power_query/refresh.json"
+  },
+  "structure": {
+    "tablesPath": "workbook_structure/defaults_tables.json",
+    "namesPath": "workbook_structure/names.json",
+    "conditionalFormattingPath": "workbook_structure/conditional_formatting.json",
+    "tablesDiscovery": {
+      "mode": "all"
+    },
+    "namesDiscovery": {
+      "mode": "all",
+      "excludeBuiltIn": true
+    },
+    "conditionalFormattingDiscovery": {
+      "mode": "all-major"
+    }
+  }
+}

@@ -1199,20 +1199,20 @@ def compare_workbook(workbook_path: Path, output_root: Path, engine: str, visibl
     return result
 
 
-def workbook_supports_tr_regressions(extracted: dict[str, Any]) -> bool:
+def workbook_supports_generic_regressions(extracted: dict[str, Any]) -> bool:
     sheet_names = {item["name"] for item in extracted.get("sheets", [])}
     table_names = {item["name"] for item in extracted.get("tables", [])}
-    return {"AP_INVOICES_INTERFACE", "AP_INVOICE_LINES_INTERFACE"} <= sheet_names and {"tbl_invoices", "tbl_invoice_lines"} <= table_names
+    return {"DATA_RECORDS", "DATA_RECORD_LINES"} <= sheet_names and {"tbl_records", "tbl_record_lines"} <= table_names
 
 
-def run_tr_regressions(workbook_path: Path) -> list[dict[str, Any]]:
-    script_dir = SKILL_ROOT / "tests" / "fixtures" / "tr_upload_sheet" / "scripts"
+def run_generic_regressions(workbook_path: Path) -> list[dict[str, Any]]:
+    script_dir = SKILL_ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "scripts"
     script_names = [
         "test-deferred-sheet-exit.ps1",
-        "test-invoice-number-sequencing.ps1",
-        "test-invoice-number-interior-edit.ps1",
-        "test-invoice-number-format-propagation.ps1",
-        "test-invoice-number-stock-vin-patterns.ps1",
+        "test-record-number-sequencing.ps1",
+        "test-record-number-interior-edit.ps1",
+        "test-record-number-format-propagation.ps1",
+        "test-record-number-asset-patterns.ps1",
         "test-export-zip-import-set.ps1",
     ]
     results = []
@@ -1308,8 +1308,8 @@ def audit_workbook(
         post_mutation_compare = compare_workbook(working_copy, reports_root / "post-mutation-compare", engine=engine, visible=visible)
         delta = compare_results(baseline, mutated)
     regressions = (
-        run_tr_regressions(working_copy)
-        if include_regressions and excel_available() and workbook_supports_tr_regressions(baseline)
+        run_generic_regressions(working_copy)
+        if include_regressions and excel_available() and workbook_supports_generic_regressions(baseline)
         else []
     )
     report = {
@@ -1580,3 +1580,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

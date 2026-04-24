@@ -4,7 +4,7 @@
 
 - `scripts/excel_workbook_sync.py`: generic extraction, parity compare, and mutation-based audit
 - `scripts/excel-foundry`: manifest-driven inspect/query/bootstrap plus plan/compare/sync and the legacy push/pull/roundtrip/refresh wrappers
-- `scripts/sync-excel.ps1`: legacy manifest-driven COM sync for push, pull, roundtrip, and refresh
+- `scripts/sync-foundry.ps1`: manifest-driven COM sync for push, pull, roundtrip, and refresh
 
 ## Engines
 
@@ -18,7 +18,10 @@ planning, per-surface compare, dry-run sync, and apply mode for the safe OOXML
 write surfaces on package-readable `.xlsx` and `.xlsm`: workbook metadata or
 calculation settings, names, formulas, data-validation, conditional
 formatting, protection, existing table definitions and table-backed cell
-regions, row and column dimensions, hyperlinks, comments, and print settings.
+regions, guarded sheet structure operations, row and column dimensions,
+hyperlinks, comments, and print settings. Desktop routes cover fidelity
+mutation for Power Query, connections, pivots, slicers, timelines, Data Model
+objects, and rich chart authoring.
 
 ## Generic audit CLI
 
@@ -87,7 +90,7 @@ Audit runs emit:
 
 ## Manifest-driven sync
 
-Use the existing launcher or `sync-excel.ps1` when committed repo artifacts and
+Use the existing launcher or `sync-foundry.ps1` when committed repo artifacts and
 manifests are the source of truth.
 
 ```powershell
@@ -115,7 +118,7 @@ sh <skills-file-root>/scripts/excel-foundry sync `
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-excel.ps1 `
+powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-foundry.ps1 `
   -ManifestPath path\to\excel-sync.manifest.json `
   -WorkbookPath path\to\file.xlsm `
   -Direction pull
@@ -126,6 +129,8 @@ Manifest `query`, `inspect`, and `bootstrap` payloads include:
 - `capabilities`: read/write/backend availability flags
 - `warnings`: fallback and partial-support diagnostics
 - `unsupported`: surfaces the selected backend could not provide
+- `engineRoutes`: per-surface routing such as package read/write,
+  package inventory with `desktop-write`, or artifact generation
 
 The plan-centric package path adds:
 
@@ -142,6 +147,8 @@ metadata, and VBA metadata where the backend supports them.
 Current package-backed write surfaces available through `sync --apply` are:
 
 - workbook metadata or calculation settings
+- sheets for guarded structure planning; destructive deletion uses direct
+  `sheet delete --destructive`
 - tables
 - names
 - formulas
@@ -153,5 +160,7 @@ Current package-backed write surfaces available through `sync --apply` are:
 - comments
 - print
 
-Charts, pivots, Power Query, connections, and model still plan and compare
-cleanly in the package path, but remain unsupported for package writes.
+Charts are package-inventoried and desktop-preferred for rich authoring.
+Pivots, slicers, timelines, Power Query, connections, and Data Model surfaces
+plan and compare cleanly in the package path and return `desktop-write` route
+metadata for write-back.

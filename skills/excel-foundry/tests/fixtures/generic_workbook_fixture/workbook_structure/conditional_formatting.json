@@ -1,0 +1,303 @@
+{
+  "rules": [
+    {
+      "id": "CF-DATA_RECORD_LINES-0101",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$M$5:$M$9",
+      "formula": "=$M5<>$H5",
+      "priority": 5,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0111",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$X$5:$X$9",
+      "formula": "=cf_BadMonthDate($X5)",
+      "priority": 7,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0121",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$BN$5:$BN$9",
+      "formula": "=($EA5=\"\")<>($BN5=\"\")",
+      "priority": 8,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0131",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$DY$5:$DY$9",
+      "formula": "=($EA5=\"\")<>($DY5=\"\")",
+      "priority": 11,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0141",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$DZ$5:$DZ$9",
+      "formula": "=($EA5=\"\")<>($DZ5=\"\")",
+      "priority": 12,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0151",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$EA$5:$EB$9",
+      "formula": "=AND($EA5<>\"\", OR($BN5=\"\", $BT5=\"\", $DX5=\"\", $DY5=\"\", $DZ5=\"\"))",
+      "priority": 13,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0161",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$A$5:$A$9",
+      "formula": "=LET(   inv_raw, $A5,    inv_blank, LEN(inv_raw&\"\")=0,   inv_num, IFERROR(--inv_raw, 0),   inv_is_pos_int, AND(inv_num>=1, inv_num=INT(inv_num)),    IF(     inv_blank,     FALSE,     IF(       inv_is_pos_int,       inv_num>=cfLine_FirstMissingInvID_Value,       TRUE     )   ) )",
+      "priority": 2575,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0171",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$A$5:$B$9",
+      "formula": "=LET(   inv_id, $A5,   ln_raw, $B5,    inv_blank, LEN(inv_id&\"\")=0,    ln_num, IFERROR(--ln_raw, 0),   ln_is_pos_int, AND(ln_num>=1, ln_num=INT(ln_num)),    miss_ln,     XLOOKUP(       inv_id,       INDEX(cfLine_FirstMissingLineNoByInvID,,1),       INDEX(cfLine_FirstMissingLineNoByInvID,,2),       1     ),    IF(inv_blank, FALSE, IF(ln_is_pos_int, ln_num>=miss_ln, TRUE)) )",
+      "priority": 2627,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0181",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$A$5:$B$9",
+      "formula": "=LET(   inv_id, $A5,   line_no, $B5,    inv_id_rng, rngLineInvID,   line_no_rng, rngLineNo,    inv_blank, LEN(inv_id&\"\")=0,   line_blank, LEN(line_no&\"\")=0,    occurrences, COUNTIFS(inv_id_rng, inv_id, line_no_rng, line_no),    AND(NOT(inv_blank), NOT(line_blank), occurrences>1) )",
+      "priority": 2628,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0191",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$A$5:$A$9",
+      "formula": "=OR(   $A5=\"\",   COUNTIF(rngInvID, $A5)=0 )",
+      "priority": 2629,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0201",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$D$5:$D$9,$A$5:$A$9",
+      "formula": "=LET(   inv_id, $A5,    header_amt,     XLOOKUP(inv_id, rngInvID, rngInvAmt, \"\"),    lines_total,     XLOOKUP(       inv_id,       INDEX(cfLine_TotalsByInvID,,1),       INDEX(cfLine_TotalsByInvID,,2),       \"\"     ),    header_blank, LEN(header_amt&\"\")=0,   lines_blank,  LEN(lines_total&\"\")=0,    mismatch,     IF(       AND(header_blank, lines_blank),       FALSE,       IF(OR(header_blank, lines_blank), TRUE, header_amt<>lines_total)     ),    AND(LEN(inv_id&\"\")>0, mismatch) )",
+      "priority": 2630,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0211",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$BT$5:$BT$9",
+      "formula": "=($EA5=\"\")<>($BT5=\"\")",
+      "priority": 2939,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORD_LINES-0221",
+      "sheet": "DATA_RECORD_LINES",
+      "address": "$DX$5:$DX$9",
+      "formula": "=($EA5=\"\")<>($DX5=\"\")",
+      "priority": 2941,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0001",
+      "sheet": "DATA_RECORDS",
+      "address": "$A$5:$EA$9",
+      "formula": "=AND($E5>=100000,$E5<>\"\")",
+      "priority": 3,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#5FDDFB",
+        "fontColor": "#000000",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0011",
+      "sheet": "DATA_RECORDS",
+      "address": "$X$5:$X$9",
+      "formula": "=cf_BadMonthDate($X5)",
+      "priority": 4,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0021",
+      "sheet": "DATA_RECORDS",
+      "address": "$W$5:$W$9",
+      "formula": "=cf_BadMonthDate($W5)",
+      "priority": 5,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0031",
+      "sheet": "DATA_RECORDS",
+      "address": "$F$5:$F$9",
+      "formula": "=cf_BadMonthDate($F5)",
+      "priority": 6,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0041",
+      "sheet": "DATA_RECORDS",
+      "address": "$AA$5:$AA$9",
+      "formula": "=OR(AND($AA5=\"\", $T5<>\"\", $Y5<>\"\"), AND($AA5<>\"\", OR($T5=\"\", $Y5=\"\")))",
+      "priority": 7,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0051",
+      "sheet": "DATA_RECORDS",
+      "address": "$Y$5:$Y$9",
+      "formula": "=OR(AND($Y5=\"\", $T5<>\"\", $AA5<>\"\"), AND($Y5<>\"\", OR($T5=\"\", $AA5=\"\")))",
+      "priority": 8,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0061",
+      "sheet": "DATA_RECORDS",
+      "address": "$T$5:$T$9",
+      "formula": "=OR(AND($T5=\"\", $Y5<>\"\", $AA5<>\"\"), AND($T5<>\"\", OR($Y5=\"\", $AA5=\"\")))",
+      "priority": 9,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0071",
+      "sheet": "DATA_RECORDS",
+      "address": "$A$5:$A$9",
+      "formula": "=LET(   inv_raw, $A5,    inv_blank, LEN(inv_raw&\"\")=0,   inv_num, IFERROR(--inv_raw, 0),   inv_is_pos_int, AND(inv_num>=1, inv_num=INT(inv_num)),    IF(     inv_blank,     FALSE,     IF(       inv_is_pos_int,       inv_num>=cfInv_FirstMissingID_Value,       TRUE     )   ) )",
+      "priority": 524,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0081",
+      "sheet": "DATA_RECORDS",
+      "address": "$E$5:$E$9",
+      "formula": "=LET(   inv_id, $A5,   header_amt, $E5,    lines_total,     XLOOKUP(       inv_id,       INDEX(cfLine_TotalsByInvID,,1),       INDEX(cfLine_TotalsByInvID,,2),       \"\"     ),    header_blank, LEN(header_amt&\"\")=0,   lines_blank,  LEN(lines_total&\"\")=0,    mismatch,     IF(       AND(header_blank, lines_blank),       FALSE,       IF(OR(header_blank, lines_blank), TRUE, header_amt<>lines_total)     ),    AND(LEN(inv_id&\"\")>0, mismatch) )",
+      "priority": 2560,
+      "stopIfTrue": false,
+      "format": {
+        "interiorColor": "#0000FF",
+        "fontColor": "#FFFFFF",
+        "bold": true
+      }
+    },
+    {
+      "id": "CF-DATA_RECORDS-0091",
+      "sheet": "DATA_RECORDS",
+      "address": "$H$5:$H$9",
+      "formula": "=AND(LEN($A5&\"\")>0,LEN($H5&\"\")=0,OR(cfSupplier_AnyKeyLineDataByInvID($A5),cfSupplier_MissingRecordFields($A5,$D5,$E5,$L5)))",
+      "priority": 2561,
+      "stopIfTrue": true,
+      "format": {
+        "interiorColor": "#CCF2FF",
+        "fontColor": "#06009C",
+        "bold": true
+      }
+    }
+  ]
+}

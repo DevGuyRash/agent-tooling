@@ -1453,6 +1453,7 @@ PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
 DESKTOP_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm", ".xlam", ".ods", ".csv", ".txt"}
 PACKAGE_WRITABLE_SURFACES = [
     "workbook",
+    "sheets",
     "tables",
     "names",
     "formulas",
@@ -1463,7 +1464,165 @@ PACKAGE_WRITABLE_SURFACES = [
     "hyperlinks",
     "comments",
     "print",
+    "charts",
 ]
+PACKAGE_DESKTOP_WRITE_SURFACES = ["pivots", "slicers", "timelines", "pq", "connections", "model"]
+PACKAGE_PARTIAL_WRITE_SURFACES = ["charts"]
+ARTIFACT_AUTHORING_SURFACES = ["workbook-author", "dashboard-author", "csv-author", "preview-render"]
+
+CAPABILITY_LEDGER: dict[str, dict[str, Any]] = {
+    "workbook": {"category": "lifecycle", "read": "package", "write": "package", "verify": "reopen-and-repull", "risk": "standard"},
+    "files": {"category": "lifecycle", "read": "desktop", "write": "desktop", "verify": "open-target", "risk": "lossy-conversion-guarded"},
+    "sheets": {"category": "structure", "read": "package", "write": "package", "verify": "sheet-list", "risk": "destructive-delete-guarded"},
+    "chart-sheets": {"category": "structure", "read": "desktop", "write": "desktop", "verify": "sheet-list", "risk": "desktop-fidelity"},
+    "cells": {"category": "grid", "read": "package", "write": "package", "verify": "cell-readback", "risk": "standard"},
+    "ranges": {"category": "grid", "read": "package", "write": "package", "verify": "range-readback", "risk": "standard"},
+    "rows-columns": {"category": "layout", "read": "package", "write": "package", "verify": "dimension-readback", "risk": "standard"},
+    "names": {"category": "objects", "read": "package", "write": "package", "verify": "name-readback", "risk": "collision-guarded"},
+    "tables": {"category": "objects", "read": "package", "write": "package", "verify": "table-readback", "risk": "existing-table-safe"},
+    "formulas": {"category": "calculation", "read": "package", "write": "package", "verify": "formula-readback", "risk": "calc-result-host-dependent"},
+    "formula-audit": {"category": "calculation", "read": "package", "write": "automation", "verify": "trace-report", "risk": "analysis-only"},
+    "data-validation": {"category": "controls", "read": "package", "write": "package", "verify": "validation-readback", "risk": "standard"},
+    "cf": {"category": "formatting", "read": "package", "write": "package", "verify": "cf-readback", "risk": "priority-order-sensitive"},
+    "styles": {"category": "formatting", "read": "package", "write": "package", "verify": "style-readback", "risk": "style-bloat-guarded"},
+    "themes": {"category": "formatting", "read": "package", "write": "package", "verify": "theme-readback", "risk": "style-bloat-guarded"},
+    "hyperlinks": {"category": "annotations", "read": "package", "write": "package", "verify": "hyperlink-readback", "risk": "standard"},
+    "comments": {"category": "annotations", "read": "package", "write": "package", "verify": "comment-readback", "risk": "threaded-comments-desktop-preferred"},
+    "threaded-comments": {"category": "annotations", "read": "desktop", "write": "desktop", "verify": "comment-readback", "risk": "host-api-dependent"},
+    "print": {"category": "distribution", "read": "package", "write": "package", "verify": "print-readback", "risk": "layout-host-dependent"},
+    "exports": {"category": "distribution", "read": "desktop", "write": "desktop", "verify": "target-file-open", "risk": "output-format-guarded"},
+    "protection": {"category": "security", "read": "package", "write": "package", "verify": "protection-readback", "risk": "password-not-recovered"},
+    "privacy": {"category": "security", "read": "desktop", "write": "desktop", "verify": "document-inspector", "risk": "destructive-redaction-guarded"},
+    "charts": {"category": "visuals", "read": "package", "write": "desktop", "verify": "chart-readback", "risk": "desktop-fidelity"},
+    "shapes": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
+    "pictures": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
+    "controls": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "control-readback", "risk": "activex-platform-dependent"},
+    "pivots": {"category": "analytics", "read": "package", "write": "desktop", "verify": "pivot-readback", "risk": "desktop-fidelity"},
+    "pivot-charts": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "pivot-chart-readback", "risk": "desktop-fidelity"},
+    "slicers": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "slicer-readback", "risk": "desktop-fidelity"},
+    "timelines": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "timeline-readback", "risk": "desktop-fidelity"},
+    "pq": {"category": "data", "read": "package", "write": "desktop", "verify": "query-readback", "risk": "credentials-not-stored"},
+    "connections": {"category": "data", "read": "package", "write": "desktop", "verify": "connection-readback", "risk": "driver-credential-dependent"},
+    "links": {"category": "data", "read": "desktop", "write": "desktop", "verify": "link-readback", "risk": "destructive-break-guarded"},
+    "model": {"category": "model", "read": "desktop", "write": "automation", "verify": "model-inspect", "risk": "excel-api-limited"},
+    "measures": {"category": "model", "read": "desktop", "write": "automation", "verify": "measure-readback", "risk": "host-api-dependent"},
+    "relationships": {"category": "model", "read": "desktop", "write": "automation", "verify": "relationship-readback", "risk": "host-api-dependent"},
+    "dax": {"category": "model", "read": "desktop", "write": "automation", "verify": "dax-parse-and-readback", "risk": "external-adapter-preferred"},
+    "what-if": {"category": "modeling", "read": "desktop", "write": "desktop", "verify": "scenario-readback", "risk": "desktop-fidelity"},
+    "vba": {"category": "automation", "read": "desktop", "write": "desktop", "verify": "module-readback", "risk": "trust-center-dependent"},
+    "office-scripts": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "web-host-required"},
+    "excel-js-api": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "add-in-host-required"},
+    "office-addins": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "sideload-host-required"},
+    "artifact-workbook": {"category": "automation", "read": "automation", "write": "automation", "verify": "node-runner-plan", "risk": "new-workbook-authoring"},
+    "legacy-bi": {"category": "legacy", "read": "desktop", "write": "preserve-only", "verify": "artifact-preservation", "risk": "preserve-only"},
+    "external-files": {"category": "portfolio", "read": "package", "write": "package", "verify": "folder-rescan", "risk": "bulk-operation-guarded"},
+}
+
+
+def _surface_route_payload(surface: str) -> dict[str, Any]:
+    ledger_entry = CAPABILITY_LEDGER.get(surface, {})
+    if surface in PACKAGE_DESKTOP_WRITE_SURFACES:
+        payload = {
+            "surface": surface,
+            "readBackend": "package",
+            "writeBackend": "desktop",
+            "route": "desktop-write",
+            "requiresBackend": "desktop",
+            "canReadPackage": True,
+            "canWritePackage": False,
+            "canWriteDesktop": True,
+            "preservation": "package-inventory/desktop-mutation",
+            "platformLimits": [
+                "Windows desktop Excel is required for fidelity-preserving writes on this surface.",
+                "Package mode inventories metadata and dependencies but does not rewrite this artifact.",
+            ],
+        }
+        payload.update({"category": ledger_entry.get("category"), "verify": ledger_entry.get("verify"), "risk": ledger_entry.get("risk")})
+        return payload
+    if surface in PACKAGE_PARTIAL_WRITE_SURFACES:
+        payload = {
+            "surface": surface,
+            "readBackend": "package",
+            "writeBackend": "desktop-preferred",
+            "route": "partial-package-write",
+            "requiresBackend": None,
+            "canReadPackage": True,
+            "canWritePackage": True,
+            "canWriteDesktop": True,
+            "preservation": "relationship-aware inventory; desktop recommended for rich edits",
+            "platformLimits": [
+                "Package mode preserves and inventories chart relationships; rich chart authoring is routed to desktop Excel.",
+            ],
+        }
+        payload.update({"category": ledger_entry.get("category"), "verify": ledger_entry.get("verify"), "risk": ledger_entry.get("risk")})
+        return payload
+    payload = {
+        "surface": surface,
+        "readBackend": "package",
+        "writeBackend": "package",
+        "route": "package-read-write",
+        "requiresBackend": None,
+        "canReadPackage": True,
+        "canWritePackage": surface in PACKAGE_WRITABLE_SURFACES,
+        "canWriteDesktop": True,
+        "preservation": "package-roundtrip-safe",
+        "platformLimits": [],
+    }
+    payload.update({"category": ledger_entry.get("category"), "verify": ledger_entry.get("verify"), "risk": ledger_entry.get("risk")})
+    return payload
+
+
+def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
+    engine_capabilities = _workbook_engine_capabilities(workbook_path)
+    extension = workbook_path.suffix.lower()
+    package_readable = extension in PACKAGE_READABLE_EXTENSIONS
+    desktop_available = extension in DESKTOP_EXTENSIONS
+    surfaces: dict[str, Any] = {}
+    for surface, spec in sorted(CAPABILITY_LEDGER.items()):
+        read_lane = spec["read"]
+        write_lane = spec["write"]
+        read_available = (
+            (read_lane == "package" and package_readable)
+            or (read_lane == "desktop" and desktop_available)
+            or read_lane == "automation"
+        )
+        write_available = (
+            (write_lane == "package" and package_readable)
+            or (write_lane == "desktop" and desktop_available)
+            or write_lane in {"automation", "preserve-only"}
+        )
+        route = {
+            "package": "package-write",
+            "desktop": "desktop-write",
+            "automation": "automation-write",
+            "preserve-only": "preserve-only",
+        }.get(write_lane, "platform-impossible")
+        surfaces[surface] = {
+            "surface": surface,
+            "category": spec["category"],
+            "readLane": read_lane,
+            "writeLane": write_lane,
+            "route": route,
+            "canReadHere": read_available,
+            "canWriteHere": write_available and write_lane != "preserve-only",
+            "canPreserveHere": package_readable or desktop_available,
+            "verify": spec["verify"],
+            "risk": spec["risk"],
+            "requires": [] if write_lane in {"package", "automation", "preserve-only"} else ["desktop-excel"],
+        }
+    return {
+        "version": 1,
+        "sourceFormat": extension,
+        "engines": engine_capabilities,
+        "surfaces": surfaces,
+        "counts": {
+            "surfaces": len(surfaces),
+            "packageWrite": sum(1 for item in surfaces.values() if item["route"] == "package-write"),
+            "desktopWrite": sum(1 for item in surfaces.values() if item["route"] == "desktop-write"),
+            "automationWrite": sum(1 for item in surfaces.values() if item["route"] == "automation-write"),
+            "preserveOnly": sum(1 for item in surfaces.values() if item["route"] == "preserve-only"),
+        },
+    }
 
 
 def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
@@ -1518,6 +1677,17 @@ def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
             "canWrite": extension in DESKTOP_EXTENSIONS,
             "requiredFor": desktop_required_surfaces if extension in DESKTOP_EXTENSIONS else [],
         },
+        "artifact": {
+            "available": True,
+            "canGenerate": True,
+            "surfaces": ARTIFACT_AUTHORING_SURFACES,
+            "recommendedFor": [
+                "new-workbook-authoring",
+                "polished-dashboard-generation",
+                "rendered-preview-validation",
+                "csv-to-xlsx-generation",
+            ],
+        },
         "automation": {
             "available": True,
             "canGenerate": True,
@@ -1555,6 +1725,9 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
                 "engines": capability_matrix,
             },
             "unsupported": [],
+            "engineRoutes": {
+                surface: _surface_route_payload(surface) for surface in PACKAGE_SURFACE_SPECS
+            },
         }
         if not surfaces or "workbook" in surfaces:
             payload["workbook"] = package.parse_workbook_metadata()
@@ -1685,10 +1858,11 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes]) -> None:
+def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes], deletes: set[str] | None = None) -> None:
     workbook_path = workbook_path.resolve()
+    delete_names = deletes or set()
     with zipfile.ZipFile(workbook_path, "r") as source:
-        members = {name: source.read(name) for name in source.namelist()}
+        members = {name: source.read(name) for name in source.namelist() if name not in delete_names}
     members.update(updates)
     fd, temp_name = tempfile.mkstemp(prefix="excel-foundry-", suffix=workbook_path.suffix, dir=str(workbook_path.parent))
     os.close(fd)
@@ -1818,10 +1992,9 @@ PACKAGE_SURFACE_SPECS: dict[str, dict[str, Any]] = {
         "queryKey": "sheets",
         "artifactPath": ("structure", "sheetsPath"),
         "artifactKey": "sheets",
-        "writable": False,
+        "writable": True,
         "selectorKinds": {"sheet"},
         "keyFields": ("name",),
-        "unsupportedReason": "Package-backed sheet sync is not enabled.",
     },
     "tables": {
         "queryKey": "tables",
@@ -1875,10 +2048,10 @@ PACKAGE_SURFACE_SPECS: dict[str, dict[str, Any]] = {
         "queryKey": "charts",
         "artifactPath": ("structure", "chartsPath"),
         "artifactKey": "charts",
-        "writable": False,
+        "writable": True,
         "selectorKinds": {"sheet"},
         "keyFields": ("sheet", "name"),
-        "unsupportedReason": "Package backend does not yet write chart metadata.",
+        "unsupportedReason": "Package-backed chart sync preserves existing chart parts; route rich chart authoring to desktop Excel.",
     },
     "pivots": {
         "queryKey": "pivots",
@@ -2605,6 +2778,128 @@ def apply_direct_sheet_create(workbook_path: Path, sheet_name: str) -> dict[str,
     return {"status": "applied", "sheet": sheet_name, "created": True}
 
 
+def apply_direct_sheet_delete(workbook_path: Path, sheet_name: str, destructive: bool) -> dict[str, Any]:
+    if not destructive:
+        return {
+            "status": "blocked",
+            "sheet": sheet_name,
+            "destructiveRequired": True,
+            "message": "sheet delete requires --destructive so agents cannot remove workbook structure by accident.",
+        }
+    package = WorkbookPackage(workbook_path)
+    try:
+        if len(package.sheets) <= 1:
+            raise ValueError("Cannot delete the last worksheet in a workbook.")
+        workbook_root = package.workbook_xml
+        sheets_node = workbook_root.find("main:sheets", NS)
+        if sheets_node is None:
+            raise ValueError("Workbook does not contain a sheets collection.")
+        sheet_nodes = list(sheets_node.findall("main:sheet", NS))
+        target_index = next((index for index, item in enumerate(package.sheets) if item["name"] == sheet_name), None)
+        if target_index is None:
+            raise ValueError(f"Unknown worksheet: {sheet_name}")
+        sheet_node = sheet_nodes[target_index]
+        rel_id = sheet_node.attrib.get(f"{{{NS['rel']}}}id")
+        sheet_path = package.sheets[target_index]["path"]
+        sheet_rels_path = _sheet_rels_path(sheet_path)
+        sheets_node.remove(sheet_node)
+
+        defined_names = workbook_root.find("main:definedNames", NS)
+        if defined_names is not None:
+            for item in list(defined_names):
+                local_sheet_id = item.attrib.get("localSheetId")
+                if local_sheet_id is None or not local_sheet_id.isdigit():
+                    continue
+                local_index = int(local_sheet_id)
+                if local_index == target_index:
+                    defined_names.remove(item)
+                elif local_index > target_index:
+                    item.attrib["localSheetId"] = str(local_index - 1)
+
+        workbook_rels_root = package._read_xml("xl/_rels/workbook.xml.rels")
+        if rel_id:
+            for rel in list(workbook_rels_root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")):
+                if rel.attrib.get("Id") == rel_id:
+                    workbook_rels_root.remove(rel)
+
+        content_types_root = package._read_xml("[Content_Types].xml")
+        for override in list(content_types_root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Override")):
+            if override.attrib.get("PartName") == f"/{sheet_path}":
+                content_types_root.remove(override)
+
+        deletes = {sheet_path, sheet_rels_path}
+        for relationship in package.sheets[target_index].get("rels", {}).values():
+            target = relationship.get("target")
+            if target and target.startswith("xl/"):
+                deletes.add(target)
+
+        updates = {
+            "xl/workbook.xml": ET.tostring(workbook_root, encoding="utf-8", xml_declaration=True),
+            "xl/_rels/workbook.xml.rels": ET.tostring(workbook_rels_root, encoding="utf-8", xml_declaration=True),
+            "[Content_Types].xml": ET.tostring(content_types_root, encoding="utf-8", xml_declaration=True),
+        }
+    finally:
+        package.close()
+    _rewrite_workbook_package(workbook_path, updates, deletes=deletes)
+    return {
+        "status": "applied",
+        "sheet": sheet_name,
+        "deleted": True,
+        "deletedParts": sorted(deletes),
+    }
+
+
+def apply_direct_sheet_visibility(workbook_path: Path, sheet_name: str, visibility: str) -> dict[str, Any]:
+    package = WorkbookPackage(workbook_path)
+    try:
+        workbook_root = package.workbook_xml
+        sheet_node = next(
+            (item for item in workbook_root.findall("main:sheets/main:sheet", NS) if item.attrib.get("name") == sheet_name),
+            None,
+        )
+        if sheet_node is None:
+            raise ValueError(f"Unknown worksheet: {sheet_name}")
+        if visibility == "visible":
+            sheet_node.attrib.pop("state", None)
+        else:
+            sheet_node.attrib["state"] = visibility
+        updates = {"xl/workbook.xml": ET.tostring(workbook_root, encoding="utf-8", xml_declaration=True)}
+    finally:
+        package.close()
+    _rewrite_workbook_package(workbook_path, updates)
+    return {"status": "applied", "sheet": sheet_name, "visibility": visibility}
+
+
+def apply_direct_sheet_reorder(workbook_path: Path, sheet_names: list[str]) -> dict[str, Any]:
+    if not sheet_names:
+        raise ValueError("sheet reorder requires one or more --sheet values in the desired front-to-back order.")
+    package = WorkbookPackage(workbook_path)
+    try:
+        workbook_root = package.workbook_xml
+        sheets_node = workbook_root.find("main:sheets", NS)
+        if sheets_node is None:
+            raise ValueError("Workbook does not contain a sheets collection.")
+        sheet_nodes = list(sheets_node.findall("main:sheet", NS))
+        by_name = {item.attrib.get("name", ""): item for item in sheet_nodes}
+        missing = [name for name in sheet_names if name not in by_name]
+        if missing:
+            raise ValueError(f"Unknown worksheet(s): {', '.join(missing)}")
+        for item in sheet_nodes:
+            sheets_node.remove(item)
+        ordered_names = []
+        for name in sheet_names:
+            if name not in ordered_names:
+                ordered_names.append(name)
+        ordered_names.extend(item.attrib.get("name", "") for item in sheet_nodes if item.attrib.get("name", "") not in ordered_names)
+        for name in ordered_names:
+            sheets_node.append(by_name[name])
+        updates = {"xl/workbook.xml": ET.tostring(workbook_root, encoding="utf-8", xml_declaration=True)}
+    finally:
+        package.close()
+    _rewrite_workbook_package(workbook_path, updates)
+    return {"status": "applied", "order": ordered_names}
+
+
 def apply_direct_names(workbook_path: Path, names: list[dict[str, Any]]) -> dict[str, Any]:
     package = WorkbookPackage(workbook_path)
     try:
@@ -2799,6 +3094,19 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
                     child.text = str(value)
                 updates["docProps/custom.xml"] = _serialize_xml(custom_root)
             messages.append("Applied workbook metadata and calculation settings.")
+        elif surface == "sheets":
+            existing_names = {sheet["name"] for sheet in package.sheets}
+            for item in payload or []:
+                sheet_name = str(item.get("name") or "").strip()
+                if not sheet_name:
+                    continue
+                if item.get("delete") or item.get("deleted"):
+                    if sheet_name in existing_names:
+                        raise ValueError("Sheet deletions require the direct sheet-delete command with --destructive.")
+                    continue
+                if sheet_name not in existing_names:
+                    messages.append(f"Sheet {sheet_name} would be created by direct sheet-create; package sync skips creation inside grouped writes.")
+            messages.append("Reviewed sheet structure manifest; destructive deletes are guarded by sheet-delete.")
         elif surface == "names":
             root = package.workbook_xml
             defined_names = root.find("main:definedNames", NS)
@@ -3281,6 +3589,8 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
                 updates[path] = _serialize_xml(root)
             updates["xl/workbook.xml"] = _serialize_xml(workbook_root)
             messages.append("Applied print areas, titles, and page layout settings.")
+        elif surface == "charts":
+            messages.append("Preserved existing chart parts; route rich chart creation/update/delete to desktop Excel.")
         else:
             raise ValueError(f"Unsupported package push surface: {surface}")
     finally:
@@ -3302,6 +3612,7 @@ def compare_bundle_surfaces(bundle: dict[str, Any], surfaces: list[str], selecto
     results: list[dict[str, Any]] = []
     for surface in surfaces:
         spec = PACKAGE_SURFACE_SPECS[surface]
+        route = _surface_route_payload(surface)
         workbook_surface = _selected_surface_items(surface, workbook_payload.get(spec["queryKey"]), selectors)
         repo_surface = _selected_surface_items(surface, load_repo_surface_payload(bundle, surface), selectors)
         summary = _summarize_diff(surface, repo_surface, workbook_surface)
@@ -3309,6 +3620,8 @@ def compare_bundle_surfaces(bundle: dict[str, Any], surfaces: list[str], selecto
             {
                 "surface": surface,
                 "backend": "package",
+                "route": route["route"],
+                "engineRoute": route,
                 "requestedSelectors": {key: sorted(value) for key, value in selectors.items() if value},
                 "comparisonAvailable": repo_surface is not None and workbook_surface is not None,
                 "strict": summary,
@@ -3335,6 +3648,7 @@ def plan_bundle_sync(
     plans: list[dict[str, Any]] = []
     for surface in surfaces:
         spec = PACKAGE_SURFACE_SPECS[surface]
+        route = _surface_route_payload(surface)
         repo_surface = _selected_surface_items(surface, load_repo_surface_payload(bundle, surface), selectors)
         workbook_surface = _selected_surface_items(surface, workbook_payload.get(spec["queryKey"]), selectors)
         baseline_surface = _selected_surface_items(surface, _load_baseline(state_root, bundle, surface), selectors)
@@ -3352,13 +3666,15 @@ def plan_bundle_sync(
         plans.append(
             {
                 "surface": surface,
-                "backendRequired": "package",
+                "backendRequired": route.get("requiresBackend") or route["writeBackend"],
                 "backendChosen": "package",
+                "route": route["route"],
+                "engineRoute": route,
                 "canRead": True,
-                "canWrite": can_write,
+                "canWrite": can_write and not route.get("requiresBackend"),
                 "comparison": compare_summary,
                 "plannedWrites": compare_summary["counts"]["changed"] + compare_summary["counts"]["repoOnly"] + compare_summary["counts"]["workbookOnly"],
-                "unsupportedReason": None if can_write else spec.get("unsupportedReason"),
+                "unsupportedReason": None if (can_write and not route.get("requiresBackend")) else spec.get("unsupportedReason") or "Route this surface to desktop Excel for write-back.",
                 "merge": {
                     "baselinePresent": baseline_surface is not None,
                     "counts": merge_counts,
@@ -3389,6 +3705,7 @@ def sync_bundle_surfaces(
     results: list[dict[str, Any]] = []
     for surface in surfaces:
         spec = PACKAGE_SURFACE_SPECS[surface]
+        route = _surface_route_payload(surface)
         repo_surface = _selected_surface_items(surface, load_repo_surface_payload(bundle, surface), selectors)
         workbook_surface = _selected_surface_items(surface, workbook_payload.get(spec["queryKey"]), selectors)
         baseline_surface = _selected_surface_items(surface, _load_baseline(state_root, bundle, surface), selectors)
@@ -3410,8 +3727,12 @@ def sync_bundle_surfaces(
         messages: list[str] = []
         if conflicts:
             status = "conflicts"
+        elif route.get("requiresBackend") and mode in {"push", "roundtrip"} and workbook_diff["match"] is False:
+            status = "requires-desktop"
+            messages.append(f"{surface} writes require the {route['requiresBackend']} backend; package mode produced a safe plan only.")
         elif not spec["writable"] and mode in {"push", "roundtrip"} and workbook_diff["match"] is False:
-            status = "unsupported"
+            status = "requires-desktop"
+            messages.append(spec.get("unsupportedReason") or f"{surface} writes are not available in package mode.")
         elif apply:
             if mode in {"push", "roundtrip"} and spec["writable"] and not workbook_diff["match"]:
                 messages.extend(apply_package_surface_push(bundle["workbookPath"], surface, desired_surface, selectors))
@@ -3425,6 +3746,8 @@ def sync_bundle_surfaces(
                 "surface": surface,
                 "status": status,
                 "backend": "package",
+                "route": route["route"],
+                "engineRoute": route,
                 "mode": mode,
                 "messages": messages,
                 "merge": {
@@ -3434,7 +3757,7 @@ def sync_bundle_surfaces(
                 },
                 "plannedWorkbookWrites": workbook_diff["counts"],
                 "plannedRepoWrites": repo_diff["counts"],
-                "unsupportedReason": None if spec["writable"] else spec.get("unsupportedReason"),
+                "unsupportedReason": None if (spec["writable"] and not route.get("requiresBackend")) else spec.get("unsupportedReason") or "Route this surface to desktop Excel for write-back.",
             }
         )
     return {
@@ -3491,11 +3814,14 @@ def apply_audit_mutation(workbook_path: Path) -> dict[str, Any]:
 def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "workbook-capabilities":
         workbook_path = Path(args.workbook_path)
-        return {
+        payload = {
             "backend": "multi-engine",
             "workbookPath": str(workbook_path.resolve()),
             "capabilities": _workbook_engine_capabilities(workbook_path),
         }
+        if getattr(args, "deep", False):
+            payload["capabilityLedger"] = _capability_ledger_for_workbook(workbook_path)
+        return payload
     if args.command == "workbook-inspect":
         workbook_path = Path(args.workbook_path)
         surfaces = normalize_surfaces(getattr(args, "surface", ""))
@@ -3565,6 +3891,20 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
                 "connections": pq["connections"],
                 "model": {"modelTables": pq["modelTables"]},
             }
+        if args.command == "dimension-get":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "dimensions": package.parse_dimensions()}
+        if args.command == "hyperlink-list":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "hyperlinks": package.parse_hyperlinks()}
+        if args.command == "comment-list":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "comments": package.parse_comments()}
+        if args.command == "print-get":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "print": package.parse_print_settings()}
+        if args.command == "formula-list":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "formulas": package.parse_formulas()}
+        if args.command == "validation-list":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "dataValidation": package.parse_data_validation()}
+        if args.command == "protection-get":
+            return {"backend": "package", "workbookPath": str(workbook_path.resolve()), "protection": package.parse_protection()}
         if args.command == "cell-get":
             return {
                 "backend": "package",
@@ -3582,6 +3922,16 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.command == "sheet-create":
         return apply_direct_sheet_create(workbook_path, args.sheet)
+    if args.command == "sheet-hide":
+        return apply_direct_sheet_visibility(workbook_path, args.sheet, "hidden")
+    if args.command == "sheet-unhide":
+        return apply_direct_sheet_visibility(workbook_path, args.sheet, "visible")
+    if args.command == "sheet-very-hide":
+        return apply_direct_sheet_visibility(workbook_path, args.sheet, "veryHidden")
+    if args.command == "sheet-reorder":
+        return apply_direct_sheet_reorder(workbook_path, args.sheet)
+    if args.command == "sheet-delete":
+        return apply_direct_sheet_delete(workbook_path, args.sheet, bool(args.destructive))
     if args.command == "name-set":
         return apply_direct_names(
             workbook_path,
@@ -3641,6 +3991,7 @@ def main(argv: list[str]) -> int:
 
     workbook_capabilities_parser = subparsers.add_parser("workbook-capabilities")
     workbook_capabilities_parser.add_argument("--workbook-path", required=True)
+    workbook_capabilities_parser.add_argument("--deep", action="store_true")
 
     workbook_inspect_parser = subparsers.add_parser("workbook-inspect")
     workbook_inspect_parser.add_argument("--workbook-path", required=True)
@@ -3673,6 +4024,27 @@ def main(argv: list[str]) -> int:
     sheet_create_parser.add_argument("--workbook-path", required=True)
     sheet_create_parser.add_argument("--sheet", required=True)
 
+    sheet_hide_parser = subparsers.add_parser("sheet-hide")
+    sheet_hide_parser.add_argument("--workbook-path", required=True)
+    sheet_hide_parser.add_argument("--sheet", required=True)
+
+    sheet_unhide_parser = subparsers.add_parser("sheet-unhide")
+    sheet_unhide_parser.add_argument("--workbook-path", required=True)
+    sheet_unhide_parser.add_argument("--sheet", required=True)
+
+    sheet_very_hide_parser = subparsers.add_parser("sheet-very-hide")
+    sheet_very_hide_parser.add_argument("--workbook-path", required=True)
+    sheet_very_hide_parser.add_argument("--sheet", required=True)
+
+    sheet_reorder_parser = subparsers.add_parser("sheet-reorder")
+    sheet_reorder_parser.add_argument("--workbook-path", required=True)
+    sheet_reorder_parser.add_argument("--sheet", action="append", required=True)
+
+    sheet_delete_parser = subparsers.add_parser("sheet-delete")
+    sheet_delete_parser.add_argument("--workbook-path", required=True)
+    sheet_delete_parser.add_argument("--sheet", required=True)
+    sheet_delete_parser.add_argument("--destructive", action="store_true")
+
     name_list_parser = subparsers.add_parser("name-list")
     name_list_parser.add_argument("--workbook-path", required=True)
 
@@ -3696,6 +4068,27 @@ def main(argv: list[str]) -> int:
 
     query_list_parser = subparsers.add_parser("query-list")
     query_list_parser.add_argument("--workbook-path", required=True)
+
+    dimension_get_parser = subparsers.add_parser("dimension-get")
+    dimension_get_parser.add_argument("--workbook-path", required=True)
+
+    hyperlink_list_parser = subparsers.add_parser("hyperlink-list")
+    hyperlink_list_parser.add_argument("--workbook-path", required=True)
+
+    comment_list_parser = subparsers.add_parser("comment-list")
+    comment_list_parser.add_argument("--workbook-path", required=True)
+
+    print_get_parser = subparsers.add_parser("print-get")
+    print_get_parser.add_argument("--workbook-path", required=True)
+
+    formula_list_parser = subparsers.add_parser("formula-list")
+    formula_list_parser.add_argument("--workbook-path", required=True)
+
+    validation_list_parser = subparsers.add_parser("validation-list")
+    validation_list_parser.add_argument("--workbook-path", required=True)
+
+    protection_get_parser = subparsers.add_parser("protection-get")
+    protection_get_parser.add_argument("--workbook-path", required=True)
 
     cell_get_parser = subparsers.add_parser("cell-get")
     cell_get_parser.add_argument("--workbook-path", required=True)
@@ -3758,6 +4151,11 @@ def main(argv: list[str]) -> int:
     if args.command in {
         "sheet-list",
         "sheet-create",
+        "sheet-hide",
+        "sheet-unhide",
+        "sheet-very-hide",
+        "sheet-reorder",
+        "sheet-delete",
         "workbook-capabilities",
         "workbook-inspect",
         "workbook-create",
@@ -3771,6 +4169,13 @@ def main(argv: list[str]) -> int:
         "table-list",
         "table-read",
         "query-list",
+        "dimension-get",
+        "hyperlink-list",
+        "comment-list",
+        "print-get",
+        "formula-list",
+        "validation-list",
+        "protection-get",
         "cell-get",
         "cell-set",
         "range-get",
@@ -3830,3 +4235,4 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+

@@ -1,0 +1,8 @@
+let
+    Source = Excel.Workbook(File.Contents("$env:EXCEL_FOUNDRY_SAMPLE_SOURCE"), null, true),
+    UnMatched_Sheet = Source{[Item="UnMatched",Kind="Sheet"]}[Data],
+    #"Promoted Headers" = Table.PromoteHeaders(UnMatched_Sheet, [PromoteAllScalars=true]),
+    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{{"As-Of Date", type date}, {"As-Of-Time", type time}, {"Debit Amt", type number}, {"Credit Amt", type number}, {"0 Day Flt Amt", Int64.Type}, {"1 Day Flt Amt", Int64.Type}, {"2+ Day Flt Amt", Int64.Type}, {"Clearing", type any}, {"VendorId", type any}, {"VendorName", type any}, {"Description", type text}, {"Coding", type any}, {"Acct No", Int64.Type}, {"SupplierSite", type any}, {"AdditionalInfo", type any}, {"Bank ID", Int64.Type}, {"Bank Name", type text}, {"State", type text}, {"Acct Type", type text}, {"Acct Name", type text}, {"Currency", type text}, {"IBAN", type any}, {"BAI Type Code", Int64.Type}, {"Tran Desc", type text}, {"Customer Ref No", Int64.Type}, {"Value Date", type date}, {"Location", type any}, {"Bank Reference", type text}, {"Tran Status", type text}, {"Descriptive Text 1", type text}, {"Unique ID", type text}, {"Discretionary Data", type any}, {"UETR", type any}, {"Payment Fee Deduction", type any}, {"Beneficiary Final Wire Received Status", type any}, {"DescKey", type text}}),
+    #"Added Index" = Table.AddIndexColumn(#"Changed Type", "Index", 0, 1, Int64.Type)
+in
+    #"Added Index"

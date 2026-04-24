@@ -1,0 +1,93 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$ManifestPath,
+    [ValidateSet("push", "pull", "roundtrip", "refresh")]
+    [string]$Direction = "pull",
+    [string]$WorkbookPath,
+    [string[]]$QueryName = @(),
+    [switch]$Visible
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot 'ExcelFoundry.Common.ps1')
+
+$resolved = Resolve-ExcelFoundryManifest -ManifestPath $ManifestPath -WorkbookPathOverride $WorkbookPath
+$powerQuery = $resolved.PowerQuery
+if ($null -eq $powerQuery -or (
+    [string]::IsNullOrWhiteSpace($powerQuery.QueriesDirectory) -and
+    [string]::IsNullOrWhiteSpace($powerQuery.QueriesPath) -and
+    [string]::IsNullOrWhiteSpace($powerQuery.ConnectionsPath) -and
+    [string]::IsNullOrWhiteSpace($powerQuery.ModelPath) -and
+    [string]::IsNullOrWhiteSpace($powerQuery.RefreshPath)
+)) {
+    return
+}
+
+$saveChanges = $Direction -in @('push', 'roundtrip', 'refresh')
+if ($Direction -eq 'pull') {
+    try {
+        $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+    }
+    catch {
+        if (-not (Test-OoxmlPackageWorkbook -WorkbookPath $resolved.WorkbookPath)) {
+            throw
+        }
+
+        $queryPayload = Get-ExcelWorkbookQuery -WorkbookPath $resolved.WorkbookPath -Surface @('pq', 'connections', 'model') -Backend 'package'
+        Write-PowerQueryArtifactsFromPayload -ResolvedManifest $resolved -QueryPayload $queryPayload
+        foreach ($query in @($queryPayload.pq)) {
+            Write-Output ("PULL PQ {0}" -f $query.name)
+        }
+        return
+    }
+}
+else {
+    $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Visible
+}
+
+try {
+    switch ($Direction) {
+        'push' {
+            Ensure-PowerQueryArtifacts -Workbook $context.Workbook -ResolvedManifest $resolved
+            foreach ($query in (Read-PowerQueryArtifacts -ResolvedManifest $resolved).queries) {
+                Write-Output ("PUSH PQ {0}" -f $query.name)
+            }
+            break
+        }
+        'pull' {
+            Export-PowerQueryArtifacts -Workbook $context.Workbook -ResolvedManifest $resolved
+            foreach ($query in (Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook).queries) {
+                Write-Output ("PULL PQ {0}" -f $query.name)
+            }
+            break
+        }
+        'roundtrip' {
+            Ensure-PowerQueryArtifacts -Workbook $context.Workbook -ResolvedManifest $resolved
+            foreach ($query in (Read-PowerQueryArtifacts -ResolvedManifest $resolved).queries) {
+                Write-Output ("PUSH PQ {0}" -f $query.name)
+            }
+            Export-PowerQueryArtifacts -Workbook $context.Workbook -ResolvedManifest $resolved
+            foreach ($query in (Get-WorkbookPowerQueryArtifacts -Workbook $context.Workbook).queries) {
+                Write-Output ("PULL PQ {0}" -f $query.name)
+            }
+            break
+        }
+        'refresh' {
+            $results = @(Invoke-WorkbookPowerQueryRefresh -Workbook $context.Workbook -QueryNames $QueryName)
+            foreach ($result in $results) {
+                if ($result.success) {
+                    Write-Output ("REFRESH PQ {0} OK {1}s" -f $result.name, $result.elapsedSeconds)
+                }
+                else {
+                    Write-Output ("REFRESH PQ {0} FAIL {1}" -f $result.name, $result.error)
+                }
+            }
+            break
+        }
+    }
+}
+finally {
+    Close-ExcelWorkbook -Context $context -SaveChanges:$saveChanges
+}
