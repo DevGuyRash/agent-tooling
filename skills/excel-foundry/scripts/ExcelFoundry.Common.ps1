@@ -488,8 +488,12 @@ function Resolve-ExcelFoundryManifest {
             [System.IO.Path]::GetFullPath($WorkbookPathOverride)
         }
 
+    $manifestVbaComponents = @()
+    if ($null -ne $manifest.PSObject.Properties['vbaComponents']) {
+        $manifestVbaComponents = @($manifest.vbaComponents)
+    }
     $resolvedVbaComponents = @()
-    foreach ($component in @($manifest.vbaComponents)) {
+    foreach ($component in $manifestVbaComponents) {
         $kind = $null
         if ($null -ne $component.PSObject.Properties['kind']) {
             $kind = [string]$component.kind
@@ -518,7 +522,10 @@ function Resolve-ExcelFoundryManifest {
         }
     }
 
-    $structure = $manifest.structure
+    $structure = $null
+    if ($null -ne $manifest.PSObject.Properties['structure']) {
+        $structure = $manifest.structure
+    }
     $resolvedStructure = [pscustomobject]@{
         SheetsPath = $null
         TablesPath = $null
@@ -960,8 +967,7 @@ function Ensure-VbaComponentExists {
         }
     }
 
-    $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-    $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
+    $vbComponents = $Workbook.VBProject.VBComponents
     $componentType = switch ($PreferredType) {
         "class-module" { 2 }
         "user-form" { 3 }
@@ -1002,6 +1008,28 @@ function Test-VbaComponentImportable {
     return $kind -in @("standard-module", "class-module", "user-form")
 }
 
+function Test-VbaModuleMutationSupported {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook
+    )
+
+    try {
+        $vbProject = $Workbook.VBProject
+        $vbComponents = $vbProject.VBComponents
+        $component = $vbComponents.Add(1)
+        try {
+            $vbComponents.Remove($component)
+        }
+        catch {
+        }
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Remove-VbaComponentIfImportable {
     param(
         [Parameter(Mandatory = $true)]
@@ -1015,9 +1043,8 @@ function Remove-VbaComponentIfImportable {
         return
     }
 
-    $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-    $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-    Invoke-LateMethod -Target $vbComponents -Name "Remove" -Arguments @($component) | Out-Null
+    $vbComponents = $Workbook.VBProject.VBComponents
+    $vbComponents.Remove($component)
 }
 
 function Set-VbaComponentCode {
@@ -1039,9 +1066,8 @@ function Set-VbaComponentCode {
         $tempImportPath = Join-Path ([System.IO.Path]::GetTempPath()) ($ComponentName + ".bas")
         try {
             Copy-Item -LiteralPath $SourcePath -Destination $tempImportPath -Force
-            $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-            $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-            $component = Invoke-LateMethod -Target $vbComponents -Name "Import" -Arguments @($tempImportPath)
+            $vbComponents = $Workbook.VBProject.VBComponents
+            $component = $vbComponents.Import($tempImportPath)
             try { $component.Name = $ComponentName } catch {}
         }
         finally {
@@ -1095,9 +1121,8 @@ function Set-VbaComponentArtifact {
 
         $component = Resolve-VbaComponentOrNull -Workbook $Workbook -ComponentName $ComponentName
         if ($null -eq $component) {
-            $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-            $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-            $imported = Invoke-LateMethod -Target $vbComponents -Name "Import" -Arguments @($SourcePath)
+            $vbComponents = $Workbook.VBProject.VBComponents
+            $imported = $vbComponents.Import($SourcePath)
             try {
                 $imported.Name = $ComponentName
             }
@@ -1107,9 +1132,8 @@ function Set-VbaComponentArtifact {
         }
         if (Test-VbaComponentImportable -Component $component) {
             Remove-VbaComponentIfImportable -Workbook $Workbook -ComponentName $ComponentName
-            $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-            $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-            $imported = Get-LateProperty -Target $vbComponents -Name "Import" -Arguments @($SourcePath)
+            $vbComponents = $Workbook.VBProject.VBComponents
+            $imported = $vbComponents.Import($SourcePath)
             try {
                 $imported.Name = $ComponentName
             }
@@ -4500,6 +4524,334 @@ function Get-DirectWorkbookQueryPayload {
     return Get-WorkbookPowerQueryArtifacts -Workbook $Workbook
 }
 
+function Get-WorksheetShapeAnchor {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Worksheet,
+        [AllowNull()]
+        [string]$TopLeft,
+        [AllowNull()]
+        [double]$Left,
+        [AllowNull()]
+        [double]$Top
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($TopLeft)) {
+        $range = $Worksheet.Range($TopLeft)
+        return [pscustomobject]@{
+            left = [double]$range.Left
+            top = [double]$range.Top
+        }
+    }
+
+    return [pscustomobject]@{
+        left = if ($null -ne $Left) { [double]$Left } else { 0.0 }
+        top = if ($null -ne $Top) { [double]$Top } else { 0.0 }
+    }
+}
+
+function Get-DirectDrawingPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Shape,
+        [Parameter(Mandatory = $true)]
+        [string]$Sheet
+    )
+
+    $entry = [ordered]@{
+        name = $null
+        sheet = $Sheet
+        type = $null
+        category = 'shape'
+        left = $null
+        top = $null
+        width = $null
+        height = $null
+        topLeft = $null
+        bottomRight = $null
+        text = $null
+        altText = $null
+        visible = $null
+        placement = $null
+        formControlType = $null
+        linkedCell = $null
+        sourceName = $null
+    }
+
+    try { $entry.name = [string]$Shape.Name } catch {}
+    try { $entry.type = [int]$Shape.Type } catch {}
+    if ($entry.type -eq 13) {
+        $entry.category = 'picture'
+    }
+    elseif ($entry.type -in @(8, 12)) {
+        $entry.category = 'control'
+    }
+    try { $entry.left = [math]::Round([double]$Shape.Left, 3) } catch {}
+    try { $entry.top = [math]::Round([double]$Shape.Top, 3) } catch {}
+    try { $entry.width = [math]::Round([double]$Shape.Width, 3) } catch {}
+    try { $entry.height = [math]::Round([double]$Shape.Height, 3) } catch {}
+    try { $entry.topLeft = [string]$Shape.TopLeftCell.Address($false, $false) } catch {}
+    try { $entry.bottomRight = [string]$Shape.BottomRightCell.Address($false, $false) } catch {}
+    try { $entry.altText = [string]$Shape.AlternativeText } catch {}
+    try { $entry.visible = [bool]$Shape.Visible } catch {}
+    try { $entry.placement = [int]$Shape.Placement } catch {}
+    try {
+        if ($null -ne $Shape.TextFrame2 -and $Shape.TextFrame2.HasText) {
+            $entry.text = [string]$Shape.TextFrame2.TextRange.Text
+        }
+    }
+    catch {
+        try { $entry.text = [string]$Shape.TextFrame.Characters().Text } catch {}
+    }
+    try { $entry.formControlType = [int]$Shape.FormControlType } catch {}
+    try { $entry.linkedCell = [string]$Shape.ControlFormat.LinkedCell } catch {}
+    try { $entry.sourceName = [string]$Shape.OnAction } catch {}
+
+    return [pscustomobject]$entry
+}
+
+function Get-DrawingQuery {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [ValidateSet('all', 'shapes', 'pictures', 'controls')]
+        [string]$Kind = 'all'
+    )
+
+    $items = @()
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $shapes = $null
+        try { $shapes = $worksheet.Shapes } catch { $shapes = $null }
+        if ($null -eq $shapes) {
+            continue
+        }
+
+        foreach ($shape in $shapes) {
+            $entry = Get-DirectDrawingPayload -Shape $shape -Sheet ([string]$worksheet.Name)
+            if ($Kind -eq 'pictures' -and $entry.category -ne 'picture') {
+                continue
+            }
+            if ($Kind -eq 'controls' -and $entry.category -ne 'control') {
+                continue
+            }
+            if ($Kind -eq 'shapes' -and $entry.category -ne 'shape') {
+                continue
+            }
+            $items += $entry
+        }
+    }
+
+    return @($items | Sort-Object sheet, name)
+}
+
+function Find-DirectDrawing {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [ValidateSet('all', 'shapes', 'pictures', 'controls')]
+        [string]$Kind = 'all'
+    )
+
+    foreach ($worksheet in $Workbook.Worksheets) {
+        $shapes = $null
+        try { $shapes = $worksheet.Shapes } catch { $shapes = $null }
+        if ($null -eq $shapes) {
+            continue
+        }
+        foreach ($shape in $shapes) {
+            try {
+                if ([string]$shape.Name -ne $Name) {
+                    continue
+                }
+                $payload = Get-DirectDrawingPayload -Shape $shape -Sheet ([string]$worksheet.Name)
+                if ($Kind -eq 'pictures' -and $payload.category -ne 'picture') {
+                    continue
+                }
+                if ($Kind -eq 'controls' -and $payload.category -ne 'control') {
+                    continue
+                }
+                if ($Kind -eq 'shapes' -and $payload.category -ne 'shape') {
+                    continue
+                }
+                return [pscustomobject]@{
+                    worksheet = $worksheet
+                    shape = $shape
+                    payload = $payload
+                }
+            }
+            catch {
+            }
+        }
+    }
+
+    return $null
+}
+
+function Set-DirectDrawingProperties {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Shape,
+        [Parameter(Mandatory = $true)]
+        $Spec
+    )
+
+    if ($null -ne $Spec.PSObject.Properties['text']) {
+        try { $Shape.TextFrame2.TextRange.Text = [string]$Spec.text } catch { try { $Shape.TextFrame.Characters().Text = [string]$Spec.text } catch {} }
+    }
+    if ($null -ne $Spec.PSObject.Properties['altText']) {
+        try { $Shape.AlternativeText = [string]$Spec.altText } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['width'] -and $null -ne $Spec.width) {
+        try { $Shape.Width = [double]$Spec.width } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['height'] -and $null -ne $Spec.height) {
+        try { $Shape.Height = [double]$Spec.height } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['left'] -and $null -ne $Spec.left) {
+        try { $Shape.Left = [double]$Spec.left } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['top'] -and $null -ne $Spec.top) {
+        try { $Shape.Top = [double]$Spec.top } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['fillColor'] -and -not [string]::IsNullOrWhiteSpace([string]$Spec.fillColor)) {
+        try { $Shape.Fill.ForeColor.RGB = Convert-HexColorToBgrInt -Color ([string]$Spec.fillColor) } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['lineColor'] -and -not [string]::IsNullOrWhiteSpace([string]$Spec.lineColor)) {
+        try { $Shape.Line.ForeColor.RGB = Convert-HexColorToBgrInt -Color ([string]$Spec.lineColor) } catch {}
+    }
+    if ($null -ne $Spec.PSObject.Properties['visible'] -and $null -ne $Spec.visible) {
+        try { $Shape.Visible = [bool]$Spec.visible } catch {}
+    }
+}
+
+function Convert-HexColorToBgrInt {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Color
+    )
+
+    $clean = $Color.Trim().TrimStart('#')
+    if ($clean.Length -ne 6) {
+        throw "Color must be a 6-digit hex value."
+    }
+    $r = [Convert]::ToInt32($clean.Substring(0, 2), 16)
+    $g = [Convert]::ToInt32($clean.Substring(2, 2), 16)
+    $b = [Convert]::ToInt32($clean.Substring(4, 2), 16)
+    return ($r -bor ($g -shl 8) -bor ($b -shl 16))
+}
+
+function Ensure-DirectShapeDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $Spec,
+        [ValidateSet('create', 'update')]
+        [string]$Mode
+    )
+
+    $name = [string]$Spec.name
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        throw "Shape spec requires a name."
+    }
+    $existing = Find-DirectDrawing -Workbook $Workbook -Name $name -Kind 'shapes'
+    if ($Mode -eq 'create' -and $null -ne $existing) {
+        throw "Shape already exists: $name"
+    }
+    if ($Mode -eq 'update' -and $null -eq $existing) {
+        throw "Shape not found: $name"
+    }
+
+    if ($null -ne $existing) {
+        Set-DirectDrawingProperties -Shape $existing.shape -Spec $Spec
+        return $existing.shape
+    }
+
+    $sheetName = if ($null -ne $Spec.PSObject.Properties['sheet']) { [string]$Spec.sheet } else { $null }
+    if ([string]::IsNullOrWhiteSpace($sheetName)) {
+        throw "Shape spec requires a sheet."
+    }
+    $topLeft = if ($null -ne $Spec.PSObject.Properties['topLeft']) { [string]$Spec.topLeft } else { $null }
+    $left = if ($null -ne $Spec.PSObject.Properties['left']) { $Spec.left } else { $null }
+    $top = if ($null -ne $Spec.PSObject.Properties['top']) { $Spec.top } else { $null }
+    $worksheet = Get-WorksheetByName -Workbook $Workbook -WorksheetName $sheetName
+    $anchor = Get-WorksheetShapeAnchor -Worksheet $worksheet -TopLeft $topLeft -Left $left -Top $top
+    $shapeType = if ($null -ne $Spec.PSObject.Properties['shapeType'] -and $null -ne $Spec.shapeType) { [int]$Spec.shapeType } else { 1 }
+    $width = if ($null -ne $Spec.PSObject.Properties['width'] -and $null -ne $Spec.width) { [double]$Spec.width } else { 120.0 }
+    $height = if ($null -ne $Spec.PSObject.Properties['height'] -and $null -ne $Spec.height) { [double]$Spec.height } else { 48.0 }
+    $shape = $worksheet.Shapes.AddShape($shapeType, [double]$anchor.left, [double]$anchor.top, $width, $height)
+    $shape.Name = $name
+    Set-DirectDrawingProperties -Shape $shape -Spec $Spec
+    return $shape
+}
+
+function Ensure-DirectPictureDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $Spec,
+        [ValidateSet('add', 'update')]
+        [string]$Mode
+    )
+
+    $name = [string]$Spec.name
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        throw "Picture spec requires a name."
+    }
+    $existing = Find-DirectDrawing -Workbook $Workbook -Name $name -Kind 'pictures'
+    if ($Mode -eq 'add' -and $null -ne $existing) {
+        throw "Picture already exists: $name"
+    }
+    if ($Mode -eq 'update' -and $null -eq $existing) {
+        throw "Picture not found: $name"
+    }
+    if ($null -ne $existing) {
+        Set-DirectDrawingProperties -Shape $existing.shape -Spec $Spec
+        return $existing.shape
+    }
+
+    $sheetName = if ($null -ne $Spec.PSObject.Properties['sheet']) { [string]$Spec.sheet } else { $null }
+    $sourcePath = if ($null -ne $Spec.PSObject.Properties['sourcePath']) { [string]$Spec.sourcePath } else { $null }
+    if ([string]::IsNullOrWhiteSpace($sheetName)) {
+        throw "Picture spec requires a sheet."
+    }
+    if ([string]::IsNullOrWhiteSpace($sourcePath) -or -not (Test-Path -LiteralPath $sourcePath)) {
+        throw "Picture spec requires an existing sourcePath."
+    }
+    $topLeft = if ($null -ne $Spec.PSObject.Properties['topLeft']) { [string]$Spec.topLeft } else { $null }
+    $left = if ($null -ne $Spec.PSObject.Properties['left']) { $Spec.left } else { $null }
+    $top = if ($null -ne $Spec.PSObject.Properties['top']) { $Spec.top } else { $null }
+    $worksheet = Get-WorksheetByName -Workbook $Workbook -WorksheetName $sheetName
+    $anchor = Get-WorksheetShapeAnchor -Worksheet $worksheet -TopLeft $topLeft -Left $left -Top $top
+    $width = if ($null -ne $Spec.PSObject.Properties['width'] -and $null -ne $Spec.width) { [double]$Spec.width } else { 96.0 }
+    $height = if ($null -ne $Spec.PSObject.Properties['height'] -and $null -ne $Spec.height) { [double]$Spec.height } else { 96.0 }
+    $shape = $worksheet.Shapes.AddPicture([System.IO.Path]::GetFullPath($sourcePath), $false, $true, [double]$anchor.left, [double]$anchor.top, $width, $height)
+    $shape.Name = $name
+    Set-DirectDrawingProperties -Shape $shape -Spec $Spec
+    return $shape
+}
+
+function Remove-DirectDrawingDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [ValidateSet('shapes', 'pictures')]
+        [string]$Kind
+    )
+
+    $existing = Find-DirectDrawing -Workbook $Workbook -Name $Name -Kind $Kind
+    if ($null -eq $existing) {
+        return $false
+    }
+    $existing.shape.Delete()
+    return $true
+}
+
 function Resolve-ExcelSaveFormatSpec {
     param(
         [string]$SourcePath,
@@ -5190,11 +5542,44 @@ function Invoke-WorkbookSafeExport {
         if ($null -ne $spec.PSObject.Properties['runDocumentInspectors']) { $runDocumentInspectors = [bool]$spec.runDocumentInspectors }
     }
 
-    $target = Resolve-WorkbookTargetPath `
-        -SourcePath $WorkbookPath `
-        -TargetPath $TargetPath `
-        -TargetFormat $TargetFormat `
-        -Suffix '.share-safe'
+    $normalizedTargetFormat = $null
+    if (-not [string]::IsNullOrWhiteSpace($TargetFormat)) {
+        $normalizedTargetFormat = $TargetFormat.Trim().ToLowerInvariant()
+        if (-not $normalizedTargetFormat.StartsWith('.')) {
+            $normalizedTargetFormat = ".$normalizedTargetFormat"
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($TargetPath)) {
+        $normalizedTargetFormat = [System.IO.Path]::GetExtension($TargetPath).ToLowerInvariant()
+    }
+
+    $target = if ($normalizedTargetFormat -eq '.pdf') {
+        $targetPathValue = if (-not [string]::IsNullOrWhiteSpace($TargetPath)) {
+            [System.IO.Path]::GetFullPath($TargetPath)
+        }
+        else {
+            $sourceFullPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            $sourceDirectory = Split-Path -Parent $sourceFullPath
+            $sourceStem = [System.IO.Path]::GetFileNameWithoutExtension($sourceFullPath)
+            [System.IO.Path]::Combine($sourceDirectory, "$sourceStem.share-safe.pdf")
+        }
+        [pscustomobject]@{
+            path = $targetPathValue
+            format = [pscustomobject]@{
+                extension = '.pdf'
+                format = 'pdf'
+                description = 'PDF'
+                fileFormat = $null
+            }
+        }
+    }
+    else {
+        Resolve-WorkbookTargetPath `
+            -SourcePath $WorkbookPath `
+            -TargetPath $TargetPath `
+            -TargetFormat $TargetFormat `
+            -Suffix '.share-safe'
+    }
 
     Ensure-ParentDirectory -Path $target.path
     $sourceExtension = [System.IO.Path]::GetExtension($WorkbookPath)
@@ -5228,10 +5613,19 @@ function Invoke-WorkbookSafeExport {
             [pscustomobject]@{ requestedAll = $false; requestedNames = @($linkNames); broken = @(); remaining = $beforeLinks }
         }
 
-        if ($target.format.extension -ne [System.IO.Path]::GetExtension($target.path).ToLowerInvariant()) {
-            $target.path = [System.IO.Path]::ChangeExtension($target.path, $target.format.extension)
+        if ($target.format.format -eq 'pdf') {
+            if ([System.IO.Path]::GetExtension($target.path).ToLowerInvariant() -ne '.pdf') {
+                $target.path = [System.IO.Path]::ChangeExtension($target.path, '.pdf')
+            }
+            Invoke-LateMethod -Target $copyContext.Workbook -Name 'ExportAsFixedFormat' -Arguments @(0, $target.path) | Out-Null
         }
-        $copyContext.Workbook.SaveAs($target.path, $target.format.fileFormat)
+        elseif ($target.format.extension -ne [System.IO.Path]::GetExtension($target.path).ToLowerInvariant()) {
+            $target.path = [System.IO.Path]::ChangeExtension($target.path, $target.format.extension)
+            $copyContext.Workbook.SaveAs($target.path, $target.format.fileFormat)
+        }
+        else {
+            $copyContext.Workbook.SaveAs($target.path, $target.format.fileFormat)
+        }
 
         return [pscustomobject]@{
             command = 'workbook-safe-export'
@@ -5281,10 +5675,24 @@ function New-WorkbookModelPlatformLimitedMutation {
     }
 }
 
+function Test-WorkbookModelHasWritableTables {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook
+    )
+
+    try {
+        return @($Workbook.Model.ModelTables).Count -gt 0
+    }
+    catch {
+        return $false
+    }
+}
+
 function Invoke-DirectExcelWorkbookCommand {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete')]
+        [ValidateSet('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete')]
         [string]$Command,
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
@@ -5370,16 +5778,22 @@ function Invoke-DirectExcelWorkbookCommand {
         throw ("{0} requires --target-path or --target-format" -f (($Command -replace '^workbook-', 'workbook ') -replace '-', ' '))
     }
 
-    $readOnlyDirectCommands = @('workbook-links', 'table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get', 'slicer-list', 'slicer-get', 'timeline-list', 'timeline-get')
+    $readOnlyDirectCommands = @('workbook-links', 'table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'shape-list', 'shape-get', 'picture-list', 'picture-get', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'slicer-list', 'slicer-get', 'timeline-list', 'timeline-get')
     $packageFallbackCommands = @('table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')
-    if ($Command -in @('hierarchy-set', 'kpi-set', 'perspective-set')) {
+    if ($Command -in @('measure-set', 'relationship-set', 'hierarchy-set', 'kpi-set', 'perspective-set')) {
         $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
         if ($null -eq $spec) {
             throw "$(($Command -replace '-', ' ')) requires --spec-json or --spec-file"
         }
-        return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name ([string]$spec.name) -Spec $spec
+        $modelName = if ($Command -eq 'relationship-set') {
+            Get-WorkbookModelRelationshipId -ForeignKeyTable ([string]$spec.foreignKeyTable) -ForeignKeyColumn ([string]$spec.foreignKeyColumn) -PrimaryKeyTable ([string]$spec.primaryKeyTable) -PrimaryKeyColumn ([string]$spec.primaryKeyColumn)
+        }
+        else {
+            [string]$spec.name
+        }
+        return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name $modelName -Spec $spec
     }
-    if ($Command -in @('hierarchy-delete', 'kpi-delete', 'perspective-delete')) {
+    if ($Command -in @('measure-delete', 'relationship-delete', 'hierarchy-delete', 'kpi-delete', 'perspective-delete')) {
         if (@($Name).Count -lt 1) {
             throw "$(($Command -replace '-', ' ')) requires --name"
         }
@@ -5692,6 +6106,63 @@ function Invoke-DirectExcelWorkbookCommand {
                     connection = $item
                 }
             }
+            'connection-update' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "connection update requires --spec-json or --spec-file"
+                }
+                $connectionName = if ($null -ne $spec.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace([string]$spec.name)) {
+                    [string]$spec.name
+                }
+                elseif (@($Connection).Count -gt 0) {
+                    [string]$Connection[0]
+                }
+                else {
+                    $null
+                }
+                if ([string]::IsNullOrWhiteSpace($connectionName)) {
+                    throw "connection update requires --connection or a spec name"
+                }
+                $connectionObject = Find-WorkbookConnectionByName -Workbook $context.Workbook -ConnectionName $connectionName
+                if ($null -eq $connectionObject) {
+                    throw "Connection not found: $connectionName"
+                }
+                Set-WorkbookConnectionArtifact -Connection $connectionObject -ConnectionSpec $spec
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
+                $item = Get-DirectWorkbookItemByName -Items $payload.connections -Name $connectionName
+                if ($null -ne $item -and $null -ne $spec.PSObject.Properties['description']) {
+                    $item.description = [string]$spec.description
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    connection = $item
+                }
+            }
+            'connection-delete' {
+                if (@($Connection).Count -lt 1) {
+                    throw "connection delete requires --connection"
+                }
+                $connectionName = [string]$Connection[0]
+                $connectionObject = Find-WorkbookConnectionByName -Workbook $context.Workbook -ConnectionName $connectionName
+                if ($null -eq $connectionObject) {
+                    throw "Connection not found: $connectionName"
+                }
+                Invoke-LateMethod -Target $connectionObject -Name 'Delete' | Out-Null
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    deleted = $true
+                    connection = $connectionName
+                }
+            }
             'chart-list' {
                 return [pscustomobject]@{
                     command = $Command
@@ -5766,6 +6237,179 @@ function Invoke-DirectExcelWorkbookCommand {
                     workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
                     deleted = $true
                     chart = [string]$Chart[0]
+                }
+            }
+            'shape-list' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    shapes = @(Get-DrawingQuery -Workbook $context.Workbook -Kind 'shapes')
+                }
+            }
+            'shape-get' {
+                if (@($Name).Count -lt 1) {
+                    throw "shape get requires --name"
+                }
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$Name[0]) -Kind 'shapes'
+                if ($null -eq $item) {
+                    throw "Shape not found: $($Name[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    shape = $item.payload
+                }
+            }
+            'shape-create' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "shape create requires --spec-json or --spec-file"
+                }
+                [void](Ensure-DirectShapeDefinition -Workbook $context.Workbook -Spec $spec -Mode 'create')
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$spec.name) -Kind 'shapes'
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    shape = $item.payload
+                }
+            }
+            'shape-update' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "shape update requires --spec-json or --spec-file"
+                }
+                [void](Ensure-DirectShapeDefinition -Workbook $context.Workbook -Spec $spec -Mode 'update')
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$spec.name) -Kind 'shapes'
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    shape = $item.payload
+                }
+            }
+            'shape-delete' {
+                if (@($Name).Count -lt 1) {
+                    throw "shape delete requires --name"
+                }
+                $removed = Remove-DirectDrawingDefinition -Workbook $context.Workbook -Name ([string]$Name[0]) -Kind 'shapes'
+                if (-not $removed) {
+                    throw "Shape not found: $($Name[0])"
+                }
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    deleted = $true
+                    shape = [string]$Name[0]
+                }
+            }
+            'picture-list' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    pictures = @(Get-DrawingQuery -Workbook $context.Workbook -Kind 'pictures')
+                }
+            }
+            'picture-get' {
+                if (@($Name).Count -lt 1) {
+                    throw "picture get requires --name"
+                }
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$Name[0]) -Kind 'pictures'
+                if ($null -eq $item) {
+                    throw "Picture not found: $($Name[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    picture = $item.payload
+                }
+            }
+            'picture-add' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "picture add requires --spec-json or --spec-file"
+                }
+                [void](Ensure-DirectPictureDefinition -Workbook $context.Workbook -Spec $spec -Mode 'add')
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$spec.name) -Kind 'pictures'
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    picture = $item.payload
+                }
+            }
+            'picture-update' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "picture update requires --spec-json or --spec-file"
+                }
+                [void](Ensure-DirectPictureDefinition -Workbook $context.Workbook -Spec $spec -Mode 'update')
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$spec.name) -Kind 'pictures'
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    picture = $item.payload
+                }
+            }
+            'picture-delete' {
+                if (@($Name).Count -lt 1) {
+                    throw "picture delete requires --name"
+                }
+                $removed = Remove-DirectDrawingDefinition -Workbook $context.Workbook -Name ([string]$Name[0]) -Kind 'pictures'
+                if (-not $removed) {
+                    throw "Picture not found: $($Name[0])"
+                }
+                $context.Workbook.Save()
+                $saveChanges = $true
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    deleted = $true
+                    picture = [string]$Name[0]
+                }
+            }
+            'control-list' {
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    controls = @(Get-DrawingQuery -Workbook $context.Workbook -Kind 'controls')
+                }
+            }
+            'control-get' {
+                if (@($Name).Count -lt 1) {
+                    throw "control get requires --name"
+                }
+                $item = Find-DirectDrawing -Workbook $context.Workbook -Name ([string]$Name[0]) -Kind 'controls'
+                if ($null -eq $item) {
+                    throw "Control not found: $($Name[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    control = $item.payload
                 }
             }
             'pivot-list' {
@@ -6147,6 +6791,9 @@ function Invoke-DirectExcelWorkbookCommand {
                 if ($null -eq $spec) {
                     throw "measure set requires --spec-json or --spec-file"
                 }
+                if (-not (Test-WorkbookModelHasWritableTables -Workbook $context.Workbook)) {
+                    return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name ([string]$spec.name) -Spec $spec
+                }
                 [void](Ensure-WorkbookModelMeasure -Workbook $context.Workbook -MeasureSpec $spec)
                 $context.Workbook.Save()
                 $saveChanges = $true
@@ -6163,6 +6810,9 @@ function Invoke-DirectExcelWorkbookCommand {
             'measure-delete' {
                 if (@($Name).Count -lt 1) {
                     throw "measure delete requires --name"
+                }
+                if (-not (Test-WorkbookModelHasWritableTables -Workbook $context.Workbook)) {
+                    return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name ([string]$Name[0]) -Spec $null
                 }
                 $removed = Remove-WorkbookModelMeasure -Workbook $context.Workbook -MeasureName ([string]$Name[0])
                 if (-not $removed) {
@@ -6211,11 +6861,14 @@ function Invoke-DirectExcelWorkbookCommand {
                 if ($null -eq $spec) {
                     throw "relationship set requires --spec-json or --spec-file"
                 }
+                $relationshipId = Get-WorkbookModelRelationshipId -ForeignKeyTable ([string]$spec.foreignKeyTable) -ForeignKeyColumn ([string]$spec.foreignKeyColumn) -PrimaryKeyTable ([string]$spec.primaryKeyTable) -PrimaryKeyColumn ([string]$spec.primaryKeyColumn)
+                if (-not (Test-WorkbookModelHasWritableTables -Workbook $context.Workbook)) {
+                    return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name $relationshipId -Spec $spec
+                }
                 [void](Ensure-WorkbookModelRelationship -Workbook $context.Workbook -RelationshipSpec $spec)
                 $context.Workbook.Save()
                 $saveChanges = $true
                 $payload = Get-DirectWorkbookQueryPayload -Workbook $context.Workbook
-                $relationshipId = Get-WorkbookModelRelationshipId -ForeignKeyTable ([string]$spec.foreignKeyTable) -ForeignKeyColumn ([string]$spec.foreignKeyColumn) -PrimaryKeyTable ([string]$spec.primaryKeyTable) -PrimaryKeyColumn ([string]$spec.primaryKeyColumn)
                 $item = @($payload.relationships | Where-Object { [string]$_.id -eq $relationshipId }) | Select-Object -First 1
                 return [pscustomobject]@{
                     command = $Command
@@ -6228,6 +6881,9 @@ function Invoke-DirectExcelWorkbookCommand {
             'relationship-delete' {
                 if (@($Name).Count -lt 1) {
                     throw "relationship delete requires --name"
+                }
+                if (-not (Test-WorkbookModelHasWritableTables -Workbook $context.Workbook)) {
+                    return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name ([string]$Name[0]) -Spec $null
                 }
                 $removed = Remove-WorkbookModelRelationship -Workbook $context.Workbook -RelationshipId ([string]$Name[0])
                 if (-not $removed) {
@@ -6385,7 +7041,7 @@ function Ensure-PowerQueryDefinition {
 
     if ($null -eq $existing) {
         $arguments = @([string]$QuerySpec.name, [string]$QuerySpec.formula)
-        if ($null -ne $QuerySpec.description) {
+        if ($null -ne $QuerySpec.PSObject.Properties['description'] -and $null -ne $QuerySpec.description) {
             $arguments += [string]$QuerySpec.description
         }
         Invoke-LateMethod -Target $Workbook.Queries -Name 'Add' -Arguments $arguments | Out-Null
@@ -6401,7 +7057,7 @@ function Ensure-PowerQueryDefinition {
         $existing.Formula = [string]$QuerySpec.formula
     }
 
-    if ($null -ne $QuerySpec.description) {
+    if ($null -ne $QuerySpec.PSObject.Properties['description'] -and $null -ne $QuerySpec.description) {
         try {
             if ([string]$existing.Description -ne [string]$QuerySpec.description) {
                 $existing.Description = [string]$QuerySpec.description
@@ -6421,13 +7077,16 @@ function Set-WorkbookConnectionArtifact {
     )
 
     try {
-        if ($null -ne $ConnectionSpec.oledb) {
+        if ($null -ne $ConnectionSpec.PSObject.Properties['description']) {
+            [void](Try-SetProperty -Target $Connection -Name 'Description' -Value ([string]$ConnectionSpec.description))
+        }
+        if ($null -ne $ConnectionSpec.PSObject.Properties['oledb'] -and $null -ne $ConnectionSpec.oledb) {
             $oledb = $Connection.OLEDBConnection
             if ($null -ne $oledb) {
                 foreach ($item in @(
-                    @{ Name = 'BackgroundQuery'; Value = $ConnectionSpec.oledb.backgroundQuery },
-                    @{ Name = 'RefreshOnFileOpen'; Value = $ConnectionSpec.oledb.refreshOnFileOpen },
-                    @{ Name = 'RefreshWithRefreshAll'; Value = $ConnectionSpec.oledb.refreshWithRefreshAll }
+                    @{ Name = 'BackgroundQuery'; Value = if ($null -ne $ConnectionSpec.oledb.PSObject.Properties['backgroundQuery']) { $ConnectionSpec.oledb.backgroundQuery } else { $null } },
+                    @{ Name = 'RefreshOnFileOpen'; Value = if ($null -ne $ConnectionSpec.oledb.PSObject.Properties['refreshOnFileOpen']) { $ConnectionSpec.oledb.refreshOnFileOpen } else { $null } },
+                    @{ Name = 'RefreshWithRefreshAll'; Value = if ($null -ne $ConnectionSpec.oledb.PSObject.Properties['refreshWithRefreshAll']) { $ConnectionSpec.oledb.refreshWithRefreshAll } else { $null } }
                 )) {
                     if ($null -ne $item.Value) {
                         [void](Try-SetProperty -Target $oledb -Name $item.Name -Value ([bool]$item.Value))

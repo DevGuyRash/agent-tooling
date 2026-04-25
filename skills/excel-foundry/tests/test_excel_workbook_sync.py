@@ -8,18 +8,24 @@ import tempfile
 import unittest
 import zipfile
 import base64
+import importlib.util
+import re
 from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parents[1]
 POSIX = ROOT / "scripts" / "excel-foundry"
 CMD = ROOT / "scripts" / "excel-foundry.cmd"
 PS1 = ROOT / "scripts" / "excel-foundry.ps1"
 COMMON = ROOT / "scripts" / "ExcelSync.Common.ps1"
 POWERQUERY = ROOT / "scripts" / "sync-excel-powerquery.ps1"
 OPENAI_YAML = ROOT / "agents" / "openai.yaml"
+CAPABILITY_EVIDENCE = ROOT / "references" / "capability-evidence.json"
+CAPABILITY_CHECKLIST = REPO_ROOT / ".local" / "excel-foundry-capability-checklist.md"
+EXTERNAL_SMOKE_TEST = ROOT / "tests" / "test_excel_workbook_external_smoke.py"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "generic_workbook_fixture"
 FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "excel-sync.manifest.json"
 FIXTURE_WORKBOOK = FIXTURE_DIR / "workflow_fixture.xlsm"
@@ -198,6 +204,8 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
               <Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>
               <Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/>
               <Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/>
+              <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+              <Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
               <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
               <Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
               <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
@@ -242,6 +250,8 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
             <?xml version="1.0" encoding="UTF-8"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
               <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+              <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+              <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
             </Relationships>
             """
         ),
@@ -358,6 +368,35 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
             </comments>
             """
         ),
+        "xl/styles.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <fonts count="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/></font></fonts>
+              <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+              <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+              <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+              <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+              <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+            </styleSheet>
+            """
+        ),
+        "xl/theme/theme1.xml": dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office">
+              <a:themeElements>
+                <a:clrScheme name="Office">
+                  <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+                  <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+                  <a:accent1><a:srgbClr val="4472C4"/></a:accent1>
+                </a:clrScheme>
+                <a:fontScheme name="Office"><a:majorFont/><a:minorFont/></a:fontScheme>
+                <a:fmtScheme name="Office"/>
+              </a:themeElements>
+            </a:theme>
+            """
+        ),
         "docProps/core.xml": dedent(
             """\
             <?xml version="1.0" encoding="UTF-8"?>
@@ -419,6 +458,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue((ROOT / "references" / "protocol-audit.md").exists())
         self.assertTrue((ROOT / "references" / "protocol-manifest-sync.md").exists())
         self.assertTrue((ROOT / "references" / "output-contract.md").exists())
+        self.assertTrue(CAPABILITY_EVIDENCE.exists())
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
@@ -435,6 +475,167 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("referencesPath", manifest["vbaProject"])
         self.assertIn("queriesDirectory", manifest["powerQuery"])
         self.assertIn("queriesPath", manifest["powerQuery"])
+
+    def test_capability_evidence_maps_claims_to_existing_tests_and_honest_routes(self) -> None:
+        evidence = json.loads(CAPABILITY_EVIDENCE.read_text(encoding="utf-8"))
+        self.assertEqual(evidence["version"], 1)
+        self.assertIn("No manual Excel", evidence["boundary"])
+        claims = evidence["claims"]
+        self.assertGreaterEqual(len(claims), 10)
+
+        package_spec = importlib.util.spec_from_file_location(
+            "excel_workbook_package_for_evidence",
+            ROOT / "scripts" / "excel_workbook_package.py",
+        )
+        package_module = importlib.util.module_from_spec(package_spec)
+        assert package_spec.loader is not None
+        package_spec.loader.exec_module(package_module)
+        ledger = package_module.CAPABILITY_LEDGER
+
+        test_sources = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "tests").glob("test_*.py"))
+        discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", test_sources))
+
+        seen_ids: set[str] = set()
+        covered_surfaces: set[str] = set()
+        for claim in claims:
+            self.assertNotIn(claim["id"], seen_ids)
+            seen_ids.add(claim["id"])
+            self.assertIn(claim["route"], {
+                "package",
+                "package-plus-hidden-desktop",
+                "package-plus-automation",
+                "package-inventory-hidden-desktop-write",
+                "partial-package-write-plus-hidden-desktop",
+                "hidden-desktop-or-preserve-only",
+                "hidden-desktop-plus-automation-artifact",
+                "copy-first-corpus-smoke",
+            })
+            self.assertGreater(len(claim["tests"]), 0, claim["id"])
+            for selector in claim["tests"]:
+                self.assertIn(selector, discovered_tests, f"{claim['id']} references missing test {selector}")
+            for surface in claim["surfaces"]:
+                self.assertIn(surface, ledger, claim["id"])
+                covered_surfaces.add(surface)
+                write_lane = ledger[surface]["write"]
+                if write_lane in {"desktop", "desktop-preferred"}:
+                    self.assertIn("desktop", claim["route"], claim["id"])
+                if write_lane == "preserve-only":
+                    self.assertIn("preserve", claim["route"], claim["id"])
+
+        self.assertEqual(set(ledger), covered_surfaces)
+
+    def test_checklist_governance_rules_are_enforced_by_tests_and_evidence(self) -> None:
+        evidence = json.loads(CAPABILITY_EVIDENCE.read_text(encoding="utf-8"))
+        checklist = CAPABILITY_CHECKLIST.read_text(encoding="utf-8")
+        test_files = sorted((ROOT / "tests").glob("test_*.py"))
+        committed_test_sources = {path.name: path.read_text(encoding="utf-8") for path in test_files}
+        committed_test_text = "\n".join(committed_test_sources.values())
+
+        package_spec = importlib.util.spec_from_file_location(
+            "excel_workbook_package_for_checklist_governance",
+            ROOT / "scripts" / "excel_workbook_package.py",
+        )
+        package_module = importlib.util.module_from_spec(package_spec)
+        assert package_spec.loader is not None
+        package_spec.loader.exec_module(package_module)
+        ledger = package_module.CAPABILITY_LEDGER
+
+        governance_rules = re.findall(r"^- \[[ x]\] .+$", checklist, flags=re.MULTILINE)[:5]
+        self.assertEqual(len(governance_rules), 5)
+        self.assertTrue(all(rule.startswith("- [x] ") for rule in governance_rules), governance_rules)
+        self.assertIn(
+            "test_checklist_governance_rules_are_enforced_by_tests_and_evidence",
+            checklist,
+        )
+
+        capability_lines = [
+            line
+            for line in checklist.splitlines()
+            if re.match(r"- \[[ x]\] ", line)
+            and not line.startswith("- [x] Skill package validation")
+            and not line.startswith("- [x] Python command modules")
+            and not line.startswith("- [x] Excel Foundry workbook tests")
+            and not line.startswith("- [x] Capability evidence")
+            and not line.startswith("- [x] Copied-corpus smoke")
+            and not line.startswith("- [x] External corpus smoke")
+            and not line.startswith("- [x] No tracked Excel workbook")
+            and not line.startswith("- [x] Secret scan")
+        ]
+        self.assertGreater(len(capability_lines), 100)
+        self.assertFalse([line for line in capability_lines if line.startswith("- [ ] ")])
+
+        discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", committed_test_text))
+        test_bodies = {
+            match.group(1): match.group(0)
+            for match in re.finditer(
+                r"def (test_[A-Za-z0-9_]+)\([^)]*\) -> None:\n(?P<body>(?:        .*\n|        \n)+)",
+                committed_test_text,
+            )
+        }
+        self.assertIn("test_checklist_governance_rules_are_enforced_by_tests_and_evidence", discovered_tests)
+
+        covered_surfaces: set[str] = set()
+        inspectable_tokens = {
+            "artifact",
+            "capabilities",
+            "capabilityledger",
+            "comparisonstatus",
+            "engineroute",
+            "engineroutes",
+            "manifest",
+            "payload",
+            "plan",
+            "route",
+            "unsupported",
+        }
+        private_patterns = [
+            r"\.local[\\/]files[\\/]excel-foundry",
+            r"EXCEL_SYNC_EXTERNAL_ROOTS\s*=\s*\.local",
+            r"C:[\\/]Users[\\/]",
+            re.escape(str(Path.home())),
+        ]
+        local_external_corpus = ".local" + "/files/excel-foundry"
+        for pattern in private_patterns:
+            self.assertIsNone(re.search(pattern, committed_test_text, flags=re.IGNORECASE), pattern)
+            self.assertIsNone(re.search(pattern, json.dumps(evidence), flags=re.IGNORECASE), pattern)
+
+        for claim in evidence["claims"]:
+            self.assertGreater(claim.get("tests", []), [], claim["id"])
+            combined_selector_source = ""
+            for selector in claim["tests"]:
+                self.assertIn(selector, discovered_tests, f"{claim['id']} references missing test {selector}")
+                combined_selector_source += test_bodies.get(selector, "")
+            for surface in claim["surfaces"]:
+                self.assertIn(surface, ledger, claim["id"])
+                covered_surfaces.add(surface)
+                write_lane = ledger[surface]["write"]
+                if write_lane in {"desktop", "desktop-preferred"}:
+                    self.assertIn("desktop", claim["route"], claim["id"])
+                if write_lane == "preserve-only":
+                    self.assertIn("preserve", claim["route"], claim["id"])
+                if write_lane == "automation":
+                    self.assertTrue(
+                        any(token in claim["route"] for token in ["automation", "desktop"]),
+                        claim["id"],
+                    )
+
+            if any(token in claim["route"] for token in ["automation", "desktop", "preserve", "corpus"]):
+                lowered_source = combined_selector_source.lower()
+                self.assertTrue(
+                    any(token in lowered_source for token in inspectable_tokens),
+                    f"{claim['id']} lacks inspectable plan/route/manifest/artifact assertions",
+                )
+
+        self.assertEqual(set(ledger), covered_surfaces)
+
+        external_source = committed_test_sources[EXTERNAL_SMOKE_TEST.name]
+        self.assertIn('os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")', external_source)
+        self.assertIn("raise unittest.SkipTest", external_source)
+        self.assertIn("copy_external_roots_to_temp(cls.original_roots", external_source)
+        self.assertIn('tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-"', external_source)
+        self.assertIn("shutil.copy2(root, target)", external_source)
+        self.assertIn("shutil.copytree(root, target)", external_source)
+        self.assertNotIn(local_external_corpus, external_source)
 
     def test_manifest_resolution_resolves_relative_paths(self) -> None:
         proc = run_pwsh(
@@ -549,6 +750,46 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIsNone(payload["referencesPath"])
             self.assertEqual(payload["vbaCount"], 1)
             self.assertEqual(Path(payload["pqDir"]), (tmp / "power_query" / "queries").resolve())
+
+    def test_manifest_resolution_accepts_vba_only_manifest_without_structure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-vba-only-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "vba-only.xlsm"
+            workbook.write_bytes(b"")
+            module = tmp / "modLiveProbe.bas"
+            module.write_text('Attribute VB_Name = "modLiveProbe"\n', encoding="utf-8")
+            manifest = tmp / "excel-sync.manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workbookPath": workbook.name,
+                        "vbaComponents": [
+                            {"name": "modLiveProbe", "path": module.name},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            proc = run_pwsh(
+                (
+                    f". '{COMMON}'; "
+                    f"$resolved = Resolve-ExcelSyncManifest -ManifestPath '{manifest}'; "
+                    "[pscustomobject]@{"
+                    "workbookPath=$resolved.WorkbookPath;"
+                    "vbaCount=@($resolved.VbaComponents).Count;"
+                    "firstVbaPath=$resolved.VbaComponents[0].Path;"
+                    "tablesPath=$resolved.Structure.TablesPath;"
+                    "queriesPath=$resolved.PowerQuery.QueriesPath"
+                    "} | ConvertTo-Json -Compress -Depth 20"
+                )
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
+            self.assertEqual(payload["vbaCount"], 1)
+            self.assertEqual(Path(payload["firstVbaPath"]), module.resolve())
+            self.assertIsNone(payload["tablesPath"])
+            self.assertIsNone(payload["queriesPath"])
 
     def test_close_excel_workbook_retries_transient_busy_calls(self) -> None:
         proc = run_pwsh(
@@ -921,7 +1162,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("Usage:", proc.stdout)
         self.assertIn("bootstrap", proc.stdout)
-        self.assertIn("connection|chart|pivot", proc.stdout)
+        for resource in ["connection", "chart", "shape", "picture", "control", "pivot"]:
+            self.assertIn(resource, proc.stdout)
         self.assertIn("--spec-json JSON", proc.stdout)
         self.assertIn("GNU-style and native PowerShell flags are both accepted.", proc.stdout)
 
@@ -1198,6 +1440,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ledger = json.loads(deep_proc.stdout)["capabilityLedger"]
             self.assertGreaterEqual(ledger["counts"]["surfaces"], 40)
             self.assertEqual(ledger["surfaces"]["tables"]["route"], "package-write")
+            self.assertEqual(ledger["surfaces"]["charts"]["route"], "partial-package-write")
+            self.assertTrue(ledger["surfaces"]["charts"]["canWriteHere"])
             self.assertEqual(ledger["surfaces"]["pivots"]["route"], "desktop-write")
             self.assertEqual(ledger["surfaces"]["artifact-workbook"]["route"], "automation-write")
             self.assertEqual(ledger["surfaces"]["legacy-bi"]["route"], "preserve-only")
@@ -1479,6 +1723,149 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             query_payload = json.loads(query_proc.stdout)
             self.assertEqual(query_payload["tables"][0]["headers"], ["Label", "Amount"])
             self.assertEqual(query_payload["tables"][0]["rows"], [["Beta", 42], ["Gamma", 99]])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_sync_push_apply_updates_existing_chart_references(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-sync-charts-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "sync-charts.xlsx"
+            build_minimal_ooxml_workbook(workbook, include_chart=True)
+            output_dir = tmp / "bundle"
+            bootstrap_proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--surface",
+                "charts",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
+            manifest = output_dir / "excel-sync.manifest.json"
+            charts_path = output_dir / "workbook_structure" / "charts.json"
+            charts_payload = json.loads(charts_path.read_text(encoding="utf-8"))
+            chart = charts_payload["charts"][0]
+            self.assertEqual(chart["name"], "Chart 1")
+            chart["title"] = "Updated Sales"
+            chart["series"][0]["nameFormula"] = "Sheet1!$C$1"
+            chart["series"][0]["categoriesFormula"] = "Sheet1!$A$2"
+            chart["series"][0]["valuesFormula"] = "Sheet1!$C$2"
+            charts_path.write_text(json.dumps(charts_payload, indent=2) + "\n", encoding="utf-8")
+
+            plan_proc = run_pwsh_file("plan", "--manifest-path", str(manifest), "--surface", "charts", "--mode", "push", timeout=60)
+            self.assertEqual(plan_proc.returncode, 0, plan_proc.stdout + plan_proc.stderr)
+            chart_plan = json.loads(plan_proc.stdout)["surfaces"][0]
+            self.assertEqual(chart_plan["route"], "partial-package-write")
+            self.assertTrue(chart_plan["canWrite"])
+
+            sync_proc = run_pwsh_file(
+                "sync",
+                "--manifest-path",
+                str(manifest),
+                "--surface",
+                "charts",
+                "--mode",
+                "push",
+                "--apply",
+                timeout=60,
+            )
+            self.assertEqual(sync_proc.returncode, 0, sync_proc.stdout + sync_proc.stderr)
+            chart_result = json.loads(sync_proc.stdout)["surfaces"][0]
+            self.assertEqual(chart_result["status"], "applied")
+            self.assertIn("Applied chart title and series reference updates", " ".join(chart_result["messages"]))
+
+            query_proc = run_pwsh_file(
+                "query",
+                "--workbook-path",
+                str(workbook),
+                "--surface",
+                "charts",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(query_proc.returncode, 0, query_proc.stdout + query_proc.stderr)
+            updated_chart = json.loads(query_proc.stdout)["charts"][0]
+            self.assertEqual(updated_chart["title"], "Updated Sales")
+            self.assertEqual(updated_chart["series"][0]["nameFormula"], "Sheet1!$C$1")
+            self.assertEqual(updated_chart["series"][0]["categoriesFormula"], "Sheet1!$A$2")
+            self.assertEqual(updated_chart["series"][0]["valuesFormula"], "Sheet1!$C$2")
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_backend_sync_push_apply_updates_styles_and_themes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-sync-styles-themes-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "sync-styles-themes.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+            output_dir = tmp / "bundle"
+            bootstrap_proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--surface",
+                "styles,themes",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
+            manifest = output_dir / "excel-sync.manifest.json"
+            styles_path = output_dir / "workbook_structure" / "styles.json"
+            themes_path = output_dir / "workbook_structure" / "themes.json"
+
+            styles_payload = json.loads(styles_path.read_text(encoding="utf-8"))
+            self.assertEqual(styles_payload["parts"][0]["path"], "xl/styles.xml")
+            styles_payload["parts"][0]["xml"] = styles_payload["parts"][0]["xml"].replace('name val="Calibri"', 'name val="Aptos"')
+            styles_path.write_text(json.dumps(styles_payload, indent=2) + "\n", encoding="utf-8")
+
+            themes_payload = json.loads(themes_path.read_text(encoding="utf-8"))
+            self.assertEqual(themes_payload["parts"][0]["path"], "xl/theme/theme1.xml")
+            themes_payload["parts"][0]["xml"] = themes_payload["parts"][0]["xml"].replace('name="Office"', 'name="Foundry Office"', 1).replace('val="4472C4"', 'val="5B9BD5"')
+            themes_path.write_text(json.dumps(themes_payload, indent=2) + "\n", encoding="utf-8")
+
+            plan_proc = run_pwsh_file("plan", "--manifest-path", str(manifest), "--surface", "styles,themes", "--mode", "push", timeout=60)
+            self.assertEqual(plan_proc.returncode, 0, plan_proc.stdout + plan_proc.stderr)
+            plan_payload = json.loads(plan_proc.stdout)
+            self.assertEqual([item["surface"] for item in plan_payload["surfaces"]], ["styles", "themes"])
+            self.assertTrue(all(item["canWrite"] for item in plan_payload["surfaces"]))
+
+            sync_proc = run_pwsh_file(
+                "sync",
+                "--manifest-path",
+                str(manifest),
+                "--surface",
+                "styles,themes",
+                "--mode",
+                "push",
+                "--apply",
+                timeout=60,
+            )
+            self.assertEqual(sync_proc.returncode, 0, sync_proc.stdout + sync_proc.stderr)
+            sync_payload = json.loads(sync_proc.stdout)
+            self.assertEqual([item["status"] for item in sync_payload["surfaces"]], ["applied", "applied"])
+            self.assertIn("Applied 1 styles package part replacement", " ".join(sync_payload["surfaces"][0]["messages"]))
+            self.assertIn("Applied 1 themes package part replacement", " ".join(sync_payload["surfaces"][1]["messages"]))
+
+            query_proc = run_pwsh_file(
+                "query",
+                "--workbook-path",
+                str(workbook),
+                "--surface",
+                "styles,themes",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(query_proc.returncode, 0, query_proc.stdout + query_proc.stderr)
+            query_payload = json.loads(query_proc.stdout)
+            self.assertIn('name val="Aptos"', query_payload["styles"]["parts"][0]["xml"])
+            self.assertEqual(query_payload["themes"]["parts"][0]["name"], "Foundry Office")
+            self.assertIn('val="5B9BD5"', query_payload["themes"]["parts"][0]["xml"])
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_sync_push_apply_updates_supported_surfaces(self) -> None:
@@ -1914,6 +2301,25 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         combined = proc.stdout + proc.stderr
         self.assertIn("Usage:", combined)
         self.assertNotIn("unknown action", combined.lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_accepts_visual_object_resource_actions(self) -> None:
+        for resource, action in [
+            ("connection", "update"),
+            ("connection", "delete"),
+            ("shape", "create"),
+            ("shape", "delete"),
+            ("picture", "add"),
+            ("picture", "delete"),
+            ("control", "list"),
+            ("control", "get"),
+        ]:
+            with self.subTest(resource=resource, action=action):
+                proc = run_pwsh_file(resource, action, "--workbook-path", str(FIXTURE_WORKBOOK), "--help")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                combined = proc.stdout + proc.stderr
+                self.assertIn("Usage:", combined)
+                self.assertNotIn("unknown action", combined.lower())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_requires_target_for_workbook_compatibility(self) -> None:
@@ -2398,6 +2804,17 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             workbook = Path(tmpdir) / "model.xlsx"
             build_minimal_ooxml_workbook(workbook)
             set_commands = [
+                ("measure", "set", {"name": "Gross Margin", "associatedTable": "Sales", "formula": "=SUM(Sales[Amount])"}),
+                (
+                    "relationship",
+                    "set",
+                    {
+                        "foreignKeyTable": "Sales",
+                        "foreignKeyColumn": "RegionId",
+                        "primaryKeyTable": "Regions",
+                        "primaryKeyColumn": "RegionId",
+                    },
+                ),
                 ("hierarchy", "set", {"name": "RegionHierarchy", "levels": ["Region", "District"]}),
                 ("kpi", "set", {"name": "MarginKpi", "measure": "Gross Margin"}),
                 ("perspective", "set", {"name": "Executive", "tables": ["Sales"]}),
@@ -2408,9 +2825,15 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 payload = json.loads(proc.stdout)
                 self.assertEqual(payload["status"], "platform-limited")
                 self.assertFalse(payload["changed"])
-                self.assertEqual(payload["name"], spec["name"])
+                self.assertTrue(payload["name"])
 
-            for resource, name in [("hierarchy", "RegionHierarchy"), ("kpi", "MarginKpi"), ("perspective", "Executive")]:
+            for resource, name in [
+                ("measure", "Gross Margin"),
+                ("relationship", "Sales[RegionId]->Regions[RegionId]"),
+                ("hierarchy", "RegionHierarchy"),
+                ("kpi", "MarginKpi"),
+                ("perspective", "Executive"),
+            ]:
                 proc = run_skill_cli(resource, "delete", "--workbook-path", str(workbook), "--name", name, timeout=60)
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 payload = json.loads(proc.stdout)
@@ -2613,6 +3036,67 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn(marker, module_path.read_text(encoding="utf-8"))
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_vba_push_then_pull_roundtrips_self_contained_module(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-self-contained-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "vba-probe.xlsm"
+            manifest = tmp / "excel-sync.manifest.json"
+            module_path = tmp / "modLiveProbe.bas"
+            module_text = dedent(
+                """\
+                Attribute VB_Name = "modLiveProbe"
+                Option Explicit
+                Public Function LiveProbeValue() As String
+                    LiveProbeValue = "initial"
+                End Function
+                """
+            )
+            module_path.write_text(module_text, encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workbookPath": workbook.name,
+                        "vbaComponents": [
+                            {"name": "modLiveProbe", "path": module_path.name},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $workbook.SaveAs('{workbook}', 52)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=300,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            push_proc = run_skill_cli("push", "--manifest-path", str(manifest), "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
+            self.assertIn("PUSH VBA modLiveProbe", push_proc.stdout)
+
+            module_path.write_text(module_text.replace('"initial"', '"local-reset"'), encoding="utf-8")
+
+            pull_proc = run_skill_cli("pull", "--manifest-path", str(manifest), "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            self.assertIn("PULL VBA modLiveProbe", pull_proc.stdout)
+            self.assertIn('LiveProbeValue = "initial"', module_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_cf_push_then_pull_roundtrips_new_rule(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -2791,6 +3275,103 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_query_set_accepts_minimal_spec(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-minimal-query-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "minimal-query.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    $workbook.SaveAs('{workbook}', 51)
+                    $workbook.Close($false)
+                    $excel.Quit()
+                    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    """
+                ),
+                timeout=300,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            spec = json.dumps(
+                {
+                    "name": "LIVE_MINIMAL_QUERY",
+                    "formula": "let Source = #table({\"Code\",\"Amount\"}, {{\"A\", 1}}) in Source",
+                }
+            )
+            set_proc = run_skill_cli("query", "set", "--workbook-path", str(workbook), "--spec-json", spec, timeout=300)
+            self.assertEqual(set_proc.returncode, 0, set_proc.stdout + set_proc.stderr)
+            set_payload = json.loads(set_proc.stdout)
+            self.assertEqual(set_payload["query"]["name"], "LIVE_MINIMAL_QUERY")
+            self.assertEqual(set_payload["query"]["description"], "")
+
+            get_proc = run_skill_cli("query", "get", "--workbook-path", str(workbook), "--query-name", "LIVE_MINIMAL_QUERY", timeout=300)
+            self.assertEqual(get_proc.returncode, 0, get_proc.stdout + get_proc.stderr)
+            get_payload = json.loads(get_proc.stdout)
+            self.assertEqual(get_payload["query"]["name"], "LIVE_MINIMAL_QUERY")
+            self.assertIn("Amount", get_payload["query"]["formula"])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_connection_update_and_delete_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-connection-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "direct-connection.xlsx"
+            csv_path = tmp / "source.csv"
+            csv_path.write_text("Code,Amount\nA,1\nB,2\n", encoding="ascii")
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'DATA'
+                        $queryTable = $sheet.QueryTables.Add('TEXT;{csv_path}', $sheet.Range('A1'))
+                        $queryTable.Name = 'LIVE_CONNECTION_SOURCE'
+                        $queryTable.TextFileParseType = 1
+                        $queryTable.TextFileCommaDelimiter = $true
+                        [void]$queryTable.Refresh($false)
+                        $workbook.Connections.Item('source').Description = 'original description'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=300,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            spec = json.dumps({"name": "source", "description": "updated description"})
+
+            update_proc = run_skill_cli("connection", "update", "--workbook-path", str(workbook), "--spec-json", spec, timeout=300)
+            self.assertEqual(update_proc.returncode, 0, update_proc.stdout + update_proc.stderr)
+            update_payload = json.loads(update_proc.stdout)
+            self.assertTrue(update_payload["changed"])
+            self.assertEqual(update_payload["connection"]["description"], "updated description")
+
+            get_proc = run_skill_cli("connection", "get", "--workbook-path", str(workbook), "--connection", "source", timeout=300)
+            self.assertEqual(get_proc.returncode, 0, get_proc.stdout + get_proc.stderr)
+            self.assertEqual(json.loads(get_proc.stdout)["connection"]["description"], "updated description")
+
+            delete_proc = run_skill_cli("connection", "delete", "--workbook-path", str(workbook), "--connection", "source", timeout=300)
+            self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
+            self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
+
+            list_proc = run_skill_cli("connection", "list", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(list_proc.returncode, 0, list_proc.stdout + list_proc.stderr)
+            self.assertEqual(json.loads(list_proc.stdout)["connections"], [])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_direct_chart_and_pivot_list_commands_return_arrays(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -2802,6 +3383,440 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         pivot_proc = run_skill_cli("pivot", "list", "--workbook-path", str(FIXTURE_WORKBOOK), timeout=300)
         self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
         self.assertIsInstance(json.loads(pivot_proc.stdout)["pivots"], list)
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_pivot_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-pivot-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "direct-pivot.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $data = $workbook.Worksheets.Item(1)
+                        $data.Name = 'DATA_RECORDS'
+                        $data.Range('A1').Value2 = 'Region'
+                        $data.Range('B1').Value2 = 'Category'
+                        $data.Range('C1').Value2 = 'Amount'
+                        $data.Range('A2').Value2 = 'West'
+                        $data.Range('B2').Value2 = 'Hardware'
+                        $data.Range('C2').Value2 = 10
+                        $data.Range('A3').Value2 = 'West'
+                        $data.Range('B3').Value2 = 'Software'
+                        $data.Range('C3').Value2 = 20
+                        $data.Range('A4').Value2 = 'East'
+                        $data.Range('B4').Value2 = 'Hardware'
+                        $data.Range('C4').Value2 = 30
+                        $pivot = $workbook.Worksheets.Add()
+                        $pivot.Name = 'PIVOTS'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            pivot_spec = json.dumps(
+                {
+                    "name": "LIVE_DIRECT_PIVOT",
+                    "destinationSheet": "PIVOTS",
+                    "topLeft": "A3",
+                    "sourceSheet": "DATA_RECORDS",
+                    "sourceAddress": "A1:C4",
+                    "rowFields": ["Region"],
+                    "dataFields": [{"name": "Amount", "summary": "sum", "caption": "Total Amount"}],
+                }
+            )
+            update_spec = json.dumps(
+                {
+                    "name": "LIVE_DIRECT_PIVOT",
+                    "destinationSheet": "PIVOTS",
+                    "topLeft": "A3",
+                    "sourceSheet": "DATA_RECORDS",
+                    "sourceAddress": "A1:C4",
+                    "rowFields": ["Category"],
+                    "dataFields": [{"name": "Amount", "summary": "count", "caption": "Count Amount"}],
+                }
+            )
+
+            create_pivot_proc = run_skill_cli("pivot", "create", "--workbook-path", str(workbook), "--spec-json", pivot_spec, timeout=300)
+            self.assertEqual(create_pivot_proc.returncode, 0, create_pivot_proc.stdout + create_pivot_proc.stderr)
+            created = json.loads(create_pivot_proc.stdout)["pivot"]
+            self.assertEqual(created["name"], "LIVE_DIRECT_PIVOT")
+            self.assertEqual(created["sheet"], "PIVOTS")
+
+            get_pivot_proc = run_skill_cli("pivot", "get", "--workbook-path", str(workbook), "--pivot", "LIVE_DIRECT_PIVOT", timeout=300)
+            self.assertEqual(get_pivot_proc.returncode, 0, get_pivot_proc.stdout + get_pivot_proc.stderr)
+            self.assertEqual(json.loads(get_pivot_proc.stdout)["pivot"]["topLeft"], "A3")
+
+            update_pivot_proc = run_skill_cli("pivot", "update", "--workbook-path", str(workbook), "--spec-json", update_spec, timeout=300)
+            self.assertEqual(update_pivot_proc.returncode, 0, update_pivot_proc.stdout + update_pivot_proc.stderr)
+            self.assertEqual(json.loads(update_pivot_proc.stdout)["pivot"]["name"], "LIVE_DIRECT_PIVOT")
+
+            refresh_pivot_proc = run_skill_cli("pivot", "refresh", "--workbook-path", str(workbook), "--pivot", "LIVE_DIRECT_PIVOT", timeout=300)
+            self.assertEqual(refresh_pivot_proc.returncode, 0, refresh_pivot_proc.stdout + refresh_pivot_proc.stderr)
+            self.assertTrue(json.loads(refresh_pivot_proc.stdout)["refreshed"])
+
+            delete_pivot_proc = run_skill_cli("pivot", "delete", "--workbook-path", str(workbook), "--pivot", "LIVE_DIRECT_PIVOT", timeout=300)
+            self.assertEqual(delete_pivot_proc.returncode, 0, delete_pivot_proc.stdout + delete_pivot_proc.stderr)
+            self.assertTrue(json.loads(delete_pivot_proc.stdout)["deleted"])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_slicer_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-slicer-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "direct-slicer.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $data = $workbook.Worksheets.Item(1)
+                        $data.Name = 'DATA_RECORDS'
+                        $data.Range('A1').Value2 = 'Region'
+                        $data.Range('B1').Value2 = 'Category'
+                        $data.Range('C1').Value2 = 'Amount'
+                        $data.Range('A2').Value2 = 'West'
+                        $data.Range('B2').Value2 = 'Hardware'
+                        $data.Range('C2').Value2 = 10
+                        $data.Range('A3').Value2 = 'West'
+                        $data.Range('B3').Value2 = 'Software'
+                        $data.Range('C3').Value2 = 20
+                        $data.Range('A4').Value2 = 'East'
+                        $data.Range('B4').Value2 = 'Hardware'
+                        $data.Range('C4').Value2 = 30
+                        $pivot = $workbook.Worksheets.Add()
+                        $pivot.Name = 'PIVOTS'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            pivot_spec = json.dumps(
+                {
+                    "name": "LIVE_SLICER_PIVOT",
+                    "destinationSheet": "PIVOTS",
+                    "topLeft": "A3",
+                    "sourceSheet": "DATA_RECORDS",
+                    "sourceAddress": "A1:C4",
+                    "rowFields": ["Region"],
+                    "dataFields": [{"name": "Amount", "summary": "sum", "caption": "Total Amount"}],
+                }
+            )
+            slicer_spec = json.dumps(
+                {
+                    "name": "LIVE_DIRECT_SLICER",
+                    "sheet": "PIVOTS",
+                    "sourcePivot": "LIVE_SLICER_PIVOT",
+                    "sourceField": "Region",
+                    "topLeft": "F3",
+                    "caption": "Region",
+                    "visibleItemsList": ["West"],
+                }
+            )
+            filter_spec = json.dumps({"visibleItemsList": ["East"]})
+
+            pivot_proc = run_skill_cli("pivot", "create", "--workbook-path", str(workbook), "--spec-json", pivot_spec, timeout=300)
+            self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
+
+            create_slicer_proc = run_skill_cli("slicer", "create", "--workbook-path", str(workbook), "--spec-json", slicer_spec, timeout=300)
+            self.assertEqual(create_slicer_proc.returncode, 0, create_slicer_proc.stdout + create_slicer_proc.stderr)
+            self.assertEqual(json.loads(create_slicer_proc.stdout)["slicer"]["name"], "LIVE_DIRECT_SLICER")
+
+            filter_slicer_proc = run_skill_cli(
+                "slicer",
+                "set-filter",
+                "--workbook-path",
+                str(workbook),
+                "--slicer",
+                "LIVE_DIRECT_SLICER",
+                "--spec-json",
+                filter_spec,
+                timeout=300,
+            )
+            self.assertEqual(filter_slicer_proc.returncode, 0, filter_slicer_proc.stdout + filter_slicer_proc.stderr)
+            self.assertTrue(json.loads(filter_slicer_proc.stdout)["changed"])
+
+            clear_slicer_proc = run_skill_cli("slicer", "clear", "--workbook-path", str(workbook), "--slicer", "LIVE_DIRECT_SLICER", timeout=300)
+            self.assertEqual(clear_slicer_proc.returncode, 0, clear_slicer_proc.stdout + clear_slicer_proc.stderr)
+            self.assertTrue(json.loads(clear_slicer_proc.stdout)["cleared"])
+
+            delete_slicer_proc = run_skill_cli("slicer", "delete", "--workbook-path", str(workbook), "--slicer", "LIVE_DIRECT_SLICER", timeout=300)
+            self.assertEqual(delete_slicer_proc.returncode, 0, delete_slicer_proc.stdout + delete_slicer_proc.stderr)
+            self.assertTrue(json.loads(delete_slicer_proc.stdout)["deleted"])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_timeline_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-timeline-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "direct-timeline.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $data = $workbook.Worksheets.Item(1)
+                        $data.Name = 'DATA_RECORDS'
+                        $data.Range('A1').Value2 = 'OrderDate'
+                        $data.Range('B1').Value2 = 'Region'
+                        $data.Range('C1').Value2 = 'Amount'
+                        $data.Range('A2').Value2 = [datetime]'2026-01-15'
+                        $data.Range('B2').Value2 = 'West'
+                        $data.Range('C2').Value2 = 10
+                        $data.Range('A3').Value2 = [datetime]'2026-02-15'
+                        $data.Range('B3').Value2 = 'East'
+                        $data.Range('C3').Value2 = 20
+                        $data.Range('A4').Value2 = [datetime]'2026-03-15'
+                        $data.Range('B4').Value2 = 'West'
+                        $data.Range('C4').Value2 = 30
+                        $pivot = $workbook.Worksheets.Add()
+                        $pivot.Name = 'PIVOTS'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            pivot_spec = json.dumps(
+                {
+                    "name": "LIVE_TIMELINE_PIVOT",
+                    "destinationSheet": "PIVOTS",
+                    "topLeft": "A3",
+                    "sourceSheet": "DATA_RECORDS",
+                    "sourceAddress": "A1:C4",
+                    "rowFields": ["OrderDate"],
+                    "dataFields": [{"name": "Amount", "summary": "sum", "caption": "Total Amount"}],
+                }
+            )
+            timeline_spec = json.dumps(
+                {
+                    "name": "LIVE_DIRECT_TIMELINE",
+                    "sheet": "PIVOTS",
+                    "sourcePivot": "LIVE_TIMELINE_PIVOT",
+                    "sourceField": "OrderDate",
+                    "topLeft": "F3",
+                    "caption": "Order Date",
+                    "timelineLevel": "months",
+                    "startDate": "2026-01-01",
+                    "endDate": "2026-02-28",
+                }
+            )
+            range_spec = json.dumps(
+                {
+                    "timelineLevel": "months",
+                    "startDate": "2026-02-01",
+                    "endDate": "2026-03-31",
+                }
+            )
+
+            pivot_proc = run_skill_cli("pivot", "create", "--workbook-path", str(workbook), "--spec-json", pivot_spec, timeout=300)
+            self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
+
+            create_timeline_proc = run_skill_cli("timeline", "create", "--workbook-path", str(workbook), "--spec-json", timeline_spec, timeout=300)
+            self.assertEqual(create_timeline_proc.returncode, 0, create_timeline_proc.stdout + create_timeline_proc.stderr)
+            self.assertEqual(json.loads(create_timeline_proc.stdout)["timeline"]["name"], "LIVE_DIRECT_TIMELINE")
+
+            range_timeline_proc = run_skill_cli(
+                "timeline",
+                "set-range",
+                "--workbook-path",
+                str(workbook),
+                "--timeline",
+                "LIVE_DIRECT_TIMELINE",
+                "--spec-json",
+                range_spec,
+                timeout=300,
+            )
+            self.assertEqual(range_timeline_proc.returncode, 0, range_timeline_proc.stdout + range_timeline_proc.stderr)
+            self.assertTrue(json.loads(range_timeline_proc.stdout)["changed"])
+
+            clear_timeline_proc = run_skill_cli("timeline", "clear", "--workbook-path", str(workbook), "--timeline", "LIVE_DIRECT_TIMELINE", timeout=300)
+            self.assertEqual(clear_timeline_proc.returncode, 0, clear_timeline_proc.stdout + clear_timeline_proc.stderr)
+            self.assertTrue(json.loads(clear_timeline_proc.stdout)["cleared"])
+
+            delete_timeline_proc = run_skill_cli("timeline", "delete", "--workbook-path", str(workbook), "--timeline", "LIVE_DIRECT_TIMELINE", timeout=300)
+            self.assertEqual(delete_timeline_proc.returncode, 0, delete_timeline_proc.stdout + delete_timeline_proc.stderr)
+            self.assertTrue(json.loads(delete_timeline_proc.stdout)["deleted"])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_workbook_safe_export_writes_pdf_from_temp_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-safe-export-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "safe-export-source.xlsx"
+            target = tmp / "safe-export-output.pdf"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'Report'
+                        $sheet.Range('A1').Value2 = 'Metric'
+                        $sheet.Range('B1').Value2 = 'Value'
+                        $sheet.Range('A2').Value2 = 'Revenue'
+                        $sheet.Range('B2').Value2 = 123
+                        $sheet.PageSetup.PrintArea = '$A$1:$B$2'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            spec = json.dumps({"breakLinks": False, "removeDocumentInfoTypes": [], "runDocumentInspectors": False})
+            export_proc = run_skill_cli(
+                "workbook",
+                "safe-export",
+                "--workbook-path",
+                str(workbook),
+                "--target-path",
+                str(target),
+                "--spec-json",
+                spec,
+                timeout=300,
+            )
+            self.assertEqual(export_proc.returncode, 0, export_proc.stdout + export_proc.stderr)
+            payload = json.loads(export_proc.stdout)
+            self.assertEqual(payload["targetFormat"], "pdf")
+            self.assertEqual(Path(payload["targetPath"]), target.resolve())
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_bytes()[:4], b"%PDF")
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_direct_shape_picture_and_control_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-visuals-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "direct-visuals.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'DATA_RECORDS'
+                        $sheet.Range('A1').Value2 = 'Code'
+                        $sheet.Range('B1').Value2 = 'Amount'
+                        $sheet.Range('A2').Value2 = 'A100'
+                        $sheet.Range('B2').Value2 = 10
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+            image_path = tmp / "pixel.png"
+            image_path.write_bytes(
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lZQtWQAAAABJRU5ErkJggg=="
+                )
+            )
+            shape_spec = json.dumps(
+                {
+                    "sheet": "DATA_RECORDS",
+                    "name": "LIVE_DIRECT_SHAPE",
+                    "topLeft": "L2",
+                    "width": 120,
+                    "height": 40,
+                    "text": "Live shape",
+                    "altText": "live shape alt text",
+                    "fillColor": "#4472C4",
+                }
+            )
+            shape_update_spec = json.dumps(
+                {
+                    "name": "LIVE_DIRECT_SHAPE",
+                    "text": "Updated shape",
+                    "altText": "updated shape alt text",
+                    "width": 132,
+                }
+            )
+            picture_spec = json.dumps(
+                {
+                    "sheet": "DATA_RECORDS",
+                    "name": "LIVE_DIRECT_PICTURE",
+                    "sourcePath": str(image_path),
+                    "topLeft": "L8",
+                    "width": 40,
+                    "height": 40,
+                    "altText": "live picture alt text",
+                }
+            )
+
+            create_shape_proc = run_skill_cli("shape", "create", "--workbook-path", str(workbook), "--spec-json", shape_spec, timeout=300)
+            self.assertEqual(create_shape_proc.returncode, 0, create_shape_proc.stdout + create_shape_proc.stderr)
+            self.assertEqual(json.loads(create_shape_proc.stdout)["shape"]["name"], "LIVE_DIRECT_SHAPE")
+
+            update_shape_proc = run_skill_cli("shape", "update", "--workbook-path", str(workbook), "--spec-json", shape_update_spec, timeout=300)
+            self.assertEqual(update_shape_proc.returncode, 0, update_shape_proc.stdout + update_shape_proc.stderr)
+            self.assertEqual(json.loads(update_shape_proc.stdout)["shape"]["text"], "Updated shape")
+
+            add_picture_proc = run_skill_cli("picture", "add", "--workbook-path", str(workbook), "--spec-json", picture_spec, timeout=300)
+            self.assertEqual(add_picture_proc.returncode, 0, add_picture_proc.stdout + add_picture_proc.stderr)
+            self.assertEqual(json.loads(add_picture_proc.stdout)["picture"]["category"], "picture")
+
+            control_list_proc = run_skill_cli("control", "list", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(control_list_proc.returncode, 0, control_list_proc.stdout + control_list_proc.stderr)
+            self.assertIsInstance(json.loads(control_list_proc.stdout)["controls"], list)
+
+            delete_picture_proc = run_skill_cli("picture", "delete", "--workbook-path", str(workbook), "--name", "LIVE_DIRECT_PICTURE", timeout=300)
+            self.assertEqual(delete_picture_proc.returncode, 0, delete_picture_proc.stdout + delete_picture_proc.stderr)
+            self.assertTrue(json.loads(delete_picture_proc.stdout)["deleted"])
+
+            delete_shape_proc = run_skill_cli("shape", "delete", "--workbook-path", str(workbook), "--name", "LIVE_DIRECT_SHAPE", timeout=300)
+            self.assertEqual(delete_shape_proc.returncode, 0, delete_shape_proc.stdout + delete_shape_proc.stderr)
+            self.assertTrue(json.loads(delete_shape_proc.stdout)["deleted"])
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_generic_pull_supports_xls_and_xlsb(self) -> None:

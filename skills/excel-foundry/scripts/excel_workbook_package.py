@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import hashlib
 import io
 import json
 import os
@@ -748,6 +749,46 @@ class WorkbookPackage:
             )
         return {"sheets": sheets_payload}
 
+    def parse_styles(self) -> dict[str, Any]:
+        parts: list[dict[str, Any]] = []
+        for path in ("xl/styles.xml",):
+            try:
+                content = self._read_bytes(path)
+            except KeyError:
+                continue
+            root = ET.fromstring(content)
+            parts.append(
+                {
+                    "path": path,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "xml": content.decode("utf-8-sig"),
+                    "counts": {
+                        "numFmts": len(root.findall("main:numFmts/main:numFmt", NS)),
+                        "fonts": len(root.findall("main:fonts/main:font", NS)),
+                        "fills": len(root.findall("main:fills/main:fill", NS)),
+                        "borders": len(root.findall("main:borders/main:border", NS)),
+                        "cellXfs": len(root.findall("main:cellXfs/main:xf", NS)),
+                        "cellStyles": len(root.findall("main:cellStyles/main:cellStyle", NS)),
+                    },
+                }
+            )
+        return {"parts": parts}
+
+    def parse_themes(self) -> dict[str, Any]:
+        parts: list[dict[str, Any]] = []
+        for path in sorted(name for name in self._zip.namelist() if name.startswith("xl/theme/") and name.endswith(".xml")):
+            content = self._read_bytes(path)
+            root = ET.fromstring(content)
+            parts.append(
+                {
+                    "path": path,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "name": root.attrib.get("name"),
+                    "xml": content.decode("utf-8-sig"),
+                }
+            )
+        return {"parts": parts}
+
     def get_cell_payload(self, sheet_name: str, cell_ref: str) -> dict[str, Any]:
         sheet_path = next((sheet["path"] for sheet in self.sheets if sheet["name"] == sheet_name), None)
         if sheet_path is None:
@@ -1027,6 +1068,11 @@ class WorkbookPackage:
             series_payload.append(
                 {
                     "name": name,
+                    "nameFormula": name_expr,
+                    "categoriesFormula": categories_expr,
+                    "valuesFormula": values_expr,
+                    "bubbleSizeFormula": bubble_expr,
+                    "order": order_value,
                     "formula": formula,
                 }
             )
@@ -1465,6 +1511,8 @@ PACKAGE_WRITABLE_SURFACES = [
     "comments",
     "print",
     "charts",
+    "styles",
+    "themes",
 ]
 PACKAGE_DESKTOP_WRITE_SURFACES = ["pivots", "slicers", "timelines", "pq", "connections", "model"]
 PACKAGE_PARTIAL_WRITE_SURFACES = ["charts"]
@@ -1493,7 +1541,7 @@ CAPABILITY_LEDGER: dict[str, dict[str, Any]] = {
     "exports": {"category": "distribution", "read": "desktop", "write": "desktop", "verify": "target-file-open", "risk": "output-format-guarded"},
     "protection": {"category": "security", "read": "package", "write": "package", "verify": "protection-readback", "risk": "password-not-recovered"},
     "privacy": {"category": "security", "read": "desktop", "write": "desktop", "verify": "document-inspector", "risk": "destructive-redaction-guarded"},
-    "charts": {"category": "visuals", "read": "package", "write": "desktop", "verify": "chart-readback", "risk": "desktop-fidelity"},
+    "charts": {"category": "visuals", "read": "package", "write": "desktop-preferred", "verify": "chart-readback", "risk": "relationship-edit-limited"},
     "shapes": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
     "pictures": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
     "controls": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "control-readback", "risk": "activex-platform-dependent"},
@@ -1589,11 +1637,13 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
         write_available = (
             (write_lane == "package" and package_readable)
             or (write_lane == "desktop" and desktop_available)
+            or (write_lane == "desktop-preferred" and (package_readable or desktop_available))
             or write_lane in {"automation", "preserve-only"}
         )
         route = {
             "package": "package-write",
             "desktop": "desktop-write",
+            "desktop-preferred": "partial-package-write",
             "automation": "automation-write",
             "preserve-only": "preserve-only",
         }.get(write_lane, "platform-impossible")
@@ -1608,7 +1658,7 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
             "canPreserveHere": package_readable or desktop_available,
             "verify": spec["verify"],
             "risk": spec["risk"],
-            "requires": [] if write_lane in {"package", "automation", "preserve-only"} else ["desktop-excel"],
+            "requires": [] if write_lane in {"package", "desktop-preferred", "automation", "preserve-only"} else ["desktop-excel"],
         }
     return {
         "version": 1,
@@ -1668,6 +1718,8 @@ def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
                 "comments",
                 "print",
                 "dimensions",
+                "styles",
+                "themes",
             ] if package_readable else [],
             "supportedWriteSurfaces": PACKAGE_WRITABLE_SURFACES if package_readable else [],
         },
@@ -1755,6 +1807,10 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             payload["comments"] = package.parse_comments()
         if not surfaces or "print" in surfaces:
             payload["print"] = package.parse_print_settings()
+        if not surfaces or "styles" in surfaces:
+            payload["styles"] = package.parse_styles()
+        if not surfaces or "themes" in surfaces:
+            payload["themes"] = package.parse_themes()
         pq_info = None
         if not surfaces or {"pq", "connections", "model"} & set(surfaces):
             pq_info = package.parse_power_query()
@@ -1785,6 +1841,8 @@ def build_query_payload(workbook_path: Path, surfaces: list[str]) -> dict[str, A
             "hyperlinks",
             "comments",
             "print",
+            "styles",
+            "themes",
             "vba",
             "project",
             "references",
@@ -1903,6 +1961,8 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
     _write_json(structure_dir / "hyperlinks.json", {"hyperlinks": query_payload.get("hyperlinks", [])})
     _write_json(structure_dir / "comments.json", {"comments": query_payload.get("comments", [])})
     _write_json(structure_dir / "print.json", query_payload.get("print", {"sheets": []}))
+    _write_json(structure_dir / "styles.json", query_payload.get("styles", {"parts": []}))
+    _write_json(structure_dir / "themes.json", query_payload.get("themes", {"parts": []}))
     manifest: dict[str, Any] = {
         "version": 2,
         "workbookPath": _relative_or_absolute(manifest_path.parent, workbook_path),
@@ -1922,6 +1982,8 @@ def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path 
             "hyperlinksPath": str(PurePosixPath("workbook_structure/hyperlinks.json")),
             "commentsPath": str(PurePosixPath("workbook_structure/comments.json")),
             "printPath": str(PurePosixPath("workbook_structure/print.json")),
+            "stylesPath": str(PurePosixPath("workbook_structure/styles.json")),
+            "themesPath": str(PurePosixPath("workbook_structure/themes.json")),
             "tablesDiscovery": {"mode": "all"},
             "namesDiscovery": {"mode": "all", "excludeBuiltIn": True},
             "conditionalFormattingDiscovery": {"mode": "all-major"},
@@ -2051,7 +2113,7 @@ PACKAGE_SURFACE_SPECS: dict[str, dict[str, Any]] = {
         "writable": True,
         "selectorKinds": {"sheet"},
         "keyFields": ("sheet", "name"),
-        "unsupportedReason": "Package-backed chart sync preserves existing chart parts; route rich chart authoring to desktop Excel.",
+        "unsupportedReason": "Package-backed chart sync updates title and series references on existing charts; route creation, deletion, and rich formatting to desktop Excel.",
     },
     "pivots": {
         "queryKey": "pivots",
@@ -2092,6 +2154,22 @@ PACKAGE_SURFACE_SPECS: dict[str, dict[str, Any]] = {
         "artifactKey": None,
         "writable": True,
         "selectorKinds": {"sheet"},
+        "keyFields": (),
+    },
+    "styles": {
+        "queryKey": "styles",
+        "artifactPath": ("structure", "stylesPath"),
+        "artifactKey": None,
+        "writable": True,
+        "selectorKinds": set(),
+        "keyFields": (),
+    },
+    "themes": {
+        "queryKey": "themes",
+        "artifactPath": ("structure", "themesPath"),
+        "artifactKey": None,
+        "writable": True,
+        "selectorKinds": set(),
         "keyFields": (),
     },
     "pq": {
@@ -2162,6 +2240,10 @@ def _normalize_surface_set(surface_text: str | None, manifest: dict[str, Any] | 
                 manifest_surfaces.discard("comments")
             if "printPath" not in structure:
                 manifest_surfaces.discard("print")
+            if "stylesPath" not in structure:
+                manifest_surfaces.discard("styles")
+            if "themesPath" not in structure:
+                manifest_surfaces.discard("themes")
             power_query = manifest.get("powerQuery") or {}
             if "queriesPath" not in power_query:
                 manifest_surfaces.discard("pq")
@@ -2246,7 +2328,7 @@ def validate_manifest_file(manifest_path: Path, *, check_files: bool) -> dict[st
     version = manifest.get("version", 1)
     if version < 2:
         warnings.append("manifest.version is older than the current bundle contract; migrate to version 2")
-    for recommended_key in ("workbookPath", "sheetsPath", "tablesPath", "namesPath", "formulasPath", "dataValidationPath", "protectionPath", "dimensionsPath", "hyperlinksPath", "commentsPath", "printPath"):
+    for recommended_key in ("workbookPath", "sheetsPath", "tablesPath", "namesPath", "formulasPath", "dataValidationPath", "protectionPath", "dimensionsPath", "hyperlinksPath", "commentsPath", "printPath", "stylesPath", "themesPath"):
         if recommended_key not in structure:
             warnings.append(f"structure.{recommended_key} is not present")
     duplicate_paths: dict[str, list[str]] = {}
@@ -2289,6 +2371,8 @@ def migrate_manifest_payload(manifest_path: Path) -> dict[str, Any]:
         "hyperlinksPath": "workbook_structure/hyperlinks.json",
         "commentsPath": "workbook_structure/comments.json",
         "printPath": "workbook_structure/print.json",
+        "stylesPath": "workbook_structure/styles.json",
+        "themesPath": "workbook_structure/themes.json",
     }
     for key, value in defaults.items():
         if key not in structure:
@@ -2397,7 +2481,7 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
 
 
 def compare_workbook_payloads(left_workbook: Path, right_workbook: Path, surfaces: list[str]) -> dict[str, Any]:
-    normalized_surfaces = surfaces or ["workbook", "sheets", "tables", "names", "formulas", "data-validation", "protection", "cf", "pivots", "hyperlinks", "comments", "print", "dimensions", "pq", "connections", "model"]
+    normalized_surfaces = surfaces or ["workbook", "sheets", "tables", "names", "formulas", "data-validation", "protection", "cf", "pivots", "hyperlinks", "comments", "print", "dimensions", "styles", "themes", "pq", "connections", "model"]
     left_payload = build_query_payload(left_workbook, normalized_surfaces)
     right_payload = build_query_payload(right_workbook, normalized_surfaces)
     surface_results: list[dict[str, Any]] = []
@@ -2509,7 +2593,7 @@ def _item_key(surface: str, item: dict[str, Any]) -> str:
 def _index_surface(surface: str, payload: Any) -> dict[str, Any]:
     if payload is None:
         return {}
-    if surface in {"workbook", "dimensions", "print", "model"}:
+    if surface in {"workbook", "dimensions", "print", "styles", "themes", "model"}:
         return {"__value__": payload}
     if surface == "protection":
         return {
@@ -2520,7 +2604,7 @@ def _index_surface(surface: str, payload: Any) -> dict[str, Any]:
 
 
 def _from_index(surface: str, payload_index: dict[str, Any]) -> Any:
-    if surface in {"workbook", "dimensions", "print", "model"}:
+    if surface in {"workbook", "dimensions", "print", "styles", "themes", "model"}:
         return payload_index.get("__value__")
     if surface == "protection":
         worksheets = [value for key, value in payload_index.items() if key.startswith("sheet|") and value is not None]
@@ -3017,6 +3101,193 @@ def _remove_relationships_by_type(rels_root: ET.Element, rel_type: str) -> None:
     for item in list(rels_root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")):
         if item.attrib.get("Type") == rel_type:
             rels_root.remove(item)
+
+
+def _chart_part_entries(package: WorkbookPackage) -> list[dict[str, str | None]]:
+    entries: list[dict[str, str | None]] = []
+    for sheet in package.sheets:
+        if sheet.get("sheetType") == "worksheet":
+            for rel in sheet["rels"].values():
+                if not rel["type"].endswith("/drawing"):
+                    continue
+                drawing_path = rel["target"]
+                try:
+                    drawing_root = package._read_xml(drawing_path)
+                except KeyError:
+                    continue
+                drawing_rels = package._read_relationships(package._drawing_relationships_path(drawing_path))
+                for anchor_node in drawing_root.findall("xdr:twoCellAnchor", NS):
+                    chart_node = anchor_node.find("xdr:graphicFrame/a:graphic/a:graphicData/c:chart", NS)
+                    if chart_node is None:
+                        continue
+                    chart_rel_id = chart_node.attrib.get(f"{{{NS['rel']}}}id")
+                    chart_rel = drawing_rels.get(chart_rel_id or "")
+                    if not chart_rel:
+                        continue
+                    c_nv_pr = anchor_node.find("xdr:graphicFrame/xdr:nvGraphicFramePr/xdr:cNvPr", NS)
+                    entries.append(
+                        {
+                            "sheet": sheet["name"],
+                            "name": c_nv_pr.attrib.get("name") if c_nv_pr is not None else None,
+                            "path": chart_rel["target"],
+                        }
+                    )
+        elif sheet.get("sheetType") == "chartsheet":
+            try:
+                root = package._read_xml(sheet["path"])
+            except KeyError:
+                continue
+            drawing_node = root.find("main:drawing", NS)
+            if drawing_node is None:
+                continue
+            drawing_rel_id = drawing_node.attrib.get(f"{{{NS['rel']}}}id")
+            drawing_rel = sheet["rels"].get(drawing_rel_id or "")
+            if not drawing_rel:
+                continue
+            drawing_rels = package._read_relationships(package._drawing_relationships_path(drawing_rel["target"]))
+            chart_rel = next((rel for rel in drawing_rels.values() if rel["type"].endswith("/chart")), None)
+            if chart_rel:
+                entries.append({"sheet": sheet["name"], "name": sheet["name"], "path": chart_rel["target"]})
+    return entries
+
+
+def _split_series_arguments(formula: str) -> list[str]:
+    text = formula.strip()
+    if text.startswith("="):
+        text = text[1:].strip()
+    if not text.upper().startswith("SERIES(") or not text.endswith(")"):
+        return []
+    body = text[text.find("(") + 1 : -1]
+    args: list[str] = []
+    current: list[str] = []
+    in_string = False
+    brace_depth = 0
+    for char in body:
+        if char == '"':
+            in_string = not in_string
+            current.append(char)
+            continue
+        if not in_string:
+            if char == "{":
+                brace_depth += 1
+            elif char == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif char == "," and brace_depth == 0:
+                args.append("".join(current).strip())
+                current = []
+                continue
+        current.append(char)
+    args.append("".join(current).strip())
+    return args
+
+
+def _series_formula_parts(series_spec: dict[str, Any]) -> dict[str, str | None]:
+    parts = {
+        "nameFormula": series_spec.get("nameFormula"),
+        "categoriesFormula": series_spec.get("categoriesFormula"),
+        "valuesFormula": series_spec.get("valuesFormula"),
+        "bubbleSizeFormula": series_spec.get("bubbleSizeFormula"),
+    }
+    if any(value for value in parts.values()):
+        return {key: (str(value) if value is not None else None) for key, value in parts.items()}
+    args = _split_series_arguments(str(series_spec.get("formula") or ""))
+    if not args:
+        return parts
+    return {
+        "nameFormula": args[0] if len(args) > 0 and args[0] else None,
+        "categoriesFormula": args[1] if len(args) > 1 and args[1] else None,
+        "valuesFormula": args[2] if len(args) > 2 and args[2] else None,
+        "bubbleSizeFormula": None,
+    }
+
+
+def _ensure_chart_child(parent: ET.Element, child_name: str) -> ET.Element:
+    child = parent.find(f"c:{child_name}", NS)
+    if child is None:
+        child = ET.SubElement(parent, f"{{{NS['c']}}}{child_name}")
+    return child
+
+
+def _set_chart_ref_formula(parent: ET.Element | None, ref_child_name: str, formula: str | None) -> bool:
+    if parent is None or formula is None:
+        return False
+    ref_node = parent.find(f"c:{ref_child_name}", NS)
+    if ref_node is None:
+        ref_node = ET.SubElement(parent, f"{{{NS['c']}}}{ref_child_name}")
+    formula_node = ref_node.find("c:f", NS)
+    if formula_node is None:
+        formula_node = ET.SubElement(ref_node, f"{{{NS['c']}}}f")
+    changed = formula_node.text != formula
+    formula_node.text = formula
+    for cache in list(ref_node):
+        if _local_name(cache.tag) in {"numCache", "strCache"}:
+            ref_node.remove(cache)
+            changed = True
+    return changed
+
+
+def _apply_chart_relationship_spec(chart_root: ET.Element, chart_spec: dict[str, Any]) -> bool:
+    changed = False
+    title = chart_spec.get("title")
+    if title is not None:
+        title_node = chart_root.find("c:chart/c:title", NS)
+        text_nodes = title_node.findall(".//a:t", NS) if title_node is not None else []
+        if text_nodes:
+            if text_nodes[0].text != str(title):
+                changed = True
+            text_nodes[0].text = str(title)
+            for extra in text_nodes[1:]:
+                if extra.text:
+                    changed = True
+                extra.text = ""
+
+    desired_series = chart_spec.get("series") or []
+    if not isinstance(desired_series, list):
+        return changed
+    existing_series = chart_root.findall(".//c:ser", NS)
+    for index, series_spec in enumerate(desired_series):
+        if index >= len(existing_series) or not isinstance(series_spec, dict):
+            continue
+        series_node = existing_series[index]
+        parts = _series_formula_parts(series_spec)
+        if parts.get("nameFormula"):
+            tx_node = _ensure_chart_child(series_node, "tx")
+            changed = _set_chart_ref_formula(tx_node, "strRef", parts["nameFormula"]) or changed
+        handled_formula_keys: set[str] = set()
+        for axis_name, formula_key, ref_child_name in (
+            ("cat", "categoriesFormula", "strRef"),
+            ("xVal", "categoriesFormula", "numRef"),
+            ("val", "valuesFormula", "numRef"),
+            ("yVal", "valuesFormula", "numRef"),
+            ("bubbleSize", "bubbleSizeFormula", "numRef"),
+        ):
+            if formula_key in handled_formula_keys:
+                continue
+            formula = parts.get(formula_key)
+            if formula is None:
+                continue
+            axis_node = series_node.find(f"c:{axis_name}", NS)
+            if axis_node is not None:
+                changed = _set_chart_ref_formula(axis_node, ref_child_name, formula) or changed
+                handled_formula_keys.add(formula_key)
+    return changed
+
+
+def _validated_package_xml_update(part_spec: dict[str, Any], surface: str) -> tuple[str, bytes]:
+    raw_path = str(part_spec.get("path") or "")
+    part_path = str(PurePosixPath(raw_path))
+    if part_path.startswith("/") or ".." in PurePosixPath(part_path).parts:
+        raise ValueError(f"{surface} package part path must be relative and stay inside the workbook package: {raw_path}")
+    if surface == "styles" and part_path != "xl/styles.xml":
+        raise ValueError("styles package sync can only update xl/styles.xml")
+    if surface == "themes" and (not part_path.startswith("xl/theme/") or not part_path.endswith(".xml")):
+        raise ValueError("themes package sync can only update XML parts below xl/theme/")
+    xml_text = part_spec.get("xml")
+    if not isinstance(xml_text, str) or not xml_text.strip():
+        raise ValueError(f"{surface} package part {part_path} requires a non-empty xml string")
+    content = xml_text.encode("utf-8")
+    ET.fromstring(content)
+    return part_path, content
 
 
 def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, selectors: dict[str, set[str]]) -> list[str]:
@@ -3590,7 +3861,43 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
             updates["xl/workbook.xml"] = _serialize_xml(workbook_root)
             messages.append("Applied print areas, titles, and page layout settings.")
         elif surface == "charts":
-            messages.append("Preserved existing chart parts; route rich chart creation/update/delete to desktop Excel.")
+            chart_specs = {
+                (item.get("sheet"), item.get("name")): item
+                for item in (payload or [])
+                if isinstance(item, dict) and item.get("sheet") and item.get("name")
+            }
+            target_sheets = selectors["sheet"] or {sheet for sheet, _ in chart_specs}
+            updated_count = 0
+            for entry in _chart_part_entries(package):
+                sheet_name = entry.get("sheet")
+                chart_name = entry.get("name")
+                chart_path = entry.get("path")
+                if not sheet_name or not chart_name or not chart_path:
+                    continue
+                if target_sheets and sheet_name not in target_sheets:
+                    continue
+                spec = chart_specs.get((sheet_name, chart_name))
+                if spec is None:
+                    continue
+                chart_root = package._read_xml(chart_path)
+                if _apply_chart_relationship_spec(chart_root, spec):
+                    updates[chart_path] = _serialize_xml(chart_root)
+                    updated_count += 1
+            messages.append(
+                f"Applied chart title and series reference updates to {updated_count} existing chart part(s); route chart creation, deletion, and rich formatting to desktop Excel."
+            )
+        elif surface in {"styles", "themes"}:
+            part_specs = (payload or {}).get("parts", []) if isinstance(payload, dict) else []
+            if not isinstance(part_specs, list):
+                raise ValueError(f"{surface} package payload must contain a parts array")
+            updated_count = 0
+            for part_spec in part_specs:
+                if not isinstance(part_spec, dict):
+                    continue
+                part_path, content = _validated_package_xml_update(part_spec, surface)
+                updates[part_path] = content
+                updated_count += 1
+            messages.append(f"Applied {updated_count} {surface} package part replacement(s).")
         else:
             raise ValueError(f"Unsupported package push surface: {surface}")
     finally:

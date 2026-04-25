@@ -1459,6 +1459,8 @@ def run_audit_subprocess(
         scenario_set,
         "--run-root",
         str(run_root),
+        "--stdout",
+        "full",
     ]
     if visible:
         command.append("--visible")
@@ -1535,6 +1537,8 @@ def parse_args() -> argparse.Namespace:
     matrix_parser.add_argument("--include-regressions", action="store_true")
     matrix_parser.add_argument("--scenario-set", choices=["full"], default="full")
     matrix_parser.add_argument("--audit-timeout-seconds", type=int, default=600)
+    matrix_parser.add_argument("--stdout", choices=["summary", "full"], default="summary")
+    matrix_parser.add_argument("--result-path", type=Path)
 
     return parser.parse_args()
 

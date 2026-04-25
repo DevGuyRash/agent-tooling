@@ -73,12 +73,13 @@ sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/exc
 - Package-backed `sync` currently writes workbook metadata/calculation
   settings, names, formulas, data-validation, conditional formatting,
   protection, row and column dimensions, hyperlinks, comments, print settings,
-  and updates to existing tables for package-readable `.xlsx` and `.xlsm`
-  workbooks.
-- Charts, pivots, slicers, timelines, Power Query, connections, and model
-  remain compare or plan surfaces in the package path. When a write requires
-  desktop Excel, the package plan reports a `desktop-write` route instead of
-  attempting a lossy rewrite.
+  exact styles/theme package part replacements, updates to existing tables,
+  and existing chart title/series reference updates for package-readable
+  `.xlsx` and `.xlsm` workbooks.
+- Rich chart authoring, pivots, slicers, timelines, Power Query, connections,
+  and model remain compare or plan surfaces in the package path. When a write
+  requires desktop Excel, the package plan reports the required route instead
+  of attempting a lossy rewrite.
 - The generic Python CLI is additive. It does not replace this write surface.
 - Load the narrower reference for the domain you are changing when needed:
   `manifest.md`, `query.md`, `power-query.md`, `vba-project.md`, or

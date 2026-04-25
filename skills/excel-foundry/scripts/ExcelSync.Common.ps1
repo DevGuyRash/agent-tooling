@@ -440,8 +440,12 @@ function Resolve-ExcelSyncManifest {
             [System.IO.Path]::GetFullPath($WorkbookPathOverride)
         }
 
+    $manifestVbaComponents = @()
+    if ($null -ne $manifest.PSObject.Properties['vbaComponents']) {
+        $manifestVbaComponents = @($manifest.vbaComponents)
+    }
     $resolvedVbaComponents = @()
-    foreach ($component in @($manifest.vbaComponents)) {
+    foreach ($component in $manifestVbaComponents) {
         $kind = $null
         if ($null -ne $component.PSObject.Properties['kind']) {
             $kind = [string]$component.kind
@@ -470,7 +474,10 @@ function Resolve-ExcelSyncManifest {
         }
     }
 
-    $structure = $manifest.structure
+    $structure = $null
+    if ($null -ne $manifest.PSObject.Properties['structure']) {
+        $structure = $manifest.structure
+    }
     $resolvedStructure = [pscustomobject]@{
         SheetsPath = $null
         TablesPath = $null
@@ -902,9 +909,8 @@ function Remove-VbaComponentIfImportable {
         return
     }
 
-    $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-    $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-    Invoke-LateMethod -Target $vbComponents -Name "Remove" -Arguments @($component) | Out-Null
+    $vbComponents = $Workbook.VBProject.VBComponents
+    $vbComponents.Remove($component)
 }
 
 function Set-VbaComponentCode {
@@ -968,9 +974,8 @@ function Set-VbaComponentArtifact {
         $component = Resolve-VbaComponent -Workbook $Workbook -ComponentName $ComponentName
         if (Test-VbaComponentImportable -Component $component) {
             Remove-VbaComponentIfImportable -Workbook $Workbook -ComponentName $ComponentName
-            $vbProject = Get-LateProperty -Target $Workbook -Name "VBProject"
-            $vbComponents = Get-LateProperty -Target $vbProject -Name "VBComponents"
-            $imported = Get-LateProperty -Target $vbComponents -Name "Import" -Arguments @($SourcePath)
+            $vbComponents = $Workbook.VBProject.VBComponents
+            $imported = $vbComponents.Import($SourcePath)
             try {
                 $imported.Name = $ComponentName
             }

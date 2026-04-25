@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
 
@@ -15,20 +16,40 @@ PS1 = ROOT / "scripts" / "excel-foundry.ps1"
 PYTHON_CLI = ROOT / "scripts" / "excel_workbook_sync.py"
 PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
 EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlam"}
+FLAT_EXPORT_EXTENSIONS = {".csv", ".txt", ".ods"}
+DISCOVERABLE_EXTENSIONS = EXCEL_EXTENSIONS | FLAT_EXPORT_EXTENSIONS
 
 
 def split_external_roots(raw: str) -> list[Path]:
     return [Path(item) for item in raw.split(os.pathsep) if item.strip()]
 
 
-def discover_external_workbooks(roots: list[Path]) -> list[Path]:
+def copy_external_roots_to_temp(roots: list[Path], destination: Path) -> list[Path]:
+    copied_roots: list[Path] = []
+    destination.mkdir(parents=True, exist_ok=True)
+    for index, root in enumerate(roots, start=1):
+        if not root.exists():
+            continue
+        root_hash = sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:10]
+        if root.is_file():
+            target = destination / f"{index:02d}-{root_hash}{root.suffix.lower()}"
+            shutil.copy2(root, target)
+            copied_roots.append(target)
+            continue
+        target = destination / f"{index:02d}-{root_hash}"
+        shutil.copytree(root, target)
+        copied_roots.append(target)
+    return copied_roots
+
+
+def discover_external_files(roots: list[Path], extensions: set[str] = DISCOVERABLE_EXTENSIONS) -> list[Path]:
     discovered: list[Path] = []
     seen: set[Path] = set()
     for root in roots:
         if not root.exists():
             continue
         if root.is_file():
-            if root.suffix.lower() not in EXCEL_EXTENSIONS:
+            if root.suffix.lower() not in extensions:
                 continue
             resolved = root.resolve()
             if resolved in seen:
@@ -39,7 +60,7 @@ def discover_external_workbooks(roots: list[Path]) -> list[Path]:
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            if path.suffix.lower() not in EXCEL_EXTENSIONS:
+            if path.suffix.lower() not in extensions:
                 continue
             resolved = path.resolve()
             if resolved in seen:
@@ -49,9 +70,15 @@ def discover_external_workbooks(roots: list[Path]) -> list[Path]:
     return sorted(discovered)
 
 
-def safe_slug(path: Path) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", str(path))
-    return normalized.strip(".-") or path.stem
+def discover_external_workbooks(roots: list[Path]) -> list[Path]:
+    return discover_external_files(roots, EXCEL_EXTENSIONS)
+
+
+def safe_slug(path: Path, ordinal: int = 1) -> str:
+    normalized_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", path.stem).strip(".-") or "workbook"
+    normalized_stem = normalized_stem[:48].strip(".-") or "workbook"
+    digest = sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"{ordinal:03d}-{normalized_stem}-{digest}"
 
 
 class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
@@ -65,6 +92,32 @@ class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
 
             self.assertEqual(discovered, [workbook.resolve()])
 
+    def test_discover_external_files_classifies_flat_exports_without_workbook_smoke(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-sync-external-flat-") as tmpdir:
+            tmp = Path(tmpdir)
+            csv_file = tmp / "export.csv"
+            txt_file = tmp / "export.txt"
+            ods_file = tmp / "export.ods"
+            csv_file.write_text("a,b\n1,2\n", encoding="utf-8")
+            txt_file.write_text("a\tb\n1\t2\n", encoding="utf-8")
+            ods_file.write_text("placeholder", encoding="utf-8")
+
+            discovered = discover_external_files([tmp])
+            workbooks = discover_external_workbooks([tmp])
+
+            self.assertEqual({path.suffix for path in discovered}, {".csv", ".txt", ".ods"})
+            self.assertEqual(workbooks, [])
+
+    def test_safe_slug_is_bounded_and_stable_for_deep_windows_paths(self) -> None:
+        path = Path("C:/very/deep/" + "/".join(["nested-directory"] * 20)) / "Macro Workbook With Spaces.xlsm"
+
+        first = safe_slug(path, 7)
+        second = safe_slug(path, 7)
+
+        self.assertEqual(first, second)
+        self.assertLessEqual(len(first), 68)
+        self.assertTrue(first.startswith("007-Macro-Workbook-With-Spaces-"))
+
 
 class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
     @classmethod
@@ -72,18 +125,33 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
         raw_roots = os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")
         if not raw_roots.strip():
             raise unittest.SkipTest("set EXCEL_SYNC_EXTERNAL_ROOTS to run external corpus smoke tests")
-        cls.roots = split_external_roots(raw_roots)
-        cls.workbooks = discover_external_workbooks(cls.roots)
+        cls.original_roots = split_external_roots(raw_roots)
+        cls.corpus_copy = tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-")
+        cls.roots = copy_external_roots_to_temp(cls.original_roots, Path(cls.corpus_copy.name))
+        cls.files = discover_external_files(cls.roots)
+        cls.workbooks = [path for path in cls.files if path.suffix.lower() in EXCEL_EXTENSIONS]
+        cls.flat_exports = [path for path in cls.files if path.suffix.lower() in FLAT_EXPORT_EXTENSIONS]
         if not cls.workbooks:
             raise unittest.SkipTest("no Excel workbooks were discovered under EXCEL_SYNC_EXTERNAL_ROOTS")
         cls.package_workbooks = [path for path in cls.workbooks if path.suffix.lower() in PACKAGE_READABLE_EXTENSIONS]
+        cls.generic_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT", "3")))
+        cls.package_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT", "3")))
         cls.audit_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT", "3")))
 
+    @classmethod
+    def tearDownClass(cls) -> None:
+        corpus_copy = getattr(cls, "corpus_copy", None)
+        if corpus_copy is not None:
+            corpus_copy.cleanup()
+
     def test_generic_pull_and_compare_are_invariant_safe(self) -> None:
+        if self.generic_limit == 0:
+            self.skipTest("set EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT to a positive value to run generic corpus smoke")
+        sample = self.workbooks[: self.generic_limit]
         with tempfile.TemporaryDirectory(prefix="excel-sync-external-generic-") as tmpdir:
             tmp = Path(tmpdir)
-            for workbook in self.workbooks:
-                slug = safe_slug(workbook)
+            for index, workbook in enumerate(sample, start=1):
+                slug = safe_slug(workbook, index)
                 with self.subTest(workbook=str(workbook)):
                     pull_root = tmp / "pull" / slug
                     pull_proc = subprocess.run(
@@ -97,6 +165,8 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                             str(pull_root),
                             "--engine",
                             "auto",
+                            "--stdout",
+                            "full",
                         ],
                         capture_output=True,
                         text=True,
@@ -122,6 +192,8 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                             str(compare_root),
                             "--engine",
                             "auto",
+                            "--stdout",
+                            "full",
                         ],
                         capture_output=True,
                         text=True,
@@ -155,10 +227,15 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("pwsh") is not None, "pwsh not available on this host")
     def test_package_manifest_flows_report_capabilities_and_unsupported(self) -> None:
+        if self.package_limit == 0:
+            self.skipTest("set EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT to a positive value to run package corpus smoke")
+        sample = self.package_workbooks[: self.package_limit]
+        if not sample:
+            self.skipTest("no package-readable Excel workbooks were discovered under EXCEL_SYNC_EXTERNAL_ROOTS")
         with tempfile.TemporaryDirectory(prefix="excel-sync-external-package-") as tmpdir:
             tmp = Path(tmpdir)
-            for workbook in self.package_workbooks:
-                slug = safe_slug(workbook)
+            for index, workbook in enumerate(sample, start=1):
+                slug = safe_slug(workbook, index)
                 with self.subTest(workbook=str(workbook)):
                     inspect_proc = subprocess.run(
                         [
@@ -246,8 +323,8 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
         sample = self.workbooks[: self.audit_limit]
         with tempfile.TemporaryDirectory(prefix="excel-sync-external-audit-") as tmpdir:
             tmp = Path(tmpdir)
-            for workbook in sample:
-                slug = safe_slug(workbook)
+            for index, workbook in enumerate(sample, start=1):
+                slug = safe_slug(workbook, index)
                 with self.subTest(workbook=str(workbook)):
                     audit_root = tmp / "audit" / slug
                     audit_proc = subprocess.run(
@@ -261,6 +338,8 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                             str(audit_root),
                             "--engine",
                             "auto",
+                            "--stdout",
+                            "full",
                         ],
                         capture_output=True,
                         text=True,
@@ -287,6 +366,8 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                 str(matrix_root),
                 "--engine",
                 "auto",
+                "--stdout",
+                "full",
             ]
             for workbook in sample:
                 command.extend(["--workbook", str(workbook)])

@@ -141,8 +141,8 @@ The plan-centric package path adds:
 
 Current generic metadata surfaces available through query/bootstrap or pull
 bundles include tables, names, conditional formatting, formulas,
-data-validation, protection, chart metadata, pivot metadata, Power Query
-metadata, and VBA metadata where the backend supports them.
+data-validation, protection, styles, themes, chart metadata, pivot metadata,
+Power Query metadata, and VBA metadata where the backend supports them.
 
 Current package-backed write surfaces available through `sync --apply` are:
 
@@ -159,8 +159,12 @@ Current package-backed write surfaces available through `sync --apply` are:
 - hyperlinks
 - comments
 - print
+- styles and themes as exact package XML part replacements
 
-Charts are package-inventoried and desktop-preferred for rich authoring.
-Pivots, slicers, timelines, Power Query, connections, and Data Model surfaces
-plan and compare cleanly in the package path and return `desktop-write` route
-metadata for write-back.
+Charts are package-inventoried, and package sync can update existing chart
+titles and series references. Rich chart authoring, pivots, slicers,
+timelines, Power Query, shapes, pictures, controls, and Data Model surfaces
+plan and compare cleanly in the package path and return route metadata for
+write-back. Desktop Excel direct commands can create/update/delete shapes,
+add/update/delete pictures, update/delete workbook connections, and inventory
+controls on copied live workbooks.

@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "boundary": "No manual Excel. Hidden desktop Excel automation is allowed for opaque workbook features when routed through safe copied workbooks.",
+  "checkOffRule": "A claim is complete only when every listed test selector exists and the route is honest about package, hidden-desktop, automation-artifact, or preserve-only support.",
+  "claims": [
+    {
+      "id": "workbook-lifecycle-formats",
+      "surfaces": ["workbook", "files", "exports"],
+      "route": "package-plus-hidden-desktop",
+      "tests": [
+        "test_direct_package_commands_support_core_workbook_ops",
+        "test_workbook_create_diff_and_manifest_lifecycle_commands_work",
+        "test_resolve_excel_save_format_supports_major_target_formats",
+        "test_live_workbook_safe_export_writes_pdf_from_temp_copy",
+        "test_live_generic_pull_supports_xls_and_xlsb"
+      ]
+    },
+    {
+      "id": "sheets-and-structure",
+      "surfaces": ["sheets", "chart-sheets"],
+      "route": "package-plus-hidden-desktop",
+      "tests": [
+        "test_direct_package_commands_support_core_workbook_ops",
+        "test_sheet_delete_requires_destructive_and_removes_package_sheet",
+        "test_package_backend_sync_push_apply_updates_supported_surfaces"
+      ]
+    },
+    {
+      "id": "cells-ranges-rows-columns",
+      "surfaces": ["cells", "ranges", "rows-columns"],
+      "route": "package",
+      "tests": [
+        "test_direct_package_commands_support_core_workbook_ops",
+        "test_package_backend_sync_push_apply_updates_workbook_adjacent_surfaces"
+      ]
+    },
+    {
+      "id": "names-and-formulas",
+      "surfaces": ["names", "formulas", "formula-audit"],
+      "route": "package-plus-automation",
+      "tests": [
+        "test_package_backend_sync_push_apply_updates_supported_surfaces",
+        "test_package_backend_plan_reports_per_surface_writeability",
+        "test_common_script_normalizes_excel_formulas_for_comparison"
+      ]
+    },
+    {
+      "id": "tables-and-structured-objects",
+      "surfaces": ["tables"],
+      "route": "package-plus-hidden-desktop",
+      "tests": [
+        "test_package_backend_sync_push_apply_updates_tables",
+        "test_direct_package_read_fallback_supports_table_get",
+        "test_live_direct_table_commands_roundtrip"
+      ]
+    },
+    {
+      "id": "validation-conditional-formatting-protection",
+      "surfaces": ["data-validation", "cf", "protection", "privacy"],
+      "route": "package-plus-hidden-desktop",
+      "tests": [
+        "test_package_backend_sync_push_apply_updates_supported_surfaces",
+        "test_package_backend_inspect_reports_capabilities_and_new_counts",
+        "test_live_cf_push_then_pull_roundtrips_new_rule"
+      ]
+    },
+    {
+      "id": "styles-themes-annotations-print",
+      "surfaces": ["styles", "themes", "hyperlinks", "comments", "threaded-comments", "print"],
+      "route": "package-plus-hidden-desktop",
+      "tests": [
+        "test_package_backend_sync_push_apply_updates_styles_and_themes",
+        "test_package_backend_sync_push_apply_updates_workbook_adjacent_surfaces",
+        "test_workbook_document_inspection_reports_manual_findings_without_excel"
+      ]
+    },
+    {
+      "id": "charts-pivots-and-visual-objects",
+      "surfaces": ["charts", "shapes", "pictures", "controls", "pivots", "pivot-charts", "slicers", "timelines"],
+      "route": "partial-package-write-plus-hidden-desktop",
+      "tests": [
+        "test_package_backend_query_reads_chart_metadata_from_ooxml_workbook",
+        "test_package_backend_sync_push_apply_updates_existing_chart_references",
+        "test_powershell_cli_accepts_visual_object_resource_actions",
+        "test_live_direct_shape_picture_and_control_commands_roundtrip",
+        "test_direct_package_read_fallback_supports_chart_list_and_get",
+        "test_live_direct_chart_and_pivot_list_commands_return_arrays",
+        "test_live_direct_pivot_commands_roundtrip",
+        "test_live_direct_slicer_commands_roundtrip",
+        "test_live_direct_timeline_commands_roundtrip"
+      ]
+    },
+    {
+      "id": "power-query-connections-links",
+      "surfaces": ["pq", "connections", "links"],
+      "route": "package-inventory-hidden-desktop-write",
+      "tests": [
+        "test_direct_package_read_fallback_supports_query_and_connection_get",
+        "test_live_direct_query_and_connection_commands_roundtrip",
+        "test_live_direct_query_set_accepts_minimal_spec",
+        "test_live_direct_connection_update_and_delete_commands_roundtrip",
+        "test_workbook_link_inventory_helper_reads_excel_and_ole_links",
+        "test_workbook_break_links_helper_breaks_selected_links"
+      ]
+    },
+    {
+      "id": "model-dax-and-bi",
+      "surfaces": ["model", "measures", "relationships", "dax", "what-if", "legacy-bi"],
+      "route": "hidden-desktop-or-preserve-only",
+      "tests": [
+        "test_direct_model_commands_support_guarded_mutation_plans",
+        "test_package_backend_plan_reports_per_surface_writeability",
+        "test_package_backend_compare_is_per_surface"
+      ]
+    },
+    {
+      "id": "automation-and-extensibility",
+      "surfaces": ["vba", "office-scripts", "excel-js-api", "office-addins", "artifact-workbook"],
+      "route": "hidden-desktop-plus-automation-artifact",
+      "tests": [
+        "test_live_vba_push_then_pull_roundtrips_module_change",
+        "test_live_vba_push_then_pull_roundtrips_self_contained_module",
+        "test_automation_artifact_workbook_generation_and_run_plan"
+      ]
+    },
+    {
+      "id": "portfolio-corpus-and-safety",
+      "surfaces": ["external-files"],
+      "route": "copy-first-corpus-smoke",
+      "tests": [
+        "test_generic_pull_and_compare_are_invariant_safe",
+        "test_package_manifest_flows_report_capabilities_and_unsupported",
+        "test_audit_and_matrix_continue_when_compare_is_unavailable",
+        "test_safe_slug_is_bounded_and_stable_for_deep_windows_paths"
+      ]
+    }
+  ]
+}

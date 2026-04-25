@@ -24,12 +24,7 @@ $context = Open-ExcelWorkbook -WorkbookPath $resolved.WorkbookPath -Visible:$Vis
 
 try {
     $projectInfo = Get-VbaProjectInfo -Workbook $context.Workbook
-    $vbComponents = $null
-    try { $vbComponents = $context.Workbook.VBProject.VBComponents } catch {}
-    $moduleMutationSupported = $false
-    if ($null -ne $vbComponents) {
-        $moduleMutationSupported = (@($vbComponents | Get-Member -Name Import).Count -gt 0) -or (@($vbComponents | Get-Member -Name Add).Count -gt 0)
-    }
+    $moduleMutationSupported = Test-VbaModuleMutationSupported -Workbook $context.Workbook
 
     if (-not $projectInfo.accessible) {
         Write-Output ("SKIP VBA project access is unavailable for: {0}" -f $resolved.WorkbookPath)

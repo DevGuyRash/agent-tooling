@@ -23,6 +23,8 @@ The generic Python CLI writes agent-readable bundles under the requested
 - `workbook_structure/hyperlinks.json`
 - `workbook_structure/comments.json`
 - `workbook_structure/print.json`
+- `workbook_structure/styles.json`
+- `workbook_structure/themes.json`
 - `power_query/connections.json`
 - `power_query/queries.json`
 - `power_query/query_files.json`
@@ -91,10 +93,13 @@ Manifest-driven `query`, `inspect`, and `bootstrap` payloads include:
 
 When the workbook is package-readable, query/bootstrap bundles can also include
 metadata for formulas, data-validation, workbook or worksheet protection,
-charts, pivots, Power Query, connections, and Data Model artifacts. Package
-plans use `engineRoutes` to distinguish package-safe writes from
-`desktop-write` surfaces that are inspectable and diffable in package mode but
-mutated through desktop Excel.
+styles, themes, charts, pivots, Power Query, connections, and Data Model
+artifacts. Package plans use `engineRoutes` to distinguish package-safe writes
+from `partial-package-write` and `desktop-write` surfaces. Styles and themes
+are exact XML package part replacements, existing chart title and series
+reference edits are partial package writes, and rich chart authoring plus
+shapes, pictures, controls, and opaque analytics objects are routed to desktop
+Excel.
 
 The deep capability ledger is the generic max-write contract. Each surface has
 `readLane`, `writeLane`, `route`, `verify`, `risk`, `canReadHere`,

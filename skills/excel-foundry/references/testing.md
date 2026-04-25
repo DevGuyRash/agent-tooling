@@ -2,13 +2,19 @@
 
 This skill ships verification assets under `<skills-file-root>/tests/fixtures/`.
 
+`references/capability-evidence.json` is the maintained capability evidence
+ledger. Capability claims should point to existing test selectors there before
+being treated as checked off.
+
 Use the fixture for:
 
 - launcher smoke checks
 - inspect and query shape validation
 - capability, warning, and unsupported-surface validation
 - per-surface plan and compare validation
-- dry-run and apply-mode package sync validation for the supported OOXML surfaces
+- dry-run and apply-mode package sync validation for the supported OOXML
+  surfaces, including exact style/theme part replacement and partial chart
+  reference updates
 - portable pull and compare tests
 - live Excel tests on temp copies when COM validation is required
 - repeated live roundtrip checks where semantic matching matters more than
@@ -23,7 +29,7 @@ Use `matrix-audit` when the task is validating copied workbook mutations across
 multiple workbooks and you want one aggregate report root.
 
 For opt-in external corpus smoke coverage, set `EXCEL_SYNC_EXTERNAL_ROOTS` to
-an `os.pathsep`-separated list of workbook roots and run:
+an `os.pathsep`-separated list of workbook roots or files and run:
 
 ```bash
 python -m unittest discover -s <skills-file-root>/tests -p 'test_excel_workbook_external_smoke.py'
@@ -31,9 +37,19 @@ python -m unittest discover -s <skills-file-root>/tests -p 'test_excel_workbook_
 
 Optional tuning:
 
+- `EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT=3` limits how many discovered workbooks
+  run through generic pull/compare smoke.
+- `EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT=3` limits how many package-readable
+  workbooks run through package inspect/query/bootstrap smoke.
 - `EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT=3` limits how many discovered workbooks run
   through live `audit` and `matrix-audit` smoke.
 
-The external smoke harness recursively discovers only Excel files, runs
-invariant-based assertions, and avoids workbook-specific counts or content
-expectations.
+The external smoke harness copies caller-provided roots into a short temporary
+corpus first, then recursively discovers Excel files plus flat export formats
+for classification. Workbook smoke assertions run only on workbook formats;
+CSV/TXT/ODS entries are classified without pretending they support workbook
+package inspection. Output directories use bounded hash-stable slugs so deep
+Windows paths do not affect results.
+
+The external smoke harness runs invariant-based assertions and avoids
+workbook-specific counts or content expectations.

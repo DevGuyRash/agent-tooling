@@ -81,7 +81,8 @@ define the generic contract.
   method, risk class, and host requirements for each major workbook surface.
 - Query/bootstrap coverage now includes sheets, formulas, data-validation,
   protection, workbook metadata, comments, hyperlinks, dimensions, print
-  settings, chart metadata, and pivot metadata in the manifest contract.
+  settings, styles, themes, chart metadata, and pivot metadata in the
+  manifest contract.
 - The plan-centric package path now supports per-surface planning, per-surface
   compare, targeted selectors, dry-run sync, and apply mode for package-safe
   OOXML writes.
@@ -102,17 +103,20 @@ define the generic contract.
   COM for mutation.
 - Package-backed `sync` currently writes names, formulas, data-validation,
   conditional formatting, protection, workbook metadata/calculation settings,
-  row and column dimensions, hyperlinks, comments, print settings, and
-  updates to existing tables for package-readable `.xlsx` and `.xlsm`
+  row and column dimensions, hyperlinks, comments, print settings, exact
+  styles/theme part replacement, and updates to existing tables and existing
+  chart title/series references for package-readable `.xlsx` and `.xlsm`
   workbooks. Direct package edits also support workbook create, workbook diff,
   sheet create/delete with explicit destructive intent, name updates, and
   cell/range writes. Direct Excel COM
   commands also support workbook
   save-as/convert/repair/compatibility/document-inspect, outbound link
-  inventory/break/repoint, share-safe export copies, table
+  inventory/break/repoint, share-safe workbook/PDF export copies, table
   create/update/delete, Power Query get/set/delete/refresh, and
-  connection/chart/pivot/slicer/timeline listing and guarded model hierarchy,
-  KPI, and perspective mutation plans on live workbooks.
+  connection/chart/pivot/slicer/timeline listing. They also support live
+  shape create/update/delete, picture add/update/delete, control inventory,
+  and guarded model hierarchy, KPI, and perspective mutation plans on live
+  workbooks.
 - `.xls` and `.xlsb` remain COM-dependent.
 - Compare output distinguishes unavailable COM comparison from true parity
   mismatches through `comparisonAvailable` and `comparisonStatus`. When Excel
