@@ -92,7 +92,10 @@ expansion unless you request it explicitly with `query --surface ...`.
 Use `workbook capabilities --deep` to emit the canonical capability ledger:
 every major workbook surface gets a category, read lane, write lane, route,
 verification method, risk class, and host requirements. Routes include
-`package-write`, `desktop-write`, `automation-write`, and `preserve-only`.
+`package-write`, `partial-package-write`, `desktop-write`,
+`automation-write`, `graph-write`, `tom-fabric-write`, and `preserve-only`.
+The ledger is derived from `references/excel-capability-matrix.json`, which is
+the single source of truth for support status and evidence selectors.
 The plan-centric commands add package-backed capability planning,
 per-surface compare, dry-run sync, targeted selectors, and apply mode for
 safe OOXML surfaces.

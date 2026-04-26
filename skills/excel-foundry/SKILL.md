@@ -79,6 +79,11 @@ define the generic contract.
 - `workbook capabilities --deep` emits the canonical capability ledger for the
   current file and host: category, read lane, write lane, route, verification
   method, risk class, and host requirements for each major workbook surface.
+- The canonical cross-backend object taxonomy lives in
+  `references/excel-capability-matrix.json`. It covers package, hidden desktop
+  Excel, Microsoft Graph, Office Scripts/Excel JS, TOM/XMLA, and Fabric lanes,
+  and distinguishes supported, partial, host-limited, preserve-only, and
+  planned surfaces.
 - Query/bootstrap coverage now includes sheets, formulas, data-validation,
   protection, workbook metadata, comments, hyperlinks, dimensions, print
   settings, styles, themes, chart metadata, and pivot metadata in the

@@ -101,10 +101,13 @@ reference edits are partial package writes, and rich chart authoring plus
 shapes, pictures, controls, and opaque analytics objects are routed to desktop
 Excel.
 
-The deep capability ledger is the generic max-write contract. Each surface has
-`readLane`, `writeLane`, `route`, `verify`, `risk`, `canReadHere`,
-`canWriteHere`, and `canPreserveHere` so agents can select the strongest safe
-write path without hard-coded workbook assumptions.
+The deep capability ledger is the generic max-write contract. It is derived
+from `references/excel-capability-matrix.json`, the canonical cross-backend
+taxonomy. Each surface has `readLane`, `writeLane`, `route`, `verify`, `risk`,
+`supportLevel`, `operations`, `hostRequirements`, `secretPolicy`,
+`destructiveRisk`, `canReadHere`, `canWriteHere`, and `canPreserveHere` so
+agents can select the strongest safe write path without hard-coded workbook
+assumptions.
 
 ## Audit Output
 

@@ -80,6 +80,65 @@ tests.
 Reference files should hold workflow details. This file should hold maintainer
 rules. Tests should encode behavioral guarantees.
 
+## Capability Source Of Truth
+
+`references/excel-capability-matrix.json` is the single source of truth for
+what Excel Foundry can do, which backend owns it, whether it is supported,
+partial, host-limited, preserve-only, or planned, and which tests prove that
+claim.
+
+You SHALL NOT create a second capability matrix, evidence ledger, checklist,
+table, or roadmap that repeats surface support status outside
+`references/excel-capability-matrix.json`.
+
+WHEN planning a new Excel Foundry feature THEN you SHALL start by locating the
+target surface in `references/excel-capability-matrix.json`.
+
+WHEN the target surface does not exist in the matrix THEN you SHALL add it to
+`references/excel-capability-matrix.json` before implementing public behavior.
+
+WHEN a feature changes support status, route, backend ownership, supported
+verbs, host requirements, destructive risk, or secret handling THEN you SHALL
+update only the matching matrix surface fields.
+
+WHEN a feature is implemented but not fully covered by tests THEN you SHALL
+leave its `supportLevel` as `partial`, `host-limited`, `preserve-only`, or
+`planned` as appropriate; you SHALL NOT mark it `supported`.
+
+WHEN marking a surface `supported` THEN you SHALL add direct
+`evidenceSelectors` for tests that exercise the claimed operation and verify
+readback or an honest host/API limitation.
+
+WHEN a surface cannot be safely mutated through an available API THEN you
+SHALL represent it as `host-limited`, `preserve-only`, or `planned` in the
+matrix and expose `plan`, `inspect`, or `preserve` behavior instead of
+claiming CRUD.
+
+WHEN credentials, tenant tokens, privacy labels, provider auth, or connection
+secret state are involved THEN you SHALL document runtime-only or preserve-only
+handling in the matrix `secretPolicy`; you SHALL NOT commit or serialize that
+material into fixtures, manifests, logs, evidence selectors, or docs.
+
+WHEN adding a direct command, manifest surface, or backend adapter THEN you
+SHALL ensure `workbook capabilities --deep` derives the same route and support
+metadata from the matrix rather than from hard-coded parallel tables.
+
+WHEN retiring or renaming a command or backend route THEN you SHALL update the
+matrix first, then update code, tests, and docs to match it.
+
+Before considering a capability checked off, all of the following must be true:
+
+- The relevant matrix surface has the correct `operations`, backend lane
+  fields, `route`, `supportLevel`, `hostRequirements`, `secretPolicy`,
+  `destructiveRisk`, and `evidenceSelectors`.
+- Every selector in `evidenceSelectors` names an existing committed test.
+- `test_capability_matrix_maps_surfaces_to_existing_tests_and_honest_routes`
+  and `test_capability_matrix_declares_all_surfaces_with_routes_and_evidence`
+  pass.
+- The implementation response reports the backend used, operation requested,
+  changed state, readback evidence, warnings or limitations, and redacted or
+  runtime-only secret handling where applicable.
+
 ## Pre-Commit Checks
 
 Before considering Excel Foundry changes complete, run the relevant subset:

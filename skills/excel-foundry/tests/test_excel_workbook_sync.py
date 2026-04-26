@@ -23,8 +23,7 @@ PS1 = ROOT / "scripts" / "excel-foundry.ps1"
 COMMON = ROOT / "scripts" / "ExcelSync.Common.ps1"
 POWERQUERY = ROOT / "scripts" / "sync-excel-powerquery.ps1"
 OPENAI_YAML = ROOT / "agents" / "openai.yaml"
-CAPABILITY_EVIDENCE = ROOT / "references" / "capability-evidence.json"
-CAPABILITY_CHECKLIST = REPO_ROOT / ".local" / "excel-foundry-capability-checklist.md"
+CAPABILITY_MATRIX = ROOT / "references" / "excel-capability-matrix.json"
 EXTERNAL_SMOKE_TEST = ROOT / "tests" / "test_excel_workbook_external_smoke.py"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "generic_workbook_fixture"
 FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "excel-sync.manifest.json"
@@ -458,7 +457,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue((ROOT / "references" / "protocol-audit.md").exists())
         self.assertTrue((ROOT / "references" / "protocol-manifest-sync.md").exists())
         self.assertTrue((ROOT / "references" / "output-contract.md").exists())
-        self.assertTrue(CAPABILITY_EVIDENCE.exists())
+        self.assertTrue(CAPABILITY_MATRIX.exists())
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
@@ -476,15 +475,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("queriesDirectory", manifest["powerQuery"])
         self.assertIn("queriesPath", manifest["powerQuery"])
 
-    def test_capability_evidence_maps_claims_to_existing_tests_and_honest_routes(self) -> None:
-        evidence = json.loads(CAPABILITY_EVIDENCE.read_text(encoding="utf-8"))
-        self.assertEqual(evidence["version"], 1)
-        self.assertIn("No manual Excel", evidence["boundary"])
-        claims = evidence["claims"]
-        self.assertGreaterEqual(len(claims), 10)
-
+    def test_capability_matrix_maps_surfaces_to_existing_tests_and_honest_routes(self) -> None:
+        matrix = json.loads(CAPABILITY_MATRIX.read_text(encoding="utf-8"))
         package_spec = importlib.util.spec_from_file_location(
-            "excel_workbook_package_for_evidence",
+            "excel_workbook_package_for_matrix_evidence",
             ROOT / "scripts" / "excel_workbook_package.py",
         )
         package_module = importlib.util.module_from_spec(package_spec)
@@ -495,44 +489,31 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         test_sources = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "tests").glob("test_*.py"))
         discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", test_sources))
 
-        seen_ids: set[str] = set()
         covered_surfaces: set[str] = set()
-        for claim in claims:
-            self.assertNotIn(claim["id"], seen_ids)
-            seen_ids.add(claim["id"])
-            self.assertIn(claim["route"], {
-                "package",
-                "package-plus-hidden-desktop",
-                "package-plus-automation",
-                "package-inventory-hidden-desktop-write",
-                "partial-package-write-plus-hidden-desktop",
-                "hidden-desktop-or-preserve-only",
-                "hidden-desktop-plus-automation-artifact",
-                "copy-first-corpus-smoke",
-            })
-            self.assertGreater(len(claim["tests"]), 0, claim["id"])
-            for selector in claim["tests"]:
-                self.assertIn(selector, discovered_tests, f"{claim['id']} references missing test {selector}")
-            for surface in claim["surfaces"]:
-                self.assertIn(surface, ledger, claim["id"])
-                covered_surfaces.add(surface)
-                write_lane = ledger[surface]["write"]
-                if write_lane in {"desktop", "desktop-preferred"}:
-                    self.assertIn("desktop", claim["route"], claim["id"])
-                if write_lane == "preserve-only":
-                    self.assertIn("preserve", claim["route"], claim["id"])
+        for surface in matrix["surfaces"]:
+            surface_id = surface["id"]
+            self.assertIn(surface_id, ledger, surface_id)
+            covered_surfaces.add(surface_id)
+            self.assertEqual(surface["readLane"], ledger[surface_id]["read"], surface_id)
+            self.assertEqual(surface["writeLane"], ledger[surface_id]["write"], surface_id)
+            self.assertEqual(surface["route"], ledger[surface_id]["route"], surface_id)
+            self.assertGreater(surface.get("evidenceSelectors", []), [], surface_id)
+            for selector in surface["evidenceSelectors"]:
+                self.assertIn(selector, discovered_tests, f"{surface_id} references missing test {selector}")
 
         self.assertEqual(set(ledger), covered_surfaces)
 
-    def test_checklist_governance_rules_are_enforced_by_tests_and_evidence(self) -> None:
-        evidence = json.loads(CAPABILITY_EVIDENCE.read_text(encoding="utf-8"))
-        checklist = CAPABILITY_CHECKLIST.read_text(encoding="utf-8")
-        test_files = sorted((ROOT / "tests").glob("test_*.py"))
-        committed_test_sources = {path.name: path.read_text(encoding="utf-8") for path in test_files}
-        committed_test_text = "\n".join(committed_test_sources.values())
+    def test_capability_matrix_declares_all_surfaces_with_routes_and_evidence(self) -> None:
+        matrix = json.loads(CAPABILITY_MATRIX.read_text(encoding="utf-8"))
+        self.assertEqual(matrix["version"], 1)
+        self.assertEqual(matrix["contract"], "Hybrid Parity")
+        self.assertEqual(matrix["secretPolicy"], "Never Store")
+        self.assertIn("list", matrix["operationVocabulary"])
+        self.assertIn("plan", matrix["operationVocabulary"])
+        self.assertIn("preserve-only", matrix["supportLevels"])
 
         package_spec = importlib.util.spec_from_file_location(
-            "excel_workbook_package_for_checklist_governance",
+            "excel_workbook_package_for_capability_matrix",
             ROOT / "scripts" / "excel_workbook_package.py",
         )
         package_module = importlib.util.module_from_spec(package_spec)
@@ -540,54 +521,87 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         package_spec.loader.exec_module(package_module)
         ledger = package_module.CAPABILITY_LEDGER
 
-        governance_rules = re.findall(r"^- \[[ x]\] .+$", checklist, flags=re.MULTILINE)[:5]
-        self.assertEqual(len(governance_rules), 5)
-        self.assertTrue(all(rule.startswith("- [x] ") for rule in governance_rules), governance_rules)
-        self.assertIn(
-            "test_checklist_governance_rules_are_enforced_by_tests_and_evidence",
-            checklist,
-        )
+        test_sources = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "tests").glob("test_*.py"))
+        discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", test_sources))
+        allowed_support = set(matrix["supportLevels"])
+        allowed_routes = {
+            "package-write",
+            "desktop-write",
+            "partial-package-write",
+            "automation-write",
+            "graph-write",
+            "tom-fabric-write",
+            "preserve-only",
+        }
+        allowed_lanes = {"package", "desktop", "desktop-preferred", "automation", "graph", "tom-fabric", "preserve-only"}
+        seen_ids: set[str] = set()
 
-        capability_lines = [
-            line
-            for line in checklist.splitlines()
-            if re.match(r"- \[[ x]\] ", line)
-            and not line.startswith("- [x] Skill package validation")
-            and not line.startswith("- [x] Python command modules")
-            and not line.startswith("- [x] Excel Foundry workbook tests")
-            and not line.startswith("- [x] Capability evidence")
-            and not line.startswith("- [x] Copied-corpus smoke")
-            and not line.startswith("- [x] External corpus smoke")
-            and not line.startswith("- [x] No tracked Excel workbook")
-            and not line.startswith("- [x] Secret scan")
-        ]
-        self.assertGreater(len(capability_lines), 100)
-        self.assertFalse([line for line in capability_lines if line.startswith("- [ ] ")])
+        for surface in matrix["surfaces"]:
+            surface_id = surface["id"]
+            self.assertNotIn(surface_id, seen_ids)
+            seen_ids.add(surface_id)
+            self.assertIn(surface_id, ledger)
+            self.assertIn(surface["supportLevel"], allowed_support)
+            self.assertIn(surface["readLane"], allowed_lanes)
+            self.assertIn(surface["writeLane"], allowed_lanes)
+            self.assertIn(surface["route"], allowed_routes)
+            self.assertGreater(surface["operations"], [], surface_id)
+            self.assertTrue({"inspect", "plan"} & set(surface["operations"]), surface_id)
+            self.assertGreater(surface["hostRequirements"], [], surface_id)
+            secret_policy = surface["secretPolicy"].lower()
+            self.assertTrue(
+                any(
+                    token in secret_policy
+                    for token in [
+                        "serialized",
+                        "stored",
+                        "runtime-only",
+                        "remain in",
+                        "stays in",
+                        "preserved in",
+                        "outside committed",
+                    ]
+                ),
+                surface_id,
+            )
+            self.assertGreater(surface["evidenceSelectors"], [], surface_id)
+            for selector in surface["evidenceSelectors"]:
+                self.assertIn(selector, discovered_tests, f"{surface_id} references missing test {selector}")
+
+            if surface["supportLevel"] == "supported":
+                self.assertNotIn(surface["writeLane"], {"graph", "tom-fabric", "preserve-only"}, surface_id)
+            if surface["writeLane"] in {"graph", "tom-fabric"}:
+                self.assertIn(surface["supportLevel"], {"planned", "host-limited", "partial"}, surface_id)
+
+        self.assertEqual(set(ledger), seen_ids)
+
+    def test_development_governance_rules_are_enforced_by_tests_and_matrix(self) -> None:
+        matrix = json.loads(CAPABILITY_MATRIX.read_text(encoding="utf-8"))
+        development = (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8")
+        test_files = sorted((ROOT / "tests").glob("test_*.py"))
+        committed_test_sources = {path.name: path.read_text(encoding="utf-8") for path in test_files}
+        committed_test_text = "\n".join(committed_test_sources.values())
+
+        package_spec = importlib.util.spec_from_file_location(
+            "excel_workbook_package_for_development_governance",
+            ROOT / "scripts" / "excel_workbook_package.py",
+        )
+        package_module = importlib.util.module_from_spec(package_spec)
+        assert package_spec.loader is not None
+        package_spec.loader.exec_module(package_module)
+        ledger = package_module.CAPABILITY_LEDGER
+
+        self.assertIn("## Capability Source Of Truth", development)
+        self.assertIn("`references/excel-capability-matrix.json` is the single source of truth", development)
+        self.assertIn("You SHALL NOT create a second capability matrix", development)
+        self.assertIn("WHEN planning a new Excel Foundry feature THEN you SHALL start", development)
+        self.assertIn("WHEN marking a surface `supported` THEN you SHALL add direct", development)
+        self.assertIn("test_capability_matrix_maps_surfaces_to_existing_tests_and_honest_routes", development)
 
         discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", committed_test_text))
-        test_bodies = {
-            match.group(1): match.group(0)
-            for match in re.finditer(
-                r"def (test_[A-Za-z0-9_]+)\([^)]*\) -> None:\n(?P<body>(?:        .*\n|        \n)+)",
-                committed_test_text,
-            )
-        }
-        self.assertIn("test_checklist_governance_rules_are_enforced_by_tests_and_evidence", discovered_tests)
+        self.assertIn("test_development_governance_rules_are_enforced_by_tests_and_matrix", discovered_tests)
 
         covered_surfaces: set[str] = set()
-        inspectable_tokens = {
-            "artifact",
-            "capabilities",
-            "capabilityledger",
-            "comparisonstatus",
-            "engineroute",
-            "engineroutes",
-            "manifest",
-            "payload",
-            "plan",
-            "route",
-            "unsupported",
-        }
         private_patterns = [
             r"\.local[\\/]files[\\/]excel-foundry",
             r"EXCEL_SYNC_EXTERNAL_ROOTS\s*=\s*\.local",
@@ -597,33 +611,30 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         local_external_corpus = ".local" + "/files/excel-foundry"
         for pattern in private_patterns:
             self.assertIsNone(re.search(pattern, committed_test_text, flags=re.IGNORECASE), pattern)
-            self.assertIsNone(re.search(pattern, json.dumps(evidence), flags=re.IGNORECASE), pattern)
+            self.assertIsNone(re.search(pattern, json.dumps(matrix), flags=re.IGNORECASE), pattern)
 
-        for claim in evidence["claims"]:
-            self.assertGreater(claim.get("tests", []), [], claim["id"])
-            combined_selector_source = ""
-            for selector in claim["tests"]:
-                self.assertIn(selector, discovered_tests, f"{claim['id']} references missing test {selector}")
-                combined_selector_source += test_bodies.get(selector, "")
-            for surface in claim["surfaces"]:
-                self.assertIn(surface, ledger, claim["id"])
-                covered_surfaces.add(surface)
-                write_lane = ledger[surface]["write"]
-                if write_lane in {"desktop", "desktop-preferred"}:
-                    self.assertIn("desktop", claim["route"], claim["id"])
-                if write_lane == "preserve-only":
-                    self.assertIn("preserve", claim["route"], claim["id"])
-                if write_lane == "automation":
-                    self.assertTrue(
-                        any(token in claim["route"] for token in ["automation", "desktop"]),
-                        claim["id"],
-                    )
-
-            if any(token in claim["route"] for token in ["automation", "desktop", "preserve", "corpus"]):
-                lowered_source = combined_selector_source.lower()
+        for surface in matrix["surfaces"]:
+            surface_id = surface["id"]
+            self.assertGreater(surface.get("evidenceSelectors", []), [], surface_id)
+            for selector in surface["evidenceSelectors"]:
+                self.assertIn(selector, discovered_tests, f"{surface_id} references missing test {selector}")
+            self.assertIn(surface_id, ledger, surface_id)
+            covered_surfaces.add(surface_id)
+            write_lane = ledger[surface_id]["write"]
+            if write_lane == "desktop":
+                self.assertIn("desktop", surface["route"], surface_id)
+            if write_lane == "desktop-preferred":
+                self.assertIn("partial", surface["route"], surface_id)
+            if write_lane == "preserve-only":
+                self.assertIn("preserve", surface["route"], surface_id)
+            if write_lane == "graph":
+                self.assertIn("graph", surface["route"], surface_id)
+            if write_lane == "tom-fabric":
+                self.assertIn("tom-fabric", surface["route"], surface_id)
+            if write_lane == "automation":
                 self.assertTrue(
-                    any(token in lowered_source for token in inspectable_tokens),
-                    f"{claim['id']} lacks inspectable plan/route/manifest/artifact assertions",
+                    any(token in surface["route"] for token in ["automation", "desktop"]),
+                    surface_id,
                 )
 
         self.assertEqual(set(ledger), covered_surfaces)

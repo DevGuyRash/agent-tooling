@@ -2,9 +2,12 @@
 
 This skill ships verification assets under `<skills-file-root>/tests/fixtures/`.
 
-`references/capability-evidence.json` is the maintained capability evidence
-ledger. Capability claims should point to existing test selectors there before
-being treated as checked off.
+`references/excel-capability-matrix.json` is the canonical object, backend,
+route, support-level, and evidence taxonomy. It is the only source of truth for
+what Excel Foundry can do. Capability claims should point to existing test
+selectors in that matrix before being treated as checked off, and every matrix
+surface should have either direct evidence, a route/plan test, preserve-only
+proof, or an explicit host/API limitation.
 
 Use the fixture for:
 

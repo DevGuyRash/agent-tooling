@@ -39,6 +39,9 @@ SUPPORTED_CF_TYPES = {
     "icon-set",
 }
 
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+CAPABILITY_MATRIX_PATH = SKILL_ROOT / "references" / "excel-capability-matrix.json"
+
 
 def _local_name(tag: str) -> str:
     if "}" in tag:
@@ -1518,52 +1521,32 @@ PACKAGE_DESKTOP_WRITE_SURFACES = ["pivots", "slicers", "timelines", "pq", "conne
 PACKAGE_PARTIAL_WRITE_SURFACES = ["charts"]
 ARTIFACT_AUTHORING_SURFACES = ["workbook-author", "dashboard-author", "csv-author", "preview-render"]
 
+def _load_capability_matrix() -> dict[str, Any]:
+    with CAPABILITY_MATRIX_PATH.open("r", encoding="utf-8") as handle:
+        matrix = json.load(handle)
+    surfaces = matrix.get("surfaces")
+    if not isinstance(surfaces, list) or not surfaces:
+        raise ValueError(f"Capability matrix has no surfaces: {CAPABILITY_MATRIX_PATH}")
+    return matrix
+
+
+CAPABILITY_MATRIX = _load_capability_matrix()
 CAPABILITY_LEDGER: dict[str, dict[str, Any]] = {
-    "workbook": {"category": "lifecycle", "read": "package", "write": "package", "verify": "reopen-and-repull", "risk": "standard"},
-    "files": {"category": "lifecycle", "read": "desktop", "write": "desktop", "verify": "open-target", "risk": "lossy-conversion-guarded"},
-    "sheets": {"category": "structure", "read": "package", "write": "package", "verify": "sheet-list", "risk": "destructive-delete-guarded"},
-    "chart-sheets": {"category": "structure", "read": "desktop", "write": "desktop", "verify": "sheet-list", "risk": "desktop-fidelity"},
-    "cells": {"category": "grid", "read": "package", "write": "package", "verify": "cell-readback", "risk": "standard"},
-    "ranges": {"category": "grid", "read": "package", "write": "package", "verify": "range-readback", "risk": "standard"},
-    "rows-columns": {"category": "layout", "read": "package", "write": "package", "verify": "dimension-readback", "risk": "standard"},
-    "names": {"category": "objects", "read": "package", "write": "package", "verify": "name-readback", "risk": "collision-guarded"},
-    "tables": {"category": "objects", "read": "package", "write": "package", "verify": "table-readback", "risk": "existing-table-safe"},
-    "formulas": {"category": "calculation", "read": "package", "write": "package", "verify": "formula-readback", "risk": "calc-result-host-dependent"},
-    "formula-audit": {"category": "calculation", "read": "package", "write": "automation", "verify": "trace-report", "risk": "analysis-only"},
-    "data-validation": {"category": "controls", "read": "package", "write": "package", "verify": "validation-readback", "risk": "standard"},
-    "cf": {"category": "formatting", "read": "package", "write": "package", "verify": "cf-readback", "risk": "priority-order-sensitive"},
-    "styles": {"category": "formatting", "read": "package", "write": "package", "verify": "style-readback", "risk": "style-bloat-guarded"},
-    "themes": {"category": "formatting", "read": "package", "write": "package", "verify": "theme-readback", "risk": "style-bloat-guarded"},
-    "hyperlinks": {"category": "annotations", "read": "package", "write": "package", "verify": "hyperlink-readback", "risk": "standard"},
-    "comments": {"category": "annotations", "read": "package", "write": "package", "verify": "comment-readback", "risk": "threaded-comments-desktop-preferred"},
-    "threaded-comments": {"category": "annotations", "read": "desktop", "write": "desktop", "verify": "comment-readback", "risk": "host-api-dependent"},
-    "print": {"category": "distribution", "read": "package", "write": "package", "verify": "print-readback", "risk": "layout-host-dependent"},
-    "exports": {"category": "distribution", "read": "desktop", "write": "desktop", "verify": "target-file-open", "risk": "output-format-guarded"},
-    "protection": {"category": "security", "read": "package", "write": "package", "verify": "protection-readback", "risk": "password-not-recovered"},
-    "privacy": {"category": "security", "read": "desktop", "write": "desktop", "verify": "document-inspector", "risk": "destructive-redaction-guarded"},
-    "charts": {"category": "visuals", "read": "package", "write": "desktop-preferred", "verify": "chart-readback", "risk": "relationship-edit-limited"},
-    "shapes": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
-    "pictures": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "shape-readback", "risk": "desktop-fidelity"},
-    "controls": {"category": "visuals", "read": "desktop", "write": "desktop", "verify": "control-readback", "risk": "activex-platform-dependent"},
-    "pivots": {"category": "analytics", "read": "package", "write": "desktop", "verify": "pivot-readback", "risk": "desktop-fidelity"},
-    "pivot-charts": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "pivot-chart-readback", "risk": "desktop-fidelity"},
-    "slicers": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "slicer-readback", "risk": "desktop-fidelity"},
-    "timelines": {"category": "analytics", "read": "desktop", "write": "desktop", "verify": "timeline-readback", "risk": "desktop-fidelity"},
-    "pq": {"category": "data", "read": "package", "write": "desktop", "verify": "query-readback", "risk": "credentials-not-stored"},
-    "connections": {"category": "data", "read": "package", "write": "desktop", "verify": "connection-readback", "risk": "driver-credential-dependent"},
-    "links": {"category": "data", "read": "desktop", "write": "desktop", "verify": "link-readback", "risk": "destructive-break-guarded"},
-    "model": {"category": "model", "read": "desktop", "write": "automation", "verify": "model-inspect", "risk": "excel-api-limited"},
-    "measures": {"category": "model", "read": "desktop", "write": "automation", "verify": "measure-readback", "risk": "host-api-dependent"},
-    "relationships": {"category": "model", "read": "desktop", "write": "automation", "verify": "relationship-readback", "risk": "host-api-dependent"},
-    "dax": {"category": "model", "read": "desktop", "write": "automation", "verify": "dax-parse-and-readback", "risk": "external-adapter-preferred"},
-    "what-if": {"category": "modeling", "read": "desktop", "write": "desktop", "verify": "scenario-readback", "risk": "desktop-fidelity"},
-    "vba": {"category": "automation", "read": "desktop", "write": "desktop", "verify": "module-readback", "risk": "trust-center-dependent"},
-    "office-scripts": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "web-host-required"},
-    "excel-js-api": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "add-in-host-required"},
-    "office-addins": {"category": "automation", "read": "automation", "write": "automation", "verify": "runner-plan", "risk": "sideload-host-required"},
-    "artifact-workbook": {"category": "automation", "read": "automation", "write": "automation", "verify": "node-runner-plan", "risk": "new-workbook-authoring"},
-    "legacy-bi": {"category": "legacy", "read": "desktop", "write": "preserve-only", "verify": "artifact-preservation", "risk": "preserve-only"},
-    "external-files": {"category": "portfolio", "read": "package", "write": "package", "verify": "folder-rescan", "risk": "bulk-operation-guarded"},
+    surface["id"]: {
+        "category": surface["category"],
+        "read": surface["readLane"],
+        "write": surface["writeLane"],
+        "verify": surface["verify"],
+        "risk": surface["risk"],
+        "supportLevel": surface["supportLevel"],
+        "route": surface["route"],
+        "operations": surface["operations"],
+        "hostRequirements": surface.get("hostRequirements", []),
+        "secretPolicy": surface.get("secretPolicy"),
+        "destructiveRisk": surface.get("destructiveRisk"),
+        "evidenceSelectors": surface.get("evidenceSelectors", []),
+    }
+    for surface in CAPABILITY_MATRIX["surfaces"]
 }
 
 
@@ -1645,6 +1628,8 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
             "desktop": "desktop-write",
             "desktop-preferred": "partial-package-write",
             "automation": "automation-write",
+            "graph": "graph-write",
+            "tom-fabric": "tom-fabric-write",
             "preserve-only": "preserve-only",
         }.get(write_lane, "platform-impossible")
         surfaces[surface] = {
@@ -1658,7 +1643,20 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
             "canPreserveHere": package_readable or desktop_available,
             "verify": spec["verify"],
             "risk": spec["risk"],
-            "requires": [] if write_lane in {"package", "desktop-preferred", "automation", "preserve-only"} else ["desktop-excel"],
+            "supportLevel": spec.get("supportLevel"),
+            "operations": spec.get("operations", []),
+            "hostRequirements": spec.get("hostRequirements", []),
+            "secretPolicy": spec.get("secretPolicy"),
+            "destructiveRisk": spec.get("destructiveRisk"),
+            "requires": {
+                "package": [],
+                "desktop-preferred": [],
+                "automation": [],
+                "preserve-only": [],
+                "desktop": ["desktop-excel"],
+                "graph": ["microsoft-graph-workbook-session"],
+                "tom-fabric": ["xmla-or-fabric-workspace"],
+            }.get(write_lane, ["unknown-host"]),
         }
     return {
         "version": 1,
