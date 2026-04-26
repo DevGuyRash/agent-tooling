@@ -2367,6 +2367,35 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 self.assertNotIn("unknown action", combined.lower())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_accepts_what_if_and_formula_audit_resource_actions(self) -> None:
+        for resource, action in [
+            ("what-if", "inspect"),
+            ("scenario", "list"),
+            ("scenario", "get"),
+            ("scenario", "set"),
+            ("scenario", "delete"),
+            ("goal-seek", "execute"),
+            ("formula-audit", "inspect"),
+            ("formula-audit", "export"),
+        ]:
+            with self.subTest(resource=resource, action=action):
+                proc = run_pwsh_file(resource, action, "--workbook-path", str(FIXTURE_WORKBOOK), "--help")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                combined = proc.stdout + proc.stderr
+                self.assertIn("Usage:", combined)
+                self.assertNotIn("unknown action", combined.lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_direct_what_if_commands_require_expected_arguments(self) -> None:
+        proc = run_pwsh_file("goal-seek", "execute", "--workbook-path", str(FIXTURE_WORKBOOK))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("goal-seek execute requires --spec-json or --spec-file", (proc.stdout + proc.stderr).lower())
+
+        export_proc = run_pwsh_file("formula-audit", "export", "--workbook-path", str(FIXTURE_WORKBOOK))
+        self.assertNotEqual(export_proc.returncode, 0)
+        self.assertIn("formula-audit export requires --target-path", (export_proc.stdout + export_proc.stderr).lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_requires_target_for_workbook_compatibility(self) -> None:
         proc = run_pwsh_file("workbook", "compatibility", "--workbook-path", str(FIXTURE_WORKBOOK))
         self.assertNotEqual(proc.returncode, 0)
@@ -3768,6 +3797,186 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(Path(payload["targetPath"]), target.resolve())
             self.assertTrue(target.exists())
             self.assertEqual(target.read_bytes()[:4], b"%PDF")
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_what_if_scenario_and_goal_seek_commands_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-what-if-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "what-if.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'Model'
+                        $sheet.Range('A1').Value2 = 'Input'
+                        $sheet.Range('B1').Value2 = 'Output'
+                        $sheet.Range('A2').Value2 = 10
+                        $sheet.Range('B2').Formula = '=A2*2'
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            scenario_spec = json.dumps(
+                {
+                    "sheet": "Model",
+                    "name": "LIVE_DIRECT_SCENARIO",
+                    "changingCells": ["A2"],
+                    "values": [25],
+                    "comment": "live scenario roundtrip",
+                }
+            )
+            set_proc = run_skill_cli("scenario", "set", "--workbook-path", str(workbook), "--spec-json", scenario_spec, timeout=300)
+            self.assertEqual(set_proc.returncode, 0, set_proc.stdout + set_proc.stderr)
+            set_payload = json.loads(set_proc.stdout)
+            self.assertTrue(set_payload["changed"])
+            self.assertEqual(set_payload["readback"]["name"], "LIVE_DIRECT_SCENARIO")
+            self.assertIn("secretHandling", set_payload)
+
+            list_proc = run_skill_cli("scenario", "list", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(list_proc.returncode, 0, list_proc.stdout + list_proc.stderr)
+            self.assertIn("LIVE_DIRECT_SCENARIO", {item["name"] for item in json.loads(list_proc.stdout)["scenarios"]})
+
+            inspect_proc = run_skill_cli("what-if", "inspect", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(inspect_proc.returncode, 0, inspect_proc.stdout + inspect_proc.stderr)
+            inspect_payload = json.loads(inspect_proc.stdout)
+            self.assertGreaterEqual(inspect_payload["inspection"]["counts"]["scenarios"], 1)
+            self.assertTrue(any("Solver" in item for item in inspect_payload["limitations"]))
+
+            goal_spec = json.dumps({"sheet": "Model", "formulaCell": "B2", "targetValue": 100, "changingCell": "A2"})
+            goal_proc = run_skill_cli("goal-seek", "execute", "--workbook-path", str(workbook), "--spec-json", goal_spec, timeout=300)
+            self.assertEqual(goal_proc.returncode, 0, goal_proc.stdout + goal_proc.stderr)
+            goal_payload = json.loads(goal_proc.stdout)
+            self.assertTrue(goal_payload["goalSeek"]["succeeded"])
+            self.assertAlmostEqual(float(goal_payload["readback"]["changingCell"]["value"]), 50.0, places=6)
+
+            delete_proc = run_skill_cli("scenario", "delete", "--workbook-path", str(workbook), "--name", "LIVE_DIRECT_SCENARIO", timeout=300)
+            self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
+            self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_formula_audit_inspect_and_export_reports_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-formula-audit-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "formula-audit.xlsx"
+            target = tmp / "formula-audit.json"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'Audit'
+                        $sheet.Range('A2').Value2 = 10
+                        $sheet.Range('B2').Formula = '=A2*2'
+                        $sheet.Range('C2').Formula = '=B2+1'
+                        $protected = $workbook.Worksheets.Add()
+                        $protected.Name = 'Protected'
+                        $protected.Range('A1').Value2 = 1
+                        $protected.Range('B1').Formula = '=A1+1'
+                        $protected.Protect()
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            inspect_proc = run_skill_cli("formula-audit", "inspect", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(inspect_proc.returncode, 0, inspect_proc.stdout + inspect_proc.stderr)
+            payload = json.loads(inspect_proc.stdout)
+            formulas = {item["address"]: item for item in payload["formulas"]}
+            self.assertIn("B2", formulas)
+            self.assertIn("C2", formulas)
+            self.assertIn("A2", " ".join(formulas["B2"]["directPrecedents"]))
+            self.assertTrue(any("protected" in warning.lower() for warning in payload["warnings"]))
+            self.assertTrue(payload["limitations"])
+
+            export_proc = run_skill_cli(
+                "formula-audit",
+                "export",
+                "--workbook-path",
+                str(workbook),
+                "--sheet",
+                "Audit",
+                "--target-path",
+                str(target),
+                timeout=300,
+            )
+            self.assertEqual(export_proc.returncode, 0, export_proc.stdout + export_proc.stderr)
+            export_payload = json.loads(export_proc.stdout)
+            self.assertTrue(export_payload["exported"])
+            self.assertEqual(Path(export_payload["targetPath"]), target.resolve())
+            self.assertIn("formulas", json.loads(target.read_text(encoding="utf-8")))
+
+    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    def test_live_links_and_document_inspect_commands_return_host_limited_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-privacy-links-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "privacy-links.xlsx"
+            create_proc = run_pwsh(
+                dedent(
+                    f"""
+                    $excel = New-Object -ComObject Excel.Application
+                    $excel.Visible = $false
+                    $excel.DisplayAlerts = $false
+                    $workbook = $excel.Workbooks.Add()
+                    try {{
+                        $sheet = $workbook.Worksheets.Item(1)
+                        $sheet.Name = 'Review'
+                        $sheet.Range('A1').Value2 = 'Outbound'
+                        $sheet.Hyperlinks.Add($sheet.Range('A2'), 'https://example.invalid/review', '', '', 'Review link') | Out-Null
+                        $sheet.Range('B2').AddComment('Review comment') | Out-Null
+                        $workbook.SaveAs('{workbook}', 51)
+                    }}
+                    finally {{
+                        $workbook.Close($false)
+                        $excel.Quit()
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+                    }}
+                    """
+                ),
+                timeout=120,
+            )
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            links_proc = run_skill_cli("workbook", "links", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(links_proc.returncode, 0, links_proc.stdout + links_proc.stderr)
+            links_payload = json.loads(links_proc.stdout)
+            self.assertEqual(links_payload["backend"], "excel")
+            self.assertIsInstance(links_payload["links"], list)
+
+            inspect_proc = run_skill_cli("workbook", "document-inspect", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(inspect_proc.returncode, 0, inspect_proc.stdout + inspect_proc.stderr)
+            inspection = json.loads(inspect_proc.stdout)["inspection"]
+            manual_messages = " ".join(item["message"] for item in inspection["manualFindings"])
+            self.assertIn("comment", manual_messages.lower())
+            self.assertIn("hyperlink", manual_messages.lower())
 
     @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
     def test_live_direct_shape_picture_and_control_commands_roundtrip(self) -> None:

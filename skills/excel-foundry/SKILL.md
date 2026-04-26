@@ -44,6 +44,8 @@ define the generic contract.
   `workbook repair`, `workbook compatibility`, `workbook document-inspect`,
   `workbook links`, `workbook break-links`, `workbook repoint-links`,
   `workbook safe-export`,
+  `what-if inspect`, `scenario list/get/set/delete`,
+  `goal-seek execute`, `formula-audit inspect/export`,
   `automation generate`, `automation run`, guarded `hierarchy set/delete`,
   `kpi set/delete`, or `perspective set/delete`,
   `manifest validate`, or `manifest migrate`, load
@@ -127,7 +129,9 @@ define the generic contract.
   connection/chart/pivot/slicer/timeline listing. They also support live
   shape create/update/delete, picture add/update/delete, control inventory,
   and guarded model hierarchy, KPI, and perspective mutation plans on live
-  workbooks.
+  workbooks. Direct Excel COM commands also support worksheet scenario
+  inventory/CRUD, Goal Seek execution, and best-effort formula audit reports;
+  Solver and forecast sheets remain plan/platform-limited.
 - `.xls` and `.xlsb` remain COM-dependent.
 - Compare output distinguishes unavailable COM comparison from true parity
   mismatches through `comparisonAvailable` and `comparisonStatus`. When Excel

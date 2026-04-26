@@ -266,20 +266,20 @@
       "category": "calculation",
       "operations": ["inspect", "plan", "export"],
       "package": "partial",
-      "desktop": "planned",
+      "desktop": "partial",
       "graph": "planned",
       "officeScript": "planned",
       "tomFabric": "not-applicable",
       "supportLevel": "partial",
-      "readLane": "package",
+      "readLane": "desktop",
       "writeLane": "automation",
       "route": "automation-write",
       "verify": "trace-report",
       "risk": "analysis-only",
-      "hostRequirements": ["package-readable workbook for package inventory"],
+      "hostRequirements": ["package-readable workbook for package inventory", "Windows desktop Excel for direct precedent/dependent tracing"],
       "secretPolicy": "No credentials serialized.",
       "destructiveRisk": "none",
-      "evidenceSelectors": ["test_package_backend_plan_reports_per_surface_writeability", "test_common_script_normalizes_excel_formulas_for_comparison"]
+      "evidenceSelectors": ["test_package_backend_plan_reports_per_surface_writeability", "test_common_script_normalizes_excel_formulas_for_comparison", "test_powershell_cli_accepts_what_if_and_formula_audit_resource_actions", "test_live_formula_audit_inspect_and_export_reports_dependencies"]
     },
     {
       "id": "data-validation",
@@ -741,7 +741,7 @@
       "hostRequirements": ["Windows desktop Excel for complete link inventory and break/repoint"],
       "secretPolicy": "Linked locations are reported as workbook content; credentials are not serialized.",
       "destructiveRisk": "destructive",
-      "evidenceSelectors": ["test_workbook_link_inventory_helper_reads_excel_and_ole_links", "test_workbook_break_links_helper_breaks_selected_links"]
+      "evidenceSelectors": ["test_workbook_link_inventory_helper_reads_excel_and_ole_links", "test_workbook_break_links_helper_breaks_selected_links", "test_live_links_and_document_inspect_commands_return_host_limited_evidence"]
     },
     {
       "id": "model",
@@ -854,20 +854,20 @@
       "category": "modeling",
       "operations": ["list", "get", "create", "update", "delete", "execute", "inspect", "plan"],
       "package": "preserve-only",
-      "desktop": "planned",
+      "desktop": "partial",
       "graph": "not-applicable",
       "officeScript": "planned",
       "tomFabric": "not-applicable",
-      "supportLevel": "planned",
+      "supportLevel": "host-limited",
       "readLane": "desktop",
       "writeLane": "desktop",
       "route": "desktop-write",
       "verify": "scenario-readback",
       "risk": "desktop-fidelity",
-      "hostRequirements": ["Windows desktop Excel for Goal Seek/Solver/scenario execution"],
+      "hostRequirements": ["Windows desktop Excel for scenario CRUD and Goal Seek execution", "Solver and forecast execution remain platform-limited until implemented and tested"],
       "secretPolicy": "No credentials serialized.",
       "destructiveRisk": "guarded",
-      "evidenceSelectors": ["test_direct_model_commands_support_guarded_mutation_plans"]
+      "evidenceSelectors": ["test_powershell_cli_accepts_what_if_and_formula_audit_resource_actions", "test_direct_what_if_commands_require_expected_arguments", "test_live_what_if_scenario_and_goal_seek_commands_roundtrip"]
     },
     {
       "id": "vba",

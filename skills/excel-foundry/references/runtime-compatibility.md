@@ -32,9 +32,10 @@ PowerShell with the `.ps1` helper for COM-backed operations.
 WHEN a task involves `.xls`, `.xlsb`, conversion, repair, compatibility checks,
 safe export, document inspection, complete link handling, refresh, VBA, pivots,
 slicers, timelines, Power Query mutation, workbook connections, rich visual
-objects, controls, or live Data Model operations THEN you SHALL require Windows
-desktop Excel through the COM-backed desktop route unless the matrix marks a
-different route as supported for that exact surface.
+objects, controls, scenarios, Goal Seek, formula dependency tracing, or live
+Data Model operations THEN you SHALL require Windows desktop Excel through the
+COM-backed desktop route unless the matrix marks a different route as supported
+for that exact surface.
 
 WHEN using Windows desktop Excel COM THEN you SHALL operate on isolated copies
 for generic audit/compare flows, keep Excel hidden unless the user explicitly

@@ -5647,6 +5647,430 @@ function Invoke-WorkbookSafeExport {
     }
 }
 
+function Get-ExcelFoundrySecretHandling {
+    return [pscustomobject]@{
+        policy = 'runtime-only'
+        serializedSecrets = $false
+        message = 'Excel Foundry does not serialize credentials; linked locations and formulas are workbook content.'
+    }
+}
+
+function Get-ExcelWorksheetByName {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$SheetName
+    )
+
+    foreach ($worksheet in @($Workbook.Worksheets)) {
+        if ([string]$worksheet.Name -eq $SheetName) {
+            return $worksheet
+        }
+        Release-ComObjectSafely -Object $worksheet
+    }
+
+    throw "Worksheet not found: $SheetName"
+}
+
+function ConvertTo-ExcelFoundryObjectArray {
+    param(
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return ,@()
+    }
+    if ($Value -is [System.Array]) {
+        return ,@($Value)
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        return ,@($Value)
+    }
+    return ,@($Value)
+}
+
+function Get-ExcelFoundryRangeAddresses {
+    param(
+        $Range
+    )
+
+    if ($null -eq $Range) {
+        return @()
+    }
+
+    $addresses = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($area in @($Range.Areas)) {
+            try {
+                $addresses.Add([string]$area.Address($false, $false, 1, $true)) | Out-Null
+            }
+            catch {
+                try { $addresses.Add([string]$area.Address()) | Out-Null } catch {}
+            }
+            finally {
+                Release-ComObjectSafely -Object $area
+            }
+        }
+    }
+    catch {
+        try {
+            $addresses.Add([string]$Range.Address($false, $false, 1, $true)) | Out-Null
+        }
+        catch {
+            try { $addresses.Add([string]$Range.Address()) | Out-Null } catch {}
+        }
+    }
+
+    return @($addresses.ToArray())
+}
+
+function Get-ExcelScenarioPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Scenario,
+        [Parameter(Mandatory = $true)]
+        $Worksheet
+    )
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $changingCells = $null
+    $values = @()
+    try {
+        $changingCells = Get-LateProperty -Target $Scenario -Name 'ChangingCells'
+    }
+    catch {
+        $warnings.Add('Excel did not expose Scenario.ChangingCells for this scenario on this host.') | Out-Null
+    }
+    try {
+        $rawValues = Get-LateProperty -Target $Scenario -Name 'Values'
+        $values = @(ConvertTo-ExcelFoundryObjectArray -Value $rawValues)
+    }
+    catch {
+        $warnings.Add('Excel did not expose Scenario.Values for this scenario on this host.') | Out-Null
+    }
+
+    try {
+        return [pscustomobject]@{
+            name = [string]$Scenario.Name
+            sheet = [string]$Worksheet.Name
+            changingCells = @(Get-ExcelFoundryRangeAddresses -Range $changingCells)
+            values = @($values)
+            comment = $(try { [string]$Scenario.Comment } catch { $null })
+            hidden = $(try { [bool]$Scenario.Hidden } catch { $null })
+            locked = $(try { [bool]$Scenario.Locked } catch { $null })
+            warnings = @($warnings.ToArray())
+        }
+    }
+    finally {
+        Release-ComObjectSafely -Object $changingCells
+    }
+}
+
+function Get-WorkbookScenarioInventory {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [string]$ScenarioName
+    )
+
+    $scenarios = New-Object System.Collections.Generic.List[object]
+    $warnings = New-Object System.Collections.Generic.List[string]
+    foreach ($worksheet in @($Workbook.Worksheets)) {
+        $scenarioCollection = $null
+        try {
+            $scenarioCollection = $worksheet.Scenarios()
+            foreach ($scenario in @($scenarioCollection)) {
+                try {
+                    if ([string]::IsNullOrWhiteSpace($ScenarioName) -or [string]$scenario.Name -eq $ScenarioName) {
+                        $scenarios.Add((Get-ExcelScenarioPayload -Scenario $scenario -Worksheet $worksheet)) | Out-Null
+                    }
+                }
+                finally {
+                    Release-ComObjectSafely -Object $scenario
+                }
+            }
+        }
+        catch {
+            $warnings.Add(("Scenario inventory unavailable on worksheet '{0}': {1}" -f [string]$worksheet.Name, $_.Exception.Message)) | Out-Null
+        }
+        finally {
+            Release-ComObjectSafely -Object $scenarioCollection
+            Release-ComObjectSafely -Object $worksheet
+        }
+    }
+
+    return [pscustomobject]@{
+        scenarios = @($scenarios.ToArray())
+        warnings = @($warnings.ToArray())
+    }
+}
+
+function Set-WorkbookScenarioDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $Spec
+    )
+
+    foreach ($required in @('name', 'sheet', 'changingCells', 'values')) {
+        if ($null -eq $Spec.PSObject.Properties[$required] -or [string]::IsNullOrWhiteSpace([string]$Spec.$required)) {
+            throw "scenario set requires spec.$required"
+        }
+    }
+
+    $worksheet = $null
+    $changingRange = $null
+    $scenarios = $null
+    try {
+        $worksheet = Get-ExcelWorksheetByName -Workbook $Workbook -SheetName ([string]$Spec.sheet)
+        $changingCells = @(ConvertTo-ExcelFoundryObjectArray -Value $Spec.changingCells | ForEach-Object { [string]$_ })
+        if ($changingCells.Count -eq 0) {
+            throw "scenario set requires at least one changing cell"
+        }
+        $changingRange = $worksheet.Range(($changingCells -join ','))
+        $values = @(ConvertTo-ExcelFoundryObjectArray -Value $Spec.values)
+        if ($values.Count -ne $changingCells.Count) {
+            throw "scenario set values count must match changingCells count"
+        }
+        $comment = if ($null -ne $Spec.PSObject.Properties['comment']) { [string]$Spec.comment } else { '' }
+        $scenarios = $worksheet.Scenarios()
+        foreach ($scenario in @($scenarios)) {
+            try {
+                if ([string]$scenario.Name -eq [string]$Spec.name) {
+                    Invoke-LateMethod -Target $scenario -Name 'Delete' | Out-Null
+                }
+            }
+            finally {
+                Release-ComObjectSafely -Object $scenario
+            }
+        }
+        Invoke-LateMethod -Target $scenarios -Name 'Add' -Arguments @([string]$Spec.name, $changingRange, $values, $comment) | Out-Null
+    }
+    finally {
+        Release-ComObjectSafely -Object $changingRange
+        Release-ComObjectSafely -Object $scenarios
+        Release-ComObjectSafely -Object $worksheet
+    }
+}
+
+function Remove-WorkbookScenarioDefinition {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        [string]$ScenarioName
+    )
+
+    foreach ($worksheet in @($Workbook.Worksheets)) {
+        $scenarioCollection = $null
+        try {
+            $scenarioCollection = $worksheet.Scenarios()
+            foreach ($scenario in @($scenarioCollection)) {
+                try {
+                    if ([string]$scenario.Name -eq $ScenarioName) {
+                        Invoke-LateMethod -Target $scenario -Name 'Delete' | Out-Null
+                        return $true
+                    }
+                }
+                finally {
+                    Release-ComObjectSafely -Object $scenario
+                }
+            }
+        }
+        catch {}
+        finally {
+            Release-ComObjectSafely -Object $scenarioCollection
+            Release-ComObjectSafely -Object $worksheet
+        }
+    }
+
+    return $false
+}
+
+function Get-WorkbookWhatIfInspection {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook
+    )
+
+    $scenarioInventory = Get-WorkbookScenarioInventory -Workbook $Workbook
+    return [pscustomobject]@{
+        scenarios = @($scenarioInventory.scenarios)
+        counts = [pscustomobject]@{
+            scenarios = @($scenarioInventory.scenarios).Count
+            dataTables = $null
+            solverModels = $null
+            forecastSheets = $null
+        }
+        warnings = @($scenarioInventory.warnings)
+        limitations = @(
+            'Excel Foundry inventories worksheet scenarios and executes Goal Seek through desktop Excel COM in this tranche.',
+            'Solver models are reported as platform-limited until a reliable Solver add-in execution path is implemented and tested.',
+            'Forecast sheets are reported as platform-limited until a reliable desktop or cloud execution path is implemented and tested.',
+            'Data table detection is not promoted beyond best-effort formula inventory in this tranche.'
+        )
+    }
+}
+
+function Invoke-WorkbookGoalSeek {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [Parameter(Mandatory = $true)]
+        $Spec
+    )
+
+    foreach ($required in @('sheet', 'formulaCell', 'targetValue', 'changingCell')) {
+        if ($null -eq $Spec.PSObject.Properties[$required] -or [string]::IsNullOrWhiteSpace([string]$Spec.$required)) {
+            throw "goal-seek execute requires spec.$required"
+        }
+    }
+
+    $worksheet = $null
+    $formulaCell = $null
+    $changingCell = $null
+    try {
+        $worksheet = Get-ExcelWorksheetByName -Workbook $Workbook -SheetName ([string]$Spec.sheet)
+        $formulaCell = $worksheet.Range([string]$Spec.formulaCell)
+        $changingCell = $worksheet.Range([string]$Spec.changingCell)
+        $before = [pscustomobject]@{
+            formulaCell = [pscustomobject]@{ address = [string]$formulaCell.Address($false, $false); value = $formulaCell.Value2; formula = $(try { [string]$formulaCell.Formula } catch { $null }) }
+            changingCell = [pscustomobject]@{ address = [string]$changingCell.Address($false, $false); value = $changingCell.Value2 }
+        }
+        $succeeded = [bool]$formulaCell.GoalSeek([double]$Spec.targetValue, $changingCell)
+        $after = [pscustomobject]@{
+            formulaCell = [pscustomobject]@{ address = [string]$formulaCell.Address($false, $false); value = $formulaCell.Value2; formula = $(try { [string]$formulaCell.Formula } catch { $null }) }
+            changingCell = [pscustomobject]@{ address = [string]$changingCell.Address($false, $false); value = $changingCell.Value2 }
+        }
+        return [pscustomobject]@{
+            succeeded = $succeeded
+            changed = ($before.formulaCell.value -ne $after.formulaCell.value -or $before.changingCell.value -ne $after.changingCell.value)
+            before = $before
+            after = $after
+            warnings = @()
+            limitations = @('Goal Seek uses Excel desktop numeric solving and may fail when the workbook cannot calculate, the target is unreachable, or host calculation settings block convergence.')
+        }
+    }
+    finally {
+        Release-ComObjectSafely -Object $formulaCell
+        Release-ComObjectSafely -Object $changingCell
+        Release-ComObjectSafely -Object $worksheet
+    }
+}
+
+function Get-FormulaDependencyAddresses {
+    param(
+        $Cell,
+        [Parameter(Mandatory = $true)]
+        [string]$DependencyName,
+        [Parameter(Mandatory = $true)]
+        $Warnings
+    )
+
+    $dependencyRange = $null
+    try {
+        $dependencyRange = Get-LateProperty -Target $Cell -Name $DependencyName
+        return @(Get-ExcelFoundryRangeAddresses -Range $dependencyRange)
+    }
+    catch {
+        $Warnings.Add(("{0} unavailable for {1}: {2}" -f $DependencyName, $(try { [string]$Cell.Address($false, $false, 1, $true) } catch { 'formula cell' }), $_.Exception.Message)) | Out-Null
+        return @()
+    }
+    finally {
+        Release-ComObjectSafely -Object $dependencyRange
+    }
+}
+
+function Get-WorkbookFormulaAudit {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Workbook,
+        [string]$SheetName,
+        [string]$Address
+    )
+
+    $formulas = New-Object System.Collections.Generic.List[object]
+    $warnings = New-Object System.Collections.Generic.List[string]
+    foreach ($worksheet in @($Workbook.Worksheets)) {
+        $usedRange = $null
+        $formulaCells = $null
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($SheetName) -and [string]$worksheet.Name -ne $SheetName) {
+                continue
+            }
+            try {
+                if ([bool]$worksheet.ProtectContents) {
+                    $warnings.Add(("Worksheet '{0}' is protected; dependency tracing may be incomplete." -f [string]$worksheet.Name)) | Out-Null
+                }
+            }
+            catch {}
+            if (-not [string]::IsNullOrWhiteSpace($Address)) {
+                $formulaCells = $worksheet.Range($Address)
+                $rowCount = 1
+                $colCount = 1
+            }
+            else {
+                $usedRange = $worksheet.UsedRange
+                if ($null -eq $usedRange) {
+                    continue
+                }
+                try { $rowCount = [int]$usedRange.Rows.Count } catch { $rowCount = 0 }
+                try { $colCount = [int]$usedRange.Columns.Count } catch { $colCount = 0 }
+                if ($rowCount -lt 1 -or $colCount -lt 1) {
+                    continue
+                }
+                $formulaCells = $usedRange
+            }
+            for ($row = 1; $row -le $rowCount; $row++) {
+                for ($col = 1; $col -le $colCount; $col++) {
+                    $cell = $null
+                    try {
+                        $cell = $formulaCells.Cells.Item($row, $col)
+                        $hasFormula = $false
+                        try { $hasFormula = [bool]$cell.HasFormula } catch {}
+                        if (-not $hasFormula) {
+                            continue
+                        }
+                        $cellWarnings = New-Object System.Collections.Generic.List[string]
+                        $formulas.Add([pscustomobject]@{
+                            sheet = [string]$worksheet.Name
+                            address = [string]$cell.Address($false, $false)
+                            formula = $(try { [string]$cell.Formula } catch { $null })
+                            formulaR1C1 = $(try { [string]$cell.FormulaR1C1 } catch { $null })
+                            value = $(try { $cell.Value2 } catch { $null })
+                            directPrecedents = @(Get-FormulaDependencyAddresses -Cell $cell -DependencyName 'DirectPrecedents' -Warnings $cellWarnings)
+                            directDependents = @(Get-FormulaDependencyAddresses -Cell $cell -DependencyName 'DirectDependents' -Warnings $cellWarnings)
+                            warnings = @($cellWarnings.ToArray())
+                        }) | Out-Null
+                        foreach ($warning in @($cellWarnings.ToArray())) {
+                            $warnings.Add($warning) | Out-Null
+                        }
+                    }
+                    finally {
+                        Release-ComObjectSafely -Object $cell
+                    }
+                }
+            }
+        }
+        finally {
+            Release-ComObjectSafely -Object $formulaCells
+            Release-ComObjectSafely -Object $usedRange
+            Release-ComObjectSafely -Object $worksheet
+        }
+    }
+
+    return [pscustomobject]@{
+        formulas = @($formulas.ToArray())
+        warnings = @($warnings.ToArray())
+        limitations = @(
+            'DirectPrecedents and DirectDependents are best-effort Excel COM surfaces.',
+            'External, closed-workbook, protected-sheet, dynamic-array spill, and multi-sheet dependencies may be unavailable or incomplete.'
+        )
+    }
+}
+
 function New-WorkbookModelPlatformLimitedMutation {
     param(
         [Parameter(Mandatory = $true)]
@@ -5692,7 +6116,7 @@ function Test-WorkbookModelHasWritableTables {
 function Invoke-DirectExcelWorkbookCommand {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete')]
+        [ValidateSet('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'what-if-inspect', 'scenario-list', 'scenario-get', 'scenario-set', 'scenario-delete', 'goal-seek-execute', 'formula-audit-inspect', 'formula-audit-export')]
         [string]$Command,
         [Parameter(Mandatory = $true)]
         [string]$WorkbookPath,
@@ -5704,6 +6128,8 @@ function Invoke-DirectExcelWorkbookCommand {
         [string[]]$Pivot = @(),
         [string[]]$Slicer = @(),
         [string[]]$Timeline = @(),
+        [string[]]$Sheet = @(),
+        [string]$Address,
         [string]$TargetPath,
         [string]$TargetFormat,
         [string]$SpecJson,
@@ -5778,7 +6204,7 @@ function Invoke-DirectExcelWorkbookCommand {
         throw ("{0} requires --target-path or --target-format" -f (($Command -replace '^workbook-', 'workbook ') -replace '-', ' '))
     }
 
-    $readOnlyDirectCommands = @('workbook-links', 'table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'shape-list', 'shape-get', 'picture-list', 'picture-get', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'slicer-list', 'slicer-get', 'timeline-list', 'timeline-get')
+    $readOnlyDirectCommands = @('workbook-links', 'table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'shape-list', 'shape-get', 'picture-list', 'picture-get', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'slicer-list', 'slicer-get', 'timeline-list', 'timeline-get', 'what-if-inspect', 'scenario-list', 'scenario-get', 'formula-audit-inspect', 'formula-audit-export')
     $packageFallbackCommands = @('table-get', 'query-get', 'connection-list', 'connection-get', 'chart-list', 'chart-get', 'pivot-list', 'pivot-get')
     if ($Command -in @('measure-set', 'relationship-set', 'hierarchy-set', 'kpi-set', 'perspective-set')) {
         $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
@@ -5798,6 +6224,18 @@ function Invoke-DirectExcelWorkbookCommand {
             throw "$(($Command -replace '-', ' ')) requires --name"
         }
         return New-WorkbookModelPlatformLimitedMutation -Command $Command -WorkbookPath $WorkbookPath -Name ([string]$Name[0]) -Spec $null
+    }
+    if ($Command -eq 'scenario-set' -and [string]::IsNullOrWhiteSpace($SpecJson) -and [string]::IsNullOrWhiteSpace($SpecFile)) {
+        throw "scenario set requires --spec-json or --spec-file"
+    }
+    if ($Command -eq 'goal-seek-execute' -and [string]::IsNullOrWhiteSpace($SpecJson) -and [string]::IsNullOrWhiteSpace($SpecFile)) {
+        throw "goal-seek execute requires --spec-json or --spec-file"
+    }
+    if ($Command -in @('scenario-get', 'scenario-delete') -and @($Name).Count -lt 1) {
+        throw "$(($Command -replace '-', ' ')) requires --name"
+    }
+    if ($Command -eq 'formula-audit-export' -and [string]::IsNullOrWhiteSpace($TargetPath)) {
+        throw "formula-audit export requires --target-path"
     }
     $context = $null
     try {
@@ -6743,6 +7181,156 @@ function Invoke-DirectExcelWorkbookCommand {
                     workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
                     changed = $true
                     timeline = $item
+                }
+            }
+            'what-if-inspect' {
+                $inspection = Get-WorkbookWhatIfInspection -Workbook $context.Workbook
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $false
+                    inspection = $inspection
+                    warnings = @($inspection.warnings)
+                    limitations = @($inspection.limitations)
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'scenario-list' {
+                $inventory = Get-WorkbookScenarioInventory -Workbook $context.Workbook
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $false
+                    scenarios = @($inventory.scenarios)
+                    warnings = @($inventory.warnings)
+                    limitations = @('Worksheet scenarios are exposed only where the desktop Excel object model reports them.')
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'scenario-get' {
+                if (@($Name).Count -lt 1) {
+                    throw "scenario get requires --name"
+                }
+                $inventory = Get-WorkbookScenarioInventory -Workbook $context.Workbook -ScenarioName ([string]$Name[0])
+                $scenario = @($inventory.scenarios) | Select-Object -First 1
+                if ($null -eq $scenario) {
+                    throw "Scenario not found: $($Name[0])"
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $false
+                    scenario = $scenario
+                    readback = $scenario
+                    warnings = @($inventory.warnings)
+                    limitations = @('Scenario values and changing cells are returned only where Excel exposes those members.')
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'scenario-set' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "scenario set requires --spec-json or --spec-file"
+                }
+                Set-WorkbookScenarioDefinition -Workbook $context.Workbook -Spec $spec
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $inventory = Get-WorkbookScenarioInventory -Workbook $context.Workbook -ScenarioName ([string]$spec.name)
+                $scenario = @($inventory.scenarios) | Select-Object -First 1
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    scenario = $scenario
+                    readback = $scenario
+                    warnings = @($inventory.warnings)
+                    limitations = @('Scenario set replaces an existing scenario with the same name because Excel COM does not provide uniform in-place update semantics.')
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'scenario-delete' {
+                if (@($Name).Count -lt 1) {
+                    throw "scenario delete requires --name"
+                }
+                $removed = Remove-WorkbookScenarioDefinition -Workbook $context.Workbook -ScenarioName ([string]$Name[0])
+                if (-not $removed) {
+                    throw "Scenario not found: $($Name[0])"
+                }
+                $context.Workbook.Save()
+                $saveChanges = $true
+                $inventory = Get-WorkbookScenarioInventory -Workbook $context.Workbook -ScenarioName ([string]$Name[0])
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $true
+                    deleted = $true
+                    scenario = [string]$Name[0]
+                    readback = [pscustomobject]@{ remaining = @($inventory.scenarios) }
+                    warnings = @($inventory.warnings)
+                    limitations = @()
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'goal-seek-execute' {
+                $spec = Read-JsonSpecValue -SpecJson $SpecJson -SpecFile $SpecFile
+                if ($null -eq $spec) {
+                    throw "goal-seek execute requires --spec-json or --spec-file"
+                }
+                $result = Invoke-WorkbookGoalSeek -Workbook $context.Workbook -Spec $spec
+                if ($result.changed) {
+                    $context.Workbook.Save()
+                    $saveChanges = $true
+                }
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = [bool]$result.changed
+                    goalSeek = $result
+                    readback = $result.after
+                    warnings = @($result.warnings)
+                    limitations = @($result.limitations)
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'formula-audit-inspect' {
+                $sheetName = if (@($Sheet).Count -gt 0) { [string]$Sheet[0] } else { $null }
+                $audit = Get-WorkbookFormulaAudit -Workbook $context.Workbook -SheetName $sheetName -Address $Address
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    changed = $false
+                    audit = $audit
+                    formulas = @($audit.formulas)
+                    warnings = @($audit.warnings)
+                    limitations = @($audit.limitations)
+                    secretHandling = Get-ExcelFoundrySecretHandling
+                }
+            }
+            'formula-audit-export' {
+                if ([string]::IsNullOrWhiteSpace($TargetPath)) {
+                    throw "formula-audit export requires --target-path"
+                }
+                $sheetName = if (@($Sheet).Count -gt 0) { [string]$Sheet[0] } else { $null }
+                $audit = Get-WorkbookFormulaAudit -Workbook $context.Workbook -SheetName $sheetName -Address $Address
+                Write-JsonFile -Path ([System.IO.Path]::GetFullPath($TargetPath)) -Value $audit
+                return [pscustomobject]@{
+                    command = $Command
+                    backend = 'excel'
+                    workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+                    targetPath = [System.IO.Path]::GetFullPath($TargetPath)
+                    changed = $false
+                    exported = $true
+                    audit = $audit
+                    warnings = @($audit.warnings)
+                    limitations = @($audit.limitations)
+                    secretHandling = Get-ExcelFoundrySecretHandling
                 }
             }
             'model-inspect' {

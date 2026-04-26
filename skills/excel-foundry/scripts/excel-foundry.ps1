@@ -123,7 +123,7 @@ function Parse-ExcelWorkbookSyncArgs {
     }
     $surfaceExplicit = $false
 
-    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'automation-inspect', 'automation-generate', 'automation-run', 'cell-get', 'cell-set', 'range-get', 'range-set')
+    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'what-if-inspect', 'scenario-list', 'scenario-get', 'scenario-set', 'scenario-delete', 'goal-seek-execute', 'formula-audit-inspect', 'formula-audit-export', 'automation-inspect', 'automation-generate', 'automation-run', 'cell-get', 'cell-set', 'range-get', 'range-set')
     $resourceCommands = @{
         'workbook' = @('inspect', 'capabilities', 'create', 'diff', 'save-as', 'convert', 'repair', 'compatibility', 'document-inspect', 'links', 'break-links', 'repoint-links', 'safe-export')
         'manifest' = @('validate', 'doctor', 'migrate')
@@ -145,6 +145,10 @@ function Parse-ExcelWorkbookSyncArgs {
         'hierarchy' = @('list', 'get', 'set', 'delete')
         'kpi' = @('list', 'get', 'set', 'delete')
         'perspective' = @('list', 'get', 'set', 'delete')
+        'what-if' = @('inspect')
+        'scenario' = @('list', 'get', 'set', 'delete')
+        'goal-seek' = @('execute')
+        'formula-audit' = @('inspect', 'export')
         'automation' = @('inspect', 'generate', 'run')
         'cell' = @('get', 'set')
         'range' = @('get', 'set')
@@ -542,6 +546,14 @@ function Parse-ExcelWorkbookSyncArgs {
             'perspective-get' { 'model' }
             'perspective-set' { 'model' }
             'perspective-delete' { 'model' }
+            'what-if-inspect' { 'what-if' }
+            'scenario-list' { 'what-if' }
+            'scenario-get' { 'what-if' }
+            'scenario-set' { 'what-if' }
+            'scenario-delete' { 'what-if' }
+            'goal-seek-execute' { 'what-if' }
+            'formula-audit-inspect' { 'formula-audit' }
+            'formula-audit-export' { 'formula-audit' }
             'automation-inspect' { '' }
             'automation-generate' { '' }
             'automation-run' { '' }
@@ -598,7 +610,7 @@ try {
         $payload | ConvertTo-Json -Depth 100
         exit 0
     }
-    if ($parsed.Command -in @('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete')) {
+    if ($parsed.Command -in @('workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'what-if-inspect', 'scenario-list', 'scenario-get', 'scenario-set', 'scenario-delete', 'goal-seek-execute', 'formula-audit-inspect', 'formula-audit-export')) {
         if ([string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
             Throw-CliError -Message "error: direct workbook commands require --workbook-path"
         }
@@ -614,6 +626,8 @@ try {
             -Slicer $parsed.Slicer `
             -Timeline $parsed.Timeline `
             -Name $parsed.Name `
+            -Sheet $parsed.Sheet `
+            -Address $parsed.Address `
             -TargetPath $parsed.TargetPath `
             -TargetFormat $parsed.TargetFormat `
             -SpecJson $parsed.SpecJson `

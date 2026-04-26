@@ -32,6 +32,10 @@ Advanced direct workbook commands use Excel COM on Windows:
 - `hierarchy list|get|set|delete`
 - `kpi list|get|set|delete`
 - `perspective list|get|set|delete`
+- `what-if inspect`
+- `scenario list|get|set|delete`
+- `goal-seek execute`
+- `formula-audit inspect|export`
 - `automation inspect|generate|run`
 
 `plan` returns per-surface capability, compare, merge, and intended write
@@ -93,6 +97,10 @@ backend even when the overall surface is host-limited; combine them with
 - `workbook repoint-links --workbook-path /path/to/book.xlsx --spec-file /path/to/link-map.json`
 - `workbook safe-export --workbook-path /path/to/book.xlsx --target-path /path/to/book.share-safe.xlsx`
 - `workbook capabilities --workbook-path /path/to/book.xlsx --deep`
+- `what-if inspect --workbook-path /path/to/book.xlsx`
+- `scenario set --workbook-path /path/to/book.xlsx --spec-json '{"sheet":"Sheet1","name":"Upside","changingCells":["A2"],"values":[125],"comment":"Upside case"}'`
+- `goal-seek execute --workbook-path /path/to/book.xlsx --spec-json '{"sheet":"Sheet1","formulaCell":"B2","targetValue":100,"changingCell":"A2"}'`
+- `formula-audit export --workbook-path /path/to/book.xlsx --sheet Sheet1 --target-path /path/to/formula-audit.json`
 - `sheet delete --workbook-path /path/to/book.xlsx --sheet Staging --destructive`
 - `automation generate --automation-type artifact-workbook --target-path build-workbook.mjs --spec-json '{"sheets":["Inputs","Dashboard"]}'`
 - `hierarchy set --workbook-path /path/to/book.xlsx --spec-json '{"name":"RegionHierarchy","levels":["Region","District"]}'`
