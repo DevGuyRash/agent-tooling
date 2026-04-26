@@ -44,7 +44,7 @@ This skill owns the repo-level wrapper surface:
 - `.github/workflows/release-cross-os.yml`
 - `githooks/pre-push` when the selected architecture uses committed dist outputs
 - `.gitignore` additions related to `.local/` and `dist/`
-- `.gitattributes` additions for `dist/**` when Git LFS is selected
+- `.gitattributes` managed section with broad text/EOL and binary defaults, plus `dist/**` Git LFS tracking when selected
 - `.local/harness/state.json`
 - `.local/harness/render/*` candidate files
 
@@ -210,6 +210,11 @@ Managed files are overwritten only when absent or already marked as managed.
 Unmanaged targets are never force-merged blindly; candidate files are written
 instead under `.local/harness/render/`.
 
+`.gitattributes` is managed by section instead of by whole file.
+WHEN this skill updates `.gitattributes` THEN you SHALL preserve human-authored rules outside the project-harness managed section.
+WHEN `.gitattributes` already exists without a project-harness section THEN you SHALL insert the managed section after leading comments and blank lines so later repo-specific rules can override the baseline.
+WHEN `.gitattributes` already contains a project-harness section THEN you SHALL replace only that section.
+
 Load `<skills-file-root>/references/existing-files.md` before changing a repo
 with an existing `justfile`, workflow set, or custom dist layout.
 
@@ -244,12 +249,12 @@ Operational templates:
 - `<skills-file-root>/assets/workflow-ci-direct.yml.tpl`
 - `<skills-file-root>/assets/workflow-ci-direct-split.yml.tpl`
 - `<skills-file-root>/assets/workflow-release-cross-os.yml.tpl`
-- `<skills-file-root>/assets/gitattributes-lfs.tpl`
 
 Generalized examples:
 - `<skills-file-root>/assets/just-no-example.just.tpl`
 - `<skills-file-root>/assets/workflow-ci-direct-component-paths.yml.tpl`
 - `<skills-file-root>/assets/workflow-release-assets-cross-os.yml.tpl`
+- `<skills-file-root>/assets/gitattributes-baseline.tpl`
 
 ## Bundled scripts
 

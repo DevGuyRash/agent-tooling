@@ -24,6 +24,207 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_DIR = SKILL_ROOT / "assets"
 STATE_VERSION = "2.6.0"
 MANAGED_MARKER = "# project-harness: managed-file"
+GITATTRIBUTES_BEGIN = "# BEGIN project-harness managed gitattributes"
+GITATTRIBUTES_END = "# END project-harness managed gitattributes"
+GITATTRIBUTES_SECTION_MARKER = "# project-harness: managed-section"
+GITATTRIBUTES_TEXT_RULES = [
+    "* text=auto eol=lf",
+    "",
+    "# Documentation, configuration, and repo metadata",
+    "*.md text eol=lf",
+    "*.markdown text eol=lf",
+    "*.txt text eol=lf",
+    "*.rst text eol=lf",
+    "*.adoc text eol=lf",
+    "*.json text eol=lf",
+    "*.jsonc text eol=lf",
+    "*.json5 text eol=lf",
+    "*.yml text eol=lf",
+    "*.yaml text eol=lf",
+    "*.toml text eol=lf",
+    "*.ini text eol=lf",
+    "*.cfg text eol=lf",
+    "*.conf text eol=lf",
+    "*.env text eol=lf",
+    "*.example text eol=lf",
+    "*.lock text eol=lf",
+    ".gitignore text eol=lf",
+    ".gitattributes text eol=lf",
+    ".editorconfig text eol=lf",
+    ".dockerignore text eol=lf",
+    "Cargo.lock text eol=lf",
+    "go.sum text eol=lf",
+    "package-lock.json text eol=lf",
+    "pnpm-lock.yaml text eol=lf",
+    "yarn.lock text eol=lf",
+    "poetry.lock text eol=lf",
+    "uv.lock text eol=lf",
+    "",
+    "# Shells, task runners, and build entrypoints",
+    "*.sh text eol=lf",
+    "*.bash text eol=lf",
+    "*.zsh text eol=lf",
+    "*.fish text eol=lf",
+    "*.ps1 text eol=lf",
+    "*.psm1 text eol=lf",
+    "*.psd1 text eol=lf",
+    "*.bat text eol=lf",
+    "*.cmd text eol=lf",
+    "Makefile text eol=lf",
+    "makefile text eol=lf",
+    "*.mk text eol=lf",
+    "Dockerfile text eol=lf",
+    "Dockerfile.* text eol=lf",
+    "*.Dockerfile text eol=lf",
+    "justfile text eol=lf",
+    "*.just text eol=lf",
+    "Taskfile.yml text eol=lf",
+    "Taskfile.yaml text eol=lf",
+    "",
+    "# Web, templates, and markup",
+    "*.html text eol=lf",
+    "*.htm text eol=lf",
+    "*.css text eol=lf",
+    "*.scss text eol=lf",
+    "*.sass text eol=lf",
+    "*.less text eol=lf",
+    "*.xml text eol=lf",
+    "*.svg text eol=lf",
+    "*.tmpl text eol=lf",
+    "*.tpl text eol=lf",
+    "*.hbs text eol=lf",
+    "*.mustache text eol=lf",
+    "*.jinja text eol=lf",
+    "*.jinja2 text eol=lf",
+    "",
+    "# Application source",
+    "*.js text eol=lf",
+    "*.jsx text eol=lf",
+    "*.mjs text eol=lf",
+    "*.cjs text eol=lf",
+    "*.ts text eol=lf",
+    "*.tsx text eol=lf",
+    "*.py text eol=lf",
+    "*.pyi text eol=lf",
+    "*.rs text eol=lf",
+    "*.go text eol=lf",
+    "*.java text eol=lf",
+    "*.kt text eol=lf",
+    "*.kts text eol=lf",
+    "*.scala text eol=lf",
+    "*.c text eol=lf",
+    "*.h text eol=lf",
+    "*.cc text eol=lf",
+    "*.cpp text eol=lf",
+    "*.cxx text eol=lf",
+    "*.hpp text eol=lf",
+    "*.hxx text eol=lf",
+    "*.cs text eol=lf",
+    "*.csproj text eol=lf",
+    "*.sln text eol=lf",
+    "*.fs text eol=lf",
+    "*.fsproj text eol=lf",
+    "*.php text eol=lf",
+    "*.rb text eol=lf",
+    "*.lua text eol=lf",
+    "*.pl text eol=lf",
+    "*.pm text eol=lf",
+    "*.swift text eol=lf",
+    "*.r text eol=lf",
+    "*.R text eol=lf",
+    "*.sql text eol=lf",
+    "*.graphql text eol=lf",
+    "*.gql text eol=lf",
+    "*.proto text eol=lf",
+    "*.tf text eol=lf",
+    "*.tfvars text eol=lf",
+    "*.hcl text eol=lf",
+    "*.nix text eol=lf",
+    "*.ex text eol=lf",
+    "*.exs text eol=lf",
+    "*.erl text eol=lf",
+    "*.hrl text eol=lf",
+    "*.clj text eol=lf",
+    "*.cljs text eol=lf",
+    "*.cljc text eol=lf",
+    "",
+    "# Data, automation, and office-adjacent source",
+    "*.csv text eol=lf",
+    "*.tsv text eol=lf",
+    "*.ndjson text eol=lf",
+    "*.fx text eol=lf",
+    "*.pq text eol=lf",
+    "*.vba text eol=lf",
+]
+GITATTRIBUTES_BINARY_RULES = [
+    "# Images and icons",
+    "*.png binary",
+    "*.jpg binary",
+    "*.jpeg binary",
+    "*.gif binary",
+    "*.webp binary",
+    "*.avif binary",
+    "*.ico binary",
+    "*.bmp binary",
+    "*.tif binary",
+    "*.tiff binary",
+    "*.psd binary",
+    "",
+    "# Documents and spreadsheets",
+    "*.pdf binary",
+    "*.doc binary",
+    "*.docx binary",
+    "*.ppt binary",
+    "*.pptx binary",
+    "*.xls binary",
+    "*.xlsx binary",
+    "*.xlsm binary",
+    "*.ods binary",
+    "*.odt binary",
+    "*.odp binary",
+    "",
+    "# Archives and packaged artifacts",
+    "*.zip binary",
+    "*.gz binary",
+    "*.tgz binary",
+    "*.bz2 binary",
+    "*.xz binary",
+    "*.7z binary",
+    "*.rar binary",
+    "*.tar binary",
+    "*.jar binary",
+    "*.war binary",
+    "*.nupkg binary",
+    "*.whl binary",
+    "",
+    "# Media and fonts",
+    "*.mp3 binary",
+    "*.mp4 binary",
+    "*.mov binary",
+    "*.avi binary",
+    "*.webm binary",
+    "*.wav binary",
+    "*.flac binary",
+    "*.ogg binary",
+    "*.ttf binary",
+    "*.otf binary",
+    "*.woff binary",
+    "*.woff2 binary",
+    "",
+    "# Executables, libraries, bytecode, and databases",
+    "*.exe binary",
+    "*.dll binary",
+    "*.so binary",
+    "*.dylib binary",
+    "*.a binary",
+    "*.lib binary",
+    "*.class binary",
+    "*.pyc binary",
+    "*.wasm binary",
+    "*.sqlite binary",
+    "*.sqlite3 binary",
+    "*.db binary",
+]
 IGNORE_DIRS = {
     ".git",
     ".hg",
@@ -2221,32 +2422,74 @@ def ensure_gitignore(repo: Path, architecture: str) -> list[str]:
     return warnings
 
 
-def ensure_gitattributes(repo: Path, architecture: str, dist_storage: str) -> list[str]:
+def render_gitattributes_section(architecture: str, dist_storage: str) -> str:
+    lines = [
+        GITATTRIBUTES_BEGIN,
+        "# Generated by project-harness. Review before editing.",
+        GITATTRIBUTES_SECTION_MARKER,
+        *GITATTRIBUTES_TEXT_RULES,
+        "",
+    ]
+    if dist_storage == "git-lfs" and architecture in {"committed-dist", "cross-os-dist"}:
+        lines.extend([
+            "# Project Harness committed distribution outputs",
+            "dist/** filter=lfs diff=lfs merge=lfs -text",
+            "",
+        ])
+    lines.extend([
+        *GITATTRIBUTES_BINARY_RULES,
+        GITATTRIBUTES_END,
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def insertion_index_after_leading_comments(lines: list[str]) -> int:
+    index = 0
+    while index < len(lines) and (lines[index].strip() == "" or lines[index].lstrip().startswith("#")):
+        index += 1
+    return index
+
+
+def merge_gitattributes(existing: str, managed_section: str) -> str:
+    existing_lines = existing.splitlines()
+    begin_index = next((idx for idx, line in enumerate(existing_lines) if line.strip() == GITATTRIBUTES_BEGIN), None)
+    end_index = next((idx for idx, line in enumerate(existing_lines) if line.strip() == GITATTRIBUTES_END), None)
+    section_lines = managed_section.rstrip("\n").splitlines()
+
+    if begin_index is not None and end_index is not None and begin_index <= end_index:
+        merged = [*existing_lines[:begin_index], *section_lines, *existing_lines[end_index + 1 :]]
+    else:
+        insert_at = insertion_index_after_leading_comments(existing_lines)
+        prefix = existing_lines[:insert_at]
+        suffix = existing_lines[insert_at:]
+        merged = [*prefix]
+        if merged and merged[-1].strip() != "":
+            merged.append("")
+        merged.extend(section_lines)
+        if suffix:
+            merged.append("")
+            merged.extend(suffix)
+
+    return "\n".join(merged).rstrip() + "\n"
+
+
+def render_gitattributes_file(repo: Path, architecture: str, dist_storage: str) -> str:
+    section = render_gitattributes_section(architecture, dist_storage)
+    gitattributes = repo / ".gitattributes"
+    existing = gitattributes.read_text(encoding="utf-8", errors="ignore") if gitattributes.exists() else ""
+    return merge_gitattributes(existing, section)
+
+
+def ensure_gitattributes(repo: Path, architecture: str, dist_storage: str) -> tuple[bool, list[str]]:
     warnings: list[str] = []
     gitattributes = repo / ".gitattributes"
-    lines = gitattributes.read_text(encoding="utf-8").splitlines() if gitattributes.exists() else []
-    managed_comment = "# project-harness: track committed dist outputs with Git LFS"
-    managed_rule = "dist/** filter=lfs diff=lfs merge=lfs -text"
-    filtered = [line for line in lines if line not in {managed_comment, managed_rule}]
-
-    if dist_storage == "git-lfs" and architecture in {"committed-dist", "cross-os-dist"}:
-        if any(line == managed_rule for line in lines):
-            return warnings
-        if filtered and filtered[-1].strip() != "":
-            filtered.append("")
-        filtered.append(managed_comment)
-        filtered.append(managed_rule)
-        gitattributes.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
-        warnings.append("added dist/** Git LFS tracking to .gitattributes")
-        return warnings
-
-    if filtered != lines:
-        if filtered:
-            gitattributes.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
-        elif gitattributes.exists():
-            gitattributes.unlink()
-        warnings.append("removed managed dist/** Git LFS tracking from .gitattributes")
-    return warnings
+    content = render_gitattributes_file(repo, architecture, dist_storage)
+    existing = gitattributes.read_text(encoding="utf-8", errors="ignore") if gitattributes.exists() else ""
+    if existing == content:
+        return False, warnings
+    gitattributes.write_text(content, encoding="utf-8")
+    warnings.append("updated repo-root .gitattributes with the project-harness managed baseline")
+    return True, warnings
 
 
 def write_candidate(path: Path, content: str) -> None:
@@ -2400,9 +2643,9 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
         write_candidate(hook_candidate, hook_content)
         hook_candidate.chmod(0o755)
         candidates.append("githooks/pre-push")
-    if dist_storage == "git-lfs" and architecture in {"committed-dist", "cross-os-dist"}:
-        write_candidate(gitattributes_candidate, "# project-harness: track committed dist outputs with Git LFS\ndist/** filter=lfs diff=lfs merge=lfs -text\n")
-        candidates.append(gitattributes_candidate.name)
+    gitattributes_content = render_gitattributes_file(repo, architecture, dist_storage)
+    write_candidate(gitattributes_candidate, gitattributes_content)
+    candidates.append(gitattributes_candidate.name)
 
     managed_writes: list[str] = []
     candidate_only: list[str] = []
@@ -2444,7 +2687,10 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
                 warnings.append("existing unmanaged githooks/pre-push was not overwritten")
 
         warnings.extend(ensure_gitignore(repo, architecture))
-        warnings.extend(ensure_gitattributes(repo, architecture, dist_storage))
+        gitattributes_changed, gitattributes_warnings = ensure_gitattributes(repo, architecture, dist_storage)
+        if gitattributes_changed:
+            managed_writes.append(".gitattributes")
+        warnings.extend(gitattributes_warnings)
 
     warnings = unique_preserve_order(warnings)
 
@@ -2483,9 +2729,15 @@ def do_bootstrap(args: argparse.Namespace) -> int:
     repo = Path(args.repo_root).resolve()
     if not repo.exists():
         return fail(f"repo root does not exist: {repo}")
+    existing_state, _existing_state_warnings = load_state(repo)
+    existing_selected = existing_state.get("selected", {}) if isinstance(existing_state, dict) else {}
+    detected = detect_components(repo)
+    architecture = str(existing_selected.get("architecture", detected["selection_defaults"]["architecture"]))
+    dist_storage = str(existing_selected.get("dist_storage", detected["selection_defaults"].get("dist_storage", "none")))
+    if not args.dry_run:
+        ensure_gitattributes(repo, architecture, dist_storage)
     if (repo / "justfile").exists() and shutil.which("just"):
         return run_exec(["just", "bootstrap"], repo, dry_run=args.dry_run)
-    detected = detect_components(repo)
     commands = command_model_for_execution(repo, detected)
     lines = commands.get("bootstrap", [])
     if not lines:

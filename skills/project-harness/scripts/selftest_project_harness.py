@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
         assert "# Install dependencies, tooling, and local prerequisites for normal development" in just1, just1
         assert "No native build surface was detected" in just1
         assert "ci.yml" not in render1["candidates"], render1
+        assert ".gitattributes" in render1["candidates"], render1
+        gitattributes1 = (repo1 / ".local" / "harness" / "render" / ".gitattributes").read_text(encoding="utf-8")
+        assert "# BEGIN project-harness managed gitattributes" in gitattributes1, gitattributes1
+        assert "* text=auto eol=lf" in gitattributes1, gitattributes1
+        assert "*.rs text eol=lf" in gitattributes1, gitattributes1
+        assert "*.png binary" in gitattributes1, gitattributes1
         if shutil.which("just"):
             list1 = assert_just_parses(repo1 / ".local" / "harness" / "render" / "justfile")
             assert re.search(r"default\s+# Show the recipe catalog and short descriptions", list1), list1
@@ -519,14 +525,17 @@ def main(argv: list[str] | None = None) -> int:
                 assert "dist" in list4 and "# Compile release outputs and stage them into dist/ for local packaging" in list4, list4
             if architecture in {"committed-dist", "cross-os-dist"}:
                 assert ".gitattributes" in render4["candidates"], render4
+                gitattributes4 = (repo4 / ".local" / "harness" / "render" / ".gitattributes").read_text(encoding="utf-8")
+                assert "dist/** filter=lfs diff=lfs merge=lfs -text" in gitattributes4, gitattributes4
             if architecture == "cross-os-dist":
                 release4 = (repo4 / ".local" / "harness" / "render" / "release-cross-os.yml").read_text(encoding="utf-8")
                 assert "fetch-depth: 1" in release4, release4
                 assert "retention-days: 7" in release4, release4
                 assert "Swatinem/rust-cache@v2" in release4, release4
         general4 = run_json(script, "render", str(repo4), "--architecture", "general", "--dist-storage", "none")
-        assert ".gitattributes" not in general4["candidates"], general4
-        assert not (repo4 / ".local" / "harness" / "render" / ".gitattributes").exists()
+        assert ".gitattributes" in general4["candidates"], general4
+        gitattributes4_general = (repo4 / ".local" / "harness" / "render" / ".gitattributes").read_text(encoding="utf-8")
+        assert "dist/** filter=lfs diff=lfs merge=lfs -text" not in gitattributes4_general, gitattributes4_general
 
         # 5) Go recipes keep forwarded args before package targets
         repo5 = tmpdir / "go"
@@ -602,9 +611,50 @@ def main(argv: list[str] | None = None) -> int:
         write(repo6 / ".github" / "workflows" / "ci.yml", "name: user-ci\n")
         update6 = run_json(script, "update", str(repo6))
         assert update6["candidate_only"] == [".github/workflows/ci.yml", "justfile"] or update6["candidate_only"] == ["justfile", ".github/workflows/ci.yml"], update6
+        assert ".gitattributes" in update6["managed_writes"], update6
         assert (repo6 / "justfile").read_text(encoding="utf-8") == "user-managed: \n\t@echo keep\n"
         assert (repo6 / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8") == "name: user-ci\n"
         assert (repo6 / ".local" / "harness" / "render" / "justfile").exists()
+        gitattributes6 = (repo6 / ".gitattributes").read_text(encoding="utf-8")
+        assert "# project-harness: managed-section" in gitattributes6, gitattributes6
+
+        # 6b) existing human .gitattributes keeps human rules after the managed baseline
+        repo6b = tmpdir / "existing-gitattributes"
+        repo6b.mkdir()
+        write(repo6b / "package.json", json.dumps({"name": "keep-human-attributes"}, indent=2) + "\n")
+        write(repo6b / ".gitattributes", "# Human header\n\n*.ps1 text eol=crlf\n*.bin binary\n")
+        update6b = run_json(script, "update", str(repo6b))
+        assert ".gitattributes" in update6b["managed_writes"], update6b
+        gitattributes6b = (repo6b / ".gitattributes").read_text(encoding="utf-8")
+        assert gitattributes6b.startswith("# Human header\n\n# BEGIN project-harness managed gitattributes"), gitattributes6b
+        assert gitattributes6b.count("# BEGIN project-harness managed gitattributes") == 1, gitattributes6b
+        assert gitattributes6b.rstrip().endswith("*.bin binary"), gitattributes6b
+        update6b_repeat = run_json(script, "update", str(repo6b))
+        assert ".gitattributes" not in update6b_repeat["managed_writes"], update6b_repeat
+        gitattributes6b_repeat = (repo6b / ".gitattributes").read_text(encoding="utf-8")
+        assert gitattributes6b_repeat.count("# BEGIN project-harness managed gitattributes") == 1, gitattributes6b_repeat
+
+        # 6c) bootstrap is also a setup path and creates repo-root .gitattributes
+        repo6c = tmpdir / "bootstrap-gitattributes"
+        repo6c.mkdir()
+        write(repo6c / "package.json", json.dumps({
+            "name": "bootstrap-attributes",
+            "scripts": {"bootstrap": "node -e \"process.exit(0)\""}
+        }, indent=2) + "\n")
+        bootstrap6c = run_cmd(script, "bootstrap", str(repo6c))
+        assert bootstrap6c.returncode == 0, bootstrap6c.stderr
+        gitattributes6c = (repo6c / ".gitattributes").read_text(encoding="utf-8")
+        assert "# BEGIN project-harness managed gitattributes" in gitattributes6c, gitattributes6c
+
+        repo6d = tmpdir / "bootstrap-gitattributes-dry-run"
+        repo6d.mkdir()
+        write(repo6d / "package.json", json.dumps({
+            "name": "bootstrap-attributes-dry-run",
+            "scripts": {"bootstrap": "node -e \"process.exit(0)\""}
+        }, indent=2) + "\n")
+        bootstrap6d = run_cmd(script, "bootstrap", str(repo6d), "--dry-run")
+        assert bootstrap6d.returncode == 0, bootstrap6d.stderr
+        assert not (repo6d / ".gitattributes").exists()
 
         # 7) managed Git LFS rule is reversible when the selection changes away from committed dist
         repo7 = tmpdir / "lfs-migrate"
@@ -615,8 +665,9 @@ def main(argv: list[str] | None = None) -> int:
         gitattributes7 = (repo7 / ".gitattributes").read_text(encoding="utf-8")
         assert "dist/** filter=lfs diff=lfs merge=lfs -text" in gitattributes7, gitattributes7
         run_json(script, "update", str(repo7), "--architecture", "general", "--dist-storage", "none")
-        if (repo7 / ".gitattributes").exists():
-            assert "dist/** filter=lfs diff=lfs merge=lfs -text" not in (repo7 / ".gitattributes").read_text(encoding="utf-8")
+        gitattributes7_general = (repo7 / ".gitattributes").read_text(encoding="utf-8")
+        assert "* text=auto eol=lf" in gitattributes7_general, gitattributes7_general
+        assert "dist/** filter=lfs diff=lfs merge=lfs -text" not in gitattributes7_general, gitattributes7_general
 
         # 8) corrupt state is preserved and surfaced instead of disappearing silently
         repo8 = tmpdir / "corrupt-state"
