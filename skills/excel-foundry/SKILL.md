@@ -55,6 +55,8 @@ define the generic contract.
   `<skills-file-root>/references/output-contract.md`.
 - If you need fixture usage or validation guidance, load
   `<skills-file-root>/references/testing.md`.
+- If you need runtime or host compatibility details before selecting a
+  backend, load `<skills-file-root>/references/runtime-compatibility.md`.
 - If you are editing, testing, packaging, or reviewing this skill itself, load
   `<skills-file-root>/DEVELOPMENT.md`. Do not load it for normal workbook
   user tasks.

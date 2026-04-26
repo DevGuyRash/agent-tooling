@@ -24,6 +24,7 @@ COMMON = ROOT / "scripts" / "ExcelSync.Common.ps1"
 POWERQUERY = ROOT / "scripts" / "sync-excel-powerquery.ps1"
 OPENAI_YAML = ROOT / "agents" / "openai.yaml"
 CAPABILITY_MATRIX = ROOT / "references" / "excel-capability-matrix.json"
+RUNTIME_COMPATIBILITY = ROOT / "references" / "runtime-compatibility.md"
 EXTERNAL_SMOKE_TEST = ROOT / "tests" / "test_excel_workbook_external_smoke.py"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "generic_workbook_fixture"
 FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "excel-sync.manifest.json"
@@ -457,7 +458,25 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue((ROOT / "references" / "protocol-audit.md").exists())
         self.assertTrue((ROOT / "references" / "protocol-manifest-sync.md").exists())
         self.assertTrue((ROOT / "references" / "output-contract.md").exists())
+        self.assertTrue(RUNTIME_COMPATIBILITY.exists())
         self.assertTrue(CAPABILITY_MATRIX.exists())
+
+    def test_skill_frontmatter_stays_skill_creator_valid(self) -> None:
+        content = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(content.startswith("---\n"))
+        frontmatter = content.split("---", 2)[1]
+        keys = [
+            line.split(":", 1)[0]
+            for line in frontmatter.splitlines()
+            if line and not line.startswith(" ") and ":" in line
+        ]
+        self.assertEqual(keys, ["name", "description"])
+        self.assertIn("name: excel-foundry", frontmatter)
+        self.assertNotIn("compatibility:", frontmatter)
+        self.assertNotIn("metadata:", frontmatter)
+
+        body = content.split("---", 2)[2]
+        self.assertIn("references/runtime-compatibility.md", body)
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
@@ -604,6 +623,9 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         ledger = package_module.CAPABILITY_LEDGER
 
         self.assertIn("## Capability Source Of Truth", development)
+        self.assertIn("## Skill Metadata", development)
+        self.assertIn("You SHALL keep `SKILL.md` frontmatter limited to `name` and `description`.", development)
+        self.assertIn("references/runtime-compatibility.md", development)
         self.assertIn("`references/excel-capability-matrix.json` is the single source of truth", development)
         self.assertIn("You SHALL NOT create a second capability matrix", development)
         self.assertIn("WHEN planning a new Excel Foundry feature THEN you SHALL start", development)

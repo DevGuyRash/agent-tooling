@@ -80,6 +80,21 @@ tests.
 Reference files should hold workflow details. This file should hold maintainer
 rules. Tests should encode behavioral guarantees.
 
+## Skill Metadata
+
+The skill frontmatter is governed by the system skill validator.
+
+You SHALL keep `SKILL.md` frontmatter limited to `name` and `description`.
+
+You SHALL keep `name: excel-foundry`.
+
+You SHALL NOT add `compatibility`, `metadata`, capability tables, or runtime
+host details to `SKILL.md` YAML frontmatter.
+
+WHEN runtime or host compatibility guidance changes THEN you SHALL update
+`references/runtime-compatibility.md`, `references/excel-capability-matrix.json`,
+or both instead of adding frontmatter fields.
+
 ## Capability Source Of Truth
 
 `references/excel-capability-matrix.json` is the single source of truth for
