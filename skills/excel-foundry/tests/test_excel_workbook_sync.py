@@ -511,6 +511,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("list", matrix["operationVocabulary"])
         self.assertIn("plan", matrix["operationVocabulary"])
         self.assertIn("preserve-only", matrix["supportLevels"])
+        compatibility_fields = matrix["environmentCompatibilityFields"]
+        self.assertEqual(compatibility_fields, ["package", "desktop", "graph", "officeScript", "tomFabric"])
+        self.assertIn("remain authoritative even when the overall supportLevel is host-limited", matrix["environmentCompatibilityRule"])
+        allowed_compatibility = set(matrix["environmentCompatibilityLevels"])
 
         package_spec = importlib.util.spec_from_file_location(
             "excel_workbook_package_for_capability_matrix",
@@ -542,6 +546,14 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             seen_ids.add(surface_id)
             self.assertIn(surface_id, ledger)
             self.assertIn(surface["supportLevel"], allowed_support)
+            for field in compatibility_fields:
+                self.assertIn(field, surface, surface_id)
+                self.assertIn(surface[field], allowed_compatibility, f"{surface_id}.{field}")
+            if surface["supportLevel"] == "host-limited":
+                self.assertTrue(
+                    any(surface[field] in {"supported", "partial", "preserve-only", "planned"} for field in compatibility_fields),
+                    surface_id,
+                )
             self.assertIn(surface["readLane"], allowed_lanes)
             self.assertIn(surface["writeLane"], allowed_lanes)
             self.assertIn(surface["route"], allowed_routes)

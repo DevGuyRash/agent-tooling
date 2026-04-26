@@ -101,6 +101,16 @@ WHEN a feature changes support status, route, backend ownership, supported
 verbs, host requirements, destructive risk, or secret handling THEN you SHALL
 update only the matching matrix surface fields.
 
+WHEN a surface is host-limited THEN you SHALL still set each environment
+compatibility field (`package`, `desktop`, `graph`, `officeScript`,
+`tomFabric`) to the current state for that backend: `supported`, `partial`,
+`preserve-only`, `planned`, `not-required`, or `not-applicable`.
+
+WHEN a backend works only with a required local app, tenant runtime, driver,
+trust setting, or API permission THEN you SHALL put the backend state in the
+matching environment compatibility field and put the condition in
+`hostRequirements`.
+
 WHEN a feature is implemented but not fully covered by tests THEN you SHALL
 leave its `supportLevel` as `partial`, `host-limited`, `preserve-only`, or
 `planned` as appropriate; you SHALL NOT mark it `supported`.

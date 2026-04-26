@@ -60,6 +60,11 @@ sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/exc
 - Query, inspect, and bootstrap responses include `capabilities`, `warnings`,
   `unsupported`, and `engineRoutes` fields. Read them before assuming a
   backend can write or expose every requested surface.
+- `references/excel-capability-matrix.json` is the capability source of truth.
+  Its `package`, `desktop`, `graph`, `officeScript`, and `tomFabric` fields
+  state the current compatibility level for each backend/environment even when
+  the overall surface is host-limited; combine those fields with
+  `hostRequirements` before deciding whether to execute, plan, or preserve.
 - In `auto` mode, manifest read flows prefer the OOXML/package backend when
   the requested surfaces do not require live VBA/project/reference access.
 - Package-helper execution is bounded; slow package reads fail explicitly

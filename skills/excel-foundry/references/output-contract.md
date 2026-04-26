@@ -109,6 +109,12 @@ taxonomy. Each surface has `readLane`, `writeLane`, `route`, `verify`, `risk`,
 agents can select the strongest safe write path without hard-coded workbook
 assumptions.
 
+The matrix also defines environment compatibility fields for `package`,
+`desktop`, `graph`, `officeScript`, and `tomFabric`. These fields state the
+current support state for each backend/environment even when the overall
+surface is `host-limited`; callers should combine those fields with
+`hostRequirements` before deciding whether to execute, plan, or preserve.
+
 ## Audit Output
 
 `audit` stages one copied workbook under a timestamped run root and writes:

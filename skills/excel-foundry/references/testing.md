@@ -9,6 +9,13 @@ selectors in that matrix before being treated as checked off, and every matrix
 surface should have either direct evidence, a route/plan test, preserve-only
 proof, or an explicit host/API limitation.
 
+The matrix `package`, `desktop`, `graph`, `officeScript`, and `tomFabric`
+fields are the current compatibility state for each backend/environment. Read
+those fields even when a surface is `host-limited`; `host-limited` means a
+host condition exists, while the per-environment fields say whether that path
+is currently supported, partial, preserve-only, planned, not required, or not
+applicable.
+
 Use the fixture for:
 
 - launcher smoke checks

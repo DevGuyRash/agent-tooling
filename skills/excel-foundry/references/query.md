@@ -76,6 +76,13 @@ Default output is JSON. Use `inspect` for counts and capability summary. Use
 Use `plan` before mutating a manifest workspace when you need backend and
 surface writeability decisions first. Use `compare` when you need per-surface
 artifact drift instead of one coarse workbook result.
+
+`references/excel-capability-matrix.json` is the source of truth for capability
+and compatibility. Its per-environment fields (`package`, `desktop`, `graph`,
+`officeScript`, and `tomFabric`) state the current support level for each
+backend even when the overall surface is host-limited; combine them with
+`hostRequirements` before choosing execute, plan, or preserve behavior.
+
 - `workbook save-as --workbook-path /path/to/book.xlsm --target-path /path/to/book.xlsb`
 - `workbook convert --workbook-path /path/to/book.xlsx --target-format csv`
 - `workbook repair --workbook-path /path/to/damaged.xlsx --mode repair --target-path /path/to/damaged.repaired.xlsx`

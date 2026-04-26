@@ -84,6 +84,10 @@ define the generic contract.
   Excel, Microsoft Graph, Office Scripts/Excel JS, TOM/XMLA, and Fabric lanes,
   and distinguishes supported, partial, host-limited, preserve-only, and
   planned surfaces.
+- Matrix environment fields (`package`, `desktop`, `graph`, `officeScript`,
+  `tomFabric`) state the current support level for each backend even when the
+  overall surface is host-limited. Combine those fields with
+  `hostRequirements` before choosing execute, plan, or preserve behavior.
 - Query/bootstrap coverage now includes sheets, formulas, data-validation,
   protection, workbook metadata, comments, hyperlinks, dimensions, print
   settings, styles, themes, chart metadata, and pivot metadata in the

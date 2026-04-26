@@ -38,6 +38,17 @@
     "preserve-only": "The skill preserves or inventories the surface without claiming mutation.",
     "planned": "The object is part of the canonical Excel ecosystem contract but is not implemented yet."
   },
+  "environmentCompatibilityFields": ["package", "desktop", "graph", "officeScript", "tomFabric"],
+  "environmentCompatibilityRule": "The environment compatibility fields are the current support state for each backend/environment. They remain authoritative even when the overall supportLevel is host-limited; host-limited means the relevant host must be present, while the per-environment value states whether that host path is supported, partial, preserve-only, planned, not required, or not applicable.",
+  "environmentCompatibilityLevels": {
+    "supported": "Works in this backend/environment when its documented host requirements are present.",
+    "partial": "This backend/environment supports inventory, planning, artifacts, or a bounded subset, but not full CRUD.",
+    "host-limited": "This backend/environment may work only when the required host, tenant, driver, trust setting, or runtime is present; use hostRequirements for the exact condition.",
+    "preserve-only": "This backend/environment preserves or inventories the surface without claiming mutation.",
+    "planned": "This backend/environment is desired but not implemented yet.",
+    "not-required": "This backend/environment is not needed for the current supported route.",
+    "not-applicable": "This backend/environment does not expose a meaningful route for this surface."
+  },
   "surfaces": [
     {
       "id": "workbook",

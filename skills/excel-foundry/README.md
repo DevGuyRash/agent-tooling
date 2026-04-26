@@ -96,6 +96,10 @@ verification method, risk class, and host requirements. Routes include
 `automation-write`, `graph-write`, `tom-fabric-write`, and `preserve-only`.
 The ledger is derived from `references/excel-capability-matrix.json`, which is
 the single source of truth for support status and evidence selectors.
+Matrix environment fields (`package`, `desktop`, `graph`, `officeScript`, and
+`tomFabric`) state the current support level for each backend even when the
+overall surface is host-limited; combine those values with `hostRequirements`
+before executing, planning, or preserving a surface.
 The plan-centric commands add package-backed capability planning,
 per-surface compare, dry-run sync, targeted selectors, and apply mode for
 safe OOXML surfaces.
