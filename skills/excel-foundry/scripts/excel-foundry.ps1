@@ -15,7 +15,7 @@ function Show-ExcelWorkbookSyncUsage {
     @"
 Usage:
   excel-foundry.ps1 <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap|plan|compare|sync> [options]
-  excel-foundry.ps1 <workbook|manifest|sheet|name|table|query|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range> <action> [options]
+  excel-foundry.ps1 <workbook|manifest|sheet|name|table|query|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table> <action> [options]
   excel-foundry.ps1 [options]
 
 Options:
@@ -43,16 +43,30 @@ Options:
   --values-json JSON   | -ValuesJson JSON
   --target-path PATH   | -TargetPath PATH
   --target-format EXT  | -TargetFormat EXT
+  --drive-id ID        | -DriveId ID
+  --item-id ID         | -ItemId ID
+  --item-path PATH     | -ItemPath PATH
+  --session-id ID      | -SessionId ID
+  --workspace-id ID    | -WorkspaceId ID
+  --semantic-model-id ID | -SemanticModelId ID
+  --dataset-id ID      | -DatasetId ID
+  --definition-dir PATH | -DefinitionDir PATH
+  --format NAME        | -Format NAME
+  --dax-query TEXT     | -DaxQuery TEXT
   --spec-json JSON     | -SpecJson JSON
   --spec-file PATH     | -SpecFile PATH
   --refers-to FORMULA  | -RefersTo FORMULA
   --hidden             | -Hidden
   --state-root PATH    | -StateRoot PATH
   --apply              | -Apply
+  --dry-run | --what-if | -DryRun
+  --persist-changes    | -PersistChanges
+  --hard-delete        | -HardDelete
   --destructive        | -Destructive
   --deep               | -Deep
+  --documentation      | -Documentation
   --visible            | -Visible
-  --help | -help | -h | -? 
+  --help | -help | -h | -?
 
 Notes:
   When the subcommand is omitted, the default is inspect.
@@ -106,6 +120,18 @@ function Parse-ExcelWorkbookSyncArgs {
         ValuesJson = $null
         TargetPath = $null
         TargetFormat = $null
+        DriveId = $null
+        ItemId = $null
+        ItemPath = $null
+        SessionId = $null
+        WorkspaceId = $null
+        SemanticModelId = $null
+        DatasetId = $null
+        OperationId = $null
+        OperationLocation = $null
+        DefinitionDir = $null
+        Format = $null
+        DaxQuery = $null
         SpecJson = $null
         SpecFile = $null
         RefersTo = $null
@@ -116,14 +142,18 @@ function Parse-ExcelWorkbookSyncArgs {
         Mode = 'push'
         StateRoot = $null
         Apply = $false
+        DryRun = $false
+        PersistChanges = $false
+        HardDelete = $false
         Destructive = $false
         Deep = $false
+        Documentation = $false
         Visible = $false
         ShowHelp = $false
     }
     $surfaceExplicit = $false
 
-    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'what-if-inspect', 'scenario-list', 'scenario-get', 'scenario-set', 'scenario-delete', 'goal-seek-execute', 'formula-audit-inspect', 'formula-audit-export', 'automation-inspect', 'automation-generate', 'automation-run', 'cell-get', 'cell-set', 'range-get', 'range-set')
+    $validCommands = @('inspect', 'query', 'push', 'pull', 'roundtrip', 'smoke', 'refresh', 'bootstrap', 'plan', 'compare', 'sync', 'workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'workbook-save-as', 'workbook-convert', 'workbook-repair', 'workbook-compatibility', 'workbook-document-inspect', 'workbook-links', 'workbook-break-links', 'workbook-repoint-links', 'workbook-safe-export', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'table-get', 'table-create', 'table-update', 'table-delete', 'query-list', 'query-get', 'query-set', 'query-delete', 'query-refresh', 'connection-list', 'connection-get', 'connection-update', 'connection-delete', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'shape-list', 'shape-get', 'shape-create', 'shape-update', 'shape-delete', 'picture-list', 'picture-get', 'picture-add', 'picture-update', 'picture-delete', 'control-list', 'control-get', 'pivot-list', 'pivot-get', 'pivot-create', 'pivot-update', 'pivot-delete', 'pivot-refresh', 'slicer-list', 'slicer-get', 'slicer-create', 'slicer-update', 'slicer-delete', 'slicer-clear', 'slicer-set-filter', 'timeline-list', 'timeline-get', 'timeline-create', 'timeline-update', 'timeline-delete', 'timeline-clear', 'timeline-set-range', 'model-inspect', 'measure-list', 'measure-get', 'measure-set', 'measure-delete', 'relationship-list', 'relationship-get', 'relationship-set', 'relationship-delete', 'hierarchy-list', 'hierarchy-get', 'hierarchy-set', 'hierarchy-delete', 'kpi-list', 'kpi-get', 'kpi-set', 'kpi-delete', 'perspective-list', 'perspective-get', 'perspective-set', 'perspective-delete', 'what-if-inspect', 'scenario-list', 'scenario-get', 'scenario-set', 'scenario-delete', 'goal-seek-execute', 'formula-audit-inspect', 'formula-audit-export', 'automation-inspect', 'automation-generate', 'automation-run', 'cell-get', 'cell-set', 'range-get', 'range-set', 'graph-workbook-inspect', 'graph-workbook-session-create', 'graph-workbook-session-close', 'graph-workbook-worksheet-list', 'graph-workbook-worksheet-get', 'graph-workbook-worksheet-create', 'graph-workbook-worksheet-update', 'graph-workbook-worksheet-delete', 'graph-workbook-range-get', 'graph-workbook-range-set', 'graph-workbook-range-clear', 'graph-workbook-range-format-get', 'graph-workbook-range-format-set', 'graph-workbook-range-format-font-get', 'graph-workbook-range-format-font-set', 'graph-workbook-range-format-fill-get', 'graph-workbook-range-format-fill-set', 'graph-workbook-range-format-protection-get', 'graph-workbook-range-format-protection-set', 'graph-workbook-range-format-border-list', 'graph-workbook-range-format-border-get', 'graph-workbook-range-format-border-set', 'graph-workbook-range-format-autofit-rows', 'graph-workbook-range-format-autofit-columns', 'graph-workbook-name-list', 'graph-workbook-name-get', 'graph-workbook-name-create', 'graph-workbook-name-update', 'graph-workbook-name-delete', 'graph-workbook-table-list', 'graph-workbook-table-get', 'graph-workbook-table-create', 'graph-workbook-table-update', 'graph-workbook-table-delete', 'graph-workbook-table-row-list', 'graph-workbook-table-row-add', 'graph-workbook-table-column-list', 'graph-workbook-table-column-add', 'graph-workbook-table-sort-apply', 'graph-workbook-table-sort-clear', 'graph-workbook-table-filter-apply', 'graph-workbook-table-filter-clear', 'graph-workbook-table-convert-to-range', 'graph-workbook-chart-list', 'graph-workbook-chart-get', 'graph-workbook-chart-create', 'graph-workbook-chart-update', 'graph-workbook-chart-delete', 'graph-workbook-chart-image', 'graph-workbook-chart-set-data', 'graph-workbook-function-call', 'graph-workbook-protection-get', 'graph-workbook-protection-protect', 'graph-workbook-protection-unprotect', 'fabric-semantic-model-list', 'fabric-semantic-model-get', 'fabric-semantic-model-create', 'fabric-semantic-model-update', 'fabric-semantic-model-delete', 'fabric-semantic-model-get-definition', 'fabric-semantic-model-update-definition', 'fabric-semantic-model-export-definition', 'fabric-semantic-model-refresh', 'fabric-semantic-model-execute-dax', 'fabric-semantic-model-operation-get', 'fabric-semantic-model-operation-result', 'model-table-list', 'model-table-get', 'model-table-set', 'model-table-delete', 'model-measure-list', 'model-measure-get', 'model-measure-set', 'model-measure-delete', 'model-relationship-list', 'model-relationship-get', 'model-relationship-set', 'model-relationship-delete', 'model-role-list', 'model-role-get', 'model-role-set', 'model-role-delete', 'model-partition-list', 'model-partition-get', 'model-partition-set', 'model-partition-delete', 'model-expression-list', 'model-expression-get', 'model-expression-set', 'model-expression-delete', 'dax-execute', 'dax-list', 'dax-get', 'dax-set', 'dax-delete', 'semantic-artifact-inspect', 'semantic-artifact-export', 'semantic-artifact-push')
     $resourceCommands = @{
         'workbook' = @('inspect', 'capabilities', 'create', 'diff', 'save-as', 'convert', 'repair', 'compatibility', 'document-inspect', 'links', 'break-links', 'repoint-links', 'safe-export')
         'manifest' = @('validate', 'doctor', 'migrate')
@@ -148,10 +178,44 @@ function Parse-ExcelWorkbookSyncArgs {
         'what-if' = @('inspect')
         'scenario' = @('list', 'get', 'set', 'delete')
         'goal-seek' = @('execute')
+        'solver' = @('inspect', 'plan', 'execute', 'export')
+        'forecast-sheet' = @('inspect', 'plan', 'create', 'export')
+        'data-table' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
         'formula-audit' = @('inspect', 'export')
+        'calc-engine' = @('inspect', 'plan', 'recalculate', 'export')
+        'cube-function' = @('list', 'get', 'inspect', 'plan')
+        'lambda-name' = @('list', 'get', 'set', 'delete', 'inspect', 'plan')
+        'sparkline' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
+        'xml-map' = @('inspect', 'plan', 'export', 'import')
+        'custom-xml' = @('inspect', 'plan', 'export')
+        'ole-object' = @('inspect', 'plan', 'export')
+        'external-data-range' = @('list', 'get', 'create', 'update', 'delete', 'refresh', 'inspect', 'plan')
+        'workbook-view' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
+        'signature' = @('inspect', 'plan')
+        'encryption' = @('inspect', 'plan')
+        'sensitivity' = @('inspect', 'plan')
         'automation' = @('inspect', 'generate', 'run')
         'cell' = @('get', 'set')
         'range' = @('get', 'set')
+        'chart-sheet' = @('list', 'get', 'create', 'update', 'delete', 'move', 'rename', 'export')
+        'threaded-comment' = @('list', 'get', 'create', 'update', 'delete')
+        'privacy' = @('inspect', 'redact', 'export')
+        'pivot-chart' = @('list', 'get', 'create', 'update', 'delete', 'refresh', 'export')
+        'office-script' = @('validate', 'run-plan')
+        'office-script-live' = @('inspect', 'plan', 'execute')
+        'excel-js-api' = @('validate', 'run-plan')
+        'office-addin' = @('validate', 'sideload-plan')
+        'addin-runtime' = @('inspect', 'plan', 'execute', 'validate', 'sideload-plan')
+        'graph-workbook' = @('inspect', 'session-create', 'session-close', 'worksheet-list', 'worksheet-get', 'worksheet-create', 'worksheet-update', 'worksheet-delete', 'range-get', 'range-set', 'range-clear', 'range-format-get', 'range-format-set', 'range-format-font-get', 'range-format-font-set', 'range-format-fill-get', 'range-format-fill-set', 'range-format-protection-get', 'range-format-protection-set', 'range-format-border-list', 'range-format-border-get', 'range-format-border-set', 'range-format-autofit-rows', 'range-format-autofit-columns', 'name-list', 'name-get', 'name-create', 'name-update', 'name-delete', 'table-list', 'table-get', 'table-create', 'table-update', 'table-delete', 'table-row-list', 'table-row-add', 'table-column-list', 'table-column-add', 'table-sort-apply', 'table-sort-clear', 'table-filter-apply', 'table-filter-clear', 'table-convert-to-range', 'chart-list', 'chart-get', 'chart-create', 'chart-update', 'chart-delete', 'chart-image', 'chart-set-data', 'function-call', 'protection-get', 'protection-protect', 'protection-unprotect')
+        'fabric-semantic-model' = @('list', 'get', 'create', 'update', 'delete', 'get-definition', 'update-definition', 'export-definition', 'refresh', 'execute-dax', 'operation-get', 'operation-result')
+        'model-table' = @('list', 'get', 'set', 'delete')
+        'model-measure' = @('list', 'get', 'set', 'delete')
+        'model-relationship' = @('list', 'get', 'set', 'delete')
+        'model-role' = @('list', 'get', 'set', 'delete')
+        'model-partition' = @('list', 'get', 'set', 'delete')
+        'model-expression' = @('list', 'get', 'set', 'delete')
+        'dax' = @('execute', 'list', 'get', 'set', 'delete')
+        'semantic-artifact' = @('inspect', 'export', 'push')
     }
     $index = 0
     if ($Tokens.Count -gt 0) {
@@ -359,6 +423,78 @@ function Parse-ExcelWorkbookSyncArgs {
                 $index++
                 continue
             }
+            { $_ -in @('--drive-id', '-DriveId', '-drive-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.DriveId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--item-id', '-ItemId', '-item-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.ItemId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--item-path', '-ItemPath', '-item-path') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.ItemPath = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--session-id', '-SessionId', '-session-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.SessionId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--workspace-id', '-WorkspaceId', '-workspace-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.WorkspaceId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--semantic-model-id', '-SemanticModelId', '-semantic-model-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.SemanticModelId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--dataset-id', '-DatasetId', '-dataset-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.DatasetId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--operation-id', '-OperationId', '-operation-id') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.OperationId = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--operation-location', '-OperationLocation', '-operation-location') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.OperationLocation = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--definition-dir', '-DefinitionDir', '-definition-dir') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.DefinitionDir = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--format', '-Format', '-format') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.Format = [string]$Tokens[$index]
+                $index++
+                continue
+            }
+            { $_ -in @('--dax-query', '-DaxQuery', '-dax-query') } {
+                if ($index -ge $Tokens.Count) { Throw-CliError -Message "error: missing value for $token" }
+                $result.DaxQuery = [string]$Tokens[$index]
+                $index++
+                continue
+            }
             { $_ -in @('--spec-json', '-SpecJson', '-spec-json') } {
                 if ($index -ge $Tokens.Count) {
                     Throw-CliError -Message "error: missing value for $token"
@@ -428,12 +564,28 @@ function Parse-ExcelWorkbookSyncArgs {
                 $result.Apply = $true
                 continue
             }
+            { $_ -in @('--dry-run', '--what-if', '-DryRun', '-dry-run', '-WhatIf', '-what-if') } {
+                $result.DryRun = $true
+                continue
+            }
+            { $_ -in @('--persist-changes', '-PersistChanges', '-persist-changes') } {
+                $result.PersistChanges = $true
+                continue
+            }
+            { $_ -in @('--hard-delete', '-HardDelete', '-hard-delete') } {
+                $result.HardDelete = $true
+                continue
+            }
             { $_ -in @('--destructive', '-Destructive', '-destructive') } {
                 $result.Destructive = $true
                 continue
             }
             { $_ -in @('--deep', '-Deep', '-deep') } {
                 $result.Deep = $true
+                continue
+            }
+            { $_ -in @('--documentation', '-Documentation', '-documentation') } {
+                $result.Documentation = $true
                 continue
             }
             { $_ -in @('--hidden', '-Hidden', '-hidden') } {
@@ -572,7 +724,90 @@ try {
     }
 
     $surfaceNames = @(Get-NormalizedSurfaceNames -Surface $parsed.Surface)
-    if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')) {
+    $automationAliasTypes = @{
+        'office-script-validate' = 'office-script'
+        'office-script-run-plan' = 'office-script'
+        'excel-js-api-validate' = 'excel-js-api'
+        'excel-js-api-run-plan' = 'excel-js-api'
+        'office-addin-validate' = 'office-addin'
+        'office-addin-sideload-plan' = 'office-addin'
+    }
+    if ($automationAliasTypes.ContainsKey($parsed.Command)) {
+        $payload = Invoke-ExcelAutomationCommand `
+            -Command 'automation-run' `
+            -WorkbookPath $parsed.WorkbookPath `
+            -TargetPath $parsed.TargetPath `
+            -AutomationType $automationAliasTypes[$parsed.Command] `
+            -SpecJson $parsed.SpecJson `
+            -SpecFile $parsed.SpecFile `
+            -Backend $parsed.Backend `
+            -Visible:$parsed.Visible
+        if ($parsed.Command -like '*validate') {
+            $payload | Add-Member -NotePropertyName operation -NotePropertyValue 'validate' -Force
+        }
+        else {
+            $payload | Add-Member -NotePropertyName operation -NotePropertyValue 'plan' -Force
+        }
+        $payload | ConvertTo-Json -Depth 100
+        exit 0
+    }
+
+    $hostLimitedAliasSurfaces = @{
+        'chart-sheet' = @('create', 'update', 'delete', 'move', 'rename', 'export')
+        'threaded-comment' = @('list', 'get', 'create', 'update', 'delete')
+        'privacy' = @('redact', 'export')
+        'pivot-chart' = @('create', 'update', 'delete', 'refresh', 'export')
+        'solver' = @('inspect', 'plan', 'execute', 'export')
+        'forecast-sheet' = @('inspect', 'plan', 'create', 'export')
+        'data-table' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
+        'calc-engine' = @('inspect', 'plan', 'recalculate', 'export')
+        'cube-function' = @('list', 'get', 'inspect', 'plan')
+        'lambda-name' = @('list', 'get', 'set', 'delete', 'inspect', 'plan')
+        'sparkline' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
+        'xml-map' = @('inspect', 'plan', 'export', 'import')
+        'custom-xml' = @('inspect', 'plan', 'export')
+        'ole-object' = @('inspect', 'plan', 'export')
+        'external-data-range' = @('list', 'get', 'create', 'update', 'delete', 'refresh', 'inspect', 'plan')
+        'workbook-view' = @('list', 'get', 'create', 'update', 'delete', 'inspect', 'plan')
+        'signature' = @('inspect', 'plan')
+        'encryption' = @('inspect', 'plan')
+        'sensitivity' = @('inspect', 'plan')
+        'office-script-live' = @('inspect', 'plan', 'execute')
+        'addin-runtime' = @('inspect', 'plan', 'execute', 'validate', 'sideload-plan')
+    }
+    foreach ($aliasSurface in $hostLimitedAliasSurfaces.Keys) {
+        if ($parsed.Command -like "$aliasSurface-*") {
+            $aliasOperation = $parsed.Command.Substring($aliasSurface.Length + 1)
+            if ($aliasOperation -in $hostLimitedAliasSurfaces[$aliasSurface]) {
+                [pscustomobject]@{
+                    command = $parsed.Command
+                    backend = 'excel'
+                    operation = $aliasOperation
+                    changed = $false
+                    readback = $null
+                    warnings = @()
+                    limitations = @("The $aliasSurface $aliasOperation command requires a live Excel host path and remains host-limited unless an opt-in live test proves readback.")
+                    secretHandling = 'No credentials serialized; workbook-local secrets remain in the workbook or host stores.'
+                    status = 'host-limited'
+                } | ConvertTo-Json -Depth 100
+                exit 0
+            }
+        }
+    }
+
+    $directAliasCommands = @{
+        'chart-sheet-list' = 'chart-list'
+        'chart-sheet-get' = 'chart-get'
+        'pivot-chart-list' = 'pivot-list'
+        'pivot-chart-get' = 'pivot-get'
+        'privacy-inspect' = 'workbook-document-inspect'
+    }
+    if ($directAliasCommands.ContainsKey($parsed.Command)) {
+        $parsed.Command = $directAliasCommands[$parsed.Command]
+    }
+
+    $packageDirectCommands = @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set', 'graph-workbook-inspect', 'graph-workbook-session-create', 'graph-workbook-session-close', 'graph-workbook-worksheet-list', 'graph-workbook-worksheet-get', 'graph-workbook-worksheet-create', 'graph-workbook-worksheet-update', 'graph-workbook-worksheet-delete', 'graph-workbook-range-get', 'graph-workbook-range-set', 'graph-workbook-range-clear', 'graph-workbook-range-format-get', 'graph-workbook-range-format-set', 'graph-workbook-range-format-font-get', 'graph-workbook-range-format-font-set', 'graph-workbook-range-format-fill-get', 'graph-workbook-range-format-fill-set', 'graph-workbook-range-format-protection-get', 'graph-workbook-range-format-protection-set', 'graph-workbook-range-format-border-list', 'graph-workbook-range-format-border-get', 'graph-workbook-range-format-border-set', 'graph-workbook-range-format-autofit-rows', 'graph-workbook-range-format-autofit-columns', 'graph-workbook-name-list', 'graph-workbook-name-get', 'graph-workbook-name-create', 'graph-workbook-name-update', 'graph-workbook-name-delete', 'graph-workbook-table-list', 'graph-workbook-table-get', 'graph-workbook-table-create', 'graph-workbook-table-update', 'graph-workbook-table-delete', 'graph-workbook-table-row-list', 'graph-workbook-table-row-add', 'graph-workbook-table-column-list', 'graph-workbook-table-column-add', 'graph-workbook-table-sort-apply', 'graph-workbook-table-sort-clear', 'graph-workbook-table-filter-apply', 'graph-workbook-table-filter-clear', 'graph-workbook-table-convert-to-range', 'graph-workbook-chart-list', 'graph-workbook-chart-get', 'graph-workbook-chart-create', 'graph-workbook-chart-update', 'graph-workbook-chart-delete', 'graph-workbook-chart-image', 'graph-workbook-chart-set-data', 'graph-workbook-function-call', 'graph-workbook-protection-get', 'graph-workbook-protection-protect', 'graph-workbook-protection-unprotect', 'fabric-semantic-model-list', 'fabric-semantic-model-get', 'fabric-semantic-model-create', 'fabric-semantic-model-update', 'fabric-semantic-model-delete', 'fabric-semantic-model-get-definition', 'fabric-semantic-model-update-definition', 'fabric-semantic-model-export-definition', 'fabric-semantic-model-refresh', 'fabric-semantic-model-execute-dax', 'fabric-semantic-model-operation-get', 'fabric-semantic-model-operation-result', 'model-table-list', 'model-table-get', 'model-table-set', 'model-table-delete', 'model-measure-list', 'model-measure-get', 'model-measure-set', 'model-measure-delete', 'model-relationship-list', 'model-relationship-get', 'model-relationship-set', 'model-relationship-delete', 'model-role-list', 'model-role-get', 'model-role-set', 'model-role-delete', 'model-partition-list', 'model-partition-get', 'model-partition-set', 'model-partition-delete', 'model-expression-list', 'model-expression-get', 'model-expression-set', 'model-expression-delete', 'dax-execute', 'dax-list', 'dax-get', 'dax-set', 'dax-delete', 'semantic-artifact-inspect', 'semantic-artifact-export', 'semantic-artifact-push')
+    if ($parsed.Command -in $packageDirectCommands) {
         if ($parsed.Command -in @('workbook-inspect', 'workbook-capabilities', 'workbook-create', 'workbook-diff', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set') -and [string]::IsNullOrWhiteSpace($parsed.WorkbookPath)) {
             Throw-CliError -Message "error: direct workbook commands require --workbook-path"
         }
@@ -592,12 +827,26 @@ try {
             -OtherWorkbookPath $parsed.OtherWorkbookPath `
             -ManifestPath $parsed.ManifestPath `
             -Surface $packageSurface `
+            -OutputDir $parsed.OutputDir `
             -Sheet $parsed.Sheet `
             -Table $parsed.Table `
             -Name $parsed.Name `
             -QueryName $parsed.QueryName `
             -Address $parsed.Address `
             -RangeRef $parsed.RangeRef `
+            -TargetPath $parsed.TargetPath `
+            -DriveId $parsed.DriveId `
+            -ItemId $parsed.ItemId `
+            -ItemPath $parsed.ItemPath `
+            -SessionId $parsed.SessionId `
+            -WorkspaceId $parsed.WorkspaceId `
+            -SemanticModelId $parsed.SemanticModelId `
+            -DatasetId $parsed.DatasetId `
+            -OperationId $parsed.OperationId `
+            -OperationLocation $parsed.OperationLocation `
+            -DefinitionDir $parsed.DefinitionDir `
+            -Format $parsed.Format `
+            -DaxQuery $parsed.DaxQuery `
             -ValueJson $parsed.ValueJson `
             -ValuesJson $parsed.ValuesJson `
             -SpecJson $parsed.SpecJson `
@@ -605,8 +854,12 @@ try {
             -RefersTo $parsed.RefersTo `
             -Hidden:$parsed.Hidden `
             -Apply:$parsed.Apply `
+            -DryRun:$parsed.DryRun `
+            -PersistChanges:$parsed.PersistChanges `
+            -HardDelete:$parsed.HardDelete `
             -Destructive:$parsed.Destructive `
-            -Deep:$parsed.Deep
+            -Deep:$parsed.Deep `
+            -Documentation:$parsed.Documentation
         $payload | ConvertTo-Json -Depth 100
         exit 0
     }
@@ -769,6 +1022,6 @@ try {
     }
 }
 catch {
-    Write-Error $_
+    [Console]::Error.WriteLine($_.Exception.Message)
     exit 1
 }

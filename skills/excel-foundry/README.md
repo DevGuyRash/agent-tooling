@@ -78,9 +78,29 @@ advanced verbs:
 - `hierarchy list|get|set|delete`
 - `kpi list|get|set|delete`
 - `perspective list|get|set|delete`
+- `solver inspect|plan|execute|export`
+- `forecast-sheet inspect|plan|create|export`
+- `data-table list|get|create|update|delete|inspect|plan`
+- `calc-engine inspect|plan|recalculate|export`, `cube-function list|get|inspect|plan`, and `lambda-name list|get|set|delete|inspect|plan`
+- `sparkline list|get|create|update|delete|inspect|plan`
+- `xml-map inspect|plan|export|import`, `custom-xml inspect|plan|export`, `ole-object inspect|plan|export`, and `external-data-range list|get|create|update|delete|refresh|inspect|plan`
+- `workbook-view list|get|create|update|delete|inspect|plan`, `signature inspect|plan`, `encryption inspect|plan`, and `sensitivity inspect|plan`
 - `automation inspect|generate|run` with `vba`, `office-script`, `excel-js-api`, `office-addin`, or `artifact-workbook`
+- `office-script-live inspect|plan|execute` and `addin-runtime inspect|plan|execute|validate|sideload-plan`
+- `graph-workbook inspect|session-create|session-close|worksheet-list|worksheet-get|worksheet-create|worksheet-update|worksheet-delete|range-get|range-set|range-clear|range-format-get|range-format-set|range-format-font-get|range-format-font-set|range-format-fill-get|range-format-fill-set|range-format-protection-get|range-format-protection-set|range-format-border-list|range-format-border-get|range-format-border-set|range-format-autofit-rows|range-format-autofit-columns|name-list|name-get|name-create|name-update|name-delete|table-list|table-get|table-create|table-update|table-delete|table-row-list|table-row-add|table-column-list|table-column-add|table-sort-apply|table-sort-clear|table-filter-apply|table-filter-clear|table-convert-to-range|chart-list|chart-get|chart-create|chart-update|chart-delete|chart-image|chart-set-data|function-call|protection-get|protection-protect|protection-unprotect`
+- `fabric-semantic-model list|get|create|update|delete|get-definition|update-definition|export-definition|refresh|execute-dax`
+- `model-table list|get|set|delete`, `dax execute|list|get|set|delete`, and `semantic-artifact inspect|export|push`
 
 Use `--spec-json` or `--spec-file` with the mutating advanced verbs.
+Use `--dry-run` or `--what-if` with cloud mutating verbs to emit the planned
+HTTP request without calling the service. Cloud commands read bearer tokens
+only from runtime environment variables: `EXCEL_FOUNDRY_GRAPH_TOKEN`,
+`EXCEL_FOUNDRY_FABRIC_TOKEN`, and `EXCEL_FOUNDRY_POWERBI_TOKEN`.
+
+Live host validation is opt-in. Use `EXCEL_FOUNDRY_LIVE_DESKTOP=1` for Excel
+COM tests, `EXCEL_FOUNDRY_LIVE_CLOUD=1` for Graph/Fabric/Power BI tests, and
+add `EXCEL_FOUNDRY_LIVE_MUTATION=1` only for temporary-copy or explicitly
+disposable mutation resources.
 
 Use manifest/workspace commands when repo artifacts and a committed
 `excel-sync.manifest.json` are the source of truth.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +32,9 @@ FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "e
 FIXTURE_WORKBOOK = FIXTURE_DIR / "workflow_fixture.xlsm"
 HAS_PWSH = shutil.which("pwsh") is not None
 HAS_CMD = shutil.which("cmd") is not None
+LIVE_DESKTOP = os.environ.get("EXCEL_FOUNDRY_LIVE_DESKTOP") == "1"
+LIVE_MUTATION = os.environ.get("EXCEL_FOUNDRY_LIVE_MUTATION") == "1"
+LIVE_DESKTOP_MUTATION = LIVE_DESKTOP and LIVE_MUTATION
 
 
 def run_pwsh(command: str, *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -63,6 +67,17 @@ def run_pwsh_file(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[
 
 def run_skill_cli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
     return run_pwsh_file(*args, timeout=timeout)
+
+
+def load_package_module(module_name: str = "excel_workbook_package_for_cloud_tests"):
+    package_spec = importlib.util.spec_from_file_location(
+        module_name,
+        ROOT / "scripts" / "excel_workbook_package.py",
+    )
+    package_module = importlib.util.module_from_spec(package_spec)
+    assert package_spec.loader is not None
+    package_spec.loader.exec_module(package_module)
+    return package_module
 
 
 def save_workbook_as_format(source_path: Path, target_path: Path, file_format: int) -> None:
@@ -556,6 +571,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             "tom-fabric-write",
             "preserve-only",
         }
+        allowed_closure_reasons = set(matrix["closureReasons"])
         allowed_lanes = {"package", "desktop", "desktop-preferred", "automation", "graph", "tom-fabric", "preserve-only"}
         seen_ids: set[str] = set()
 
@@ -576,6 +592,28 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn(surface["readLane"], allowed_lanes)
             self.assertIn(surface["writeLane"], allowed_lanes)
             self.assertIn(surface["route"], allowed_routes)
+            self.assertIn(surface["closureReason"], allowed_closure_reasons, surface_id)
+            if surface["supportLevel"] != "supported":
+                self.assertIn(
+                    surface["closureReason"],
+                    {
+                        "public-api-supported",
+                        "host-api-required",
+                        "preserve-only-opaque",
+                        "tenant-policy-required",
+                        "no-public-mutation-api",
+                    },
+                    surface_id,
+                )
+            self.assertGreater(surface.get("documentationAnchors", []), [], surface_id)
+            for anchor in surface["documentationAnchors"]:
+                self.assertIn("document", anchor, surface_id)
+                self.assertIn("route", anchor, surface_id)
+                self.assertGreater(anchor.get("proves", []), [], surface_id)
+                self.assertTrue(
+                    {"mutation", "readback", "inventory", "preservation", "limitation"} & set(anchor["proves"]),
+                    surface_id,
+                )
             self.assertGreater(surface["operations"], [], surface_id)
             self.assertTrue({"inspect", "plan"} & set(surface["operations"]), surface_id)
             self.assertGreater(surface["hostRequirements"], [], surface_id)
@@ -603,8 +641,45 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 self.assertNotIn(surface["writeLane"], {"graph", "tom-fabric", "preserve-only"}, surface_id)
             if surface["writeLane"] in {"graph", "tom-fabric"}:
                 self.assertIn(surface["supportLevel"], {"planned", "host-limited", "partial"}, surface_id)
+            if surface["supportLevel"] != "supported":
+                planned_fields = [field for field in compatibility_fields if surface[field] == "planned"]
+                self.assertEqual(planned_fields, [], f"{surface_id} has unfinished backend fields")
 
         self.assertEqual(set(ledger), seen_ids)
+
+    def test_capability_matrix_declares_explicit_advanced_excel_surfaces(self) -> None:
+        matrix = json.loads(CAPABILITY_MATRIX.read_text(encoding="utf-8"))
+        surface_ids = {surface["id"] for surface in matrix["surfaces"]}
+        advanced_surfaces = {
+            "cube-functions",
+            "sparklines",
+            "calc-engine",
+            "lambda-names",
+            "xml-maps",
+            "custom-xml",
+            "ole-objects",
+            "external-data-ranges",
+            "workbook-views",
+            "signatures",
+            "encryption",
+            "sensitivity-irm",
+            "solver",
+            "forecast-sheets",
+            "data-tables",
+            "office-script-live",
+            "addin-runtime",
+        }
+        self.assertLessEqual(advanced_surfaces, surface_ids)
+
+        surfaces = {surface["id"]: surface for surface in matrix["surfaces"]}
+        for surface_id in advanced_surfaces:
+            with self.subTest(surface=surface_id):
+                surface = surfaces[surface_id]
+                self.assertGreater(surface["operations"], [])
+                self.assertIn(surface["supportLevel"], {"partial", "host-limited", "preserve-only"})
+                self.assertNotEqual(surface["supportLevel"], "supported")
+                self.assertGreater(surface["hostRequirements"], [])
+                self.assertGreater(surface["evidenceSelectors"], [])
 
     def test_development_governance_rules_are_enforced_by_tests_and_matrix(self) -> None:
         matrix = json.loads(CAPABILITY_MATRIX.read_text(encoding="utf-8"))
@@ -1492,6 +1567,28 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(ledger["surfaces"]["legacy-bi"]["route"], "preserve-only")
             self.assertEqual(ledger["surfaces"]["sheets"]["risk"], "destructive-delete-guarded")
 
+            documentation_proc = run_pwsh_file(
+                "workbook",
+                "capabilities",
+                "--workbook-path",
+                str(workbook),
+                "--deep",
+                "--documentation",
+                timeout=60,
+            )
+            self.assertEqual(documentation_proc.returncode, 0, documentation_proc.stdout + documentation_proc.stderr)
+            documentation_payload = json.loads(documentation_proc.stdout)
+            documentation_ledger = documentation_payload["capabilityLedger"]
+            self.assertIn("closureReasons", documentation_payload)
+            self.assertEqual(
+                documentation_ledger["surfaces"]["tables"]["documentationAnchors"][0]["route"],
+                "package-write",
+            )
+            self.assertEqual(
+                documentation_ledger["surfaces"]["legacy-bi"]["closureReason"],
+                "preserve-only-opaque",
+            )
+
             inspect_proc = run_pwsh_file(
                 "workbook",
                 "inspect",
@@ -2350,6 +2447,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_powershell_cli_accepts_visual_object_resource_actions(self) -> None:
         for resource, action in [
+            ("chart-sheet", "list"),
+            ("chart-sheet", "export"),
             ("connection", "update"),
             ("connection", "delete"),
             ("shape", "create"),
@@ -2358,6 +2457,11 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ("picture", "delete"),
             ("control", "list"),
             ("control", "get"),
+            ("threaded-comment", "list"),
+            ("privacy", "inspect"),
+            ("privacy", "redact"),
+            ("pivot-chart", "list"),
+            ("pivot-chart", "export"),
         ]:
             with self.subTest(resource=resource, action=action):
                 proc = run_pwsh_file(resource, action, "--workbook-path", str(FIXTURE_WORKBOOK), "--help")
@@ -2375,11 +2479,75 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             ("scenario", "set"),
             ("scenario", "delete"),
             ("goal-seek", "execute"),
+            ("solver", "inspect"),
+            ("solver", "execute"),
+            ("forecast-sheet", "plan"),
+            ("forecast-sheet", "create"),
+            ("data-table", "list"),
+            ("data-table", "create"),
             ("formula-audit", "inspect"),
             ("formula-audit", "export"),
+            ("calc-engine", "inspect"),
+            ("calc-engine", "recalculate"),
+            ("cube-function", "inspect"),
+            ("lambda-name", "set"),
+            ("sparkline", "create"),
+            ("xml-map", "export"),
+            ("custom-xml", "inspect"),
+            ("ole-object", "export"),
+            ("external-data-range", "refresh"),
+            ("workbook-view", "update"),
+            ("signature", "inspect"),
+            ("encryption", "plan"),
+            ("sensitivity", "inspect"),
         ]:
             with self.subTest(resource=resource, action=action):
                 proc = run_pwsh_file(resource, action, "--workbook-path", str(FIXTURE_WORKBOOK), "--help")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                combined = proc.stdout + proc.stderr
+                self.assertIn("Usage:", combined)
+                self.assertNotIn("unknown action", combined.lower())
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_powershell_cli_accepts_cloud_resource_actions(self) -> None:
+        for resource, action in [
+            ("graph-workbook", "worksheet-get"),
+            ("graph-workbook", "worksheet-update"),
+            ("graph-workbook", "range-clear"),
+            ("graph-workbook", "range-format-get"),
+            ("graph-workbook", "range-format-set"),
+            ("graph-workbook", "range-format-font-set"),
+            ("graph-workbook", "range-format-fill-set"),
+            ("graph-workbook", "range-format-autofit-columns"),
+            ("graph-workbook", "name-list"),
+            ("graph-workbook", "name-get"),
+            ("graph-workbook", "name-create"),
+            ("graph-workbook", "name-update"),
+            ("graph-workbook", "name-delete"),
+            ("graph-workbook", "table-get"),
+            ("graph-workbook", "table-row-add"),
+            ("graph-workbook", "table-sort-apply"),
+            ("graph-workbook", "table-filter-clear"),
+            ("graph-workbook", "chart-get"),
+            ("graph-workbook", "chart-update"),
+            ("graph-workbook", "chart-delete"),
+            ("graph-workbook", "chart-image"),
+            ("graph-workbook", "chart-set-data"),
+            ("graph-workbook", "function-call"),
+            ("graph-workbook", "protection-get"),
+            ("graph-workbook", "protection-protect"),
+            ("graph-workbook", "protection-unprotect"),
+            ("fabric-semantic-model", "get-definition"),
+            ("fabric-semantic-model", "operation-get"),
+            ("semantic-artifact", "inspect"),
+            ("model-measure", "set"),
+            ("office-script-live", "plan"),
+            ("office-script-live", "execute"),
+            ("addin-runtime", "validate"),
+            ("addin-runtime", "sideload-plan"),
+        ]:
+            with self.subTest(resource=resource, action=action):
+                proc = run_pwsh_file(resource, action, "--help")
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 combined = proc.stdout + proc.stderr
                 self.assertIn("Usage:", combined)
@@ -2873,6 +3041,586 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(run_payload["automationType"], "office-script")
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_office_script_generation_emits_workbook_surface_api_calls(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-office-script-surfaces-") as tmpdir:
+            target = Path(tmpdir) / "workbook-surfaces.ts"
+            spec = json.dumps(
+                {
+                    "name": "Workbook Surface Script",
+                    "operations": [
+                        "apply-conditional-format",
+                        "apply-data-validation",
+                        "add-comment",
+                        "table-upsert",
+                        "worksheet-upsert",
+                        "format-range",
+                        "protect-worksheet",
+                    ],
+                }
+            )
+            generate_proc = run_skill_cli(
+                "automation",
+                "generate",
+                "--automation-type",
+                "office-script",
+                "--target-path",
+                str(target),
+                "--spec-json",
+                spec,
+                timeout=60,
+            )
+            self.assertEqual(generate_proc.returncode, 0, generate_proc.stdout + generate_proc.stderr)
+            payload = json.loads(generate_proc.stdout)
+            self.assertEqual(payload["automationType"], "office-script")
+            self.assertEqual(payload["operations"], json.loads(spec)["operations"])
+            script = target.read_text(encoding="utf-8")
+            for expected in [
+                "addConditionalFormat",
+                "getDataValidation().setRule",
+                "workbook.addComment",
+                "sheet.addTable",
+                "workbook.addWorksheet",
+                "format.autofitColumns",
+                "getProtection().protect",
+            ]:
+                self.assertIn(expected, script)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_automation_public_aliases_return_host_plans(self) -> None:
+        for resource, action, automation_type in [
+            ("office-script", "validate", "office-script"),
+            ("office-script", "run-plan", "office-script"),
+            ("excel-js-api", "validate", "excel-js-api"),
+            ("excel-js-api", "run-plan", "excel-js-api"),
+            ("office-addin", "validate", "office-addin"),
+            ("office-addin", "sideload-plan", "office-addin"),
+        ]:
+            with self.subTest(resource=resource, action=action):
+                proc = run_skill_cli(resource, action, timeout=60)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                payload = json.loads(proc.stdout)
+                self.assertEqual(payload["status"], "runner-plan")
+                self.assertEqual(payload["automationType"], automation_type)
+                self.assertIn("operation", payload)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_host_limited_public_aliases_return_standard_envelope(self) -> None:
+        for resource, action in [
+            ("chart-sheet", "export"),
+            ("threaded-comment", "create"),
+            ("privacy", "redact"),
+            ("pivot-chart", "export"),
+        ]:
+            with self.subTest(resource=resource, action=action):
+                proc = run_skill_cli(resource, action, "--workbook-path", str(FIXTURE_WORKBOOK), timeout=60)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                payload = json.loads(proc.stdout)
+                self.assertEqual(payload["status"], "host-limited")
+                for field in ["backend", "operation", "changed", "readback", "warnings", "limitations", "secretHandling"]:
+                    self.assertIn(field, payload)
+
+    def test_cloud_graph_workbook_commands_require_runtime_token_and_build_dry_run_requests(self) -> None:
+        package_module = load_package_module("excel_workbook_package_for_cloud_graph")
+        missing = package_module.run_graph_workbook_command(
+            argparse.Namespace(
+                command="graph-workbook-worksheet-list",
+                item_id="workbook_example",
+                drive_id=None,
+                item_path=None,
+                session_id=None,
+                spec_json=None,
+                spec_file=None,
+                dry_run=False,
+            )
+        )
+        self.assertEqual(missing["status"], "host-limited")
+        self.assertFalse(missing["changed"])
+        self.assertTrue(any("EXCEL_FOUNDRY_GRAPH_TOKEN" in item for item in missing["warnings"]))
+
+        old_token = os.environ.get("EXCEL_FOUNDRY_GRAPH_TOKEN")
+        os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = "graph_redaction_probe"
+        try:
+            dry_run = package_module.run_graph_workbook_command(
+                argparse.Namespace(
+                    command="graph-workbook-range-set",
+                    item_id="workbook_example",
+                    drive_id=None,
+                    item_path=None,
+                    session_id="session_example",
+                    sheet=["Sheet1"],
+                    address=None,
+                    range_ref="A1:B1",
+                    value_json=None,
+                    values_json=json.dumps([[1, 2]]),
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                    persist_changes=False,
+                    deep=False,
+                )
+            )
+        finally:
+            if old_token is None:
+                os.environ.pop("EXCEL_FOUNDRY_GRAPH_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = old_token
+        self.assertEqual(dry_run["status"], "dry-run")
+        self.assertEqual(dry_run["request"]["method"], "PATCH")
+        self.assertIn("/workbook/worksheets/", dry_run["request"]["url"])
+        self.assertIn("range(address=", dry_run["request"]["url"])
+        self.assertEqual(dry_run["request"]["headers"]["Workbook-Session-Id"], "session_example")
+        self.assertEqual(dry_run["request"]["body"]["values"], [[1, 2]])
+        self.assertNotIn("graph_redaction_probe", json.dumps(dry_run))
+
+        old_token = os.environ.get("EXCEL_FOUNDRY_GRAPH_TOKEN")
+        os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = "graph_redaction_probe"
+        try:
+            graph_cases = [
+                (
+                    "graph-workbook-worksheet-update",
+                    {"sheet": ["Sheet1"], "spec_json": json.dumps({"name": "Renamed"})},
+                    "PATCH",
+                    "/worksheets/",
+                ),
+                (
+                    "graph-workbook-range-clear",
+                    {"sheet": ["Sheet1"], "range_ref": "A1:B1", "spec_json": json.dumps({"applyTo": "Contents"})},
+                    "POST",
+                    "/clear",
+                ),
+                (
+                    "graph-workbook-range-format-set",
+                    {"sheet": ["Sheet1"], "range_ref": "A1:B1", "spec_json": json.dumps({"columnWidth": 18})},
+                    "PATCH",
+                    "/format",
+                ),
+                (
+                    "graph-workbook-range-format-font-set",
+                    {"sheet": ["Sheet1"], "range_ref": "A1:B1", "spec_json": json.dumps({"bold": True})},
+                    "PATCH",
+                    "/format/font",
+                ),
+                (
+                    "graph-workbook-range-format-fill-set",
+                    {"sheet": ["Sheet1"], "range_ref": "A1:B1", "spec_json": json.dumps({"color": "#D9EAF7"})},
+                    "PATCH",
+                    "/format/fill",
+                ),
+                (
+                    "graph-workbook-range-format-autofit-columns",
+                    {"sheet": ["Sheet1"], "range_ref": "A1:B1"},
+                    "POST",
+                    "/format/autofitColumns",
+                ),
+                (
+                    "graph-workbook-name-create",
+                    {"name": ["NamedInput"], "range_ref": "Sheet1!A1"},
+                    "POST",
+                    "/names/add",
+                ),
+                (
+                    "graph-workbook-name-update",
+                    {"name": ["NamedInput"], "range_ref": "Sheet1!B1"},
+                    "PATCH",
+                    "/names/",
+                ),
+                (
+                    "graph-workbook-name-delete",
+                    {"name": ["NamedInput"]},
+                    "POST",
+                    "/delete",
+                ),
+                (
+                    "graph-workbook-table-get",
+                    {"table": ["Table1"]},
+                    "GET",
+                    "/tables/",
+                ),
+                (
+                    "graph-workbook-table-row-add",
+                    {"table": ["Table1"], "spec_json": json.dumps({"values": [["Alpha", 1]]})},
+                    "POST",
+                    "/rows/add",
+                ),
+                (
+                    "graph-workbook-table-column-add",
+                    {"table": ["Table1"], "spec_json": json.dumps({"values": [["NewColumn"]]})},
+                    "POST",
+                    "/columns/add",
+                ),
+                (
+                    "graph-workbook-table-sort-apply",
+                    {"table": ["Table1"], "spec_json": json.dumps({"fields": [{"key": 1, "ascending": True}]})},
+                    "POST",
+                    "/sort/apply",
+                ),
+                (
+                    "graph-workbook-table-filter-clear",
+                    {"table": ["Table1"], "name": ["Value"]},
+                    "POST",
+                    "/filter/clear",
+                ),
+                (
+                    "graph-workbook-table-convert-to-range",
+                    {"table": ["Table1"]},
+                    "POST",
+                    "/convertToRange",
+                ),
+                (
+                    "graph-workbook-chart-update",
+                    {"sheet": ["Sheet1"], "name": ["Chart 1"], "spec_json": json.dumps({"name": "Chart 2"})},
+                    "PATCH",
+                    "/charts/",
+                ),
+                (
+                    "graph-workbook-chart-image",
+                    {"sheet": ["Sheet1"], "name": ["Chart 1"], "spec_json": json.dumps({"width": 640, "height": 480})},
+                    "POST",
+                    "/image",
+                ),
+                (
+                    "graph-workbook-chart-set-data",
+                    {"sheet": ["Sheet1"], "name": ["Chart 1"], "spec_json": json.dumps({"sourceData": "A1:B2", "seriesBy": "Auto"})},
+                    "POST",
+                    "/setData",
+                ),
+                (
+                    "graph-workbook-function-call",
+                    {"name": ["sum"], "spec_json": json.dumps({"values": [[1, 2, 3]]})},
+                    "POST",
+                    "/functions/sum",
+                ),
+                (
+                    "graph-workbook-chart-delete",
+                    {"sheet": ["Sheet1"], "name": ["Chart 1"]},
+                    "POST",
+                    "/delete",
+                ),
+                (
+                    "graph-workbook-protection-protect",
+                    {"sheet": ["Sheet1"], "spec_json": json.dumps({"options": {"allowFormatCells": True}})},
+                    "POST",
+                    "/protection/protect",
+                ),
+                (
+                    "graph-workbook-protection-unprotect",
+                    {"sheet": ["Sheet1"]},
+                    "POST",
+                    "/protection/unprotect",
+                ),
+            ]
+            for command, overrides, method, url_fragment in graph_cases:
+                with self.subTest(command=command):
+                    base_args = {
+                        "command": command,
+                        "item_id": "workbook_example",
+                        "drive_id": None,
+                        "item_path": None,
+                        "session_id": "session_example",
+                        "sheet": [],
+                        "table": [],
+                        "name": [],
+                        "address": None,
+                        "range_ref": None,
+                        "value_json": None,
+                        "values_json": None,
+                        "spec_json": None,
+                        "spec_file": None,
+                        "dry_run": True,
+                        "persist_changes": False,
+                        "deep": False,
+                    }
+                    base_args.update(overrides)
+                    payload = package_module.run_graph_workbook_command(argparse.Namespace(**base_args))
+                    self.assertEqual(payload["status"], "dry-run")
+                    self.assertEqual(payload["request"]["method"], method)
+                    self.assertIn(url_fragment, payload["request"]["url"])
+                    self.assertEqual(payload["request"]["headers"]["Workbook-Session-Id"], "session_example")
+                    self.assertNotIn("graph_redaction_probe", json.dumps(payload))
+        finally:
+            if old_token is None:
+                os.environ.pop("EXCEL_FOUNDRY_GRAPH_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = old_token
+
+    def test_cloud_powerbi_dax_and_fabric_commands_build_dry_run_requests(self) -> None:
+        package_module = load_package_module("excel_workbook_package_for_cloud_powerbi")
+        old_powerbi = os.environ.get("EXCEL_FOUNDRY_POWERBI_TOKEN")
+        old_fabric = os.environ.get("EXCEL_FOUNDRY_FABRIC_TOKEN")
+        os.environ["EXCEL_FOUNDRY_POWERBI_TOKEN"] = "powerbi_redaction_probe"
+        os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = "fabric_redaction_probe"
+        try:
+            dax = package_module.run_dax_command(
+                argparse.Namespace(
+                    command="dax-execute",
+                    workspace_id="workspace_example",
+                    dataset_id="dataset_example",
+                    semantic_model_id=None,
+                    dax_query='EVALUATE ROW("A", 1)',
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                )
+            )
+            fabric = package_module.run_fabric_semantic_command(
+                argparse.Namespace(
+                    command="fabric-semantic-model-get-definition",
+                    workspace_id="workspace_example",
+                    semantic_model_id="model_example",
+                    dataset_id=None,
+                    operation_id=None,
+                    operation_location=None,
+                    definition_dir=None,
+                    output_dir=None,
+                    format="TMDL",
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                    deep=False,
+                )
+            )
+        finally:
+            if old_powerbi is None:
+                os.environ.pop("EXCEL_FOUNDRY_POWERBI_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_POWERBI_TOKEN"] = old_powerbi
+            if old_fabric is None:
+                os.environ.pop("EXCEL_FOUNDRY_FABRIC_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = old_fabric
+
+        self.assertEqual(dax["status"], "dry-run")
+        self.assertIn("/executeQueries", dax["request"]["url"])
+        self.assertEqual(dax["request"]["body"]["queries"][0]["query"], 'EVALUATE ROW("A", 1)')
+        self.assertNotIn("powerbi_redaction_probe", json.dumps(dax))
+        self.assertEqual(fabric["status"], "dry-run")
+        self.assertIn("/semanticModels/model_example/getDefinition", fabric["request"]["url"])
+        self.assertEqual(fabric["request"]["body"]["format"], "TMDL")
+        self.assertNotIn("fabric_redaction_probe", json.dumps(fabric))
+
+        old_fabric = os.environ.get("EXCEL_FOUNDRY_FABRIC_TOKEN")
+        os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = "fabric_redaction_probe"
+        try:
+            operation_poll = package_module.run_fabric_semantic_command(
+                argparse.Namespace(
+                    command="fabric-semantic-model-operation-get",
+                    workspace_id=None,
+                    semantic_model_id=None,
+                    dataset_id=None,
+                    operation_id="operation_example",
+                    operation_location=None,
+                    definition_dir=None,
+                    output_dir=None,
+                    format=None,
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                    deep=False,
+                )
+            )
+            operation_result = package_module.run_fabric_semantic_command(
+                argparse.Namespace(
+                    command="fabric-semantic-model-operation-result",
+                    workspace_id=None,
+                    semantic_model_id=None,
+                    dataset_id=None,
+                    operation_id=None,
+                    operation_location="https://api.fabric.microsoft.com/v1/operations/operation_example",
+                    definition_dir=None,
+                    output_dir=None,
+                    format=None,
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                    deep=False,
+                )
+            )
+        finally:
+            if old_fabric is None:
+                os.environ.pop("EXCEL_FOUNDRY_FABRIC_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = old_fabric
+        self.assertEqual(operation_poll["request"]["method"], "GET")
+        self.assertTrue(operation_poll["request"]["url"].endswith("/operations/operation_example"))
+        self.assertTrue(operation_result["request"]["url"].endswith("/operations/operation_example/result"))
+        self.assertNotIn("fabric_redaction_probe", json.dumps(operation_poll) + json.dumps(operation_result))
+
+        old_fabric = os.environ.get("EXCEL_FOUNDRY_FABRIC_TOKEN")
+        os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = "fabric_redaction_probe"
+        original_http = package_module._cloud_http_json
+        try:
+            package_module._cloud_http_json = lambda *args, **kwargs: {
+                "statusCode": 202,
+                "headers": {"Location": "https://api.fabric.microsoft.com/operations/example", "Retry-After": "30"},
+                "body": None,
+            }
+            accepted = package_module.run_fabric_semantic_command(
+                argparse.Namespace(
+                    command="fabric-semantic-model-get-definition",
+                    workspace_id="workspace_example",
+                    semantic_model_id="model_example",
+                    dataset_id=None,
+                    operation_id=None,
+                    operation_location=None,
+                    definition_dir=None,
+                    output_dir=None,
+                    format="TMDL",
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=False,
+                    deep=False,
+                )
+            )
+        finally:
+            package_module._cloud_http_json = original_http
+            if old_fabric is None:
+                os.environ.pop("EXCEL_FOUNDRY_FABRIC_TOKEN", None)
+            else:
+                os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = old_fabric
+        self.assertEqual(accepted["status"], "accepted")
+        self.assertEqual(accepted["operationLocation"], "https://api.fabric.microsoft.com/operations/example")
+        self.assertEqual(accepted["retryAfter"], "30")
+
+    def test_cloud_semantic_artifact_commands_inventory_and_plan_definition_parts(self) -> None:
+        package_module = load_package_module("excel_workbook_package_for_cloud_artifacts")
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-semantic-artifact-") as tmpdir:
+            definition_root = Path(tmpdir) / "definition"
+            table_dir = definition_root / "tables"
+            table_dir.mkdir(parents=True)
+            (definition_root / "model.tmdl").write_text("model Example\n", encoding="utf-8")
+            (table_dir / "Sales.tmdl").write_text("table Sales\n", encoding="utf-8")
+
+            inspect_payload = package_module.run_semantic_artifact_command(
+                argparse.Namespace(
+                    command="semantic-artifact-inspect",
+                    definition_dir=str(definition_root),
+                    target_path=None,
+                )
+            )
+            self.assertEqual(inspect_payload["status"], "completed")
+            self.assertEqual(inspect_payload["readback"]["partCount"], 2)
+            self.assertTrue(any(part["path"] == "tables/Sales.tmdl" for part in inspect_payload["parts"]))
+
+            old_fabric = os.environ.get("EXCEL_FOUNDRY_FABRIC_TOKEN")
+            os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = "fabric_redaction_probe"
+            try:
+                model_table = package_module.run_model_table_command(
+                    argparse.Namespace(
+                        command="model-table-set",
+                        workspace_id="workspace_example",
+                        semantic_model_id="model_example",
+                        dataset_id=None,
+                        definition_dir=str(definition_root),
+                        output_dir=None,
+                        format="TMDL",
+                        spec_json=None,
+                        spec_file=None,
+                        dry_run=True,
+                        deep=False,
+                    )
+                )
+            finally:
+                if old_fabric is None:
+                    os.environ.pop("EXCEL_FOUNDRY_FABRIC_TOKEN", None)
+                else:
+                    os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = old_fabric
+            self.assertEqual(model_table["status"], "dry-run")
+            self.assertIn("/updateDefinition", model_table["request"]["url"])
+            part_summaries = model_table["request"]["body"]["definition"]["parts"]
+            self.assertTrue(any(part["path"] == "tables/Sales.tmdl" and "bytes" in part for part in part_summaries))
+            self.assertNotIn("fabric_redaction_probe", json.dumps(model_table))
+
+            local_measure = package_module.run_tmdl_artifact_command(
+                argparse.Namespace(
+                    command="model-measure-set",
+                    definition_dir=str(definition_root),
+                    target_path=None,
+                    name=["Gross Margin"],
+                    spec_json=json.dumps({"table": "Sales", "expression": "SUM(Sales[Amount])"}),
+                    spec_file=None,
+                ),
+                "measure",
+            )
+            local_relationship = package_module.run_tmdl_artifact_command(
+                argparse.Namespace(
+                    command="model-relationship-set",
+                    definition_dir=str(definition_root),
+                    target_path=None,
+                    name=["Sales to Region"],
+                    spec_json=json.dumps(
+                        {
+                            "fromTable": "Sales",
+                            "fromColumn": "RegionId",
+                            "toTable": "Region",
+                            "toColumn": "RegionId",
+                        }
+                    ),
+                    spec_file=None,
+                ),
+                "relationship",
+            )
+            self.assertTrue(local_measure["changed"])
+            self.assertTrue((definition_root / "tables" / "Sales" / "measures" / "Gross-Margin.tmdl").exists())
+            self.assertIn("relationship Sales-to-Region", (definition_root / "relationships" / "Sales-to-Region.tmdl").read_text(encoding="utf-8"))
+            self.assertEqual(local_relationship["readback"]["path"], "relationships/Sales-to-Region.tmdl")
+
+            old_fabric = os.environ.get("EXCEL_FOUNDRY_FABRIC_TOKEN")
+            os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = "fabric_redaction_probe"
+            original_http = package_module._cloud_http_json
+            try:
+                package_module._cloud_http_json = lambda *args, **kwargs: {
+                    "statusCode": 200,
+                    "headers": {"x-ms-operation-id": "operation-id"},
+                    "body": {
+                        "definition": {
+                            "parts": [
+                                {
+                                    "path": "model.tmdl",
+                                    "payloadType": "InlineBase64",
+                                    "payload": base64.b64encode(b"model Exported\n").decode("ascii"),
+                                }
+                            ]
+                        }
+                    },
+                }
+                export_dir = Path(tmpdir) / "export"
+                exported = package_module.run_fabric_semantic_command(
+                    argparse.Namespace(
+                        command="fabric-semantic-model-export-definition",
+                        workspace_id="workspace_example",
+                        semantic_model_id="model_example",
+                        dataset_id=None,
+                        definition_dir=None,
+                        output_dir=str(export_dir),
+                        format="TMDL",
+                        spec_json=None,
+                        spec_file=None,
+                        dry_run=False,
+                        deep=False,
+                    )
+                )
+            finally:
+                package_module._cloud_http_json = original_http
+                if old_fabric is None:
+                    os.environ.pop("EXCEL_FOUNDRY_FABRIC_TOKEN", None)
+                else:
+                    os.environ["EXCEL_FOUNDRY_FABRIC_TOKEN"] = old_fabric
+            self.assertEqual(exported["status"], "completed")
+            self.assertEqual((export_dir / "model.tmdl").read_text(encoding="utf-8"), "model Exported\n")
+
+            with self.assertRaises(ValueError):
+                package_module._write_definition_parts(
+                    str(Path(tmpdir) / "blocked-export"),
+                    [
+                        {
+                            "path": "../escape.tmdl",
+                            "payloadType": "InlineBase64",
+                            "payload": base64.b64encode(b"escape").decode("ascii"),
+                        }
+                    ],
+                )
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_direct_model_commands_support_guarded_mutation_plans(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-model-plan-") as tmpdir:
             workbook = Path(tmpdir) / "model.xlsx"
@@ -2948,7 +3696,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(proc.stdout.strip(), "", proc.stdout + proc.stderr)
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_inspect_returns_counts(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -2981,7 +3729,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("pq", payload["counts"])
         self.assertIn("connections", payload["counts"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_query_returns_expected_shape(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3014,7 +3762,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("accessible", payload["project"])
         self.assertIn("modelTables", payload["model"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_roundtrip_on_temp_workspace_copy(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3069,7 +3817,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 self.assertIsInstance(payload, dict)
                 self.assertTrue(payload)
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_vba_push_then_pull_roundtrips_module_change(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3109,7 +3857,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             self.assertIn(marker, module_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_vba_push_then_pull_roundtrips_self_contained_module(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-self-contained-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3170,7 +3918,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("PULL VBA modLiveProbe", pull_proc.stdout)
             self.assertIn('LiveProbeValue = "initial"', module_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_cf_push_then_pull_roundtrips_new_rule(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3233,7 +3981,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 )
             )
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_powerquery_push_then_pull_roundtrips_formula_change(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3273,7 +4021,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             self.assertIn(marker, query_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_table_commands_roundtrip(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3316,7 +4064,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_query_and_connection_commands_roundtrip(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3348,7 +4096,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_query_set_accepts_minimal_spec(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-minimal-query-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3389,7 +4137,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(get_payload["query"]["name"], "LIVE_MINIMAL_QUERY")
             self.assertIn("Amount", get_payload["query"]["formula"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_connection_update_and_delete_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-connection-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3445,7 +4193,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(list_proc.returncode, 0, list_proc.stdout + list_proc.stderr)
             self.assertEqual(json.loads(list_proc.stdout)["connections"], [])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_chart_and_pivot_list_commands_return_arrays(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -3458,7 +4206,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
         self.assertIsInstance(json.loads(pivot_proc.stdout)["pivots"], list)
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_pivot_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-pivot-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3546,7 +4294,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_pivot_proc.returncode, 0, delete_pivot_proc.stdout + delete_pivot_proc.stderr)
             self.assertTrue(json.loads(delete_pivot_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_slicer_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-slicer-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3641,7 +4389,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_slicer_proc.returncode, 0, delete_slicer_proc.stdout + delete_slicer_proc.stderr)
             self.assertTrue(json.loads(delete_slicer_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_timeline_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-timeline-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3744,7 +4492,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_timeline_proc.returncode, 0, delete_timeline_proc.stdout + delete_timeline_proc.stderr)
             self.assertTrue(json.loads(delete_timeline_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_workbook_safe_export_writes_pdf_from_temp_copy(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-safe-export-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3798,7 +4546,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(target.exists())
             self.assertEqual(target.read_bytes()[:4], b"%PDF")
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_what_if_scenario_and_goal_seek_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-what-if-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3868,7 +4616,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_formula_audit_inspect_and_export_reports_dependencies(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-formula-audit-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3933,7 +4681,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(Path(export_payload["targetPath"]), target.resolve())
             self.assertIn("formulas", json.loads(target.read_text(encoding="utf-8")))
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_links_and_document_inspect_commands_return_host_limited_evidence(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-privacy-links-") as tmpdir:
             tmp = Path(tmpdir)
@@ -3978,7 +4726,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("comment", manual_messages.lower())
             self.assertIn("hyperlink", manual_messages.lower())
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_direct_shape_picture_and_control_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-visuals-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4072,7 +4820,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_shape_proc.returncode, 0, delete_shape_proc.stdout + delete_shape_proc.stderr)
             self.assertTrue(json.loads(delete_shape_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_generic_pull_supports_xls_and_xlsb(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")
@@ -4112,7 +4860,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 self.assertTrue((output_root / "normalized.json").exists())
                 self.assertFalse((output_root / "ooxml-parts").exists())
 
-    @unittest.skipUnless(os.environ.get("EXCEL_SYNC_LIVE") == "1", "set EXCEL_SYNC_LIVE=1 to run live Excel COM tests")
+    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
     def test_live_compare_reports_package_unavailable_for_xls_and_xlsb(self) -> None:
         if not FIXTURE_WORKBOOK.exists():
             self.skipTest("fixture workbook is unavailable")

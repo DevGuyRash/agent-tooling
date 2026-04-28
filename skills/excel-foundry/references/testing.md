@@ -9,6 +9,11 @@ selectors in that matrix before being treated as checked off, and every matrix
 surface should have either direct evidence, a route/plan test, preserve-only
 proof, or an explicit host/API limitation.
 
+Governance tests also require every surface to carry `documentationAnchors`
+and `closureReason`. These fields are the proof trail for closed but not fully
+package-supported surfaces, so tests should reject missing anchors, stale
+planned backend lanes, or evidence selectors that do not name real tests.
+
 The matrix `package`, `desktop`, `graph`, `officeScript`, and `tomFabric`
 fields are the current compatibility state for each backend/environment. Read
 those fields even when a surface is `host-limited`; `host-limited` means a
@@ -31,6 +36,13 @@ Use the fixture for:
   Excel-assigned priority or rule ordering
 
 Use external workbooks only in local audit runs, not in committed tests.
+
+Live desktop tests are opt-in. Set `EXCEL_FOUNDRY_LIVE_DESKTOP=1` to allow
+Excel COM host tests, and set `EXCEL_FOUNDRY_LIVE_MUTATION=1` as well for
+tests that create, update, refresh, export, break links, or otherwise mutate
+temporary workbook copies. Live cloud tests must be gated separately with
+`EXCEL_FOUNDRY_LIVE_CLOUD=1` plus runtime-only resource identifiers and bearer
+tokens.
 
 If you are adding or changing fixtures, tests, or local corpus behavior for
 this skill, first read `<skills-file-root>/DEVELOPMENT.md`.

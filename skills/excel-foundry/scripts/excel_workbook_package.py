@@ -11,6 +11,10 @@ import re
 import struct
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
@@ -1544,6 +1548,8 @@ CAPABILITY_LEDGER: dict[str, dict[str, Any]] = {
         "hostRequirements": surface.get("hostRequirements", []),
         "secretPolicy": surface.get("secretPolicy"),
         "destructiveRisk": surface.get("destructiveRisk"),
+        "closureReason": surface.get("closureReason"),
+        "documentationAnchors": surface.get("documentationAnchors", []),
         "evidenceSelectors": surface.get("evidenceSelectors", []),
     }
     for surface in CAPABILITY_MATRIX["surfaces"]
@@ -1648,6 +1654,7 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
             "hostRequirements": spec.get("hostRequirements", []),
             "secretPolicy": spec.get("secretPolicy"),
             "destructiveRisk": spec.get("destructiveRisk"),
+            "closureReason": spec.get("closureReason"),
             "requires": {
                 "package": [],
                 "desktop-preferred": [],
@@ -1912,6 +1919,1039 @@ def build_inspection_payload(query_payload: dict[str, Any]) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_json_spec(spec_json: str | None = None, spec_file: str | None = None) -> dict[str, Any]:
+    if spec_json:
+        payload = json.loads(spec_json)
+    elif spec_file:
+        payload = json.loads(Path(spec_file).read_text(encoding="utf-8"))
+    else:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("spec-json/spec-file must contain a JSON object")
+    return payload
+
+
+def _redact_secret(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(token in lowered for token in ("authorization", "token", "secret", "password")):
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = _redact_secret(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_secret(item) for item in value]
+    return value
+
+
+def _cloud_secret_handling(token_env: str, identifier_envs: list[str] | None = None) -> str:
+    envs = ", ".join([token_env] + (identifier_envs or []))
+    return f"Credentials and tenant/workspace identifiers are read from runtime environment or explicit arguments only ({envs}); tokens are never serialized."
+
+
+def _cloud_host_limited(command: str, backend: str, operation: str, missing: list[str], token_env: str) -> dict[str, Any]:
+    return {
+        "command": command,
+        "backend": backend,
+        "operation": operation,
+        "changed": False,
+        "status": "host-limited",
+        "readback": None,
+        "warnings": [f"Missing required runtime value: {item}" for item in missing],
+        "limitations": ["Live cloud execution requires tenant permissions, network access, and runtime-only bearer tokens."],
+        "secretHandling": _cloud_secret_handling(token_env),
+    }
+
+
+def _cloud_dry_run_payload(
+    *,
+    command: str,
+    backend: str,
+    operation: str,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: Any,
+    token_env: str,
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "command": command,
+        "backend": backend,
+        "operation": operation,
+        "changed": False,
+        "status": "dry-run",
+        "request": {
+            "method": method,
+            "url": url,
+            "headers": _redact_secret(headers),
+            "body": _redact_secret(body),
+        },
+        "readback": None,
+        "warnings": [],
+        "limitations": limitations or [],
+        "secretHandling": _cloud_secret_handling(token_env),
+    }
+
+
+def _cloud_http_json(method: str, url: str, token: str, body: Any = None, headers: dict[str, str] | None = None, timeout: int = 120) -> dict[str, Any]:
+    request_headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+    payload: bytes | None = None
+    if body is not None:
+        request_headers.setdefault("Content-Type", "application/json")
+        payload = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=payload, headers=request_headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response_body = response.read()
+            parsed = json.loads(response_body.decode("utf-8")) if response_body else None
+            return {
+                "statusCode": int(response.status),
+                "headers": dict(response.headers.items()),
+                "body": parsed,
+            }
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read()
+        try:
+            parsed_error = json.loads(response_body.decode("utf-8")) if response_body else None
+        except json.JSONDecodeError:
+            parsed_error = response_body.decode("utf-8", errors="replace")
+        return {
+            "statusCode": int(exc.code),
+            "headers": dict(exc.headers.items()),
+            "body": parsed_error,
+            "error": True,
+        }
+
+
+def _cloud_response(
+    *,
+    command: str,
+    backend: str,
+    operation: str,
+    changed: bool,
+    result: dict[str, Any],
+    token_env: str,
+    warnings: list[str] | None = None,
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    headers = result.get("headers", {})
+    return {
+        "command": command,
+        "backend": backend,
+        "operation": operation,
+        "changed": changed and not bool(result.get("error")),
+        "status": "http-error" if result.get("error") else "completed",
+        "statusCode": result.get("statusCode"),
+        "requestId": headers.get("request-id") or headers.get("x-ms-request-id") or headers.get("x-ms-activity-id"),
+        "operationLocation": headers.get("Location") or headers.get("Operation-Location") or headers.get("x-ms-operation-id"),
+        "retryAfter": headers.get("Retry-After"),
+        "readback": _redact_secret(result.get("body")),
+        "warnings": warnings or [],
+        "limitations": limitations or [],
+        "secretHandling": _cloud_secret_handling(token_env),
+    }
+
+
+def _require_cloud_values(command: str, backend: str, operation: str, token_env: str, required: dict[str, str | None]) -> dict[str, Any] | None:
+    missing = [key for key, value in required.items() if not value]
+    if not missing:
+        return None
+    return _cloud_host_limited(command, backend, operation, missing, token_env)
+
+
+def _graph_workbook_url(args: argparse.Namespace, suffix: str = "") -> tuple[str | None, list[str]]:
+    drive_id = getattr(args, "drive_id", None)
+    item_id = getattr(args, "item_id", None)
+    item_path = getattr(args, "item_path", None)
+    clean_suffix = suffix if suffix.startswith("/") or not suffix else f"/{suffix}"
+    if drive_id and item_id:
+        return f"https://graph.microsoft.com/v1.0/drives/{urllib.parse.quote(drive_id)}/items/{urllib.parse.quote(item_id)}/workbook{clean_suffix}", []
+    if item_id:
+        return f"https://graph.microsoft.com/v1.0/me/drive/items/{urllib.parse.quote(item_id)}/workbook{clean_suffix}", []
+    if item_path:
+        quoted_path = urllib.parse.quote(item_path.strip("/"))
+        return f"https://graph.microsoft.com/v1.0/me/drive/root:/{quoted_path}:/workbook{clean_suffix}", []
+    return None, ["item-id or item-path"]
+
+
+def _graph_headers(args: argparse.Namespace, include_async: bool = False) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if getattr(args, "session_id", None):
+        headers["Workbook-Session-Id"] = str(args.session_id)
+    if include_async:
+        headers["Prefer"] = "respond-async"
+    return headers
+
+
+def _graph_selector(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return urllib.parse.quote(f"'{escaped}'", safe="()'=")
+
+
+def _graph_sheet_prefix(args: argparse.Namespace) -> str:
+    sheet = getattr(args, "sheet", None)
+    if sheet:
+        first_sheet = sheet[0] if isinstance(sheet, list) else sheet
+        return f"/worksheets/{_graph_selector(str(first_sheet))}"
+    return ""
+
+
+def _first_arg(args: argparse.Namespace, name: str, spec: dict[str, Any], *spec_keys: str) -> str:
+    value = getattr(args, name, None)
+    if isinstance(value, list) and value:
+        return str(value[0])
+    if value:
+        return str(value)
+    for key in spec_keys:
+        if spec.get(key) not in {None, ""}:
+            return str(spec[key])
+    return ""
+
+
+def _graph_table_name(args: argparse.Namespace, spec: dict[str, Any]) -> str:
+    return _first_arg(args, "table", spec, "table", "tableName", "name", "id")
+
+
+def _graph_chart_name(args: argparse.Namespace, spec: dict[str, Any]) -> str:
+    return _first_arg(args, "name", spec, "name", "id")
+
+
+def _graph_range_address(args: argparse.Namespace) -> str | None:
+    return getattr(args, "range_ref", None) or getattr(args, "address", None)
+
+
+def _graph_range_suffix(args: argparse.Namespace, operation: str, token_env: str, command: str) -> tuple[str | None, dict[str, Any] | None]:
+    address = _graph_range_address(args)
+    if not address:
+        return None, _cloud_host_limited(command, "graph", operation, ["address or range-ref"], token_env)
+    return f"{_graph_sheet_prefix(args)}/range(address={_graph_selector(address)})", None
+
+
+def _graph_table_suffix(args: argparse.Namespace, spec: dict[str, Any], operation: str, token_env: str, command: str) -> tuple[str | None, dict[str, Any] | None]:
+    table_name = _graph_table_name(args, spec)
+    if not table_name:
+        return None, _cloud_host_limited(command, "graph", operation, ["table or name"], token_env)
+    return f"/tables/{_graph_selector(table_name)}", None
+
+
+def _graph_column_selector(args: argparse.Namespace, spec: dict[str, Any]) -> str:
+    value = _first_arg(args, "name", spec, "column", "columnName", "columnId", "id", "name")
+    if value:
+        return value
+    index = spec.get("index")
+    return "" if index in {None, ""} else str(index)
+
+
+def run_graph_workbook_command(args: argparse.Namespace) -> dict[str, Any]:
+    token_env = "EXCEL_FOUNDRY_GRAPH_TOKEN"
+    token = os.environ.get(token_env)
+    command = args.command
+    operation = command.removeprefix("graph-workbook-")
+    spec = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None))
+    dry_run = bool(getattr(args, "dry_run", False))
+    token_missing = _require_cloud_values(command, "graph", operation, token_env, {token_env: token})
+    if token_missing:
+        return token_missing
+
+    method = "GET"
+    body: Any = None
+    headers = _graph_headers(args)
+    changed = operation in {
+        "session-create",
+        "session-close",
+        "worksheet-create",
+        "worksheet-update",
+        "worksheet-delete",
+        "range-set",
+        "range-clear",
+        "range-format-set",
+        "range-format-font-set",
+        "range-format-fill-set",
+        "range-format-protection-set",
+        "range-format-border-set",
+        "range-format-autofit-rows",
+        "range-format-autofit-columns",
+        "name-create",
+        "name-update",
+        "name-delete",
+        "table-create",
+        "table-update",
+        "table-delete",
+        "table-row-add",
+        "table-column-add",
+        "table-sort-apply",
+        "table-sort-clear",
+        "table-filter-apply",
+        "table-filter-clear",
+        "table-convert-to-range",
+        "chart-create",
+        "chart-update",
+        "chart-delete",
+        "chart-set-data",
+        "protection-protect",
+        "protection-unprotect",
+    }
+    suffix = ""
+    if operation == "session-create":
+        method = "POST"
+        suffix = "/createSession"
+        headers = _graph_headers(args, include_async=True)
+        body = {"persistChanges": bool(getattr(args, "persist_changes", False))}
+    elif operation == "session-close":
+        method = "POST"
+        suffix = "/closeSession"
+    elif operation in {"inspect", "worksheet-list"}:
+        suffix = "/worksheets"
+    elif operation == "worksheet-get":
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        suffix = sheet_prefix
+    elif operation == "worksheet-create":
+        method = "POST"
+        suffix = "/worksheets/add"
+        body = spec or {"name": (getattr(args, "name", []) or ["Sheet1"])[0]}
+    elif operation == "worksheet-update":
+        method = "PATCH"
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        suffix = sheet_prefix
+        body = spec
+    elif operation == "worksheet-delete":
+        method = "POST"
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        suffix = f"{sheet_prefix}/delete"
+    elif operation == "range-get":
+        address = getattr(args, "range_ref", None) or getattr(args, "address", None)
+        if not address:
+            return _cloud_host_limited(command, "graph", operation, "address or range-ref".split(), token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/range(address={_graph_selector(address)})"
+    elif operation == "range-set":
+        method = "PATCH"
+        address = getattr(args, "range_ref", None) or getattr(args, "address", None)
+        if not address:
+            return _cloud_host_limited(command, "graph", operation, ["address or range-ref"], token_env)
+        body = dict(spec)
+        if "values" not in body and getattr(args, "values_json", None):
+            body["values"] = json.loads(args.values_json)
+        if "values" not in body and getattr(args, "value_json", None):
+            body["values"] = [[json.loads(args.value_json)]]
+        if not body:
+            return _cloud_host_limited(command, "graph", operation, ["values-json, value-json, or spec-json"], token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/range(address={_graph_selector(address)})"
+    elif operation == "range-clear":
+        method = "POST"
+        address = getattr(args, "range_ref", None) or getattr(args, "address", None)
+        if not address:
+            return _cloud_host_limited(command, "graph", operation, ["address or range-ref"], token_env)
+        body = spec or {"applyTo": "All"}
+        suffix = f"{_graph_sheet_prefix(args)}/range(address={_graph_selector(address)})/clear"
+    elif operation == "range-format-get":
+        address = getattr(args, "range_ref", None) or getattr(args, "address", None)
+        if not address:
+            return _cloud_host_limited(command, "graph", operation, ["address or range-ref"], token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/range(address={_graph_selector(address)})/format"
+    elif operation == "range-format-set":
+        method = "PATCH"
+        range_suffix, host_limited = _graph_range_suffix(args, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        if not spec:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json or spec-file"], token_env)
+        body = spec
+        suffix = f"{range_suffix}/format"
+    elif operation in {"range-format-font-get", "range-format-fill-get", "range-format-protection-get", "range-format-border-list"}:
+        range_suffix, host_limited = _graph_range_suffix(args, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        child = {
+            "range-format-font-get": "font",
+            "range-format-fill-get": "fill",
+            "range-format-protection-get": "protection",
+            "range-format-border-list": "borders",
+        }[operation]
+        suffix = f"{range_suffix}/format/{child}"
+    elif operation in {"range-format-font-set", "range-format-fill-set", "range-format-protection-set"}:
+        method = "PATCH"
+        range_suffix, host_limited = _graph_range_suffix(args, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        if not spec:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json or spec-file"], token_env)
+        child = {
+            "range-format-font-set": "font",
+            "range-format-fill-set": "fill",
+            "range-format-protection-set": "protection",
+        }[operation]
+        body = spec
+        suffix = f"{range_suffix}/format/{child}"
+    elif operation in {"range-format-border-get", "range-format-border-set"}:
+        range_suffix, host_limited = _graph_range_suffix(args, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        border_id = _first_arg(args, "name", spec, "sideIndex", "id", "name")
+        if not border_id:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.sideIndex"], token_env)
+        if operation == "range-format-border-set":
+            method = "PATCH"
+            body = dict(spec)
+            body.pop("sideIndex", None)
+            body.pop("id", None)
+            body.pop("name", None)
+            if not body:
+                return _cloud_host_limited(command, "graph", operation, ["spec-json border properties"], token_env)
+        suffix = f"{range_suffix}/format/borders/{_graph_selector(border_id)}"
+    elif operation in {"range-format-autofit-rows", "range-format-autofit-columns"}:
+        method = "POST"
+        range_suffix, host_limited = _graph_range_suffix(args, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = f"{range_suffix}/format/{'autofitRows' if operation.endswith('rows') else 'autofitColumns'}"
+    elif operation == "name-list":
+        suffix = "/names"
+    elif operation == "name-get":
+        name_value = (getattr(args, "name", []) or [spec.get("name") or spec.get("id") or ""])[0]
+        if not name_value:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        suffix = f"/names/{_graph_selector(str(name_value))}"
+    elif operation == "name-create":
+        method = "POST"
+        suffix = "/names/add"
+        body = spec
+        if not body:
+            name_value = (getattr(args, "name", []) or [""])[0]
+            reference = getattr(args, "range_ref", None) or getattr(args, "address", None)
+            if not name_value or not reference:
+                return _cloud_host_limited(command, "graph", operation, ["name and address/range-ref or spec-json"], token_env)
+            body = {"name": name_value, "reference": reference}
+    elif operation == "name-update":
+        method = "PATCH"
+        name_value = (getattr(args, "name", []) or [spec.get("name") or spec.get("id") or ""])[0]
+        if not name_value:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        body = dict(spec)
+        body.pop("name", None)
+        body.pop("id", None)
+        if not body:
+            reference = getattr(args, "range_ref", None) or getattr(args, "address", None)
+            if not reference:
+                return _cloud_host_limited(command, "graph", operation, ["address/range-ref or spec-json"], token_env)
+            body = {"value": reference}
+        suffix = f"/names/{_graph_selector(str(name_value))}"
+    elif operation == "name-delete":
+        method = "POST"
+        name_value = (getattr(args, "name", []) or [spec.get("name") or spec.get("id") or ""])[0]
+        if not name_value:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        suffix = f"/names/{_graph_selector(str(name_value))}/delete"
+    elif operation == "table-list":
+        suffix = f"{_graph_sheet_prefix(args)}/tables"
+    elif operation == "table-get":
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = table_suffix
+    elif operation == "table-create":
+        method = "POST"
+        suffix = f"{_graph_sheet_prefix(args)}/tables/add"
+        body = spec
+    elif operation == "table-update":
+        method = "PATCH"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = table_suffix
+        body = spec
+    elif operation == "table-delete":
+        method = "POST"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = f"{table_suffix}/delete"
+    elif operation in {"table-row-list", "table-column-list"}:
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = f"{table_suffix}/{'rows' if operation == 'table-row-list' else 'columns'}"
+    elif operation in {"table-row-add", "table-column-add"}:
+        method = "POST"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        body = spec
+        if not body:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json or spec-file"], token_env)
+        suffix = f"{table_suffix}/{'rows' if operation == 'table-row-add' else 'columns'}/add"
+    elif operation in {"table-sort-apply", "table-sort-clear"}:
+        method = "POST"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        body = spec if operation == "table-sort-apply" else None
+        if operation == "table-sort-apply" and not body:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json or spec-file"], token_env)
+        suffix = f"{table_suffix}/sort/{'apply' if operation == 'table-sort-apply' else 'clear'}"
+    elif operation in {"table-filter-apply", "table-filter-clear"}:
+        method = "POST"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        column = _graph_column_selector(args, spec)
+        if not column:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.column"], token_env)
+        body = spec if operation == "table-filter-apply" else None
+        if isinstance(body, dict):
+            body = dict(body)
+            for key in ("column", "columnName", "columnId", "id", "name"):
+                body.pop(key, None)
+        if operation == "table-filter-apply" and not body:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json filter criteria"], token_env)
+        suffix = f"{table_suffix}/columns/{_graph_selector(column)}/filter/{'apply' if operation == 'table-filter-apply' else 'clear'}"
+    elif operation == "table-convert-to-range":
+        method = "POST"
+        table_suffix, host_limited = _graph_table_suffix(args, spec, operation, token_env, command)
+        if host_limited:
+            return host_limited
+        suffix = f"{table_suffix}/convertToRange"
+    elif operation == "chart-list":
+        suffix = f"{_graph_sheet_prefix(args)}/charts"
+    elif operation == "chart-get":
+        chart_name = _graph_chart_name(args, spec)
+        if not chart_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/charts/{_graph_selector(str(chart_name))}"
+    elif operation == "chart-create":
+        method = "POST"
+        suffix = f"{_graph_sheet_prefix(args)}/charts/add"
+        body = spec
+    elif operation == "chart-update":
+        method = "PATCH"
+        chart_name = _graph_chart_name(args, spec)
+        if not chart_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/charts/{_graph_selector(str(chart_name))}"
+        body = spec
+    elif operation == "chart-delete":
+        method = "POST"
+        chart_name = _graph_chart_name(args, spec)
+        if not chart_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        suffix = f"{_graph_sheet_prefix(args)}/charts/{_graph_selector(str(chart_name))}/delete"
+    elif operation == "chart-image":
+        method = "POST"
+        chart_name = _graph_chart_name(args, spec)
+        if not chart_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        body = spec or None
+        suffix = f"{_graph_sheet_prefix(args)}/charts/{_graph_selector(str(chart_name))}/image"
+    elif operation == "chart-set-data":
+        method = "POST"
+        chart_name = _graph_chart_name(args, spec)
+        if not chart_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.id"], token_env)
+        if not spec:
+            return _cloud_host_limited(command, "graph", operation, ["spec-json or spec-file"], token_env)
+        body = spec
+        suffix = f"{_graph_sheet_prefix(args)}/charts/{_graph_selector(str(chart_name))}/setData"
+    elif operation == "function-call":
+        function_name = _first_arg(args, "name", spec, "function", "functionName", "name")
+        if not function_name:
+            return _cloud_host_limited(command, "graph", operation, ["name or spec-json.function"], token_env)
+        body = dict(spec)
+        for key in ("function", "functionName", "name"):
+            body.pop(key, None)
+        method = "POST"
+        suffix = f"/functions/{urllib.parse.quote(function_name)}"
+    elif operation == "protection-get":
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        suffix = f"{sheet_prefix}/protection"
+    elif operation == "protection-protect":
+        method = "POST"
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        body = spec or {}
+        suffix = f"{sheet_prefix}/protection/protect"
+    elif operation == "protection-unprotect":
+        method = "POST"
+        sheet_prefix = _graph_sheet_prefix(args)
+        if not sheet_prefix:
+            return _cloud_host_limited(command, "graph", operation, ["sheet"], token_env)
+        body = spec or {}
+        suffix = f"{sheet_prefix}/protection/unprotect"
+    else:
+        raise AssertionError(f"unsupported graph workbook command: {command}")
+
+    url, missing = _graph_workbook_url(args, suffix)
+    if not url:
+        return _cloud_host_limited(command, "graph", operation, missing, token_env)
+    if dry_run:
+        return _cloud_dry_run_payload(command=command, backend="graph", operation=operation, method=method, url=url, headers=headers, body=body, token_env=token_env)
+    result = _cloud_http_json(method, url, token or "", body=body, headers=headers)
+    response = _cloud_response(command=command, backend="graph", operation=operation, changed=changed, result=result, token_env=token_env)
+    if operation == "session-create" and result.get("statusCode") == 202:
+        response["status"] = "accepted"
+        response["limitations"].append("Session creation returned a long-running operation location; poll the returned operationLocation for completion.")
+    return response
+
+
+def _fabric_base(args: argparse.Namespace, semantic_model_id: str | None = None) -> tuple[str | None, list[str]]:
+    workspace_id = getattr(args, "workspace_id", None)
+    model_id = semantic_model_id or getattr(args, "semantic_model_id", None) or getattr(args, "dataset_id", None)
+    if not workspace_id:
+        return None, ["workspace-id"]
+    base = f"https://api.fabric.microsoft.com/v1/workspaces/{urllib.parse.quote(workspace_id)}/semanticModels"
+    if model_id:
+        base += f"/{urllib.parse.quote(model_id)}"
+    return base, []
+
+
+def _powerbi_dataset_base(args: argparse.Namespace) -> tuple[str | None, list[str]]:
+    workspace_id = getattr(args, "workspace_id", None)
+    dataset_id = getattr(args, "dataset_id", None) or getattr(args, "semantic_model_id", None)
+    missing = []
+    if not workspace_id:
+        missing.append("workspace-id")
+    if not dataset_id:
+        missing.append("dataset-id or semantic-model-id")
+    if missing:
+        return None, missing
+    return f"https://api.powerbi.com/v1.0/myorg/groups/{urllib.parse.quote(workspace_id)}/datasets/{urllib.parse.quote(dataset_id)}", []
+
+
+def _definition_parts_from_dir(definition_dir: str, include_payload: bool = True) -> list[dict[str, Any]]:
+    root = Path(definition_dir).resolve()
+    parts: list[dict[str, Any]] = []
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        rel = path.relative_to(root).as_posix()
+        part: dict[str, Any] = {"path": rel}
+        if include_payload:
+            part["payload"] = base64.b64encode(path.read_bytes()).decode("ascii")
+            part["payloadType"] = "InlineBase64"
+        else:
+            part["bytes"] = path.stat().st_size
+        parts.append(part)
+    return parts
+
+
+def _write_definition_parts(output_dir: str, parts: list[dict[str, Any]]) -> list[str]:
+    root = Path(output_dir).resolve()
+    written: list[str] = []
+    for part in parts:
+        path_value = part.get("path") or part.get("Path")
+        payload = part.get("payload") or part.get("Payload")
+        payload_type = part.get("payloadType") or part.get("PayloadType")
+        if not path_value or not payload or str(payload_type).lower() != "inlinebase64":
+            continue
+        target = (root / str(path_value)).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise ValueError(f"Definition part path escapes output directory: {path_value}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(str(payload)))
+        written.append(str(target))
+    return written
+
+
+def _validate_definition_dir(definition_dir: str) -> list[str]:
+    root = Path(definition_dir).resolve()
+    warnings: list[str] = []
+    if not root.exists():
+        raise FileNotFoundError(f"Definition directory does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"Definition path is not a directory: {root}")
+    platform = root / ".platform"
+    if platform.exists():
+        try:
+            json.loads(platform.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid .platform metadata JSON: {exc}") from exc
+    else:
+        warnings.append("Definition directory has no .platform metadata file; Fabric may still accept TMDL parts, but item metadata is not locally represented.")
+    if not any(path.suffix.lower() in {".tmdl", ".tmsl", ".json", ".platform"} for path in root.rglob("*") if path.is_file()):
+        warnings.append("Definition directory contains no recognized semantic model definition parts.")
+    return warnings
+
+
+def _fabric_operation_url(args: argparse.Namespace, spec: dict[str, Any], result: bool = False) -> tuple[str | None, list[str]]:
+    location = getattr(args, "operation_location", None) or spec.get("operationLocation") or spec.get("location")
+    operation_id = getattr(args, "operation_id", None) or spec.get("operationId") or spec.get("id")
+    if location:
+        url = str(location)
+        if result and not url.rstrip("/").endswith("/result"):
+            url = url.rstrip("/") + "/result"
+        return url, []
+    if operation_id:
+        url = f"https://api.fabric.microsoft.com/v1/operations/{urllib.parse.quote(str(operation_id))}"
+        if result:
+            url += "/result"
+        return url, []
+    return None, ["operation-location or operation-id"]
+
+
+def run_fabric_semantic_command(args: argparse.Namespace) -> dict[str, Any]:
+    command = args.command
+    operation = command.removeprefix("fabric-semantic-model-")
+    token_env = "EXCEL_FOUNDRY_FABRIC_TOKEN"
+    token = os.environ.get(token_env)
+    spec = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None))
+    dry_run = bool(getattr(args, "dry_run", False))
+    missing_auth = _require_cloud_values(command, "tom-fabric", operation, token_env, {token_env: token})
+    if missing_auth:
+        return missing_auth
+
+    method = "GET"
+    body: Any = None
+    changed = operation in {"create", "update", "delete", "update-definition", "refresh"}
+    if operation in {"operation-get", "operation-result"}:
+        url, missing = _fabric_operation_url(args, spec, result=operation == "operation-result")
+        if not url:
+            return _cloud_host_limited(command, "tom-fabric", operation, missing, token_env)
+        if dry_run:
+            return _cloud_dry_run_payload(command=command, backend="tom-fabric", operation=operation, method=method, url=url, headers={}, body=None, token_env=token_env)
+        result = _cloud_http_json(method, url, token or "")
+        return _cloud_response(command=command, backend="tom-fabric", operation=operation, changed=False, result=result, token_env=token_env)
+    url, missing = _fabric_base(args)
+    if operation == "list":
+        pass
+    elif operation in {"get", "delete", "get-definition", "update", "update-definition", "export-definition"}:
+        if missing:
+            return _cloud_host_limited(command, "tom-fabric", operation, missing, token_env)
+        if operation == "delete":
+            method = "DELETE"
+        elif operation == "get-definition" or operation == "export-definition":
+            method = "POST"
+            url += "/getDefinition"
+            fmt = getattr(args, "format", None)
+            body = {"format": fmt} if fmt else None
+        elif operation == "update-definition":
+            method = "POST"
+            url += "/updateDefinition"
+            definition_dir = getattr(args, "definition_dir", None)
+            if not definition_dir:
+                return _cloud_host_limited(command, "tom-fabric", operation, ["definition-dir"], token_env)
+            definition_warnings = _validate_definition_dir(definition_dir)
+            body = {"definition": {"parts": _definition_parts_from_dir(definition_dir, include_payload=True)}}
+            fmt = getattr(args, "format", None)
+            if fmt:
+                body["definition"]["format"] = fmt
+        else:
+            method = "PATCH"
+            body = spec
+    elif operation == "create":
+        method = "POST"
+        if missing and missing != ["workspace-id"]:
+            return _cloud_host_limited(command, "tom-fabric", operation, missing, token_env)
+        if not getattr(args, "workspace_id", None):
+            return _cloud_host_limited(command, "tom-fabric", operation, ["workspace-id"], token_env)
+        url, _ = _fabric_base(argparse.Namespace(workspace_id=args.workspace_id, semantic_model_id=None, dataset_id=None))
+        body = spec
+        definition_dir = getattr(args, "definition_dir", None)
+        if definition_dir:
+            definition_warnings = _validate_definition_dir(definition_dir)
+            body = dict(spec)
+            body["definition"] = {"parts": _definition_parts_from_dir(definition_dir, include_payload=True)}
+    elif operation == "refresh":
+        return run_powerbi_dataset_command(args, command_override=command, operation_override=operation, token_env_override="EXCEL_FOUNDRY_POWERBI_TOKEN")
+    elif operation == "execute-dax":
+        return run_powerbi_dataset_command(args, command_override=command, operation_override="execute-dax", token_env_override="EXCEL_FOUNDRY_POWERBI_TOKEN")
+    else:
+        raise AssertionError(f"unsupported fabric semantic command: {command}")
+
+    assert url is not None
+    dry_body = body
+    if operation in {"create", "update-definition"} and getattr(args, "definition_dir", None) and not getattr(args, "deep", False):
+        dry_body = {"definition": {"parts": _definition_parts_from_dir(args.definition_dir, include_payload=False)}}
+    if dry_run:
+        payload = _cloud_dry_run_payload(command=command, backend="tom-fabric", operation=operation, method=method, url=url, headers={}, body=dry_body, token_env=token_env)
+        if "definition_warnings" in locals():
+            payload["warnings"].extend(definition_warnings)
+        return payload
+    result = _cloud_http_json(method, url, token or "", body=body)
+    response = _cloud_response(command=command, backend="tom-fabric", operation=operation, changed=changed, result=result, token_env=token_env, warnings=definition_warnings if "definition_warnings" in locals() else None)
+    if result.get("statusCode") == 202:
+        response["status"] = "accepted"
+        response["changed"] = False
+        response["limitations"].append("Fabric returned a long-running operation location; poll the returned operationLocation for completion before treating the command as verified.")
+    if operation == "export-definition" and getattr(args, "output_dir", None) and isinstance(result.get("body"), dict):
+        definition = result["body"].get("definition") or {}
+        written = _write_definition_parts(args.output_dir, definition.get("parts", []))
+        response["exportedFiles"] = written
+    return response
+
+
+def run_powerbi_dataset_command(
+    args: argparse.Namespace,
+    command_override: str | None = None,
+    operation_override: str | None = None,
+    token_env_override: str | None = None,
+) -> dict[str, Any]:
+    command = command_override or args.command
+    operation = operation_override or command.removeprefix("dax-")
+    token_env = token_env_override or "EXCEL_FOUNDRY_POWERBI_TOKEN"
+    token = os.environ.get(token_env)
+    dry_run = bool(getattr(args, "dry_run", False))
+    missing_auth = _require_cloud_values(command, "power-bi", operation, token_env, {token_env: token})
+    if missing_auth:
+        return missing_auth
+    base_url, missing = _powerbi_dataset_base(args)
+    if missing:
+        return _cloud_host_limited(command, "power-bi", operation, missing, token_env)
+    method = "POST"
+    changed = operation == "refresh"
+    if operation in {"execute", "execute-dax"}:
+        query = getattr(args, "dax_query", None)
+        spec = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None))
+        if not query:
+            query = spec.get("query") or spec.get("dax")
+        if not query:
+            return _cloud_host_limited(command, "power-bi", operation, ["dax-query or spec-json.query"], token_env)
+        body = {"queries": [{"query": query}], "serializerSettings": spec.get("serializerSettings", {"includeNulls": True})}
+        url = f"{base_url}/executeQueries"
+    elif operation == "refresh":
+        body = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None)) or {"notifyOption": "NoNotification"}
+        url = f"{base_url}/refreshes"
+    else:
+        raise AssertionError(f"unsupported Power BI command: {command}")
+    if dry_run:
+        return _cloud_dry_run_payload(command=command, backend="power-bi", operation=operation, method=method, url=url, headers={}, body=body, token_env=token_env)
+    result = _cloud_http_json(method, url, token or "", body=body)
+    return _cloud_response(command=command, backend="power-bi", operation=operation, changed=changed, result=result, token_env=token_env)
+
+
+def run_semantic_artifact_command(args: argparse.Namespace) -> dict[str, Any]:
+    command = args.command
+    operation = command.removeprefix("semantic-artifact-")
+    if operation == "inspect":
+        definition_dir = getattr(args, "definition_dir", None) or getattr(args, "target_path", None)
+        if not definition_dir:
+            return _cloud_host_limited(command, "tom-fabric", operation, ["definition-dir or target-path"], "EXCEL_FOUNDRY_FABRIC_TOKEN")
+        parts = _definition_parts_from_dir(definition_dir, include_payload=False)
+        return {
+            "command": command,
+            "backend": "tom-fabric",
+            "operation": operation,
+            "changed": False,
+            "status": "completed",
+            "definitionDir": str(Path(definition_dir).resolve()),
+            "parts": parts,
+            "readback": {"partCount": len(parts)},
+            "warnings": [],
+            "limitations": ["Artifact inspection is file-shape inventory; semantic validation requires Fabric/XMLA."],
+            "secretHandling": _cloud_secret_handling("EXCEL_FOUNDRY_FABRIC_TOKEN"),
+        }
+    if operation == "export":
+        args.command = "fabric-semantic-model-export-definition"
+        return run_fabric_semantic_command(args)
+    if operation == "push":
+        args.command = "fabric-semantic-model-update-definition"
+        return run_fabric_semantic_command(args)
+    raise AssertionError(f"unsupported semantic artifact command: {command}")
+
+
+def _tmdl_root(args: argparse.Namespace, command: str, operation: str) -> tuple[Path | None, dict[str, Any] | None]:
+    definition_dir = getattr(args, "definition_dir", None) or getattr(args, "target_path", None)
+    if not definition_dir:
+        return None, _cloud_host_limited(command, "tom-fabric", operation, ["definition-dir or target-path"], "EXCEL_FOUNDRY_FABRIC_TOKEN")
+    root = Path(definition_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root, None
+
+
+def _tmdl_name(args: argparse.Namespace, spec: dict[str, Any], *keys: str) -> str:
+    value = _first_arg(args, "name", spec, *keys, "name")
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-") if value else ""
+
+
+def _write_tmdl_part(root: Path, relative_path: str, content: str) -> Path:
+    target = (root / relative_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError(f"TMDL part path escapes definition directory: {relative_path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content.rstrip() + "\n", encoding="utf-8")
+    return target
+
+
+def _delete_tmdl_part(root: Path, relative_path: str) -> bool:
+    target = (root / relative_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError(f"TMDL part path escapes definition directory: {relative_path}")
+    if not target.exists():
+        return False
+    target.unlink()
+    return True
+
+
+def _default_tmdl_content(kind: str, name: str, spec: dict[str, Any]) -> str:
+    if spec.get("tmdl"):
+        return str(spec["tmdl"])
+    if kind == "table":
+        return f"table {name}"
+    if kind == "measure":
+        table = spec.get("table") or spec.get("associatedTable") or "Measures"
+        expression = spec.get("expression") or spec.get("formula") or "0"
+        return f"table {table}\n  measure {name} = {expression}"
+    if kind == "relationship":
+        from_table = spec.get("fromTable") or spec.get("foreignKeyTable") or "FromTable"
+        from_column = spec.get("fromColumn") or spec.get("foreignKeyColumn") or "FromColumn"
+        to_table = spec.get("toTable") or spec.get("primaryKeyTable") or "ToTable"
+        to_column = spec.get("toColumn") or spec.get("primaryKeyColumn") or "ToColumn"
+        return f"relationship {name}\n  fromColumn: {from_table}.{from_column}\n  toColumn: {to_table}.{to_column}"
+    if kind == "role":
+        return f"role {name}"
+    if kind == "partition":
+        source = spec.get("source") or spec.get("query") or ""
+        return f"partition {name}\n  source = {source}"
+    if kind == "expression":
+        expression = spec.get("expression") or spec.get("formula") or ""
+        return f"expression {name} = {expression}"
+    raise AssertionError(f"unsupported TMDL kind: {kind}")
+
+
+def _tmdl_relative_path(kind: str, name: str, spec: dict[str, Any]) -> str:
+    if spec.get("path"):
+        return str(spec["path"]).replace("\\", "/")
+    if kind == "table":
+        return f"tables/{name}.tmdl"
+    if kind == "measure":
+        table = re.sub(r"[^A-Za-z0-9._-]+", "-", str(spec.get("table") or spec.get("associatedTable") or "Measures")).strip(".-") or "Measures"
+        return f"tables/{table}/measures/{name}.tmdl"
+    if kind == "relationship":
+        return f"relationships/{name}.tmdl"
+    if kind == "role":
+        return f"roles/{name}.tmdl"
+    if kind == "partition":
+        table = re.sub(r"[^A-Za-z0-9._-]+", "-", str(spec.get("table") or "Tables")).strip(".-") or "Tables"
+        return f"tables/{table}/partitions/{name}.tmdl"
+    if kind == "expression":
+        return f"expressions/{name}.tmdl"
+    raise AssertionError(f"unsupported TMDL kind: {kind}")
+
+
+def run_tmdl_artifact_command(args: argparse.Namespace, kind: str) -> dict[str, Any]:
+    command = args.command
+    prefix = f"model-{kind}-"
+    operation = command.removeprefix(prefix)
+    spec = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None))
+    if operation in {"list", "get"}:
+        root, host_limited = _tmdl_root(args, command, operation)
+        if host_limited:
+            return host_limited
+        pattern = {
+            "table": "tables/**/*.tmdl",
+            "measure": "tables/**/measures/*.tmdl",
+            "relationship": "relationships/*.tmdl",
+            "role": "roles/*.tmdl",
+            "partition": "tables/**/partitions/*.tmdl",
+            "expression": "expressions/*.tmdl",
+        }[kind]
+        parts = [{"path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size} for path in sorted(root.glob(pattern)) if path.is_file()]
+        name = _tmdl_name(args, spec, kind, f"{kind}Name")
+        if operation == "get" and name:
+            parts = [part for part in parts if Path(part["path"]).stem.lower() == name.lower()]
+        return {
+            "command": command,
+            "backend": "tom-fabric",
+            "operation": operation,
+            "changed": False,
+            "status": "completed",
+            "definitionDir": str(root),
+            "parts": parts,
+            "readback": {"partCount": len(parts)},
+            "warnings": [],
+            "limitations": ["Local TMDL mutation is deterministic file generation; semantic validation requires Fabric/XMLA."],
+            "secretHandling": _cloud_secret_handling("EXCEL_FOUNDRY_FABRIC_TOKEN"),
+        }
+    if operation in {"set", "delete"}:
+        root, host_limited = _tmdl_root(args, command, operation)
+        if host_limited:
+            return host_limited
+        name = _tmdl_name(args, spec, kind, f"{kind}Name")
+        if not name:
+            return _cloud_host_limited(command, "tom-fabric", operation, ["name or spec-json.name"], "EXCEL_FOUNDRY_FABRIC_TOKEN")
+        relative_path = _tmdl_relative_path(kind, name, spec)
+        if operation == "delete":
+            changed = _delete_tmdl_part(root, relative_path)
+        else:
+            target = _write_tmdl_part(root, relative_path, _default_tmdl_content(kind, name, spec))
+            changed = True
+        return {
+            "command": command,
+            "backend": "tom-fabric",
+            "operation": operation,
+            "changed": changed,
+            "status": "completed",
+            "definitionDir": str(root),
+            "readback": {"path": relative_path, "exists": (root / relative_path).exists()},
+            "warnings": [],
+            "limitations": ["Local TMDL mutation must be pushed with fabric-semantic-model update-definition before it affects a Fabric semantic model."],
+            "secretHandling": _cloud_secret_handling("EXCEL_FOUNDRY_FABRIC_TOKEN"),
+        }
+    raise AssertionError(f"unsupported TMDL artifact command: {command}")
+
+
+def run_model_table_command(args: argparse.Namespace) -> dict[str, Any]:
+    command = args.command
+    operation = command.removeprefix("model-table-")
+    if operation in {"list", "get"}:
+        args.command = "semantic-artifact-inspect"
+        payload = run_semantic_artifact_command(args)
+        if operation == "get" and getattr(args, "name", None):
+            names = set(args.name)
+            payload["parts"] = [part for part in payload.get("parts", []) if any(name in part.get("path", "") for name in names)]
+            payload["readback"] = {"partCount": len(payload["parts"])}
+        payload["command"] = command
+        payload["operation"] = operation
+        return payload
+    if operation in {"set", "delete"} and (getattr(args, "definition_dir", None) or getattr(args, "target_path", None)) and not getattr(args, "workspace_id", None):
+        return run_tmdl_artifact_command(args, "table")
+    if operation == "set":
+        args.command = "fabric-semantic-model-update-definition"
+        return run_fabric_semantic_command(args)
+    if operation == "delete":
+        return _cloud_host_limited(command, "tom-fabric", operation, ["definition-dir mutation policy for targeted table deletion"], "EXCEL_FOUNDRY_FABRIC_TOKEN")
+    raise AssertionError(f"unsupported model table command: {command}")
+
+
+def run_dax_command(args: argparse.Namespace) -> dict[str, Any]:
+    command = args.command
+    operation = command.removeprefix("dax-")
+    if operation == "execute":
+        return run_powerbi_dataset_command(args)
+    if operation in {"list", "get"}:
+        args.command = "semantic-artifact-inspect"
+        payload = run_semantic_artifact_command(args)
+        payload["command"] = command
+        payload["operation"] = operation
+        payload["parts"] = [part for part in payload.get("parts", []) if part.get("path", "").lower().endswith((".tmdl", ".dax"))]
+        payload["readback"] = {"partCount": len(payload["parts"])}
+        return payload
+    if operation == "set":
+        args.command = "fabric-semantic-model-update-definition"
+        return run_fabric_semantic_command(args)
+    if operation == "delete":
+        return _cloud_host_limited(command, "tom-fabric", operation, ["definition-dir mutation policy for targeted DAX deletion"], "EXCEL_FOUNDRY_FABRIC_TOKEN")
+    raise AssertionError(f"unsupported DAX command: {command}")
 
 
 def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes], deletes: set[str] | None = None) -> None:
@@ -4117,6 +5157,19 @@ def apply_audit_mutation(workbook_path: Path) -> dict[str, Any]:
 
 
 def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command.startswith("graph-workbook-"):
+        return run_graph_workbook_command(args)
+    if args.command.startswith("fabric-semantic-model-"):
+        return run_fabric_semantic_command(args)
+    if args.command.startswith("semantic-artifact-"):
+        return run_semantic_artifact_command(args)
+    if args.command.startswith("model-table-"):
+        return run_model_table_command(args)
+    for tmdl_kind in ("measure", "relationship", "role", "partition", "expression"):
+        if args.command.startswith(f"model-{tmdl_kind}-"):
+            return run_tmdl_artifact_command(args, tmdl_kind)
+    if args.command.startswith("dax-"):
+        return run_dax_command(args)
     if args.command == "workbook-capabilities":
         workbook_path = Path(args.workbook_path)
         payload = {
@@ -4126,6 +5179,11 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
         }
         if getattr(args, "deep", False):
             payload["capabilityLedger"] = _capability_ledger_for_workbook(workbook_path)
+            if getattr(args, "documentation", False):
+                surfaces = payload["capabilityLedger"]["surfaces"]
+                for surface_id, surface_payload in surfaces.items():
+                    surface_payload["documentationAnchors"] = CAPABILITY_LEDGER[surface_id].get("documentationAnchors", [])
+                payload["closureReasons"] = CAPABILITY_MATRIX.get("closureReasons", {})
         return payload
     if args.command == "workbook-inspect":
         workbook_path = Path(args.workbook_path)
@@ -4297,6 +5355,7 @@ def main(argv: list[str]) -> int:
     workbook_capabilities_parser = subparsers.add_parser("workbook-capabilities")
     workbook_capabilities_parser.add_argument("--workbook-path", required=True)
     workbook_capabilities_parser.add_argument("--deep", action="store_true")
+    workbook_capabilities_parser.add_argument("--documentation", action="store_true")
 
     workbook_inspect_parser = subparsers.add_parser("workbook-inspect")
     workbook_inspect_parser.add_argument("--workbook-path", required=True)
@@ -4417,6 +5476,139 @@ def main(argv: list[str]) -> int:
     range_set_parser.add_argument("--range-ref", required=True)
     range_set_parser.add_argument("--values-json", required=True)
 
+    def add_cloud_parser(command_name: str) -> argparse.ArgumentParser:
+        cloud_parser = subparsers.add_parser(command_name)
+        cloud_parser.add_argument("--drive-id")
+        cloud_parser.add_argument("--item-id")
+        cloud_parser.add_argument("--item-path")
+        cloud_parser.add_argument("--session-id")
+        cloud_parser.add_argument("--persist-changes", action="store_true")
+        cloud_parser.add_argument("--workspace-id")
+        cloud_parser.add_argument("--semantic-model-id")
+        cloud_parser.add_argument("--dataset-id")
+        cloud_parser.add_argument("--operation-id")
+        cloud_parser.add_argument("--operation-location")
+        cloud_parser.add_argument("--definition-dir")
+        cloud_parser.add_argument("--format")
+        cloud_parser.add_argument("--hard-delete", action="store_true")
+        cloud_parser.add_argument("--dry-run", "--what-if", dest="dry_run", action="store_true")
+        cloud_parser.add_argument("--dax-query")
+        cloud_parser.add_argument("--output-dir")
+        cloud_parser.add_argument("--target-path")
+        cloud_parser.add_argument("--sheet", action="append", default=[])
+        cloud_parser.add_argument("--table", action="append", default=[])
+        cloud_parser.add_argument("--name", action="append", default=[])
+        cloud_parser.add_argument("--address")
+        cloud_parser.add_argument("--range-ref")
+        cloud_parser.add_argument("--value-json")
+        cloud_parser.add_argument("--values-json")
+        cloud_parser.add_argument("--spec-json")
+        cloud_parser.add_argument("--spec-file")
+        cloud_parser.add_argument("--deep", action="store_true")
+        return cloud_parser
+
+    for cloud_command in [
+        "graph-workbook-inspect",
+        "graph-workbook-session-create",
+        "graph-workbook-session-close",
+        "graph-workbook-worksheet-list",
+        "graph-workbook-worksheet-get",
+        "graph-workbook-worksheet-create",
+        "graph-workbook-worksheet-update",
+        "graph-workbook-worksheet-delete",
+        "graph-workbook-range-get",
+        "graph-workbook-range-set",
+        "graph-workbook-range-clear",
+        "graph-workbook-range-format-get",
+        "graph-workbook-range-format-set",
+        "graph-workbook-range-format-font-get",
+        "graph-workbook-range-format-font-set",
+        "graph-workbook-range-format-fill-get",
+        "graph-workbook-range-format-fill-set",
+        "graph-workbook-range-format-protection-get",
+        "graph-workbook-range-format-protection-set",
+        "graph-workbook-range-format-border-list",
+        "graph-workbook-range-format-border-get",
+        "graph-workbook-range-format-border-set",
+        "graph-workbook-range-format-autofit-rows",
+        "graph-workbook-range-format-autofit-columns",
+        "graph-workbook-name-list",
+        "graph-workbook-name-get",
+        "graph-workbook-name-create",
+        "graph-workbook-name-update",
+        "graph-workbook-name-delete",
+        "graph-workbook-table-list",
+        "graph-workbook-table-get",
+        "graph-workbook-table-create",
+        "graph-workbook-table-update",
+        "graph-workbook-table-delete",
+        "graph-workbook-table-row-list",
+        "graph-workbook-table-row-add",
+        "graph-workbook-table-column-list",
+        "graph-workbook-table-column-add",
+        "graph-workbook-table-sort-apply",
+        "graph-workbook-table-sort-clear",
+        "graph-workbook-table-filter-apply",
+        "graph-workbook-table-filter-clear",
+        "graph-workbook-table-convert-to-range",
+        "graph-workbook-chart-list",
+        "graph-workbook-chart-get",
+        "graph-workbook-chart-create",
+        "graph-workbook-chart-update",
+        "graph-workbook-chart-delete",
+        "graph-workbook-chart-image",
+        "graph-workbook-chart-set-data",
+        "graph-workbook-function-call",
+        "graph-workbook-protection-get",
+        "graph-workbook-protection-protect",
+        "graph-workbook-protection-unprotect",
+        "fabric-semantic-model-list",
+        "fabric-semantic-model-get",
+        "fabric-semantic-model-create",
+        "fabric-semantic-model-update",
+        "fabric-semantic-model-delete",
+        "fabric-semantic-model-get-definition",
+        "fabric-semantic-model-update-definition",
+        "fabric-semantic-model-export-definition",
+        "fabric-semantic-model-refresh",
+        "fabric-semantic-model-execute-dax",
+        "fabric-semantic-model-operation-get",
+        "fabric-semantic-model-operation-result",
+        "model-table-list",
+        "model-table-get",
+        "model-table-set",
+        "model-table-delete",
+        "model-measure-list",
+        "model-measure-get",
+        "model-measure-set",
+        "model-measure-delete",
+        "model-relationship-list",
+        "model-relationship-get",
+        "model-relationship-set",
+        "model-relationship-delete",
+        "model-role-list",
+        "model-role-get",
+        "model-role-set",
+        "model-role-delete",
+        "model-partition-list",
+        "model-partition-get",
+        "model-partition-set",
+        "model-partition-delete",
+        "model-expression-list",
+        "model-expression-get",
+        "model-expression-set",
+        "model-expression-delete",
+        "dax-execute",
+        "dax-list",
+        "dax-get",
+        "dax-set",
+        "dax-delete",
+        "semantic-artifact-inspect",
+        "semantic-artifact-export",
+        "semantic-artifact-push",
+    ]:
+        add_cloud_parser(cloud_command)
+
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--manifest-path", required=True)
     plan_parser.add_argument("--workbook-path")
@@ -4485,6 +5677,104 @@ def main(argv: list[str]) -> int:
         "cell-set",
         "range-get",
         "range-set",
+        "graph-workbook-inspect",
+        "graph-workbook-session-create",
+        "graph-workbook-session-close",
+        "graph-workbook-worksheet-list",
+        "graph-workbook-worksheet-get",
+        "graph-workbook-worksheet-create",
+        "graph-workbook-worksheet-update",
+        "graph-workbook-worksheet-delete",
+        "graph-workbook-range-get",
+        "graph-workbook-range-set",
+        "graph-workbook-range-clear",
+        "graph-workbook-range-format-get",
+        "graph-workbook-range-format-set",
+        "graph-workbook-range-format-font-get",
+        "graph-workbook-range-format-font-set",
+        "graph-workbook-range-format-fill-get",
+        "graph-workbook-range-format-fill-set",
+        "graph-workbook-range-format-protection-get",
+        "graph-workbook-range-format-protection-set",
+        "graph-workbook-range-format-border-list",
+        "graph-workbook-range-format-border-get",
+        "graph-workbook-range-format-border-set",
+        "graph-workbook-range-format-autofit-rows",
+        "graph-workbook-range-format-autofit-columns",
+        "graph-workbook-name-list",
+        "graph-workbook-name-get",
+        "graph-workbook-name-create",
+        "graph-workbook-name-update",
+        "graph-workbook-name-delete",
+        "graph-workbook-table-list",
+        "graph-workbook-table-get",
+        "graph-workbook-table-create",
+        "graph-workbook-table-update",
+        "graph-workbook-table-delete",
+        "graph-workbook-table-row-list",
+        "graph-workbook-table-row-add",
+        "graph-workbook-table-column-list",
+        "graph-workbook-table-column-add",
+        "graph-workbook-table-sort-apply",
+        "graph-workbook-table-sort-clear",
+        "graph-workbook-table-filter-apply",
+        "graph-workbook-table-filter-clear",
+        "graph-workbook-table-convert-to-range",
+        "graph-workbook-chart-list",
+        "graph-workbook-chart-get",
+        "graph-workbook-chart-create",
+        "graph-workbook-chart-update",
+        "graph-workbook-chart-delete",
+        "graph-workbook-chart-image",
+        "graph-workbook-chart-set-data",
+        "graph-workbook-function-call",
+        "graph-workbook-protection-get",
+        "graph-workbook-protection-protect",
+        "graph-workbook-protection-unprotect",
+        "fabric-semantic-model-list",
+        "fabric-semantic-model-get",
+        "fabric-semantic-model-create",
+        "fabric-semantic-model-update",
+        "fabric-semantic-model-delete",
+        "fabric-semantic-model-get-definition",
+        "fabric-semantic-model-update-definition",
+        "fabric-semantic-model-export-definition",
+        "fabric-semantic-model-refresh",
+        "fabric-semantic-model-execute-dax",
+        "fabric-semantic-model-operation-get",
+        "fabric-semantic-model-operation-result",
+        "model-table-list",
+        "model-table-get",
+        "model-table-set",
+        "model-table-delete",
+        "model-measure-list",
+        "model-measure-get",
+        "model-measure-set",
+        "model-measure-delete",
+        "model-relationship-list",
+        "model-relationship-get",
+        "model-relationship-set",
+        "model-relationship-delete",
+        "model-role-list",
+        "model-role-get",
+        "model-role-set",
+        "model-role-delete",
+        "model-partition-list",
+        "model-partition-get",
+        "model-partition-set",
+        "model-partition-delete",
+        "model-expression-list",
+        "model-expression-get",
+        "model-expression-set",
+        "model-expression-delete",
+        "dax-execute",
+        "dax-list",
+        "dax-get",
+        "dax-set",
+        "dax-delete",
+        "semantic-artifact-inspect",
+        "semantic-artifact-export",
+        "semantic-artifact-push",
     }:
         payload = run_direct_package_command(args)
         json.dump(payload, sys.stdout, indent=2)
@@ -4540,4 +5830,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

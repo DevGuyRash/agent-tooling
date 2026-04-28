@@ -90,6 +90,8 @@ Manifest-driven `query`, `inspect`, and `bootstrap` payloads include:
 - `unsupported`
 - `engineRoutes`
 - `capabilityLedger` when `workbook capabilities --deep` is requested
+- `documentationAnchors` inside ledger surfaces when
+  `workbook capabilities --deep --documentation` is requested
 
 When the workbook is package-readable, query/bootstrap bundles can also include
 metadata for formulas, data-validation, workbook or worksheet protection,
@@ -105,15 +107,45 @@ The deep capability ledger is the generic max-write contract. It is derived
 from `references/excel-capability-matrix.json`, the canonical cross-backend
 taxonomy. Each surface has `readLane`, `writeLane`, `route`, `verify`, `risk`,
 `supportLevel`, `operations`, `hostRequirements`, `secretPolicy`,
-`destructiveRisk`, `canReadHere`, `canWriteHere`, and `canPreserveHere` so
-agents can select the strongest safe write path without hard-coded workbook
-assumptions.
+`destructiveRisk`, `closureReason`, `canReadHere`, `canWriteHere`, and
+`canPreserveHere` so agents can select the strongest safe write path without
+hard-coded workbook assumptions.
+
+When `--documentation` is present, each ledger surface also includes the
+matrix `documentationAnchors`. Anchors name the official Microsoft or local
+Excel Foundry document, the route it supports, and whether it proves mutation,
+readback, inventory, preservation, or a limitation. These anchors explain why
+a closed surface may still be `preserve-only` or host-limited rather than
+package-supported.
 
 The matrix also defines environment compatibility fields for `package`,
 `desktop`, `graph`, `officeScript`, and `tomFabric`. These fields state the
 current support state for each backend/environment even when the overall
 surface is `host-limited`; callers should combine those fields with
 `hostRequirements` before deciding whether to execute, plan, or preserve.
+
+## Cloud Command Output
+
+Graph, Fabric, Power BI, and semantic artifact commands return the standard
+operation envelope:
+
+- `backend`
+- `operation`
+- `changed`
+- `status`
+- `statusCode` when an HTTP request was made
+- `requestId`, `operationLocation`, and `retryAfter` when the service returns them
+- `readback`
+- `warnings`
+- `limitations`
+- `secretHandling`
+
+When `--dry-run` or `--what-if` is supplied, cloud commands return `status:
+dry-run`, `changed: false`, and a redacted `request` object containing the
+planned method, URL, headers, and body. Runtime bearer tokens are never emitted.
+
+Semantic definition export writes decoded `InlineBase64` definition parts under
+the requested output directory and reports the written files in `exportedFiles`.
 
 ## Audit Output
 

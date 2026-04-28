@@ -46,6 +46,18 @@ define the generic contract.
   `workbook safe-export`,
   `what-if inspect`, `scenario list/get/set/delete`,
   `goal-seek execute`, `formula-audit inspect/export`,
+  `solver inspect/plan/execute`, `forecast-sheet inspect/plan/create`,
+  `data-table list/get/create/update/delete`, `calc-engine inspect/plan`,
+  `cube-function inspect/plan`, `lambda-name list/get/set/delete`,
+  `sparkline inspect/plan`, `xml-map inspect/plan`,
+  `custom-xml inspect/plan`, `ole-object inspect/plan`,
+  `external-data-range list/get/refresh`, `workbook-view inspect/plan`,
+  `signature inspect/plan`, `encryption inspect/plan`,
+  `sensitivity inspect/plan`,
+  `graph-workbook worksheet-list/worksheet-update/range-get/range-set/range-clear/name-create/protection-protect`,
+  `fabric-semantic-model get-definition/update-definition/execute-dax`,
+  `semantic-artifact inspect/export/push`,
+  `office-script-live inspect/plan/execute`, `addin-runtime validate/sideload-plan`,
   `automation generate`, `automation run`, guarded `hierarchy set/delete`,
   `kpi set/delete`, or `perspective set/delete`,
   `manifest validate`, or `manifest migrate`, load
@@ -82,7 +94,10 @@ define the generic contract.
   backend limits instead of assuming every surface is package-writable.
 - `workbook capabilities --deep` emits the canonical capability ledger for the
   current file and host: category, read lane, write lane, route, verification
-  method, risk class, and host requirements for each major workbook surface.
+  method, risk class, closure reason, and host requirements for each major
+  workbook surface. Add `--documentation` to include the matrix documentation
+  anchors that justify mutation, readback, inventory, preservation, or explicit
+  limitation.
 - The canonical cross-backend object taxonomy lives in
   `references/excel-capability-matrix.json`. It covers package, hidden desktop
   Excel, Microsoft Graph, Office Scripts/Excel JS, TOM/XMLA, and Fabric lanes,
@@ -92,6 +107,10 @@ define the generic contract.
   `tomFabric`) state the current support level for each backend even when the
   overall surface is host-limited. Combine those fields with
   `hostRequirements` before choosing execute, plan, or preserve behavior.
+- Matrix closure reasons are final-state explanations, not support labels.
+  `preserve-only` and host-limited surfaces can be closed when the matrix names
+  the public route or limitation and tests prove inventory, preservation,
+  diagnostics, redaction, or opt-in host execution.
 - Query/bootstrap coverage now includes sheets, formulas, data-validation,
   protection, workbook metadata, comments, hyperlinks, dimensions, print
   settings, styles, themes, chart metadata, and pivot metadata in the
@@ -106,6 +125,10 @@ define the generic contract.
 - Automation is first-class: VBA can run through desktop Excel, while Office
   Scripts, Excel JS/Add-in, and `artifact-workbook` generation return portable
   artifacts or runner plans for their proper host.
+- Cloud commands are host-limited live routes. Microsoft Graph workbook,
+  Fabric semantic model, Power BI DAX/refresh, and TMDL/TMSL artifact commands
+  require runtime bearer tokens and tenant/workspace identifiers; `--dry-run`
+  returns a redacted request plan without making the HTTP call.
 - Manifest read flows use bounded package-helper execution and prefer the
   package backend automatically when the requested surfaces do not require live
   VBA/project inspection.

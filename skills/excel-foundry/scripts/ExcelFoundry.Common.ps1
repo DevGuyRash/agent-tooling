@@ -1462,7 +1462,7 @@ function Test-OoxmlPackageWorkbook {
 function Invoke-PackageWorkbookHelper {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('query', 'inspect', 'inspect-lite', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-clone', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'workbook-metadata', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set')]
+        [ValidateSet('query', 'inspect', 'inspect-lite', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-clone', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'workbook-metadata', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set', 'graph-workbook-inspect', 'graph-workbook-session-create', 'graph-workbook-session-close', 'graph-workbook-worksheet-list', 'graph-workbook-worksheet-get', 'graph-workbook-worksheet-create', 'graph-workbook-worksheet-update', 'graph-workbook-worksheet-delete', 'graph-workbook-range-get', 'graph-workbook-range-set', 'graph-workbook-range-clear', 'graph-workbook-range-format-get', 'graph-workbook-range-format-set', 'graph-workbook-range-format-font-get', 'graph-workbook-range-format-font-set', 'graph-workbook-range-format-fill-get', 'graph-workbook-range-format-fill-set', 'graph-workbook-range-format-protection-get', 'graph-workbook-range-format-protection-set', 'graph-workbook-range-format-border-list', 'graph-workbook-range-format-border-get', 'graph-workbook-range-format-border-set', 'graph-workbook-range-format-autofit-rows', 'graph-workbook-range-format-autofit-columns', 'graph-workbook-name-list', 'graph-workbook-name-get', 'graph-workbook-name-create', 'graph-workbook-name-update', 'graph-workbook-name-delete', 'graph-workbook-table-list', 'graph-workbook-table-get', 'graph-workbook-table-create', 'graph-workbook-table-update', 'graph-workbook-table-delete', 'graph-workbook-table-row-list', 'graph-workbook-table-row-add', 'graph-workbook-table-column-list', 'graph-workbook-table-column-add', 'graph-workbook-table-sort-apply', 'graph-workbook-table-sort-clear', 'graph-workbook-table-filter-apply', 'graph-workbook-table-filter-clear', 'graph-workbook-table-convert-to-range', 'graph-workbook-chart-list', 'graph-workbook-chart-get', 'graph-workbook-chart-create', 'graph-workbook-chart-update', 'graph-workbook-chart-delete', 'graph-workbook-chart-image', 'graph-workbook-chart-set-data', 'graph-workbook-function-call', 'graph-workbook-protection-get', 'graph-workbook-protection-protect', 'graph-workbook-protection-unprotect', 'fabric-semantic-model-list', 'fabric-semantic-model-get', 'fabric-semantic-model-create', 'fabric-semantic-model-update', 'fabric-semantic-model-delete', 'fabric-semantic-model-get-definition', 'fabric-semantic-model-update-definition', 'fabric-semantic-model-export-definition', 'fabric-semantic-model-refresh', 'fabric-semantic-model-execute-dax', 'fabric-semantic-model-operation-get', 'fabric-semantic-model-operation-result', 'model-table-list', 'model-table-get', 'model-table-set', 'model-table-delete', 'model-measure-list', 'model-measure-get', 'model-measure-set', 'model-measure-delete', 'model-relationship-list', 'model-relationship-get', 'model-relationship-set', 'model-relationship-delete', 'model-role-list', 'model-role-get', 'model-role-set', 'model-role-delete', 'model-partition-list', 'model-partition-get', 'model-partition-set', 'model-partition-delete', 'model-expression-list', 'model-expression-get', 'model-expression-set', 'model-expression-delete', 'dax-execute', 'dax-list', 'dax-get', 'dax-set', 'dax-delete', 'semantic-artifact-inspect', 'semantic-artifact-export', 'semantic-artifact-push')]
         [string]$Command,
         [string]$WorkbookPath,
         [string]$OtherWorkbookPath,
@@ -1480,6 +1480,18 @@ function Invoke-PackageWorkbookHelper {
         [string]$RangeRef,
         [string]$TargetPath,
         [string]$Index,
+        [string]$DriveId,
+        [string]$ItemId,
+        [string]$ItemPath,
+        [string]$SessionId,
+        [string]$WorkspaceId,
+        [string]$SemanticModelId,
+        [string]$DatasetId,
+        [string]$OperationId,
+        [string]$OperationLocation,
+        [string]$DefinitionDir,
+        [string]$Format,
+        [string]$DaxQuery,
         [string]$ValueJson,
         [string]$ValuesJson,
         [string]$SpecJson,
@@ -1488,8 +1500,12 @@ function Invoke-PackageWorkbookHelper {
         [switch]$Hidden,
         [string]$StateRoot,
         [switch]$Apply,
+        [switch]$DryRun,
+        [switch]$PersistChanges,
+        [switch]$HardDelete,
         [switch]$Destructive,
         [switch]$Deep,
+        [switch]$Documentation,
         [int]$TimeoutSeconds = 120
     )
 
@@ -1538,6 +1554,42 @@ function Invoke-PackageWorkbookHelper {
     if (-not [string]::IsNullOrWhiteSpace($Index)) {
         $arguments += @('--index', $Index)
     }
+    if (-not [string]::IsNullOrWhiteSpace($DriveId)) {
+        $arguments += @('--drive-id', $DriveId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ItemId)) {
+        $arguments += @('--item-id', $ItemId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ItemPath)) {
+        $arguments += @('--item-path', $ItemPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
+        $arguments += @('--session-id', $SessionId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkspaceId)) {
+        $arguments += @('--workspace-id', $WorkspaceId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SemanticModelId)) {
+        $arguments += @('--semantic-model-id', $SemanticModelId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DatasetId)) {
+        $arguments += @('--dataset-id', $DatasetId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OperationId)) {
+        $arguments += @('--operation-id', $OperationId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OperationLocation)) {
+        $arguments += @('--operation-location', $OperationLocation)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DefinitionDir)) {
+        $arguments += @('--definition-dir', $DefinitionDir)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Format)) {
+        $arguments += @('--format', $Format)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DaxQuery)) {
+        $arguments += @('--dax-query', $DaxQuery)
+    }
     if (-not [string]::IsNullOrWhiteSpace($ValueJson)) {
         $arguments += @('--value-json', $ValueJson)
     }
@@ -1562,11 +1614,23 @@ function Invoke-PackageWorkbookHelper {
     if ($Apply) {
         $arguments += '--apply'
     }
+    if ($DryRun) {
+        $arguments += '--dry-run'
+    }
+    if ($PersistChanges) {
+        $arguments += '--persist-changes'
+    }
+    if ($HardDelete) {
+        $arguments += '--hard-delete'
+    }
     if ($Destructive) {
         $arguments += '--destructive'
     }
-    if ($Deep -and $Command -eq 'workbook-capabilities') {
+    if ($Deep) {
         $arguments += '--deep'
+    }
+    if ($Documentation) {
+        $arguments += '--documentation'
     }
     if ($Command -eq 'bootstrap') {
         if ([string]::IsNullOrWhiteSpace($OutputDir)) {
@@ -8024,6 +8088,90 @@ function Get-ExcelAutomationOperationCatalog {
             )
             warnings = @('Save-copy is a desktop-file-system behavior. Office Scripts and Excel JS scaffolds emit a handoff note instead of a direct save.')
         }
+        'apply-conditional-format' = @{
+            label = 'Apply Conditional Format'
+            vba = @('    statusLog = statusLog & "Conditional formatting should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  const range = sheet.getRange("B2");',
+                '  const conditionalFormat = range.addConditionalFormat(ExcelScript.ConditionalFormatType.cellValue);',
+                '  conditionalFormat.getCellValue().getRule().formula1 = "0";',
+                '  conditionalFormat.getCellValue().getRule().operator = ExcelScript.ConditionalCellValueOperator.greaterThan;',
+                '  conditionalFormat.getCellValue().getFormat().getFill().setColor("#C6EFCE");',
+                '  log.push("Applied an Office Script conditional format scaffold.");'
+            )
+            excelJs = @('    console.log("Conditional formatting scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'apply-data-validation' = @{
+            label = 'Apply Data Validation'
+            vba = @('    statusLog = statusLog & "Data validation should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  sheet.getRange("B2").getDataValidation().setRule({',
+                '    wholeNumber: { formula1: 1, formula2: 10, operator: ExcelScript.DataValidationOperator.between }',
+                '  });',
+                '  log.push("Applied an Office Script data validation scaffold.");'
+            )
+            excelJs = @('    console.log("Data validation scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'add-comment' = @{
+            label = 'Add Comment'
+            vba = @('    statusLog = statusLog & "Comment creation should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  workbook.addComment(sheet.getRange("B2"), "Generated by Excel Foundry");',
+                '  log.push("Added an Office Script comment scaffold.");'
+            )
+            excelJs = @('    console.log("Comment scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'table-upsert' = @{
+            label = 'Create Or Update Table'
+            vba = @('    statusLog = statusLog & "Table upsert should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  const tables = workbook.getTables();',
+                '  if (!tables.some(table => table.getName() === "ExcelFoundryTable")) {',
+                '    const table = sheet.addTable("A1:B2", true);',
+                '    table.setName("ExcelFoundryTable");',
+                '  }',
+                '  log.push("Created or retained an Office Script table scaffold.");'
+            )
+            excelJs = @('    console.log("Table upsert scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'worksheet-upsert' = @{
+            label = 'Create Or Update Worksheet'
+            vba = @('    statusLog = statusLog & "Worksheet upsert should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("ExcelFoundry") ?? workbook.addWorksheet("ExcelFoundry");',
+                '  sheet.getRange("A1").setValue("Excel Foundry");',
+                '  log.push("Created or updated an Office Script worksheet scaffold.");'
+            )
+            excelJs = @('    console.log("Worksheet upsert scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'format-range' = @{
+            label = 'Format Range'
+            vba = @('    statusLog = statusLog & "Range formatting should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  const format = sheet.getRange("A1:B2").getFormat();',
+                '  format.getFont().setBold(true);',
+                '  format.getFill().setColor("#D9EAF7");',
+                '  format.autofitColumns();',
+                '  format.autofitRows();',
+                '  log.push("Applied an Office Script range-format scaffold.");'
+            )
+            excelJs = @('    console.log("Range-format scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
+        'protect-worksheet' = @{
+            label = 'Protect Worksheet'
+            vba = @('    statusLog = statusLog & "Worksheet protection should be applied from the generated Office Script artifact." & vbCrLf')
+            officeScript = @(
+                '  const sheet = workbook.getWorksheet("Sheet1") ?? workbook.getWorksheets()[0];',
+                '  sheet.getProtection().protect({ allowFormatCells: true });',
+                '  log.push("Applied an Office Script worksheet-protection scaffold.");'
+            )
+            excelJs = @('    console.log("Worksheet-protection scaffold belongs in Office Scripts or host-specific Excel JS code.");')
+        }
     }
 }
 
@@ -9863,4 +10011,3 @@ function Invoke-ExcelFoundrySmoke {
         }
     }
 }
-
