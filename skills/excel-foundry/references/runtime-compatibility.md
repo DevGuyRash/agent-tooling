@@ -42,18 +42,13 @@ for generic audit/compare flows, keep Excel hidden unless the user explicitly
 needs an interactive host, and report host limitations instead of fabricating
 package parity.
 
-WHEN running live desktop tests THEN you SHALL require
-`EXCEL_FOUNDRY_LIVE_DESKTOP=1`. WHEN a live desktop test mutates, refreshes,
-exports, breaks links, or deletes workbook content THEN you SHALL also require
-`EXCEL_FOUNDRY_LIVE_MUTATION=1` and operate only on temporary workbook copies.
-
 WHEN VBA mutation or execution is requested THEN you SHALL require Windows
 desktop Excel and Trust Center access to the VBA project object model.
 
 WHEN refreshing Power Query or workbook connections THEN you SHALL require
 Windows desktop Excel plus any local providers, drivers, tenant permissions, or
 credential stores needed by the workbook. You SHALL NOT serialize credential
-material into manifests, fixtures, logs, or reports.
+material into manifests, logs, reports, or command output.
 
 Office Scripts, Excel JavaScript, and Office Add-in lanes currently generate
 portable artifacts or runner plans unless the matrix and tests show a live host
@@ -79,13 +74,7 @@ preservation, diagnostics, or a live host/cloud requirement.
 WHEN using live cloud commands THEN you SHALL provide bearer tokens at runtime
 through `EXCEL_FOUNDRY_GRAPH_TOKEN`, `EXCEL_FOUNDRY_FABRIC_TOKEN`, or
 `EXCEL_FOUNDRY_POWERBI_TOKEN`. You SHALL NOT serialize those tokens into
-manifests, fixtures, logs, command output, or definition artifacts.
-
-WHEN running live cloud tests THEN you SHALL require
-`EXCEL_FOUNDRY_LIVE_CLOUD=1` plus safe runtime workbook, workspace, dataset, or
-semantic model identifiers. WHEN a live cloud test mutates, refreshes, deletes,
-or updates service resources THEN you SHALL also require
-`EXCEL_FOUNDRY_LIVE_MUTATION=1` and use only explicitly disposable resources.
+manifests, logs, command output, or definition artifacts.
 
 WHEN a cloud command is mutating and `--dry-run` or `--what-if` is supplied
 THEN you SHALL return the planned method, URL, and redacted body without making

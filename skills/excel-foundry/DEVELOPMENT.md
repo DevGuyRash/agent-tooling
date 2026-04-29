@@ -13,6 +13,16 @@ work when copied to another host.
 WHEN you change this skill's public behavior THEN you SHALL keep `SKILL.md`
 focused on routing and progressive disclosure.
 
+WHEN writing production-facing instructions THEN you SHALL make them a
+heuristic category router.
+
+WHEN development procedure, fixture policy, or validation detail is needed
+THEN you SHALL keep it in this file unless normal workbook execution needs a
+one-line pointer.
+
+You SHALL NOT add a production `README.md`; use `SKILL.md` for routing and
+focused files under `references/` for details.
+
 WHEN a detail is only useful to skill maintainers THEN you SHALL put it in this
 file instead of `SKILL.md`.
 

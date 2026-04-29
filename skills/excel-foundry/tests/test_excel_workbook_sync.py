@@ -462,7 +462,7 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
 class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_expected_files_exist(self) -> None:
         self.assertTrue((ROOT / "SKILL.md").exists())
-        self.assertTrue((ROOT / "README.md").exists())
+        self.assertFalse((ROOT / "README.md").exists())
         self.assertTrue(OPENAI_YAML.exists())
         self.assertTrue(POSIX.exists())
         self.assertTrue(CMD.exists())
@@ -498,6 +498,138 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue(content.startswith("interface:\n"))
         self.assertNotIn("metadata:", content)
         self.assertIn("matrix-audit", content)
+
+    def test_production_docs_are_router_focused_and_command_synced(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        query = (ROOT / "references" / "query.md").read_text(encoding="utf-8")
+        openai = OPENAI_YAML.read_text(encoding="utf-8")
+        usage = (ROOT / "references" / "usage.md").read_text(encoding="utf-8")
+        public_docs = "\n".join([skill, query, usage, openai])
+
+        self.assertEqual(skill.count("DEVELOPMENT.md"), 1)
+        self.assertFalse((ROOT / "README.md").exists())
+        self.assertNotIn("references/testing.md", skill)
+        self.assertNotIn("tests/fixtures", public_docs)
+        self.assertNotIn("verification fixtures", public_docs.lower())
+        self.assertNotIn("planned surfaces", public_docs.lower())
+        self.assertNotIn("Use this skill for four explicit workflows", skill)
+        self.assertNotIn("opinionated workbook workflows", openai)
+        self.assertIn("Intent Router", skill)
+        self.assertIn("Progressive", (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8"))
+        self.assertIn("workbook capabilities --deep --documentation", public_docs)
+
+        ps1 = PS1.read_text(encoding="utf-8")
+        command_tokens = set(re.findall(r"'([a-z][a-z0-9-]+-[a-z0-9-]+)'", ps1))
+        special_resources = [
+            "fabric-semantic-model",
+            "graph-workbook",
+            "semantic-artifact",
+            "model-expression",
+            "model-relationship",
+            "model-partition",
+            "model-measure",
+            "model-table",
+            "model-role",
+            "office-script-live",
+            "office-script",
+            "excel-js-api",
+            "office-addin",
+            "addin-runtime",
+            "chart-sheet",
+            "pivot-chart",
+            "threaded-comment",
+            "external-data-range",
+            "workbook-view",
+            "formula-audit",
+            "forecast-sheet",
+            "cube-function",
+            "lambda-name",
+            "custom-xml",
+            "ole-object",
+            "goal-seek",
+            "data-table",
+            "calc-engine",
+            "xml-map",
+            "what-if",
+        ]
+        action_suffixes = sorted(
+            {
+                "set-filter",
+                "set-range",
+                "very-hide",
+                "break-links",
+                "repoint-links",
+                "safe-export",
+                "document-inspect",
+                "get-definition",
+                "update-definition",
+                "export-definition",
+                "execute-dax",
+                "operation-get",
+                "operation-result",
+                "sideload-plan",
+                "run-plan",
+                "add",
+                "apply",
+                "autofit-columns",
+                "autofit-rows",
+                "bootstrap",
+                "capabilities",
+                "clear",
+                "close",
+                "compatibility",
+                "convert",
+                "create",
+                "delete",
+                "diff",
+                "doctor",
+                "execute",
+                "export",
+                "get",
+                "hide",
+                "image",
+                "import",
+                "inspect",
+                "list",
+                "migrate",
+                "move",
+                "plan",
+                "protect",
+                "read",
+                "recalculate",
+                "redact",
+                "refresh",
+                "rename",
+                "reorder",
+                "repair",
+                "result",
+                "set",
+                "sort",
+                "unhide",
+                "unprotect",
+                "update",
+                "validate",
+            },
+            key=len,
+            reverse=True,
+        )
+
+        def resource_for(command: str) -> str | None:
+            for resource in special_resources:
+                if command == resource or command.startswith(resource + "-"):
+                    return resource
+            for action in action_suffixes:
+                suffix = "-" + action
+                if command.endswith(suffix):
+                    return command[: -len(suffix)]
+            return None
+
+        documented_groups = (query + "\n" + usage).lower()
+        actual_groups = {resource_for(command) for command in command_tokens}
+        actual_groups.discard(None)
+        ignored_internal_groups = {"dimension", "hyperlink", "comment", "formula", "validation", "protection", "print"}
+        for group in sorted(actual_groups - ignored_internal_groups):
+            self.assertIn(group, documented_groups, group)
 
     def test_fixture_manifest_exercises_richer_surfaces(self) -> None:
         manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))

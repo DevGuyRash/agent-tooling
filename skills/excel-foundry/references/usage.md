@@ -1,10 +1,16 @@
 # Usage
 
-## Surfaces
+Use this file for command examples after `SKILL.md` or `references/query.md`
+has selected the command family.
 
-- `scripts/excel_workbook_sync.py`: generic extraction, parity compare, and mutation-based audit
-- `scripts/excel-foundry`: manifest-driven inspect/query/bootstrap plus plan/compare/sync and the legacy push/pull/roundtrip/refresh wrappers
-- `scripts/sync-foundry.ps1`: manifest-driven COM sync for push, pull, roundtrip, and refresh
+## Entrypoints
+
+- `scripts/excel-foundry`: direct `<resource> <action> [flags]` commands plus
+  manifest/artifact synchronization.
+- `scripts/excel_workbook_sync.py`: generic extraction, parity compare, and
+  copied-workbook audit bundles.
+- `scripts/sync-foundry.ps1`: COM-backed manifest push, pull, roundtrip, and
+  refresh wrappers.
 
 ## Engines
 
@@ -23,13 +29,12 @@ hyperlinks, comments, and print settings. Desktop routes cover fidelity
 mutation for Power Query, connections, pivots, slicers, timelines, Data Model
 objects, and rich chart authoring.
 
-## Generic audit CLI
+## Generic Audit CLI
 
 This CLI accepts arbitrary Excel workbook inputs for pull, audit, and copied
 workbook reporting. Package-backed reads are broadly workbook-agnostic for
 package-readable `.xlsx` and `.xlsm`; COM-backed compare still depends on Excel
-being able to open the workbook on the current host. Bundled fixtures are
-verification assets for the repo and are not required inputs.
+being able to open the workbook on the current host.
 
 ### Pull
 
@@ -88,7 +93,7 @@ Audit runs emit:
 - `reports/mutation-report.json`
 - `reports/report.json`
 
-## Manifest-driven sync
+## Manifest Artifact Commands
 
 Use the existing launcher or `sync-foundry.ps1` when committed repo artifacts and
 manifests are the source of truth.
@@ -168,3 +173,32 @@ plan and compare cleanly in the package path and return route metadata for
 write-back. Desktop Excel direct commands can create/update/delete shapes,
 add/update/delete pictures, update/delete workbook connections, and inventory
 controls on copied live workbooks.
+
+## Direct Command Examples
+
+```powershell
+sh <skills-file-root>/scripts/excel-foundry workbook capabilities `
+  --workbook-path path\to\file.xlsx `
+  --deep `
+  --documentation
+
+sh <skills-file-root>/scripts/excel-foundry range set `
+  --workbook-path path\to\file.xlsx `
+  --sheet Inputs `
+  --range-ref A1:B2 `
+  --values-json '[[1,2],[3,4]]'
+
+sh <skills-file-root>/scripts/excel-foundry graph-workbook range-set `
+  --item-id DRIVE_ITEM_ID `
+  --session-id SESSION_ID `
+  --sheet Sheet1 `
+  --range-ref A1:B2 `
+  --values-json '[[1,2]]' `
+  --dry-run
+
+sh <skills-file-root>/scripts/excel-foundry fabric-semantic-model get-definition `
+  --workspace-id WORKSPACE_ID `
+  --semantic-model-id MODEL_ID `
+  --format TMDL `
+  --dry-run
+```
