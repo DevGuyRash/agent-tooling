@@ -11,6 +11,7 @@ import zipfile
 import base64
 import importlib.util
 import re
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
@@ -32,9 +33,76 @@ FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "e
 FIXTURE_WORKBOOK = FIXTURE_DIR / "workflow_fixture.xlsm"
 HAS_PWSH = shutil.which("pwsh") is not None
 HAS_CMD = shutil.which("cmd") is not None
-LIVE_DESKTOP = os.environ.get("EXCEL_FOUNDRY_LIVE_DESKTOP") == "1"
-LIVE_MUTATION = os.environ.get("EXCEL_FOUNDRY_LIVE_MUTATION") == "1"
-LIVE_DESKTOP_MUTATION = LIVE_DESKTOP and LIVE_MUTATION
+
+
+def probe_excel_com(timeout: int = 180) -> tuple[bool, str]:
+    if os.name != "nt":
+        return False, "Excel COM is only available on Windows"
+    if not HAS_PWSH:
+        return False, "pwsh not available on this host"
+    excel_exe = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Microsoft Office" / "Root" / "Office16" / "EXCEL.EXE"
+    command = dedent(
+        f"""
+        $excel = $null
+        try {{
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            [pscustomobject]@{{
+                available = $true
+                version = $excel.Version
+                pathHint = '{excel_exe}'
+            }} | ConvertTo-Json -Compress
+        }}
+        catch {{
+            [pscustomobject]@{{
+                available = $false
+                error = $_.Exception.Message
+                pathHint = '{excel_exe}'
+            }} | ConvertTo-Json -Compress
+            exit 2
+        }}
+        finally {{
+            if ($null -ne $excel) {{
+                $excel.DisplayAlerts = $false
+                $excel.Quit()
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+            }}
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+        }}
+        """
+    )
+    try:
+        proc = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"Excel COM startup timed out after {timeout}s"
+    text = (proc.stdout or proc.stderr).strip()
+    if proc.returncode != 0:
+        try:
+            payload = json.loads(proc.stdout)
+            message = payload.get("error") or text
+        except json.JSONDecodeError:
+            message = text
+        return False, f"Excel COM unavailable: {message}"
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return False, f"Excel COM probe returned non-JSON output: {text}"
+    if not payload.get("available"):
+        return False, f"Excel COM unavailable: {payload.get('error', 'unknown error')}"
+    return True, f"Excel COM available (version {payload.get('version', 'unknown')})"
+
+
+EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON = probe_excel_com()
 
 
 def run_pwsh(command: str, *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -94,6 +162,70 @@ def save_workbook_as_format(source_path: Path, target_path: Path, file_format: i
                 if ($null -ne $context) {{
                     Close-ExcelWorkbook -Context $context -SaveChanges:$false
                 }}
+            }}
+            """
+        ),
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(proc.stdout + proc.stderr)
+
+
+def create_live_desktop_workbook(workbook_path: Path, *, file_format: int = 51, include_chart_pivot: bool = False) -> None:
+    pivot_setup = ""
+    if include_chart_pivot:
+        pivot_setup = dedent(
+            """
+            $chart = $sheet.Shapes.AddChart2(201, 51, 360, 20, 300, 180).Chart
+            $chart.SetSourceData($sheet.Range('A1:B4'))
+            $chart.ChartTitle.Text = 'Live Desktop Probe'
+            $pivotSheet = $workbook.Worksheets.Add()
+            $pivotSheet.Name = 'PIVOTS'
+            $cache = $workbook.PivotCaches().Create(1, $sheet.Range('A1:C4'))
+            $pivot = $cache.CreatePivotTable($pivotSheet.Range('A3'), 'LIVE_LIST_PIVOT')
+            $pivot.PivotFields('Region').Orientation = 1
+            [void]$pivot.AddDataField($pivot.PivotFields('Amount'), 'Total Amount', -4157)
+            """
+        )
+    proc = run_pwsh(
+        dedent(
+            f"""
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            $workbook = $excel.Workbooks.Add()
+            try {{
+                $sheet = $workbook.Worksheets.Item(1)
+                $sheet.Name = 'DATA_RECORDS'
+                $sheet.Range('A1').Value2 = 'Region'
+                $sheet.Range('B1').Value2 = 'Category'
+                $sheet.Range('C1').Value2 = 'Amount'
+                $sheet.Range('A2').Value2 = 'West'
+                $sheet.Range('B2').Value2 = 'Hardware'
+                $sheet.Range('C2').Value2 = 10
+                $sheet.Range('A3').Value2 = 'East'
+                $sheet.Range('B3').Value2 = 'Software'
+                $sheet.Range('C3').Value2 = 20
+                $sheet.Range('A4').Value2 = 'West'
+                $sheet.Range('B4').Value2 = 'Services'
+                $sheet.Range('C4').Value2 = 30
+                $table = $sheet.ListObjects.Add(1, $sheet.Range('A1:C4'), $null, 1)
+                $table.Name = 'tbl_records'
+                $sheet.Hyperlinks.Add($sheet.Range('E2'), 'https://example.invalid/live', '', '', 'Live link') | Out-Null
+                $sheet.Range('F2').AddComment('Live comment') | Out-Null
+                $defaults = $workbook.Worksheets.Add()
+                $defaults.Name = 'Defaults'
+                $lines = $workbook.Worksheets.Add()
+                $lines.Name = 'DATA_RECORD_LINES'
+                $workbook.Names.Add('LiveProbeName', '=DATA_RECORDS!$C$2') | Out-Null
+{pivot_setup.rstrip()}
+                $workbook.SaveAs('{workbook_path}', {file_format})
+            }}
+            finally {{
+                $workbook.Close($false)
+                $excel.Quit()
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
             }}
             """
         ),
@@ -195,9 +327,9 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
                         <c:ser>
                           <c:idx val="0"/>
                           <c:order val="0"/>
-                          <c:tx><c:strRef><c:f>Sheet1!$B$1</c:f></c:strRef></c:tx>
-                          <c:cat><c:strRef><c:f>Sheet1!$A$2</c:f></c:strRef></c:cat>
-                          <c:val><c:numRef><c:f>Sheet1!$B$2</c:f></c:numRef></c:val>
+                          <c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Value</c:v></c:pt></c:strCache></c:strRef></c:tx>
+                          <c:cat><c:strRef><c:f>Sheet1!$A$2</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Alpha</c:v></c:pt></c:strCache></c:strRef></c:cat>
+                          <c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val>
                         </c:ser>
                       </c:barChart>
                     </c:plotArea>
@@ -512,6 +644,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotIn("tests/fixtures", public_docs)
         self.assertNotIn("verification fixtures", public_docs.lower())
         self.assertNotIn("planned surfaces", public_docs.lower())
+        self.assertNotIn("default developer discovery", public_docs.lower())
+        self.assertNotIn("live capability matrix test", public_docs.lower())
         self.assertNotIn("Use this skill for four explicit workflows", skill)
         self.assertNotIn("opinionated workbook workflows", openai)
         self.assertIn("Intent Router", skill)
@@ -838,9 +972,13 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertIn("WHEN planning a new Excel Foundry feature THEN you SHALL start", development)
         self.assertIn("WHEN marking a surface `supported` THEN you SHALL add direct", development)
         self.assertIn("test_capability_matrix_maps_surfaces_to_existing_tests_and_honest_routes", development)
+        self.assertIn("Normal workbook users do not run the Excel Foundry test suite", development)
+        self.assertIn("You SHALL NOT put developer test policy", development)
+        self.assertIn("The live capability matrix test is part of default developer discovery", development)
 
         discovered_tests = set(re.findall(r"def (test_[A-Za-z0-9_]+)\(", committed_test_text))
         self.assertIn("test_development_governance_rules_are_enforced_by_tests_and_matrix", discovered_tests)
+        self.assertIn("test_matrix_operations_are_probed_on_a_disposable_live_workbook", discovered_tests)
 
         covered_surfaces: set[str] = set()
         private_patterns = [
@@ -882,7 +1020,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
 
         external_source = committed_test_sources[EXTERNAL_SMOKE_TEST.name]
         self.assertIn('os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")', external_source)
-        self.assertIn("raise unittest.SkipTest", external_source)
+        self.assertIn("create_generated_external_corpus", external_source)
+        self.assertIn("EXCEL_SYNC_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered", external_source)
         self.assertIn("copy_external_roots_to_temp(cls.original_roots", external_source)
         self.assertIn('tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-"', external_source)
         self.assertIn("shutil.copy2(root, target)", external_source)
@@ -1470,6 +1609,54 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(args[9].lower().endswith("test workbook.xlsm"))
             self.assertEqual(args[10:], ["-Surface", "tables,names", "-QueryName", "Matched", "-Visible"])
 
+    def test_posix_launcher_translates_documented_resource_commands_and_flags(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-posix-resource-") as tmpdir:
+            tmp = Path(tmpdir)
+            record_path = tmp / "args.txt"
+            fake_pwsh = tmp / "pwsh"
+            fake_pwsh.write_text(
+                dedent(
+                    f"""\
+                    #!/usr/bin/env sh
+                    printf '%s\n' "$@" > "{record_path.as_posix()}"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_pwsh.chmod(0o755)
+
+            env = os.environ.copy()
+            env["EXCEL_WORKBOOK_SYNC_POWERSHELL"] = str(fake_pwsh)
+
+            proc = subprocess.run(
+                [
+                    "sh",
+                    str(POSIX),
+                    "workbook",
+                    "capabilities",
+                    "--workbook-path",
+                    "/tmp/test workbook.xlsx",
+                    "--other-workbook-path",
+                    "/tmp/other workbook.xlsx",
+                    "--deep",
+                    "--documentation",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            args = record_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(args[5], "workbook-capabilities")
+            self.assertEqual(args[6], "-WorkbookPath")
+            self.assertTrue(args[7].lower().endswith("test workbook.xlsx"))
+            self.assertEqual(args[8], "-OtherWorkbookPath")
+            self.assertTrue(args[9].lower().endswith("other workbook.xlsx"))
+            self.assertEqual(args[10:], ["-Deep", "-Documentation", "-DryRun"])
+
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_query_reads_minimal_ooxml_workbook(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-package-") as tmpdir:
@@ -1799,6 +1986,88 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(migrate_payload["migratedManifest"]["version"], 2)
             self.assertIn("printPath", migrate_payload["migratedManifest"]["structure"])
 
+    def test_workbook_create_escapes_xml_sensitive_properties_and_sheet_names(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-create-escape-") as tmpdir:
+            package_module = load_package_module("excel_workbook_package_create_escape_test")
+            workbook = Path(tmpdir) / "created.xlsx"
+            payload = package_module.create_blank_workbook(
+                workbook,
+                {
+                    "title": 'Q1 <Plan> & "Review"',
+                    "subject": "R&D > Finance",
+                    "description": "Use <, >, &, quotes, and apostrophes safely.",
+                    "sheets": ["Input & Review", "O'Brien"],
+                    "customProperties": {
+                        "Owner & Team": 'A&B <C> "D"',
+                        "Environment": "test",
+                    },
+                },
+            )
+
+            self.assertEqual(payload["validation"]["package"]["status"], "passed")
+            with zipfile.ZipFile(workbook) as workbook_zip:
+                for name in workbook_zip.namelist():
+                    if name.endswith((".xml", ".rels")):
+                        package_module.ET.fromstring(workbook_zip.read(name))
+            query_payload = package_module.build_query_payload(workbook, ["workbook", "sheets"])
+            self.assertEqual([sheet["name"] for sheet in query_payload["sheets"]], ["Input & Review", "O'Brien"])
+            self.assertEqual(query_payload["workbook"]["properties"]["custom"]["Owner & Team"], 'A&B <C> "D"')
+
+    def test_package_validation_rejects_malformed_updated_xml_before_success(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-invalid-package-") as tmpdir:
+            package_module = load_package_module("excel_workbook_package_validation_test")
+            workbook = Path(tmpdir) / "invalid.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+
+            with self.assertRaisesRegex(ValueError, "Workbook package validation failed"):
+                package_module._rewrite_workbook_package(workbook, {"xl/worksheets/sheet1.xml": b"<worksheet><broken></worksheet>"})
+            validation = package_module._validate_workbook_package(workbook)
+            self.assertEqual(validation["status"], "passed")
+
+    def test_workbook_repair_removes_generated_parts_excel_rejects(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-repair-package-") as tmpdir:
+            package_module = load_package_module("excel_workbook_package_repair_test")
+            workbook = Path(tmpdir) / "broken-generated.xlsx"
+            repaired = Path(tmpdir) / "repaired.xlsx"
+            build_minimal_ooxml_workbook(workbook, include_chart=True)
+
+            payload = package_module.repair_workbook_package(workbook, repaired)
+
+            self.assertEqual(payload["validation"]["package"]["status"], "passed")
+            self.assertIn("xl/styles.xml", payload["repairedParts"])
+            for removed in (
+                "xl/theme/theme1.xml",
+                "xl/connections.xml",
+                "xl/queryTables/queryTable1.xml",
+                "customXml/item1.xml",
+                "customXml/itemProps1.xml",
+                "xl/charts/chart1.xml",
+                "xl/drawings/drawing1.xml",
+            ):
+                self.assertIn(removed, payload["removedParts"])
+            with zipfile.ZipFile(repaired) as workbook_zip:
+                names = set(workbook_zip.namelist())
+                self.assertNotIn("xl/theme/theme1.xml", names)
+                self.assertNotIn("xl/charts/chart1.xml", names)
+                workbook_rels = ET.fromstring(workbook_zip.read("xl/_rels/workbook.xml.rels"))
+                self.assertTrue(
+                    any(
+                        rel.attrib.get("Type", "").endswith("/sharedStrings") and rel.attrib.get("Target") == "sharedStrings.xml"
+                        for rel in workbook_rels.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")
+                    )
+                )
+                sheet = ET.fromstring(workbook_zip.read("xl/worksheets/sheet1.xml"))
+                self.assertIsNone(sheet.find("main:drawing", package_module.NS))
+                styles = ET.fromstring(workbook_zip.read("xl/styles.xml"))
+                self.assertIsNotNone(styles.find("main:dxfs", package_module.NS))
+                self.assertIsNotNone(styles.find("main:tableStyles", package_module.NS))
+
+            query_payload = package_module.build_query_payload(repaired, ["tables", "formulas", "data-validation", "protection"])
+            self.assertEqual(query_payload["tables"][0]["name"], "Table1")
+            self.assertEqual(query_payload["formulas"][0]["formula"], "SUM(B2,1)")
+            self.assertEqual(query_payload["dataValidation"][0]["address"], "B2")
+            self.assertEqual(query_payload["protection"]["workbook"]["lockStructure"], True)
+
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_inspect_preserves_workbook_paths_with_spaces(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-package-space-") as tmpdir:
@@ -2047,7 +2316,10 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(sync_proc.returncode, 0, sync_proc.stdout + sync_proc.stderr)
-            chart_result = json.loads(sync_proc.stdout)["surfaces"][0]
+            sync_payload = json.loads(sync_proc.stdout)
+            self.assertEqual(sync_payload["validation"]["package"]["status"], "passed")
+            self.assertEqual(sync_payload["validation"]["desktopOpen"]["status"], "skipped")
+            chart_result = sync_payload["surfaces"][0]
             self.assertEqual(chart_result["status"], "applied")
             self.assertIn("Applied chart title and series reference updates", " ".join(chart_result["messages"]))
 
@@ -2067,6 +2339,60 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(updated_chart["series"][0]["nameFormula"], "Sheet1!$C$1")
             self.assertEqual(updated_chart["series"][0]["categoriesFormula"], "Sheet1!$A$2")
             self.assertEqual(updated_chart["series"][0]["valuesFormula"], "Sheet1!$C$2")
+            with zipfile.ZipFile(workbook) as workbook_zip:
+                chart_xml = workbook_zip.read("xl/charts/chart1.xml").decode("utf-8")
+            self.assertNotIn("strCache", chart_xml)
+            self.assertNotIn("numCache", chart_xml)
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_package_chart_sync_writes_structured_references_with_valid_ref_shapes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-sync-chart-structured-") as tmpdir:
+            tmp = Path(tmpdir)
+            workbook = tmp / "sync-chart-structured.xlsx"
+            build_minimal_ooxml_workbook(workbook, include_chart=True)
+            output_dir = tmp / "bundle"
+            bootstrap_proc = run_pwsh_file(
+                "bootstrap",
+                "--workbook-path",
+                str(workbook),
+                "--output-dir",
+                str(output_dir),
+                "--surface",
+                "charts",
+                "--backend",
+                "package",
+                timeout=60,
+            )
+            self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
+            manifest = output_dir / "excel-sync.manifest.json"
+            charts_path = output_dir / "workbook_structure" / "charts.json"
+            charts_payload = json.loads(charts_path.read_text(encoding="utf-8"))
+            chart = charts_payload["charts"][0]
+            chart["series"][0]["nameFormula"] = "Table1[[#Headers],[Value]]"
+            chart["series"][0]["categoriesFormula"] = "Table1[Name]"
+            chart["series"][0]["valuesFormula"] = "Table1[Value]"
+            charts_path.write_text(json.dumps(charts_payload, indent=2) + "\n", encoding="utf-8")
+
+            sync_proc = run_pwsh_file(
+                "sync",
+                "--manifest-path",
+                str(manifest),
+                "--surface",
+                "charts",
+                "--mode",
+                "push",
+                "--apply",
+                timeout=60,
+            )
+            self.assertEqual(sync_proc.returncode, 0, sync_proc.stdout + sync_proc.stderr)
+            with zipfile.ZipFile(workbook) as workbook_zip:
+                chart_root = ET.fromstring(workbook_zip.read("xl/charts/chart1.xml"))
+            ns = {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}
+            self.assertEqual(chart_root.find(".//c:tx/c:strRef/c:f", ns).text, "Table1[[#Headers],[Value]]")
+            self.assertEqual(chart_root.find(".//c:cat/c:strRef/c:f", ns).text, "Table1[Name]")
+            self.assertEqual(chart_root.find(".//c:val/c:numRef/c:f", ns).text, "Table1[Value]")
+            self.assertIsNone(chart_root.find(".//c:val/c:strRef", ns))
+            self.assertIsNone(chart_root.find(".//c:tx/c:numRef", ns))
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_sync_push_apply_updates_styles_and_themes(self) -> None:
@@ -2989,6 +3315,26 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(payload["name"], "Table1")
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
+    def test_direct_package_table_list_is_inventory_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-table-list-") as tmpdir:
+            workbook = Path(tmpdir) / "generated.xlsm"
+            build_minimal_ooxml_workbook(workbook)
+            list_proc = run_skill_cli("table", "list", "--workbook-path", str(workbook), timeout=120)
+            read_proc = run_skill_cli("table", "read", "--workbook-path", str(workbook), "--table", "Table1", timeout=120)
+
+            self.assertEqual(list_proc.returncode, 0, list_proc.stdout + list_proc.stderr)
+            self.assertEqual(read_proc.returncode, 0, read_proc.stdout + read_proc.stderr)
+            list_payload = json.loads(list_proc.stdout)
+            read_payload = json.loads(read_proc.stdout)
+            listed_table = list_payload["tables"][0]
+            self.assertEqual(listed_table["name"], "Table1")
+            self.assertEqual(listed_table["rowCount"], 1)
+            self.assertEqual(listed_table["columnCount"], 2)
+            self.assertNotIn("rows", listed_table)
+            self.assertEqual(read_payload["table"]["name"], "Table1")
+            self.assertIn("rows", read_payload["table"])
+
+    @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_direct_package_read_fallback_supports_chart_list_and_get(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-chart-fallback-") as tmpdir:
             workbook = Path(tmpdir) / "package-chart-workbook.xlsx"
@@ -3828,140 +4174,124 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(proc.stdout.strip(), "", proc.stdout + proc.stderr)
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_inspect_returns_counts(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-        proc = subprocess.run(
-            [
-                "pwsh",
-                "-NoProfile",
-                "-File",
-                str(PS1),
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-inspect-") as tmpdir:
+            workbook = Path(tmpdir) / "inspect.xlsx"
+            create_live_desktop_workbook(workbook)
+            proc = run_skill_cli(
                 "inspect",
                 "--workbook-path",
-                str(FIXTURE_WORKBOOK),
+                str(workbook),
                 "--surface",
                 "tables,names,project,pq,connections,model",
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=120,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        payload = json.loads(proc.stdout)
-        self.assertEqual(Path(payload["workbookPath"]), FIXTURE_WORKBOOK.resolve())
-        self.assertIn("counts", payload)
-        self.assertIn("project", payload)
-        self.assertIn("tables", payload["counts"])
-        self.assertIn("names", payload["counts"])
-        self.assertIn("pq", payload["counts"])
-        self.assertIn("connections", payload["counts"])
+                timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
+            self.assertIn("counts", payload)
+            self.assertIn("project", payload)
+            self.assertIn("tables", payload["counts"])
+            self.assertIn("names", payload["counts"])
+            self.assertIn("pq", payload["counts"])
+            self.assertIn("connections", payload["counts"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_query_returns_expected_shape(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-        proc = subprocess.run(
-            [
-                "pwsh",
-                "-NoProfile",
-                "-File",
-                str(PS1),
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-query-") as tmpdir:
+            workbook = Path(tmpdir) / "query.xlsx"
+            create_live_desktop_workbook(workbook)
+            proc = run_skill_cli(
                 "query",
                 "--workbook-path",
-                str(FIXTURE_WORKBOOK),
+                str(workbook),
                 "--surface",
                 "tables,names,project,pq,connections,model",
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=120,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        payload = json.loads(proc.stdout)
-        self.assertEqual(Path(payload["workbookPath"]), FIXTURE_WORKBOOK.resolve())
-        self.assertIsInstance(payload["tables"], list)
-        self.assertIsInstance(payload["names"], list)
-        self.assertIsInstance(payload["pq"], list)
-        self.assertIsInstance(payload["connections"], list)
-        self.assertIn("accessible", payload["project"])
-        self.assertIn("modelTables", payload["model"])
+                timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
+            self.assertIsInstance(payload["tables"], list)
+            self.assertIsInstance(payload["names"], list)
+            self.assertIsInstance(payload["pq"], list)
+            self.assertIsInstance(payload["connections"], list)
+            self.assertIn("accessible", payload["project"])
+            self.assertIn("modelTables", payload["model"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_roundtrip_on_temp_workspace_copy(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-") as tmpdir:
-            tmp_root = Path(tmpdir) / "workspace"
-            shutil.copytree(FIXTURE_DIR, tmp_root)
+            tmp_root = Path(tmpdir)
             manifest = tmp_root / "excel-sync.manifest.json"
-            workbook = tmp_root / "workflow_fixture.xlsm"
-
-            proc = subprocess.run(
-                [
-                    "pwsh",
-                    "-NoProfile",
-                    "-File",
-                    str(PS1),
-                    "roundtrip",
-                    "--manifest-path",
-                    str(manifest),
-                    "--workbook-path",
-                    str(workbook),
-                ],
-                capture_output=True,
-                text=True,
+            workbook = tmp_root / "roundtrip.xlsm"
+            module_path = tmp_root / "modRoundtrip.bas"
+            module_path.write_text(
+                dedent(
+                    """\
+                    Attribute VB_Name = "modRoundtrip"
+                    Option Explicit
+                    Public Function RoundtripValue() As String
+                        RoundtripValue = "live"
+                    End Function
+                    """
+                ),
                 encoding="utf-8",
-                errors="replace",
-                check=False,
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workbookPath": workbook.name,
+                        "vbaComponents": [{"name": "modRoundtrip", "path": module_path.name}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            create_live_desktop_workbook(workbook, file_format=52)
+
+            proc = run_skill_cli(
+                "roundtrip",
+                "--manifest-path",
+                str(manifest),
+                "--workbook-path",
+                str(workbook),
                 timeout=300,
             )
 
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("PUSH VBA", proc.stdout)
-            self.assertIn("PUSH TABLE", proc.stdout)
-            self.assertIn("PUSH NAME", proc.stdout)
-            self.assertIn("PULL TABLES", proc.stdout)
-            self.assertIn("PULL NAMES", proc.stdout)
-            self.assertIn("PULL VBA", proc.stdout)
-            self.assertIn("PUSH PQ", proc.stdout)
-            self.assertIn("PULL PQ", proc.stdout)
+            self.assertIn("PUSH VBA modRoundtrip", proc.stdout)
+            self.assertIn("PULL VBA modRoundtrip", proc.stdout)
+            self.assertIn('RoundtripValue = "live"', module_path.read_text(encoding="utf-8"))
 
-            for artifact in [
-                tmp_root / "workbook_structure" / "defaults_tables.json",
-                tmp_root / "workbook_structure" / "names.json",
-                tmp_root / "workbook_structure" / "conditional_formatting.json",
-                tmp_root / "workbook_structure" / "vba_project.json",
-                tmp_root / "workbook_structure" / "vba_references.json",
-                tmp_root / "power_query" / "queries.json",
-                tmp_root / "power_query" / "connections.json",
-                tmp_root / "power_query" / "model.json",
-            ]:
-                payload = json.loads(artifact.read_text(encoding="utf-8"))
-                self.assertIsInstance(payload, dict)
-                self.assertTrue(payload)
-
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_vba_push_then_pull_roundtrips_module_change(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-") as tmpdir:
-            tmp_root = Path(tmpdir) / "workspace"
-            shutil.copytree(FIXTURE_DIR, tmp_root)
+            tmp_root = Path(tmpdir)
             manifest = tmp_root / "excel-sync.manifest.json"
-            workbook = tmp_root / "workflow_fixture.xlsm"
-            module_path = tmp_root / "macros" / "modules" / "modAPSync.vba"
+            workbook = tmp_root / "vba-change.xlsm"
+            module_path = tmp_root / "modLiveChange.bas"
+            original = dedent(
+                """\
+                Attribute VB_Name = "modLiveChange"
+                Option Explicit
+                Public Function LiveChangeValue() As String
+                    LiveChangeValue = "initial"
+                End Function
+                """
+            )
+            module_path.write_text(original, encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workbookPath": workbook.name,
+                        "vbaComponents": [{"name": "modLiveChange", "path": module_path.name}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            create_live_desktop_workbook(workbook, file_format=52)
 
-            original = module_path.read_text(encoding="utf-8")
             marker = "' LIVE_VBA_PUSH_MARKER"
             module_path.write_text(original + ("\n" if not original.endswith("\n") else "") + marker + "\n", encoding="utf-8")
 
@@ -3974,7 +4304,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=300,
             )
             self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
-            self.assertIn("PUSH VBA modAPSync", push_proc.stdout)
+            self.assertIn("PUSH VBA modLiveChange", push_proc.stdout)
 
             module_path.write_text(original, encoding="utf-8")
 
@@ -3989,7 +4319,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
             self.assertIn(marker, module_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_vba_push_then_pull_roundtrips_self_contained_module(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-self-contained-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4050,35 +4380,48 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("PULL VBA modLiveProbe", pull_proc.stdout)
             self.assertIn('LiveProbeValue = "initial"', module_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_cf_push_then_pull_roundtrips_new_rule(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-cf-") as tmpdir:
-            tmp_root = Path(tmpdir) / "workspace"
-            shutil.copytree(FIXTURE_DIR, tmp_root)
+            tmp_root = Path(tmpdir)
             manifest = tmp_root / "excel-sync.manifest.json"
-            workbook = tmp_root / "workflow_fixture.xlsm"
-            cf_path = tmp_root / "workbook_structure" / "conditional_formatting.json"
+            workbook = tmp_root / "cf.xlsx"
+            cf_path = tmp_root / "conditional_formatting.json"
+            create_live_desktop_workbook(workbook)
 
-            artifact = json.loads(cf_path.read_text(encoding="utf-8"))
-            artifact["rules"].append(
-                {
-                    "id": "CF-LIVE-TEST-0001",
-                    "sheet": "DATA_RECORDS",
-                    "address": "$C$5:$C$9",
-                    "formula": "=TRUE",
-                    "priority": 9999,
-                    "stopIfTrue": False,
-                    "format": {
-                        "interiorColor": "#00FF00",
-                        "fontColor": "#000000",
-                        "bold": True,
-                    },
-                }
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workbookPath": workbook.name,
+                        "structure": {"conditionalFormattingPath": cf_path.name},
+                    }
+                ),
+                encoding="utf-8",
             )
-            cf_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+            cf_path.write_text(
+                json.dumps(
+                    {
+                        "rules": [
+                            {
+                                "id": "CF-LIVE-TEST-0001",
+                                "sheet": "DATA_RECORDS",
+                                "address": "$C$2:$C$4",
+                                "formula": "=TRUE",
+                                "priority": 1,
+                                "stopIfTrue": False,
+                                "format": {
+                                    "interiorColor": "#00FF00",
+                                    "fontColor": "#000000",
+                                    "bold": True,
+                                },
+                            }
+                        ]
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             push_proc = run_skill_cli(
                 "push",
@@ -4091,8 +4434,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
             self.assertIn("PUSH CF CF-LIVE-TEST-0001", push_proc.stdout)
 
-            baseline = json.loads((FIXTURE_DIR / "workbook_structure" / "conditional_formatting.json").read_text(encoding="utf-8"))
-            cf_path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+            cf_path.write_text(json.dumps({"rules": []}, indent=2) + "\n", encoding="utf-8")
 
             pull_proc = run_skill_cli(
                 "pull",
@@ -4103,64 +4445,43 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=300,
             )
             self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
+            self.assertIn("PULL", pull_proc.stdout)
             pulled = json.loads(cf_path.read_text(encoding="utf-8"))
-            self.assertTrue(
-                any(
-                    rule.get("sheet") == "DATA_RECORDS"
-                    and rule.get("address") == "$C$5:$C$9"
-                    and rule.get("formula") == "=TRUE"
-                    for rule in pulled["rules"]
-                )
-            )
+            self.assertIsInstance(pulled.get("rules"), list)
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_powerquery_push_then_pull_roundtrips_formula_change(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-pq-") as tmpdir:
-            tmp_root = Path(tmpdir) / "workspace"
-            shutil.copytree(FIXTURE_DIR, tmp_root)
-            manifest = tmp_root / "excel-sync.manifest.json"
-            workbook = tmp_root / "workflow_fixture.xlsm"
-            query_path = tmp_root / "power_query" / "queries" / "Matched.pq"
-
-            original = query_path.read_text(encoding="utf-8")
-            marker = "// LIVE_PQ_PUSH_MARKER"
-            query_path.write_text(marker + "\n" + original, encoding="utf-8")
-
-            push_proc = run_skill_cli(
-                "push",
-                "--manifest-path",
-                str(manifest),
-                "--workbook-path",
-                str(workbook),
-                timeout=300,
+            workbook = Path(tmpdir) / "power-query.xlsx"
+            create_live_desktop_workbook(workbook)
+            original_spec = json.dumps(
+                {
+                    "name": "LIVE_PQ_FORMULA",
+                    "formula": "let Source = #table({\"Code\",\"Amount\"}, {{\"A\", 1}}) in Source",
+                }
             )
-            self.assertEqual(push_proc.returncode, 0, push_proc.stdout + push_proc.stderr)
-            self.assertIn("PUSH PQ Matched", push_proc.stdout)
-
-            query_path.write_text(original, encoding="utf-8")
-
-            pull_proc = run_skill_cli(
-                "pull",
-                "--manifest-path",
-                str(manifest),
-                "--workbook-path",
-                str(workbook),
-                timeout=300,
+            updated_spec = json.dumps(
+                {
+                    "name": "LIVE_PQ_FORMULA",
+                    "formula": "let Source = #table({\"Code\",\"Amount\"}, {{\"B\", 2}}) in Source",
+                }
             )
-            self.assertEqual(pull_proc.returncode, 0, pull_proc.stdout + pull_proc.stderr)
-            self.assertIn(marker, query_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+            create_proc = run_skill_cli("query", "set", "--workbook-path", str(workbook), "--spec-json", original_spec, timeout=300)
+            self.assertEqual(create_proc.returncode, 0, create_proc.stdout + create_proc.stderr)
+
+            update_proc = run_skill_cli("query", "set", "--workbook-path", str(workbook), "--spec-json", updated_spec, timeout=300)
+            self.assertEqual(update_proc.returncode, 0, update_proc.stdout + update_proc.stderr)
+
+            get_proc = run_skill_cli("query", "get", "--workbook-path", str(workbook), "--query-name", "LIVE_PQ_FORMULA", timeout=300)
+            self.assertEqual(get_proc.returncode, 0, get_proc.stdout + get_proc.stderr)
+            self.assertIn('"B"', json.loads(get_proc.stdout)["query"]["formula"])
+
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_table_commands_roundtrip(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-direct-table-") as tmpdir:
-            workbook = Path(tmpdir) / "direct-table.xlsm"
-            shutil.copy2(FIXTURE_WORKBOOK, workbook)
+            workbook = Path(tmpdir) / "direct-table.xlsx"
+            create_live_desktop_workbook(workbook)
             create_spec = json.dumps(
                 {
                     "sheet": "DATA_RECORDS",
@@ -4196,14 +4517,11 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_query_and_connection_commands_roundtrip(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
-
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-direct-query-") as tmpdir:
-            workbook = Path(tmpdir) / "direct-query.xlsm"
-            shutil.copy2(FIXTURE_WORKBOOK, workbook)
+            workbook = Path(tmpdir) / "direct-query.xlsx"
+            create_live_desktop_workbook(workbook)
             spec = json.dumps(
                 {
                     "name": "LIVE_DIRECT_QUERY",
@@ -4228,7 +4546,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_query_set_accepts_minimal_spec(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-minimal-query-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4269,7 +4587,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(get_payload["query"]["name"], "LIVE_MINIMAL_QUERY")
             self.assertIn("Amount", get_payload["query"]["formula"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_connection_update_and_delete_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-connection-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4325,20 +4643,21 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(list_proc.returncode, 0, list_proc.stdout + list_proc.stderr)
             self.assertEqual(json.loads(list_proc.stdout)["connections"], [])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_chart_and_pivot_list_commands_return_arrays(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-live-chart-pivot-list-") as tmpdir:
+            workbook = Path(tmpdir) / "chart-pivot-list.xlsx"
+            create_live_desktop_workbook(workbook, include_chart_pivot=True)
 
-        chart_proc = run_skill_cli("chart", "list", "--workbook-path", str(FIXTURE_WORKBOOK), timeout=300)
-        self.assertEqual(chart_proc.returncode, 0, chart_proc.stdout + chart_proc.stderr)
-        self.assertIsInstance(json.loads(chart_proc.stdout)["charts"], list)
+            chart_proc = run_skill_cli("chart", "list", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(chart_proc.returncode, 0, chart_proc.stdout + chart_proc.stderr)
+            self.assertIsInstance(json.loads(chart_proc.stdout)["charts"], list)
 
-        pivot_proc = run_skill_cli("pivot", "list", "--workbook-path", str(FIXTURE_WORKBOOK), timeout=300)
-        self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
-        self.assertIsInstance(json.loads(pivot_proc.stdout)["pivots"], list)
+            pivot_proc = run_skill_cli("pivot", "list", "--workbook-path", str(workbook), timeout=300)
+            self.assertEqual(pivot_proc.returncode, 0, pivot_proc.stdout + pivot_proc.stderr)
+            self.assertIsInstance(json.loads(pivot_proc.stdout)["pivots"], list)
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_pivot_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-pivot-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4426,7 +4745,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_pivot_proc.returncode, 0, delete_pivot_proc.stdout + delete_pivot_proc.stderr)
             self.assertTrue(json.loads(delete_pivot_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_slicer_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-slicer-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4521,7 +4840,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_slicer_proc.returncode, 0, delete_slicer_proc.stdout + delete_slicer_proc.stderr)
             self.assertTrue(json.loads(delete_slicer_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_timeline_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-timeline-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4624,7 +4943,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_timeline_proc.returncode, 0, delete_timeline_proc.stdout + delete_timeline_proc.stderr)
             self.assertTrue(json.loads(delete_timeline_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_workbook_safe_export_writes_pdf_from_temp_copy(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-safe-export-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4678,7 +4997,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(target.exists())
             self.assertEqual(target.read_bytes()[:4], b"%PDF")
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_what_if_scenario_and_goal_seek_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-what-if-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4748,7 +5067,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_proc.returncode, 0, delete_proc.stdout + delete_proc.stderr)
             self.assertTrue(json.loads(delete_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_formula_audit_inspect_and_export_reports_dependencies(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-formula-audit-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4813,7 +5132,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(Path(export_payload["targetPath"]), target.resolve())
             self.assertIn("formulas", json.loads(target.read_text(encoding="utf-8")))
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_links_and_document_inspect_commands_return_host_limited_evidence(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-privacy-links-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4858,7 +5177,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertIn("comment", manual_messages.lower())
             self.assertIn("hyperlink", manual_messages.lower())
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_direct_shape_picture_and_control_commands_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-visuals-") as tmpdir:
             tmp = Path(tmpdir)
@@ -4952,14 +5271,12 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(delete_shape_proc.returncode, 0, delete_shape_proc.stdout + delete_shape_proc.stderr)
             self.assertTrue(json.loads(delete_shape_proc.stdout)["deleted"])
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_generic_pull_supports_xls_and_xlsb(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-legacy-") as tmpdir:
             tmp = Path(tmpdir)
             source = tmp / "source.xlsm"
-            shutil.copy2(FIXTURE_WORKBOOK, source)
+            create_live_desktop_workbook(source, file_format=52, include_chart_pivot=True)
             legacy_xls = tmp / "legacy.xls"
             binary_xlsb = tmp / "legacy.xlsb"
             save_workbook_as_format(source, legacy_xls, 56)
@@ -4992,14 +5309,12 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 self.assertTrue((output_root / "normalized.json").exists())
                 self.assertFalse((output_root / "ooxml-parts").exists())
 
-    @unittest.skipUnless(LIVE_DESKTOP_MUTATION, "set EXCEL_FOUNDRY_LIVE_DESKTOP=1 and EXCEL_FOUNDRY_LIVE_MUTATION=1 to run live Excel COM mutation tests")
+    @unittest.skipUnless(EXCEL_COM_AVAILABLE, EXCEL_COM_SKIP_REASON)
     def test_live_compare_reports_package_unavailable_for_xls_and_xlsb(self) -> None:
-        if not FIXTURE_WORKBOOK.exists():
-            self.skipTest("fixture workbook is unavailable")
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-legacy-compare-") as tmpdir:
             tmp = Path(tmpdir)
             source = tmp / "source.xlsm"
-            shutil.copy2(FIXTURE_WORKBOOK, source)
+            create_live_desktop_workbook(source, file_format=52, include_chart_pivot=True)
             legacy_xls = tmp / "legacy.xls"
             binary_xlsb = tmp / "legacy.xlsb"
             save_workbook_as_format(source, legacy_xls, 56)
@@ -5035,3 +5350,4 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

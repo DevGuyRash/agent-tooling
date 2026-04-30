@@ -26,11 +26,25 @@ NS = {
     "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "pkgrel": "http://schemas.openxmlformats.org/package/2006/relationships",
+    "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
+    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcmitype": "http://purl.org/dc/dcmitype/",
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "ep": "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties",
+    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+    "custprops": "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
     "custom": "http://schemas.openxmlformats.org/officeDocument/2006/customXml",
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
     "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
 }
+
+ET.register_namespace("", NS["main"])
+for prefix, uri in NS.items():
+    if prefix != "main":
+        ET.register_namespace(prefix, uri)
 
 SUPPORTED_CF_TYPES = {
     "expression",
@@ -1001,6 +1015,38 @@ class WorkbookPackage:
                 )
         return sorted(tables, key=lambda entry: (entry["sheet"], entry["name"]))
 
+    def parse_table_inventory(self) -> list[dict[str, Any]]:
+        tables: list[dict[str, Any]] = []
+        for sheet in self.sheets:
+            sheet_xml = self._read_xml(sheet["path"])
+            cells = self._read_sheet_cells(sheet["path"])
+            table_parts = sheet_xml.find("main:tableParts", NS)
+            if table_parts is None:
+                continue
+            for table_part in table_parts.findall("main:tablePart", NS):
+                rel_id = table_part.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                rel = sheet["rels"].get(rel_id or "")
+                if not rel:
+                    continue
+                table_xml = self._read_xml(rel["target"])
+                ref = table_xml.attrib.get("ref", "")
+                start_row, start_col, end_row, end_col = _range_ref_to_bounds(ref)
+                header_row_count = int(table_xml.attrib.get("headerRowCount", "1") or "1")
+                totals_row_count = int(table_xml.attrib.get("totalsRowCount", "0") or "0")
+                headers = [cells.get((start_row, col), "") for col in range(start_col, end_col + 1)]
+                tables.append(
+                    {
+                        "sheet": sheet["name"],
+                        "name": table_xml.attrib.get("name", ""),
+                        "ref": ref,
+                        "topLeft": ref.split(":", 1)[0],
+                        "headers": headers,
+                        "rowCount": max(0, end_row - start_row + 1 - header_row_count - totals_row_count),
+                        "columnCount": max(0, end_col - start_col + 1),
+                    }
+                )
+        return sorted(tables, key=lambda entry: (entry["sheet"], entry["name"]))
+
     def _drawing_relationships_path(self, drawing_path: str) -> str:
         drawing_name = PurePosixPath(drawing_path).name
         drawing_parent = PurePosixPath(drawing_path).parent
@@ -1029,7 +1075,7 @@ class WorkbookPackage:
         if literal is None:
             literal = "".join(node.text or "" for node in tx_node.findall(".//a:t", NS)) or None
         expression = formula if formula else (_excel_formula_literal(literal) if literal else None)
-        return literal or formula, expression
+        return formula or literal, expression
 
     def _chart_series_axis_expression(self, series_node: ET.Element, *axis_names: str) -> str | None:
         for axis_name in axis_names:
@@ -2954,7 +3000,85 @@ def run_dax_command(args: argparse.Namespace) -> dict[str, Any]:
     raise AssertionError(f"unsupported DAX command: {command}")
 
 
-def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes], deletes: set[str] | None = None) -> None:
+def _validate_workbook_package(workbook_path: Path) -> dict[str, Any]:
+    workbook_path = workbook_path.resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
+    xml_part_count = 0
+    relationship_count = 0
+    try:
+        with zipfile.ZipFile(workbook_path, "r") as package_zip:
+            names = set(package_zip.namelist())
+            required_parts = {"[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/_rels/workbook.xml.rels"}
+            for required in sorted(required_parts):
+                if required not in names:
+                    errors.append(f"missing required package part: {required}")
+
+            content_types_root = None
+            if "[Content_Types].xml" in names:
+                try:
+                    content_types_root = ET.fromstring(package_zip.read("[Content_Types].xml"))
+                    xml_part_count += 1
+                except ET.ParseError as exc:
+                    errors.append(f"[Content_Types].xml is not well-formed XML: {exc}")
+
+            for name in sorted(names):
+                if not name.endswith(".xml") or name == "[Content_Types].xml":
+                    continue
+                try:
+                    ET.fromstring(package_zip.read(name))
+                    xml_part_count += 1
+                except ET.ParseError as exc:
+                    errors.append(f"{name} is not well-formed XML: {exc}")
+
+            for name in sorted(item for item in names if item.endswith(".rels")):
+                try:
+                    rels_root = ET.fromstring(package_zip.read(name))
+                    xml_part_count += 1
+                except ET.ParseError as exc:
+                    errors.append(f"{name} is not well-formed XML: {exc}")
+                    continue
+                for rel in rels_root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+                    relationship_count += 1
+                    target = rel.attrib.get("Target", "")
+                    if rel.attrib.get("TargetMode") == "External" or not target:
+                        continue
+                    target_part = _normalize_rel_target(name, target)
+                    if target_part not in names:
+                        errors.append(f"{name} relationship {rel.attrib.get('Id', '')} targets missing part: {target}")
+
+            if content_types_root is not None:
+                overrides = {
+                    override.attrib.get("PartName", "").lstrip("/")
+                    for override in content_types_root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Override")
+                }
+                for required in ("xl/workbook.xml",):
+                    if required not in overrides:
+                        errors.append(f"missing content type override for {required}")
+                for override in sorted(item for item in overrides if item):
+                    if override not in names:
+                        warnings.append(f"content type override targets missing part: {override}")
+    except zipfile.BadZipFile as exc:
+        errors.append(f"not a readable zip package: {exc}")
+
+    status = "passed" if not errors else "failed"
+    return {
+        "status": status,
+        "errors": errors,
+        "warnings": warnings,
+        "xmlPartCount": xml_part_count,
+        "relationshipCount": relationship_count,
+    }
+
+
+def _require_valid_workbook_package(workbook_path: Path) -> dict[str, Any]:
+    validation = _validate_workbook_package(workbook_path)
+    if validation["status"] != "passed":
+        raise ValueError("Workbook package validation failed: " + "; ".join(validation["errors"]))
+    return validation
+
+
+def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes], deletes: set[str] | None = None) -> dict[str, Any]:
     workbook_path = workbook_path.resolve()
     delete_names = deletes or set()
     with zipfile.ZipFile(workbook_path, "r") as source:
@@ -2968,9 +3092,259 @@ def _rewrite_workbook_package(workbook_path: Path, updates: dict[str, bytes], de
         with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
             for name, payload in members.items():
                 target.writestr(name, payload)
+        validation = _require_valid_workbook_package(temp_path)
         temp_path.replace(workbook_path)
+        return validation
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def _default_workbook_styles_xml() -> bytes:
+    root = ET.Element(f"{{{NS['main']}}}styleSheet")
+    fonts = ET.SubElement(root, f"{{{NS['main']}}}fonts", {"count": "1"})
+    font = ET.SubElement(fonts, f"{{{NS['main']}}}font")
+    ET.SubElement(font, f"{{{NS['main']}}}sz", {"val": "11"})
+    ET.SubElement(font, f"{{{NS['main']}}}color", {"rgb": "FF000000"})
+    ET.SubElement(font, f"{{{NS['main']}}}name", {"val": "Calibri"})
+    ET.SubElement(font, f"{{{NS['main']}}}family", {"val": "2"})
+    fills = ET.SubElement(root, f"{{{NS['main']}}}fills", {"count": "2"})
+    fill = ET.SubElement(fills, f"{{{NS['main']}}}fill")
+    ET.SubElement(fill, f"{{{NS['main']}}}patternFill", {"patternType": "none"})
+    fill = ET.SubElement(fills, f"{{{NS['main']}}}fill")
+    ET.SubElement(fill, f"{{{NS['main']}}}patternFill", {"patternType": "gray125"})
+    borders = ET.SubElement(root, f"{{{NS['main']}}}borders", {"count": "1"})
+    border = ET.SubElement(borders, f"{{{NS['main']}}}border")
+    for side in ("left", "right", "top", "bottom", "diagonal"):
+        ET.SubElement(border, f"{{{NS['main']}}}{side}")
+    cell_style_xfs = ET.SubElement(root, f"{{{NS['main']}}}cellStyleXfs", {"count": "1"})
+    ET.SubElement(cell_style_xfs, f"{{{NS['main']}}}xf", {"numFmtId": "0", "fontId": "0", "fillId": "0", "borderId": "0"})
+    cell_xfs = ET.SubElement(root, f"{{{NS['main']}}}cellXfs", {"count": "1"})
+    ET.SubElement(cell_xfs, f"{{{NS['main']}}}xf", {"numFmtId": "0", "fontId": "0", "fillId": "0", "borderId": "0", "xfId": "0"})
+    cell_styles = ET.SubElement(root, f"{{{NS['main']}}}cellStyles", {"count": "1"})
+    ET.SubElement(cell_styles, f"{{{NS['main']}}}cellStyle", {"name": "Normal", "xfId": "0", "builtinId": "0"})
+    ET.SubElement(root, f"{{{NS['main']}}}dxfs", {"count": "0"})
+    ET.SubElement(root, f"{{{NS['main']}}}tableStyles", {"count": "0", "defaultTableStyle": "TableStyleMedium2", "defaultPivotStyle": "PivotStyleLight16"})
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _style_part_needs_repair(root: ET.Element) -> bool:
+    return root.find("main:dxfs", NS) is None or root.find("main:tableStyles", NS) is None
+
+
+def _theme_part_needs_repair(root: ET.Element) -> bool:
+    return any(
+        root.find(f".//a:{required}", NS) is None
+        for required in ("clrScheme", "fontScheme", "fmtScheme", "fillStyleLst", "lnStyleLst", "effectStyleLst", "bgFillStyleLst")
+    )
+
+
+def _source_part_for_rels_path(rels_path: str) -> str | None:
+    rels = PurePosixPath(rels_path)
+    if rels.name == ".rels":
+        return None
+    if rels.parent.name != "_rels" or not rels.name.endswith(".rels"):
+        return None
+    return str(rels.parent.parent / rels.name[:-5])
+
+
+def _remove_content_type_overrides(root: ET.Element, deleted_parts: set[str]) -> bool:
+    changed = False
+    for override in list(root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Override")):
+        if override.attrib.get("PartName", "").lstrip("/") in deleted_parts:
+            root.remove(override)
+            changed = True
+    return changed
+
+
+def _remove_related_xml_references(source_part: str, removed_rel_ids: set[str], root: ET.Element) -> bool:
+    changed = False
+    if source_part.startswith("xl/worksheets/"):
+        for child in list(root):
+            if _local_name(child.tag) in {"drawing", "legacyDrawing", "legacyDrawingHF", "picture"}:
+                rel_id = child.attrib.get(f"{{{NS['rel']}}}id")
+                if rel_id in removed_rel_ids:
+                    root.remove(child)
+                    changed = True
+    return changed
+
+
+def _drawing_part_needs_repair(root: ET.Element) -> bool:
+    for ext in root.findall(".//a:ext", NS):
+        if ext.attrib.get("cx") == "0" or ext.attrib.get("cy") == "0":
+            return True
+    return False
+
+
+def _chart_part_needs_repair(root: ET.Element) -> bool:
+    chart_types = (
+        "areaChart",
+        "barChart",
+        "bubbleChart",
+        "doughnutChart",
+        "lineChart",
+        "ofPieChart",
+        "pieChart",
+        "radarChart",
+        "scatterChart",
+        "stockChart",
+        "surfaceChart",
+    )
+    for chart_type in chart_types:
+        for chart_node in root.findall(f".//c:{chart_type}", NS):
+            if chart_type in {"doughnutChart", "pieChart", "ofPieChart"}:
+                continue
+            if chart_node.find("c:axId", NS) is None:
+                return True
+    return False
+
+
+def _cleanup_rels_for_deleted_parts(members: dict[str, bytes], deleted_parts: set[str]) -> tuple[dict[str, bytes], set[str]]:
+    updates: dict[str, bytes] = {}
+    newly_deleted: set[str] = set()
+    for rels_path in sorted(name for name in members if name.endswith(".rels") and name not in deleted_parts):
+        try:
+            root = ET.fromstring(members[rels_path])
+        except ET.ParseError:
+            continue
+        source_part = _source_part_for_rels_path(rels_path)
+        removed_rel_ids: set[str] = set()
+        changed = False
+        for rel in list(root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")):
+            if rel.attrib.get("TargetMode") == "External":
+                continue
+            target = rel.attrib.get("Target", "")
+            if not target:
+                continue
+            target_part = _normalize_rel_target(rels_path, target)
+            if target_part in deleted_parts:
+                removed_rel_ids.add(rel.attrib.get("Id", ""))
+                root.remove(rel)
+                changed = True
+        if changed:
+            if source_part and source_part.startswith("xl/drawings/") and source_part in members:
+                newly_deleted.add(source_part)
+            elif source_part and source_part in members and source_part.endswith(".xml"):
+                try:
+                    source_root = ET.fromstring(members[source_part])
+                except ET.ParseError:
+                    source_root = None
+                if source_root is not None and _remove_related_xml_references(source_part, removed_rel_ids, source_root):
+                    updates[source_part] = ET.tostring(source_root, encoding="utf-8", xml_declaration=True)
+            updates[rels_path] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    return updates, newly_deleted
+
+
+def _workbook_rels_has_type(root: ET.Element, rel_type_suffix: str, target: str | None = None) -> bool:
+    for rel in root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+        if not rel.attrib.get("Type", "").endswith(rel_type_suffix):
+            continue
+        if target is not None and rel.attrib.get("Target") != target:
+            continue
+        return True
+    return False
+
+
+def repair_workbook_package(workbook_path: Path, target_path: Path | None = None) -> dict[str, Any]:
+    workbook_path = workbook_path.resolve()
+    destination = target_path.resolve() if target_path else workbook_path.with_name(f"{workbook_path.stem}.repaired{workbook_path.suffix}")
+    if destination != workbook_path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(workbook_path, "r") as source, zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for name in source.namelist():
+                target.writestr(name, source.read(name))
+    updates: dict[str, bytes] = {}
+    deletes: set[str] = set()
+    repaired_parts: list[str] = []
+    removed_parts: list[str] = []
+    warnings: list[str] = []
+    with zipfile.ZipFile(destination, "r") as package_zip:
+        members = {name: package_zip.read(name) for name in package_zip.namelist()}
+
+    for name, payload in members.items():
+            if not name.endswith(".xml"):
+                continue
+            try:
+                root = ET.fromstring(payload)
+            except ET.ParseError:
+                continue
+            local = _local_name(root.tag)
+            if local in {"workbook", "worksheet"}:
+                before = ET.tostring(root, encoding="utf-8")
+                _normalize_ooxml_element_order(root)
+                after = ET.tostring(root, encoding="utf-8")
+                if after != before:
+                    updates[name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                    repaired_parts.append(name)
+            elif local == "styleSheet" and name == "xl/styles.xml" and _style_part_needs_repair(root):
+                updates[name] = _default_workbook_styles_xml()
+                repaired_parts.append(name)
+            elif local == "theme" and name.startswith("xl/theme/") and _theme_part_needs_repair(root):
+                deletes.add(name)
+            elif name.startswith("xl/charts/") and _chart_part_needs_repair(root):
+                deletes.add(name)
+            elif name.startswith("xl/drawings/") and _drawing_part_needs_repair(root):
+                deletes.add(name)
+            elif name.startswith("customXml/") and root.find(".//{http://schemas.microsoft.com/DataMashup}DataMashup") is not None:
+                deletes.add(name)
+
+    for name in list(members):
+        if name.startswith("xl/queryTables/") or name == "xl/connections.xml":
+            deletes.add(name)
+        elif name.startswith("customXml/") or name.startswith("xl/theme/"):
+            deletes.add(name)
+
+    while True:
+        rel_updates, rel_deleted = _cleanup_rels_for_deleted_parts({**members, **updates}, deletes)
+        for name, payload in rel_updates.items():
+            if updates.get(name) != payload:
+                updates[name] = payload
+                if name not in repaired_parts:
+                    repaired_parts.append(name)
+        added = rel_deleted - deletes
+        if not added:
+            break
+        deletes.update(added)
+
+    if "[Content_Types].xml" in members:
+        content_types_root = ET.fromstring(updates.get("[Content_Types].xml", members["[Content_Types].xml"]))
+        if _remove_content_type_overrides(content_types_root, deletes):
+            updates["[Content_Types].xml"] = ET.tostring(content_types_root, encoding="utf-8", xml_declaration=True)
+            repaired_parts.append("[Content_Types].xml")
+
+    if "xl/sharedStrings.xml" in members and "xl/_rels/workbook.xml.rels" in members:
+        workbook_rels_root = ET.fromstring(updates.get("xl/_rels/workbook.xml.rels", members["xl/_rels/workbook.xml.rels"]))
+        if not _workbook_rels_has_type(workbook_rels_root, "/sharedStrings", "sharedStrings.xml"):
+            ET.SubElement(
+                workbook_rels_root,
+                f"{{{NS['pkgrel']}}}Relationship",
+                {
+                    "Id": _next_relationship_id(workbook_rels_root),
+                    "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
+                    "Target": "sharedStrings.xml",
+                },
+            )
+            updates["xl/_rels/workbook.xml.rels"] = ET.tostring(workbook_rels_root, encoding="utf-8", xml_declaration=True)
+            repaired_parts.append("xl/_rels/workbook.xml.rels")
+
+    removed_parts = sorted(deletes)
+    if removed_parts:
+        warnings.append("Removed generated package parts that Excel rejected during recovery validation; rerun rich feature authoring through desktop Excel for those surfaces.")
+
+    validation = _rewrite_workbook_package(destination, updates, deletes) if updates or deletes else _require_valid_workbook_package(destination)
+    return {
+        "command": "workbook-repair",
+        "backend": "package",
+        "workbookPath": str(workbook_path),
+        "targetPath": str(destination),
+        "repairedParts": sorted(set(repaired_parts)),
+        "removedParts": removed_parts,
+        "warnings": warnings,
+        "saved": True,
+        "validation": {
+            "package": validation,
+            "desktopOpen": {"status": "skipped", "reason": "desktop Excel validation is not part of package repair"},
+        },
+    }
 
 
 def _relative_or_absolute(base_dir: Path, target_path: Path) -> str:
@@ -3430,92 +3804,105 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
             name = name[:31]
         if name in seen:
             raise ValueError(f"duplicate worksheet name in create spec: {name}")
+        if re.search(r"[\[\]:*?/\\]", name):
+            raise ValueError(f"worksheet name contains an Excel-invalid character: {name}")
         seen.add(name)
         normalized_sheets.append(name)
 
-    content_types = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
-        '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
-        '  <Default Extension="xml" ContentType="application/xml"/>',
-        '  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
-        '  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
-        '  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>',
-    ]
-    workbook_rels = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
-    ]
-    workbook_xml = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-        '  <sheets>',
-    ]
+    content_types_root = ET.Element(f"{{{NS['ct']}}}Types")
+    ET.SubElement(content_types_root, f"{{{NS['ct']}}}Default", {"Extension": "rels", "ContentType": "application/vnd.openxmlformats-package.relationships+xml"})
+    ET.SubElement(content_types_root, f"{{{NS['ct']}}}Default", {"Extension": "xml", "ContentType": "application/xml"})
+    _ensure_override(content_types_root, "/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml")
+    _ensure_override(content_types_root, "/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml")
+    _ensure_override(content_types_root, "/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml")
+
+    package_rels_root = _relationships_root()
+    ET.SubElement(
+        package_rels_root,
+        f"{{{NS['pkgrel']}}}Relationship",
+        {"Id": "rId1", "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument", "Target": "xl/workbook.xml"},
+    )
+    ET.SubElement(
+        package_rels_root,
+        f"{{{NS['pkgrel']}}}Relationship",
+        {"Id": "rId2", "Type": "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties", "Target": "docProps/core.xml"},
+    )
+    ET.SubElement(
+        package_rels_root,
+        f"{{{NS['pkgrel']}}}Relationship",
+        {"Id": "rId3", "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties", "Target": "docProps/app.xml"},
+    )
+
+    workbook_rels_root = _relationships_root()
+    workbook_root = ET.Element(f"{{{NS['main']}}}workbook")
+    sheets_node = ET.SubElement(workbook_root, f"{{{NS['main']}}}sheets")
     for index, sheet_name in enumerate(normalized_sheets, start=1):
-        content_types.append(
-            f'  <Override PartName="/xl/worksheets/sheet{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        _ensure_override(content_types_root, f"/xl/worksheets/sheet{index}.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml")
+        ET.SubElement(
+            workbook_rels_root,
+            f"{{{NS['pkgrel']}}}Relationship",
+            {"Id": f"rId{index}", "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet", "Target": f"worksheets/sheet{index}.xml"},
         )
-        workbook_rels.append(
-            f'  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>'
+        ET.SubElement(
+            sheets_node,
+            f"{{{NS['main']}}}sheet",
+            {"name": sheet_name, "sheetId": str(index), f"{{{NS['rel']}}}id": f"rId{index}"},
         )
-        workbook_xml.append(f'    <sheet name="{sheet_name}" sheetId="{index}" r:id="rId{index}"/>')
-    workbook_xml.extend(["  </sheets>", "</workbook>"])
-    workbook_rels.append("</Relationships>")
-    content_types.append("</Types>")
 
     title = spec.get("title") or workbook_path.stem
     subject = spec.get("subject") or ""
     description = spec.get("description") or ""
     custom_properties = spec.get("customProperties") or {}
 
-    core_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>{title}</dc:title>
-  <dc:subject>{subject}</dc:subject>
-  <dc:description>{description}</dc:description>
-</cp:coreProperties>"""
-    app_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Excel Foundry</Application>
-  <TitlesOfParts><vt:vector size="{len(normalized_sheets)}" baseType="lpstr">{''.join(f'<vt:lpstr>{name}</vt:lpstr>' for name in normalized_sheets)}</vt:vector></TitlesOfParts>
-</Properties>"""
-    custom_xml = None
+    core_root = ET.Element(f"{{{NS['cp']}}}coreProperties")
+    ET.SubElement(core_root, f"{{{NS['dc']}}}title").text = str(title)
+    ET.SubElement(core_root, f"{{{NS['dc']}}}subject").text = str(subject)
+    ET.SubElement(core_root, f"{{{NS['dc']}}}description").text = str(description)
+
+    app_root = ET.Element(f"{{{NS['ep']}}}Properties")
+    ET.SubElement(app_root, f"{{{NS['ep']}}}Application").text = "Excel Foundry"
+    titles = ET.SubElement(app_root, f"{{{NS['ep']}}}TitlesOfParts")
+    vector = ET.SubElement(titles, f"{{{NS['vt']}}}vector", {"size": str(len(normalized_sheets)), "baseType": "lpstr"})
+    for name in normalized_sheets:
+        ET.SubElement(vector, f"{{{NS['vt']}}}lpstr").text = name
+
+    custom_root = None
     if custom_properties:
-        content_types.insert(-1, '  <Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>')
-        props = []
-        for index, (key, value) in enumerate(sorted(custom_properties.items()), start=2):
-            props.append(
-                f'<property fmtid="{{D5CDD505-2E9C-101B-9397-08002B2CF9AE}}" pid="{index}" name="{key}"><vt:lpwstr xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">{value}</vt:lpwstr></property>'
-            )
-        custom_xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" '
-            'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-            + "".join(props)
-            + "</Properties>"
+        _ensure_override(content_types_root, "/docProps/custom.xml", "application/vnd.openxmlformats-officedocument.custom-properties+xml")
+        ET.SubElement(
+            package_rels_root,
+            f"{{{NS['pkgrel']}}}Relationship",
+            {"Id": "rId4", "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties", "Target": "docProps/custom.xml"},
         )
+        custom_root = ET.Element(f"{{{NS['custprops']}}}Properties")
+        for index, (key, value) in enumerate(sorted(custom_properties.items()), start=2):
+            prop = ET.SubElement(
+                custom_root,
+                f"{{{NS['custprops']}}}property",
+                {"fmtid": "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}", "pid": str(index), "name": str(key)},
+            )
+            ET.SubElement(prop, f"{{{NS['vt']}}}lpwstr").text = str(value)
 
     with zipfile.ZipFile(workbook_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
-        workbook_zip.writestr("[Content_Types].xml", "\n".join(content_types))
-        workbook_zip.writestr("_rels/.rels", """<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-  """ + ('<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>' if custom_xml is not None else '') + """
-</Relationships>""")
-        workbook_zip.writestr("xl/workbook.xml", "\n".join(workbook_xml))
-        workbook_zip.writestr("xl/_rels/workbook.xml.rels", "\n".join(workbook_rels))
+        workbook_zip.writestr("[Content_Types].xml", _serialize_xml(content_types_root))
+        workbook_zip.writestr("_rels/.rels", _serialize_xml(package_rels_root))
+        workbook_zip.writestr("xl/workbook.xml", _serialize_xml(workbook_root))
+        workbook_zip.writestr("xl/_rels/workbook.xml.rels", _serialize_xml(workbook_rels_root))
         for index in range(1, len(normalized_sheets) + 1):
+            worksheet_root = ET.Element(f"{{{NS['main']}}}worksheet")
+            ET.SubElement(worksheet_root, f"{{{NS['main']}}}sheetData")
             workbook_zip.writestr(
                 f"xl/worksheets/sheet{index}.xml",
-                '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData /></worksheet>',
+                _serialize_xml(worksheet_root),
             )
-        workbook_zip.writestr("docProps/core.xml", core_xml)
-        workbook_zip.writestr("docProps/app.xml", app_xml)
-        if custom_xml is not None:
-            workbook_zip.writestr("docProps/custom.xml", custom_xml)
-    return build_inspection_payload(build_query_payload(workbook_path, ["workbook", "sheets"]))
+        workbook_zip.writestr("docProps/core.xml", _serialize_xml(core_root))
+        workbook_zip.writestr("docProps/app.xml", _serialize_xml(app_root))
+        if custom_root is not None:
+            workbook_zip.writestr("docProps/custom.xml", _serialize_xml(custom_root))
+    validation = _require_valid_workbook_package(workbook_path)
+    payload = build_inspection_payload(build_query_payload(workbook_path, ["workbook", "sheets"]))
+    payload["validation"] = {"package": validation, "desktopOpen": {"status": "skipped", "reason": "desktop Excel validation is not part of package-only create"}}
+    return payload
 
 
 def compare_workbook_payloads(left_workbook: Path, right_workbook: Path, surfaces: list[str]) -> dict[str, Any]:
@@ -4069,7 +4456,94 @@ def apply_direct_cells(workbook_path: Path, sheet_name: str, assignments: list[d
     return {"status": "applied", "sheet": sheet_name, "cells": assignments}
 
 
+WORKBOOK_CHILD_ORDER = {
+    "fileVersion": 10,
+    "fileSharing": 20,
+    "workbookPr": 30,
+    "workbookProtection": 40,
+    "bookViews": 50,
+    "sheets": 60,
+    "functionGroups": 70,
+    "externalReferences": 80,
+    "definedNames": 90,
+    "calcPr": 100,
+    "oleSize": 110,
+    "customWorkbookViews": 120,
+    "pivotCaches": 130,
+    "smartTagPr": 140,
+    "smartTagTypes": 150,
+    "webPublishing": 160,
+    "fileRecoveryPr": 170,
+    "webPublishObjects": 180,
+    "extLst": 190,
+}
+
+WORKSHEET_CHILD_ORDER = {
+    "sheetPr": 10,
+    "dimension": 20,
+    "sheetViews": 30,
+    "sheetFormatPr": 40,
+    "cols": 50,
+    "sheetData": 60,
+    "sheetCalcPr": 70,
+    "sheetProtection": 80,
+    "protectedRanges": 90,
+    "scenarios": 100,
+    "autoFilter": 110,
+    "sortState": 120,
+    "dataConsolidate": 130,
+    "customSheetViews": 140,
+    "mergeCells": 150,
+    "phoneticPr": 160,
+    "conditionalFormatting": 170,
+    "dataValidations": 180,
+    "hyperlinks": 190,
+    "printOptions": 200,
+    "pageMargins": 210,
+    "pageSetup": 220,
+    "headerFooter": 230,
+    "rowBreaks": 240,
+    "colBreaks": 250,
+    "customProperties": 260,
+    "cellWatches": 270,
+    "ignoredErrors": 280,
+    "smartTags": 290,
+    "drawing": 300,
+    "legacyDrawing": 310,
+    "legacyDrawingHF": 320,
+    "picture": 330,
+    "oleObjects": 340,
+    "controls": 350,
+    "webPublishItems": 360,
+    "tableParts": 370,
+    "extLst": 380,
+}
+
+
+def _sort_children_by_ooxml_order(element: ET.Element, order: dict[str, int]) -> None:
+    children = list(element)
+    if len(children) < 2:
+        return
+    indexed = list(enumerate(children))
+    indexed.sort(key=lambda item: (order.get(_local_name(item[1].tag), 10000), item[0]))
+    if [child for _, child in indexed] == children:
+        return
+    for child in children:
+        element.remove(child)
+    for _, child in indexed:
+        element.append(child)
+
+
+def _normalize_ooxml_element_order(element: ET.Element) -> None:
+    local = _local_name(element.tag)
+    if local == "workbook":
+        _sort_children_by_ooxml_order(element, WORKBOOK_CHILD_ORDER)
+    elif local == "worksheet":
+        _sort_children_by_ooxml_order(element, WORKSHEET_CHILD_ORDER)
+
+
 def _serialize_xml(element: ET.Element) -> bytes:
+    _normalize_ooxml_element_order(element)
     return ET.tostring(element, encoding="utf-8", xml_declaration=True)
 
 
@@ -4246,17 +4720,43 @@ def _ensure_chart_child(parent: ET.Element, child_name: str) -> ET.Element:
     return child
 
 
+def _normalized_chart_formula(formula: str) -> str:
+    normalized = formula.strip()
+    if normalized.startswith("="):
+        normalized = normalized[1:].strip()
+    if not normalized:
+        raise ValueError("chart reference formula cannot be blank")
+    return normalized
+
+
+def _chart_ref_child_name(parent: ET.Element | None, default_child_name: str) -> str:
+    if parent is None:
+        return default_child_name
+    for child_name in ("numRef", "strRef"):
+        if parent.find(f"c:{child_name}", NS) is not None:
+            return child_name
+    return default_child_name
+
+
 def _set_chart_ref_formula(parent: ET.Element | None, ref_child_name: str, formula: str | None) -> bool:
     if parent is None or formula is None:
         return False
+    formula_text = _normalized_chart_formula(formula)
+    changed = False
+    for child in list(parent):
+        if _local_name(child.tag) in {"numRef", "strRef", "numLit", "strLit"} and _local_name(child.tag) != ref_child_name:
+            parent.remove(child)
+            changed = True
     ref_node = parent.find(f"c:{ref_child_name}", NS)
     if ref_node is None:
         ref_node = ET.SubElement(parent, f"{{{NS['c']}}}{ref_child_name}")
+        changed = True
     formula_node = ref_node.find("c:f", NS)
     if formula_node is None:
         formula_node = ET.SubElement(ref_node, f"{{{NS['c']}}}f")
-    changed = formula_node.text != formula
-    formula_node.text = formula
+        changed = True
+    changed = (formula_node.text != formula_text) or changed
+    formula_node.text = formula_text
     for cache in list(ref_node):
         if _local_name(cache.tag) in {"numCache", "strCache"}:
             ref_node.remove(cache)
@@ -4292,7 +4792,7 @@ def _apply_chart_relationship_spec(chart_root: ET.Element, chart_spec: dict[str,
             tx_node = _ensure_chart_child(series_node, "tx")
             changed = _set_chart_ref_formula(tx_node, "strRef", parts["nameFormula"]) or changed
         handled_formula_keys: set[str] = set()
-        for axis_name, formula_key, ref_child_name in (
+        for axis_name, formula_key, default_ref_child_name in (
             ("cat", "categoriesFormula", "strRef"),
             ("xVal", "categoriesFormula", "numRef"),
             ("val", "valuesFormula", "numRef"),
@@ -4306,6 +4806,7 @@ def _apply_chart_relationship_spec(chart_root: ET.Element, chart_spec: dict[str,
                 continue
             axis_node = series_node.find(f"c:{axis_name}", NS)
             if axis_node is not None:
+                ref_child_name = _chart_ref_child_name(axis_node, default_ref_child_name)
                 changed = _set_chart_ref_formula(axis_node, ref_child_name, formula) or changed
                 handled_formula_keys.add(formula_key)
     return changed
@@ -4387,7 +4888,6 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
             if custom_properties:
                 custom_root = ET.Element(
                     "{http://schemas.openxmlformats.org/officeDocument/2006/custom-properties}Properties",
-                    {"xmlns:vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"},
                 )
                 for index, (key, value) in enumerate(custom_properties.items(), start=2):
                     prop = ET.SubElement(
@@ -5105,7 +5605,7 @@ def sync_bundle_surfaces(
                 "unsupportedReason": None if (spec["writable"] and not route.get("requiresBackend")) else spec.get("unsupportedReason") or "Route this surface to desktop Excel for write-back.",
             }
         )
-    return {
+    result = {
         "workbookPath": str(bundle["workbookPath"]),
         "manifestPath": str(bundle["manifestPath"]),
         "mode": mode,
@@ -5114,6 +5614,12 @@ def sync_bundle_surfaces(
         "selectors": {key: sorted(value) for key, value in selectors.items() if value},
         "surfaces": results,
     }
+    if apply:
+        result["validation"] = {
+            "package": _require_valid_workbook_package(bundle["workbookPath"]),
+            "desktopOpen": {"status": "skipped", "reason": "desktop Excel validation is optional for package sync and was not requested"},
+        }
+    return result
 
 
 def apply_audit_mutation(workbook_path: Path) -> dict[str, Any]:
@@ -5193,6 +5699,9 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
         return build_inspection_payload(build_query_payload(workbook_path, surfaces))
     if args.command == "workbook-diff":
         return compare_workbook_payloads(Path(args.workbook_path), Path(args.other_workbook_path), normalize_surfaces(getattr(args, "surface", "")))
+    if args.command == "workbook-repair":
+        target_path = Path(args.target_path) if getattr(args, "target_path", None) else None
+        return repair_workbook_package(Path(args.workbook_path), target_path)
     if args.command == "workbook-create":
         spec = {}
         if getattr(args, "spec_json", None):
@@ -5231,7 +5740,7 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
             return {
                 "backend": "package",
                 "workbookPath": str(workbook_path.resolve()),
-                "tables": package.parse_tables(),
+                "tables": package.parse_table_inventory(),
             }
         if args.command == "table-read":
             tables = package.parse_tables()
@@ -5370,6 +5879,12 @@ def main(argv: list[str]) -> int:
     workbook_diff_parser.add_argument("--workbook-path", required=True)
     workbook_diff_parser.add_argument("--other-workbook-path", required=True)
     workbook_diff_parser.add_argument("--surface", default="")
+
+    workbook_repair_parser = subparsers.add_parser("workbook-repair")
+    workbook_repair_parser.add_argument("--workbook-path", required=True)
+    workbook_repair_parser.add_argument("--target-path")
+    workbook_repair_parser.add_argument("--target-format")
+    workbook_repair_parser.add_argument("--mode", choices=("repair", "extract"), default="repair")
 
     manifest_validate_parser = subparsers.add_parser("manifest-validate")
     manifest_validate_parser.add_argument("--manifest-path", required=True)
@@ -5657,6 +6172,7 @@ def main(argv: list[str]) -> int:
         "workbook-inspect",
         "workbook-create",
         "workbook-diff",
+        "workbook-repair",
         "manifest-validate",
         "manifest-doctor",
         "manifest-migrate",

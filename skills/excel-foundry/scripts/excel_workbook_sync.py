@@ -574,8 +574,52 @@ def package_readable_workbook(workbook_path: Path) -> bool:
         return False
 
 
+_EXCEL_AVAILABLE_CACHE: bool | None = None
+
+
 def excel_available() -> bool:
-    return os.name == "nt" and shutil.which("powershell") is not None
+    global _EXCEL_AVAILABLE_CACHE
+    if _EXCEL_AVAILABLE_CACHE is not None:
+        return _EXCEL_AVAILABLE_CACHE
+    if os.name != "nt":
+        _EXCEL_AVAILABLE_CACHE = False
+        return False
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        _EXCEL_AVAILABLE_CACHE = False
+        return False
+    probe = (
+        "$excel=$null;"
+        "try {"
+        "$excel=New-Object -ComObject Excel.Application;"
+        "$excel.Visible=$false;"
+        "$excel.DisplayAlerts=$false;"
+        "$null=$excel.Version;"
+        "exit 0"
+        "} catch { exit 2 }"
+        "finally {"
+        "if ($null -ne $excel) {"
+        "$excel.DisplayAlerts=$false;"
+        "$excel.Quit();"
+        "[void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)"
+        "}"
+        "}"
+    )
+    try:
+        proc = subprocess.run(
+            [powershell, "-NoProfile", "-Command", probe],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        _EXCEL_AVAILABLE_CACHE = False
+        return False
+    _EXCEL_AVAILABLE_CACHE = proc.returncode == 0
+    return _EXCEL_AVAILABLE_CACHE
 
 
 def choose_engine(engine: str) -> str:

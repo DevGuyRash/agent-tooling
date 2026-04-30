@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PS1 = ROOT / "scripts" / "excel-foundry.ps1"
 PYTHON_CLI = ROOT / "scripts" / "excel_workbook_sync.py"
+PACKAGE_CLI = ROOT / "scripts" / "excel_workbook_package.py"
 PACKAGE_READABLE_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".xlam"}
 EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlam"}
 FLAT_EXPORT_EXTENSIONS = {".csv", ".txt", ".ods"}
@@ -40,6 +42,34 @@ def copy_external_roots_to_temp(roots: list[Path], destination: Path) -> list[Pa
         shutil.copytree(root, target)
         copied_roots.append(target)
     return copied_roots
+
+
+def load_package_module():
+    spec = importlib.util.spec_from_file_location("excel_workbook_package_external_smoke", PACKAGE_CLI)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def create_generated_external_corpus(destination: Path) -> list[Path]:
+    destination.mkdir(parents=True, exist_ok=True)
+    package_module = load_package_module()
+    workbook = destination / "generated-corpus.xlsx"
+    package_module.create_blank_workbook(
+        workbook,
+        {
+            "title": "Generated External Smoke Corpus",
+            "subject": "Excel Foundry test corpus",
+            "description": "Disposable package-readable workbook generated at test runtime.",
+            "sheets": ["DATA_RECORDS", "DATA_RECORD_LINES"],
+            "customProperties": {"Corpus": "generated"},
+        },
+    )
+    (destination / "flat-export.csv").write_text("Record,Amount\nINV-001,10\n", encoding="utf-8")
+    (destination / "flat-export.txt").write_text("Record\tAmount\nINV-002\t20\n", encoding="utf-8")
+    (destination / "flat-export.ods").write_text("placeholder\n", encoding="utf-8")
+    return [destination]
 
 
 def discover_external_files(roots: list[Path], extensions: set[str] = DISCOVERABLE_EXTENSIONS) -> list[Path]:
@@ -123,16 +153,23 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         raw_roots = os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")
-        if not raw_roots.strip():
-            raise unittest.SkipTest("set EXCEL_SYNC_EXTERNAL_ROOTS to run external corpus smoke tests")
-        cls.original_roots = split_external_roots(raw_roots)
         cls.corpus_copy = tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-")
-        cls.roots = copy_external_roots_to_temp(cls.original_roots, Path(cls.corpus_copy.name))
+        corpus_root = Path(cls.corpus_copy.name)
+        if raw_roots.strip():
+            cls.original_roots = split_external_roots(raw_roots)
+            cls.roots = copy_external_roots_to_temp(cls.original_roots, corpus_root)
+            cls.generated_corpus = False
+        else:
+            cls.original_roots = []
+            cls.roots = create_generated_external_corpus(corpus_root)
+            cls.generated_corpus = True
         cls.files = discover_external_files(cls.roots)
         cls.workbooks = [path for path in cls.files if path.suffix.lower() in EXCEL_EXTENSIONS]
         cls.flat_exports = [path for path in cls.files if path.suffix.lower() in FLAT_EXPORT_EXTENSIONS]
         if not cls.workbooks:
-            raise unittest.SkipTest("no Excel workbooks were discovered under EXCEL_SYNC_EXTERNAL_ROOTS")
+            if raw_roots.strip():
+                raise AssertionError("EXCEL_SYNC_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered under the copied roots")
+            raise AssertionError("generated external smoke corpus did not contain an Excel workbook")
         cls.package_workbooks = [path for path in cls.workbooks if path.suffix.lower() in PACKAGE_READABLE_EXTENSIONS]
         cls.generic_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT", "3")))
         cls.package_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT", "3")))
@@ -231,7 +268,7 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
             self.skipTest("set EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT to a positive value to run package corpus smoke")
         sample = self.package_workbooks[: self.package_limit]
         if not sample:
-            self.skipTest("no package-readable Excel workbooks were discovered under EXCEL_SYNC_EXTERNAL_ROOTS")
+            self.fail("no package-readable Excel workbooks were discovered in the external smoke corpus")
         with tempfile.TemporaryDirectory(prefix="excel-sync-external-package-") as tmpdir:
             tmp = Path(tmpdir)
             for index, workbook in enumerate(sample, start=1):

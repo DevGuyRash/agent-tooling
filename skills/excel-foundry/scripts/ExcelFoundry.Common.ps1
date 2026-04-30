@@ -1462,7 +1462,7 @@ function Test-OoxmlPackageWorkbook {
 function Invoke-PackageWorkbookHelper {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('query', 'inspect', 'inspect-lite', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-clone', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'workbook-metadata', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set', 'graph-workbook-inspect', 'graph-workbook-session-create', 'graph-workbook-session-close', 'graph-workbook-worksheet-list', 'graph-workbook-worksheet-get', 'graph-workbook-worksheet-create', 'graph-workbook-worksheet-update', 'graph-workbook-worksheet-delete', 'graph-workbook-range-get', 'graph-workbook-range-set', 'graph-workbook-range-clear', 'graph-workbook-range-format-get', 'graph-workbook-range-format-set', 'graph-workbook-range-format-font-get', 'graph-workbook-range-format-font-set', 'graph-workbook-range-format-fill-get', 'graph-workbook-range-format-fill-set', 'graph-workbook-range-format-protection-get', 'graph-workbook-range-format-protection-set', 'graph-workbook-range-format-border-list', 'graph-workbook-range-format-border-get', 'graph-workbook-range-format-border-set', 'graph-workbook-range-format-autofit-rows', 'graph-workbook-range-format-autofit-columns', 'graph-workbook-name-list', 'graph-workbook-name-get', 'graph-workbook-name-create', 'graph-workbook-name-update', 'graph-workbook-name-delete', 'graph-workbook-table-list', 'graph-workbook-table-get', 'graph-workbook-table-create', 'graph-workbook-table-update', 'graph-workbook-table-delete', 'graph-workbook-table-row-list', 'graph-workbook-table-row-add', 'graph-workbook-table-column-list', 'graph-workbook-table-column-add', 'graph-workbook-table-sort-apply', 'graph-workbook-table-sort-clear', 'graph-workbook-table-filter-apply', 'graph-workbook-table-filter-clear', 'graph-workbook-table-convert-to-range', 'graph-workbook-chart-list', 'graph-workbook-chart-get', 'graph-workbook-chart-create', 'graph-workbook-chart-update', 'graph-workbook-chart-delete', 'graph-workbook-chart-image', 'graph-workbook-chart-set-data', 'graph-workbook-function-call', 'graph-workbook-protection-get', 'graph-workbook-protection-protect', 'graph-workbook-protection-unprotect', 'fabric-semantic-model-list', 'fabric-semantic-model-get', 'fabric-semantic-model-create', 'fabric-semantic-model-update', 'fabric-semantic-model-delete', 'fabric-semantic-model-get-definition', 'fabric-semantic-model-update-definition', 'fabric-semantic-model-export-definition', 'fabric-semantic-model-refresh', 'fabric-semantic-model-execute-dax', 'fabric-semantic-model-operation-get', 'fabric-semantic-model-operation-result', 'model-table-list', 'model-table-get', 'model-table-set', 'model-table-delete', 'model-measure-list', 'model-measure-get', 'model-measure-set', 'model-measure-delete', 'model-relationship-list', 'model-relationship-get', 'model-relationship-set', 'model-relationship-delete', 'model-role-list', 'model-role-get', 'model-role-set', 'model-role-delete', 'model-partition-list', 'model-partition-get', 'model-partition-set', 'model-partition-delete', 'model-expression-list', 'model-expression-get', 'model-expression-set', 'model-expression-delete', 'dax-execute', 'dax-list', 'dax-get', 'dax-set', 'dax-delete', 'semantic-artifact-inspect', 'semantic-artifact-export', 'semantic-artifact-push')]
+        [ValidateSet('query', 'inspect', 'inspect-lite', 'bootstrap', 'mutate-audit', 'plan', 'compare', 'sync', 'workbook-capabilities', 'workbook-clone', 'workbook-inspect', 'workbook-create', 'workbook-diff', 'workbook-repair', 'workbook-metadata', 'manifest-validate', 'manifest-doctor', 'manifest-migrate', 'sheet-list', 'sheet-create', 'sheet-hide', 'sheet-unhide', 'sheet-very-hide', 'sheet-reorder', 'sheet-delete', 'name-list', 'name-set', 'name-delete', 'dimension-get', 'hyperlink-list', 'comment-list', 'print-get', 'formula-list', 'validation-list', 'protection-get', 'table-list', 'table-read', 'query-list', 'cell-get', 'cell-set', 'range-get', 'range-set', 'graph-workbook-inspect', 'graph-workbook-session-create', 'graph-workbook-session-close', 'graph-workbook-worksheet-list', 'graph-workbook-worksheet-get', 'graph-workbook-worksheet-create', 'graph-workbook-worksheet-update', 'graph-workbook-worksheet-delete', 'graph-workbook-range-get', 'graph-workbook-range-set', 'graph-workbook-range-clear', 'graph-workbook-range-format-get', 'graph-workbook-range-format-set', 'graph-workbook-range-format-font-get', 'graph-workbook-range-format-font-set', 'graph-workbook-range-format-fill-get', 'graph-workbook-range-format-fill-set', 'graph-workbook-range-format-protection-get', 'graph-workbook-range-format-protection-set', 'graph-workbook-range-format-border-list', 'graph-workbook-range-format-border-get', 'graph-workbook-range-format-border-set', 'graph-workbook-range-format-autofit-rows', 'graph-workbook-range-format-autofit-columns', 'graph-workbook-name-list', 'graph-workbook-name-get', 'graph-workbook-name-create', 'graph-workbook-name-update', 'graph-workbook-name-delete', 'graph-workbook-table-list', 'graph-workbook-table-get', 'graph-workbook-table-create', 'graph-workbook-table-update', 'graph-workbook-table-delete', 'graph-workbook-table-row-list', 'graph-workbook-table-row-add', 'graph-workbook-table-column-list', 'graph-workbook-table-column-add', 'graph-workbook-table-sort-apply', 'graph-workbook-table-sort-clear', 'graph-workbook-table-filter-apply', 'graph-workbook-table-filter-clear', 'graph-workbook-table-convert-to-range', 'graph-workbook-chart-list', 'graph-workbook-chart-get', 'graph-workbook-chart-create', 'graph-workbook-chart-update', 'graph-workbook-chart-delete', 'graph-workbook-chart-image', 'graph-workbook-chart-set-data', 'graph-workbook-function-call', 'graph-workbook-protection-get', 'graph-workbook-protection-protect', 'graph-workbook-protection-unprotect', 'fabric-semantic-model-list', 'fabric-semantic-model-get', 'fabric-semantic-model-create', 'fabric-semantic-model-update', 'fabric-semantic-model-delete', 'fabric-semantic-model-get-definition', 'fabric-semantic-model-update-definition', 'fabric-semantic-model-export-definition', 'fabric-semantic-model-refresh', 'fabric-semantic-model-execute-dax', 'fabric-semantic-model-operation-get', 'fabric-semantic-model-operation-result', 'model-table-list', 'model-table-get', 'model-table-set', 'model-table-delete', 'model-measure-list', 'model-measure-get', 'model-measure-set', 'model-measure-delete', 'model-relationship-list', 'model-relationship-get', 'model-relationship-set', 'model-relationship-delete', 'model-role-list', 'model-role-get', 'model-role-set', 'model-role-delete', 'model-partition-list', 'model-partition-get', 'model-partition-set', 'model-partition-delete', 'model-expression-list', 'model-expression-get', 'model-expression-set', 'model-expression-delete', 'dax-execute', 'dax-list', 'dax-get', 'dax-set', 'dax-delete', 'semantic-artifact-inspect', 'semantic-artifact-export', 'semantic-artifact-push')]
         [string]$Command,
         [string]$WorkbookPath,
         [string]$OtherWorkbookPath,
@@ -3324,6 +3324,31 @@ function Resolve-PivotSummaryFunctionValue {
     }
 
     throw "Unsupported pivot summary function: $raw"
+}
+
+function Convert-RangeRefToBounds {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RangeRef
+    )
+
+    $parts = @($RangeRef -split ':')
+    $first = $parts[0].Replace('$', '')
+    $last = if ($parts.Count -gt 1) { $parts[1].Replace('$', '') } else { $first }
+    if ($first -notmatch '^([A-Za-z]+)(\d+)$') {
+        throw "Unsupported range reference: $RangeRef"
+    }
+    $startColumn = Convert-ColumnLettersToNumber -Letters $Matches[1]
+    $startRow = [int]$Matches[2]
+    if ($last -notmatch '^([A-Za-z]+)(\d+)$') {
+        throw "Unsupported range reference: $RangeRef"
+    }
+    return [pscustomobject]@{
+        startColumn = $startColumn
+        startRow = $startRow
+        endColumn = Convert-ColumnLettersToNumber -Letters $Matches[1]
+        endRow = [int]$Matches[2]
+    }
 }
 
 function Get-ChartSourceRange {
@@ -6177,6 +6202,205 @@ function Test-WorkbookModelHasWritableTables {
     }
 }
 
+function Invoke-WorkbookPackageRebuildRepair {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookPath,
+        [string]$TargetPath,
+        [string]$TargetFormat,
+        [switch]$Visible
+    )
+
+    $surfaces = @('sheets', 'tables', 'names', 'formulas', 'data-validation', 'protection', 'hyperlinks', 'comments', 'charts', 'cf', 'print')
+    $payload = Invoke-PackageWorkbookHelper -Command 'query' -WorkbookPath $WorkbookPath -Surface $surfaces
+    $repairTargetFormat = if ([string]::IsNullOrWhiteSpace($TargetFormat)) { [System.IO.Path]::GetExtension($WorkbookPath) } else { $TargetFormat }
+    $target = Resolve-WorkbookTargetPath -SourcePath $WorkbookPath -TargetPath $TargetPath -TargetFormat $repairTargetFormat -Suffix '.rebuilt'
+
+    Ensure-ParentDirectory -Path $target.path
+    $excel = $null
+    $workbook = $null
+    try {
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = [bool]$Visible
+        $excel.DisplayAlerts = $false
+        $workbook = $excel.Workbooks.Add()
+
+        $sheetNames = @($payload.sheets | Where-Object { $_.sheetType -eq 'worksheet' } | ForEach-Object { [string]$_.name })
+        if ($sheetNames.Count -lt 1) {
+            $sheetNames = @('Sheet1')
+        }
+        while ([int]$workbook.Worksheets.Count -lt $sheetNames.Count) {
+            [void]$workbook.Worksheets.Add($null, $workbook.Worksheets.Item($workbook.Worksheets.Count))
+        }
+        for ($index = 1; $index -le $workbook.Worksheets.Count; $index++) {
+            $worksheet = $workbook.Worksheets.Item($index)
+            if ($index -le $sheetNames.Count) {
+                $worksheet.Name = $sheetNames[$index - 1]
+            }
+            elseif ([int]$workbook.Worksheets.Count -gt 1) {
+                $worksheet.Delete()
+            }
+        }
+
+        foreach ($table in @($payload.tables)) {
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$table.sheet)
+            $bounds = Convert-RangeRefToBounds -RangeRef ([string]$table.topLeft)
+            $row = [int]$bounds.startRow
+            $column = [int]$bounds.startColumn
+            $headers = @($table.headers)
+            for ($offset = 0; $offset -lt $headers.Count; $offset++) {
+                $worksheet.Cells.Item($row, $column + $offset).Value2 = [string]$headers[$offset]
+            }
+            $dataRows = @($table.rows)
+            for ($rowOffset = 0; $rowOffset -lt $dataRows.Count; $rowOffset++) {
+                $values = @($dataRows[$rowOffset])
+                for ($columnOffset = 0; $columnOffset -lt $values.Count; $columnOffset++) {
+                    $cellValue = $values[$columnOffset]
+                    $worksheet.Cells.Item($row + 1 + $rowOffset, $column + $columnOffset).Value2 = [string]$cellValue
+                }
+            }
+            $endRow = $row + [Math]::Max(1, $dataRows.Count)
+            $endColumn = $column + [Math]::Max(1, $headers.Count) - 1
+            $range = $worksheet.Range($worksheet.Cells.Item($row, $column), $worksheet.Cells.Item($endRow, $endColumn))
+            $listObject = $worksheet.ListObjects.Add(1, $range, $null, 1)
+            if (-not [string]::IsNullOrWhiteSpace([string]$table.name)) {
+                $listObject.Name = [string]$table.name
+            }
+        }
+
+        foreach ($formula in @($payload.formulas)) {
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$formula.sheet)
+            $text = [string]$formula.formula
+            if (-not $text.StartsWith('=')) {
+                $text = "=$text"
+            }
+            $worksheet.Range([string]$formula.address).Formula = $text
+        }
+
+        foreach ($name in @($payload.names)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$name.name) -and -not [string]::IsNullOrWhiteSpace([string]$name.refersTo)) {
+                $refersTo = [string]$name.refersTo
+                if (-not $refersTo.StartsWith('=')) {
+                    $refersTo = "=$refersTo"
+                }
+                [void]$workbook.Names.Add([string]$name.name, $refersTo)
+            }
+        }
+
+        foreach ($hyperlink in @($payload.hyperlinks)) {
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$hyperlink.sheet)
+            $anchor = $worksheet.Range([string]$hyperlink.address)
+            $targetAddress = if ($null -ne $hyperlink.target) { [string]$hyperlink.target } else { '' }
+            $subAddress = if ($null -ne $hyperlink.location) { [string]$hyperlink.location } else { '' }
+            $display = if ($null -ne $hyperlink.display) { [string]$hyperlink.display } else { [string]$anchor.Text }
+            [void]$worksheet.Hyperlinks.Add($anchor, $targetAddress, $subAddress, [string]$hyperlink.tooltip, $display)
+        }
+
+        foreach ($comment in @($payload.comments)) {
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$comment.sheet)
+            try { $worksheet.Range([string]$comment.address).ClearComments() } catch {}
+            [void]$worksheet.Range([string]$comment.address).AddComment([string]$comment.text)
+        }
+
+        foreach ($rule in @($payload.dataValidation)) {
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$rule.sheet)
+            $range = $worksheet.Range([string]$rule.address)
+            try { $range.Validation.Delete() } catch {}
+            $typeMap = @{ whole = 1; decimal = 2; list = 3; date = 4; time = 5; textLength = 6; custom = 7 }
+            $operatorMap = @{ between = 1; notBetween = 2; equal = 3; notEqual = 4; greaterThan = 5; lessThan = 6; greaterThanOrEqual = 7; lessThanOrEqual = 8 }
+            $validationType = if ($typeMap.ContainsKey([string]$rule.type)) { [int]$typeMap[[string]$rule.type] } else { 1 }
+            $validationOperator = if ($operatorMap.ContainsKey([string]$rule.operator)) { [int]$operatorMap[[string]$rule.operator] } else { 1 }
+            $range.Validation.Add($validationType, 1, $validationOperator, [string]$rule.formula1, [string]$rule.formula2)
+            $range.Validation.IgnoreBlank = [bool]$rule.allowBlank
+            $range.Validation.ShowInput = [bool]$rule.showInputMessage
+            $range.Validation.ShowError = [bool]$rule.showErrorMessage
+        }
+
+        foreach ($rule in @($payload.cf)) {
+            if ([string]$rule.type -ne 'expression') {
+                continue
+            }
+            $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$rule.sheet)
+            $formulaText = [string]$rule.formula
+            if (-not $formulaText.StartsWith('=')) {
+                $formulaText = "=$formulaText"
+            }
+            [void]$worksheet.Range([string]$rule.address).FormatConditions.Add(2, $null, $formulaText)
+        }
+
+        foreach ($chart in @($payload.charts)) {
+            $chartSheet = [string]$chart.sheet
+            $sourceAddress = $null
+            $table = @($payload.tables | Where-Object { [string]$_.sheet -eq $chartSheet } | Select-Object -First 1)
+            if ($table.Count -gt 0) {
+                $headers = @($table[0].headers)
+                $rows = @($table[0].rows)
+                $bounds = Convert-RangeRefToBounds -RangeRef ([string]$table[0].topLeft)
+                $endColumn = Convert-ColumnNumberToLetters -ColumnNumber ([int]$bounds.startColumn + [Math]::Max(1, $headers.Count) - 1)
+                $endRow = [int]$bounds.startRow + [Math]::Max(1, $rows.Count)
+                $sourceAddress = "{0}:{1}{2}" -f ([string]$table[0].topLeft), $endColumn, $endRow
+            }
+            if ([string]::IsNullOrWhiteSpace($sourceAddress)) {
+                continue
+            }
+            $topLeft = if (-not [string]::IsNullOrWhiteSpace([string]$chart.address)) { ([string]$chart.address -split ':')[0] } else { 'E2' }
+            $chartSpec = [pscustomobject]@{
+                name = [string]$chart.name
+                sheet = $chartSheet
+                sourceSheet = $chartSheet
+                sourceAddress = $sourceAddress
+                topLeft = $topLeft
+                chartType = 'column-clustered'
+                title = [string]$chart.title
+                width = 480
+                height = 288
+            }
+            Ensure-DirectChartDefinition -Workbook $workbook -ChartSpec $chartSpec -Mode 'set'
+        }
+
+        foreach ($sheetProtection in @($payload.protection.worksheets)) {
+            if ([bool]$sheetProtection.enabled) {
+                $worksheet = Get-WorksheetByName -Workbook $workbook -WorksheetName ([string]$sheetProtection.sheet)
+                $worksheet.Protect()
+            }
+        }
+        if ($null -ne $payload.protection.workbook -and [bool]$payload.protection.workbook.lockStructure) {
+            $workbook.Protect($null, $true, [bool]$payload.protection.workbook.lockWindows)
+        }
+
+        $workbook.SaveAs($target.path, $target.format.fileFormat)
+        return [pscustomobject]@{
+            command = 'workbook-repair'
+            backend = 'excel-rebuild'
+            workbookPath = [System.IO.Path]::GetFullPath($WorkbookPath)
+            targetPath = [string]$target.path
+            targetFormat = [string]$target.format.format
+            recoveryMode = 'package-inventory-rebuild'
+            restored = [pscustomobject]@{
+                sheets = @($sheetNames).Count
+                tables = @($payload.tables).Count
+                formulas = @($payload.formulas).Count
+                dataValidation = @($payload.dataValidation).Count
+                comments = @($payload.comments).Count
+                hyperlinks = @($payload.hyperlinks).Count
+                charts = @($payload.charts).Count
+                protectedSheets = @($payload.protection.worksheets | Where-Object { [bool]$_.enabled }).Count
+            }
+            saved = $true
+        }
+    }
+    finally {
+        if ($null -ne $workbook) {
+            try { $workbook.Close($false) } catch {}
+        }
+        if ($null -ne $excel) {
+            try { $excel.Quit() } catch {}
+        }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+    }
+}
+
 function Invoke-DirectExcelWorkbookCommand {
     param(
         [Parameter(Mandatory = $true)]
@@ -6229,7 +6453,17 @@ function Invoke-DirectExcelWorkbookCommand {
             -TargetPath $TargetPath `
             -TargetFormat $repairTargetFormat `
             -Suffix $repairSuffix
-        $context = Invoke-WorkbookRepairOpen -WorkbookPath $WorkbookPath -Visible:$Visible -CorruptLoad $recoveryMode
+        $context = $null
+        try {
+            $context = Invoke-WorkbookRepairOpen -WorkbookPath $WorkbookPath -Visible:$Visible -CorruptLoad $recoveryMode
+        }
+        catch {
+            return Invoke-WorkbookPackageRebuildRepair `
+                -WorkbookPath $WorkbookPath `
+                -TargetPath $TargetPath `
+                -TargetFormat $TargetFormat `
+                -Visible:$Visible
+        }
         try {
             Ensure-ParentDirectory -Path $target.path
             $context.Workbook.SaveAs($target.path, $target.format.fileFormat)

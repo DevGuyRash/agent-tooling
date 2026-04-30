@@ -35,43 +35,8 @@ Use the fixture for:
 - repeated live roundtrip checks where semantic matching matters more than
   Excel-assigned priority or rule ordering
 
-Use external workbooks only in local audit runs, not in committed tests.
-
-Live desktop tests are opt-in. Set `EXCEL_FOUNDRY_LIVE_DESKTOP=1` to allow
-Excel COM host tests, and set `EXCEL_FOUNDRY_LIVE_MUTATION=1` as well for
-tests that create, update, refresh, export, break links, or otherwise mutate
-temporary workbook copies. Live cloud tests must be gated separately with
-`EXCEL_FOUNDRY_LIVE_CLOUD=1` plus runtime-only resource identifiers and bearer
-tokens.
-
 If you are adding or changing fixtures, tests, or local corpus behavior for
 this skill, first read `<skills-file-root>/DEVELOPMENT.md`.
 
 Use `matrix-audit` when the task is validating copied workbook mutations across
 multiple workbooks and you want one aggregate report root.
-
-For opt-in external corpus smoke coverage, set `EXCEL_SYNC_EXTERNAL_ROOTS` to
-an `os.pathsep`-separated list of workbook roots or files and run:
-
-```bash
-python -m unittest discover -s <skills-file-root>/tests -p 'test_excel_workbook_external_smoke.py'
-```
-
-Optional tuning:
-
-- `EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT=3` limits how many discovered workbooks
-  run through generic pull/compare smoke.
-- `EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT=3` limits how many package-readable
-  workbooks run through package inspect/query/bootstrap smoke.
-- `EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT=3` limits how many discovered workbooks run
-  through live `audit` and `matrix-audit` smoke.
-
-The external smoke harness copies caller-provided roots into a short temporary
-corpus first, then recursively discovers Excel files plus flat export formats
-for classification. Workbook smoke assertions run only on workbook formats;
-CSV/TXT/ODS entries are classified without pretending they support workbook
-package inspection. Output directories use bounded hash-stable slugs so deep
-Windows paths do not affect results.
-
-The external smoke harness runs invariant-based assertions and avoids
-workbook-specific counts or content expectations.

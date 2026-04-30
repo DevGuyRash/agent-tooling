@@ -16,7 +16,6 @@ from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = ROOT / "skills" / "excel-foundry" / "scripts" / "excel_workbook_sync.py"
-LOCAL_FIXTURE = ROOT / "skills" / "excel-foundry" / "tests" / "fixtures" / "generic_workbook_fixture" / "workflow_fixture.xlsm"
 
 
 def load_module():
@@ -221,6 +220,86 @@ def build_generic_test_workbook(workbook_path: Path) -> None:
     with zipfile.ZipFile(workbook_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
         for name, content in workbook_files.items():
             workbook_zip.writestr(name, content)
+
+
+def create_live_com_audit_workbook(workbook_path: Path) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        raise AssertionError("Excel COM test prerequisite failed: PowerShell is unavailable")
+    path_literal = str(workbook_path.resolve()).replace("'", "''")
+    command = dedent(
+        f"""
+        $excel = $null
+        $workbook = $null
+        try {{
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            $workbook = $excel.Workbooks.Add()
+            $sheet = $workbook.Worksheets.Item(1)
+            $sheet.Name = 'DATA_RECORDS'
+            $sheet.Range('A1').Value2 = 'Record'
+            $sheet.Range('B1').Value2 = 'Amount'
+            $sheet.Range('A2').Value2 = 'INV-001'
+            $sheet.Range('B2').Value2 = 10
+            $sheet.Range('A3').Value2 = 'INV-002'
+            $sheet.Range('B3').Value2 = 20
+            $table = $sheet.ListObjects.Add(1, $sheet.Range('A1:B3'), $null, 1)
+            $table.Name = 'tbl_records'
+            $lines = $workbook.Worksheets.Add()
+            $lines.Name = 'DATA_RECORD_LINES'
+            $lines.Range('A1').Value2 = 'Record'
+            $lines.Range('B1').Value2 = 'LineAmount'
+            $lines.Range('A2').Value2 = 'INV-001'
+            $lines.Range('B2').Value2 = 10
+            $lineTable = $lines.ListObjects.Add(1, $lines.Range('A1:B2'), $null, 1)
+            $lineTable.Name = 'tbl_record_lines'
+            $workbook.Queries.Add('Matched', 'let Source = #table({{"Record","Amount"}}, {{{{"INV-001", 10}}}}) in Source') | Out-Null
+            $workbook.Queries.Add('UnMatched', 'let Source = #table({{"Record","Amount"}}, {{{{"INV-002", 20}}}}) in Source') | Out-Null
+            $workbook.Queries.Add('DATA_RECORDS', 'let Source = Excel.CurrentWorkbook(){{[Name="tbl_records"]}}[Content] in Source') | Out-Null
+            $workbook.Queries.Add('DATA_RECORD_LINES', 'let Source = Excel.CurrentWorkbook(){{[Name="tbl_record_lines"]}}[Content] in Source') | Out-Null
+            try {{
+                $project = $workbook.VBProject
+                $module = $project.VBComponents.Add(1)
+                $module.Name = 'modGeneratedAudit'
+                $module.CodeModule.AddFromString("Option Explicit`r`nPublic Function GeneratedAuditValue() As Long`r`n    GeneratedAuditValue = 42`r`nEnd Function")
+                $helpers = $project.VBComponents.Add(1)
+                $helpers.Name = 'modGeneratedHelpers'
+                $helpers.CodeModule.AddFromString("Option Explicit`r`nPublic Sub GeneratedAuditMacro()`r`n    Debug.Print ""Generated audit macro""`r`nEnd Sub")
+            }} catch {{
+                throw "Excel COM is available, but VBA project object model access is blocked. Enable Trust access to the VBA project object model for this live COM extraction test. $($_.Exception.Message)"
+            }}
+            $workbook.SaveAs('{path_literal}', 52)
+        }} catch {{
+            Write-Error $_.Exception.Message
+            exit 1
+        }} finally {{
+            if ($null -ne $workbook) {{
+                $workbook.Close($false)
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook)
+            }}
+            if ($null -ne $excel) {{
+                $excel.Quit()
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel)
+            }}
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+        }}
+        """
+    )
+    proc = subprocess.run(
+        [powershell, "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(proc.stdout + proc.stderr)
+    if not workbook_path.exists():
+        raise AssertionError(f"Excel COM did not create disposable audit workbook: {workbook_path}")
 
 
 class ExcelWorkbookGenericAuditTests(unittest.TestCase):
@@ -668,16 +747,16 @@ class ExcelWorkbookGenericAuditTests(unittest.TestCase):
 
     @unittest.skipUnless(load_module().excel_available(), "Excel COM not available")
     def test_com_extract_recovers_live_vba_and_queries(self) -> None:
-        if not LOCAL_FIXTURE.exists():
-            self.skipTest("local workbook fixture is unavailable")
         with tempfile.TemporaryDirectory() as temp_dir:
-            output_root = Path(temp_dir)
-            result = self.module.extract_com(LOCAL_FIXTURE, output_root=output_root, visible=False)
+            output_root = Path(temp_dir) / "extract"
+            workbook_path = Path(temp_dir) / "live-com-audit.xlsm"
+            create_live_com_audit_workbook(workbook_path)
+            result = self.module.extract_com(workbook_path, output_root=output_root, visible=False)
             self.assertEqual(result["engine"], "com")
             self.assertGreaterEqual(len(result["queries"]), 4)
             self.assertTrue(result["vba"]["accessible"])
             self.assertGreaterEqual(len(result["vba"]["components"]), 3)
-            self.assertTrue((output_root / "macros" / "modules" / "modAPSync.vba").exists())
+            self.assertTrue((output_root / "macros" / "modules" / "modGeneratedAudit.vba").exists())
 
 
 if __name__ == "__main__":

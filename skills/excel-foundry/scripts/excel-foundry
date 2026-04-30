@@ -5,11 +5,12 @@ usage() {
   cat <<'EOF'
 Usage:
   excel-foundry <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap|plan|compare|sync> [options]
-  excel-foundry <sheet|name|table|query|cell|range> <action> [options]
+  excel-foundry <workbook|manifest|sheet|name|table|query|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table> <action> [options]
 
 Options:
   --manifest-path PATH
   --workbook-path PATH
+  --other-workbook-path PATH
   --output-dir PATH
   --query-name NAME
   --surface LIST
@@ -19,14 +20,40 @@ Options:
   --table NAME
   --name NAME
   --name-prefix NAME
+  --connection NAME
+  --chart NAME
+  --pivot NAME
+  --slicer NAME
+  --timeline NAME
+  --automation-type NAME
   --address A1
   --range-ref A1:B2
   --value-json JSON
   --values-json JSON
+  --target-path PATH
+  --target-format EXT
+  --drive-id ID
+  --item-id ID
+  --item-path PATH
+  --session-id ID
+  --workspace-id ID
+  --semantic-model-id ID
+  --dataset-id ID
+  --definition-dir PATH
+  --format NAME
+  --dax-query TEXT
+  --spec-json JSON
+  --spec-file PATH
   --refers-to FORMULA
   --hidden
   --state-root PATH
   --apply
+  --dry-run | --what-if
+  --persist-changes
+  --hard-delete
+  --destructive
+  --deep
+  --documentation
   --visible
   --help
 
@@ -89,6 +116,30 @@ convert_path_arg() {
   printf '%s\n' "$value"
 }
 
+append_arg() {
+  translated="${translated}
+$1"
+}
+
+append_value_arg() {
+  flag="$1"
+  value="$2"
+  translated="${translated}
+$flag
+$value"
+}
+
+pascal_flag() {
+  printf '%s\n' "$1" | awk -F- '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      if ($i == "") continue
+      out = out toupper(substr($i, 1, 1)) substr($i, 2)
+    }
+    print "-" out
+  }'
+}
+
 subcommand="${1:-}"
 case "$subcommand" in
   ""|-h|--help|help)
@@ -109,23 +160,15 @@ case "$subcommand" in
   bootstrap)
     shift
     ;;
-  sheet|name|table|cell|range)
+  workbook|manifest|sheet|name|table|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table|what-if|scenario|goal-seek|formula-audit|calc-engine|cube-function|lambda-name|sparkline|xml-map|custom-xml|ole-object|external-data-range|workbook-view|threaded-comment|signature|encryption|sensitivity|privacy|pivot-chart|chart-sheet|office-script|office-script-live|excel-js-api|office-addin|addin-runtime)
     action="${2:-}"
     [ -n "$action" ] || { echo "error: missing action for resource command: $subcommand" >&2; exit 2; }
-    case "${subcommand}:${action}" in
-      sheet:list|sheet:create|name:list|name:set|name:delete|table:list|table:read|cell:get|cell:set|range:get|range:set)
-        subcommand="${subcommand}-${action}"
-        shift 2
-        ;;
-      *)
-        echo "error: unknown action '$action' for resource '$subcommand'" >&2
-        exit 2
-        ;;
-    esac
+    subcommand="${subcommand}-${action}"
+    shift 2
     ;;
   *)
     echo "error: unknown subcommand: $subcommand" >&2
-    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh, bootstrap, plan, compare, sync, or resource commands like 'sheet list'" >&2
+    echo "hint: use one of inspect, query, push, pull, roundtrip, smoke, refresh, bootstrap, plan, compare, sync, or resource commands like 'workbook inspect'" >&2
     exit 2
     ;;
 esac
@@ -144,136 +187,71 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       value="$(convert_path_arg "$1")"
       shift
-      translated="${translated}
--ManifestPath
-$value"
+      append_value_arg "-ManifestPath" "$value"
       ;;
     --workbook-path|-WorkbookPath)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       value="$(convert_path_arg "$1")"
       shift
-      translated="${translated}
--WorkbookPath
-$value"
+      append_value_arg "-WorkbookPath" "$value"
+      ;;
+    --other-workbook-path|-OtherWorkbookPath)
+      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
+      value="$(convert_path_arg "$1")"
+      shift
+      append_value_arg "-OtherWorkbookPath" "$value"
       ;;
     --output-dir|-OutputDir)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       value="$(convert_path_arg "$1")"
       shift
-      translated="${translated}
--OutputDir
-$value"
+      append_value_arg "-OutputDir" "$value"
       ;;
-    --surface|-Surface)
+    --surface|-Surface|--mode|-Mode|--sheet|-Sheet|--table|-Table|--name|-Name|--name-prefix|-NamePrefix|--connection|-Connection|--chart|-Chart|--pivot|-Pivot|--slicer|-Slicer|--timeline|-Timeline|--automation-type|-AutomationType|--address|-Address|--range-ref|-RangeRef|--value-json|-ValueJson|--values-json|-ValuesJson|--target-format|-TargetFormat|--drive-id|-DriveId|--item-id|-ItemId|--item-path|-ItemPath|--session-id|-SessionId|--workspace-id|-WorkspaceId|--semantic-model-id|-SemanticModelId|--dataset-id|-DatasetId|--operation-id|-OperationId|--operation-location|-OperationLocation|--format|-Format|--dax-query|-DaxQuery|--spec-json|-SpecJson|--refers-to|-RefersTo|--query-name|-QueryName)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Surface
-$1"
+      case "$arg" in
+        --*) flag="$(pascal_flag "${arg#--}")" ;;
+        -*) flag="$arg" ;;
+      esac
+      append_value_arg "$flag" "$1"
       shift
       ;;
-    --mode|-Mode)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Mode
-$1"
-      shift
-      ;;
-    --sheet|-Sheet)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Sheet
-$1"
-      shift
-      ;;
-    --table|-Table)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Table
-$1"
-      shift
-      ;;
-    --name|-Name)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Name
-$1"
-      shift
-      ;;
-    --name-prefix|-NamePrefix)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--NamePrefix
-$1"
-      shift
-      ;;
-    --address|-Address)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Address
-$1"
-      shift
-      ;;
-    --range-ref|-RangeRef)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--RangeRef
-$1"
-      shift
-      ;;
-    --value-json|-ValueJson)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--ValueJson
-$1"
-      shift
-      ;;
-    --values-json|-ValuesJson)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--ValuesJson
-$1"
-      shift
-      ;;
-    --refers-to|-RefersTo)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--RefersTo
-$1"
-      shift
-      ;;
-    --state-root|-StateRoot)
+    --target-path|-TargetPath|--definition-dir|-DefinitionDir|--spec-file|-SpecFile|--state-root|-StateRoot)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       value="$(convert_path_arg "$1")"
       shift
-      translated="${translated}
--StateRoot
-$value"
-      ;;
-    --query-name|-QueryName)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--QueryName
-$1"
-      shift
+      case "$arg" in
+        --*) flag="$(pascal_flag "${arg#--}")" ;;
+        -*) flag="$arg" ;;
+      esac
+      append_value_arg "$flag" "$value"
       ;;
     --apply|-Apply)
-      translated="${translated}
--Apply"
+      append_arg "-Apply"
       ;;
     --hidden|-Hidden)
-      translated="${translated}
--Hidden"
-      ;;
-    --backend|-Backend)
-      [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
-      translated="${translated}
--Backend
-$1"
-      shift
+      append_arg "-Hidden"
       ;;
     --visible|-Visible)
-      translated="${translated}
--Visible"
+      append_arg "-Visible"
+      ;;
+    --dry-run|--what-if|-DryRun|-WhatIf)
+      append_arg "-DryRun"
+      ;;
+    --persist-changes|-PersistChanges)
+      append_arg "-PersistChanges"
+      ;;
+    --hard-delete|-HardDelete)
+      append_arg "-HardDelete"
+      ;;
+    --destructive|-Destructive)
+      append_arg "-Destructive"
+      ;;
+    --deep|-Deep)
+      append_arg "-Deep"
+      ;;
+    --documentation|-Documentation)
+      append_arg "-Documentation"
       ;;
     *)
       echo "error: unknown flag or argument: $arg" >&2

@@ -176,6 +176,39 @@ Before considering a capability checked off, all of the following must be true:
 
 ## Pre-Commit Checks
 
+Normal workbook users do not run the Excel Foundry test suite. The suite is a
+developer validation surface for the skill package.
+
+WHEN documenting developer test policy THEN you SHALL keep it in this file or
+another maintainer-only document.
+
+You SHALL NOT put developer test policy, live readiness commands, fixture
+maintenance rules, or local corpus setup in `SKILL.md` or normal
+agent-facing references.
+
+Default developer discovery should exercise as much live behavior as the host
+can support while keeping generated/disposable workbooks and preserving clear
+host-prerequisite signals.
+
+WHEN Excel COM is installed and responsive THEN default developer discovery
+SHALL run live desktop workbook tests without requiring opt-in environment
+variables.
+
+WHEN Excel COM is unavailable THEN developer tests SHALL still verify
+package-supported behavior and SHALL make it clear that full live Excel
+validation could not run because Excel is unavailable.
+
+WHEN a test needs a workbook fixture THEN it SHALL generate a disposable
+synthetic workbook or use committed non-binary fixture artifacts.
+
+You SHALL NOT commit workbook binaries, user-local workbook paths, external
+corpus contents, or evidence artifacts.
+
+The live capability matrix test is part of default developer discovery. It
+uses disposable workbooks and should probe every matrix operation, returning
+real execution evidence when the backend is available and structured
+limitation evidence when a host or cloud prerequisite is absent.
+
 Before considering Excel Foundry changes complete, run the relevant subset:
 
 ```powershell
@@ -213,8 +246,22 @@ Local corpus contents are for validation only. They are not part of the skill
 contract and should not appear in committed tests by exact filename, directory
 name, source path, or workbook-specific count.
 
-WHEN tests need the local corpus THEN they SHALL read a root from environment
-variables such as `EXCEL_SYNC_EXTERNAL_ROOTS` and skip clearly when the corpus
-is absent.
+WHEN tests need expanded local corpus coverage THEN they SHALL read roots from
+environment variables such as `EXCEL_SYNC_EXTERNAL_ROOTS`.
+
+WHEN `EXCEL_SYNC_EXTERNAL_ROOTS` is absent THEN default external smoke tests
+SHALL generate a disposable corpus instead of skipping.
+
+WHEN explicit external roots are provided but contain no workbook files THEN
+tests SHALL fail with a clear configuration error.
+
+External smoke tests generate a disposable temp corpus by default, including a
+package-readable workbook and flat export files. `EXCEL_SYNC_EXTERNAL_ROOTS`
+expands coverage with caller-provided roots but is not a prerequisite for
+default developer discovery.
+
+The live generic COM audit test creates its own disposable `.xlsm` with
+workbook queries and VBA components at runtime before extracting through COM.
+It does not depend on a committed or user-local macro-enabled workbook.
 
 
