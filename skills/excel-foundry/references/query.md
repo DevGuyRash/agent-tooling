@@ -29,7 +29,7 @@ explicit destructive flags as required by the command.
 - `picture list|get|add|update|delete`
 - `control list|get`
 - `dimension get`
-- `hyperlink list`
+- `hyperlink list|set|delete`
 - `comment list`
 - `print get`
 - `formula list`

@@ -3,6 +3,9 @@
 Use this file for command examples after `SKILL.md` or `references/query.md`
 has selected the command family.
 
+For intent and lane selection, read `references/task-router.md` first. This
+file gives recipes after the task lane is known.
+
 ## Entrypoints
 
 - `scripts/excel-foundry`: direct `<resource> <action> [flags]` commands plus
@@ -11,6 +14,61 @@ has selected the command family.
   copied-workbook audit bundles.
 - `scripts/sync-foundry.ps1`: COM-backed manifest push, pull, roundtrip, and
   refresh wrappers.
+
+## Task Recipes
+
+### Create A Polished Workbook
+
+Use the polished authoring lane from `references/task-router.md` for new
+`.xlsx` workbooks that need layout, formulas, tables, charts, validation, and
+formatting. Python workbook libraries such as `xlsxwriter` or `openpyxl` are
+acceptable mechanisms for this lane. After authoring, use Excel Foundry to
+inspect, diff, bootstrap, or otherwise govern the resulting workbook.
+
+Recommended verification:
+
+```powershell
+sh <skills-file-root>/scripts/excel-foundry workbook inspect `
+  --workbook-path path\to\output.xlsx `
+  --surface 'workbook,sheets,tables,names,formulas,data-validation,protection,cf,charts,hyperlinks,comments,print,dimensions'
+```
+
+### Edit An Existing Workbook Safely
+
+Inspect before mutation, choose the smallest safe edit, then read back the
+changed surface. Prefer package CRUD only when the workbook is package-readable
+and the target surface is package-supported. Use desktop Excel or a host plan
+for host-owned surfaces.
+
+```powershell
+sh <skills-file-root>/scripts/excel-foundry workbook inspect `
+  --workbook-path path\to\existing.xlsx `
+  --surface 'workbook,sheets,tables,names,formulas,charts,pivots,pq,connections,model'
+
+sh <skills-file-root>/scripts/excel-foundry range set `
+  --workbook-path path\to\existing.xlsx `
+  --sheet Inputs `
+  --range-ref A1:B2 `
+  --values-json '[[1,2],[3,4]]'
+```
+
+### Audit Or Synchronize Workbook Artifacts
+
+Use bootstrap, plan, compare, and sync when workbook state should be represented
+as portable artifacts or compared against repo-managed files. Sync remains
+dry-run until `--apply` is supplied.
+
+### Route Host-Owned Work
+
+Use desktop Excel for `.xls`, `.xlsb`, conversion, repair, document inspection,
+Power Query refresh or mutation, VBA, pivots, slicers, timelines, scenarios,
+Goal Seek, Solver, rich visuals, controls, and Data Model work.
+
+Use Graph workbook commands for OneDrive or SharePoint workbook sessions. Use
+`--dry-run` to inspect planned requests without live credentials.
+
+Use Fabric, Power BI, DAX, TMDL, PBIP, and semantic artifact routes for
+semantic model and BI work.
 
 ## Engines
 
@@ -29,6 +87,19 @@ hyperlinks, comments, and print settings. Desktop routes cover fidelity
 mutation for Power Query, connections, pivots, slicers, timelines, Data Model
 objects, and rich chart authoring.
 
+## Known Gotchas
+
+- Use `--spec-file` for complex JSON payloads.
+- Quote comma-separated `--surface` values in PowerShell.
+- Package-readable workbooks can still contain host-owned or preserve-only
+  surfaces.
+- Python workbook libraries are good new-authoring mechanisms but can rewrite
+  packages in ways that are unsuitable for complex existing workbooks.
+- Desktop Excel COM can hold file locks; use isolated copies for generic audit
+  and compare flows.
+- Live cloud execution needs runtime credentials; dry-run planning should
+  return redacted request details.
+
 ## Generic Audit CLI
 
 This CLI accepts arbitrary Excel workbook inputs for pull, audit, and copied
@@ -43,7 +114,7 @@ Extract workbook artifacts into a file tree.
 ```powershell
 python <skills-file-root>/scripts/excel_workbook_sync.py pull `
   --workbook path\to\file.xlsm `
-  --output-root out\excel-sync `
+  --output-root out\excel-foundry `
   --engine auto
 ```
 
@@ -54,7 +125,7 @@ Compare COM and OOXML extraction results for the same workbook.
 ```powershell
 python <skills-file-root>/scripts/excel_workbook_sync.py compare `
   --workbook path\to\file.xlsm `
-  --output-root out\excel-sync `
+  --output-root out\excel-foundry `
   --engine auto
 ```
 
@@ -100,21 +171,21 @@ manifests are the source of truth.
 
 ```powershell
 sh <skills-file-root>/scripts/excel-foundry plan `
-  --manifest-path path\to\excel-sync.manifest.json `
+  --manifest-path path\to\excel-foundry.manifest.json `
   --surface all-supported `
   --mode push
 
 sh <skills-file-root>/scripts/excel-foundry compare `
-  --manifest-path path\to\excel-sync.manifest.json `
+  --manifest-path path\to\excel-foundry.manifest.json `
   --surface 'names,formulas,protection'
 
 sh <skills-file-root>/scripts/excel-foundry sync `
-  --manifest-path path\to\excel-sync.manifest.json `
+  --manifest-path path\to\excel-foundry.manifest.json `
   --surface 'names,formulas,protection' `
   --mode push
 
 sh <skills-file-root>/scripts/excel-foundry sync `
-  --manifest-path path\to\excel-sync.manifest.json `
+  --manifest-path path\to\excel-foundry.manifest.json `
   --surface 'names,formulas,protection' `
   --mode push `
   --sheet Sheet1 `
@@ -124,7 +195,7 @@ sh <skills-file-root>/scripts/excel-foundry sync `
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File <skills-file-root>/scripts/sync-foundry.ps1 `
-  -ManifestPath path\to\excel-sync.manifest.json `
+  -ManifestPath path\to\excel-foundry.manifest.json `
   -WorkbookPath path\to\file.xlsm `
   -Direction pull
 ```

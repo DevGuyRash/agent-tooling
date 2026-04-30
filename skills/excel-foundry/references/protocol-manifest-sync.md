@@ -19,25 +19,25 @@ sh <skills-file-root>/scripts/excel-foundry workbook links --workbook-path /path
 sh <skills-file-root>/scripts/excel-foundry workbook break-links --workbook-path /path/to/source.xlsx --spec-json '{"all":true}'
 sh <skills-file-root>/scripts/excel-foundry workbook repoint-links --workbook-path /path/to/source.xlsx --spec-file /path/to/link-map.json
 sh <skills-file-root>/scripts/excel-foundry workbook safe-export --workbook-path /path/to/source.xlsx --target-path /path/to/source.share-safe.xlsx
-sh <skills-file-root>/scripts/excel-foundry manifest validate --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry manifest doctor --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry manifest migrate --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry query --manifest-path /path/to/excel-sync.manifest.json --surface 'tables,names,formulas,data-validation,protection,charts,pivots,pq,connections,model'
+sh <skills-file-root>/scripts/excel-foundry manifest validate --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry manifest doctor --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry manifest migrate --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry query --manifest-path /path/to/excel-foundry.manifest.json --surface 'tables,names,formulas,data-validation,protection,charts,pivots,pq,connections,model'
 sh <skills-file-root>/scripts/excel-foundry bootstrap --workbook-path /path/to/workbook.xlsx --output-dir /path/to/bundle
-sh <skills-file-root>/scripts/excel-foundry plan --manifest-path /path/to/excel-sync.manifest.json --surface all-supported --mode push
-sh <skills-file-root>/scripts/excel-foundry compare --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas,protection'
-sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas' --mode push
-sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-sync.manifest.json --surface 'names,formulas' --mode push --apply
-sh <skills-file-root>/scripts/excel-foundry push --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry pull --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry roundtrip --manifest-path /path/to/excel-sync.manifest.json
-sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/excel-sync.manifest.json --query-name MyQuery
+sh <skills-file-root>/scripts/excel-foundry plan --manifest-path /path/to/excel-foundry.manifest.json --surface all-supported --mode push
+sh <skills-file-root>/scripts/excel-foundry compare --manifest-path /path/to/excel-foundry.manifest.json --surface 'names,formulas,protection'
+sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-foundry.manifest.json --surface 'names,formulas' --mode push
+sh <skills-file-root>/scripts/excel-foundry sync --manifest-path /path/to/excel-foundry.manifest.json --surface 'names,formulas' --mode push --apply
+sh <skills-file-root>/scripts/excel-foundry push --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry pull --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry roundtrip --manifest-path /path/to/excel-foundry.manifest.json
+sh <skills-file-root>/scripts/excel-foundry refresh --manifest-path /path/to/excel-foundry.manifest.json --query-name MyQuery
 ```
 
 ## Use This Protocol When
 
 - workbook artifacts are already committed in the repo
-- `excel-sync.manifest.json` defines the intended structure
+- `excel-foundry.manifest.json` defines the intended structure
 - you need write-capable sync, refresh, or roundtrip behavior
 
 ## Notes

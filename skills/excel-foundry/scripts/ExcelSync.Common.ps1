@@ -1501,7 +1501,7 @@ function Write-ExcelWorkbookBootstrapArtifacts {
     }
 
     if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
-        $ManifestPath = Join-Path $outputRoot 'excel-sync.manifest.json'
+        $ManifestPath = Join-Path $outputRoot 'excel-foundry.manifest.json'
     }
 
     $manifestDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ManifestPath))
@@ -4928,7 +4928,7 @@ function Invoke-ExcelSyncSmoke {
     )
 
     $manifestDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ManifestPath))
-    $tempRoot = Join-Path $env:TEMP ("excel_sync_smoke_{0}_{1}" -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $tempRoot = Join-Path $env:TEMP ("excel_foundry_smoke_{0}_{1}" -f $PID, [System.Guid]::NewGuid().ToString('N'))
     $tempWorkspace = Join-Path $tempRoot 'workspace'
     $tempManifestPath = Join-Path $tempWorkspace (Split-Path -Leaf $ManifestPath)
     $relativeWorkbookPath = Resolve-RelativePath -BasePath $manifestDirectory -TargetPath $WorkbookPath

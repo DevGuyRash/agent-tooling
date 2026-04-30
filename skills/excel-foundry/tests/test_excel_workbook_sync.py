@@ -27,9 +27,10 @@ POWERQUERY = ROOT / "scripts" / "sync-excel-powerquery.ps1"
 OPENAI_YAML = ROOT / "agents" / "openai.yaml"
 CAPABILITY_MATRIX = ROOT / "references" / "excel-capability-matrix.json"
 RUNTIME_COMPATIBILITY = ROOT / "references" / "runtime-compatibility.md"
+TASK_ROUTER = ROOT / "references" / "task-router.md"
 EXTERNAL_SMOKE_TEST = ROOT / "tests" / "test_excel_workbook_external_smoke.py"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "generic_workbook_fixture"
-FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "excel-sync.manifest.json"
+FIXTURE_MANIFEST = ROOT / "tests" / "fixtures" / "generic_workbook_fixture" / "excel-foundry.manifest.json"
 FIXTURE_WORKBOOK = FIXTURE_DIR / "workflow_fixture.xlsm"
 HAS_PWSH = shutil.which("pwsh") is not None
 HAS_CMD = shutil.which("cmd") is not None
@@ -606,6 +607,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertTrue((ROOT / "references" / "protocol-manifest-sync.md").exists())
         self.assertTrue((ROOT / "references" / "output-contract.md").exists())
         self.assertTrue(RUNTIME_COMPATIBILITY.exists())
+        self.assertTrue(TASK_ROUTER.exists())
         self.assertTrue(CAPABILITY_MATRIX.exists())
 
     def test_skill_frontmatter_stays_skill_creator_valid(self) -> None:
@@ -623,7 +625,14 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotIn("metadata:", frontmatter)
 
         body = content.split("---", 2)[2]
+        self.assertLess(len(body.splitlines()), 90)
+        self.assertIn("references/task-router.md", body)
         self.assertIn("references/runtime-compatibility.md", body)
+
+        bundled_paths = re.findall(r"`<skills-file-root>/([^`]+)`", body)
+        self.assertGreater(bundled_paths, [])
+        for relative_path in bundled_paths:
+            self.assertTrue((ROOT / relative_path).exists(), relative_path)
 
     def test_openai_yaml_interface_only(self) -> None:
         content = OPENAI_YAML.read_text(encoding="utf-8")
@@ -636,7 +645,8 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         query = (ROOT / "references" / "query.md").read_text(encoding="utf-8")
         openai = OPENAI_YAML.read_text(encoding="utf-8")
         usage = (ROOT / "references" / "usage.md").read_text(encoding="utf-8")
-        public_docs = "\n".join([skill, query, usage, openai])
+        task_router = TASK_ROUTER.read_text(encoding="utf-8")
+        public_docs = "\n".join([skill, query, usage, task_router, openai])
 
         self.assertEqual(skill.count("DEVELOPMENT.md"), 1)
         self.assertFalse((ROOT / "README.md").exists())
@@ -649,8 +659,33 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotIn("Use this skill for four explicit workflows", skill)
         self.assertNotIn("opinionated workbook workflows", openai)
         self.assertIn("Intent Router", skill)
+        self.assertIn("Task Router", task_router)
+        self.assertIn("heuristic category router", task_router)
+        self.assertIn("Route by user intent first", skill)
+        self.assertIn("references/task-router.md", skill)
         self.assertIn("Progressive", (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8"))
         self.assertIn("workbook capabilities --deep --documentation", public_docs)
+        self.assertIn("Use `--spec-file` for complex JSON payloads.", usage)
+        self.assertIn("Quote comma-separated `--surface` values in PowerShell.", usage)
+
+        lane_names = {
+            "Polished Authoring Lane",
+            "Package CRUD Lane",
+            "Existing Workbook Edit Lane",
+            "Desktop Excel Lane",
+            "Cloud Workbook Lane",
+            "Office Automation Lane",
+            "Semantic And BI Lane",
+            "Preserve-Only Lane",
+        }
+        for lane_name in lane_names:
+            self.assertIn(lane_name, task_router)
+        for mechanism in ["xlsxwriter", "openpyxl", "direct OOXML", "desktop Excel COM", "Graph"]:
+            self.assertIn(mechanism, public_docs)
+        for route_term in ["package", "desktop", "automation", "graph", "tom-fabric", "preserve-only"]:
+            self.assertIn(route_term, task_router.lower())
+        self.assertNotIn("other agent skill", public_docs.lower())
+        self.assertNotIn("$Excel", public_docs)
 
         ps1 = PS1.read_text(encoding="utf-8")
         command_tokens = set(re.findall(r"'([a-z][a-z0-9-]+-[a-z0-9-]+)'", ps1))
@@ -983,7 +1018,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         covered_surfaces: set[str] = set()
         private_patterns = [
             r"\.local[\\/]files[\\/]excel-foundry",
-            r"EXCEL_SYNC_EXTERNAL_ROOTS\s*=\s*\.local",
+            r"EXCEL_FOUNDRY_EXTERNAL_ROOTS\s*=\s*\.local",
             r"C:[\\/]Users[\\/]",
             re.escape(str(Path.home())),
         ]
@@ -1019,11 +1054,11 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertEqual(set(ledger), covered_surfaces)
 
         external_source = committed_test_sources[EXTERNAL_SMOKE_TEST.name]
-        self.assertIn('os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")', external_source)
+        self.assertIn('os.environ.get("EXCEL_FOUNDRY_EXTERNAL_ROOTS", "")', external_source)
         self.assertIn("create_generated_external_corpus", external_source)
-        self.assertIn("EXCEL_SYNC_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered", external_source)
+        self.assertIn("EXCEL_FOUNDRY_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered", external_source)
         self.assertIn("copy_external_roots_to_temp(cls.original_roots", external_source)
-        self.assertIn('tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-"', external_source)
+        self.assertIn('tempfile.TemporaryDirectory(prefix="excel-foundry-external-corpus-"', external_source)
         self.assertIn("shutil.copy2(root, target)", external_source)
         self.assertIn("shutil.copytree(root, target)", external_source)
         self.assertNotIn(local_external_corpus, external_source)
@@ -1099,7 +1134,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             tmp = Path(tmpdir)
             workbook = tmp / "legacy.xlsm"
             workbook.write_bytes(b"")
-            manifest = tmp / "excel-sync.manifest.json"
+            manifest = tmp / "excel-foundry.manifest.json"
             manifest.write_text(
                 json.dumps(
                     {
@@ -1149,7 +1184,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             workbook.write_bytes(b"")
             module = tmp / "modLiveProbe.bas"
             module.write_text('Attribute VB_Name = "modLiveProbe"\n', encoding="utf-8")
-            manifest = tmp / "excel-sync.manifest.json"
+            manifest = tmp / "excel-foundry.manifest.json"
             manifest.write_text(
                 json.dumps(
                     {
@@ -1745,11 +1780,35 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             proc = run_pwsh_file("name", "set", "--workbook-path", str(workbook), "--name", "MyOtherValue", "--refers-to", "Sheet1!$A$2", timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+            proc = run_pwsh_file("name", "set", "--workbook-path", str(workbook), "--name", "MyFormulaStyleValue", "--refers-to", "=Sheet1!$A$2", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)["names"][0]["refersTo"], "Sheet1!$A$2")
+
             proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "D4", "--value-json", "\"hello\"", timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
             proc = run_pwsh_file("range", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--range-ref", "E5:F6", "--values-json", "[[1,2],[3,4]]", timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "G5", "--value-json", "\"=SUM(E5:F6)\"", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "G6", "--value-json", "{\"type\":\"formula\",\"formula\":\"AVERAGE(E5:F6)\",\"value\":2.5}", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "G7", "--value-json", "{\"type\":\"literal\",\"value\":\"=Sheet1!$A$1\"}", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "G8", "--value-json", "\"'=Sheet1!$A$1\"", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            proc = run_pwsh_file("cell", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "G9", "--value-json", "\"Sheet1!A1\"", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(json.loads(proc.stdout)["warnings"])
+
+            proc = run_pwsh_file("hyperlink", "set", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "B2", "--location", "Sheet2!A1", "--display", "Go to Sheet2", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(json.loads(proc.stdout)["changed"])
 
             proc = run_pwsh_file("cell", "get", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "D4", timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -1758,6 +1817,26 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             proc = run_pwsh_file("range", "get", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--range-ref", "E5:F6", timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(json.loads(proc.stdout)["range"]["values"], [[1, 2], [3, 4]])
+
+            proc = run_pwsh_file("formula", "list", "--workbook-path", str(workbook), timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            formulas = {(item["sheet"], item["address"]): item for item in json.loads(proc.stdout)["formulas"]}
+            self.assertEqual(formulas[("Sheet1", "G5")]["formula"], "SUM(E5:F6)")
+            self.assertIsNone(formulas[("Sheet1", "G5")]["value"])
+            self.assertEqual(formulas[("Sheet1", "G6")]["formula"], "AVERAGE(E5:F6)")
+            self.assertEqual(formulas[("Sheet1", "G6")]["value"], 2.5)
+            self.assertNotIn(("Sheet1", "G7"), formulas)
+            self.assertNotIn(("Sheet1", "G8"), formulas)
+
+            proc = run_pwsh_file("hyperlink", "list", "--workbook-path", str(workbook), timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            hyperlinks = {(item["sheet"], item["address"]): item for item in json.loads(proc.stdout)["hyperlinks"]}
+            self.assertEqual(hyperlinks[("Sheet1", "B2")]["location"], "Sheet2!A1")
+            self.assertEqual(hyperlinks[("Sheet1", "B2")]["display"], "Go to Sheet2")
+
+            proc = run_pwsh_file("hyperlink", "delete", "--workbook-path", str(workbook), "--sheet", "Sheet1", "--address", "B2", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(json.loads(proc.stdout)["changed"])
 
             proc = run_pwsh_file("name", "list", "--workbook-path", str(workbook), timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -1812,7 +1891,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["backend"], "package")
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             sheets = output_dir / "workbook_structure" / "sheets.json"
             tables = output_dir / "workbook_structure" / "tables.json"
             names = output_dir / "workbook_structure" / "names.json"
@@ -1908,6 +1987,14 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 "preserve-only-opaque",
             )
 
+            generic_proc = run_pwsh_file("workbook", "capabilities", "--deep", "--documentation", timeout=60)
+            self.assertEqual(generic_proc.returncode, 0, generic_proc.stdout + generic_proc.stderr)
+            generic_payload = json.loads(generic_proc.stdout)
+            self.assertIsNone(generic_payload["workbookPath"])
+            self.assertEqual(generic_payload["sourceFormat"], ".xlsx")
+            self.assertTrue(generic_payload["capabilities"]["package"]["canRead"])
+            self.assertEqual(generic_payload["capabilityLedger"]["surfaces"]["tables"]["route"], "package-write")
+
             inspect_proc = run_pwsh_file(
                 "workbook",
                 "inspect",
@@ -1963,7 +2050,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             bootstrap_dir = tmp / "bootstrap"
             bootstrap_proc = run_pwsh_file("bootstrap", "--workbook-path", str(workbook), "--output-dir", str(bootstrap_dir), timeout=60)
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = bootstrap_dir / "excel-sync.manifest.json"
+            manifest = bootstrap_dir / "excel-foundry.manifest.json"
 
             validate_proc = run_pwsh_file("manifest", "validate", "--manifest-path", str(manifest), timeout=60)
             self.assertEqual(validate_proc.returncode, 0, validate_proc.stdout + validate_proc.stderr)
@@ -1975,7 +2062,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertTrue(doctor_payload["valid"])
             self.assertIn("resolved", doctor_payload)
 
-            legacy_manifest = tmp / "legacy-excel-sync.manifest.json"
+            legacy_manifest = tmp / "legacy-excel-foundry.manifest.json"
             legacy_manifest.write_text(
                 json.dumps({"workbookPath": workbook.name, "structure": {"sheetsPath": "workbook_structure/sheets.json"}}, indent=2) + "\n",
                 encoding="utf-8",
@@ -2006,6 +2093,20 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
 
             self.assertEqual(payload["validation"]["package"]["status"], "passed")
             with zipfile.ZipFile(workbook) as workbook_zip:
+                self.assertIn("xl/styles.xml", workbook_zip.namelist())
+                workbook_rels = package_module.ET.fromstring(workbook_zip.read("xl/_rels/workbook.xml.rels"))
+                self.assertTrue(
+                    any(
+                        rel.attrib.get("Type", "").endswith("/styles") and rel.attrib.get("Target") == "styles.xml"
+                        for rel in workbook_rels
+                    )
+                )
+                workbook_xml = package_module.ET.fromstring(workbook_zip.read("xl/workbook.xml"))
+                self.assertIsNotNone(workbook_xml.find("main:bookViews/main:workbookView", package_module.NS))
+                self.assertIsNotNone(workbook_xml.find("main:calcPr", package_module.NS))
+                first_sheet = package_module.ET.fromstring(workbook_zip.read("xl/worksheets/sheet1.xml"))
+                self.assertIsNotNone(first_sheet.find("main:sheetViews/main:sheetView", package_module.NS))
+                self.assertIsNotNone(first_sheet.find("main:sheetFormatPr", package_module.NS))
                 for name in workbook_zip.namelist():
                     if name.endswith((".xml", ".rels")):
                         package_module.ET.fromstring(workbook_zip.read(name))
@@ -2107,7 +2208,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertEqual(Path(payload["workbookPath"]), workbook.resolve())
-            self.assertTrue((output_dir / "excel-sync.manifest.json").exists())
+            self.assertTrue((output_dir / "excel-foundry.manifest.json").exists())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_plan_reports_per_surface_writeability(self) -> None:
@@ -2129,7 +2230,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
 
             proc = run_pwsh_file(
                 "plan",
@@ -2176,7 +2277,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
 
             names_path = output_dir / "workbook_structure" / "names.json"
             names_payload = json.loads(names_path.read_text(encoding="utf-8"))
@@ -2218,7 +2319,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
 
             tables_path = output_dir / "workbook_structure" / "tables.json"
             tables_payload = json.loads(tables_path.read_text(encoding="utf-8"))
@@ -2287,7 +2388,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             charts_path = output_dir / "workbook_structure" / "charts.json"
             charts_payload = json.loads(charts_path.read_text(encoding="utf-8"))
             chart = charts_payload["charts"][0]
@@ -2364,7 +2465,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             charts_path = output_dir / "workbook_structure" / "charts.json"
             charts_payload = json.loads(charts_path.read_text(encoding="utf-8"))
             chart = charts_payload["charts"][0]
@@ -2414,7 +2515,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             styles_path = output_dir / "workbook_structure" / "styles.json"
             themes_path = output_dir / "workbook_structure" / "themes.json"
 
@@ -2487,7 +2588,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
 
             names_path = output_dir / "workbook_structure" / "names.json"
             names_payload = json.loads(names_path.read_text(encoding="utf-8"))
@@ -2564,7 +2665,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(query_payload["names"][0]["refersTo"], "Sheet1!$C$2")
             self.assertEqual(query_payload["formulas"][0]["formula"], "SUM(B2,5)")
             self.assertFalse(query_payload["protection"]["worksheets"][0]["objects"])
-            baseline = output_dir / ".excel-sync" / "state" / "sync" / "names" / "baseline.json"
+            baseline = output_dir / ".excel-foundry" / "state" / "sync" / "names" / "baseline.json"
             self.assertTrue(baseline.exists())
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
@@ -2587,7 +2688,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
                 timeout=60,
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
 
             workbook_json = output_dir / "workbook_structure" / "workbook.json"
             workbook_payload = json.loads(workbook_json.read_text(encoding="utf-8"))
@@ -2684,7 +2785,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
 
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             queries_json = output_dir / "power_query" / "queries.json"
             query_file = output_dir / "power_query" / "queries" / "Query1.pq"
             sheets_json = output_dir / "workbook_structure" / "sheets.json"
@@ -2791,7 +2892,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             )
             self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
 
-            manifest = output_dir / "excel-sync.manifest.json"
+            manifest = output_dir / "excel-foundry.manifest.json"
             proc = run_pwsh_file(
                 "roundtrip",
                 "--manifest-path",
@@ -3651,6 +3752,35 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         self.assertNotIn("graph_redaction_probe", json.dumps(dry_run))
 
         old_token = os.environ.get("EXCEL_FOUNDRY_GRAPH_TOKEN")
+        os.environ.pop("EXCEL_FOUNDRY_GRAPH_TOKEN", None)
+        try:
+            no_token_dry_run = package_module.run_graph_workbook_command(
+                argparse.Namespace(
+                    command="graph-workbook-range-set",
+                    item_id="workbook_example",
+                    drive_id=None,
+                    item_path=None,
+                    session_id="session_example",
+                    sheet=["Sheet1"],
+                    address=None,
+                    range_ref="A1:B1",
+                    value_json=None,
+                    values_json=json.dumps([[3, 4]]),
+                    spec_json=None,
+                    spec_file=None,
+                    dry_run=True,
+                    persist_changes=False,
+                    deep=False,
+                )
+            )
+        finally:
+            if old_token is not None:
+                os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = old_token
+        self.assertEqual(no_token_dry_run["status"], "dry-run")
+        self.assertEqual(no_token_dry_run["request"]["body"]["values"], [[3, 4]])
+        self.assertFalse(no_token_dry_run["warnings"])
+
+        old_token = os.environ.get("EXCEL_FOUNDRY_GRAPH_TOKEN")
         os.environ["EXCEL_FOUNDRY_GRAPH_TOKEN"] = "graph_redaction_probe"
         try:
             graph_cases = [
@@ -4224,7 +4354,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_live_roundtrip_on_temp_workspace_copy(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-") as tmpdir:
             tmp_root = Path(tmpdir)
-            manifest = tmp_root / "excel-sync.manifest.json"
+            manifest = tmp_root / "excel-foundry.manifest.json"
             workbook = tmp_root / "roundtrip.xlsm"
             module_path = tmp_root / "modRoundtrip.bas"
             module_path.write_text(
@@ -4268,7 +4398,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_live_vba_push_then_pull_roundtrips_module_change(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-") as tmpdir:
             tmp_root = Path(tmpdir)
-            manifest = tmp_root / "excel-sync.manifest.json"
+            manifest = tmp_root / "excel-foundry.manifest.json"
             workbook = tmp_root / "vba-change.xlsm"
             module_path = tmp_root / "modLiveChange.bas"
             original = dedent(
@@ -4324,7 +4454,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-vba-self-contained-") as tmpdir:
             tmp = Path(tmpdir)
             workbook = tmp / "vba-probe.xlsm"
-            manifest = tmp / "excel-sync.manifest.json"
+            manifest = tmp / "excel-foundry.manifest.json"
             module_path = tmp / "modLiveProbe.bas"
             module_text = dedent(
                 """\
@@ -4384,7 +4514,7 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_live_cf_push_then_pull_roundtrips_new_rule(self) -> None:
         with tempfile.TemporaryDirectory(prefix="excel-foundry-live-cf-") as tmpdir:
             tmp_root = Path(tmpdir)
-            manifest = tmp_root / "excel-sync.manifest.json"
+            manifest = tmp_root / "excel-foundry.manifest.json"
             workbook = tmp_root / "cf.xlsx"
             cf_path = tmp_root / "conditional_formatting.json"
             create_live_desktop_workbook(workbook)

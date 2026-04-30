@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage:
   excel-foundry <inspect|query|push|pull|roundtrip|smoke|refresh|bootstrap|plan|compare|sync> [options]
-  excel-foundry <workbook|manifest|sheet|name|table|query|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table> <action> [options]
+  excel-foundry <workbook|manifest|sheet|name|table|query|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|formula|hyperlink|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table> <action> [options]
 
 Options:
   --manifest-path PATH
@@ -160,7 +160,7 @@ case "$subcommand" in
   bootstrap)
     shift
     ;;
-  workbook|manifest|sheet|name|table|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table|what-if|scenario|goal-seek|formula-audit|calc-engine|cube-function|lambda-name|sparkline|xml-map|custom-xml|ole-object|external-data-range|workbook-view|threaded-comment|signature|encryption|sensitivity|privacy|pivot-chart|chart-sheet|office-script|office-script-live|excel-js-api|office-addin|addin-runtime)
+  workbook|manifest|sheet|name|table|connection|chart|shape|picture|control|pivot|slicer|timeline|model|measure|relationship|hierarchy|kpi|perspective|automation|cell|range|formula|hyperlink|graph-workbook|fabric-semantic-model|model-table|dax|semantic-artifact|solver|forecast-sheet|data-table|what-if|scenario|goal-seek|formula-audit|calc-engine|cube-function|lambda-name|sparkline|xml-map|custom-xml|ole-object|external-data-range|workbook-view|threaded-comment|signature|encryption|sensitivity|privacy|pivot-chart|chart-sheet|office-script|office-script-live|excel-js-api|office-addin|addin-runtime)
     action="${2:-}"
     [ -n "$action" ] || { echo "error: missing action for resource command: $subcommand" >&2; exit 2; }
     subcommand="${subcommand}-${action}"
@@ -207,7 +207,7 @@ while [ "$#" -gt 0 ]; do
       shift
       append_value_arg "-OutputDir" "$value"
       ;;
-    --surface|-Surface|--mode|-Mode|--sheet|-Sheet|--table|-Table|--name|-Name|--name-prefix|-NamePrefix|--connection|-Connection|--chart|-Chart|--pivot|-Pivot|--slicer|-Slicer|--timeline|-Timeline|--automation-type|-AutomationType|--address|-Address|--range-ref|-RangeRef|--value-json|-ValueJson|--values-json|-ValuesJson|--target-format|-TargetFormat|--drive-id|-DriveId|--item-id|-ItemId|--item-path|-ItemPath|--session-id|-SessionId|--workspace-id|-WorkspaceId|--semantic-model-id|-SemanticModelId|--dataset-id|-DatasetId|--operation-id|-OperationId|--operation-location|-OperationLocation|--format|-Format|--dax-query|-DaxQuery|--spec-json|-SpecJson|--refers-to|-RefersTo|--query-name|-QueryName)
+    --surface|-Surface|--mode|-Mode|--sheet|-Sheet|--table|-Table|--name|-Name|--name-prefix|-NamePrefix|--connection|-Connection|--chart|-Chart|--pivot|-Pivot|--slicer|-Slicer|--timeline|-Timeline|--automation-type|-AutomationType|--address|-Address|--range-ref|-RangeRef|--value-json|-ValueJson|--values-json|-ValuesJson|--target-format|-TargetFormat|--drive-id|-DriveId|--item-id|-ItemId|--item-path|-ItemPath|--session-id|-SessionId|--workspace-id|-WorkspaceId|--semantic-model-id|-SemanticModelId|--dataset-id|-DatasetId|--operation-id|-OperationId|--operation-location|-OperationLocation|--format|-Format|--dax-query|-DaxQuery|--spec-json|-SpecJson|--refers-to|-RefersTo|--query-name|-QueryName|--target|-Target|--location|-Location|--display|-Display|--tooltip|-Tooltip)
       [ "$#" -gt 0 ] || { echo "error: missing value for $arg" >&2; exit 2; }
       case "$arg" in
         --*) flag="$(pascal_flag "${arg#--}")" ;;

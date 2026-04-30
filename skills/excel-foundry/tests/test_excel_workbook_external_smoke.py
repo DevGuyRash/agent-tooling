@@ -113,7 +113,7 @@ def safe_slug(path: Path, ordinal: int = 1) -> str:
 
 class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
     def test_discover_external_workbooks_accepts_explicit_file_roots(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="excel-sync-external-root-file-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-external-root-file-") as tmpdir:
             tmp = Path(tmpdir)
             workbook = tmp / "single.xlsx"
             workbook.write_text("placeholder", encoding="utf-8")
@@ -123,7 +123,7 @@ class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
             self.assertEqual(discovered, [workbook.resolve()])
 
     def test_discover_external_files_classifies_flat_exports_without_workbook_smoke(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="excel-sync-external-flat-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-external-flat-") as tmpdir:
             tmp = Path(tmpdir)
             csv_file = tmp / "export.csv"
             txt_file = tmp / "export.txt"
@@ -152,8 +152,8 @@ class ExcelWorkbookExternalSmokeHelperTests(unittest.TestCase):
 class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        raw_roots = os.environ.get("EXCEL_SYNC_EXTERNAL_ROOTS", "")
-        cls.corpus_copy = tempfile.TemporaryDirectory(prefix="excel-sync-external-corpus-")
+        raw_roots = os.environ.get("EXCEL_FOUNDRY_EXTERNAL_ROOTS", "")
+        cls.corpus_copy = tempfile.TemporaryDirectory(prefix="excel-foundry-external-corpus-")
         corpus_root = Path(cls.corpus_copy.name)
         if raw_roots.strip():
             cls.original_roots = split_external_roots(raw_roots)
@@ -168,12 +168,12 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
         cls.flat_exports = [path for path in cls.files if path.suffix.lower() in FLAT_EXPORT_EXTENSIONS]
         if not cls.workbooks:
             if raw_roots.strip():
-                raise AssertionError("EXCEL_SYNC_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered under the copied roots")
+                raise AssertionError("EXCEL_FOUNDRY_EXTERNAL_ROOTS was provided, but no Excel workbooks were discovered under the copied roots")
             raise AssertionError("generated external smoke corpus did not contain an Excel workbook")
         cls.package_workbooks = [path for path in cls.workbooks if path.suffix.lower() in PACKAGE_READABLE_EXTENSIONS]
-        cls.generic_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT", "3")))
-        cls.package_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT", "3")))
-        cls.audit_limit = max(0, int(os.environ.get("EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT", "3")))
+        cls.generic_limit = max(0, int(os.environ.get("EXCEL_FOUNDRY_EXTERNAL_GENERIC_LIMIT", "3")))
+        cls.package_limit = max(0, int(os.environ.get("EXCEL_FOUNDRY_EXTERNAL_PACKAGE_LIMIT", "3")))
+        cls.audit_limit = max(0, int(os.environ.get("EXCEL_FOUNDRY_EXTERNAL_AUDIT_LIMIT", "3")))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -183,9 +183,9 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
 
     def test_generic_pull_and_compare_are_invariant_safe(self) -> None:
         if self.generic_limit == 0:
-            self.skipTest("set EXCEL_SYNC_EXTERNAL_GENERIC_LIMIT to a positive value to run generic corpus smoke")
+            self.skipTest("set EXCEL_FOUNDRY_EXTERNAL_GENERIC_LIMIT to a positive value to run generic corpus smoke")
         sample = self.workbooks[: self.generic_limit]
-        with tempfile.TemporaryDirectory(prefix="excel-sync-external-generic-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-external-generic-") as tmpdir:
             tmp = Path(tmpdir)
             for index, workbook in enumerate(sample, start=1):
                 slug = safe_slug(workbook, index)
@@ -265,11 +265,11 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("pwsh") is not None, "pwsh not available on this host")
     def test_package_manifest_flows_report_capabilities_and_unsupported(self) -> None:
         if self.package_limit == 0:
-            self.skipTest("set EXCEL_SYNC_EXTERNAL_PACKAGE_LIMIT to a positive value to run package corpus smoke")
+            self.skipTest("set EXCEL_FOUNDRY_EXTERNAL_PACKAGE_LIMIT to a positive value to run package corpus smoke")
         sample = self.package_workbooks[: self.package_limit]
         if not sample:
             self.fail("no package-readable Excel workbooks were discovered in the external smoke corpus")
-        with tempfile.TemporaryDirectory(prefix="excel-sync-external-package-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-external-package-") as tmpdir:
             tmp = Path(tmpdir)
             for index, workbook in enumerate(sample, start=1):
                 slug = safe_slug(workbook, index)
@@ -352,13 +352,13 @@ class ExcelWorkbookExternalSmokeTests(unittest.TestCase):
                         timeout=240,
                     )
                     self.assertEqual(bootstrap_proc.returncode, 0, bootstrap_proc.stdout + bootstrap_proc.stderr)
-                    self.assertTrue((output_dir / "excel-sync.manifest.json").exists())
+                    self.assertTrue((output_dir / "excel-foundry.manifest.json").exists())
 
     def test_audit_and_matrix_continue_when_compare_is_unavailable(self) -> None:
         if self.audit_limit == 0:
-            self.skipTest("set EXCEL_SYNC_EXTERNAL_AUDIT_LIMIT to a positive value to run audit smoke")
+            self.skipTest("set EXCEL_FOUNDRY_EXTERNAL_AUDIT_LIMIT to a positive value to run audit smoke")
         sample = self.workbooks[: self.audit_limit]
-        with tempfile.TemporaryDirectory(prefix="excel-sync-external-audit-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-external-audit-") as tmpdir:
             tmp = Path(tmpdir)
             for index, workbook in enumerate(sample, start=1):
                 slug = safe_slug(workbook, index)

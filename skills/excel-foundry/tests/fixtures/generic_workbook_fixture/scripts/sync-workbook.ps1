@@ -8,7 +8,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) "excel-sync.manifest.json"
+$manifestPath = Join-Path (Split-Path -Parent $PSScriptRoot) "excel-foundry.manifest.json"
 $genericScript = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts") "sync-excel.ps1"
 
 $params = @{

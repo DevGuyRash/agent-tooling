@@ -19,12 +19,18 @@ description: >-
 
 # Excel Foundry
 
-Use this skill as a capability router for Excel workbooks and related cloud or
-semantic-model surfaces. Prefer the narrowest reference that matches the
-user's intent, then run the launcher shape `<resource> <action> [flags]`.
+Use this skill as the governance and routing layer for Excel workbook work and
+related cloud or semantic-model surfaces. Route by user intent first, then by
+workbook format, surface support, host availability, destructive risk, and
+secret handling. Prefer the narrowest reference that matches the task, then run
+the launcher shape `<resource> <action> [flags]`.
 
 ## Intent Router
 
+- **Choose the task lane**: load
+  `<skills-file-root>/references/task-router.md` when deciding whether the
+  task is authoring, package CRUD, existing-workbook edit, desktop Excel,
+  cloud workbook, Office automation, semantic/BI, or preserve-only work.
 - **Discover support or choose a route**: load
   `<skills-file-root>/references/query.md`; use `workbook capabilities --deep`
   or `workbook capabilities --deep --documentation` when support level,
@@ -50,8 +56,17 @@ user's intent, then run the launcher shape `<resource> <action> [flags]`.
 - Treat `references/excel-capability-matrix.json` as the only support ledger.
   It defines each surface's support level, route, backend lanes, closure
   reason, host requirements, secret handling, and documentation anchors.
+- Treat Python workbook libraries, direct OOXML, desktop Excel COM, Graph,
+  Office-host automation, Fabric, and Power BI as mechanisms selected by the
+  task lane. You SHALL NOT present them as separate top-level workflows when
+  Excel Foundry is governing the task.
 - Prefer package routes for package-readable `.xlsx` and `.xlsm` workbooks
   when the target surfaces are package-supported.
+- Prefer Python workbook authoring mechanisms such as `xlsxwriter` or
+  `openpyxl` for new polished `.xlsx` workbooks when visual layout, charts,
+  tables, formulas, validation, and formatting matter more than preserving
+  existing opaque workbook internals. Use Excel Foundry inspection and
+  artifacts to govern and verify the result.
 - Use desktop Excel routes for `.xls`, `.xlsb`, conversion, repair, refresh,
   VBA, Power Query mutation, connections, pivots, slicers, timelines, rich
   visual objects, controls, scenarios, Goal Seek, and other surfaces whose
@@ -60,8 +75,8 @@ user's intent, then run the launcher shape `<resource> <action> [flags]`.
   PBIP, and semantic-artifact routes only when the user asks for those hosts or
   the matrix routes the target surface there.
 - When mutation is not publicly safe, return inventory, preservation,
-  diagnostics, a host/cloud execution plan, or a clear limitation. Do not
-  invent package mutation for opaque Excel internals.
+  diagnostics, a host/cloud execution plan, or a clear limitation. You SHALL
+  NOT invent package mutation for opaque Excel internals.
 - Treat tokens, passwords, connection strings, privacy labels, tenant IDs,
   workbook paths, and workbook contents as sensitive runtime data. Redact
   secrets from output and keep destructive/cloud operations on explicit
@@ -75,5 +90,3 @@ user's intent, then run the launcher shape `<resource> <action> [flags]`.
 - `<skills-file-root>/scripts/excel-foundry.ps1`
 - `<skills-file-root>/scripts/excel_workbook_sync.py`
 - `<skills-file-root>/scripts/excel_workbook_package.py`
-- `<skills-file-root>/scripts/excel_com_direct.ps1`
-- `<skills-file-root>/scripts/excel_automation.py`

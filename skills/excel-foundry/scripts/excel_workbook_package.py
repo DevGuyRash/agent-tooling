@@ -1655,9 +1655,9 @@ def _surface_route_payload(surface: str) -> dict[str, Any]:
     return payload
 
 
-def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
+def _capability_ledger_for_workbook(workbook_path: Path | None = None, default_extension: str = ".xlsx") -> dict[str, Any]:
     engine_capabilities = _workbook_engine_capabilities(workbook_path)
-    extension = workbook_path.suffix.lower()
+    extension = workbook_path.suffix.lower() if workbook_path is not None else default_extension.lower()
     package_readable = extension in PACKAGE_READABLE_EXTENSIONS
     desktop_available = extension in DESKTOP_EXTENSIONS
     surfaces: dict[str, Any] = {}
@@ -1726,8 +1726,8 @@ def _capability_ledger_for_workbook(workbook_path: Path) -> dict[str, Any]:
     }
 
 
-def _workbook_engine_capabilities(workbook_path: Path) -> dict[str, Any]:
-    extension = workbook_path.suffix.lower()
+def _workbook_engine_capabilities(workbook_path: Path | None = None, default_extension: str = ".xlsx") -> dict[str, Any]:
+    extension = workbook_path.suffix.lower() if workbook_path is not None else default_extension.lower()
     package_readable = extension in PACKAGE_READABLE_EXTENSIONS
     desktop_recommended = extension in {".xls", ".xlsb", ".ods", ".csv", ".txt"}
     desktop_required_surfaces = [
@@ -2205,9 +2205,10 @@ def run_graph_workbook_command(args: argparse.Namespace) -> dict[str, Any]:
     operation = command.removeprefix("graph-workbook-")
     spec = _read_json_spec(getattr(args, "spec_json", None), getattr(args, "spec_file", None))
     dry_run = bool(getattr(args, "dry_run", False))
-    token_missing = _require_cloud_values(command, "graph", operation, token_env, {token_env: token})
-    if token_missing:
-        return token_missing
+    if not dry_run:
+        token_missing = _require_cloud_values(command, "graph", operation, token_env, {token_env: token})
+        if token_missing:
+            return token_missing
 
     method = "GET"
     body: Any = None
@@ -3021,6 +3022,12 @@ def _validate_workbook_package(workbook_path: Path) -> dict[str, Any]:
                     xml_part_count += 1
                 except ET.ParseError as exc:
                     errors.append(f"[Content_Types].xml is not well-formed XML: {exc}")
+                else:
+                    if content_types_root.tag != f"{{{NS['ct']}}}Types":
+                        errors.append("[Content_Types].xml root must be OPC Types in the content-types namespace")
+                    for child in list(content_types_root):
+                        if child.tag not in {f"{{{NS['ct']}}}Default", f"{{{NS['ct']}}}Override"}:
+                            errors.append(f"[Content_Types].xml contains unsupported child element: {_local_name(child.tag)}")
 
             for name in sorted(names):
                 if not name.endswith(".xml") or name == "[Content_Types].xml":
@@ -3308,7 +3315,7 @@ def repair_workbook_package(workbook_path: Path, target_path: Path | None = None
     if "[Content_Types].xml" in members:
         content_types_root = ET.fromstring(updates.get("[Content_Types].xml", members["[Content_Types].xml"]))
         if _remove_content_type_overrides(content_types_root, deletes):
-            updates["[Content_Types].xml"] = ET.tostring(content_types_root, encoding="utf-8", xml_declaration=True)
+            updates["[Content_Types].xml"] = _serialize_content_types_xml(content_types_root)
             repaired_parts.append("[Content_Types].xml")
 
     if "xl/sharedStrings.xml" in members and "xl/_rels/workbook.xml.rels" in members:
@@ -3357,7 +3364,7 @@ def _relative_or_absolute(base_dir: Path, target_path: Path) -> str:
 def bootstrap_bundle(workbook_path: Path, output_dir: Path, manifest_path: Path | None, surfaces: list[str]) -> dict[str, Any]:
     query_payload = build_query_payload(workbook_path, surfaces)
     output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_path or output_dir / "excel-sync.manifest.json"
+    manifest_path = manifest_path or output_dir / "excel-foundry.manifest.json"
     structure_dir = output_dir / "workbook_structure"
     _write_json(structure_dir / "workbook.json", {"workbook": query_payload.get("workbook", {})})
     _write_json(structure_dir / "sheets.json", {"sheets": query_payload.get("sheets", [])})
@@ -3813,6 +3820,7 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
     ET.SubElement(content_types_root, f"{{{NS['ct']}}}Default", {"Extension": "rels", "ContentType": "application/vnd.openxmlformats-package.relationships+xml"})
     ET.SubElement(content_types_root, f"{{{NS['ct']}}}Default", {"Extension": "xml", "ContentType": "application/xml"})
     _ensure_override(content_types_root, "/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml")
+    _ensure_override(content_types_root, "/xl/styles.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml")
     _ensure_override(content_types_root, "/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml")
     _ensure_override(content_types_root, "/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml")
 
@@ -3835,6 +3843,9 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
 
     workbook_rels_root = _relationships_root()
     workbook_root = ET.Element(f"{{{NS['main']}}}workbook")
+    ET.SubElement(workbook_root, f"{{{NS['main']}}}workbookPr", {"date1904": "0"})
+    book_views = ET.SubElement(workbook_root, f"{{{NS['main']}}}bookViews")
+    ET.SubElement(book_views, f"{{{NS['main']}}}workbookView", {"activeTab": "0"})
     sheets_node = ET.SubElement(workbook_root, f"{{{NS['main']}}}sheets")
     for index, sheet_name in enumerate(normalized_sheets, start=1):
         _ensure_override(content_types_root, f"/xl/worksheets/sheet{index}.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml")
@@ -3848,6 +3859,12 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
             f"{{{NS['main']}}}sheet",
             {"name": sheet_name, "sheetId": str(index), f"{{{NS['rel']}}}id": f"rId{index}"},
         )
+    ET.SubElement(
+        workbook_rels_root,
+        f"{{{NS['pkgrel']}}}Relationship",
+        {"Id": f"rId{len(normalized_sheets) + 1}", "Type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles", "Target": "styles.xml"},
+    )
+    ET.SubElement(workbook_root, f"{{{NS['main']}}}calcPr", {"calcMode": "auto", "fullCalcOnLoad": "1"})
 
     title = spec.get("title") or workbook_path.stem
     subject = spec.get("subject") or ""
@@ -3884,12 +3901,17 @@ def create_blank_workbook(workbook_path: Path, spec: dict[str, Any]) -> dict[str
             ET.SubElement(prop, f"{{{NS['vt']}}}lpwstr").text = str(value)
 
     with zipfile.ZipFile(workbook_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
-        workbook_zip.writestr("[Content_Types].xml", _serialize_xml(content_types_root))
+        workbook_zip.writestr("[Content_Types].xml", _serialize_content_types_xml(content_types_root))
         workbook_zip.writestr("_rels/.rels", _serialize_xml(package_rels_root))
         workbook_zip.writestr("xl/workbook.xml", _serialize_xml(workbook_root))
         workbook_zip.writestr("xl/_rels/workbook.xml.rels", _serialize_xml(workbook_rels_root))
+        workbook_zip.writestr("xl/styles.xml", _default_workbook_styles_xml())
         for index in range(1, len(normalized_sheets) + 1):
             worksheet_root = ET.Element(f"{{{NS['main']}}}worksheet")
+            ET.SubElement(worksheet_root, f"{{{NS['main']}}}dimension", {"ref": "A1"})
+            sheet_views = ET.SubElement(worksheet_root, f"{{{NS['main']}}}sheetViews")
+            ET.SubElement(sheet_views, f"{{{NS['main']}}}sheetView", {"workbookViewId": "0"})
+            ET.SubElement(worksheet_root, f"{{{NS['main']}}}sheetFormatPr", {"defaultRowHeight": "15"})
             ET.SubElement(worksheet_root, f"{{{NS['main']}}}sheetData")
             workbook_zip.writestr(
                 f"xl/worksheets/sheet{index}.xml",
@@ -4190,6 +4212,46 @@ def _replace_simple_properties(prop_root: ET.Element, properties: dict[str, Any]
         child.text = str(value)
 
 
+def _looks_formula_like_literal(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    if re.match(r"^(?:'[^']+'|[A-Za-z_][A-Za-z0-9_]*)!\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?$", text):
+        return True
+    if re.match(r"^[A-Z]{1,3}\d+(?::[A-Z]{1,3}\d+)?$", text, re.IGNORECASE):
+        return True
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_.]*\s*\(.+\)$", text))
+
+
+def _normalize_cell_payload(value: Any) -> dict[str, Any]:
+    warnings: list[str] = []
+    if isinstance(value, dict):
+        payload_type = str(value.get("type", "")).lower()
+        if payload_type == "formula" or (not payload_type and "formula" in value):
+            formula = str(value.get("formula") or "")
+            return {
+                "kind": "formula",
+                "formula": formula[1:] if formula.startswith("=") else formula,
+                "value": value.get("value"),
+                "hasCachedValue": "value" in value,
+                "warnings": warnings,
+            }
+        if payload_type == "literal":
+            return {"kind": "literal", "value": value.get("value"), "warnings": warnings}
+        if payload_type:
+            warnings.append(f"Unknown cell payload type '{payload_type}'; wrote payload value as a literal scalar.")
+            return {"kind": "literal", "value": value.get("value"), "warnings": warnings}
+
+    if isinstance(value, str):
+        if value.startswith("'="):
+            return {"kind": "literal", "value": value[1:], "warnings": warnings}
+        if value.startswith("="):
+            return {"kind": "formula", "formula": value[1:], "value": None, "hasCachedValue": False, "warnings": warnings}
+        if _looks_formula_like_literal(value):
+            warnings.append(f"String value '{value}' looks like a formula or reference; use an explicit literal or formula payload to remove ambiguity.")
+    return {"kind": "literal", "value": value, "warnings": warnings}
+
+
 def _normalize_scalar_for_cell(value: Any) -> tuple[str | None, str]:
     if value is None:
         return None, ""
@@ -4200,7 +4262,8 @@ def _normalize_scalar_for_cell(value: Any) -> tuple[str | None, str]:
     return "str", str(value)
 
 
-def _apply_cell_value_to_sheet(root: ET.Element, cell_ref: str, value: Any) -> None:
+def _apply_cell_value_to_sheet(root: ET.Element, cell_ref: str, value: Any) -> list[str]:
+    payload = _normalize_cell_payload(value)
     sheet_data = root.find("main:sheetData", NS)
     if sheet_data is None:
         sheet_data = ET.SubElement(root, f"{{{NS['main']}}}sheetData")
@@ -4208,8 +4271,25 @@ def _apply_cell_value_to_sheet(root: ET.Element, cell_ref: str, value: Any) -> N
     row = _get_or_create_row(sheet_data, row_number)
     cell = _get_or_create_cell(row, cell_ref)
     formula_node = cell.find("main:f", NS)
-    if formula_node is not None:
+    value_node = cell.find("main:v", NS)
+    if payload["kind"] == "formula":
+        if formula_node is None:
+            formula_node = ET.SubElement(cell, f"{{{NS['main']}}}f")
+        formula_node.text = payload["formula"]
+        for attr in ("t", "ref"):
+            formula_node.attrib.pop(attr, None)
+        if "t" in cell.attrib:
+            del cell.attrib["t"]
+        if not payload["hasCachedValue"]:
+            if value_node is not None:
+                cell.remove(value_node)
+            return payload["warnings"]
+        value = payload["value"]
+    elif formula_node is not None:
         cell.remove(formula_node)
+        value = payload["value"]
+    else:
+        value = payload["value"]
     value_node = cell.find("main:v", NS)
     if value_node is None:
         value_node = ET.SubElement(cell, f"{{{NS['main']}}}v")
@@ -4219,6 +4299,7 @@ def _apply_cell_value_to_sheet(root: ET.Element, cell_ref: str, value: Any) -> N
     elif "t" in cell.attrib:
         del cell.attrib["t"]
     value_node.text = scalar
+    return payload["warnings"]
 
 
 def apply_direct_sheet_create(workbook_path: Path, sheet_name: str) -> dict[str, Any]:
@@ -4278,7 +4359,7 @@ def apply_direct_sheet_create(workbook_path: Path, sheet_name: str) -> dict[str,
         updates = {
             "xl/workbook.xml": ET.tostring(workbook_root, encoding="utf-8", xml_declaration=True),
             "xl/_rels/workbook.xml.rels": ET.tostring(workbook_rels_root, encoding="utf-8", xml_declaration=True),
-            "[Content_Types].xml": ET.tostring(content_types_root, encoding="utf-8", xml_declaration=True),
+            "[Content_Types].xml": _serialize_content_types_xml(content_types_root),
             worksheet_path: ET.tostring(worksheet_root, encoding="utf-8", xml_declaration=True),
         }
     finally:
@@ -4345,7 +4426,7 @@ def apply_direct_sheet_delete(workbook_path: Path, sheet_name: str, destructive:
         updates = {
             "xl/workbook.xml": ET.tostring(workbook_root, encoding="utf-8", xml_declaration=True),
             "xl/_rels/workbook.xml.rels": ET.tostring(workbook_rels_root, encoding="utf-8", xml_declaration=True),
-            "[Content_Types].xml": ET.tostring(content_types_root, encoding="utf-8", xml_declaration=True),
+            "[Content_Types].xml": _serialize_content_types_xml(content_types_root),
         }
     finally:
         package.close()
@@ -4431,7 +4512,8 @@ def apply_direct_names(workbook_path: Path, names: list[dict[str, Any]]) -> dict
                 continue
             if node is None:
                 node = ET.SubElement(defined_names, f"{{{NS['main']}}}definedName", {"name": name})
-            node.text = item.get("refersTo", "")
+            refers_to = str(item.get("refersTo", ""))
+            node.text = refers_to[1:] if refers_to.startswith("=") else refers_to
             if item.get("hidden") is not None:
                 node.attrib["hidden"] = "1" if item.get("hidden") else "0"
             applied.append({"name": name, "refersTo": node.text, "deleted": False})
@@ -4439,21 +4521,139 @@ def apply_direct_names(workbook_path: Path, names: list[dict[str, Any]]) -> dict
     finally:
         package.close()
     _rewrite_workbook_package(workbook_path, updates)
-    return {"status": "applied", "names": applied}
+    return {"status": "applied", "backend": "package", "changed": bool(applied), "names": applied}
 
 
 def apply_direct_cells(workbook_path: Path, sheet_name: str, assignments: list[dict[str, Any]]) -> dict[str, Any]:
+    warnings: list[str] = []
     package = WorkbookPackage(workbook_path)
     try:
         sheet_path = _sheet_xml_path(package, sheet_name)
         root = package._read_xml(sheet_path)
         for assignment in assignments:
-            _apply_cell_value_to_sheet(root, assignment["address"].replace("$", "").upper(), assignment.get("value"))
+            warnings.extend(_apply_cell_value_to_sheet(root, assignment["address"].replace("$", "").upper(), assignment.get("value")))
         updates = {sheet_path: ET.tostring(root, encoding="utf-8", xml_declaration=True)}
     finally:
         package.close()
     _rewrite_workbook_package(workbook_path, updates)
-    return {"status": "applied", "sheet": sheet_name, "cells": assignments}
+    return {
+        "status": "applied",
+        "backend": "package",
+        "changed": bool(assignments),
+        "sheet": sheet_name,
+        "cells": assignments,
+        "affectedCount": len(assignments),
+        "warnings": warnings,
+    }
+
+
+def _hyperlink_rel_target(sheet_path: str, target: str) -> str:
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+        return target
+    sheet_dir = PurePosixPath(sheet_path).parent
+    target_path = PurePosixPath(target)
+    if target_path.is_absolute():
+        return target_path.as_posix().lstrip("/")
+    return os.path.relpath(str(target_path), str(sheet_dir)).replace("\\", "/")
+
+
+def apply_direct_hyperlinks(workbook_path: Path, sheet_name: str, links: list[dict[str, Any]]) -> dict[str, Any]:
+    package = WorkbookPackage(workbook_path)
+    try:
+        sheet_path = _sheet_xml_path(package, sheet_name)
+        root = package._read_xml(sheet_path)
+        rels_path = _sheet_rels_path(sheet_path)
+        try:
+            rels_root = package._read_xml(rels_path)
+            rels_exists = True
+        except KeyError:
+            rels_root = _relationships_root()
+            rels_exists = False
+
+        hyperlinks_node = root.find("main:hyperlinks", NS)
+        affected: list[dict[str, Any]] = []
+        rel_ids_to_consider: set[str] = set()
+        for link in links:
+            address = str(link["address"]).replace("$", "").upper()
+            existing: ET.Element | None = None
+            if hyperlinks_node is not None:
+                for node in hyperlinks_node.findall("main:hyperlink", NS):
+                    if (node.attrib.get("ref") or "").replace("$", "").upper() == address:
+                        existing = node
+                        break
+            if link.get("delete"):
+                if existing is not None and hyperlinks_node is not None:
+                    rel_id = existing.attrib.get(f"{{{NS['rel']}}}id")
+                    if rel_id:
+                        rel_ids_to_consider.add(rel_id)
+                    hyperlinks_node.remove(existing)
+                    affected.append({"address": address, "deleted": True})
+                continue
+            if hyperlinks_node is None:
+                hyperlinks_node = ET.SubElement(root, f"{{{NS['main']}}}hyperlinks")
+            if existing is None:
+                existing = ET.SubElement(hyperlinks_node, f"{{{NS['main']}}}hyperlink", {"ref": address})
+            else:
+                old_rel_id = existing.attrib.pop(f"{{{NS['rel']}}}id", None)
+                if old_rel_id:
+                    rel_ids_to_consider.add(old_rel_id)
+                for attr in ("location", "display", "tooltip"):
+                    existing.attrib.pop(attr, None)
+            existing.attrib["ref"] = address
+            target = link.get("target")
+            location = link.get("location")
+            if target:
+                target_text = str(target)
+                target_mode = "External" if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target_text) else None
+                rel_id = _upsert_relationship(
+                    rels_root,
+                    rel_type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+                    target=target_text if target_mode else _hyperlink_rel_target(sheet_path, target_text),
+                    target_mode=target_mode,
+                )
+                existing.attrib[f"{{{NS['rel']}}}id"] = rel_id
+            elif location:
+                existing.attrib["location"] = str(location).lstrip("#")
+            else:
+                raise ValueError("hyperlink set requires --target or --location")
+            for attr in ("display", "tooltip"):
+                if link.get(attr) is not None:
+                    existing.attrib[attr] = str(link[attr])
+            affected.append({"address": address, "target": target, "location": location, "deleted": False})
+
+        if hyperlinks_node is not None and not list(hyperlinks_node):
+            root.remove(hyperlinks_node)
+
+        used_rel_ids = {
+            node.attrib.get(f"{{{NS['rel']}}}id")
+            for node in root.findall("main:hyperlinks/main:hyperlink", NS)
+            if node.attrib.get(f"{{{NS['rel']}}}id")
+        }
+        for rel_id in rel_ids_to_consider:
+            if rel_id in used_rel_ids:
+                continue
+            for rel in list(rels_root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship")):
+                if rel.attrib.get("Id") == rel_id:
+                    rels_root.remove(rel)
+
+        updates = {sheet_path: _serialize_xml(root)}
+        deletes: set[str] = set()
+        if list(rels_root):
+            updates[rels_path] = _serialize_xml(rels_root)
+        elif rels_exists:
+            deletes.add(rels_path)
+    finally:
+        package.close()
+    _rewrite_workbook_package(workbook_path, updates, deletes=deletes)
+    return {
+        "status": "applied",
+        "backend": "package",
+        "changed": bool(affected),
+        "sheet": sheet_name,
+        "hyperlinks": affected,
+        "affectedCount": len(affected),
+        "warnings": [],
+    }
 
 
 WORKBOOK_CHILD_ORDER = {
@@ -4545,6 +4745,29 @@ def _normalize_ooxml_element_order(element: ET.Element) -> None:
 def _serialize_xml(element: ET.Element) -> bytes:
     _normalize_ooxml_element_order(element)
     return ET.tostring(element, encoding="utf-8", xml_declaration=True)
+
+
+def _serialize_content_types_xml(content_types_root: ET.Element) -> bytes:
+    root = ET.Element("Types", {"xmlns": NS["ct"]})
+    defaults: list[tuple[str, str]] = []
+    overrides: list[tuple[str, str]] = []
+    for child in list(content_types_root):
+        local = _local_name(child.tag)
+        if local == "Default":
+            extension = child.attrib.get("Extension", "")
+            content_type = child.attrib.get("ContentType", "")
+            if extension and content_type:
+                defaults.append((extension, content_type))
+        elif local == "Override":
+            part_name = child.attrib.get("PartName", "")
+            content_type = child.attrib.get("ContentType", "")
+            if part_name and content_type:
+                overrides.append((part_name, content_type))
+    for extension, content_type in sorted(set(defaults)):
+        ET.SubElement(root, "Default", {"Extension": extension, "ContentType": content_type})
+    for part_name, content_type in sorted(set(overrides)):
+        ET.SubElement(root, "Override", {"PartName": part_name, "ContentType": content_type})
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 def _relationships_root() -> ET.Element:
@@ -5010,13 +5233,20 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
                 if sheet_data is None:
                     sheet_data = ET.SubElement(root, f"{{{NS['main']}}}sheetData")
                 for formula in formulas:
-                    row_number, _ = _cell_ref_to_row_col(formula["address"])
+                    address = formula["address"].replace("$", "").upper()
+                    payload = {
+                        "type": "formula",
+                        "formula": formula.get("formula", ""),
+                    }
+                    if "value" in formula:
+                        payload["value"] = formula.get("value")
+                    _apply_cell_value_to_sheet(root, address, payload)
+                    row_number, _ = _cell_ref_to_row_col(address)
                     row = _get_or_create_row(sheet_data, row_number)
-                    cell = _get_or_create_cell(row, formula["address"])
+                    cell = _get_or_create_cell(row, address)
                     formula_node = cell.find("main:f", NS)
                     if formula_node is None:
                         formula_node = ET.SubElement(cell, f"{{{NS['main']}}}f")
-                    formula_node.text = formula.get("formula", "")
                     kind = formula.get("kind")
                     ref = formula.get("reference")
                     if kind and kind != "normal":
@@ -5264,7 +5494,7 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
                         ET.SubElement(hyperlinks_node, f"{{{NS['main']}}}hyperlink", attrs)
                 updates[path] = _serialize_xml(root)
                 updates[rels_path] = _serialize_xml(rels_root)
-            updates["[Content_Types].xml"] = _serialize_xml(content_types_root)
+            updates["[Content_Types].xml"] = _serialize_content_types_xml(content_types_root)
             messages.append(f"Applied {len(payload)} hyperlink definition(s).")
         elif surface == "comments":
             content_types_root = package._read_xml("[Content_Types].xml")
@@ -5325,7 +5555,7 @@ def apply_package_surface_push(workbook_path: Path, surface: str, payload: Any, 
                         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
                     )
                 updates[rels_path] = _serialize_xml(rels_root)
-            updates["[Content_Types].xml"] = _serialize_xml(content_types_root)
+            updates["[Content_Types].xml"] = _serialize_content_types_xml(content_types_root)
             messages.append(f"Applied {len(payload)} comment definition(s).")
         elif surface == "print":
             workbook_root = package.workbook_xml
@@ -5677,10 +5907,11 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command.startswith("dax-"):
         return run_dax_command(args)
     if args.command == "workbook-capabilities":
-        workbook_path = Path(args.workbook_path)
+        workbook_path = Path(args.workbook_path) if getattr(args, "workbook_path", None) else None
         payload = {
             "backend": "multi-engine",
-            "workbookPath": str(workbook_path.resolve()),
+            "workbookPath": str(workbook_path.resolve()) if workbook_path is not None else None,
+            "sourceFormat": workbook_path.suffix.lower() if workbook_path is not None else ".xlsx",
             "capabilities": _workbook_engine_capabilities(workbook_path),
         }
         if getattr(args, "deep", False):
@@ -5811,6 +6042,22 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.command == "name-delete":
         return apply_direct_names(workbook_path, [{"name": args.name, "delete": True}])
+    if args.command == "hyperlink-set":
+        return apply_direct_hyperlinks(
+            workbook_path,
+            args.sheet,
+            [
+                {
+                    "address": args.address,
+                    "target": args.target,
+                    "location": args.location,
+                    "display": args.display,
+                    "tooltip": args.tooltip,
+                }
+            ],
+        )
+    if args.command == "hyperlink-delete":
+        return apply_direct_hyperlinks(workbook_path, args.sheet, [{"address": args.address, "delete": True}])
     if args.command == "cell-set":
         return apply_direct_cells(
             workbook_path,
@@ -5862,7 +6109,7 @@ def main(argv: list[str]) -> int:
     mutate_parser.add_argument("--workbook-path", required=True)
 
     workbook_capabilities_parser = subparsers.add_parser("workbook-capabilities")
-    workbook_capabilities_parser.add_argument("--workbook-path", required=True)
+    workbook_capabilities_parser.add_argument("--workbook-path")
     workbook_capabilities_parser.add_argument("--deep", action="store_true")
     workbook_capabilities_parser.add_argument("--documentation", action="store_true")
 
@@ -5953,6 +6200,20 @@ def main(argv: list[str]) -> int:
 
     hyperlink_list_parser = subparsers.add_parser("hyperlink-list")
     hyperlink_list_parser.add_argument("--workbook-path", required=True)
+
+    hyperlink_set_parser = subparsers.add_parser("hyperlink-set")
+    hyperlink_set_parser.add_argument("--workbook-path", required=True)
+    hyperlink_set_parser.add_argument("--sheet", required=True)
+    hyperlink_set_parser.add_argument("--address", required=True)
+    hyperlink_set_parser.add_argument("--target")
+    hyperlink_set_parser.add_argument("--location")
+    hyperlink_set_parser.add_argument("--display")
+    hyperlink_set_parser.add_argument("--tooltip")
+
+    hyperlink_delete_parser = subparsers.add_parser("hyperlink-delete")
+    hyperlink_delete_parser.add_argument("--workbook-path", required=True)
+    hyperlink_delete_parser.add_argument("--sheet", required=True)
+    hyperlink_delete_parser.add_argument("--address", required=True)
 
     comment_list_parser = subparsers.add_parser("comment-list")
     comment_list_parser.add_argument("--workbook-path", required=True)
@@ -6184,6 +6445,8 @@ def main(argv: list[str]) -> int:
         "query-list",
         "dimension-get",
         "hyperlink-list",
+        "hyperlink-set",
+        "hyperlink-delete",
         "comment-list",
         "print-get",
         "formula-list",
@@ -6308,7 +6571,7 @@ def main(argv: list[str]) -> int:
             "query": {item for item in getattr(args, "query_name", []) if item},
         }
         surfaces = _normalize_surface_set(getattr(args, "surface", ""), bundle["manifest"])
-        state_root = Path(args.state_root).resolve() if getattr(args, "state_root", None) else (bundle["manifestRoot"] / ".excel-sync" / "state")
+        state_root = Path(args.state_root).resolve() if getattr(args, "state_root", None) else (bundle["manifestRoot"] / ".excel-foundry" / "state")
         if args.command == "plan":
             payload = plan_bundle_sync(bundle, surfaces, selectors, args.mode, state_root)
         elif args.command == "compare":
