@@ -186,20 +186,7 @@ bounded_slugify() {
 # --- JSON building ---
 
 json_escape() {
-  printf '%s' "$1" | awk '
-    BEGIN { ORS="" }
-    {
-      if (NR > 1) printf "\\n"
-      for (i = 1; i <= length($0); i++) {
-        c = substr($0, i, 1)
-        if      (c == "\\") printf "\\\\"
-        else if (c == "\"") printf "\\\""
-        else if (c == "\t") printf "\\t"
-        else if (c == "\r") printf "\\r"
-        else                printf "%s", c
-      }
-    }
-  ' -
+  python3 -c 'import json, sys; print(json.dumps(sys.argv[1], ensure_ascii=False)[1:-1], end="")' "$1"
 }
 
 json_string() {
@@ -436,7 +423,7 @@ extract_all_tags() {
 import json, sys
 from pathlib import Path
 tags = set()
-with Path(sys.argv[1]).open("r", encoding="utf-8") as fh:
+with Path(sys.argv[1]).open("r", encoding="utf-8", errors="replace") as fh:
     for raw in fh:
         raw = raw.strip()
         if not raw:
@@ -468,7 +455,7 @@ extract_all_aliases() {
 import json, sys
 from pathlib import Path
 aliases = set()
-with Path(sys.argv[1]).open("r", encoding="utf-8") as fh:
+with Path(sys.argv[1]).open("r", encoding="utf-8", errors="replace") as fh:
     for raw in fh:
         raw = raw.strip()
         if not raw:
