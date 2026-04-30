@@ -777,6 +777,37 @@ def component_root_path(repo: Path, component: dict[str, Any]) -> Path:
     return repo / component["path"] if component["path"] != "." else repo
 
 
+def rust_version_from_component(repo: Path, component: dict[str, Any]) -> str | None:
+    cargo_toml = component_root_path(repo, component) / "Cargo.toml"
+    if not cargo_toml.exists():
+        return None
+    data = read_toml(cargo_toml)
+    if not isinstance(data, dict):
+        return None
+    workspace = data.get("workspace", {})
+    if isinstance(workspace, dict):
+        workspace_package = workspace.get("package", {})
+        if isinstance(workspace_package, dict) and isinstance(workspace_package.get("rust-version"), str):
+            return workspace_package["rust-version"]
+    package = data.get("package", {})
+    if isinstance(package, dict) and isinstance(package.get("rust-version"), str):
+        return package["rust-version"]
+    return None
+
+
+def rust_toolchain_version(repo: Path, components: list[dict[str, Any]]) -> str:
+    rust_components = [component for component in components if component["language"] == "rust"]
+    ordered = [
+        *[component for component in rust_components if component.get("workspace")],
+        *[component for component in rust_components if not component.get("workspace")],
+    ]
+    for component in ordered:
+        version = rust_version_from_component(repo, component)
+        if version:
+            return version
+    return "stable"
+
+
 def workspace_member_patterns(repo: Path, component: dict[str, Any]) -> list[str]:
     root = component_root_path(repo, component)
     path = component["path"]
@@ -804,6 +835,24 @@ def workspace_member_patterns(repo: Path, component: dict[str, Any]) -> list[str
         for item in packages:
             patterns.append(item if path == "." else f"{path}/{item}")
     return patterns
+
+
+def component_path_matches_workspace_patterns(path: str, patterns: set[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def covered_workspace_member_paths(repo: Path, components: list[dict[str, Any]]) -> set[str]:
+    workspace_patterns: set[str] = set()
+    for component in components:
+        if component.get("workspace"):
+            workspace_patterns.update(workspace_member_patterns(repo, component))
+    if not workspace_patterns:
+        return set()
+    return {
+        component["path"]
+        for component in components
+        if not component.get("workspace") and component_path_matches_workspace_patterns(component["path"], workspace_patterns)
+    }
 
 
 def workspace_member_watch_patterns(repo: Path, component: dict[str, Any]) -> list[str]:
@@ -1131,7 +1180,9 @@ def rust_component_commands(component: dict[str, Any]) -> dict[str, list[str]]:
         commands["build"] = [component_cd("cargo build --workspace {{args}}", component)]
         commands["release"] = [component_cd("cargo build --workspace --release", component)]
         commands["test"] = [component_cd("cargo test --workspace {{args}}", component)]
-        commands["lint"] = [component_cd("cargo clippy --workspace -- -D warnings", component)]
+        commands["lint"] = [component_cd("cargo clippy --workspace --all-targets -- -D warnings", component)]
+        commands["fmt"] = [component_cd("cargo fmt --all", component)]
+        commands["fmt-check"] = [component_cd("cargo fmt --all --check", component)]
     return commands
 
 
@@ -1273,31 +1324,45 @@ def commands_for_component(component: dict[str, Any], repo: Path) -> dict[str, l
     return {"build": [], "release": [], "test": [], "lint": [], "fmt": [], "fmt-check": [], "clean": [], "bootstrap": [], "dev": []}
 
 
-def merge_recipe_commands(existing: dict[str, list[str]], new: dict[str, list[str]]) -> dict[str, list[str]]:
-    out = {key: list(value) for key, value in existing.items()}
+def append_recipe_commands(out: dict[str, list[str]], new: dict[str, list[str]], seen_by_recipe: dict[str, set[str]]) -> None:
     for key, value in new.items():
         out.setdefault(key, [])
+        seen = seen_by_recipe.setdefault(key, set(out[key]))
         for item in value:
-            if item not in out[key]:
-                out[key].append(item)
+            if item in seen:
+                continue
+            seen.add(item)
+            out[key].append(item)
+
+
+def merge_recipe_commands(existing: dict[str, list[str]], new: dict[str, list[str]]) -> dict[str, list[str]]:
+    out = {key: list(value) for key, value in existing.items()}
+    seen_by_recipe = {key: set(value) for key, value in out.items()}
+    append_recipe_commands(out, new, seen_by_recipe)
     return out
 
 
 def make_initial_recipe_commands(repo: Path, detected: dict[str, Any]) -> dict[str, list[str]]:
     commands = {key: [] for key in ["build", "release", "test", "lint", "fmt", "fmt-check", "clean", "bootstrap", "ci", "dev"]}
+    seen_by_recipe: dict[str, set[str]] = {key: set() for key in commands}
     if "make" in detected["task_runners"]:
         mapped = task_target_map(detected.get("make_targets", []), "make")
-        for key, value in mapped.items():
-            commands[key].append(value)
+        append_recipe_commands(commands, {key: [value] for key, value in mapped.items()}, seen_by_recipe)
     if "task" in detected["task_runners"]:
         mapped = task_target_map(detected.get("task_targets", []), "task")
-        for key, value in mapped.items():
-            if value not in commands[key]:
-                commands[key].append(value)
+        append_recipe_commands(commands, {key: [value] for key, value in mapped.items()}, seen_by_recipe)
 
-    for component in promoted_runnable_components(detected):
+    components = promoted_runnable_components(detected)
+    covered_member_paths = covered_workspace_member_paths(repo, components)
+    workspace_components = [component for component in components if component.get("workspace")]
+    independent_components = [
+        component
+        for component in components
+        if not component.get("workspace") and component["path"] not in covered_member_paths
+    ]
+    for component in [*workspace_components, *independent_components]:
         component_commands = commands_for_component(component, repo)
-        commands = merge_recipe_commands(commands, component_commands)
+        append_recipe_commands(commands, component_commands, seen_by_recipe)
 
     if detected["docker"]["compose_files"]:
         commands["docker-build"] = ["docker compose build"]
@@ -1399,7 +1464,8 @@ def unique_preserve_order(items: list[str]) -> list[str]:
 
 def strip_args_placeholder(line: str) -> str:
     cleaned = line.replace("{{args}}", "").rstrip()
-    cleaned = re.sub(r"\s+--\s*$", "", cleaned)
+    cleaned = re.sub(r"\s+--\s*(\)|$)", r"\1", cleaned)
+    cleaned = re.sub(r"\s+(\))", r"\1", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     return cleaned.strip()
 
@@ -1770,12 +1836,21 @@ def workflow_setup_steps(repo: Path, detected: dict[str, Any]) -> list[str]:
         ])
         add_multiline_input("cache-dependency-path", go_cache_paths)
     if "rust" in languages:
+        rust_version = rust_toolchain_version(repo, components)
+        rust_workspaces = [
+            component["path"]
+            for component in components
+            if component["language"] == "rust" and component.get("workspace") and component["path"] != "."
+        ]
         steps.extend([
-            "      - uses: dtolnay/rust-toolchain@stable",
+            f"      - uses: dtolnay/rust-toolchain@{rust_version}",
             "        with:",
             "          components: clippy, rustfmt",
             "      - uses: Swatinem/rust-cache@v2",
         ])
+        if rust_workspaces:
+            steps.extend(["        with:"])
+            add_multiline_input("workspaces", unique_preserve_order(rust_workspaces))
     if "java" in languages:
         gradle_cache_paths = cache_paths_for(
             "java",
@@ -1836,6 +1911,12 @@ def render_direct_workflow_steps(recipe_lines: list[str], name: str) -> list[str
     for line in recipe_lines:
         out.append(f"          {strip_args_placeholder(line)}")
     return out
+
+
+def normalize_ci_extra_commands(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
 
 
 def ci_layout_default(detected: dict[str, Any], ci_mode: str) -> str:
@@ -2227,12 +2308,14 @@ def render_split_direct_ci(
     setup_steps: list[str],
     commands: dict[str, list[str]],
     change_detection: str,
+    ci_extra_commands: list[str],
 ) -> tuple[str, list[str]]:
     bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
     lint_steps: list[str] = []
     lint_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
     lint_steps.extend(render_direct_workflow_steps(commands["lint"], "Lint"))
     test_steps = render_direct_workflow_steps(commands["test"], "Test")
+    test_steps.extend(render_direct_workflow_steps(ci_extra_commands, "Extra verification"))
     build_lines = commands["build"] or commands["release"]
     build_steps = render_direct_workflow_steps(build_lines, "Build")
     warnings: list[str] = []
@@ -2285,6 +2368,7 @@ def render_ci_workflow(
     ci_layout: str,
     ci_paths: str,
     change_detection: str,
+    ci_extra_commands: list[str],
 ) -> tuple[str, list[str]]:
     commands = make_initial_recipe_commands(repo, detected)
     setup_steps = workflow_setup_steps(repo, detected)
@@ -2304,13 +2388,14 @@ def render_ci_workflow(
     template = read_text(ASSETS_DIR / "workflow-ci-direct.yml.tpl")
     template = replace_trigger_block(template, trigger_block)
     if ci_layout == "split":
-        split_output, split_warnings = render_split_direct_ci(repo, trigger_block, detected, setup_steps, commands, change_detection)
+        split_output, split_warnings = render_split_direct_ci(repo, trigger_block, detected, setup_steps, commands, change_detection, ci_extra_commands)
         return split_output, warnings + split_warnings
     bootstrap_steps = render_direct_workflow_steps(commands["bootstrap"], "Bootstrap")
     run_steps: list[str] = []
     run_steps.extend(render_direct_workflow_steps(commands["fmt-check"], "Check formatting"))
     run_steps.extend(render_direct_workflow_steps(commands["lint"], "Lint"))
     run_steps.extend(render_direct_workflow_steps(commands["test"], "Test"))
+    run_steps.extend(render_direct_workflow_steps(ci_extra_commands, "Extra verification"))
     setup_block = "\n".join(setup_steps)
     bootstrap_block = "\n".join(bootstrap_steps)
     run_block = "\n".join(run_steps)
@@ -2581,6 +2666,10 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
         if args.change_detection != "auto"
         else str(existing_selected.get("change_detection", detected["selection_defaults"].get("change_detection", "none")))
     )
+    if args.ci_extra_command is not None:
+        ci_extra_commands = normalize_ci_extra_commands(args.ci_extra_command)
+    else:
+        ci_extra_commands = normalize_ci_extra_commands(existing_selected.get("ci_extra_commands", []))
     warnings: list[str] = [*existing_state_warnings, *detected.get("notes", [])]
     if dist_storage == "artifacts" and architecture in {"committed-dist", "cross-os-dist"}:
         warnings.append("artifact-based dist storage conflicts with a committed dist architecture; prefer local-dist/general plus a release overlay")
@@ -2600,7 +2689,7 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
     warnings.extend(just_warnings)
     ci_content = ""
     if ci_mode != "none":
-        ci_content, ci_warnings = render_ci_workflow(repo, detected, ci_mode, ci_layout, ci_paths, change_detection)
+        ci_content, ci_warnings = render_ci_workflow(repo, detected, ci_mode, ci_layout, ci_paths, change_detection, ci_extra_commands if ci_mode == "direct" else [])
         warnings.extend(ci_warnings)
     if args.release_overlay is not None:
         release_requested = bool(args.release_overlay)
@@ -2702,6 +2791,7 @@ def do_render_or_update(args: argparse.Namespace, write: bool) -> int:
         "change_detection": change_detection,
         "release_overlay": bool(release_requested and release_content),
         "dist_storage": dist_storage,
+        "ci_extra_commands": ci_extra_commands,
     }
     generated = {
         "render_dir": relpath(out_dir, repo),
@@ -2806,6 +2896,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--ci-paths", choices=["none", "components"], default="none")
     render.add_argument("--change-detection", choices=["auto", "none", "git-diff"], default="auto")
     render.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
+    render.add_argument("--ci-extra-command", action="append", help="Append a repo-owned shell command after generated direct-mode tests.")
     render_release = render.add_mutually_exclusive_group()
     render_release.add_argument("--release-overlay", action="store_const", const=True, dest="release_overlay")
     render_release.add_argument("--no-release-overlay", action="store_const", const=False, dest="release_overlay")
@@ -2821,6 +2912,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--ci-paths", choices=["none", "components"], default="none")
     update.add_argument("--change-detection", choices=["auto", "none", "git-diff"], default="auto")
     update.add_argument("--dist-storage", choices=["auto", "none", "git", "git-lfs", "artifacts"], default="auto")
+    update.add_argument("--ci-extra-command", action="append", help="Append a repo-owned shell command after generated direct-mode tests.")
     update_release = update.add_mutually_exclusive_group()
     update_release.add_argument("--release-overlay", action="store_const", const=True, dest="release_overlay")
     update_release.add_argument("--no-release-overlay", action="store_const", const=False, dest="release_overlay")

@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         assert "      - 'backend/**'" in ci3b_paths, ci3b_paths
         assert "      - 'frontend/**'" in ci3b_paths, ci3b_paths
         assert "ci.yml" in render3b_paths["candidates"], render3b_paths
-        assert "(cd 'backend' && cargo test " in ci3b_paths, ci3b_paths
+        assert "(cd 'backend' && cargo test)" in ci3b_paths, ci3b_paths
         assert "(cd 'frontend' && npm ci)" in ci3b_paths, ci3b_paths
         assert "\n          cd 'backend' && cargo test " not in ci3b_paths, ci3b_paths
 
@@ -440,6 +440,78 @@ def main(argv: list[str] | None = None) -> int:
         assert "    paths:\n" not in ci3c_paths, ci3c_paths
         assert "dtolnay/rust-toolchain@stable" in ci3c_paths, ci3c_paths
         assert "Swatinem/rust-cache@v2" in ci3c_paths, ci3c_paths
+        assert ci3c_paths.count("cargo fetch") == 1, ci3c_paths
+        assert "cargo fmt --all --check" in ci3c_paths, ci3c_paths
+        assert "cargo clippy --workspace --all-targets -- -D warnings" in ci3c_paths, ci3c_paths
+        assert "cd 'backend' && cargo test" not in ci3c_paths, ci3c_paths
+
+        repo3c_root_glob = tmpdir / "root-workspace-glob"
+        repo3c_root_glob.mkdir()
+        write(repo3c_root_glob / "Cargo.toml", "[workspace]\nmembers = ['crates/*']\n")
+        write(repo3c_root_glob / "crates" / "core" / "Cargo.toml", "[package]\nname = 'core'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3c_root_glob / "crates" / "core" / "src" / "lib.rs", "pub fn ok() {}\n")
+        render3c_root_glob = run_json(script, "render", str(repo3c_root_glob), "--ci-mode", "direct")
+        ci3c_root_glob = (repo3c_root_glob / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "ci.yml" in render3c_root_glob["candidates"], render3c_root_glob
+        assert ci3c_root_glob.count("cargo fetch") == 1, ci3c_root_glob
+        assert "cargo fmt --all --check" in ci3c_root_glob, ci3c_root_glob
+        assert "cargo clippy --workspace --all-targets -- -D warnings" in ci3c_root_glob, ci3c_root_glob
+        assert "cd 'crates/core' && cargo test" not in ci3c_root_glob, ci3c_root_glob
+
+        repo3c_nested = tmpdir / "nested-rust-workspace"
+        repo3c_nested.mkdir()
+        write(repo3c_nested / "tools" / "rust" / "Cargo.toml", "[workspace]\nmembers = ['crates/*']\n[workspace.package]\nrust-version = '1.88.0'\n")
+        write(repo3c_nested / "tools" / "rust" / "crates" / "core" / "Cargo.toml", "[package]\nname = 'core'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3c_nested / "tools" / "rust" / "crates" / "core" / "src" / "lib.rs", "pub fn ok() {}\n")
+        render3c_nested = run_json(script, "render", str(repo3c_nested), "--ci-mode", "direct")
+        ci3c_nested = (repo3c_nested / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        assert "ci.yml" in render3c_nested["candidates"], render3c_nested
+        assert "dtolnay/rust-toolchain@1.88.0" in ci3c_nested, ci3c_nested
+        assert "Swatinem/rust-cache@v2\n        with:\n          workspaces: tools/rust" in ci3c_nested, ci3c_nested
+        assert ci3c_nested.count("cargo fetch") == 1, ci3c_nested
+        assert "(cd 'tools/rust' && cargo fmt --all --check)" in ci3c_nested, ci3c_nested
+        assert "(cd 'tools/rust' && cargo clippy --workspace --all-targets -- -D warnings)" in ci3c_nested, ci3c_nested
+        assert "cd 'tools/rust/crates/core' && cargo test" not in ci3c_nested, ci3c_nested
+
+        repo3c_mixed = tmpdir / "workspace-plus-independent"
+        repo3c_mixed.mkdir()
+        write(repo3c_mixed / "tools" / "rust" / "Cargo.toml", "[workspace]\nmembers = ['crates/*']\n")
+        write(repo3c_mixed / "tools" / "rust" / "crates" / "core" / "Cargo.toml", "[package]\nname = 'core'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3c_mixed / "tools" / "rust" / "crates" / "core" / "src" / "lib.rs", "pub fn ok() {}\n")
+        write(repo3c_mixed / "app" / "package.json", json.dumps({
+            "name": "app",
+            "scripts": {"test": "node test.js", "lint": "node lint.js"}
+        }, indent=2) + "\n")
+        write(repo3c_mixed / "app" / "package-lock.json", "{}\n")
+        render3c_mixed = run_json(script, "render", str(repo3c_mixed), "--ci-mode", "direct")
+        ci3c_mixed = (repo3c_mixed / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        just3c_mixed = (repo3c_mixed / ".local" / "harness" / "render" / "justfile").read_text(encoding="utf-8")
+        assert "ci.yml" in render3c_mixed["candidates"], render3c_mixed
+        assert ci3c_mixed.count("cargo fetch") == 1, ci3c_mixed
+        assert "cd 'tools/rust/crates/core' && cargo test" not in ci3c_mixed, ci3c_mixed
+        assert "(cd 'app' && npm run test --if-present)" in ci3c_mixed, ci3c_mixed
+        assert "tools-rust-crates-core-test" in just3c_mixed, just3c_mixed
+
+        repo3c_extra = tmpdir / "direct-extra-ci"
+        repo3c_extra.mkdir()
+        write(repo3c_extra / "Cargo.toml", "[workspace]\nmembers = ['crates/core']\n")
+        write(repo3c_extra / "crates" / "core" / "Cargo.toml", "[package]\nname = 'core'\nversion = '0.1.0'\nedition = '2021'\n")
+        write(repo3c_extra / "crates" / "core" / "src" / "lib.rs", "pub fn ok() {}\n")
+        render3c_extra = run_json(
+            script,
+            "render",
+            str(repo3c_extra),
+            "--ci-mode",
+            "direct",
+            "--ci-extra-command",
+            "cargo run -p acceptance --bin acceptance",
+        )
+        ci3c_extra = (repo3c_extra / ".local" / "harness" / "render" / "ci.yml").read_text(encoding="utf-8")
+        state3c_extra = json.loads((repo3c_extra / ".local" / "harness" / "state.json").read_text(encoding="utf-8"))
+        assert "ci.yml" in render3c_extra["candidates"], render3c_extra
+        assert "      - name: Extra verification" in ci3c_extra, ci3c_extra
+        assert ci3c_extra.index("cargo test --workspace") < ci3c_extra.index("cargo run -p acceptance --bin acceptance"), ci3c_extra
+        assert state3c_extra["selected"]["ci_extra_commands"] == ["cargo run -p acceptance --bin acceptance"], state3c_extra
 
         repo3e = tmpdir / "guided-components"
         repo3e.mkdir()
