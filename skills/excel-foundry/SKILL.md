@@ -5,7 +5,7 @@ description: >-
   artifacts across package-readable workbooks, safe copies, installed desktop
   Excel, Microsoft Graph workbook APIs, Office Scripts/Add-in hosts, and
   Fabric/Power BI semantic models. Use when the task involves: (1) workbook
-  lifecycle or direct commands such as inspect/capabilities/create/diff/save-as/
+  lifecycle or direct commands such as inspect/diagnose/capabilities/create/diff/save-as/
   convert/repair/compatibility/document-inspect, sheet/table/range/cell/name
   edits, links, safe export, formulas, calc, Solver, scenarios, forecasts, data
   tables, or automation artifacts, (2) package inventory or preservation for

@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
@@ -59,6 +60,48 @@ SUPPORTED_CF_TYPES = {
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY_MATRIX_PATH = SKILL_ROOT / "references" / "excel-capability-matrix.json"
+WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+WORKSHEET_PART_RE = re.compile(r"^xl/worksheets/sheet\d+\.xml$")
+TABLE_PART_RE = re.compile(r"^xl/tables/table(\d+)\.xml$")
+THREAD_COMMENT_PART_RE = re.compile(r"^xl/threadedcomments/threadedcomment\d*\.xml$")
+COMMENT_PART_RE = re.compile(r"^xl/comments\d+\.xml$")
+VML_DRAWING_PART_RE = re.compile(r"^xl/drawings/vmldrawing\d*\.vml$")
+GUID_TEXT_RE = re.compile(
+    r"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$"
+)
+
+FORMULA_FUNCTION_PREFIXES = {
+    "BYCOL": "_xlfn.BYCOL",
+    "BYROW": "_xlfn.BYROW",
+    "CHOOSECOLS": "_xlfn.CHOOSECOLS",
+    "CHOOSEROWS": "_xlfn.CHOOSEROWS",
+    "DROP": "_xlfn.DROP",
+    "FILTER": "_xlfn._xlws.FILTER",
+    "HSTACK": "_xlfn.HSTACK",
+    "MAKEARRAY": "_xlfn.MAKEARRAY",
+    "MAP": "_xlfn.MAP",
+    "RANDARRAY": "_xlfn.RANDARRAY",
+    "REDUCE": "_xlfn.REDUCE",
+    "SCAN": "_xlfn.SCAN",
+    "SEQUENCE": "_xlfn.SEQUENCE",
+    "SORT": "_xlfn._xlws.SORT",
+    "SORTBY": "_xlfn.SORTBY",
+    "SWITCH": "_xlfn.SWITCH",
+    "TAKE": "_xlfn.TAKE",
+    "TEXTAFTER": "_xlfn.TEXTAFTER",
+    "TEXTBEFORE": "_xlfn.TEXTBEFORE",
+    "TEXTJOIN": "_xlfn.TEXTJOIN",
+    "TEXTSPLIT": "_xlfn.TEXTSPLIT",
+    "TOCOL": "_xlfn.TOCOL",
+    "TOROW": "_xlfn.TOROW",
+    "UNIQUE": "_xlfn.UNIQUE",
+    "VSTACK": "_xlfn.VSTACK",
+    "WRAPCOLS": "_xlfn.WRAPCOLS",
+    "WRAPROWS": "_xlfn.WRAPROWS",
+    "XLOOKUP": "_xlfn.XLOOKUP",
+    "XMATCH": "_xlfn.XMATCH",
+}
 
 
 def _local_name(tag: str) -> str:
@@ -3001,6 +3044,503 @@ def run_dax_command(args: argparse.Namespace) -> dict[str, Any]:
     raise AssertionError(f"unsupported DAX command: {command}")
 
 
+def _decode_package_xml(data: bytes) -> tuple[str, bytes]:
+    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
+    return data.decode("utf-8-sig"), bom
+
+
+def _encode_package_xml(text: str, bom: bytes) -> bytes:
+    return bom + text.encode("utf-8")
+
+
+def _repair_finding(kind: str, severity: str, part: str, message: str, *, repair: str | None = None, samples: list[str] | None = None, count: int | None = None) -> dict[str, Any]:
+    finding: dict[str, Any] = {
+        "kind": kind,
+        "severity": severity,
+        "part": part,
+        "message": message,
+    }
+    if repair is not None:
+        finding["repair"] = repair
+    if samples:
+        finding["samples"] = samples
+    if count is not None:
+        finding["count"] = count
+    return finding
+
+
+def _xml_cell_refs(pattern: re.Pattern[str], text: str, *, limit: int = 20) -> list[str]:
+    refs: list[str] = []
+    for match in pattern.finditer(text):
+        ref_match = re.search(r'\br="([^"]+)"', match.group(0))
+        refs.append(ref_match.group(1) if ref_match else "")
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def _remove_xml_attr(markup: str, attr_name: str) -> str:
+    return re.sub(rf'\s{attr_name}="[^"]*"', "", markup, count=1)
+
+
+def _inline_string_markup(open_tag: str, value: str) -> str:
+    prefix_match = re.match(r"<(?P<prefix>(?:\w+:)?)c\b", open_tag)
+    prefix = prefix_match.group("prefix") if prefix_match else ""
+    space_attr = ' xml:space="preserve"' if value[:1].isspace() or value[-1:].isspace() else ""
+    return f"{open_tag}<{prefix}is><{prefix}t{space_attr}>{value}</{prefix}t></{prefix}is></{prefix}c>"
+
+
+def _replace_formula_future_function_tokens(formula: str) -> tuple[str, dict[str, int]]:
+    output: list[str] = []
+    counts: dict[str, int] = {}
+    in_string = False
+    index = 0
+    function_names = sorted(FORMULA_FUNCTION_PREFIXES, key=len, reverse=True)
+    while index < len(formula):
+        char = formula[index]
+        if char == '"':
+            output.append(char)
+            if in_string and index + 1 < len(formula) and formula[index + 1] == '"':
+                output.append(formula[index + 1])
+                index += 2
+                continue
+            in_string = not in_string
+            index += 1
+            continue
+        if not in_string:
+            previous = formula[index - 1] if index > 0 else ""
+            if not re.match(r"[A-Za-z0-9_.]", previous):
+                matched_name = None
+                for function_name in function_names:
+                    end = index + len(function_name)
+                    if formula[index:end] == function_name and end < len(formula) and formula[end] == "(":
+                        matched_name = function_name
+                        break
+                if matched_name is not None:
+                    output.append(FORMULA_FUNCTION_PREFIXES[matched_name])
+                    counts[matched_name] = counts.get(matched_name, 0) + 1
+                    index += len(matched_name)
+                    continue
+        output.append(char)
+        index += 1
+    return "".join(output), counts
+
+
+def _package_formula_prefix_counts(text: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    _, formula_counts = _replace_formula_future_function_tokens(text)
+    for function_name, count in formula_counts.items():
+        counts[function_name] = counts.get(function_name, 0) + count
+    return counts
+
+
+def _patch_formula_future_function_prefixes(data: bytes) -> tuple[bytes, int]:
+    text, bom = _decode_package_xml(data)
+    changed = 0
+
+    def patch_formula(match: re.Match[str]) -> str:
+        nonlocal changed
+        formula = match.group(2)
+        patched, counts = _replace_formula_future_function_tokens(formula)
+        changed += sum(counts.values())
+        return match.group(1) + patched + match.group(3)
+
+    text = re.sub(r"(<(?:\w+:)?f\b[^>]*>)([\s\S]*?)(</(?:\w+:)?f>)", patch_formula, text)
+    return _encode_package_xml(text, bom), changed
+
+
+def _patch_worksheet_cell_type_conformance(data: bytes) -> tuple[bytes, int]:
+    text, bom = _decode_package_xml(data)
+    changed = 0
+    full_cell_pattern = re.compile(r"(<(?:\w+:)?c\b[^>]*\bt=\"(?:str|inlineStr)\"[^>]*>)([\s\S]*?</(?:\w+:)?c>)")
+    empty_cell_pattern = re.compile(r"<(?:\w+:)?c\b[^>]*\bt=\"(?:str|inlineStr)\"[^>]*/>")
+    literal_string_pattern = re.compile(
+        r"(<(?:\w+:)?c\b[^>]*\bt=\"str\"[^>]*>)(?!\s*<(?:\w+:)?f\b)\s*<(?:\w+:)?v\b[^>]*>([\s\S]*?)</(?:\w+:)?v>\s*</(?:\w+:)?c>"
+    )
+
+    def full_repl(match: re.Match[str]) -> str:
+        nonlocal changed
+        body = match.group(2)
+        if re.search(r"<(?:\w+:)?f\b", body) and not re.search(r"<(?:\w+:)?(?:v|is)\b", body):
+            changed += 1
+            return _remove_xml_attr(match.group(1), "t") + body
+        if not re.search(r"<(?:\w+:)?(?:f|v|is)\b", body):
+            changed += 1
+            return _remove_xml_attr(match.group(1), "t") + body
+        return match.group(0)
+
+    def empty_repl(match: re.Match[str]) -> str:
+        nonlocal changed
+        changed += 1
+        return _remove_xml_attr(match.group(0), "t")
+
+    def literal_repl(match: re.Match[str]) -> str:
+        nonlocal changed
+        changed += 1
+        open_tag = match.group(1).replace(' t="str"', ' t="inlineStr"', 1)
+        return _inline_string_markup(open_tag, match.group(2))
+
+    text = literal_string_pattern.sub(literal_repl, text)
+    text = full_cell_pattern.sub(full_repl, text)
+    text = empty_cell_pattern.sub(empty_repl, text)
+    return _encode_package_xml(text, bom), changed
+
+
+def _patch_conditional_formatting_conformance(data: bytes) -> tuple[bytes, int]:
+    text, bom = _decode_package_xml(data)
+    patched, count = re.subn(
+        r'(<(?:\w+:)?cfRule\b(?=[^>]*\btype="cellIs")(?![^>]*\boperator=)[^>]*)(>)',
+        r'\1 operator="equal"\2',
+        text,
+    )
+    return _encode_package_xml(patched, bom), count
+
+
+def _patch_vml_shape_ids(data: bytes, start_id: int) -> tuple[bytes, int]:
+    text, bom = _decode_package_xml(data)
+    next_id = start_id
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal next_id
+        replacement = f'{match.group(1)} id="_x0000_s{next_id}"'
+        next_id += 1
+        return replacement
+
+    patched, count = re.subn(r"(<v:shape\b)(?![^>]*\bid=)", repl, text)
+    return _encode_package_xml(patched, bom), count
+
+
+def _thread_comment_guid(value: str) -> str:
+    if GUID_TEXT_RE.match(value):
+        return value.upper()
+    return "{" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"excel-foundry-threaded-comment:{value}")).upper() + "}"
+
+
+def _collect_thread_comment_id_repairs(members: dict[str, bytes]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    id_pattern = re.compile(r'(<(?:\w+:)?threadedComment\b[^>]*\bid=")([^"]+)(")')
+    author_ref_pattern = re.compile(r"(>tc=)([^<]+)(</(?:\w+:)?author>)")
+    for name, payload in members.items():
+        if THREAD_COMMENT_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            for match in id_pattern.finditer(text):
+                value = match.group(2)
+                if not GUID_TEXT_RE.match(value):
+                    mapping.setdefault(value, _thread_comment_guid(value))
+        elif COMMENT_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            for match in author_ref_pattern.finditer(text):
+                value = match.group(2)
+                if not GUID_TEXT_RE.match(value):
+                    mapping.setdefault(value, _thread_comment_guid(value))
+    return mapping
+
+
+def _patch_thread_comment_ids(data: bytes, mapping: dict[str, str]) -> tuple[bytes, int]:
+    text, bom = _decode_package_xml(data)
+
+    def threaded_repl(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{mapping.get(match.group(2), match.group(2))}{match.group(3)}"
+
+    text, threaded_count = re.subn(r'(<(?:\w+:)?threadedComment\b[^>]*\bid=")([^"]+)(")', threaded_repl, text)
+
+    def author_repl(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{mapping.get(match.group(2), match.group(2))}{match.group(3)}"
+
+    text, author_count = re.subn(r"(>tc=)([^<]+)(</(?:\w+:)?author>)", author_repl, text)
+    return _encode_package_xml(text, bom), threaded_count + author_count
+
+
+def _patch_table_id_conformance(name: str, data: bytes) -> tuple[bytes, int]:
+    match = TABLE_PART_RE.match(name)
+    if not match:
+        return data, 0
+    expected = match.group(1)
+    text, bom = _decode_package_xml(data)
+    patched, count = re.subn(r'(<(?:\w+:)?table\b[^>]*\bid=")(\d+)(")', rf"\g<1>{expected}\3", text, count=1)
+    return _encode_package_xml(patched, bom), count if patched != text else 0
+
+
+def _patch_content_type_conformance(data: bytes) -> tuple[bytes, int]:
+    root = ET.fromstring(data)
+    changed = 0
+    xml_default_seen = False
+    for default in root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Default"):
+        if default.attrib.get("Extension") != "xml":
+            continue
+        xml_default_seen = True
+        if default.attrib.get("ContentType") == WORKBOOK_CONTENT_TYPE:
+            default.attrib["ContentType"] = "application/xml"
+            changed += 1
+    if not xml_default_seen:
+        ET.SubElement(
+            root,
+            "{http://schemas.openxmlformats.org/package/2006/content-types}Default",
+            {"Extension": "xml", "ContentType": "application/xml"},
+        )
+        changed += 1
+    overrides = {
+        override.attrib.get("PartName", ""): override.attrib.get("ContentType", "")
+        for override in root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Override")
+    }
+    if overrides.get("/xl/workbook.xml") != WORKBOOK_CONTENT_TYPE:
+        _ensure_override(root, "/xl/workbook.xml", WORKBOOK_CONTENT_TYPE)
+        changed += 1
+    return _serialize_content_types_xml(root), changed
+
+
+def _diagnose_package_conformance_from_members(members: dict[str, bytes]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    content_types_payload = members.get("[Content_Types].xml")
+    if content_types_payload:
+        try:
+            root = ET.fromstring(content_types_payload)
+        except ET.ParseError:
+            root = None
+        if root is not None:
+            xml_defaults = [
+                child.attrib.get("ContentType", "")
+                for child in root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Default")
+                if child.attrib.get("Extension") == "xml"
+            ]
+            if WORKBOOK_CONTENT_TYPE in xml_defaults:
+                findings.append(
+                    _repair_finding(
+                        "bad-xml-default-content-type",
+                        "error",
+                        "[Content_Types].xml",
+                        "The default content type for .xml parts is the workbook main part type; Excel expects generic XML plus a workbook override.",
+                        repair="replace the .xml default with application/xml",
+                    )
+                )
+            workbook_override = False
+            for override in root.findall("{http://schemas.openxmlformats.org/package/2006/content-types}Override"):
+                if override.attrib.get("PartName") == "/xl/workbook.xml" and override.attrib.get("ContentType") == WORKBOOK_CONTENT_TYPE:
+                    workbook_override = True
+                    break
+            if not workbook_override:
+                findings.append(
+                    _repair_finding(
+                        "missing-workbook-content-type-override",
+                        "error",
+                        "[Content_Types].xml",
+                        "The workbook part lacks an explicit main workbook content type override.",
+                        repair="add /xl/workbook.xml workbook override",
+                    )
+                )
+
+    typed_blank_pattern = re.compile(r"<(?:\w+:)?c\b[^>]*\bt=\"(?:str|inlineStr)\"[^>]*/>")
+    literal_string_pattern = re.compile(r"<(?:\w+:)?c\b[^>]*\bt=\"str\"[^>]*>(?!\s*<(?:\w+:)?f\b)\s*<(?:\w+:)?v\b")
+    typed_string_cell_pattern = re.compile(r"<(?:\w+:)?c\b[^>]*\bt=\"(?:str|inlineStr)\"[^>]*>[\s\S]*?</(?:\w+:)?c>")
+    cellis_missing_operator_pattern = re.compile(r'<(?:\w+:)?cfRule\b(?=[^>]*\btype="cellIs")(?![^>]*\boperator=)')
+    formula_pattern = re.compile(r"<(?:\w+:)?f\b[^>]*>([\s\S]*?)</(?:\w+:)?f>")
+    for name, payload in sorted(members.items()):
+        if WORKSHEET_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            typed_blank_refs = _xml_cell_refs(typed_blank_pattern, text)
+            if typed_blank_refs:
+                findings.append(
+                    _repair_finding(
+                        "typed-blank-cells",
+                        "warning",
+                        name,
+                        "Blank cells are serialized with string cell types.",
+                        repair="remove string cell type from blank cells",
+                        samples=typed_blank_refs,
+                        count=len(typed_blank_pattern.findall(text)),
+                    )
+                )
+            literal_refs = _xml_cell_refs(literal_string_pattern, text)
+            if literal_refs:
+                findings.append(
+                    _repair_finding(
+                        "literal-str-value-cells",
+                        "error",
+                        name,
+                        "Literal cells use t=\"str\" with <v>; that form is reserved for formula string results.",
+                        repair="convert literal string values to inlineStr cells",
+                        samples=literal_refs,
+                        count=len(literal_string_pattern.findall(text)),
+                    )
+                )
+            formula_no_cache_refs = []
+            for cell_match in typed_string_cell_pattern.finditer(text):
+                cell_markup = cell_match.group(0)
+                if re.search(r"<(?:\w+:)?f\b", cell_markup) and not re.search(r"<(?:\w+:)?(?:v|is)\b", cell_markup):
+                    ref_match = re.search(r'\br="([^"]+)"', cell_markup)
+                    formula_no_cache_refs.append(ref_match.group(1) if ref_match else "")
+            if formula_no_cache_refs:
+                findings.append(
+                    _repair_finding(
+                        "typed-formula-without-cache",
+                        "warning",
+                        name,
+                        "Formula cells have a string cell type but no cached string value.",
+                        repair="remove the string cell type from formula-only cells",
+                        samples=formula_no_cache_refs,
+                        count=len(formula_no_cache_refs),
+                    )
+                )
+            cf_count = len(cellis_missing_operator_pattern.findall(text))
+            if cf_count:
+                findings.append(
+                    _repair_finding(
+                        "cellis-conditional-formatting-missing-operator",
+                        "warning",
+                        name,
+                        "cellIs conditional formatting rules omit an operator.",
+                        repair="add operator=\"equal\"",
+                        count=cf_count,
+                    )
+                )
+            formula_counts: dict[str, int] = {}
+            for formula_match in formula_pattern.finditer(text):
+                for function_name, count in _package_formula_prefix_counts(formula_match.group(1)).items():
+                    formula_counts[function_name] = formula_counts.get(function_name, 0) + count
+            if formula_counts:
+                findings.append(
+                    _repair_finding(
+                        "future-formula-functions-without-prefix",
+                        "error",
+                        name,
+                        "Formulas use future/dynamic Excel functions without the OOXML compatibility prefixes Excel writes.",
+                        repair="prefix known future functions with their OOXML _xlfn/_xlws names",
+                        samples=sorted(formula_counts),
+                        count=sum(formula_counts.values()),
+                    )
+                )
+        elif TABLE_PART_RE.match(name):
+            expected = TABLE_PART_RE.match(name).group(1)
+            text, _ = _decode_package_xml(payload)
+            table_match = re.search(r'<(?:\w+:)?table\b[^>]*\bid="(\d+)"', text)
+            if table_match and table_match.group(1) != expected:
+                findings.append(
+                    _repair_finding(
+                        "table-id-mismatch",
+                        "warning",
+                        name,
+                        "The table part number and table id differ.",
+                        repair=f"set table id to {expected}",
+                        samples=[table_match.group(1)],
+                    )
+                )
+        elif THREAD_COMMENT_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            bad_ids = [
+                value
+                for value in re.findall(r'<(?:\w+:)?threadedComment\b[^>]*\bid="([^"]+)"', text)
+                if not GUID_TEXT_RE.match(value)
+            ]
+            if bad_ids:
+                findings.append(
+                    _repair_finding(
+                        "threaded-comment-id-not-guid",
+                        "error",
+                        name,
+                        "Threaded comment IDs are not GUIDs.",
+                        repair="replace non-GUID threaded comment IDs with deterministic GUIDs and update author references",
+                        samples=bad_ids[:20],
+                        count=len(bad_ids),
+                    )
+                )
+        elif COMMENT_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            bad_refs = [
+                value
+                for value in re.findall(r">tc=([^<]+)</(?:\w+:)?author>", text)
+                if not GUID_TEXT_RE.match(value)
+            ]
+            if bad_refs:
+                findings.append(
+                    _repair_finding(
+                        "threaded-comment-author-ref-not-guid",
+                        "error",
+                        name,
+                        "Comment author metadata references threaded comment IDs that are not GUIDs.",
+                        repair="replace tc= author references with deterministic GUIDs",
+                        samples=bad_refs[:20],
+                        count=len(bad_refs),
+                    )
+                )
+        elif VML_DRAWING_PART_RE.match(name):
+            text, _ = _decode_package_xml(payload)
+            count = len(re.findall(r"<v:shape\b(?![^>]*\bid=)", text))
+            if count:
+                findings.append(
+                    _repair_finding(
+                        "vml-shape-missing-id",
+                        "warning",
+                        name,
+                        "VML note/comment shapes are missing shape IDs.",
+                        repair="add stable VML shape IDs",
+                        count=count,
+                    )
+                )
+    return findings
+
+
+def diagnose_workbook_package(workbook_path: Path) -> dict[str, Any]:
+    workbook_path = workbook_path.resolve()
+    validation = _validate_workbook_package(workbook_path)
+    findings: list[dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(workbook_path, "r") as package_zip:
+            members = {name: package_zip.read(name) for name in package_zip.namelist()}
+        findings = _diagnose_package_conformance_from_members(members)
+    except zipfile.BadZipFile:
+        pass
+
+    error_count = len(validation.get("errors", [])) + len([item for item in findings if item.get("severity") == "error"])
+    warning_count = len(validation.get("warnings", [])) + len([item for item in findings if item.get("severity") == "warning"])
+    status = "failed" if validation.get("status") == "failed" or error_count else ("warning" if warning_count else "passed")
+    return {
+        "command": "workbook-diagnose",
+        "backend": "package",
+        "workbookPath": str(workbook_path),
+        "status": status,
+        "summary": {
+            "errorCount": error_count,
+            "warningCount": warning_count,
+            "findingCount": len(findings),
+            "repairableFindingCount": len([item for item in findings if item.get("repair")]),
+        },
+        "validation": {"package": validation},
+        "findings": findings,
+    }
+
+
+def _build_package_conformance_repairs(members: dict[str, bytes]) -> tuple[dict[str, bytes], list[str], list[dict[str, Any]]]:
+    findings = _diagnose_package_conformance_from_members(members)
+    updates: dict[str, bytes] = {}
+    repaired_parts: list[str] = []
+    thread_id_mapping = _collect_thread_comment_id_repairs(members)
+    next_vml_id = 1025
+    for name, original_payload in members.items():
+        payload = updates.get(name, original_payload)
+        changed = 0
+        if name == "[Content_Types].xml":
+            try:
+                payload, changed = _patch_content_type_conformance(payload)
+            except ET.ParseError:
+                changed = 0
+        elif WORKSHEET_PART_RE.match(name):
+            payload, formula_prefix_count = _patch_formula_future_function_prefixes(payload)
+            payload, cell_type_count = _patch_worksheet_cell_type_conformance(payload)
+            payload, cf_count = _patch_conditional_formatting_conformance(payload)
+            changed = formula_prefix_count + cell_type_count + cf_count
+        elif TABLE_PART_RE.match(name):
+            payload, changed = _patch_table_id_conformance(name, payload)
+        elif VML_DRAWING_PART_RE.match(name):
+            payload, changed = _patch_vml_shape_ids(payload, next_vml_id)
+            next_vml_id += changed
+        elif (THREAD_COMMENT_PART_RE.match(name) or COMMENT_PART_RE.match(name)) and thread_id_mapping:
+            payload, changed = _patch_thread_comment_ids(payload, thread_id_mapping)
+        if changed and payload != original_payload:
+            updates[name] = payload
+            repaired_parts.append(name)
+    return updates, repaired_parts, findings
+
+
 def _validate_workbook_package(workbook_path: Path) -> dict[str, Any]:
     workbook_path = workbook_path.resolve()
     errors: list[str] = []
@@ -3267,7 +3807,14 @@ def repair_workbook_package(workbook_path: Path, target_path: Path | None = None
     with zipfile.ZipFile(destination, "r") as package_zip:
         members = {name: package_zip.read(name) for name in package_zip.namelist()}
 
+    conformance_updates, conformance_repaired_parts, conformance_findings = _build_package_conformance_repairs(members)
+    updates.update(conformance_updates)
+    repaired_parts.extend(conformance_repaired_parts)
+    if conformance_findings:
+        warnings.append("Applied safe OOXML conformance repairs for package records that commonly trigger Excel recovery dialogs.")
+
     for name, payload in members.items():
+            payload = updates.get(name, payload)
             if not name.endswith(".xml"):
                 continue
             try:
@@ -3345,6 +3892,7 @@ def repair_workbook_package(workbook_path: Path, target_path: Path | None = None
         "targetPath": str(destination),
         "repairedParts": sorted(set(repaired_parts)),
         "removedParts": removed_parts,
+        "conformanceFindings": conformance_findings,
         "warnings": warnings,
         "saved": True,
         "validation": {
@@ -5928,6 +6476,8 @@ def run_direct_package_command(args: argparse.Namespace) -> dict[str, Any]:
         if not surfaces:
             return build_inventory_payload(workbook_path)
         return build_inspection_payload(build_query_payload(workbook_path, surfaces))
+    if args.command == "workbook-diagnose":
+        return diagnose_workbook_package(Path(args.workbook_path))
     if args.command == "workbook-diff":
         return compare_workbook_payloads(Path(args.workbook_path), Path(args.other_workbook_path), normalize_surfaces(getattr(args, "surface", "")))
     if args.command == "workbook-repair":
@@ -6116,6 +6666,9 @@ def main(argv: list[str]) -> int:
     workbook_inspect_parser = subparsers.add_parser("workbook-inspect")
     workbook_inspect_parser.add_argument("--workbook-path", required=True)
     workbook_inspect_parser.add_argument("--surface", default="")
+
+    workbook_diagnose_parser = subparsers.add_parser("workbook-diagnose")
+    workbook_diagnose_parser.add_argument("--workbook-path", required=True)
 
     workbook_create_parser = subparsers.add_parser("workbook-create")
     workbook_create_parser.add_argument("--workbook-path", required=True)
@@ -6431,6 +6984,7 @@ def main(argv: list[str]) -> int:
         "sheet-delete",
         "workbook-capabilities",
         "workbook-inspect",
+        "workbook-diagnose",
         "workbook-create",
         "workbook-diff",
         "workbook-repair",

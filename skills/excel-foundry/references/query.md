@@ -13,7 +13,7 @@ explicit destructive flags as required by the command.
 
 ## Core Workbook Commands
 
-- `workbook inspect|capabilities|create|diff`
+- `workbook inspect|diagnose|capabilities|create|diff`
 - `workbook save-as|convert|repair|compatibility|document-inspect`
 - `workbook links|break-links|repoint-links|safe-export`
 - `manifest validate|doctor|migrate`
@@ -174,9 +174,22 @@ closure reasons without creating a second support table. A closed surface can
 still be `preserve-only` or host-limited when the documented public route only
 supports inventory, preservation, diagnostics, or live host execution.
 
+## Excel Repair Dialogs
+
+When Excel reports "We found a problem with some content" for a package-readable
+`.xlsx` or `.xlsm`, run `workbook diagnose` before mutating the file. It is a
+read-only package scan for OOXML records that often pass ZIP/XML parsing but
+still trigger Excel recovery, such as incorrect content types, invalid string
+cell serialization, missing compatibility prefixes for future functions,
+non-GUID threaded comment IDs, VML note shape issues, conditional formatting
+rules missing required attributes, and table ID mismatches. Use `workbook repair`
+for the safe package-backed conformance repairs; use desktop Excel repair only
+when package diagnosis is clean or the workbook is not package-readable.
+
 ## Examples
 
 - `workbook inspect --workbook-path /path/to/book.xlsx`
+- `workbook diagnose --workbook-path /path/to/book.xlsx`
 - `workbook capabilities --workbook-path /path/to/book.xlsx --deep --documentation`
 - `workbook save-as --workbook-path /path/to/book.xlsm --target-path /path/to/book.xlsb`
 - `workbook compatibility --workbook-path /path/to/book.xlsm --target-format ods`

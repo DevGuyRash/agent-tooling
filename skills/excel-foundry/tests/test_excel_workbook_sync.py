@@ -592,6 +592,18 @@ def build_minimal_ooxml_workbook(workbook_path: Path, *, include_chart: bool = F
             workbook_zip.writestr(name, content)
 
 
+def rewrite_ooxml_package(workbook_path: Path, updates: dict[str, str]) -> None:
+    with zipfile.ZipFile(workbook_path, "r") as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    for name, content in updates.items():
+        members[name] = content.encode("utf-8")
+    temp_path = workbook_path.with_suffix(f".tmp{workbook_path.suffix}")
+    with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for name, payload in members.items():
+            target.writestr(name, payload)
+    temp_path.replace(workbook_path)
+
+
 class ExcelWorkbookSyncSkillTests(unittest.TestCase):
     def test_expected_files_exist(self) -> None:
         self.assertTrue((ROOT / "SKILL.md").exists())
@@ -2168,6 +2180,77 @@ class ExcelWorkbookSyncSkillTests(unittest.TestCase):
             self.assertEqual(query_payload["formulas"][0]["formula"], "SUM(B2,1)")
             self.assertEqual(query_payload["dataValidation"][0]["address"], "B2")
             self.assertEqual(query_payload["protection"]["workbook"]["lockStructure"], True)
+
+    def test_workbook_diagnose_and_repair_handle_excel_recovery_risk_records(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="excel-foundry-recovery-risk-") as tmpdir:
+            package_module = load_package_module("excel_workbook_package_recovery_risk_test")
+            workbook = Path(tmpdir) / "recovery-risk.xlsx"
+            repaired = Path(tmpdir) / "repaired.xlsx"
+            build_minimal_ooxml_workbook(workbook)
+
+            with zipfile.ZipFile(workbook, "r") as workbook_zip:
+                content_types = workbook_zip.read("[Content_Types].xml").decode("utf-8")
+                sheet = workbook_zip.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                table = workbook_zip.read("xl/tables/table1.xml").decode("utf-8")
+            content_types = content_types.replace(
+                '<Default Extension="xml" ContentType="application/xml"/>',
+                '<Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+            ).replace(
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+                "",
+            )
+            sheet = sheet.replace(
+                '<c r="C2"><f>SUM(B2,1)</f><v>2</v></c>',
+                '<c r="C2" t="str"><f>FILTER(B2:B2,B2:B2&gt;0)</f></c><c r="D2" t="str"><v>Literal</v></c><c r="E2" t="str"/>',
+            ).replace(
+                '<cfRule type="expression" priority="1">',
+                '<cfRule type="cellIs" priority="1">',
+            )
+            table = table.replace('id="1"', 'id="42"', 1)
+            rewrite_ooxml_package(
+                workbook,
+                {
+                    "[Content_Types].xml": content_types,
+                    "xl/worksheets/sheet1.xml": sheet,
+                    "xl/tables/table1.xml": table,
+                },
+            )
+
+            diagnosis = package_module.diagnose_workbook_package(workbook)
+            finding_kinds = {finding["kind"] for finding in diagnosis["findings"]}
+            self.assertIn("bad-xml-default-content-type", finding_kinds)
+            self.assertIn("missing-workbook-content-type-override", finding_kinds)
+            self.assertIn("future-formula-functions-without-prefix", finding_kinds)
+            self.assertIn("literal-str-value-cells", finding_kinds)
+            self.assertIn("typed-blank-cells", finding_kinds)
+            self.assertIn("cellis-conditional-formatting-missing-operator", finding_kinds)
+            self.assertIn("table-id-mismatch", finding_kinds)
+
+            payload = package_module.repair_workbook_package(workbook, repaired)
+
+            self.assertEqual(payload["validation"]["package"]["status"], "passed")
+            self.assertIn("[Content_Types].xml", payload["repairedParts"])
+            self.assertIn("xl/worksheets/sheet1.xml", payload["repairedParts"])
+            self.assertIn("xl/tables/table1.xml", payload["repairedParts"])
+            repaired_diagnosis = package_module.diagnose_workbook_package(repaired)
+            repaired_kinds = {finding["kind"] for finding in repaired_diagnosis["findings"]}
+            self.assertNotIn("bad-xml-default-content-type", repaired_kinds)
+            self.assertNotIn("missing-workbook-content-type-override", repaired_kinds)
+            self.assertNotIn("future-formula-functions-without-prefix", repaired_kinds)
+            self.assertNotIn("literal-str-value-cells", repaired_kinds)
+            self.assertNotIn("typed-blank-cells", repaired_kinds)
+            self.assertNotIn("cellis-conditional-formatting-missing-operator", repaired_kinds)
+            self.assertNotIn("table-id-mismatch", repaired_kinds)
+            with zipfile.ZipFile(repaired, "r") as repaired_zip:
+                repaired_content_types = repaired_zip.read("[Content_Types].xml").decode("utf-8")
+                repaired_sheet = repaired_zip.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                repaired_table = repaired_zip.read("xl/tables/table1.xml").decode("utf-8")
+            self.assertIn('Extension="xml" ContentType="application/xml"', repaired_content_types)
+            self.assertIn('PartName="/xl/workbook.xml"', repaired_content_types)
+            self.assertIn("_xlfn._xlws.FILTER", repaired_sheet)
+            self.assertIn('r="D2" t="inlineStr"', repaired_sheet)
+            self.assertIn('operator="equal"', repaired_sheet)
+            self.assertIn('id="1"', repaired_table)
 
     @unittest.skipUnless(HAS_PWSH, "pwsh not available on this host")
     def test_package_backend_inspect_preserves_workbook_paths_with_spaces(self) -> None:
