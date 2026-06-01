@@ -59,6 +59,11 @@ formatting, formulas, and opaque internals matters.
 
 - Inspect first with `workbook inspect`, `query`, or `bootstrap`.
 - Apply the smallest scoped mutation that satisfies the request.
+- Editable user-maintained ranges that may grow or shrink are usually better
+  modeled as Excel Tables/ListObjects with structured references. Data
+  validation has narrower source rules: if direct structured references or
+  dynamic arrays are rejected, use a named range or helper range fed from table
+  formulas, then verify row-add expansion in desktop Excel.
 - Avoid authoring mechanisms that rewrite the entire workbook unless inspection
   shows the workbook is simple enough or the user accepts that tradeoff.
 - Verify by readback and report any unsupported, host-limited, or preserve-only
