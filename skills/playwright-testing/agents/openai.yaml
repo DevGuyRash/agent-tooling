@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwright Testing"
+  short_description: "Outcome-first, non-brittle e2e tests"
+  default_prompt: "Use $playwright-testing to design or refactor Playwright e2e tests with durable selectors and useful failure artifacts."
