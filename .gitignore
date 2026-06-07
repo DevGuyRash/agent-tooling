@@ -23,6 +23,7 @@ tmp/
 
 # Local coordination artifacts (if you run skills in this repo)
 .local/
+.codex/
 .gitnexus/
 plugins/gitops-workflow/skills/gitops-workflow/.bin/
 plugins/gitops-workflow/skills/gitops-workflow/tests/artifacts/security-e2e-*.log

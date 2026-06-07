@@ -31,7 +31,7 @@ lint:
 # Run the workspace and repo-level script test suites
 test:
   cargo test --workspace --locked
-  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port
+  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port scripts.tests.test_install_all
   python3 -m unittest discover -s plugins/excel-foundry/skills/excel-foundry/tests -p 'test_*.py'
 
 # Run the plugin portability converter unit tests
@@ -41,6 +41,10 @@ test-plugin-port:
 # Run opt-in live plugin portability checks against local CLI tools
 test-plugin-port-live:
   PLUGIN_PORT_LIVE=1 python3 -m unittest scripts.tests.test_plugin_port_live
+
+# Add the sparse agent-tooling marketplace to Codex and Claude Code, then install matching plugins
+install-all *args:
+  scripts/install-all {{args}}
 
 # Compile the Rust workspace in the default build profile
 build:

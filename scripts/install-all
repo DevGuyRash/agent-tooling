@@ -1,0 +1,283 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+repo_root="$(CDPATH= cd -- "${script_dir}/.." && pwd -P)"
+
+source_value="${AGENT_TOOLING_MARKETPLACE_SOURCE:-DevGuyRash/agent-tooling}"
+codex_ref="${AGENT_TOOLING_MARKETPLACE_REF:-main}"
+claude_scope="${AGENT_TOOLING_CLAUDE_SCOPE:-user}"
+codex_enabled=1
+claude_enabled=1
+use_sparse=1
+dry_run=0
+include_filters=""
+exclude_filters=""
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/install-all [options]
+
+Install every plugin from the agent-tooling marketplace into Codex and Claude Code.
+
+Options:
+  --source <source>        Marketplace source. Defaults to DevGuyRash/agent-tooling.
+  --ref <ref>              Codex Git ref for the marketplace. Defaults to main.
+  --claude-scope <scope>   Claude install scope: user, project, or local. Defaults to user.
+  --codex-only             Install only Codex plugins.
+  --claude-only            Install only Claude Code plugins.
+  --include <patterns>     Install only matching plugins. CSV globs; repeatable.
+  --exclude <patterns>     Exclude matching plugins. CSV globs; repeatable.
+  --no-codex               Skip Codex.
+  --no-claude              Skip Claude Code.
+  --no-sparse              Do not pass sparse checkout paths to marketplace add.
+  --dry-run                Print commands without running them.
+  -h, --help               Show this help text.
+
+Environment:
+  AGENT_TOOLING_MARKETPLACE_SOURCE  Same as --source.
+  AGENT_TOOLING_MARKETPLACE_REF     Same as --ref.
+  AGENT_TOOLING_CLAUDE_SCOPE        Same as --claude-scope.
+USAGE
+}
+
+log() {
+  printf '%s\n' "install-all: $*" >&2
+}
+
+die() {
+  log "error: $*"
+  exit 1
+}
+
+require_value() {
+  opt="$1"
+  val="${2:-}"
+  if [ -z "$val" ] || [ "${val#--}" != "$val" ]; then
+    die "$opt requires a value"
+  fi
+}
+
+append_filter() {
+  current="$1"
+  value="$2"
+  if [ -n "$current" ]; then
+    printf '%s\n%s' "$current" "$value"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+is_local_source() {
+  if [ -e "$source_value" ]; then
+    return 0
+  fi
+  case "$source_value" in
+    /*|./*|../*|.|..|~/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+quote_arg() {
+  python3 - "$1" <<'PY'
+import shlex
+import sys
+
+print(shlex.quote(sys.argv[1]))
+PY
+}
+
+run() {
+  if [ "$dry_run" = "1" ]; then
+    printf '+'
+    for arg in "$@"; do
+      printf ' %s' "$(quote_arg "$arg")"
+    done
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source)
+      require_value "$1" "${2:-}"
+      source_value="$2"
+      shift 2
+      ;;
+    --ref)
+      require_value "$1" "${2:-}"
+      codex_ref="$2"
+      shift 2
+      ;;
+    --claude-scope)
+      require_value "$1" "${2:-}"
+      claude_scope="$2"
+      shift 2
+      ;;
+    --codex-only)
+      codex_enabled=1
+      claude_enabled=0
+      shift
+      ;;
+    --claude-only)
+      codex_enabled=0
+      claude_enabled=1
+      shift
+      ;;
+    --include)
+      require_value "$1" "${2:-}"
+      include_filters="$(append_filter "$include_filters" "$2")"
+      shift 2
+      ;;
+    --exclude)
+      require_value "$1" "${2:-}"
+      exclude_filters="$(append_filter "$exclude_filters" "$2")"
+      shift 2
+      ;;
+    --no-codex)
+      codex_enabled=0
+      shift
+      ;;
+    --no-claude)
+      claude_enabled=0
+      shift
+      ;;
+    --no-sparse)
+      use_sparse=0
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[ "$codex_enabled" = "1" ] || [ "$claude_enabled" = "1" ] || die "nothing to install: both Codex and Claude Code are disabled"
+command -v python3 >/dev/null 2>&1 || die "missing required command: python3"
+
+if [ "$codex_enabled" = "1" ] && [ "$dry_run" != "1" ]; then
+  command -v codex >/dev/null 2>&1 || die "missing required command: codex"
+fi
+if [ "$claude_enabled" = "1" ] && [ "$dry_run" != "1" ]; then
+  command -v claude >/dev/null 2>&1 || die "missing required command: claude"
+fi
+
+manifest_output="$(
+  python3 - "$repo_root" "$include_filters" "$exclude_filters" <<'PY'
+import fnmatch
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+include_raw = sys.argv[2]
+exclude_raw = sys.argv[3]
+codex_manifest = root / ".agents" / "plugins" / "marketplace.json"
+claude_manifest = root / ".claude-plugin" / "marketplace.json"
+
+
+def parse_patterns(raw: str) -> list[str]:
+    patterns: list[str] = []
+    for line in raw.splitlines():
+        for item in line.split(","):
+            pattern = item.strip()
+            if pattern:
+                patterns.append(pattern)
+    return patterns
+
+
+def matches_any(name: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+
+def require_patterns_match(patterns: list[str], names: list[str], label: str) -> None:
+    misses = [pattern for pattern in patterns if not any(fnmatch.fnmatchcase(name, pattern) for name in names)]
+    if misses:
+        raise SystemExit(f"{label} pattern(s) matched no plugins: {', '.join(misses)}")
+
+codex = json.loads(codex_manifest.read_text(encoding="utf-8"))
+claude = json.loads(claude_manifest.read_text(encoding="utf-8"))
+
+codex_name = codex.get("name")
+claude_name = claude.get("name")
+if not codex_name or not claude_name:
+    raise SystemExit("marketplace manifests must both declare a name")
+if codex_name != claude_name:
+    raise SystemExit(f"marketplace names differ: Codex={codex_name!r}, Claude={claude_name!r}")
+
+codex_plugins = [item["name"] for item in codex.get("plugins", [])]
+claude_plugins = [item["name"] for item in claude.get("plugins", [])]
+if codex_plugins != claude_plugins:
+    raise SystemExit("Codex and Claude marketplace plugin lists differ")
+
+include_patterns = parse_patterns(include_raw)
+exclude_patterns = parse_patterns(exclude_raw)
+require_patterns_match(include_patterns, codex_plugins, "--include")
+require_patterns_match(exclude_patterns, codex_plugins, "--exclude")
+
+selected_plugins = [
+    plugin
+    for plugin in codex_plugins
+    if (not include_patterns or matches_any(plugin, include_patterns))
+    and not matches_any(plugin, exclude_patterns)
+]
+if not selected_plugins:
+    raise SystemExit("plugin filters selected no plugins")
+
+print(codex_name)
+for plugin in selected_plugins:
+    print(plugin)
+PY
+)"
+
+marketplace_name="$(printf '%s\n' "$manifest_output" | sed -n '1p')"
+plugin_names="$(printf '%s\n' "$manifest_output" | sed '1d')"
+[ -n "$marketplace_name" ] || die "failed to read marketplace name"
+[ -n "$plugin_names" ] || die "no plugins found in marketplace manifests"
+
+if [ "$use_sparse" = "1" ] && is_local_source; then
+  log "local source detected; sparse checkout flags are only used for Git sources"
+  use_sparse=0
+fi
+
+if [ "$codex_enabled" = "1" ]; then
+  log "adding Codex marketplace $marketplace_name from $source_value"
+  if [ "$use_sparse" = "1" ]; then
+    run codex plugin marketplace add --ref "$codex_ref" --sparse .agents/plugins --sparse plugins "$source_value"
+  else
+    run codex plugin marketplace add "$source_value"
+  fi
+
+  printf '%s\n' "$plugin_names" | while IFS= read -r plugin_name; do
+    [ -n "$plugin_name" ] || continue
+    log "installing Codex plugin $plugin_name@$marketplace_name"
+    run codex plugin add "$plugin_name@$marketplace_name"
+  done
+fi
+
+if [ "$claude_enabled" = "1" ]; then
+  log "adding Claude Code marketplace $marketplace_name from $source_value"
+  if [ "$use_sparse" = "1" ]; then
+    run claude plugin marketplace add --scope "$claude_scope" "$source_value" --sparse .claude-plugin plugins
+  else
+    run claude plugin marketplace add --scope "$claude_scope" "$source_value"
+  fi
+
+  printf '%s\n' "$plugin_names" | while IFS= read -r plugin_name; do
+    [ -n "$plugin_name" ] || continue
+    log "installing Claude Code plugin $plugin_name@$marketplace_name"
+    run claude plugin install --scope "$claude_scope" "$plugin_name@$marketplace_name"
+  done
+fi
+
+log "done"

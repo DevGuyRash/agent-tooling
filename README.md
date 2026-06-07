@@ -153,6 +153,7 @@ Common commands:
 - `just bootstrap` — install packaging prerequisites used by the repo scripts
 - `just verify` — run the fast local verification surface (`fmt-check`, `lint`, `test`)
 - `just ci` — run the full repo verification surface, including staged packaging checks
+- `scripts/install-all` / `just install-all` — add the sparse `agent-tooling` marketplace to Codex and Claude Code, then install every plugin in both CLIs
 - `just dist-host` — build and stage host-platform packaged binaries into plugin-local skill `dist/` trees
 - `just verify-packaging` — verify host refresh plus the committed dist completeness contract
 - `just verify-skill-launchers` — smoke-test plugin-local skill launchers against the staged binaries
@@ -160,6 +161,43 @@ Common commands:
 - `just harness-doctor` — inspect the current repo shape and local tool availability from the installed harness
 
 `just hooks-install` is local convenience, not the authoritative policy surface. CI and PR gating remain the real enforcement path.
+
+### Install all plugins
+
+Run this from a clone when you want this repo's full plugin marketplace available in both supported CLIs:
+
+```bash
+scripts/install-all
+```
+
+By default it uses the GitHub marketplace source `DevGuyRash/agent-tooling` with sparse checkout paths for each host:
+
+- Codex: `.agents/plugins` plus `plugins`
+- Claude Code: `.claude-plugin` plus `plugins`
+
+The script reads plugin names from the committed marketplace manifests, adds the marketplace, then installs each selected plugin as `<plugin>@agent-tooling`. By default, the selection is every plugin in both host manifests.
+
+Filter the dynamic plugin list with repeatable CSV/glob flags:
+
+```bash
+scripts/install-all --exclude 'rust*,gitops-workflow'
+scripts/install-all --include 'goal-*,project-harness' --exclude 'project-*'
+```
+
+Limit the target host when needed:
+
+```bash
+scripts/install-all --codex-only
+scripts/install-all --claude-only
+```
+
+The `just` recipe forwards the same flags:
+
+```bash
+just install-all --exclude 'rust*,gitops-workflow'
+```
+
+Use `scripts/install-all --help` for source, scope, host, filter, and dry-run options.
 
 ### Contributor hook setup
 
