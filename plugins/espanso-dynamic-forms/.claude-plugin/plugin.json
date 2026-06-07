@@ -1,0 +1,19 @@
+{
+  "name": "espanso-dynamic-forms",
+  "displayName": "Espanso Dynamic Forms",
+  "version": "1.2.0",
+  "description": "Build portable dynamic Espanso forms where a script or binary generates form layouts at runtime. Use when the task involves: (1) Creating or modifying Espanso form triggers or match files, (2) Building dynamic Espanso forms with runtime-generated layouts or choices, (3) Scaffolding a new Espanso form provider pattern, (4) Configuring Espanso YAML for scripted fields or runtime-generated options, (5) Debugging or linting Espanso form configurations, (6) Implementing clipboard or output patterns for Espanso expansions, or (7) Any task involving Espanso text expansion with dynamic or scripted form UIs.",
+  "author": {
+    "name": "DevGuyRash"
+  },
+  "license": "MIT",
+  "keywords": [
+    "automation",
+    "claude",
+    "codex",
+    "espanso",
+    "forms",
+    "skills",
+    "yaml"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "code-review",
+  "displayName": "Code Review",
+  "version": "1.0.0",
+  "description": "Run recursive, machine-first code review, review application, and full-cycle convergence workflows with the `mpcr` CLI. Use when the task involves: (1) Reviewing a diff, pull request, or set of commits, (2) Applying structured review findings back to code, (3) Validating canonical review artifacts or report trees, (4) Driving review\u2192apply\u2192verify convergence loops, or (5) Any task requiring systematic, multi-pass code review with per-agent report trees.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "automation",
+    "claude",
+    "code-review",
+    "codex",
+    "mpcr",
+    "review",
+    "skills"
+  ]
+}

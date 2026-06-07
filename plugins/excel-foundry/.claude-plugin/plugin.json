@@ -1,0 +1,19 @@
+{
+  "name": "excel-foundry",
+  "displayName": "Excel Foundry",
+  "version": "1.0.0",
+  "description": "Inspect, create, diff, document, audit, automate, and sync Excel workbook artifacts across package-readable workbooks, safe copies, installed desktop Excel, Microsoft Graph workbook APIs, Office Scripts/Add-in hosts, and Fabric/Power BI semantic models. Use when the task involves: (1) workbook lifecycle or direct commands such as inspect/diagnose/capabilities/create/diff/save-as/ convert/repair/compatibility/document-inspect, sheet/table/range/cell/name edits, links, safe export, formulas, calc, Solver, scenarios, forecasts, data tables, or automation artifacts, (2) package inventory or preservation for charts, pivots, slicers, timelines, Power Query, connections, XML/custom XML, OLE, signatures, encryption, sensitivity, VBA/package metadata, or embedded media, (3) desktop Excel host operations, (4) Graph, Office Scripts, Office.js/Add-in, Fabric, Power BI, DAX, TMDL, PBIP, or semantic-model operations, or (5) manifest/artifact synchronization, audit bundles, parity reports, and portable workbook manifests.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "automation",
+    "claude",
+    "codex",
+    "excel",
+    "skills",
+    "spreadsheets",
+    "workbooks"
+  ]
+}

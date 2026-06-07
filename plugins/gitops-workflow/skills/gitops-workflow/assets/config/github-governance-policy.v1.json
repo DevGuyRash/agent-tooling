@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "github-governance/v1",
+  "repository": {
+    "owner": "example-org",
+    "name": "example-repo",
+    "defaultBranch": "main"
+  },
+  "rulesets": [],
+  "requiredChecks": [
+    "commitlint",
+    "validate PR title (Conventional Commits)"
+  ],
+  "codeowners": {
+    "path": ".github/CODEOWNERS",
+    "entries": [
+      {
+        "pattern": "*",
+        "owners": [
+          "@example-org/maintainers"
+        ]
+      },
+      {
+        "pattern": "plugins/gitops-workflow/skills/gitops-workflow/**",
+        "owners": [
+          "@example-org/devx"
+        ]
+      }
+    ]
+  },
+  "labels": [
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Something is not working"
+    },
+    {
+      "name": "documentation",
+      "color": "0075ca",
+      "description": "Improvements or additions to documentation"
+    },
+    {
+      "name": "enhancement",
+      "color": "a2eeef",
+      "description": "New feature or request"
+    }
+  ],
+  "options": {
+    "allowLegacyBranchProtection": false,
+    "rulesetsExact": true,
+    "managedRulesetName": "default-branch-protection",
+    "requiredApprovingReviewCount": 1,
+    "dismissStaleReviews": true,
+    "requireCodeOwnerReview": true,
+    "requireLastPushApproval": false,
+    "requireLinearHistory": true,
+    "requireSignedCommits": false,
+    "blockForcePushes": true
+  },
+  "bypass": []
+}

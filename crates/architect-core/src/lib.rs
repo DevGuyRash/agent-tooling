@@ -53,8 +53,8 @@ pub enum SkillVariant {
 impl SkillVariant {
     fn user_agent(self) -> &'static str {
         match self {
-            SkillVariant::Compose => "agent-skills-docker-architect-compose/0.1",
-            SkillVariant::Image => "agent-skills-docker-architect-image/0.1",
+            SkillVariant::Compose => "agent-tooling-docker-architect-compose/0.1",
+            SkillVariant::Image => "agent-tooling-docker-architect-image/0.1",
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::model::{
 };
 
 const KNOWLEDGE_V1: &str =
-    include_str!("../../../skills/docker-architect/references/image-knowledge/knowledge.v1.yaml");
+    include_str!("../../../plugins/docker-architect/skills/docker-architect/references/image-knowledge/knowledge.v1.yaml");
 
 /// Compiled curated knowledge base.
 #[derive(Debug, Clone, Deserialize)]

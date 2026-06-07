@@ -1,0 +1,27 @@
+{
+  "name": "friction-diagnostics",
+  "version": "4.0.0",
+  "description": "REQUIRED for every task. Log every error, failure, unexpected outcome, or friction encountered \u2014 no exceptions. Covers: (1) Any tool, command, script, or build step that fails or produces unexpected results, (2) Any instruction, workflow, or environment that behaves differently than expected, (3) Code bugs, compilation errors, test failures, or runtime exceptions, (4) MCP server, subagent, or integration misbehavior, (5) User-requested friction or diagnostic reporting, (6) Any problem, error, or divergence from expected behavior during task execution. If anything goes wrong, it gets logged here. Do not skip this skill.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "diagnostics",
+    "friction",
+    "logging",
+    "troubleshooting"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Friction Diagnostics",
+    "shortDescription": "REQUIRED for every task",
+    "longDescription": "REQUIRED for every task. Log every error, failure, unexpected outcome, or friction encountered \u2014 no exceptions. Covers: (1) Any tool, command, script, or build step that fails or produces unexpected results, (2) Any instruction, workflow, or environment that behaves differently than expected, (3) Code bugs, compilation errors, test failures, or runtime exceptions, (4) MCP server, subagent, or integration misbehavior, (5) User-requested friction or diagnostic reporting, (6) Any problem, error, or divergence from expected behavior during task execution. If anything goes wrong, it gets logged here. Do not skip this skill.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Diagnostics",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": "Use $friction-diagnostics for required for every task."
+  }
+}

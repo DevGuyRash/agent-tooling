@@ -24,7 +24,7 @@ fn skill_root() -> anyhow::Result<PathBuf> {
     manifest
         .parent()
         .and_then(Path::parent)
-        .map(|root| root.join("skills/code-review"))
+        .map(|root| root.join("plugins/code-review/skills/code-review"))
         .ok_or_else(|| anyhow::anyhow!("failed to resolve skill root"))
 }
 

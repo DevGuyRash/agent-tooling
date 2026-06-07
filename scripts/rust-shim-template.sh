@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-# Template for skill-local packaged-binary launchers.
-# Copy this file into a skill's scripts/ directory and replace:
+# Template for plugin-local skill packaged-binary launchers.
+# Copy this file into a plugin-local skill's scripts/ directory and replace:
 #   __BIN_NAME__    binary name (example: docker-architect-compose)
 
 script_path="$0"

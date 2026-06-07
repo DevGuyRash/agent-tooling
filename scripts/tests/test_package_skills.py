@@ -49,7 +49,7 @@ class PackageSkillsTests(unittest.TestCase):
                 [skills.tool]
                 package = "tool"
                 binary = "tool"
-                skill_dir = "skills/tool"
+                skill_dir = "plugins/tool/skills/tool"
                 launcher = "scripts/tool"
                 required_platforms = ["linux-x86_64"]
                 ci_platforms = ["linux-x86_64"]
@@ -113,8 +113,8 @@ class PackageSkillsTests(unittest.TestCase):
             + "\n",
         )
         write(self.repo / "crates" / "helper" / "src" / "lib.rs", "pub fn helper() {}\n")
-        write(self.repo / "skills" / "tool" / "scripts" / "tool", "#!/bin/sh\n")
-        write(self.repo / "skills" / "tool" / "tests" / "smoke.sh", "#!/bin/sh\n")
+        write(self.repo / "plugins" / "tool" / "skills" / "tool" / "scripts" / "tool", "#!/bin/sh\n")
+        write(self.repo / "plugins" / "tool" / "skills" / "tool" / "tests" / "smoke.sh", "#!/bin/sh\n")
 
     def write_multi_config(self) -> None:
         write(
@@ -124,7 +124,7 @@ class PackageSkillsTests(unittest.TestCase):
                 [skills.tool]
                 package = "tool"
                 binary = "tool"
-                skill_dir = "skills/tool"
+                skill_dir = "plugins/tool/skills/tool"
                 launcher = "scripts/tool"
                 required_platforms = ["linux-x86_64"]
                 ci_platforms = ["linux-x86_64"]
@@ -132,7 +132,7 @@ class PackageSkillsTests(unittest.TestCase):
                 [skills.helper]
                 package = "helper"
                 binary = "helper"
-                skill_dir = "skills/helper"
+                skill_dir = "plugins/helper/skills/helper"
                 launcher = "scripts/helper"
                 required_platforms = ["linux-x86_64"]
                 ci_platforms = ["linux-x86_64"]
@@ -169,7 +169,7 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_verify_complete_accepts_tracked_required_payloads(self) -> None:
         self.write_config()
-        payload = self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
+        payload = self.repo / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
         write(payload, "linux binary\n")
         payload.chmod(0o755)
         subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
@@ -178,13 +178,13 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_compare_and_sync_artifacts_use_downloaded_artifact_tree(self) -> None:
         self.write_config()
-        repo_payload = self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
+        repo_payload = self.repo / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
         write(repo_payload, "old payload\n")
         repo_payload.chmod(0o755)
         subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
 
         artifact_root = self.repo / "artifact-downloads"
-        artifact_payload = artifact_root / "skill-dist-linux-x86_64" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
+        artifact_payload = artifact_root / "skill-dist-linux-x86_64" / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
         write(artifact_payload, "new payload\n")
 
         with self.assertRaises(SystemExit):
@@ -207,10 +207,9 @@ class PackageSkillsTests(unittest.TestCase):
 
         def fake_stage_host_native(selected: list[tuple[str, dict[str, object]]], platform_id: str) -> None:
             calls.append((selected, platform_id))
-            install_root = self.repo / "skills"
             for _, skill in selected:
                 target_name = str(skill["binary"])
-                dst = install_root / str(skill["skill_dir"]).split("/", 1)[1] / "dist" / platform_id / target_name
+                dst = self.repo / str(skill["skill_dir"]) / "dist" / platform_id / target_name
                 write(dst, f"{target_name} payload\n")
                 dst.chmod(0o755)
 
@@ -227,8 +226,8 @@ class PackageSkillsTests(unittest.TestCase):
             calls,
             [([("tool", package_skills.load_config()["tool"])], "linux-x86_64")],
         )
-        self.assertTrue((self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool").exists())
-        self.assertFalse((self.repo / "skills" / "helper" / "dist" / "linux-x86_64" / "helper").exists())
+        self.assertTrue((self.repo / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool").exists())
+        self.assertFalse((self.repo / "plugins" / "helper" / "skills" / "helper" / "dist" / "linux-x86_64" / "helper").exists())
 
     def test_selected_skill_entries_rejects_unknown_skill(self) -> None:
         self.write_config()
@@ -239,15 +238,15 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_compare_artifacts_flags_stale_repo_payloads_and_sync_removes_them(self) -> None:
         self.write_config()
-        repo_payload = self.repo / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
-        stale_payload = self.repo / "skills" / "helper" / "dist" / "linux-x86_64" / "helper"
+        repo_payload = self.repo / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
+        stale_payload = self.repo / "plugins" / "helper" / "skills" / "helper" / "dist" / "linux-x86_64" / "helper"
         write(repo_payload, "current payload\n")
         write(stale_payload, "stale payload\n")
         repo_payload.chmod(0o755)
         stale_payload.chmod(0o755)
 
         artifact_root = self.repo / "artifact-downloads"
-        artifact_payload = artifact_root / "skill-dist-linux-x86_64" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
+        artifact_payload = artifact_root / "skill-dist-linux-x86_64" / "plugins" / "tool" / "skills" / "tool" / "dist" / "linux-x86_64" / "tool"
         write(artifact_payload, "current payload\n")
 
         with self.assertRaises(SystemExit) as ctx:
@@ -293,6 +292,7 @@ class PackageSkillsTests(unittest.TestCase):
     def test_use_container_build_prefers_docker_for_linux_x86_64_in_auto_mode(self) -> None:
         original_env = os.environ.copy()
         original_docker_available = package_skills.docker_available
+        os.environ.pop("AGENT_TOOLING_DIST_BUILD_MODE", None)
         os.environ.pop("AGENT_SKILLS_DIST_BUILD_MODE", None)
         package_skills.docker_available = lambda: True
         self.addCleanup(os.environ.clear)
@@ -302,10 +302,20 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertTrue(package_skills.use_container_build("linux-x86_64"))
         self.assertFalse(package_skills.use_container_build("linux-aarch64"))
 
+    def test_dist_build_mode_accepts_deprecated_agent_skills_alias(self) -> None:
+        original_env = os.environ.copy()
+        os.environ.pop("AGENT_TOOLING_DIST_BUILD_MODE", None)
+        os.environ["AGENT_SKILLS_DIST_BUILD_MODE"] = "host"
+        self.addCleanup(os.environ.clear)
+        self.addCleanup(os.environ.update, original_env)
+
+        self.assertEqual(package_skills.dist_build_mode(), "host")
+
     def test_use_container_build_requires_docker_in_container_mode(self) -> None:
         original_env = os.environ.copy()
         original_docker_available = package_skills.docker_available
-        os.environ["AGENT_SKILLS_DIST_BUILD_MODE"] = "container"
+        os.environ["AGENT_TOOLING_DIST_BUILD_MODE"] = "container"
+        os.environ.pop("AGENT_SKILLS_DIST_BUILD_MODE", None)
         package_skills.docker_available = lambda: False
         self.addCleanup(os.environ.clear)
         self.addCleanup(os.environ.update, original_env)
@@ -328,8 +338,8 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertIn("rust-toolchain.toml", watched)
         self.assertIn("crates/tool", watched)
         self.assertIn("crates/helper", watched)
-        self.assertIn("skills/tool/scripts/tool", watched)
-        self.assertIn("skills/tool/dist", watched)
+        self.assertIn("plugins/tool/skills/tool/scripts/tool", watched)
+        self.assertIn("plugins/tool/skills/tool/dist", watched)
 
     def test_matches_changed_files_respects_watch_prefixes_and_optional_tests(self) -> None:
         self.write_config()
@@ -345,21 +355,21 @@ class PackageSkillsTests(unittest.TestCase):
         )
         self.assertTrue(
             package_skills.matches_changed_files(
-                ["skills/tool/dist/linux-x86_64/tool"],
+                ["plugins/tool/skills/tool/dist/linux-x86_64/tool"],
                 config,
                 ["tool"],
             )
         )
         self.assertFalse(
             package_skills.matches_changed_files(
-                ["skills/tool/tests/smoke.sh"],
+                ["plugins/tool/skills/tool/tests/smoke.sh"],
                 config,
                 ["tool"],
             )
         )
         self.assertTrue(
             package_skills.matches_changed_files(
-                ["./skills/tool/tests/smoke.sh"],
+                ["./plugins/tool/skills/tool/tests/smoke.sh"],
                 config,
                 ["tool"],
                 include_tests=True,

@@ -1,0 +1,29 @@
+{
+  "name": "gitops-workflow",
+  "version": "2.0.0",
+  "description": "End-to-end GitOps workflow governance and automation covering branching, Conventional Commits, PR lifecycle, CI gating, and release management. Use when the task involves: (1) Creating a Git branch from the default branch, (2) Writing or enforcing Conventional Commit messages, (3) Creating, updating, reviewing, or merging pull requests, (4) Generating squash-merge commit messages or release notes, (5) Setting up or enforcing CI gating policies, (6) Automating Git or GitHub CLI (gh) workflows, (7) Enforcing team Git workflow standards or branch naming conventions, or (8) Any task requiring structured Git operations with auditability and governance. Includes helper scripts for git and GitHub CLI.",
+  "author": {
+    "name": "DevGuyRash"
+  },
+  "license": "MIT",
+  "keywords": [
+    "commits",
+    "git",
+    "github",
+    "gitops",
+    "pull-requests"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "GitOps Workflow",
+    "shortDescription": "End-to-end GitOps workflow governance and automation covering branching, Conventional Commits, PR lifecycle, CI gating, and release management",
+    "longDescription": "End-to-end GitOps workflow governance and automation covering branching, Conventional Commits, PR lifecycle, CI gating, and release management. Use when the task involves: (1) Creating a Git branch from the default branch, (2) Writing or enforcing Conventional Commit messages, (3) Creating, updating, reviewing, or merging pull requests, (4) Generating squash-merge commit messages or release notes, (5) Setting up or enforcing CI gating policies, (6) Automating Git or GitHub CLI (gh) workflows, (7) Enforcing team Git workflow standards or branch naming conventions, or (8) Any task requiring structured Git operations with auditability and governance. Includes helper scripts for git and GitHub CLI.",
+    "developerName": "DevGuyRash",
+    "category": "Development",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use $gitops-workflow for end-to-end gitops workflow governance and automation covering branching, conventional commits, pr lifecycle, ci gating, and release management."
+  }
+}

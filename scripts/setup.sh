@@ -32,8 +32,15 @@ if command -v git >/dev/null 2>&1; then
   fi
 fi
 
-if [ "${AGENT_SKILLS_SKIP_RUST:-}" = "1" ]; then
-  log "setup" "skipping Rust install (AGENT_SKILLS_SKIP_RUST=1)"
+rust_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_TOOLING_SKIP_RUST" \
+  "${AGENT_TOOLING_SKIP_RUST:-}" \
+  "AGENT_SKILLS_SKIP_RUST" \
+  "${AGENT_SKILLS_SKIP_RUST:-}")"
+
+if [ "${rust_skip_flag}" = "1" ]; then
+  log "setup" "skipping Rust install (AGENT_TOOLING_SKIP_RUST=1)"
 else
   if ! command -v cargo >/dev/null 2>&1; then
     log "setup" "cargo not found; installing Rust toolchain via rustup (stable)"
@@ -77,26 +84,47 @@ fi
 
 compose_skip_flag="$(resolve_deprecated_flag \
   "setup" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "${AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}" \
   "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
-  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}")"
+
+compose_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "${compose_skip_flag}" \
   "AGENT_SKILLS_SKIP_PCA_BUILD" \
   "${AGENT_SKILLS_SKIP_PCA_BUILD:-}")"
 
 image_skip_flag="$(resolve_deprecated_flag \
   "setup" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "${AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}" \
   "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
-  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}")"
+
+image_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "${image_skip_flag}" \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
-if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ] && \
+mpcr_skip_flag="$(resolve_deprecated_flag \
+  "setup" \
+  "AGENT_TOOLING_SKIP_MPCR_BUILD" \
+  "${AGENT_TOOLING_SKIP_MPCR_BUILD:-}" \
+  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
+  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}")"
+
+if [ "${mpcr_skip_flag}" = "1" ] && \
    [ "${compose_skip_flag}" = "1" ] && \
    [ "${image_skip_flag}" = "1" ]; then
   log "setup" "skipping host dist staging because all Rust skill build flags are disabled"
 else
   log "setup" "bootstrapping Rust workspace dependencies"
   python3 scripts/package_skills.py bootstrap
-  log "setup" "staging host packaged binaries into skill-local dist/"
+  log "setup" "staging host packaged binaries into plugin-local skill dist/"
   python3 scripts/package_skills.py stage-host
 fi
 

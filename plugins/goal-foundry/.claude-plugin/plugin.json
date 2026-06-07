@@ -1,0 +1,20 @@
+{
+  "name": "goal-foundry",
+  "displayName": "Goal Foundry",
+  "version": "1.0.0",
+  "description": "Compile messy intent and project context into bounded, verifiable goal contracts with capability inventory, validation scripts, lifecycle hooks, and goal ledger artifacts.",
+  "author": {
+    "name": "Goal Foundry Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "codex",
+    "goal",
+    "planning",
+    "skills",
+    "hooks",
+    "automation",
+    "governance"
+  ]
+}

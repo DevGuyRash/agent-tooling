@@ -274,6 +274,20 @@ class PluginPortTests(unittest.TestCase):
         self.assertEqual(report.support_level, "supported-with-preserved-surfaces")
         self.assertTrue(any(item["kind"] == "apps" for item in report.executable_surfaces))
 
+    def test_codex_to_claude_quarantines_root_claude_md(self) -> None:
+        source = self.root / "goal-foundry"
+        out = self.root / "out"
+        self.write_codex_plugin(source)
+        write(source / "CLAUDE.md", "# Goal Foundry\n\nRoot context that Claude plugins do not load.\n")
+
+        report = plugin_port.convert_plugin(source, "claude", out, mode="strict", overwrite=False)
+
+        self.assertFalse((out / "CLAUDE.md").exists())
+        self.assertTrue((out / ".plugin-portability" / "preserved" / "CLAUDE.md").exists())
+        self.assertTrue(any(item["kind"] == "claude-root-context" for item in report.preserved_only))
+        validation = plugin_port.validate_plugin(out, "claude", external=False)
+        self.assertTrue(validation.validation_summary["internal"]["passed"])
+
     def test_claude_plugin_best_effort_converts_to_codex_and_reports_unsupported(self) -> None:
         source = self.root / "kitchen"
         out = self.root / "codex-out"
@@ -298,6 +312,99 @@ class PluginPortTests(unittest.TestCase):
         self.assertTrue(any(item["kind"] == "claude-lsp" for item in report.preserved_only))
         self.assertEqual(report.support_level, "best-effort-lossy")
 
+    def test_claude_lowercase_skill_entrypoint_converts_to_codex_skill_md(self) -> None:
+        source = self.root / "lowercase-skill"
+        out = self.root / "codex-out"
+        write(
+            source / ".claude-plugin" / "plugin.json",
+            json.dumps(
+                {
+                    "name": "lowercase-skill",
+                    "version": "1.0.0",
+                    "description": "Claude plugin with lowercase skill entrypoint.",
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+        write(
+            source / "skills" / "git-commit" / "skill.md",
+            textwrap.dedent(
+                """
+                ---
+                description: Commit changes with project conventions.
+                ---
+
+                Create a commit after checking repository state.
+                """
+            ).lstrip(),
+        )
+
+        payload = json.loads(plugin_port.inspect_path(source, fmt="json", explicit_host="claude"))
+        self.assertIn("skills/git-commit/skill.md", payload["components"]["skills"])
+
+        report = plugin_port.convert_plugin(source, "codex", out, mode="strict", overwrite=False)
+
+        self.assertFalse((out / "skills" / "git-commit" / "skill.md").exists())
+        converted = out / "skills" / "git-commit" / "SKILL.md"
+        self.assertTrue(converted.exists())
+        self.assertIn("name: git-commit", converted.read_text(encoding="utf-8"))
+        self.assertTrue(
+            any(
+                item["source"] == "skills/git-commit/skill.md"
+                and item["target"] == "skills/git-commit/SKILL.md"
+                for item in report.mappings
+            )
+        )
+        validation = plugin_port.validate_plugin(out, "codex", external=False)
+        self.assertTrue(validation.validation_summary["internal"]["passed"])
+
+    def test_invalid_skill_frontmatter_best_effort_converts_with_generated_metadata(self) -> None:
+        source = self.root / "invalid-skill"
+        out = self.root / "codex-out"
+        write(
+            source / ".claude-plugin" / "plugin.json",
+            json.dumps(
+                {
+                    "name": "invalid-skill",
+                    "version": "1.0.0",
+                    "description": "Plugin with malformed skill metadata.",
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+        write(
+            source / "skills" / "monitor" / "SKILL.md",
+            textwrap.dedent(
+                """
+                ---
+                name: monitor
+                description: Use this skill when: monitoring systems.
+                ---
+
+                # Monitor
+
+                Analyze system telemetry.
+                """
+            ).lstrip(),
+        )
+
+        report = plugin_port.convert_plugin(source, "codex", out, mode="best-effort", overwrite=False)
+
+        converted = out / "skills" / "monitor" / "SKILL.md"
+        converted_text = converted.read_text(encoding="utf-8")
+        self.assertIn("name: monitor", converted_text)
+        self.assertIn("description: Monitor", converted_text)
+        self.assertIn("Analyze system telemetry.", converted_text)
+        self.assertTrue(any(item["kind"] == "skill-frontmatter" for item in report.unsupported))
+        self.assertEqual(report.support_level, "best-effort-lossy")
+        validation = plugin_port.validate_plugin(out, "codex", external=False)
+        self.assertTrue(validation.validation_summary["internal"]["passed"])
+
+        with self.assertRaises(plugin_port.PluginPortError):
+            plugin_port.convert_plugin(source, "codex", self.root / "strict-out", mode="strict", overwrite=False)
+
     def test_claude_plugin_strict_rejects_codex_unsupported_hooks(self) -> None:
         source = self.root / "kitchen"
         out = self.root / "codex-out"
@@ -305,6 +412,52 @@ class PluginPortTests(unittest.TestCase):
 
         with self.assertRaises(plugin_port.PluginPortError):
             plugin_port.convert_plugin(source, "codex", out, mode="strict", overwrite=False)
+
+    def test_claude_command_invalid_frontmatter_best_effort_converts_body(self) -> None:
+        source = self.root / "relaxed-command"
+        out = self.root / "codex-out"
+        write(
+            source / ".claude-plugin" / "plugin.json",
+            json.dumps(
+                {
+                    "name": "relaxed-command",
+                    "version": "1.0.0",
+                    "description": "Claude command with relaxed metadata.",
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+        write(
+            source / "commands" / "add-agent.md",
+            textwrap.dedent(
+                """
+                ---
+                description: Add a new sub-agent to the current plugin
+                argument-hint: [agent-name] ["description"]
+                ---
+
+                # Add Agent
+
+                Create a new sub-agent file.
+                """
+            ).lstrip(),
+        )
+
+        report = plugin_port.convert_plugin(source, "codex", out, mode="best-effort", overwrite=False)
+
+        converted = out / "skills" / "add-agent" / "SKILL.md"
+        self.assertTrue(converted.exists())
+        converted_text = converted.read_text(encoding="utf-8")
+        self.assertIn("Create a new sub-agent file.", converted_text)
+        self.assertIn("description: Add Agent", converted_text)
+        self.assertTrue(any(item["kind"] == "command-frontmatter" for item in report.unsupported))
+        self.assertEqual(report.support_level, "best-effort-lossy")
+        validation = plugin_port.validate_plugin(out, "codex", external=False)
+        self.assertTrue(validation.validation_summary["internal"]["passed"])
+
+        with self.assertRaises(plugin_port.PluginPortError):
+            plugin_port.convert_plugin(source, "codex", self.root / "strict-out", mode="strict", overwrite=False)
 
     def test_claude_marketplace_converts_local_plugins_to_codex_marketplace(self) -> None:
         marketplace = self.root / "market"

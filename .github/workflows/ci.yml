@@ -333,7 +333,7 @@ jobs:
 
       - name: Run friction diagnostics smoke test (POSIX)
         shell: bash
-        run: bash skills/friction-diagnostics/tests/smoke-posix.sh
+        run: bash plugins/friction-diagnostics/skills/friction-diagnostics/tests/smoke-posix.sh
 
   rust:
     name: Rust (fmt, clippy, test)

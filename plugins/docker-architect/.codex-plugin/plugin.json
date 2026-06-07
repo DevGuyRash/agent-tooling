@@ -1,0 +1,28 @@
+{
+  "name": "docker-architect",
+  "version": "2.0.0",
+  "description": "Generate hardened, production-ready Docker architecture including Dockerfiles, Compose stacks, and Swarm deploy configs. Use when the task involves: (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing an application (Python, Node.js, Rust, Go, Nginx, or custom stacks), (3) Creating or modifying compose.yaml or Docker Swarm deployments, (4) Hardening container security, healthchecks, secrets management, or resource limits, (5) Setting up CI/CD container scanning or image supply-chain controls (hadolint, trivy, docker scout, SBOM, provenance), or (6) Any task involving Docker, containers, or container orchestration.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "compose",
+    "containers",
+    "docker",
+    "security",
+    "swarm"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Docker Architect",
+    "shortDescription": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",
+    "longDescription": "Generate hardened, production-ready Docker architecture including Dockerfiles, Compose stacks, and Swarm deploy configs. Use when the task involves: (1) Writing or improving a Dockerfile or multi-stage build, (2) Containerizing an application (Python, Node.js, Rust, Go, Nginx, or custom stacks), (3) Creating or modifying compose.yaml or Docker Swarm deployments, (4) Hardening container security, healthchecks, secrets management, or resource limits, (5) Setting up CI/CD container scanning or image supply-chain controls (hadolint, trivy, docker scout, SBOM, provenance), or (6) Any task involving Docker, containers, or container orchestration.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Development",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": "Generate hardened multi-stage Dockerfiles and Compose/Swarm deployment files with non-root execution, healthchecks, secrets management, and read-only runtime hardening defaults. Include CI/CD scanning guidance with hadolint, Trivy, and Docker Scout. Prefer digest-pinned images, OCI labels, and SBOM/provenance-ready outputs."
+  }
+}

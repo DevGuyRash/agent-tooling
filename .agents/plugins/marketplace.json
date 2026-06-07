@@ -1,0 +1,140 @@
+{
+  "name": "agent-tooling",
+  "interface": {
+    "displayName": "Agent Tooling"
+  },
+  "plugins": [
+    {
+      "name": "code-review",
+      "source": {
+        "source": "local",
+        "path": "./plugins/code-review"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "docker-architect",
+      "source": {
+        "source": "local",
+        "path": "./plugins/docker-architect"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "espanso-dynamic-forms",
+      "source": {
+        "source": "local",
+        "path": "./plugins/espanso-dynamic-forms"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "excel-foundry",
+      "source": {
+        "source": "local",
+        "path": "./plugins/excel-foundry"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "friction-diagnostics",
+      "source": {
+        "source": "local",
+        "path": "./plugins/friction-diagnostics"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Diagnostics"
+    },
+    {
+      "name": "gitops-workflow",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gitops-workflow"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "goal-foundry",
+      "source": {
+        "source": "local",
+        "path": "./plugins/goal-foundry"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "playwright-testing",
+      "source": {
+        "source": "local",
+        "path": "./plugins/playwright-testing"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Testing"
+    },
+    {
+      "name": "project-harness",
+      "source": {
+        "source": "local",
+        "path": "./plugins/project-harness"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "rust-development",
+      "source": {
+        "source": "local",
+        "path": "./plugins/rust-development"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    },
+    {
+      "name": "skill-auditor",
+      "source": {
+        "source": "local",
+        "path": "./plugins/skill-auditor"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    }
+  ]
+}

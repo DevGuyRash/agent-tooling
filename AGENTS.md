@@ -1,7 +1,7 @@
 # Repo-wide agent notes
 
 This file contains cross-cutting constraints that apply regardless of language or skill.
-Language/toolchain-specific workflows live in the corresponding skill `SKILL.md` files under `skills/`.
+Language/toolchain-specific workflows live in the corresponding plugin-local skill `SKILL.md` files under `plugins/<plugin-name>/skills/<skill-name>/`.
 
 Skills in this repo follow the [Open Agent Skills standard](https://agentskills.io/specification).
 Skills authored to this standard are portable across Claude, Codex, GitHub Copilot,
@@ -68,11 +68,11 @@ When writing or editing a skill, use `<skills-file-root>` as the path prefix for
 
 ## GitOps Workflow drift control
 
-WHEN you edit files under `skills/gitops-workflow/` AND the change affects top-level commands, aliases, routing modes, or help discovery THEN you SHALL update the same change in `scripts/gitops-help.sh`, `SKILL.md`, `references/SCRIPT_ROUTING.md`, and the targeted tests.
+WHEN you edit files under `plugins/gitops-workflow/skills/gitops-workflow/` AND the change affects top-level commands, aliases, routing modes, or help discovery THEN you SHALL update the same change in `plugins/gitops-workflow/skills/gitops-workflow/scripts/gitops-help.sh`, `plugins/gitops-workflow/skills/gitops-workflow/SKILL.md`, `plugins/gitops-workflow/skills/gitops-workflow/references/SCRIPT_ROUTING.md`, and the targeted tests.
 
-WHEN command discovery is needed for `skills/gitops-workflow/` THEN you SHALL treat `scripts/gitops-help.sh --json` as the canonical agent-facing discovery surface.
+WHEN command discovery is needed for `plugins/gitops-workflow/skills/gitops-workflow/` THEN you SHALL treat `plugins/gitops-workflow/skills/gitops-workflow/scripts/gitops-help.sh --json` as the canonical agent-facing discovery surface.
 
-You SHALL NOT add another manually maintained command catalog or alias inventory for `skills/gitops-workflow/` unless runtime behavior requires it.
+You SHALL NOT add another manually maintained command catalog or alias inventory for `plugins/gitops-workflow/skills/gitops-workflow/` unless runtime behavior requires it.
 
 
 ---
@@ -860,4 +860,3 @@ Don't log issues caused by the user's project (compilation errors in their
 code, missing user dependencies, etc.). Only log issues caused by the skill
 itself: its documentation, its scripts, its CLIs, its templates, or its
 reference files.
-

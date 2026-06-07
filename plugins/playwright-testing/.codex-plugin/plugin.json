@@ -1,0 +1,27 @@
+{
+  "name": "playwright-testing",
+  "version": "1.0.0",
+  "description": "Design durable, outcome-oriented Playwright and browser e2e tests that prove product behavior instead of recording today's DOM. Use when the task involves: (1) Creating, reviewing, or refactoring Playwright tests, (2) Designing selector strategies, page objects, fixtures, e2e assertions, or trace/artifact capture, (3) Reducing brittle selectors, fixed waits, layout assertions, or flaky authenticated flows, (4) Testing third-party, authenticated, frequently changing, or browser-extension UIs, or (5) Any task involving Playwright e2e test design or brittle-test cleanup.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "e2e",
+    "playwright",
+    "testing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Playwright Testing",
+    "shortDescription": "Outcome-first, non-brittle e2e tests",
+    "longDescription": "Design durable, outcome-oriented Playwright and browser e2e tests that prove product behavior instead of recording today's DOM. Use when the task involves: (1) Creating, reviewing, or refactoring Playwright tests, (2) Designing selector strategies, page objects, fixtures, e2e assertions, or trace/artifact capture, (3) Reducing brittle selectors, fixed waits, layout assertions, or flaky authenticated flows, (4) Testing third-party, authenticated, frequently changing, or browser-extension UIs, or (5) Any task involving Playwright e2e test design or brittle-test cleanup.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Testing",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": "Use $playwright-testing to design or refactor Playwright e2e tests with durable selectors and useful failure artifacts."
+  }
+}

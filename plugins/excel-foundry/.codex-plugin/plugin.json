@@ -1,0 +1,28 @@
+{
+  "name": "excel-foundry",
+  "version": "1.0.0",
+  "description": "Inspect, create, diff, document, audit, automate, and sync Excel workbook artifacts across package-readable workbooks, safe copies, installed desktop Excel, Microsoft Graph workbook APIs, Office Scripts/Add-in hosts, and Fabric/Power BI semantic models. Use when the task involves: (1) workbook lifecycle or direct commands such as inspect/diagnose/capabilities/create/diff/save-as/ convert/repair/compatibility/document-inspect, sheet/table/range/cell/name edits, links, safe export, formulas, calc, Solver, scenarios, forecasts, data tables, or automation artifacts, (2) package inventory or preservation for charts, pivots, slicers, timelines, Power Query, connections, XML/custom XML, OLE, signatures, encryption, sensitivity, VBA/package metadata, or embedded media, (3) desktop Excel host operations, (4) Graph, Office Scripts, Office.js/Add-in, Fabric, Power BI, DAX, TMDL, PBIP, or semantic-model operations, or (5) manifest/artifact synchronization, audit bundles, parity reports, and portable workbook manifests.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "automation",
+    "excel",
+    "spreadsheets",
+    "workbooks"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Excel Foundry",
+    "shortDescription": "Excel workbook capability router for package, desktop, cloud, automation, semantic-model, and manifest/artifact operations",
+    "longDescription": "Inspect, create, diff, document, audit, automate, and sync Excel workbook artifacts across package-readable workbooks, safe copies, installed desktop Excel, Microsoft Graph workbook APIs, Office Scripts/Add-in hosts, and Fabric/Power BI semantic models. Use when the task involves: (1) workbook lifecycle or direct commands such as inspect/diagnose/capabilities/create/diff/save-as/ convert/repair/compatibility/document-inspect, sheet/table/range/cell/name edits, links, safe export, formulas, calc, Solver, scenarios, forecasts, data tables, or automation artifacts, (2) package inventory or preservation for charts, pivots, slicers, timelines, Power Query, connections, XML/custom XML, OLE, signatures, encryption, sensitivity, VBA/package metadata, or embedded media, (3) desktop Excel host operations, (4) Graph, Office Scripts, Office.js/Add-in, Fabric, Power BI, DAX, TMDL, PBIP, or semantic-model operations, or (5) manifest/artifact synchronization, audit bundles, parity reports, and portable workbook manifests.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use $excel-foundry when the user needs raw Excel workbook capabilities across package-readable files, installed desktop Excel, Graph workbook APIs, Office Scripts/Excel JS/Add-in hosts, Fabric/Power BI semantic models, DAX/TMDL/PBIP artifacts, or manifest/artifact synchronization. Treat SKILL.md as the top-level router: read only the reference selected by the user's intent first. Use `references/query.md` for direct `<resource> <action> [flags]` commands, `references/runtime-compatibility.md` for package vs desktop vs cloud vs semantic host selection, `references/protocol-audit.md` for arbitrary workbook inspect/pull/compare/audit/matrix-audit, `references/protocol-manifest-sync.md` only for manifest/artifact synchronization, and `references/output-contract.md` for JSON/report interpretation. Use `workbook capabilities --deep --documentation` and `references/excel-capability-matrix.json` when support level, backend lanes, closure reason, host requirements, secret handling, or documentation anchors matter. Do not invent SOPs, opinionated workbook procedures, or unsupported mutation paths; expose inventory, preservation, diagnostics, host/cloud plans, dry-runs, or explicit limitations when public mutation is not supported."
+  }
+}

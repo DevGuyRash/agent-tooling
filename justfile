@@ -1,9 +1,9 @@
-# Repo command surface for skill packaging, launcher validation, and local verification.
+# Repo command surface for plugin-local skill packaging, launcher validation, and local verification.
 # Usage examples:
 #   just bootstrap         # install packaging prerequisites used by repo scripts
 #   just verify            # run the fast local verification surface
 #   just ci                # run the pull-request verification surface for this repo
-#   just dist-host         # build and stage host-platform skill binaries into dist/
+#   just dist-host         # build and stage host-platform plugin-local skill binaries into dist/
 #   just hooks-install     # install the local pre-push gate
 # project-harness: managed-file
 set shell := ["bash", "-euo", "pipefail", "-c"]
@@ -32,7 +32,7 @@ lint:
 test:
   cargo test --workspace --locked
   python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port
-  python3 -m unittest discover -s skills/excel-foundry/tests -p 'test_*.py'
+  python3 -m unittest discover -s plugins/excel-foundry/skills/excel-foundry/tests -p 'test_*.py'
 
 # Run the plugin portability converter unit tests
 test-plugin-port:
@@ -46,7 +46,7 @@ test-plugin-port-live:
 build:
   cargo build --workspace --locked
 
-# Build and stage host-platform packaged binaries into skill dist/ directories
+# Build and stage host-platform packaged binaries into plugin-local skill dist/ directories
 dist-host:
   python3 scripts/package_skills.py stage-host
 
@@ -55,18 +55,18 @@ verify: fmt-check lint test
 
 # Render the Project Harness candidate files under .local/harness/render
 harness-render:
-  python3 skills/project-harness/scripts/project_harness.py render . --pretty
+  python3 plugins/project-harness/skills/project-harness/scripts/project_harness.py render . --pretty
 
 # Inspect the Project Harness view of this repo and local tool availability
 harness-doctor:
-  python3 skills/project-harness/scripts/project_harness.py doctor . --pretty
+  python3 plugins/project-harness/skills/project-harness/scripts/project_harness.py doctor . --pretty
 
 # Verify committed packaging policy and staged deliverables for the current host
 verify-packaging:
   python3 scripts/package_skills.py verify-host
   python3 scripts/package_skills.py verify-complete
 
-# Smoke-test skill-local launchers against the staged dist payloads
+# Smoke-test plugin-local skill launchers against the staged dist payloads
 verify-skill-launchers:
   python3 scripts/package_skills.py smoke-launchers
 

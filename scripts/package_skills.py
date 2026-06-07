@@ -105,11 +105,26 @@ def docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
+def env_value(name: str, *, deprecated: str | None = None, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if deprecated:
+        legacy = os.environ.get(deprecated)
+        if legacy:
+            return legacy
+    return default
+
+
 def dist_build_mode() -> str:
-    mode = os.environ.get("AGENT_SKILLS_DIST_BUILD_MODE", "auto").strip().lower()
+    mode = env_value(
+        "AGENT_TOOLING_DIST_BUILD_MODE",
+        deprecated="AGENT_SKILLS_DIST_BUILD_MODE",
+        default="auto",
+    ).strip().lower()
     if mode not in {"auto", "container", "host"}:
         raise SystemExit(
-            "AGENT_SKILLS_DIST_BUILD_MODE must be one of: auto, container, host"
+            "AGENT_TOOLING_DIST_BUILD_MODE must be one of: auto, container, host"
         )
     return mode
 
@@ -123,13 +138,17 @@ def use_container_build(platform_id: str) -> bool:
         return False
     if mode == "container":
         if not docker_available():
-            raise SystemExit("docker is required for AGENT_SKILLS_DIST_BUILD_MODE=container")
+            raise SystemExit("docker is required for AGENT_TOOLING_DIST_BUILD_MODE=container")
         return True
     return docker_available()
 
 
 def container_image() -> str:
-    return os.environ.get("AGENT_SKILLS_RUST_IMAGE", f"rust:{toolchain_channel()}")
+    return env_value(
+        "AGENT_TOOLING_RUST_IMAGE",
+        deprecated="AGENT_SKILLS_RUST_IMAGE",
+        default=f"rust:{toolchain_channel()}",
+    )
 
 
 def container_rustflags() -> str:
@@ -476,21 +495,37 @@ def tracked_dist_paths(config: dict[str, dict[str, object]], platform_ids: list[
     return paths
 
 
-def repo_dist_payload_paths() -> list[Path]:
-    dist_root = REPO_ROOT / "skills"
-    if not dist_root.exists():
-        return []
+def repo_dist_payload_roots(config: dict[str, dict[str, object]] | None = None) -> list[Path]:
+    roots: set[Path] = set()
+    if config is None:
+        config = load_config()
+    for skill in config.values():
+        roots.add(REPO_ROOT / str(skill["skill_dir"]) / "dist")
+    for path in REPO_ROOT.glob("plugins/*/skills/*/dist"):
+        roots.add(path)
+    for path in REPO_ROOT.glob("skills/*/dist"):
+        roots.add(path)
+    return sorted(roots)
+
+
+def repo_dist_payload_paths(config: dict[str, dict[str, object]] | None = None) -> list[Path]:
     paths: list[Path] = []
-    for path in sorted(dist_root.glob("*/dist/**/*")):
-        if path.is_file() or path.is_symlink():
-            paths.append(path)
+    for dist_root in repo_dist_payload_roots(config):
+        if not dist_root.exists():
+            continue
+        for path in sorted(dist_root.glob("**/*")):
+            if path.is_file() or path.is_symlink():
+                paths.append(path)
     return paths
 
 
-def stale_dist_paths(expected_paths: list[Path]) -> list[Path]:
+def stale_dist_paths(
+    expected_paths: list[Path],
+    config: dict[str, dict[str, object]] | None = None,
+) -> list[Path]:
     expected = {path.resolve() for path in expected_paths}
     stale: list[Path] = []
-    for path in repo_dist_payload_paths():
+    for path in repo_dist_payload_paths(config):
         if path.resolve() in expected:
             continue
         stale.append(path)
@@ -590,7 +625,7 @@ def compare_artifacts(artifacts_root: Path, platform_set: str) -> None:
         if not filecmp.cmp(source, target, shallow=False):
             print(f"artifact payload differs: {rel_path}")
             mismatches = True
-    for stale_path in stale_dist_paths(expected_paths):
+    for stale_path in stale_dist_paths(expected_paths, config):
         print(f"stale dist payload: {stale_path.relative_to(REPO_ROOT)}")
         mismatches = True
     if mismatches:
@@ -612,7 +647,7 @@ def sync_artifacts(artifacts_root: Path, platform_set: str) -> None:
             mode = os.stat(target).st_mode
             os.chmod(target, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             changed.append(rel_path)
-    for stale_path in stale_dist_paths(expected_paths):
+    for stale_path in stale_dist_paths(expected_paths, config):
         stale_path.unlink()
         changed.append(stale_path.relative_to(REPO_ROOT))
     for rel_path in changed:

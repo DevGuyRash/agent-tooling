@@ -6,7 +6,8 @@ fn fixtures_root() -> PathBuf {
 }
 
 fn references_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills/docker-architect/references")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/docker-architect/skills/docker-architect/references")
 }
 
 fn run_policy_check(

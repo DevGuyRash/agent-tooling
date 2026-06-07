@@ -792,6 +792,6 @@ fn fixture_path(relative: &str) -> PathBuf {
 
 fn references_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../skills/docker-architect/references")
+        .join("../../plugins/docker-architect/skills/docker-architect/references")
         .join(name)
 }

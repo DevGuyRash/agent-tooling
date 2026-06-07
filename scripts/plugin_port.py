@@ -34,6 +34,7 @@ CLAUDE_MARKETPLACE = Path(".claude-plugin/marketplace.json")
 PORTABILITY_DIR = Path(".plugin-portability")
 REPORT_NAME = "report.json"
 REPORT_SCHEMA_VERSION = "1.0"
+SKILL_ENTRYPOINT_NAMES = ("SKILL.md", "skill.md")
 
 EXIT_USER_ERROR = 2
 EXIT_VALIDATION_FAILED = 3
@@ -289,6 +290,45 @@ def split_frontmatter(path: Path) -> tuple[dict[str, Any], str, bool, str]:
     return load_yaml_text(raw, path=path), after, True, raw
 
 
+def split_frontmatter_unparsed(path: Path) -> tuple[str, str, bool]:
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return "", text, False
+    end = text.find("\n---", 4)
+    if end == -1:
+        return "", text, False
+    raw = text[4:end]
+    after = text[end + len("\n---") :]
+    if after.startswith("\n"):
+        after = after[1:]
+    return raw, after, True
+
+
+def split_component_frontmatter(
+    path: Path,
+    root: Path,
+    report: Report,
+    *,
+    kind: str,
+    mode: str,
+) -> tuple[dict[str, Any], str, bool, str]:
+    try:
+        return split_frontmatter(path)
+    except PluginPortError as exc:
+        if mode == "strict":
+            raise
+        raw_frontmatter, body, had_frontmatter = split_frontmatter_unparsed(path)
+        rel = path.relative_to(root).as_posix()
+        report.warn(f"{rel}: invalid Claude {kind} frontmatter ignored during best-effort conversion")
+        report.add_unsupported(
+            f"{kind}-frontmatter",
+            rel,
+            f"Frontmatter could not be parsed and was replaced with generated metadata: {exc}",
+            active=True,
+        )
+        return {}, body, had_frontmatter, raw_frontmatter
+
+
 def write_frontmatter(path: Path, data: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}", encoding="utf-8")
@@ -487,6 +527,30 @@ def finalize_report(report: Report, root: Path) -> Report:
     return report
 
 
+def skill_entrypoint_path(skill_dir: Path) -> Path | None:
+    for filename in SKILL_ENTRYPOINT_NAMES:
+        path = skill_dir / filename
+        if path.is_file():
+            return path
+    return None
+
+
+def skill_entrypoint_paths(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    root_skill = skill_entrypoint_path(root)
+    if root_skill is not None:
+        paths.append(root_skill)
+    skills_dir = root / "skills"
+    if skills_dir.exists():
+        for skill_dir in sorted(skills_dir.iterdir(), key=lambda path: path.name):
+            if not skill_dir.is_dir():
+                continue
+            skill = skill_entrypoint_path(skill_dir)
+            if skill is not None:
+                paths.append(skill)
+    return paths
+
+
 def component_inventory(root: Path) -> dict[str, list[str]]:
     components: dict[str, list[str]] = {
         "skills": [],
@@ -503,12 +567,8 @@ def component_inventory(root: Path) -> dict[str, list[str]]:
         "settings": [],
         "assets": [],
     }
-    if (root / "SKILL.md").exists():
-        components["skills"].append("SKILL.md")
-    skills_dir = root / "skills"
-    if skills_dir.exists():
-        for skill in sorted(skills_dir.glob("*/SKILL.md")):
-            components["skills"].append(skill.relative_to(root).as_posix())
+    for skill in skill_entrypoint_paths(root):
+        components["skills"].append(skill.relative_to(root).as_posix())
     commands_dir = root / "commands"
     if commands_dir.exists():
         for command in sorted(commands_dir.rglob("*.md")):
@@ -617,8 +677,28 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
     shutil.copytree(source, output, symlinks=True)
 
 
-def read_skill_description(path: Path) -> tuple[dict[str, Any], str, str, str]:
-    frontmatter, body, _, raw_frontmatter = split_frontmatter(path)
+def read_skill_description(
+    path: Path,
+    root: Path,
+    report: Report,
+    *,
+    mode: str,
+) -> tuple[dict[str, Any], str, str, str]:
+    try:
+        frontmatter, body, _, raw_frontmatter = split_frontmatter(path)
+    except PluginPortError as exc:
+        if mode == "strict":
+            raise
+        raw_frontmatter, body, _ = split_frontmatter_unparsed(path)
+        rel = path.relative_to(root).as_posix()
+        report.warn(f"{rel}: invalid skill frontmatter ignored during best-effort conversion")
+        report.add_unsupported(
+            "skill-frontmatter",
+            rel,
+            f"Frontmatter could not be parsed and was replaced with generated metadata: {exc}",
+            active=True,
+        )
+        frontmatter = {}
     fallback = first_text_paragraph(body) or f"Skill converted from {path.parent.name}."
     description = safe_description(str(frontmatter.get("description", "")), fallback)
     return frontmatter, body, description, raw_frontmatter
@@ -638,7 +718,26 @@ def merge_openai_yaml_policy(skill_dir: Path, *, allow_implicit: bool, name: str
     path.write_text(dump_yaml_data(data) + "\n", encoding="utf-8")
 
 
-def normalize_codex_skills(root: Path, report: Report) -> None:
+def normalize_skill_entrypoint_filenames(root: Path, report: Report) -> None:
+    candidates = [root]
+    skills_dir = root / "skills"
+    if skills_dir.exists():
+        candidates.extend(path for path in sorted(skills_dir.iterdir(), key=lambda item: item.name) if path.is_dir())
+    for skill_dir in candidates:
+        lower = skill_dir / "skill.md"
+        target = skill_dir / "SKILL.md"
+        if not lower.is_file() or target.exists():
+            continue
+        lower.rename(target)
+        report.add_mapping(
+            lower.relative_to(root).as_posix(),
+            target.relative_to(root).as_posix(),
+            "Lowercase Claude skill entrypoint normalized to Codex SKILL.md",
+        )
+
+
+def normalize_codex_skills(root: Path, report: Report, *, mode: str) -> None:
+    normalize_skill_entrypoint_filenames(root, report)
     skill_paths: list[Path] = []
     if (root / "SKILL.md").exists():
         root_skill_name = slugify(root.name)
@@ -651,7 +750,12 @@ def normalize_codex_skills(root: Path, report: Report) -> None:
     skill_paths.extend(sorted((root / "skills").glob("*/SKILL.md")) if (root / "skills").exists() else [])
 
     for path in skill_paths:
-        frontmatter, body, description, raw_frontmatter = read_skill_description(path)
+        frontmatter, body, description, raw_frontmatter = read_skill_description(
+            path,
+            root,
+            report,
+            mode=mode,
+        )
         skill_slug = slugify(path.parent.name)
         disable_model = bool(
             frontmatter.pop("disable-model-invocation", False)
@@ -681,9 +785,14 @@ def normalize_codex_skills(root: Path, report: Report) -> None:
             )
 
 
-def normalize_claude_skills(root: Path, report: Report) -> None:
+def normalize_claude_skills(root: Path, report: Report, *, mode: str) -> None:
     for path in sorted((root / "skills").glob("*/SKILL.md")) if (root / "skills").exists() else []:
-        frontmatter, body, description, _ = read_skill_description(path)
+        frontmatter, body, description, _ = read_skill_description(
+            path,
+            root,
+            report,
+            mode=mode,
+        )
         openai_yaml = path.parent / "agents/openai.yaml"
         if openai_yaml.exists():
             data = load_yaml_text(openai_yaml.read_text(encoding="utf-8"), path=openai_yaml)
@@ -699,13 +808,19 @@ def normalize_claude_skills(root: Path, report: Report) -> None:
         write_frontmatter(path, frontmatter, body)
 
 
-def normalize_claude_markdown_components(root: Path, report: Report) -> None:
+def normalize_claude_markdown_components(root: Path, report: Report, *, mode: str) -> None:
     for dirname, kind in (("commands", "command"), ("agents", "agent")):
         directory = root / dirname
         if not directory.exists():
             continue
         for path in sorted(directory.rglob("*.md")):
-            frontmatter, body, had_frontmatter, _ = split_frontmatter(path)
+            frontmatter, body, had_frontmatter, _ = split_component_frontmatter(
+                path,
+                root,
+                report,
+                kind=kind,
+                mode=mode,
+            )
             fallback = first_text_paragraph(body) or f"{display_name(slugify(path.stem))} {kind}."
             description = safe_description(str(frontmatter.get("description", "")), fallback)
             if frontmatter.get("description") == description and had_frontmatter:
@@ -719,12 +834,18 @@ def normalize_claude_markdown_components(root: Path, report: Report) -> None:
             )
 
 
-def convert_commands_to_codex_skills(root: Path, report: Report) -> None:
+def convert_commands_to_codex_skills(root: Path, report: Report, *, mode: str) -> None:
     commands_dir = root / "commands"
     if not commands_dir.exists():
         return
     for command in sorted(commands_dir.rglob("*.md")):
-        frontmatter, body, _, _ = split_frontmatter(command)
+        frontmatter, body, _, _ = split_component_frontmatter(
+            command,
+            root,
+            report,
+            kind="command",
+            mode=mode,
+        )
         slug = slugify(command.stem)
         target = root / "skills" / slug / "SKILL.md"
         if target.exists():
@@ -879,6 +1000,25 @@ def write_hooks(root: Path, data: dict[str, Any]) -> None:
         (root / "hooks.json").unlink()
 
 
+def quarantine_root_claude_context(root: Path, report: Report) -> None:
+    context = root / "CLAUDE.md"
+    if not context.exists():
+        return
+    target = root / PORTABILITY_DIR / "preserved" / "CLAUDE.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(context), str(target))
+    report.add_mapping(
+        "CLAUDE.md",
+        target.relative_to(root).as_posix(),
+        "Root CLAUDE.md moved because Claude plugin validation rejects plugin-root context files",
+    )
+    report.add_preserved(
+        "claude-root-context",
+        "CLAUDE.md",
+        "Claude plugins do not load root CLAUDE.md; original file preserved under .plugin-portability/preserved/",
+    )
+
+
 def author_object(value: Any, fallback: str) -> dict[str, Any]:
     if isinstance(value, dict):
         name = value.get("name") or fallback
@@ -1003,8 +1143,8 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     )
 
     if target == "codex":
-        convert_commands_to_codex_skills(out_root, report)
-        normalize_codex_skills(out_root, report)
+        convert_commands_to_codex_skills(out_root, report, mode=mode)
+        normalize_codex_skills(out_root, report, mode=mode)
         hooks = load_hooks_from_plugin(out_root, pkg.claude_manifest or pkg.codex_manifest)
         if hooks:
             write_hooks(out_root, convert_hooks_to_codex(hooks, report, mode=mode))
@@ -1012,8 +1152,9 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="codex"))
         write_json(out_root / CODEX_MANIFEST, build_codex_manifest(pkg, out_root))
     elif target == "claude":
-        normalize_claude_skills(out_root, report)
-        normalize_claude_markdown_components(out_root, report)
+        quarantine_root_claude_context(out_root, report)
+        normalize_claude_skills(out_root, report, mode=mode)
+        normalize_claude_markdown_components(out_root, report, mode=mode)
         hooks = load_hooks_from_plugin(out_root, pkg.codex_manifest or pkg.claude_manifest)
         if hooks:
             write_hooks(out_root, convert_hooks_to_claude(hooks, report))

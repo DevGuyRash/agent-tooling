@@ -42,26 +42,47 @@ fi
 
 compose_skip_flag="$(resolve_deprecated_flag \
   "maintenance" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "${AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}" \
   "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
-  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD:-}")"
+
+compose_skip_flag="$(resolve_deprecated_flag \
+  "maintenance" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD" \
+  "${compose_skip_flag}" \
   "AGENT_SKILLS_SKIP_PCA_BUILD" \
   "${AGENT_SKILLS_SKIP_PCA_BUILD:-}")"
 
 image_skip_flag="$(resolve_deprecated_flag \
   "maintenance" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "${AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}" \
   "AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
-  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}" \
+  "${AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD:-}")"
+
+image_skip_flag="$(resolve_deprecated_flag \
+  "maintenance" \
+  "AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD" \
+  "${image_skip_flag}" \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
-if [ "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}" = "1" ] && \
+mpcr_skip_flag="$(resolve_deprecated_flag \
+  "maintenance" \
+  "AGENT_TOOLING_SKIP_MPCR_BUILD" \
+  "${AGENT_TOOLING_SKIP_MPCR_BUILD:-}" \
+  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
+  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}")"
+
+if [ "${mpcr_skip_flag}" = "1" ] && \
    [ "${compose_skip_flag}" = "1" ] && \
    [ "${image_skip_flag}" = "1" ]; then
   log "maintenance" "skipping host dist staging because all Rust skill build flags are disabled"
 else
   log "maintenance" "bootstrapping Rust workspace dependencies"
   python3 scripts/package_skills.py bootstrap
-  log "maintenance" "refreshing host packaged binaries into skill-local dist/"
+  log "maintenance" "refreshing host packaged binaries into plugin-local skill dist/"
   python3 scripts/package_skills.py stage-host
 fi
 

@@ -91,7 +91,7 @@ struct ConfigBlobDetails {
 /// ```no_run
 /// use architect_core::fetch::fetch_image_profile;
 ///
-/// let profile = fetch_image_profile("nginx:1.27", true, "agent-skills-docker-architect-compose/0.1")?;
+/// let profile = fetch_image_profile("nginx:1.27", true, "agent-tooling-docker-architect-compose/0.1")?;
 /// assert!(profile.image.contains("nginx"));
 /// # Ok::<(), architect_core::error::AppError>(())
 /// ```
@@ -343,7 +343,7 @@ fn fetch_image_profile_with_client(
 /// ```no_run
 /// use architect_core::fetch::fetch_profiles;
 ///
-/// let profiles = fetch_profiles(&["nginx:1.27".to_string()], true, "agent-skills-docker-architect-compose/0.1")?;
+/// let profiles = fetch_profiles(&["nginx:1.27".to_string()], true, "agent-tooling-docker-architect-compose/0.1")?;
 /// assert_eq!(profiles.len(), 1);
 /// # Ok::<(), architect_core::error::AppError>(())
 /// ```
@@ -1869,7 +1869,7 @@ https://github.com/n8n-io/n8n for build details.
         let request = build_docs_request(
             &client,
             "https://api.github.com/repos/example/project/readme",
-            "agent-skills/1.0",
+            "agent-tooling/1.0",
         )
         .build()
         .expect("request should build");

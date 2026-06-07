@@ -1,0 +1,75 @@
+{
+  "name": "agent-tooling",
+  "owner": {
+    "name": "Agent Tooling"
+  },
+  "description": "Local marketplace for cross-host agent tooling plugin packages in this repository.",
+  "plugins": [
+    {
+      "name": "code-review",
+      "source": "./plugins/code-review",
+      "description": "Recursive machine-first code review, application, and full-cycle convergence with mpcr",
+      "version": "1.0.0"
+    },
+    {
+      "name": "docker-architect",
+      "source": "./plugins/docker-architect",
+      "description": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",
+      "version": "2.0.0"
+    },
+    {
+      "name": "espanso-dynamic-forms",
+      "source": "./plugins/espanso-dynamic-forms",
+      "description": "Comprehensive dynamic form patterns for Espanso",
+      "version": "1.2.0"
+    },
+    {
+      "name": "excel-foundry",
+      "source": "./plugins/excel-foundry",
+      "description": "Excel workbook capability router for package, desktop, cloud, automation, semantic-model, and manifest/artifact operations",
+      "version": "1.0.0"
+    },
+    {
+      "name": "friction-diagnostics",
+      "source": "./plugins/friction-diagnostics",
+      "description": "REQUIRED for every task",
+      "version": "4.0.0"
+    },
+    {
+      "name": "gitops-workflow",
+      "source": "./plugins/gitops-workflow",
+      "description": "End-to-end GitOps workflow governance and automation covering branching, Conventional Commits, PR lifecycle, CI gating, and release management",
+      "version": "2.0.0"
+    },
+    {
+      "name": "goal-foundry",
+      "source": "./plugins/goal-foundry",
+      "description": "Compile messy intent and project context into bounded, verifiable goal contracts.",
+      "version": "1.0.0"
+    },
+    {
+      "name": "playwright-testing",
+      "source": "./plugins/playwright-testing",
+      "description": "Outcome-first, non-brittle e2e tests",
+      "version": "1.0.0"
+    },
+    {
+      "name": "project-harness",
+      "source": "./plugins/project-harness",
+      "description": "Detects repo languages, frameworks, task runners, distribution shape, and CI surface, then scaffolds or updates a repo-level harness: justfile, GitHub Actions CI/dist workflows, .gitignore/.gitattributes support files, and local state under .local/harness/",
+      "version": "2.6.0"
+    },
+    {
+      "name": "rust-development",
+      "source": "./plugins/rust-development",
+      "description": "Idiomatic, production-grade Rust development",
+      "version": "2.2.0"
+    },
+    {
+      "name": "skill-auditor",
+      "source": "./plugins/skill-auditor",
+      "description": "Audit and improve a skill's packaging, triggers, workflow, and verification loop",
+      "version": "1.0.0"
+    }
+  ]
+}

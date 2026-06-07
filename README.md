@@ -1,8 +1,43 @@
-# Agent Skills
+# Agent Tooling
 
-This repository contains portable Agent Skills (AgentSkills open standard).
+This repository contains portable agent tooling: dual-host plugin packages,
+host-agnostic skill payloads, Rust-backed launchers, and repo harness scripts.
 
-## Skills
+## Repository layout
+
+Top-level `plugins/` contains plugin packages that may bundle skills, hooks,
+MCP servers, apps, and host manifests.
+Top-level `skills/` is kept with `.gitkeep` for future standalone,
+host-agnostic skill packages that are not distributed as plugins.
+
+WHEN adding a plugin package to this repository THEN you SHALL place it under
+`plugins/<plugin-name>/`.
+WHEN adding reusable skill content that is not a plugin package THEN you SHALL
+place it under `skills/<skill-name>/`.
+WHEN a plugin bundles skill instructions THEN you SHALL keep those bundled
+skills inside the plugin package's own `skills/` directory.
+
+Marketplace manifests:
+
+- Codex: `.agents/plugins/marketplace.json`
+- Claude: `.claude-plugin/marketplace.json`
+
+Current local plugins:
+
+- `plugins/code-review/`
+- `plugins/docker-architect/`
+- `plugins/espanso-dynamic-forms/`
+- `plugins/excel-foundry/`
+- `plugins/friction-diagnostics/`
+- `plugins/gitops-workflow/`
+- `plugins/goal-foundry/` exposes `goal-foundry` for both Codex and Claude and
+  bundles the agnostic `$authoring-goals` skill payload.
+- `plugins/playwright-testing/`
+- `plugins/project-harness/`
+- `plugins/rust-development/`
+- `plugins/skill-auditor/`
+
+## Plugin Packages
 
 ### `code-review`
 
@@ -13,20 +48,20 @@ Unified code review skill with two workflows:
 
 Both workflows coordinate artifacts under `.local/reports/code_reviews/{YYYY-MM-DD}/` and use a bundled `mpcr` tool for deterministic reviewer/session operations (ID generation, locking, session JSON updates, report writing).
 
-Path: `skills/code-review/`
+Path: `plugins/code-review/skills/code-review/`
 
-**Migration note:** `perform-code-review` and `apply-code-review` were consolidated into `code-review`. Update any tooling or docs that reference `skills/perform-code-review/` or `skills/apply-code-review/` to use `skills/code-review/`.
+**Migration note:** `perform-code-review` and `apply-code-review` were consolidated into `code-review`. Update any tooling or docs that reference `skills/perform-code-review/` or `skills/apply-code-review/` to use `plugins/code-review/skills/code-review/`.
 
 ### `docker-architect`
 
 Deterministic Docker architecture skill spanning both Compose/Swarm deployment design and image supply-chain planning with strict output ordering and traceability IDs (`AC-*`, `IMG-*`, `RSK-*`, `O-*`).
 
-- Compose/Swarm workflow via `skills/docker-architect/scripts/docker-architect-compose` (packaged-binary launcher)
-- Image/build workflow via `skills/docker-architect/scripts/docker-architect-image` (packaged-binary launcher)
+- Compose/Swarm workflow via `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose` (packaged-binary launcher)
+- Image/build workflow via `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image` (packaged-binary launcher)
 - API-first image metadata refresh with optional scraping fallback
 - Cached deterministic render/check workflow for reproducible outputs
 
-Path: `skills/docker-architect/`
+Path: `plugins/docker-architect/skills/docker-architect/`
 
 ## Plugin portability converter
 
@@ -48,14 +83,20 @@ Compatibility contract:
   Codex skills, Claude skills, Claude commands converted to Codex skills, basic
   manifests, local marketplaces, MCP path normalization, and hook placeholder
   normalization.
-- Preserved-only surfaces: Codex apps when targeting Claude, and Claude
-  LSP/output styles/themes/monitors/bin/settings when targeting Codex.
+- Preserved-only surfaces: Codex apps and plugin-root `CLAUDE.md` files when
+  targeting Claude; Claude LSP/output styles/themes/monitors/bin/settings when
+  targeting Codex. Root `CLAUDE.md` files are moved to
+  `.plugin-portability/preserved/CLAUDE.md` in Claude output because Claude
+  plugin validation rejects plugin-root context files.
 - Strict rejection surfaces: unsupported hook events, async command hooks,
   handler-level hook filters, non-command hook handlers, invalid JSON/YAML,
   non-local marketplace entries, and marketplace paths that escape the
   marketplace root.
 - Best-effort behavior: the source tree is still copied, but semantic loss is
   recorded in `unsupported`, `preserved_only`, and `executable_surfaces`.
+  Invalid skill, command, or agent frontmatter is repaired with generated target
+  metadata only in best-effort conversion; validation still rejects malformed
+  source frontmatter.
 
 Report fields include `schema_version`, `status`, `support_level`,
 `validation_summary`, `executable_surfaces`, `warnings`, `unsupported`,
@@ -101,7 +142,8 @@ Both scripts:
 - Ensure `.local/reports/code_reviews/` exists (gitignored)
 - Best-effort add the repo root to git `safe.directory`
 - Bootstrap the root Rust workspace
-- Stage host-platform packaged binaries into each skill's `dist/<platform-id>/` directory
+- Stage host-platform packaged binaries into each plugin-local skill's
+  `dist/<platform-id>/` directory
 
 ## Repo harness
 
@@ -111,9 +153,9 @@ Common commands:
 - `just bootstrap` — install packaging prerequisites used by the repo scripts
 - `just verify` — run the fast local verification surface (`fmt-check`, `lint`, `test`)
 - `just ci` — run the full repo verification surface, including staged packaging checks
-- `just dist-host` — build and stage host-platform packaged binaries into the skill `dist/` trees
+- `just dist-host` — build and stage host-platform packaged binaries into plugin-local skill `dist/` trees
 - `just verify-packaging` — verify host refresh plus the committed dist completeness contract
-- `just verify-skill-launchers` — smoke-test skill-local launchers against the staged binaries
+- `just verify-skill-launchers` — smoke-test plugin-local skill launchers against the staged binaries
 - `just hooks-install` — point this clone at the committed repo-owned `githooks/` directory for local pre-push checks
 - `just harness-doctor` — inspect the current repo shape and local tool availability from the installed harness
 
@@ -139,7 +181,7 @@ That means:
 
 - `just ci` verifies the committed Linux packaged artifacts
 - Linux packaging prefers a fixed `rust:<toolchain>` container when Docker is available, so local `just dist-host` / `just ci` and hosted CI build against the same linker and userspace
-- Linux consumers can use the committed skill-local `dist/linux-x86_64/` payloads directly
+- Linux consumers can use the committed plugin-local skill `dist/linux-x86_64/` payloads directly
 - Non-Linux hosts are outside the supported packaged-binary contract for this repo
 
 This keeps the repo portable at the skill-directory level for Linux while avoiding heavy cross-OS packaging in routine CI.
@@ -155,11 +197,11 @@ Use `markdown` or `list` when Unicode box drawing is undesirable, terminal-width
 
 ## Rust shim pattern
 
-- `skills/code-review/scripts/mpcr`, `skills/docker-architect/scripts/docker-architect-compose`, `skills/docker-architect/scripts/docker-architect-image`, and `skills/friction-diagnostics/scripts/render-table.sh` are skill-local launchers that execute packaged binaries from the same skill directory.
+- `plugins/code-review/skills/code-review/scripts/mpcr`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image`, and `plugins/friction-diagnostics/skills/friction-diagnostics/scripts/render-table.sh` are plugin-local skill launchers that execute packaged binaries from the same skill directory.
 - `scripts/rust-shim-template.sh` is the copy template for future packaged-binary launchers.
 - Build and staging are centralized at the repo root through `just` and `scripts/package_skills.py`.
-- `packaging/skills.toml` is the single registry for packaged skill binaries, their launcher paths, and which platforms are required in git versus built in CI.
-- Portability contract: a skill should not require runtime paths outside its own folder.
+- `packaging/skills.toml` is the single registry for packaged plugin-local skill binaries, their launcher paths, and which platforms are required in git versus built in CI.
+- Portability contract: a plugin-local skill should not require runtime paths outside its own folder.
 - The committed Linux `dist/` payloads are verified in CI only when packaging-relevant files changed.
 - Packaged launchers in this repo support Linux hosts only.
 
@@ -167,8 +209,8 @@ To add or update a packaged binary, append or edit one `[skills.<id>]` entry in 
 
 - `package` — Cargo package name to build
 - `binary` — emitted executable name
-- `skill_dir` — encapsulated skill directory that owns `dist/<platform-id>/`
-- `launcher` — skill-local wrapper script that executes the packaged binary
+- `skill_dir` — encapsulated plugin-local skill directory that owns `dist/<platform-id>/`
+- `launcher` — plugin-local skill wrapper script that executes the packaged binary
 - `smoke_args` — lightweight launcher verification arguments
 - `required_platforms` — committed payloads that must already exist in git
 - `ci_platforms` — platforms that automated packaging surfaces should stage for this repo
@@ -176,7 +218,12 @@ To add or update a packaged binary, append or edit one `[skills.<id>]` entry in 
 `scripts/package_skills.py`, `just ci`, and any future packaging workflow all consume that same manifest, so new binaries only need one registry entry rather than parallel updates in multiple places.
 
 Environment flags:
-- `AGENT_SKILLS_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`
-- `AGENT_SKILLS_SKIP_MPCR_BUILD=1` — skip the `mpcr` prebuild step in either script
-- `AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD=1` — skip the `docker-architect-compose` prebuild step in either script
-- `AGENT_SKILLS_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD=1` — skip the `docker-architect-image` prebuild step in either script
+
+- `AGENT_TOOLING_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`
+- `AGENT_TOOLING_SKIP_MPCR_BUILD=1` — skip the `mpcr` prebuild step in setup/maintenance
+- `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD=1` — skip the `docker-architect-compose` prebuild step in setup/maintenance
+- `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD=1` — skip the `docker-architect-image` prebuild step in setup/maintenance
+- `AGENT_TOOLING_DIST_BUILD_MODE=auto|container|host` — choose host or containerized dist builds
+- `AGENT_TOOLING_RUST_IMAGE=<image>` — override the Rust container image used for Linux dist builds
+
+Deprecated `AGENT_SKILLS_*` names remain accepted as aliases.

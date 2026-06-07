@@ -12,7 +12,7 @@ use crate::error::AppError;
 use crate::heuristics::DeployMode;
 
 const BUILTIN_DEFAULTS_V1: &str =
-    include_str!("../../../skills/docker-architect/references/compose-defaults/defaults.v1.yaml");
+    include_str!("../../../plugins/docker-architect/skills/docker-architect/references/compose-defaults/defaults.v1.yaml");
 const MAX_GENERATOR_COMPOSITES: usize = 200;
 
 /// Anchor rendering mode.

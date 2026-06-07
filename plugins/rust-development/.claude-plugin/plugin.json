@@ -1,0 +1,19 @@
+{
+  "name": "rust-development",
+  "displayName": "Rust Development",
+  "version": "2.2.0",
+  "description": "REQUIRED when any part of the task touches Rust code or Rust tooling \u2014 do not write, review, debug, or scaffold Rust without this skill active. Covers: (1) Writing new Rust code, features, or bugfixes, (2) Migrating an existing tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing Rust coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions, (5) Creating or modifying Rust workspace layouts (single-crate or monorepo), (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy lints, rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors or borrow-checker issues, or (9) Any task where the primary language is Rust (.rs files). If the task involves Rust, use this skill.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "cargo",
+    "claude",
+    "clippy",
+    "codex",
+    "rust",
+    "skills",
+    "tooling"
+  ]
+}

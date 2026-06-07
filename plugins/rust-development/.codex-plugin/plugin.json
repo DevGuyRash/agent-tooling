@@ -1,0 +1,27 @@
+{
+  "name": "rust-development",
+  "version": "2.2.0",
+  "description": "REQUIRED when any part of the task touches Rust code or Rust tooling \u2014 do not write, review, debug, or scaffold Rust without this skill active. Covers: (1) Writing new Rust code, features, or bugfixes, (2) Migrating an existing tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing Rust coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions, (5) Creating or modifying Rust workspace layouts (single-crate or monorepo), (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy lints, rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors or borrow-checker issues, or (9) Any task where the primary language is Rust (.rs files). If the task involves Rust, use this skill.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "cargo",
+    "clippy",
+    "rust",
+    "tooling"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rust Development",
+    "shortDescription": "Idiomatic, production-grade Rust development",
+    "longDescription": "REQUIRED when any part of the task touches Rust code or Rust tooling \u2014 do not write, review, debug, or scaffold Rust without this skill active. Covers: (1) Writing new Rust code, features, or bugfixes, (2) Migrating an existing tool or codebase to Rust, (3) Reviewing Rust pull requests or enforcing Rust coding standards, (4) Setting up Rust CI/CD pipelines or GitHub Actions, (5) Creating or modifying Rust workspace layouts (single-crate or monorepo), (6) Scaffolding a new Rust project or crate, (7) Configuring Clippy lints, rustfmt, or Rust toolchain settings, (8) Debugging Rust compilation errors or borrow-checker issues, or (9) Any task where the primary language is Rust (.rs files). If the task involves Rust, use this skill.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Development",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": "Use $rust-development for repo-adaptive Rust delivery: start with the compatibility map, choose Fast Path only for deterministic localized changes, use the phased Standard workflow otherwise, and enforce verification/bootstrap via scripts/verify.sh and scripts/scaffold.sh."
+  }
+}
