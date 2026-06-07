@@ -11,6 +11,7 @@ paths = [
   '''(^|/)tests/golden/''',
   '''(^|/)docs/examples/''',
   '''(^|/)\.git/''',
+  '''(^|/)\.local[^/]*/''',
   '''(^|/)target/''',
   '''(^|/)__pycache__/''',
 ]
@@ -42,7 +43,7 @@ tags = ["pii", "vehicle", "vin"]
 [[rules]]
 id = "pii-stock-number-labeled"
 description = "Potential stock or inventory identifier in labeled context"
-regex = '''(?i)\b(?:stock(?:[\s_-]?number)?|inventory(?:[\s_-]?number)?|stockno)\b[^\n]{0,16}(?:=|:|=>)\s*[\"']?([A-Z0-9][A-Z0-9-]{5,20})[\"']?'''
+regex = '''(?i)(?:^|[[:space:]])(?:stock(?:[\s_-]?number)?|inventory(?:[\s_-]?number)?|stockno)\b[^\n]{0,16}(?:=|:|=>)\s*[\"']?([A-Z0-9][A-Z0-9-]{5,20})[\"']?'''
 keywords = ["stock", "inventory"]
 tags = ["pii", "inventory"]
 
