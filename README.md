@@ -28,6 +28,63 @@ Deterministic Docker architecture skill spanning both Compose/Swarm deployment d
 
 Path: `skills/docker-architect/`
 
+## Plugin portability converter
+
+`scripts/plugin_port.py` converts Codex and Claude Code plugin packages and
+marketplaces while preserving source trees and writing a conversion report to
+`.plugin-portability/report.json`.
+
+Common commands:
+
+- `python3 scripts/plugin_port.py inspect <path> --format json|md [--from codex|claude]`
+- `python3 scripts/plugin_port.py convert <plugin-dir> --to codex|claude --out <output-dir> --mode strict|best-effort [--summary full|json|md]`
+- `python3 scripts/plugin_port.py convert-marketplace <marketplace-root-or-json> --to codex|claude --out <output-dir> [--summary full|json|md]`
+- `python3 scripts/plugin_port.py validate <plugin-dir> --host codex|claude [--require-external-validator] [--summary full|json|md]`
+- `python3 scripts/plugin_port.py roundtrip <plugin-dir> --to codex|claude --tmp <work-dir> [--summary full|json|md]`
+
+Compatibility contract:
+
+- Supported active surfaces: plugin detection, plugin/marketplace inspection,
+  Codex skills, Claude skills, Claude commands converted to Codex skills, basic
+  manifests, local marketplaces, MCP path normalization, and hook placeholder
+  normalization.
+- Preserved-only surfaces: Codex apps when targeting Claude, and Claude
+  LSP/output styles/themes/monitors/bin/settings when targeting Codex.
+- Strict rejection surfaces: unsupported hook events, async command hooks,
+  handler-level hook filters, non-command hook handlers, invalid JSON/YAML,
+  non-local marketplace entries, and marketplace paths that escape the
+  marketplace root.
+- Best-effort behavior: the source tree is still copied, but semantic loss is
+  recorded in `unsupported`, `preserved_only`, and `executable_surfaces`.
+
+Report fields include `schema_version`, `status`, `support_level`,
+`validation_summary`, `executable_surfaces`, `warnings`, `unsupported`,
+`preserved_only`, `mappings`, and `files_copied`.
+
+Exit codes:
+
+- `0`: success
+- `2`: user input or unsupported conversion error
+- `3`: validation failure
+- `4`: required external validator unavailable
+
+WHEN semantic loss would be unacceptable THEN you SHALL use `--mode strict`.
+WHEN publishing converted output THEN you SHALL inspect
+`.plugin-portability/report.json` for warnings, unsupported items, preserved-only
+items, executable/runtime surfaces, validation summaries, and file mappings.
+WHEN external validator parity is required THEN you SHALL run `validate` with
+`--require-external-validator`.
+
+Local tests:
+
+- `just test-plugin-port` runs deterministic unit tests.
+- `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CLAUDE=1 just test-plugin-port-live` runs
+  Claude CLI checks when `claude` is installed.
+- `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CODEX=1 just test-plugin-port-live` runs Codex
+  temp-marketplace checks when `codex` is installed.
+- Live tests use temporary directories and a temporary `CODEX_HOME`; they do not
+  install into the user's normal plugin state.
+
 ## Container bootstrap scripts
 
 These scripts are repo-wide (not skill-specific) and are intended for:

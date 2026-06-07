@@ -29,4 +29,13 @@ skills/gitops-workflow/tests/artifacts/security-e2e-*.log
 ~$*.xls*
 skills/excel-workbook-sync/tests/fixtures/tr_upload_sheet/tr_upload_template.xlsm
 
-__pycache__
+# Python / test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

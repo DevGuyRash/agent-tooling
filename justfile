@@ -31,8 +31,16 @@ lint:
 # Run the workspace and repo-level script test suites
 test:
   cargo test --workspace --locked
-  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills
+  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port
   python3 -m unittest discover -s skills/excel-foundry/tests -p 'test_*.py'
+
+# Run the plugin portability converter unit tests
+test-plugin-port:
+  python3 -m unittest scripts.tests.test_plugin_port
+
+# Run opt-in live plugin portability checks against local CLI tools
+test-plugin-port-live:
+  PLUGIN_PORT_LIVE=1 python3 -m unittest scripts.tests.test_plugin_port_live
 
 # Compile the Rust workspace in the default build profile
 build:
