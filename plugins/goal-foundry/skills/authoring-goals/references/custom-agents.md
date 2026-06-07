@@ -8,7 +8,7 @@ Codex custom agents are project/user configuration, not automatically installed 
 Install them only when the user wants project-scoped custom agents:
 
 ```bash
-python3 skills/authoring-goals/scripts/init_project.py --install-agents
+python3 <skills-file-root>/scripts/init_project.py --install-agents
 ```
 
 Use custom agents only for noisy, read-heavy discovery and skeptical audits. They are not the source of truth. The source of truth is deterministic evidence: test exit codes, build results, coverage numbers, benchmark output, MCP resource data, artifacts, or human review gates.

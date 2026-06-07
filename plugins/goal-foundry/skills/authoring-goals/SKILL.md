@@ -30,7 +30,7 @@ Before authoring, scanning, decomposing, or auditing any non-trivial goal, inven
 Run or emulate:
 
 ```bash
-python3 skills/authoring-goals/scripts/inventory_capabilities.py --format markdown
+python3 <skills-file-root>/scripts/inventory_capabilities.py --format markdown
 ```
 
 Inventory these sources when available:
@@ -92,7 +92,7 @@ Allowed procedural rails are generic and finite:
 After writing `.goals/current.md`, instruct the user or executor to run:
 
 ```bash
-python3 skills/authoring-goals/scripts/validate_goal.py .goals/current.md --write-hash
+python3 <skills-file-root>/scripts/validate_goal.py .goals/current.md --write-hash
 ```
 
 During execution, the agent may read `.goals/current.md` but must not modify it. The only `.goals/` paths the executor may write during a `/goal` run are:
@@ -183,12 +183,12 @@ Load these only as needed:
 Use scripts for deterministic checks and project artifact operations. Prefer the unified wrapper when convenient:
 
 ```bash
-python3 skills/authoring-goals/scripts/goal_foundry.py init
-python3 skills/authoring-goals/scripts/goal_foundry.py inventory --format markdown
-python3 skills/authoring-goals/scripts/goal_foundry.py validate .goals/current.md --write-hash
-python3 skills/authoring-goals/scripts/goal_foundry.py render .goals/current.md --write .goals/rendered-goal.txt
-python3 skills/authoring-goals/scripts/goal_foundry.py select
-python3 skills/authoring-goals/scripts/goal_foundry.py audit .goals/current.md --report .goals/reports/latest.md
+python3 <skills-file-root>/scripts/goal_foundry.py init
+python3 <skills-file-root>/scripts/goal_foundry.py inventory --format markdown
+python3 <skills-file-root>/scripts/goal_foundry.py validate .goals/current.md --write-hash
+python3 <skills-file-root>/scripts/goal_foundry.py render .goals/current.md --write .goals/rendered-goal.txt
+python3 <skills-file-root>/scripts/goal_foundry.py select
+python3 <skills-file-root>/scripts/goal_foundry.py audit .goals/current.md --report .goals/reports/latest.md
 ```
 
 Individual scripts:
@@ -207,17 +207,15 @@ Individual scripts:
 - `scripts/goal_foundry.py`
 
 Optional read-only custom-agent templates live in `assets/codex-agents/`. They are templates for project `.codex/agents/`; use `init_project.py --install-agents` only when the user wants them copied into the project.
-- `scripts/update_graph.py`
-- `scripts/select_goal.py`
 
 
 ## Mature-mode helpers
 
 When the user wants the fuller Goal Foundry flow, use deterministic helper scripts instead of hand-maintaining state:
 
-- Initialize project state with `python3 skills/authoring-goals/scripts/init_goal_foundry.py`.
-- Add a compiled contract to the graph with `python3 skills/authoring-goals/scripts/update_graph.py add-contract .goals/current.md`.
-- Select the next ready goal with `python3 skills/authoring-goals/scripts/select_goal.py`.
-- Use `python3 skills/authoring-goals/scripts/goal_foundry.py <command>` as the wrapper when convenient.
+- Initialize project state with `python3 <skills-file-root>/scripts/init_project.py`.
+- Add a compiled contract to the graph with `python3 <skills-file-root>/scripts/graph_goal.py --add-contract .goals/current.md`.
+- Select the next ready goal with `python3 <skills-file-root>/scripts/select_goal.py`.
+- Use `python3 <skills-file-root>/scripts/goal_foundry.py <command>` as the wrapper when convenient.
 
-Optional custom agent templates live in `assets/codex-agents/`. They are templates, not automatically loaded by plugin install. To use them in a repo, copy them into `.codex/agents/` or run `init_goal_foundry.py --install-agents`, then explicitly ask Codex to spawn `goal_discoverer` or `goal_auditor` when broad read-only exploration or skeptical audit would otherwise pollute the main context.
+Optional custom agent templates live in `assets/codex-agents/`. They are templates, not automatically loaded by plugin install. To use them in a repo, copy them into `.codex/agents/` or run `python3 <skills-file-root>/scripts/init_project.py --install-agents`, then explicitly ask Codex to spawn `goal_discoverer` or `goal_auditor` when broad read-only exploration or skeptical audit would otherwise pollute the main context.
