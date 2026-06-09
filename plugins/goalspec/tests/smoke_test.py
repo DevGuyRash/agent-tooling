@@ -221,30 +221,61 @@ def main() -> int:
             )
 
         # Passing verifier (`true` -> exit 0) + report sections + matching hash => achieved.
-        contract = write_contract("true")
-        report = write_report("achieved")
-        run_verifiers_cli(contract)
+        vc = write_contract("true")
+        vr = write_report("achieved")
+        run_verifiers_cli(vc)
         assert_true((ev / "result.json").exists(), "run_verifiers writes the goalspec.verifier.v1 result file")
         rj = json.loads((ev / "result.json").read_text(encoding="utf-8"))
         assert_true(rj["schema"] == "goalspec.verifier.v1" and rj["overall_passed"] is True,
                     f"verifier result schema/pass recorded: {rj}")
-        a_pass = audit(contract, report, goals / "evidence")
+        a_pass = audit(vc, vr, goals / "evidence")
         assert_true(a_pass["result"] == "achieved", f"passing verifier result => achieved: {a_pass}")
 
         # Same report + evidence, but verifier result REMOVED => never achieved.
         (ev / "result.json").unlink()
-        a_missing = audit(contract, report, goals / "evidence")
+        a_missing = audit(vc, vr, goals / "evidence")
         assert_true(a_missing["result"] == "inconclusive",
                     f"headings + evidence without a verifier result => inconclusive: {a_missing}")
 
         # Failing verifier (`false` -> exit 1) => not achieved, even with a full report and matching hash.
-        contract = write_contract("false")
-        report = write_report("achieved")
-        run_verifiers_cli(contract)
+        vc = write_contract("false")
+        vr = write_report("achieved")
+        run_verifiers_cli(vc)
         rj = json.loads((ev / "result.json").read_text(encoding="utf-8"))
         assert_true(rj["overall_passed"] is False, f"failing verifier recorded overall_passed false: {rj}")
-        a_fail = audit(contract, report, goals / "evidence")
+        a_fail = audit(vc, vr, goals / "evidence")
         assert_true(a_fail["result"] == "not achieved", f"failing verifier result => not achieved: {a_fail}")
+
+    # G-3: a sprawling request is preserved as provenance, never as execution scope.
+    with tempfile.TemporaryDirectory() as td5:
+        goals = Path(td5) / ".goals"
+        (goals / "provenance").mkdir(parents=True)
+        shutil.copyfile(FIXTURES / "contracts" / "G-001-fix-password-reset.md", goals / "current.md")
+        sprawl = ("SPRAWLMARKER make everything better forever, rewrite the world, add dark mode, "
+                  "migrate to microservices, and keep improving until perfect")
+        req = Path(td5) / "request.txt"
+        req.write_text(sprawl + "\n", encoding="utf-8")
+        rec = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_provenance.py"),
+             "--request", str(req), "--id", "G-001", "--source", "user prompt",
+             "--goals-dir", str(goals), "--contract", str(goals / "current.md"),
+             "--update-contract", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true(rec.returncode == 0, f"record_provenance ran: {rec.stderr}")
+        art_text = (goals / "provenance" / "G-001.md").read_text(encoding="utf-8")
+        cur_text = (goals / "current.md").read_text(encoding="utf-8")
+        assert_true("SPRAWLMARKER" in art_text, "verbatim request present in provenance artifact")
+        assert_true("SPRAWLMARKER" not in cur_text, "verbatim request absent from current.md")
+        assert_true("## Provenance" in cur_text and "not execution scope" in cur_text,
+                    "current.md carries only a provenance pointer")
+        rendered = render(goals / "current.md", allow_unlocked=True)
+        assert_true("SPRAWLMARKER" not in rendered, "rendered /goal excludes the verbatim request")
+        assert_true("provenance" in rendered.lower(), "rendered /goal marks provenance as non-execution scope")
+        a_prov = audit(goals / "current.md", None, goals / "evidence")
+        assert_true(a_prov.get("provenance", {}).get("matched") is True,
+                    f"audit reads provenance as a matching drift anchor: {a_prov.get('provenance')}")
 
     print("GoalSpec full smoke test passed.")
     return 0

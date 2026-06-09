@@ -22,6 +22,7 @@ DIRS = [
     "abandoned",
     "blocked",
     "reports",
+    "provenance",
     "evidence",
     "evidence/events",
     "decisions",
@@ -51,6 +52,7 @@ def init(root: Path, overwrite: bool = False, install_agents: bool = False, appe
         TEMPLATES / "report.md": goals / "reports" / "report-template.md",
         TEMPLATES / "campaign.md": goals / "campaign-template.md",
         TEMPLATES / "current.md": goals / "current.template.md",
+        TEMPLATES / "provenance.md": goals / "provenance" / "provenance-template.md",
     }
     copied = []
     for src, dst in mapping.items():

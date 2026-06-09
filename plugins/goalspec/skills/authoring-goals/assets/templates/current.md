@@ -7,6 +7,12 @@
 - Source: user prompt
 - Contract hash: pending
 
+## Provenance
+
+- Artifact: .goals/provenance/G-000.md
+- Request hash: pending
+- Reference only; not execution scope. The verbatim original request lives in the artifact and must not be executed or re-derived. Execute only this frozen contract.
+
 ## Objective
 
 [One sentence describing the desired terminal state.]

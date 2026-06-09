@@ -14,6 +14,7 @@ from common import (
     current_hash_status,
     extract_verifier_commands,
     parse_sections,
+    sha256_text,
     verifier_kinds,
     verifier_result_path,
 )
@@ -46,6 +47,37 @@ def _load_verifier_result(evidence_dir: Path | None, explicit: Path | None) -> t
                 return path, None
             return path, (data if isinstance(data, dict) else None)
     return None, None
+
+
+def _provenance_check(contract_sections: dict, contract: Path) -> dict:
+    """Read the ## Provenance pointer as a drift/completeness anchor (informational).
+
+    Never gates the verdict — provenance is reference only — but surfaces whether the
+    verbatim request is preserved and still matches the pointer's request hash.
+    """
+    info: dict = {"present": False}
+    prov = contract_sections.get("Provenance", "")
+    if not prov.strip():
+        return info
+    info["present"] = True
+    m_art = re.search(r"Artifact:\s*(\S+)", prov)
+    m_hash = re.search(r"Request hash:\s*([0-9a-fA-F]{64}|pending)", prov)
+    info["artifact"] = m_art.group(1) if m_art else None
+    info["pointer_hash"] = m_hash.group(1) if m_hash else None
+    if not info["artifact"]:
+        return info
+    root = contract.parent.parent if contract.parent.name == ".goals" else Path.cwd()
+    art_path = (root / info["artifact"])
+    info["artifact_exists"] = art_path.exists()
+    if art_path.exists():
+        try:
+            req = parse_sections(art_path.read_text(encoding="utf-8")).get("Original Request", "")
+            info["artifact_request_hash"] = sha256_text(req.strip()) if req.strip() else None
+            info["matched"] = (info.get("pointer_hash") not in (None, "pending")
+                               and info["artifact_request_hash"] == info["pointer_hash"])
+        except OSError:
+            info["matched"] = None
+    return info
 
 
 def _report_result_decl(report_text: str) -> str:
@@ -86,6 +118,17 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
     if terminal_count:
         result["satisfied_checks"].append(f"Contract has {terminal_count} terminal-state clause(s)")
     result["satisfied_checks"].append(f"Contract verifier kinds: {sorted(declared_kinds) or ['unclassified']}")
+
+    # Provenance drift/completeness anchor (informational; never gates the verdict).
+    prov = _provenance_check(contract_sections, contract)
+    result["provenance"] = prov
+    if prov.get("present"):
+        if prov.get("artifact_exists") and prov.get("matched"):
+            result["satisfied_checks"].append("Provenance artifact present and request hash matches (drift anchor)")
+        elif prov.get("artifact_exists") and prov.get("matched") is False:
+            result["warnings"].append("Provenance request hash drift: contract pointer hash does not match the artifact's Original Request")
+        elif prov.get("artifact") and not prov.get("artifact_exists"):
+            result["warnings"].append(f"Provenance pointer references a missing artifact: {prov.get('artifact')}")
 
     # --- Report sections (presence is necessary but never sufficient) ---
     report_sections_ok = True
