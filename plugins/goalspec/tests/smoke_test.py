@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import py_compile
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from init_project import init  # noqa: E402
 from select_goal import parse_goals_md, parse_graph, select  # noqa: E402
 from graph_goal import load as load_graph, contract_metadata  # noqa: E402
 from run_verifiers import extract_commands  # noqa: E402
+from inventory_capabilities import inventory  # noqa: E402
 from common import sha256_file  # noqa: E402
 
 
@@ -276,6 +278,64 @@ def main() -> int:
         a_prov = audit(goals / "current.md", None, goals / "evidence")
         assert_true(a_prov.get("provenance", {}).get("matched") is True,
                     f"audit reads provenance as a matching drift anchor: {a_prov.get('provenance')}")
+
+    # G-4: spine fields are real constraints, not boilerplate.
+    base = (FIXTURES / "contracts" / "G-001-fix-password-reset.md").read_text(encoding="utf-8")
+
+    def _swap(text: str, name: str, body: str) -> str:
+        return re.sub(rf"(^##\s+{name}\s*\n)(.*?)(?=^##\s|\Z)",
+                      lambda m: m.group(1) + "\n" + body + "\n\n", text, flags=re.S | re.M)
+
+    with tempfile.TemporaryDirectory() as td6:
+        # Budget with no numeric ceiling and no external gate must fail.
+        badb = Path(td6) / "badbudget.md"
+        badb.write_text(_swap(base, "Budget", "- Stop when the budget is exhausted even if incomplete."), encoding="utf-8")
+        vb = validate(badb)
+        assert_true(not vb["ok"] and any("Budget must state" in e for e in vb["errors"]),
+                    f"keyword-only budget fails: {vb['errors']}")
+
+        # Scope with both labels but no bullets must fail.
+        bads = Path(td6) / "badscope.md"
+        bads.write_text(_swap(base, "Scope", "In scope:\n\nOut of scope:"), encoding="utf-8")
+        vs = validate(bads)
+        assert_true(not vs["ok"] and any("at least one bullet under both" in e for e in vs["errors"]),
+                    f"empty in/out scope fails: {vs['errors']}")
+
+        # Unresolved capability placeholders warn.
+        badc = Path(td6) / "badcaps.md"
+        badc.write_text(_swap(base, "Available Capabilities", "- Skills: [discovered relevant skills]\n- Plugins: [tbd]"), encoding="utf-8")
+        vc4 = validate(badc)
+        assert_true(any("Available Capabilities still contains unresolved" in w for w in vc4["warnings"]),
+                    f"capability placeholders warn: {vc4['warnings']}")
+
+    # .log files are scanned and their failure signals become candidates.
+    with tempfile.TemporaryDirectory() as td7:
+        (Path(td7) / "run.log").write_text("INFO ok\nERROR something failed\nTraceback (most recent call last)\n", encoding="utf-8")
+        logc = extract([td7], max_files=20, max_candidates=10)
+        assert_true(any("error signal" in c for c in logc), "extract detects .log failure candidates in a directory scan")
+
+    # Inventory defaults to repo-local and never emits a raw absolute home path.
+    inv = inventory()
+    assert_true(inv["scanned_home"] is False, "inventory defaults to repo-local (no home scan)")
+    assert_true(str(Path.home()) + "/" not in json.dumps(inv), "inventory emits no raw absolute home paths by default")
+
+    # Audit: an active contract with no hash lock is inconclusive, never achieved.
+    with tempfile.TemporaryDirectory() as td8:
+        g = Path(td8) / ".goals"
+        (g / "evidence" / "verifiers").mkdir(parents=True)
+        shutil.copyfile(FIXTURES / "contracts" / "G-001-fix-password-reset.md", g / "current.md")
+        (g / "evidence" / "verifiers" / "result.json").write_text(json.dumps({
+            "schema": "goalspec.verifier.v1", "overall_passed": True,
+            "verifiers": [{"verifier": "x", "kind": "command", "exit_code": 0, "evidence": "e", "passed": True}],
+        }), encoding="utf-8")
+        rep = g / "reports" / "r.md"
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text("## Result\nachieved\n\n## Files Changed\n- x\n\n## Commands Run\n- x\n\n"
+                       "## Evidence\n- x\n\n## Budget Used\n- x\n\n## Remaining Risks\n- x\n\n## Follow-Up Candidates\n- x\n",
+                       encoding="utf-8")
+        a_nolock = audit(g / "current.md", rep, g / "evidence")
+        assert_true(a_nolock["result"] == "inconclusive",
+                    f"missing hash lock on active contract => inconclusive, not achieved: {a_nolock}")
 
     print("GoalSpec full smoke test passed.")
     return 0

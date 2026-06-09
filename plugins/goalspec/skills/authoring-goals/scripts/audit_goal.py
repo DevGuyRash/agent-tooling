@@ -108,6 +108,10 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
     hash_status = current_hash_status(str(contract.parent.parent if contract.parent.name == ".goals" else Path.cwd()))
     result["hash_status"] = hash_status
     hash_matched = hash_status.get("matched")
+    # An active contract with no .goals/current.sha256 is not frozen: it can never
+    # be certified achieved, only inconclusive (or contract mutated on mismatch).
+    if hash_status.get("exists") and hash_matched is None and "no current.sha256" in (hash_status.get("reason") or ""):
+        result["missing_checks"].append("No hash lock (.goals/current.sha256); active contract is not frozen — cannot certify achieved")
 
     contract_sections = parse_sections(contract.read_text(encoding="utf-8"))
     verifier_section = contract_sections.get("Verifier", "")

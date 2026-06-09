@@ -11,7 +11,7 @@ FAIL_RE = re.compile(r"\b(fail(?:ed|ing)?|error|exception|traceback|assertion|ti
 TEST_SKIP_RE = re.compile(r"\b(skip|xfail|pending)\b", re.I)
 
 IGNORE_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next", "target", "coverage", "__pycache__"}
-TEXT_SUFFIXES = {".md", ".txt", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".yml", ".yaml", ".json", ".toml", ".sh", ".css", ".html"}
+TEXT_SUFFIXES = {".md", ".txt", ".log", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".yml", ".yaml", ".json", ".toml", ".sh", ".css", ".html"}
 
 
 def iter_files(paths, max_files):

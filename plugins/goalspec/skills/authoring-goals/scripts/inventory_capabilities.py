@@ -142,27 +142,34 @@ def scan_mcp(root: Path, home: Path, include_home: bool = True) -> List[dict]:
                 for name, spec in servers.items():
                     if isinstance(spec, dict):
                         out.append({"name": name, "source": str(mcp), "spec_keys": sorted(spec.keys())})
-    # Best effort CLI query.
-    try:
-        result = subprocess.run(["codex", "mcp", "list"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
-        if result.returncode == 0 and result.stdout.strip():
-            full = result.stdout.strip()
-            out.append({"name": "codex mcp list", "source": "codex-cli", "output": full[:4000], "truncated": len(full) > 4000})
-    except Exception:
-        pass
+    # Best effort CLI query. This reads the user's ~/.codex config, so it is
+    # home-scoped: only run it when home scanning is explicitly opted in.
+    if include_home:
+        try:
+            result = subprocess.run(["codex", "mcp", "list"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                full = result.stdout.strip()
+                out.append({"name": "codex mcp list", "source": "codex-cli", "output": full[:4000], "truncated": len(full) > 4000})
+        except Exception:
+            pass
     return out
 
 
 def scan_hooks(root: Path, home: Path, include_home: bool = True) -> List[dict]:
     out = []
-    for hook_file in [root / ".codex" / "hooks.json", home / ".codex" / "hooks.json", root / "hooks" / "hooks.json"]:
+    hook_files = [root / ".codex" / "hooks.json", root / "hooks" / "hooks.json"]
+    cfgs = [root / ".codex" / "config.toml"]
+    if include_home:
+        hook_files.append(home / ".codex" / "hooks.json")
+        cfgs.append(home / ".codex" / "config.toml")
+    for hook_file in hook_files:
         data = read_json(hook_file)
         if isinstance(data, dict):
             hooks = data.get("hooks", {})
             if isinstance(hooks, dict):
                 for event, groups in hooks.items():
                     out.append({"event": event, "source": str(hook_file), "groups": len(groups) if isinstance(groups, list) else "unknown"})
-    for cfg in [root / ".codex" / "config.toml", home / ".codex" / "config.toml"]:
+    for cfg in cfgs:
         data = read_toml(cfg)
         if isinstance(data, dict) and "hooks" in data:
             out.append({"event": "inline", "source": str(cfg), "groups": "config.toml"})
@@ -176,8 +183,8 @@ def scan_subagents(root: Path, home: Path, include_home: bool = True) -> List[di
         root.glob("skills/**/agents/openai.yaml"),
         root.glob("**/agents/openai.yaml"),
     ]
-    if include_home:
-        patterns.append((home / ".agents").glob("**/openai.yaml") if (home / ".agents").exists() else [])
+    if include_home and (home / ".agents").exists():
+        patterns.append((home / ".agents").glob("**/openai.yaml"))
     seen: Set[Path] = set()
     for pat in patterns:
         for y in pat:
@@ -204,11 +211,32 @@ def scan_project_commands(root: Path) -> List[dict]:
     return out
 
 
-def inventory(include_home=True) -> dict:
+def _normalize_home(value, home_str: str):
+    """Rewrite any emitted absolute home path to ~/... so inventories are shareable
+    and never leak a raw /home/<user> prefix (the repo itself often lives under home).
+    Replaces embedded occurrences too, not just a leading prefix."""
+    if isinstance(value, str):
+        if not home_str:
+            return value
+        if value == home_str:
+            return "~"
+        return value.replace(home_str + "/", "~/")
+    if isinstance(value, list):
+        return [_normalize_home(v, home_str) for v in value]
+    if isinstance(value, dict):
+        return {k: _normalize_home(v, home_str) for k, v in value.items()}
+    return value
+
+
+def inventory(include_home=False) -> dict:
     root = git_root_or_cwd()
     home = Path.home()
-    return {
+    agents_md_paths = [root / "AGENTS.md"]
+    if include_home:
+        agents_md_paths.insert(0, home / ".codex" / "AGENTS.md")
+    inv = {
         "repo_root": str(root),
+        "scanned_home": include_home,
         "toml_support": tomllib is not None,
         "skills": scan_skills(root, home, include_home),
         "plugins": scan_plugins(root, home, include_home),
@@ -216,9 +244,11 @@ def inventory(include_home=True) -> dict:
         "hooks": scan_hooks(root, home, include_home),
         "subagents": scan_subagents(root, home, include_home),
         "project_commands": scan_project_commands(root),
-        "agents_md": [str(p) for p in [home / ".codex" / "AGENTS.md", root / "AGENTS.md"] if p.exists()],
+        "agents_md": [str(p) for p in agents_md_paths if p.exists()],
         "goals_artifacts": [str(p) for p in [root / ".goals" / "current.md", root / ".goals" / "GOALS.md", root / ".goals" / "graph.json"] if p.exists()],
     }
+    home_str = str(home)
+    return {k: _normalize_home(v, home_str) for k, v in inv.items()}
 
 
 def md_list(items, key="name"):
@@ -270,10 +300,11 @@ Repo root: `{inv['repo_root']}`
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
-    parser.add_argument("--no-home", action="store_true", help="Do not scan home directory")
+    parser.add_argument("--include-home", action="store_true",
+                        help="Also scan home/user directories (~/.codex, ~/.agents, plugin cache). Default is repo-local only.")
     parser.add_argument("--write", help="Write inventory to file")
     args = parser.parse_args()
-    inv = inventory(include_home=not args.no_home)
+    inv = inventory(include_home=args.include_home)
     output = json.dumps(inv, indent=2, ensure_ascii=False) if args.format == "json" else to_markdown(inv)
     if args.write:
         p = Path(args.write)

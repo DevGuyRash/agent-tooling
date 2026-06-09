@@ -69,16 +69,35 @@ def validate(path: Path) -> dict:
         # The verifier exists but audit cannot key off it: no runnable command and
         # no declared human/artifact/MCP gate, so audit stays inconclusive forever.
         warnings.append("Verifier has no executable command and declares no human/artifact/MCP gate; audit cannot auto-confirm pass. Add a runnable command (e.g. `pytest -q`) or name the human/artifact/MCP oracle explicitly")
-    budget_has_keyword = re.search(r"\b(max|maximum|limit|ceiling|budget|stop when|iterations?|files?|dependencies?|time|cost)\b", budget, re.I)
+    # A budget must bind: a concrete numeric ceiling OR an explicit external gate.
+    # Keyword-only boilerplate ("Stop when the budget is exhausted") does not bind.
     budget_has_number = re.search(r"\d", budget)
-    if not (budget_has_keyword or budget_has_number):
-        errors.append("Budget section must state a concrete ceiling (a number of iterations, changed files, time, or cost) and a stop rule")
-    if not re.search(r"In scope:\s*\n", scope, re.I) or not re.search(r"Out of scope:\s*\n", scope, re.I):
+    budget_has_gate = re.search(
+        r"\b(external gate|approv\w*|sign[\s-]?off|reviewer|"
+        r"human (?:gate|review)|manual (?:gate|review)|ci gate|gated by)\b", budget, re.I)
+    if not (budget_has_number or budget_has_gate):
+        errors.append("Budget must state a concrete numeric ceiling (iterations, changed files, time, or cost) or an explicit external gate, not keyword-only boilerplate like 'Stop when the budget is exhausted'")
+    # Scope needs both labels AND at least one real bullet under each, not just labels.
+    has_in = re.search(r"In scope:", scope, re.I)
+    has_out = re.search(r"Out of scope:", scope, re.I)
+    if not has_in or not has_out:
         errors.append("Scope section must include both 'In scope:' and 'Out of scope:'")
+    else:
+        parts = re.split(r"Out of scope:", scope, maxsplit=1, flags=re.I)
+        out_bullets = bullets(parts[1]) if len(parts) == 2 else []
+        in_region = re.split(r"In scope:", parts[0], maxsplit=1, flags=re.I)
+        in_bullets = bullets(in_region[1]) if len(in_region) == 2 else []
+        if len(in_bullets) < 1 or len(out_bullets) < 1:
+            errors.append("Scope must list at least one bullet under both 'In scope:' and 'Out of scope:' (not just the labels)")
     if len(bullets(giveup)) < 2:
         errors.append("Give-Up Conditions should name at least two concrete stop states")
     if len(bullets(completeness)) < 2:
         errors.append("Completeness Dimensions should list at least two dimensions")
+
+    # Capabilities should be resolved from a real inventory, not left as placeholders.
+    caps = sections.get("Available Capabilities", "")
+    if "[" in caps and "]" in caps:
+        warnings.append("Available Capabilities still contains unresolved [placeholders]; resolve them with inventory_capabilities.py before launch")
 
     lowered = term.lower()
     for phrase in OPEN_ENDED_PHRASES:
