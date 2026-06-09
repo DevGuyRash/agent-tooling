@@ -81,6 +81,12 @@ def main() -> int:
         # Before lock, authoring can create/update current.md.
         return 0
 
+    if tool.startswith("mcp__"):
+        # MCP calls are now matched (parity with PostToolUse) but their I/O is
+        # opaque, so there is no deterministic protected-path check here. The
+        # audit hash and render-refuse-unlocked remain the freeze backstop.
+        return 0
+
     if tool in {"apply_patch", "Edit", "Write"}:
         paths = extract_patch_paths(command)
         protected_hits = [p for p in paths if path_is_protected(p)]

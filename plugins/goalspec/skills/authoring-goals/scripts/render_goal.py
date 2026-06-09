@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from common import bullets, parse_sections, sha256_file
+from common import bullets, contract_lock_status, parse_sections, sha256_file
+
+
+class RenderRefused(Exception):
+    """Raised when rendering an unlocked or hash-mismatched contract without override."""
+
+    def __init__(self, reason: str, status: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
 
 
 def compact_list(items, max_items=5, max_len=600):
@@ -21,10 +31,21 @@ def compact_list(items, max_items=5, max_len=600):
     return text
 
 
-def render_with_meta(path: Path, max_chars: int = 4000) -> dict:
+def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = False) -> dict:
     text = path.read_text(encoding="utf-8")
+    # Freeze gate: refuse to project an unlocked or mismatched contract into a
+    # /goal by default. Hooks are defense-in-depth; this refusal plus the audit
+    # hash are the real backstop that keeps execution bound to a frozen contract.
+    status = contract_lock_status(path)
+    if not allow_unlocked and (not status.get("locked") or status.get("matched") is False):
+        raise RenderRefused(
+            f"GoalSpec refuses to render an unlocked or mismatched contract ({status.get('reason')}). "
+            f"Lock it first: validate_goal.py {path} --write-hash. "
+            "Pass --allow-unlocked to override (e.g. for a preview before locking).",
+            status,
+        )
     sections = parse_sections(text)
-    h = sha256_file(path)
+    h = status.get("current_hash") or sha256_file(path)
     terminal = compact_list(bullets(sections.get("Terminal State", "")), max_items=6, max_len=900)
     verifier = compact_list(bullets(sections.get("Verifier", "")), max_items=5, max_len=700)
     out_scope = sections.get("Scope", "")
@@ -45,11 +66,12 @@ def render_with_meta(path: Path, max_chars: int = 4000) -> dict:
     truncated = full_chars > max_chars
     if truncated:
         rendered = rendered[: max_chars - 160].rstrip() + " ... See .goals/current.md for full non-droppable contract clauses; if this projection conflicts with current.md, current.md wins."
-    return {"rendered": rendered, "truncated": truncated, "chars": len(rendered), "full_chars": full_chars}
+    return {"rendered": rendered, "truncated": truncated, "chars": len(rendered),
+            "full_chars": full_chars, "lock_status": status}
 
 
-def render(path: Path, max_chars: int = 4000) -> str:
-    return render_with_meta(path, max_chars)["rendered"]
+def render(path: Path, max_chars: int = 4000, allow_unlocked: bool = False) -> str:
+    return render_with_meta(path, max_chars, allow_unlocked)["rendered"]
 
 
 def main() -> int:
@@ -57,16 +79,24 @@ def main() -> int:
     parser.add_argument("path", nargs="?", default=".goals/current.md")
     parser.add_argument("--write", help="Write rendered objective to this path")
     parser.add_argument("--max-chars", type=int, default=4000)
+    parser.add_argument("--allow-unlocked", action="store_true",
+                        help="Render even if the contract is unlocked or hash-mismatched (preview only; not for launch).")
     parser.add_argument("--json", action="store_true", help="Emit JSON with rendered text and truncation metadata")
     args = parser.parse_args()
-    meta = render_with_meta(Path(args.path), args.max_chars)
+    try:
+        meta = render_with_meta(Path(args.path), args.max_chars, allow_unlocked=args.allow_unlocked)
+    except RenderRefused as exc:
+        print(f"RENDER REFUSED: {exc.reason}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"refused": True, "reason": exc.reason, "lock_status": exc.status},
+                             indent=2, ensure_ascii=False))
+        return 2
     output = meta["rendered"]
     if args.write:
         out = Path(args.write)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(output + "\n", encoding="utf-8")
     if meta["truncated"]:
-        import sys
         print(
             f"WARNING: rendered objective truncated to {args.max_chars} chars "
             f"({meta['full_chars']} projected); full contract remains in .goals/current.md.",

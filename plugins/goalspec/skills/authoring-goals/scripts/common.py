@@ -240,6 +240,33 @@ def current_hash_status(cwd: Optional[str] = None) -> dict:
     }
 
 
+def contract_lock_status(path: Path) -> dict:
+    """Path-relative lock status for a contract and its sibling current.sha256.
+
+    Unlike current_hash_status (which resolves the active goal via the git root),
+    this checks the lock next to a given contract path — the convention used by
+    validate --write-hash/--check-hash and the render freeze gate, so they share
+    one definition of locked / matched / mismatch.
+    """
+    path = Path(path)
+    lock = path.with_name("current.sha256")
+    if not path.exists():
+        return {"locked": False, "matched": None, "lock": str(lock), "reason": "missing contract"}
+    current_hash = sha256_file(path)
+    if not lock.exists():
+        return {"locked": False, "matched": None, "lock": str(lock),
+                "current_hash": current_hash, "reason": "no current.sha256 lock"}
+    expected = lock.read_text(encoding="utf-8").strip().split()[0]
+    return {
+        "locked": True,
+        "matched": expected == current_hash,
+        "lock": str(lock),
+        "expected_hash": expected,
+        "current_hash": current_hash,
+        "reason": "matched" if expected == current_hash else "hash mismatch",
+    }
+
+
 def extract_verifier_commands(section: str) -> List[str]:
     """Pull executable verifier commands from a ## Verifier section body.
 

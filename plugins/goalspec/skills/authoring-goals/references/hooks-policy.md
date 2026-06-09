@@ -1,6 +1,30 @@
 # Hook Policy
 
-Hooks are guardrails, not a substitute for good contracts.
+Hooks are guardrails, not a substitute for good contracts. They are
+defense-in-depth, not an absolute boundary — the freeze backstop is
+render-refuse-unlocked plus the audit hash, not the hooks.
+
+## Codex runtime, trust, and conformance
+
+- Hooks are **enabled by default** on Codex. Disable them with `[features] hooks = false`
+  in config (`codex_hooks` is a deprecated alias; do not rely on it, and
+  `codex_hooks = true` is not required).
+- Plugin-bundled hooks require a **trust review** before they run: review and approve
+  them with `/hooks`. The default path `hooks/hooks.json` needs no manifest field.
+- Hook commands receive `PLUGIN_ROOT` / `PLUGIN_DATA` / `CLAUDE_PLUGIN_ROOT` /
+  `CLAUDE_PLUGIN_DATA`; the wired commands use `"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/scripts/..."`
+  so they resolve on either host.
+- **PreToolUse** intercepts Bash, `apply_patch` (matchers `apply_patch|Edit|Write`,
+  canonical `tool_name: apply_patch`), and MCP calls — but not all shell calls.
+  **PostToolUse** runs after Bash/`apply_patch`/MCP and **cannot undo** side effects.
+- Because interception is incomplete and irreversible after the fact, the
+  authoritative freeze is the audit hash (`audit_goal.py`) and render refusing to
+  project an unlocked contract — not the hooks.
+- `conformance_probe.py` reports coverage on the installed runtime. `selftest`
+  drives each wired hook with synthetic input and checks the documented decision
+  shape offline; `observe`/`report` record and summarize what actually fired on a
+  live session. If the runtime lags the docs, degrade gracefully and lean on the
+  render-refuse-unlocked + audit-hash backstop, stating the observed coverage.
 
 ## PreToolUse: scope guard
 
@@ -17,7 +41,12 @@ Allow executor writes only under:
 - `.goals/evidence/`
 - `.goals/reports/`
 
-Block dangerous commands and explicit out-of-scope paths when detected. Because hook interception is not complete, audit hash and report evidence at close.
+Matcher: `Bash|apply_patch|Edit|Write|mcp__.*` (MCP parity with PostToolUse). MCP
+tool I/O is opaque, so there is no deterministic protected-path check for `mcp__*`
+calls — they pass through, and the audit hash remains the backstop. Deny output uses
+`{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", ...}}`.
+Block dangerous commands and explicit out-of-scope paths when detected. Because hook
+interception is not complete, audit hash and report evidence at close.
 
 ## PostToolUse: evidence capture
 
@@ -25,10 +54,16 @@ Save tool-use events to `.goals/evidence/events/` when an active contract exists
 
 ## UserPromptSubmit: goal launch guard
 
-If a user prompt starts `/goal` but does not reference `.goals/current.md` or `$authoring-goals`, add context warning that long-running work should be compiled first.
+If a user prompt starts `/goal` but does not reference `.goals/current.md` or `$authoring-goals`, add context warning that long-running work should be compiled first. To block, emit `{"decision":"block","reason":"..."}` (or exit 2); a referenced-but-missing `.goals/current.md` is blocked.
+
+## Render freeze gate
+
+`render_goal.py` refuses to project an unlocked or hash-mismatched `current.md` into a `/goal` by default (exit 2). Lock first with `validate_goal.py .goals/current.md --write-hash`; pass `--allow-unlocked` only for a preview before locking. This refusal, with the audit hash, is the freeze backstop the hooks cannot fully guarantee.
 
 ## Stop: final evidence gate
 
-If the last assistant message appears to claim completion but omits required report fields, continue with a prompt asking for missing evidence. An achievement claim must reference the verifier pass/fail result (the oracle), not merely that files changed — evidence presence is not verification success. If the contract hash changed, continue and require the agent to report the contract mutation as failure.
+If the last assistant message appears to claim completion but omits required report fields, continue with a prompt asking for missing evidence. An achievement claim must reference the verifier pass/fail result (the oracle), not merely that files changed — evidence presence is not verification success. A completion claim against an unlocked contract (no `current.sha256`) is blocked: it cannot be certified, so it must be locked or reported inconclusive/blocked. If the contract hash changed, continue and require the agent to report the contract mutation as failure.
+
+Codex Stop I/O: allow/no-op is exit 0 with **no stdout**; continue the agent (block the stop) with `{"decision":"block","reason":"..."}` (or exit 2). A bare `{"continue": true}` is ambiguous on Codex, so allow paths stay silent — `conformance_probe.py` verifies this empirically.
 
 The Stop hook is defense-in-depth, not the oracle. The authoritative close decision is `audit_goal.py` reading the `goalspec.verifier.v1` result file: `achieved` requires a passing verifier result plus required report sections plus a matching contract hash. A missing result for an executable verifier is inconclusive, and a failing result is not achieved.

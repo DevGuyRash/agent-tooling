@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from common import REQUIRED_SECTIONS, OPEN_ENDED_PHRASES, bullets, parse_sections, sha256_file, verifier_kinds
+from common import REQUIRED_SECTIONS, OPEN_ENDED_PHRASES, bullets, contract_lock_status, parse_sections, sha256_file, verifier_kinds
 
 # Concrete repair hints keyed by a substring of the error message they address.
 REPAIR_HINTS = {
@@ -122,16 +122,16 @@ def main() -> int:
     result = validate(path)
 
     if args.check_hash:
-        lock = path.with_name("current.sha256")
-        if not lock.exists():
+        ls = contract_lock_status(path)
+        result["lock_status"] = ls
+        if not ls.get("locked"):
             result["ok"] = False
-            result.setdefault("errors", []).append(f"Missing hash lock: {lock}")
+            result.setdefault("errors", []).append(f"Missing hash lock: {ls['lock']}")
         else:
-            expected = lock.read_text(encoding="utf-8").strip().split()[0]
-            if expected != result.get("sha256"):
+            result["expected_hash"] = ls.get("expected_hash")
+            if ls.get("matched") is False:
                 result["ok"] = False
                 result.setdefault("errors", []).append("Contract hash mismatch; current.md changed after lock")
-            result["expected_hash"] = expected
 
     if args.write_hash and result.get("ok"):
         lock = path.with_name("current.sha256")

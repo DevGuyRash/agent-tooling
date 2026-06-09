@@ -20,7 +20,7 @@ sys.path.insert(0, str(HOOKS))
 os.environ["GOALSPEC_NO_GIT"] = "1"
 
 from validate_goal import validate  # noqa: E402
-from render_goal import render  # noqa: E402
+from render_goal import render, RenderRefused  # noqa: E402
 from score_goal_risk import score  # noqa: E402
 from extract_candidates import extract  # noqa: E402
 from audit_goal import audit  # noqa: E402
@@ -56,8 +56,14 @@ def main() -> int:
     contract = FIXTURES / "contracts" / "G-001-fix-password-reset.md"
     v = validate(contract)
     assert_true(v["ok"], f"sample contract validates: {v}")
-    r = render(contract)
-    assert_true(r.startswith("/goal "), "render starts with /goal")
+    # G-2 freeze gate: render refuses an unlocked contract by default; --allow-unlocked previews it.
+    try:
+        render(contract)
+        raise AssertionError("render must refuse an unlocked/mismatched contract by default")
+    except RenderRefused:
+        pass
+    r = render(contract, allow_unlocked=True)
+    assert_true(r.startswith("/goal "), "render --allow-unlocked starts with /goal")
     assert_true("current.md" in r and "sha256" in r, "render references source and hash")
     risk = score("Improve the whole app as much as possible")
     assert_true(risk["forever_risk"] in {"high", "extreme"}, "risk scoring catches runaway phrasing")
@@ -87,6 +93,18 @@ def main() -> int:
         )
         assert_true(proc.returncode == 0, f"validate --write-hash: {proc.stderr} {proc.stdout}")
         assert_true((tmp / ".goals" / "current.sha256").exists(), "hash lock written")
+
+        # Once locked, render succeeds by default (no --allow-unlocked needed).
+        locked_render = render(tmp / ".goals" / "current.md")
+        assert_true(locked_render.startswith("/goal "), "locked contract renders by default")
+        # The render CLI refuses an unlocked contract with a non-zero exit.
+        rproc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "render_goal.py"), str(contract)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true(rproc.returncode == 2 and "REFUSED" in rproc.stderr,
+                    f"render CLI refuses unlocked by default: rc={rproc.returncode} {rproc.stderr}")
 
         event = {
             "cwd": str(tmp),
@@ -137,6 +155,25 @@ def main() -> int:
         gpath.write_text(json.dumps(cyclic), encoding="utf-8")
         sel = select(parse_graph(gpath))
         assert_true("selected" in sel, "select handles a cyclic graph without crashing")
+
+    # G-2: the conformance probe drives every wired hook with synthetic input and
+    # confirms each emits its documented Codex decision shape (UserPromptSubmit
+    # block, PreToolUse deny for Bash + apply_patch, PreToolUse mcp no-op,
+    # PostToolUse capture for Bash + mcp, Stop allow=no-stdout, Stop block=JSON)
+    # plus PreToolUse/PostToolUse mcp__ matcher parity.
+    probe_proc = subprocess.run(
+        [sys.executable, str(HOOKS / "conformance_probe.py"), "selftest", "--json"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+    )
+    assert_true(probe_proc.returncode == 0, f"conformance probe selftest exits 0: {probe_proc.stderr}")
+    probe = json.loads(probe_proc.stdout)
+    assert_true(probe["overall_conforms"], f"all wired hooks conform to documented I/O: {probe}")
+    assert_true(probe["matcher_parity"]["conforms"], "PreToolUse matcher has mcp__ parity with PostToolUse")
+    by_surface = {(r["surface"], r["tool"]): r["decision"] for r in probe["rows"]}
+    assert_true(by_surface.get(("Stop", "allow")) == "noop", "Stop allow path emits no stdout")
+    assert_true(by_surface.get(("Stop", "block")) == "block", "Stop block path emits documented JSON")
+    assert_true(by_surface.get(("UserPromptSubmit", None)) == "block", "UserPromptSubmit block tested")
 
     # G-1: the goalspec.verifier.v1 result file is the deterministic oracle for
     # "achieved". Report headings and a non-empty evidence dir are necessary but

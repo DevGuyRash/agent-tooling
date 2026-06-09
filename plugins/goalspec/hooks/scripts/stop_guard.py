@@ -18,8 +18,10 @@ def main() -> int:
     stop_hook_active = bool(event.get("stop_hook_active"))
     last = event.get("last_assistant_message") or ""
     _, current, lock = active_goal_paths(cwd)
+    # Codex Stop semantics: allow/no-op is exit 0 with NO stdout; emit JSON only
+    # to continue (block the stop). A bare {"continue": true} is a Claude-ism that
+    # Codex treats as ambiguous, so allow paths stay silent here.
     if not current.exists():
-        print(json.dumps({"continue": True}))
         return 0
 
     status = current_hash_status(cwd)
@@ -32,10 +34,15 @@ def main() -> int:
 
     # Avoid forcing twice in a row; if already continued by Stop, let it end.
     if stop_hook_active:
-        print(json.dumps({"continue": True}))
         return 0
 
     if CLAIM_WORDS.search(last):
+        if not lock.exists():
+            print(json.dumps({
+                "decision": "block",
+                "reason": "GoalSpec audit gate: completion claimed but .goals/current.md is not locked (no .goals/current.sha256). An unlocked contract cannot be certified as achieved. Lock it with validate_goal.py .goals/current.md --write-hash and audit, or report the result as inconclusive/blocked, not achieved."
+            }))
+            return 0
         required_phrases = [
             "files changed",
             "commands run",
@@ -57,7 +64,7 @@ def main() -> int:
             }))
             return 0
 
-    print(json.dumps({"continue": True}))
+    # Allow the stop: exit 0 with no stdout.
     return 0
 
 
