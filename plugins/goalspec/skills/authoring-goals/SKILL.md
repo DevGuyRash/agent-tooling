@@ -47,6 +47,22 @@ Use the inventory to choose verifiers, context sources, and allowed tools. Do no
 
 Every compiled contract should include an **Available Capabilities** section listing only capabilities that are actually discovered, explicitly provided, or clearly inferable from local files.
 
+## Deterministic signals are inputs to judgment
+
+The helper scripts produce deterministic signals. They are **mandatory inputs to your judgment, not substitutes for it and not optional** — read them, then decide. You may override a signal, but only explicitly and with a stated reason; never silently, and never narrate a signal (e.g. a risk level) you did not actually run.
+
+Required for non-trivial work (multi-step authoring, scanning, decomposing, selecting, or auditing):
+
+- **`inventory_capabilities.py`** — before authoring, scanning, decomposing, selecting, or auditing any non-trivial goal. Name the discovered capabilities you use; do not invent ones.
+- **`score_goal_risk.py`** — on any raw or vague request, campaign parent, or lint. State the forever-risk level and whether you accepted, repaired, or decomposed it, and why.
+- **`extract_candidates.py`** — whenever files, folders, logs, or specs are supplied (NOT for a pure greenfield prompt with no source). Name the extraction frontier: what was inspected and what was left.
+- **`validate_goal.py`** — before rendering any contract; do not render an invalid contract.
+- **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate).
+
+Respond to the signals explicitly in your output: state the risk level and your decision, name the discovered capabilities you used, and name the extraction frontier when you scanned.
+
+Keep it proportionate. A micro-goal — a single concrete one-file change with an obvious verifier and no source files supplied — does not need a full scan or candidate extraction; inventory can be a quick check. But a non-trivial goal cannot skip inventory, risk scoring, validation, and rendering. The point is well-informed judgment, not ceremony on tiny tasks.
+
 ## Launchability spine
 
 A goal is launchable only if it has all six fields:

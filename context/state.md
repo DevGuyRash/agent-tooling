@@ -1,6 +1,6 @@
 In-flight work:
 
-- GoalSpec hardening campaign in progress. Done: baseline rename, G-1 (verifier-pass gate), G-2 (hook conformance + freeze gate), G-3 (provenance separation), G-4 (validator/audit hardening), G-5 (evidence hygiene), G-6 (decomposition/greenfield doctrine). Remaining child goal, one commit: G-7 mandatory deterministic signals. Keep `bash plugins/goalspec/tests/run_smoke_tests.sh` + repo tests + dual-host roundtrip green per child.
+- GoalSpec hardening campaign: all child goals G-1..G-7 landed (verifier-pass gate, hook conformance + freeze gate, provenance separation, validator/audit hardening, evidence hygiene, decomposition/greenfield doctrine, mandatory deterministic signals). Remaining: campaign-end end-to-end verification (sprawl → campaign → one verified child) before closing out.
 
 Active risks:
 
