@@ -4,35 +4,32 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from common import parse_sections
+from common import (
+    VERIFIER_RESULT_NAME,
+    VERIFIER_RESULT_SCHEMA,
+    extract_verifier_commands,
+    parse_sections,
+    sha256_file,
+    verifier_kinds,
+)
+
+
+def verifier_section(contract: Path) -> str:
+    text = contract.read_text(encoding="utf-8")
+    return parse_sections(text).get("Verifier", "")
 
 
 def extract_commands(contract: Path) -> list[str]:
-    text = contract.read_text(encoding="utf-8")
-    sec = parse_sections(text).get("Verifier", "")
-    commands: list[str] = []
-    # Prefer fenced shell blocks.
-    for m in re.finditer(r"```(?:bash|sh|shell)?\s*\n(.*?)```", sec, re.S | re.I):
-        for line in m.group(1).splitlines():
-            s = line.strip()
-            if s and not s.startswith("#"):
-                commands.append(s)
-    # Also accept inline `command` bullets that look command-like.
-    for m in re.finditer(r"`([^`]+)`", sec):
-        c = m.group(1).strip()
-        if re.match(r"^(npm|pnpm|yarn|pytest|python|python3|go|cargo|mvn|gradle|make|just|tox|ruff|eslint|vitest|jest|bun|deno)\b", c):
-            commands.append(c)
-    return list(dict.fromkeys(commands))
+    return extract_verifier_commands(verifier_section(contract))
 
 
 def run(commands: list[str], evidence_dir: Path, timeout: int) -> dict:
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    results = []
+    verifiers = []
     for idx, cmd in enumerate(commands, 1):
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         out_path = evidence_dir / f"{ts}-verifier-{idx}.txt"
@@ -41,36 +38,82 @@ def run(commands: list[str], evidence_dir: Path, timeout: int) -> dict:
             output = proc.stdout
             code = proc.returncode
         except subprocess.TimeoutExpired as e:
-            output = (e.stdout or "") + f"\nTIMEOUT after {timeout}s\n"
+            partial = e.stdout or ""
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", "replace")
+            output = partial + f"\nTIMEOUT after {timeout}s\n"
             code = 124
         out_path.write_text(f"$ {cmd}\nexit_code={code}\n\n{output}", encoding="utf-8")
-        results.append({"command": cmd, "exit_code": code, "evidence": str(out_path)})
-    return {"ok": all(r["exit_code"] == 0 for r in results), "results": results}
+        verifiers.append({
+            "verifier": cmd,
+            "kind": "command",
+            "exit_code": code,
+            "evidence": str(out_path),
+            "passed": code == 0,
+        })
+    # A run with zero executed verifiers must never read as a pass.
+    overall = bool(verifiers) and all(v["passed"] for v in verifiers)
+    return {"ok": overall, "overall_passed": overall, "verifiers": verifiers}
+
+
+def write_result(contract: Path, run_data: dict, result_file: Path, declared_kinds: set) -> Path:
+    """Persist the goalspec.verifier.v1 oracle artifact audit reads."""
+    payload = {
+        "schema": VERIFIER_RESULT_SCHEMA,
+        "contract": str(contract),
+        "contract_sha256": sha256_file(contract) if contract.exists() else None,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "declared_kinds": sorted(declared_kinds),
+        "overall_passed": run_data["overall_passed"],
+        "verifiers": run_data["verifiers"],
+    }
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return result_file
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("contract", nargs="?", default=".goals/current.md")
     parser.add_argument("--evidence-dir", default=".goals/evidence/verifiers")
+    parser.add_argument("--result-file", default=None,
+                        help=f"Where to write the {VERIFIER_RESULT_NAME} oracle artifact (default: <evidence-dir>/{VERIFIER_RESULT_NAME}).")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--run", action="store_true", help="Actually run extracted commands. Without this, only list them.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    commands = extract_commands(Path(args.contract))
+    contract = Path(args.contract)
+    section = verifier_section(contract) if contract.exists() else ""
+    commands = extract_verifier_commands(section)
+    declared = verifier_kinds(section)
     if not args.run:
-        result = {"commands": commands, "ran": False, "note": "Pass --run to execute verifier commands."}
+        result = {"commands": commands, "ran": False, "declared_kinds": sorted(declared),
+                  "note": "Pass --run to execute verifier commands and write the oracle result file."}
     else:
-        result = {"commands": commands, "ran": True, **run(commands, Path(args.evidence_dir), args.timeout)}
+        evidence_dir = Path(args.evidence_dir)
+        run_data = run(commands, evidence_dir, args.timeout)
+        result = {"commands": commands, "ran": True, "declared_kinds": sorted(declared), **run_data}
+        if commands:
+            result_file = Path(args.result_file) if args.result_file else evidence_dir / VERIFIER_RESULT_NAME
+            write_result(contract, run_data, result_file, declared)
+            result["result_file"] = str(result_file)
+        else:
+            # No executable command: do not fabricate a pass/fail. Audit treats a
+            # missing result file as inconclusive unless a human/artifact/MCP gate is declared.
+            result["note"] = "No executable verifier commands found; no oracle result written. Record the human/artifact/MCP gate outcome in the run report."
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
         if not commands:
-            print("No executable verifier commands found in contract. Use manual/human/MCP verifier as specified.")
+            print("No executable verifier commands found in contract. Use the declared human/artifact/MCP verifier and record its outcome in the report.")
+            if declared:
+                print(f"Declared verifier kinds: {', '.join(sorted(declared))}")
         for c in commands:
             print(c)
-        if args.run:
-            for r in result["results"]:
-                print(f"exit {r['exit_code']}: {r['command']} -> {r['evidence']}")
+        if args.run and commands:
+            for v in result["verifiers"]:
+                print(f"exit {v['exit_code']} ({'pass' if v['passed'] else 'FAIL'}): {v['verifier']} -> {v['evidence']}")
+            print(f"overall_passed={result['overall_passed']} -> {result.get('result_file')}")
     return 0 if (not args.run or result.get("ok", False)) else 1
 
 

@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from common import REQUIRED_SECTIONS, OPEN_ENDED_PHRASES, bullets, parse_sections, sha256_file
+from common import REQUIRED_SECTIONS, OPEN_ENDED_PHRASES, bullets, parse_sections, sha256_file, verifier_kinds
 
 # Concrete repair hints keyed by a substring of the error message they address.
 REPAIR_HINTS = {
@@ -65,6 +65,10 @@ def validate(path: Path) -> dict:
         errors.append("Terminal State should contain at least two checkable clauses")
     if len(bullets(verifier)) < 1:
         errors.append("Verifier should contain at least one command, artifact, metric, checklist, or gate")
+    elif not verifier_kinds(verifier):
+        # The verifier exists but audit cannot key off it: no runnable command and
+        # no declared human/artifact/MCP gate, so audit stays inconclusive forever.
+        warnings.append("Verifier has no executable command and declares no human/artifact/MCP gate; audit cannot auto-confirm pass. Add a runnable command (e.g. `pytest -q`) or name the human/artifact/MCP oracle explicitly")
     budget_has_keyword = re.search(r"\b(max|maximum|limit|ceiling|budget|stop when|iterations?|files?|dependencies?|time|cost)\b", budget, re.I)
     budget_has_number = re.search(r"\d", budget)
     if not (budget_has_keyword or budget_has_number):

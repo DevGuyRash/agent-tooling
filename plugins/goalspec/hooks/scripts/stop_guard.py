@@ -46,10 +46,14 @@ def main() -> int:
         # Evidence can be phrased as raw results, test results, or artifact paths.
         if not any(p in last.lower() for p in ["evidence", "raw result", "test result", "artifact", "exit code"]):
             missing.append("evidence/raw results/artifact paths")
+        # An achievement claim must reference the verifier pass/fail oracle, not
+        # merely that files changed. Evidence presence is not verification success.
+        if not any(p in last.lower() for p in ["verifier", "passed", "pass/fail", "exit 0", "overall_passed", "exit code"]):
+            missing.append("verifier pass/fail result (the oracle, e.g. 'verifier passed' or 'exit 0')")
         if missing:
             print(json.dumps({
                 "decision": "block",
-                "reason": "GoalSpec final-report gate: before stopping, provide the required final report fields from .goals/current.md: files changed, commands run with raw pass/fail results or artifact paths, budget used, remaining risks, and follow-up candidates. Missing: " + ", ".join(missing)
+                "reason": "GoalSpec final-report gate: before stopping, provide the required final report fields from .goals/current.md: files changed, commands run with the verifier pass/fail result (achievement requires passing verifier evidence, not just changed files), budget used, remaining risks, and follow-up candidates. Missing: " + ", ".join(missing)
             }))
             return 0
 

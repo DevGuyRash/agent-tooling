@@ -19,10 +19,24 @@
 
 ## Audit a completed run
 
-1. Compare final report/evidence/diffs against `.goals/current.md`.
-2. Verify `.goals/current.sha256` still matches.
-3. Treat missing evidence as inconclusive, not achieved.
-4. Treat contract mutation as audit failure.
+The verifier result is the oracle, not the report prose. `run_verifiers.py --run`
+writes a machine-readable `goalspec.verifier.v1` result file
+(`.goals/evidence/verifiers/result.json`) recording each verifier's
+`exit_code`/`passed` and an `overall_passed`. `audit_goal.py` reads that file as
+the sole upgrade path to `achieved`.
+
+1. Run the contract's verifiers and produce the result file:
+   `run_verifiers.py .goals/current.md --run`.
+2. Audit against the frozen contract: `audit_goal.py .goals/current.md --report <report> --evidence-dir .goals/evidence`.
+3. The audit returns exactly one verdict:
+   - `achieved` — verifier `overall_passed` is true AND required report sections are present AND `.goals/current.sha256` matches AND no scope violation.
+   - `not achieved` — the verifier result did not pass.
+   - `inconclusive` — no verifier result file for an executable verifier (run the verifiers), or required sections/evidence are missing. Report headings and a non-empty evidence dir are necessary but never sufficient.
+   - `blocked` / `scope violation` — declared in the report's `## Result` line; these downgrade the verdict but can never upgrade it to achieved.
+   - `contract mutated` — `current.md` no longer matches its hash lock.
+4. For a human/artifact/MCP verifier there is no machine result; the report
+   attestation is the recorded oracle, so name that gate explicitly in the
+   contract's `## Verifier` section or audit stays inconclusive.
 5. Record follow-up candidates without continuing the current goal.
 
 ## Select next goal

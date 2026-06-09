@@ -52,6 +52,26 @@ REPORT_FIELDS = [
     "Follow-Up Candidates",
 ]
 
+# Machine-readable verifier result contract shared by run_verifiers.py (writer)
+# and audit_goal.py (the deterministic oracle reader).
+VERIFIER_RESULT_SCHEMA = "goalspec.verifier.v1"
+VERIFIER_RESULT_NAME = "result.json"
+
+# A verifier command is something the runner can execute and read an exit code from.
+VERIFIER_COMMAND_RE = re.compile(
+    r"^(npm|pnpm|yarn|pytest|python|python3|go|cargo|mvn|gradle|make|just|tox|ruff|eslint|vitest|jest|bun|deno)\b"
+)
+
+# Patterns that mark a verifier as a non-executable oracle. A human/artifact/MCP
+# gate cannot produce a machine pass/fail, so audit may fall back to the report
+# attestation for those kinds; metric thresholds still need a command to measure.
+_VERIFIER_KIND_PATTERNS = {
+    "human": r"\b(human|manual(?:ly)?|reviewer|review by|sign[\s-]?off|approv(?:e|al)|inspect|screenshot|by hand|stakeholder)\b",
+    "artifact": r"\b(artifact|file exists|path exists|exists at|present at|generated file|output file|produced file)\b",
+    "mcp": r"(mcp__|\bMCP\b|model context protocol)",
+    "metric": r"(\bthreshold\b|\bcoverage\b|\bp9[05]\b|\blatency\b|>=|<=|\b\d+\s?%|\bpercent\b)",
+}
+
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -218,3 +238,44 @@ def current_hash_status(cwd: Optional[str] = None) -> dict:
         "current_hash": current_hash,
         "reason": "matched" if expected == current_hash else "hash mismatch",
     }
+
+
+def extract_verifier_commands(section: str) -> List[str]:
+    """Pull executable verifier commands from a ## Verifier section body.
+
+    Fenced shell blocks contribute every non-comment line; inline `code` spans
+    contribute only when they begin with a recognized runner so prose backticks
+    do not masquerade as commands. Order-preserving and de-duplicated.
+    """
+    commands: List[str] = []
+    for m in re.finditer(r"```(?:bash|sh|shell)?\s*\n(.*?)```", section, re.S | re.I):
+        for line in m.group(1).splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                commands.append(s)
+    for m in re.finditer(r"`([^`]+)`", section):
+        c = m.group(1).strip()
+        if VERIFIER_COMMAND_RE.match(c):
+            commands.append(c)
+    return list(dict.fromkeys(commands))
+
+
+def verifier_kinds(section: str) -> set:
+    """Classify a ## Verifier section into the oracle kinds it declares.
+
+    Returns a subset of {command, human, artifact, mcp, metric}. 'command' means
+    audit expects a machine pass/fail result; human/artifact/mcp mark a
+    non-executable oracle whose outcome lives in the run report attestation.
+    """
+    kinds = set()
+    if extract_verifier_commands(section):
+        kinds.add("command")
+    for kind, pat in _VERIFIER_KIND_PATTERNS.items():
+        if re.search(pat, section, re.I):
+            kinds.add(kind)
+    return kinds
+
+
+def verifier_result_path(goals_dir: Path) -> Path:
+    """Canonical location of the machine-readable verifier result file."""
+    return Path(goals_dir) / "evidence" / "verifiers" / VERIFIER_RESULT_NAME

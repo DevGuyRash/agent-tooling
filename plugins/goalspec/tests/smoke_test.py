@@ -28,6 +28,7 @@ from init_project import init  # noqa: E402
 from select_goal import parse_goals_md, parse_graph, select  # noqa: E402
 from graph_goal import load as load_graph, contract_metadata  # noqa: E402
 from run_verifiers import extract_commands  # noqa: E402
+from common import sha256_file  # noqa: E402
 
 
 def assert_true(condition: bool, message: str) -> None:
@@ -63,7 +64,9 @@ def main() -> int:
     cands = extract([str(FIXTURES / "raw-inputs")], max_files=20, max_candidates=10)
     assert_true(len(cands) >= 1, "candidate extraction finds sample candidates")
     a = audit(contract, FIXTURES / "reports" / "G-001-sample-report.md", FIXTURES / "reports")
-    assert_true(a["result"] == "achieved", f"audit sample achieved: {a}")
+    # The sample report declares "inconclusive" and there is no verifier result file:
+    # report headings + a non-empty evidence dir must NOT certify achievement (G-1 oracle gate).
+    assert_true(a["result"] == "inconclusive", f"sample without verifier result is inconclusive, not achieved: {a}")
 
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -134,6 +137,77 @@ def main() -> int:
         gpath.write_text(json.dumps(cyclic), encoding="utf-8")
         sel = select(parse_graph(gpath))
         assert_true("selected" in sel, "select handles a cyclic graph without crashing")
+
+    # G-1: the goalspec.verifier.v1 result file is the deterministic oracle for
+    # "achieved". Report headings and a non-empty evidence dir are necessary but
+    # never sufficient — only a passing verifier result can certify achievement.
+    with tempfile.TemporaryDirectory() as td4:
+        goals = Path(td4) / ".goals"
+        ev = goals / "evidence" / "verifiers"
+        goals.mkdir(parents=True)
+
+        def write_contract(cmd: str) -> Path:
+            c = goals / "current.md"
+            c.write_text(
+                "# Goal Contract: G-900 Verifier Gate\n\n"
+                "## Objective\nProve the verifier-pass gate.\n\n"
+                "## Terminal State\nThis goal is complete when:\n"
+                "- The demo verifier exits 0.\n- The audit oracle reads the verifier result.\n\n"
+                "## Verifier\nCompletion must be verified by:\n\n"
+                "```bash\n" + cmd + "\n```\n\n"
+                "## Evidence Required\n- Files changed\n- Commands run\n- Budget used\n- Follow-up candidates\n",
+                encoding="utf-8",
+            )
+            # Lock the hash so a passing verifier can be certified (hash_matched True).
+            (goals / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+            return c
+
+        def write_report(decl: str) -> Path:
+            r = goals / "reports" / "report.md"
+            r.parent.mkdir(parents=True, exist_ok=True)
+            r.write_text(
+                "# Goal Report: G-900\n\n## Result\n" + decl + "\n\n"
+                "## Files Changed\n- none\n\n## Commands Run\n```text\ndemo\n```\n\n"
+                "## Evidence\n- .goals/evidence/verifiers/result.json\n\n"
+                "## Budget Used\n- iterations: 1\n\n## Remaining Risks\n- none\n\n"
+                "## Follow-Up Candidates\n- none\n",
+                encoding="utf-8",
+            )
+            return r
+
+        def run_verifiers_cli(contract: Path) -> None:
+            subprocess.run(
+                [sys.executable, str(SCRIPTS / "run_verifiers.py"), str(contract), "--run",
+                 "--evidence-dir", str(ev), "--json"],
+                cwd=td4, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=60,
+            )
+
+        # Passing verifier (`true` -> exit 0) + report sections + matching hash => achieved.
+        contract = write_contract("true")
+        report = write_report("achieved")
+        run_verifiers_cli(contract)
+        assert_true((ev / "result.json").exists(), "run_verifiers writes the goalspec.verifier.v1 result file")
+        rj = json.loads((ev / "result.json").read_text(encoding="utf-8"))
+        assert_true(rj["schema"] == "goalspec.verifier.v1" and rj["overall_passed"] is True,
+                    f"verifier result schema/pass recorded: {rj}")
+        a_pass = audit(contract, report, goals / "evidence")
+        assert_true(a_pass["result"] == "achieved", f"passing verifier result => achieved: {a_pass}")
+
+        # Same report + evidence, but verifier result REMOVED => never achieved.
+        (ev / "result.json").unlink()
+        a_missing = audit(contract, report, goals / "evidence")
+        assert_true(a_missing["result"] == "inconclusive",
+                    f"headings + evidence without a verifier result => inconclusive: {a_missing}")
+
+        # Failing verifier (`false` -> exit 1) => not achieved, even with a full report and matching hash.
+        contract = write_contract("false")
+        report = write_report("achieved")
+        run_verifiers_cli(contract)
+        rj = json.loads((ev / "result.json").read_text(encoding="utf-8"))
+        assert_true(rj["overall_passed"] is False, f"failing verifier recorded overall_passed false: {rj}")
+        a_fail = audit(contract, report, goals / "evidence")
+        assert_true(a_fail["result"] == "not achieved", f"failing verifier result => not achieved: {a_fail}")
 
     print("GoalSpec full smoke test passed.")
     return 0

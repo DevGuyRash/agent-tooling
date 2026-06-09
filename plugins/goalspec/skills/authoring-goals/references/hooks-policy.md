@@ -29,4 +29,6 @@ If a user prompt starts `/goal` but does not reference `.goals/current.md` or `$
 
 ## Stop: final evidence gate
 
-If the last assistant message appears to claim completion but omits required report fields, continue with a prompt asking for missing evidence. If the contract hash changed, continue and require the agent to report the contract mutation as failure.
+If the last assistant message appears to claim completion but omits required report fields, continue with a prompt asking for missing evidence. An achievement claim must reference the verifier pass/fail result (the oracle), not merely that files changed — evidence presence is not verification success. If the contract hash changed, continue and require the agent to report the contract mutation as failure.
+
+The Stop hook is defense-in-depth, not the oracle. The authoritative close decision is `audit_goal.py` reading the `goalspec.verifier.v1` result file: `achieved` requires a passing verifier result plus required report sections plus a matching contract hash. A missing result for an executable verifier is inconclusive, and a failing result is not achieved.
