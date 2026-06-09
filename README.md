@@ -30,7 +30,7 @@ Current local plugins:
 - `plugins/excel-foundry/`
 - `plugins/friction-diagnostics/`
 - `plugins/gitops-workflow/`
-- `plugins/goal-foundry/` exposes `goal-foundry` for both Codex and Claude and
+- `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and
   bundles the agnostic `$authoring-goals` skill payload.
 - `plugins/playwright-testing/`
 - `plugins/project-harness/`
@@ -181,7 +181,7 @@ Filter the dynamic plugin list with repeatable CSV/glob flags:
 
 ```bash
 scripts/install-all --exclude 'rust*,gitops-workflow'
-scripts/install-all --include 'goal-*,project-harness' --exclude 'project-*'
+scripts/install-all --include 'goalspec,project-harness' --exclude 'project-*'
 ```
 
 Limit the target host when needed:

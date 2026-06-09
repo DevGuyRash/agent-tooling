@@ -77,10 +77,10 @@
       "category": "Development"
     },
     {
-      "name": "goal-foundry",
+      "name": "goalspec",
       "source": {
         "source": "local",
-        "path": "./plugins/goal-foundry"
+        "path": "./plugins/goalspec"
       },
       "policy": {
         "installation": "AVAILABLE",

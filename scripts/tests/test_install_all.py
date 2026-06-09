@@ -79,17 +79,19 @@ class InstallAllTests(unittest.TestCase):
             ["plugin", "marketplace", "add", "--ref", "main", "--sparse", ".agents/plugins", "--sparse", "plugins", "DevGuyRash/agent-tooling"],
             codex_calls[0],
         )
+        self.assertEqual(["plugin", "marketplace", "upgrade", "agent-tooling"], codex_calls[1])
         self.assertEqual(
             ["plugin", "marketplace", "add", "--scope", "local", "DevGuyRash/agent-tooling", "--sparse", ".claude-plugin", "plugins"],
             claude_calls[0],
         )
+        self.assertEqual(["plugin", "marketplace", "update", "agent-tooling"], claude_calls[1])
 
-        codex_installs = codex_calls[1:]
-        claude_installs = claude_calls[1:]
+        codex_installs = codex_calls[2:]
+        claude_installs = claude_calls[2:]
         self.assertEqual(11, len(codex_installs))
         self.assertEqual(11, len(claude_installs))
-        self.assertEqual(["plugin", "add", "goal-foundry@agent-tooling"], codex_installs[6])
-        self.assertEqual(["plugin", "install", "--scope", "local", "goal-foundry@agent-tooling"], claude_installs[6])
+        self.assertEqual(["plugin", "add", "goalspec@agent-tooling"], codex_installs[6])
+        self.assertEqual(["plugin", "install", "--scope", "local", "goalspec@agent-tooling"], claude_installs[6])
 
         codex_plugins = [args[-1] for args in codex_installs]
         claude_plugins = [args[-1] for args in claude_installs]
@@ -105,8 +107,23 @@ class InstallAllTests(unittest.TestCase):
         self.assertFalse(any(call["command"] == "claude" for call in calls))
         self.assertEqual(12, len(calls))
 
+    def test_replace_marketplace_removes_existing_source_before_local_add(self) -> None:
+        calls = self.run_install_all("--source", str(REPO_ROOT), "--include", "goalspec", "--replace-marketplace")
+
+        self.assertEqual(
+            [
+                {"command": "codex", "args": ["plugin", "marketplace", "remove", "agent-tooling"]},
+                {"command": "codex", "args": ["plugin", "marketplace", "add", str(REPO_ROOT)]},
+                {"command": "codex", "args": ["plugin", "add", "goalspec@agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "marketplace", "remove", "agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "marketplace", "add", "--scope", "user", str(REPO_ROOT)]},
+                {"command": "claude", "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"]},
+            ],
+            calls,
+        )
+
     def test_claude_only_skips_codex(self) -> None:
-        calls = self.run_install_all("--claude-only", "--include", "goal-*")
+        calls = self.run_install_all("--claude-only", "--include", "goalspec")
 
         self.assertFalse(any(call["command"] == "codex" for call in calls))
         self.assertEqual(
@@ -117,7 +134,11 @@ class InstallAllTests(unittest.TestCase):
                 },
                 {
                     "command": "claude",
-                    "args": ["plugin", "install", "--scope", "user", "goal-foundry@agent-tooling"],
+                    "args": ["plugin", "marketplace", "update", "agent-tooling"],
+                },
+                {
+                    "command": "claude",
+                    "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"],
                 },
             ],
             calls,
@@ -139,13 +160,13 @@ class InstallAllTests(unittest.TestCase):
             "--include",
             "rust*,gitops-workflow",
             "--include",
-            "goal-*",
+            "goalspec",
             "--exclude",
             "rust*",
         )
 
         codex_installs = [call["args"][-1] for call in calls if call["command"] == "codex" and call["args"][:2] == ["plugin", "add"]]
-        self.assertEqual(["gitops-workflow@agent-tooling", "goal-foundry@agent-tooling"], codex_installs)
+        self.assertEqual(["gitops-workflow@agent-tooling", "goalspec@agent-tooling"], codex_installs)
 
     def test_unmatched_filter_fails_fast(self) -> None:
         proc, calls = self.run_install_all_process("--include", "missing-plugin")

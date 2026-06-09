@@ -1,6 +1,0 @@
-interface:
-  display_name: "Authoring Goals"
-  short_description: "Compile raw intent into bounded, verifiable Codex /goal contracts."
-  default_prompt: "Use $authoring-goals to create or audit a Goal Foundry contract."
-policy:
-  allow_implicit_invocation: true

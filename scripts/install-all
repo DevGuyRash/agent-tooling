@@ -11,6 +11,7 @@ codex_enabled=1
 claude_enabled=1
 use_sparse=1
 dry_run=0
+replace_marketplace=0
 include_filters=""
 exclude_filters=""
 
@@ -31,6 +32,7 @@ Options:
   --no-codex               Skip Codex.
   --no-claude              Skip Claude Code.
   --no-sparse              Do not pass sparse checkout paths to marketplace add.
+  --replace-marketplace    Remove the existing marketplace before adding this source.
   --dry-run                Print commands without running them.
   -h, --help               Show this help text.
 
@@ -99,6 +101,46 @@ run() {
   "$@"
 }
 
+remove_marketplace_if_requested() {
+  host="$1"
+
+  [ "$replace_marketplace" = "1" ] || return 0
+
+  case "$host" in
+    codex)
+      log "removing Codex marketplace $marketplace_name before re-adding it"
+      run codex plugin marketplace remove "$marketplace_name"
+      ;;
+    claude)
+      log "removing Claude Code marketplace $marketplace_name before re-adding it"
+      run claude plugin marketplace remove "$marketplace_name"
+      ;;
+    *)
+      die "unsupported marketplace host: $host"
+      ;;
+  esac
+}
+
+refresh_marketplace_if_remote() {
+  host="$1"
+
+  [ "$source_is_local" = "0" ] || return 0
+
+  case "$host" in
+    codex)
+      log "refreshing Codex marketplace $marketplace_name"
+      run codex plugin marketplace upgrade "$marketplace_name"
+      ;;
+    claude)
+      log "refreshing Claude Code marketplace $marketplace_name"
+      run claude plugin marketplace update "$marketplace_name"
+      ;;
+    *)
+      die "unsupported marketplace host: $host"
+      ;;
+  esac
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --source)
@@ -146,6 +188,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-sparse)
       use_sparse=0
+      shift
+      ;;
+    --replace-marketplace)
+      replace_marketplace=1
       shift
       ;;
     --dry-run)
@@ -245,18 +291,26 @@ plugin_names="$(printf '%s\n' "$manifest_output" | sed '1d')"
 [ -n "$marketplace_name" ] || die "failed to read marketplace name"
 [ -n "$plugin_names" ] || die "no plugins found in marketplace manifests"
 
-if [ "$use_sparse" = "1" ] && is_local_source; then
+source_is_local=0
+if is_local_source; then
+  source_is_local=1
+fi
+
+if [ "$use_sparse" = "1" ] && [ "$source_is_local" = "1" ]; then
   log "local source detected; sparse checkout flags are only used for Git sources"
   use_sparse=0
 fi
 
 if [ "$codex_enabled" = "1" ]; then
+  remove_marketplace_if_requested codex
+
   log "adding Codex marketplace $marketplace_name from $source_value"
   if [ "$use_sparse" = "1" ]; then
     run codex plugin marketplace add --ref "$codex_ref" --sparse .agents/plugins --sparse plugins "$source_value"
   else
     run codex plugin marketplace add "$source_value"
   fi
+  refresh_marketplace_if_remote codex
 
   printf '%s\n' "$plugin_names" | while IFS= read -r plugin_name; do
     [ -n "$plugin_name" ] || continue
@@ -266,12 +320,15 @@ if [ "$codex_enabled" = "1" ]; then
 fi
 
 if [ "$claude_enabled" = "1" ]; then
+  remove_marketplace_if_requested claude
+
   log "adding Claude Code marketplace $marketplace_name from $source_value"
   if [ "$use_sparse" = "1" ]; then
     run claude plugin marketplace add --scope "$claude_scope" "$source_value" --sparse .claude-plugin plugins
   else
     run claude plugin marketplace add --scope "$claude_scope" "$source_value"
   fi
+  refresh_marketplace_if_remote claude
 
   printf '%s\n' "$plugin_names" | while IFS= read -r plugin_name; do
     [ -n "$plugin_name" ] || continue

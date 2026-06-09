@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/scripts/prompt_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking GoalSpec launch rules"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/scripts/scope_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking GoalSpec scope"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/scripts/evidence_capture.py\"",
+            "timeout": 10,
+            "statusMessage": "Capturing GoalSpec evidence"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/scripts/stop_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking GoalSpec final report"
+          }
+        ]
+      }
+    ]
+  }
+}

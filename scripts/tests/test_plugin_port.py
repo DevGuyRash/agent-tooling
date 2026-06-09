@@ -41,21 +41,21 @@ class PluginPortTests(unittest.TestCase):
             root / ".codex-plugin" / "plugin.json",
             json.dumps(
                 {
-                    "name": "goal-foundry",
+                    "name": "goalspec",
                     "version": "1.0.0",
                     "description": "Compile bounded goals.",
-                    "author": {"name": "Goal Foundry"},
+                    "author": {"name": "GoalSpec"},
                     "skills": "./skills/",
                     "mcpServers": "./.mcp.json",
                     "apps": "./.app.json",
                     "interface": {
-                        "displayName": "Goal Foundry",
+                        "displayName": "GoalSpec",
                         "shortDescription": "Compile bounded goals.",
                         "longDescription": "Compile bounded goals from raw intent.",
-                        "developerName": "Goal Foundry",
+                        "developerName": "GoalSpec",
                         "category": "Productivity",
                         "capabilities": ["Read", "Write"],
-                        "defaultPrompt": ["Use Goal Foundry."],
+                        "defaultPrompt": ["Use GoalSpec."],
                     },
                 },
                 indent=2,
@@ -243,14 +243,14 @@ class PluginPortTests(unittest.TestCase):
         write(root / "monitors" / "monitors.json", "[]\n")
 
     def test_codex_plugin_converts_to_claude_with_env_and_skill_policy(self) -> None:
-        source = self.root / "goal-foundry"
+        source = self.root / "goalspec"
         out = self.root / "out"
         self.write_codex_plugin(source)
 
         report = plugin_port.convert_plugin(source, "claude", out, mode="strict", overwrite=False)
 
         manifest = read_json(out / ".claude-plugin" / "plugin.json")
-        self.assertEqual(manifest["name"], "goal-foundry")
+        self.assertEqual(manifest["name"], "goalspec")
         self.assertNotIn("hooks", manifest)
         hooks = read_json(out / "hooks" / "hooks.json")
         command = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
@@ -275,10 +275,10 @@ class PluginPortTests(unittest.TestCase):
         self.assertTrue(any(item["kind"] == "apps" for item in report.executable_surfaces))
 
     def test_codex_to_claude_quarantines_root_claude_md(self) -> None:
-        source = self.root / "goal-foundry"
+        source = self.root / "goalspec"
         out = self.root / "out"
         self.write_codex_plugin(source)
-        write(source / "CLAUDE.md", "# Goal Foundry\n\nRoot context that Claude plugins do not load.\n")
+        write(source / "CLAUDE.md", "# GoalSpec\n\nRoot context that Claude plugins do not load.\n")
 
         report = plugin_port.convert_plugin(source, "claude", out, mode="strict", overwrite=False)
 
@@ -584,7 +584,7 @@ class PluginPortTests(unittest.TestCase):
             plugin_port.convert_marketplace(marketplace, "codex", self.root / "out", mode="strict", overwrite=False)
 
     def test_summary_output_is_concise_json(self) -> None:
-        source = self.root / "goal-foundry"
+        source = self.root / "goalspec"
         out = self.root / "out"
         self.write_codex_plugin(source)
 

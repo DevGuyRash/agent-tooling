@@ -42,8 +42,8 @@
       "version": "2.0.0"
     },
     {
-      "name": "goal-foundry",
-      "source": "./plugins/goal-foundry",
+      "name": "goalspec",
+      "source": "./plugins/goalspec",
       "description": "Compile messy intent and project context into bounded, verifiable goal contracts.",
       "version": "1.0.0"
     },
