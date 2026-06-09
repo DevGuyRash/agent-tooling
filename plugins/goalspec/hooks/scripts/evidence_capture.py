@@ -1,13 +1,53 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: persist tool events as evidence when a goal contract is active."""
+"""PostToolUse hook: persist tool events as evidence when a goal contract is active.
+
+PostToolUse cannot undo side effects, so this capture is write-once: secrets are
+redacted and oversized output is truncated BEFORE anything touches disk. Redaction
+is best-effort and intentionally over-redacts — a stray [REDACTED] is cheaper than
+a leaked credential.
+"""
 from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from _hook_common import SCRIPTS  # noqa: F401
 from common import active_goal_paths, git_root_or_cwd, load_json_stdin, relpath, write_event
+
+# Per-string capture ceiling; override with GOALSPEC_EVIDENCE_MAX_BYTES.
+DEFAULT_MAX_BYTES = 16384
+
+_SECRET_VALUE = r"([^\s'\"&]+)"
+REDACTIONS = [
+    (re.compile(r"(Authorization:\s*Bearer\s+)" + _SECRET_VALUE, re.I), r"\1[REDACTED]"),
+    (re.compile(r"(\b\w*API_KEY\s*[=:]\s*)" + _SECRET_VALUE, re.I), r"\1[REDACTED]"),
+    (re.compile(r"(\bpassword\s*[=:]\s*)" + _SECRET_VALUE, re.I), r"\1[REDACTED]"),
+    (re.compile(r"(\btoken\s*[=:]\s*)" + _SECRET_VALUE, re.I), r"\1[REDACTED]"),
+    (re.compile(r"(\bsecret\s*[=:]\s*)" + _SECRET_VALUE, re.I), r"\1[REDACTED]"),
+]
+
+
+def redact_text(text: str) -> str:
+    for pattern, repl in REDACTIONS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def sanitize(value, max_bytes: int):
+    """Recursively redact secret patterns and truncate oversized strings."""
+    if isinstance(value, str):
+        out = redact_text(value)
+        encoded = out.encode("utf-8", "replace")
+        if len(encoded) > max_bytes:
+            out = encoded[:max_bytes].decode("utf-8", "ignore") + f"...[truncated {len(encoded) - max_bytes} bytes]"
+        return out
+    if isinstance(value, list):
+        return [sanitize(v, max_bytes) for v in value]
+    if isinstance(value, dict):
+        return {k: sanitize(v, max_bytes) for k, v in value.items()}
+    return value
 
 
 def main() -> int:
@@ -16,21 +56,26 @@ def main() -> int:
     _, current, lock = active_goal_paths(cwd)
     if not current.exists():
         return 0
-    # Keep a compact but raw-enough evidence event. The transcript is not treated as a stable interface.
+    try:
+        max_bytes = int(os.environ.get("GOALSPEC_EVIDENCE_MAX_BYTES", DEFAULT_MAX_BYTES))
+    except ValueError:
+        max_bytes = DEFAULT_MAX_BYTES
+    # Keep a compact but raw-enough evidence event, redacted and size-capped first.
     payload = {
         "hook_event_name": event.get("hook_event_name"),
         "turn_id": event.get("turn_id"),
         "tool_name": event.get("tool_name"),
-        "tool_input": event.get("tool_input"),
-        "tool_response": event.get("tool_response") or event.get("tool_result") or event.get("result"),
+        "tool_input": sanitize(event.get("tool_input"), max_bytes),
+        "tool_response": sanitize(event.get("tool_response") or event.get("tool_result") or event.get("result"), max_bytes),
         "permission_mode": event.get("permission_mode"),
         "cwd": cwd,
     }
     path = write_event(cwd, payload, prefix=(event.get("tool_name") or "tool").replace("/", "_"))
     # Maintain a simple runtime state file for audits and budget reports.
     root = git_root_or_cwd(cwd)
-    state_path = root / ".goals" / "run_state.json"
+    state_path = root / ".goals" / "evidence" / "run_state.json"
     try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"tool_events": 0, "tools": {}}
         state["tool_events"] = int(state.get("tool_events", 0)) + 1
         tool = event.get("tool_name") or "unknown"

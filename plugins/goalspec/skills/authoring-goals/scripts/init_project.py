@@ -37,7 +37,28 @@ def copy_if_missing(src: Path, dst: Path, overwrite: bool = False) -> bool:
     return True
 
 
-def init(root: Path, overwrite: bool = False, install_agents: bool = False, append_agents_md: bool = False) -> dict:
+GITIGNORE_MARKER = "# GoalSpec evidence hygiene"
+GITIGNORE_BLOCK = (
+    f"{GITIGNORE_MARKER}\n"
+    "# Evidence may hold raw tool I/O (best-effort redacted) and runtime state — keep it local.\n"
+    "# Reports stay tracked so completed runs remain reviewable.\n"
+    ".goals/evidence/\n"
+    ".goals/run_state.json\n"
+)
+
+
+def ensure_gitignore(root: Path) -> bool:
+    """Append GoalSpec evidence-ignore rules to .gitignore (idempotent). Reports stay reviewable."""
+    gi = root / ".gitignore"
+    old = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    if GITIGNORE_MARKER in old:
+        return False
+    gi.write_text((old.rstrip() + "\n\n" + GITIGNORE_BLOCK) if old.strip() else GITIGNORE_BLOCK, encoding="utf-8")
+    return True
+
+
+def init(root: Path, overwrite: bool = False, install_agents: bool = False, append_agents_md: bool = False,
+         write_gitignore: bool = True) -> dict:
     root = root.resolve()
     goals = root / ".goals"
     created = []
@@ -90,6 +111,9 @@ def init(root: Path, overwrite: bool = False, install_agents: bool = False, appe
             if copy_if_missing(src, dst, overwrite):
                 copied.append(str(dst.relative_to(root)))
 
+    if write_gitignore and ensure_gitignore(root):
+        copied.append(".gitignore")
+
     return {"root": str(root), "created_dirs": created, "created_or_updated_files": copied}
 
 
@@ -99,10 +123,11 @@ def main() -> int:
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing template files.")
     parser.add_argument("--install-agents", action="store_true", help="Copy optional read-only custom agent templates into .codex/agents/.")
     parser.add_argument("--append-agents-md", action="store_true", help="Append the compact GoalSpec rule to AGENTS.md if absent.")
+    parser.add_argument("--no-gitignore", action="store_true", help="Do not write GoalSpec evidence-ignore rules to .gitignore.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     root = Path(args.root).resolve() if args.root else git_root_or_cwd()
-    result = init(root, args.overwrite, args.install_agents, args.append_agents_md)
+    result = init(root, args.overwrite, args.install_agents, args.append_agents_md, write_gitignore=not args.no_gitignore)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

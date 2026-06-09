@@ -83,6 +83,11 @@ def main() -> int:
         assert_true((tmp / ".goals" / "graph.json").exists(), "init creates graph")
         assert_true((tmp / "AGENTS.md").exists(), "init appends AGENTS.md")
         assert_true((tmp / ".codex" / "agents" / "goal-auditor.toml").exists(), "init installs agent template")
+        assert_true((tmp / ".goals" / "provenance").is_dir(), "init scaffolds provenance dir")
+        gitignore_text = (tmp / ".gitignore").read_text(encoding="utf-8") if (tmp / ".gitignore").exists() else ""
+        assert_true(".goals/evidence/" in gitignore_text and ".goals/run_state.json" in gitignore_text,
+                    "init writes evidence-ignore rules to .gitignore")
+        assert_true(".goals/reports/" not in gitignore_text, "init keeps .goals/reports/ reviewable (not ignored)")
 
         shutil.copyfile(contract, tmp / ".goals" / "current.md")
         proc = subprocess.run(
@@ -336,6 +341,35 @@ def main() -> int:
         a_nolock = audit(g / "current.md", rep, g / "evidence")
         assert_true(a_nolock["result"] == "inconclusive",
                     f"missing hash lock on active contract => inconclusive, not achieved: {a_nolock}")
+
+    # G-5: evidence capture redacts secrets, truncates oversized output, and keeps
+    # runtime state under .goals/evidence/ (never .goals/run_state.json).
+    with tempfile.TemporaryDirectory() as td9:
+        g = Path(td9) / ".goals"
+        g.mkdir(parents=True)
+        (g / "current.md").write_text("# Goal Contract: G-900\n\n## Objective\nx\n", encoding="utf-8")
+        secret_event = {
+            "hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "curl -H 'Authorization: Bearer sk-LEAK-TOKEN-123' ; "
+                                      "export OPENAI_API_KEY=sk-proj-NOPE ; psql password=hunter2"},
+            "tool_response": ("x" * 50000) + " secret=topsecretvalue",
+            "cwd": str(td9),
+        }
+        cap = subprocess.run(
+            [sys.executable, str(HOOKS / "evidence_capture.py")],
+            input=json.dumps(secret_event), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1", "GOALSPEC_EVIDENCE_MAX_BYTES": "2048"},
+            timeout=30,
+        )
+        events = list((g / "evidence" / "events").glob("*.json"))
+        assert_true(len(events) == 1, f"evidence event written: {cap.stderr}")
+        blob = events[0].read_text(encoding="utf-8")
+        for leaked in ["sk-LEAK-TOKEN-123", "sk-proj-NOPE", "hunter2", "topsecretvalue"]:
+            assert_true(leaked not in blob, f"evidence capture redacts injected secret {leaked!r}")
+        assert_true("[REDACTED]" in blob, "evidence capture marks redactions")
+        assert_true("truncated" in blob, "evidence capture truncates oversized output")
+        assert_true((g / "evidence" / "run_state.json").exists() and not (g / "run_state.json").exists(),
+                    "runtime state lives under .goals/evidence/run_state.json")
 
     print("GoalSpec full smoke test passed.")
     return 0

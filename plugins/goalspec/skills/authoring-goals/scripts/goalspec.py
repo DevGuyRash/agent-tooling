@@ -20,6 +20,7 @@ COMMANDS = {
     "render": ("render_goal", "Render a paste-ready Codex /goal objective"),
     "risk": ("score_goal_risk", "Score raw goal text for runaway risk"),
     "extract": ("extract_candidates", "Extract candidate goals from files/folders"),
+    "provenance": ("record_provenance", "Record the verbatim request as provenance (not execution scope)"),
     "select": ("select_goal", "Select next ready unblocked goal"),
     "graph": ("graph_goal", "Update .goals/graph.json"),
     "ledger": ("update_ledger", "Update .goals/GOALS.md"),
