@@ -52,6 +52,10 @@ interception is not complete, audit hash and report evidence at close.
 
 Save tool-use events to `.goals/evidence/events/` when an active contract exists. Surface evidence paths as additional context.
 
+### Evidence sensitivity
+
+Capture is write-once (PostToolUse cannot undo side effects), so it sanitizes before writing. Common secret patterns (`Authorization: Bearer`, `*_API_KEY=`, `password=`, `token=`, `secret=`) are redacted to `[REDACTED]` and oversized strings are truncated (`GOALSPEC_EVIDENCE_MAX_BYTES`, default 16 KB). Redaction is best-effort and intentionally over-redacts — **evidence may still contain sensitive raw output**. `init_project.py` gitignores `.goals/evidence/` and `.goals/run_state.json` (runtime state lives at `.goals/evidence/run_state.json`); keep evidence local and do not paste it outside the project. `.goals/reports/` is the reviewable summary and stays tracked.
+
 ## UserPromptSubmit: goal launch guard
 
 If a user prompt starts `/goal` but does not reference `.goals/current.md` or `$authoring-goals`, add context warning that long-running work should be compiled first. To block, emit `{"decision":"block","reason":"..."}` (or exit 2); a referenced-but-missing `.goals/current.md` is blocked.
