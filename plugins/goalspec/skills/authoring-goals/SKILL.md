@@ -73,6 +73,24 @@ Choose the artifact based on input shape:
 
 `GOALS.md` is a registry. `.goals/current.md` is the active mission. Never run `/goal` against a backlog or registry.
 
+## Decomposition routing
+
+Route by risk and shape, not just by the literal input:
+
+- If `score_goal_risk.py` reports **high or extreme** forever-risk, OR the request is **broad, multi-objective, or activity-shaped** (e.g. "modernize the app", "fix everything in the backlog", "improve onboarding and checkout and search"), do NOT compile it into a single executable contract. Produce a **non-executable campaign** (`.goals/campaign-*.md` from the campaign template) and split it into finite child candidates with readiness statuses: **ready | conditional | blocked | not-launchable**.
+- Compile **at most one ready child** into `.goals/current.md`. A campaign parent is never executed; it has no contract hash and is never rendered to a `/goal`.
+- If **no child is ready**, stop at the campaign/backlog and report the missing fields or decisions that block the most promising child. Do not force a not-ready child into `current.md`.
+- Record the remaining children as candidates/backlog, not as implicit scope of the one launched child.
+
+## Greenfield / from spec
+
+When there is no existing code to scan:
+
+- Skip the repo scan, but still run the capability inventory (the languages, tooling, and test runners that will exist).
+- Author from the prompt or spec. If a spec/PRD/design doc exists, scan that document as the discovery surface instead of code.
+- A first greenfield goal is usually small: produce a minimal verifiable artifact plus a smoke test and run instructions, with a verifier that actually executes (e.g. the smoke-test command), not a manual "looks done".
+- Greenfield does not waive the spine: terminal state, verifier, budget, scope, give-up, and completeness are still mandatory.
+
 ## Contract style
 
 Generated goal contracts should be declarative. Say what must be true, what must not change, what proves completion, and when to stop.

@@ -1,6 +1,6 @@
 # Candidate Goal: [ID] [Title]
 
-- Status: candidate
+- Status: [ready | conditional | blocked | not-launchable]
 - Type: [bugfix | test | docs | refactor | research | maintenance-slice | campaign]
 - Source evidence:
   - [file:line or provided context]

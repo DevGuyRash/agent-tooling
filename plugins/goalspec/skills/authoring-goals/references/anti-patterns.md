@@ -35,6 +35,21 @@ Rewrite into fixed targets:
 Bad: run `/goal` against all of `GOALS.md`.
 Good: select one ready goal and compile `.goals/current.md`.
 
+## Campaign-parent-as-goal
+
+Bad: render or run a campaign parent (or a multi-objective aspiration) as one `/goal`.
+Good: decompose into finite children, compile at most one ready child into `.goals/current.md`; the parent is never executed.
+
+## Kitchen-sink single goal
+
+Bad: one contract that bundles several independent objectives ("fix auth and add search and modernize deps").
+Good: one finite objective per contract; the others become candidates in the campaign/backlog.
+
+## Greenfield without a verifier
+
+Bad: a first greenfield goal whose completion is "the app looks done" with no runnable check.
+Good: a minimal artifact plus a smoke test and run instructions, verified by an executing command.
+
 ## Self-ratified completion
 
 Bad: "Done because the agent says it is better."

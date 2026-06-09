@@ -1,6 +1,9 @@
 # Campaign: Replace With Name
 
-This campaign is not directly executable. Compile one child goal into `.goals/current.md` before running Codex `/goal`.
+> **Not executable.** A campaign parent is never run, never rendered to a `/goal`,
+> and has no contract hash. Compile **at most one ready child** into
+> `.goals/current.md`, validate, and lock it before running Codex `/goal`. If no
+> child is ready, stop here and report what blocks the most promising child.
 
 ## Intent
 
@@ -26,6 +29,13 @@ This campaign is not directly executable. Compile one child goal into `.goals/cu
 - Depends on: G-001
 - Missing decision:
 
+### G-003: Not-launchable child
+
+- Status: not-launchable
+- Reason: [no checkable terminal state / no verifier / unbounded scope]
+- Needed to launch: [the missing spine field or decision]
+
 ## Selection Recommendation
 
-Run G-001 first because [reason].
+Compile at most one ready child. Run G-001 first because [reason]. If no child is
+ready, stop here and report what blocks the most promising child.

@@ -35,3 +35,29 @@ Output: lint report with statuses: ready, conditional, blocked, maintenance-loop
 Input: `.goals/current.md` and `.goals/reports/latest.md`.
 
 Output: audit result based on evidence, not confidence.
+
+## Decompose a large request
+
+Input:
+
+```text
+Modernize the whole app: upgrade deps, add tests everywhere, refactor the API, and improve performance.
+```
+
+Output: not one contract. A non-executable campaign (`.goals/campaign-modernize.md`) splitting the aspiration into finite children with readiness statuses, e.g.:
+
+1. `ready` — Upgrade dependency set S to versions available as of date D; build and test command C exit 0.
+2. `conditional` — Add tests for module M once its public API is frozen (needs decision).
+3. `not-launchable` — "Refactor the API" has no checkable terminal state; needs a concrete target.
+
+Compile only child 1 into `.goals/current.md`. The campaign parent is never run.
+
+## Greenfield / from spec
+
+Input:
+
+```text
+Build a CLI that converts CSV to JSON. No code yet; here is a one-paragraph spec.
+```
+
+Output: skip the repo scan, inventory the language/test runner, and compile one small `.goals/current.md`: a minimal `csv2json` plus a smoke test, terminal state "the smoke test command exits 0 on the sample input", verifier = that command, bounded budget. Not "the CLI is done".
