@@ -193,6 +193,18 @@ class PluginPortTests(unittest.TestCase):
             ).lstrip(),
         )
         write(
+            root / "agents" / "reviewer.md",
+            textwrap.dedent(
+                """
+                ---
+                description: Review pull requests.
+                ---
+
+                Review the change set thoroughly.
+                """
+            ).lstrip(),
+        )
+        write(
             root / "hooks" / "hooks.json",
             json.dumps(
                 {
@@ -310,6 +322,7 @@ class PluginPortTests(unittest.TestCase):
         self.assertNotIn("Notification", hooks["hooks"])
         self.assertTrue(any(item["kind"] == "hook-event" for item in report.unsupported))
         self.assertTrue(any(item["kind"] == "claude-lsp" for item in report.preserved_only))
+        self.assertTrue(any(item["kind"] == "claude-agents" for item in report.preserved_only))
         self.assertEqual(report.support_level, "best-effort-lossy")
 
     def test_claude_lowercase_skill_entrypoint_converts_to_codex_skill_md(self) -> None:

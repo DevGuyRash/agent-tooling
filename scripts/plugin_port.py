@@ -1113,6 +1113,7 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
     if target == "codex":
         for kind, rels in {
             "claude-lsp": [".lsp.json"],
+            "claude-agents": ["agents"],
             "claude-output-style": ["output-styles"],
             "claude-theme": ["themes"],
             "claude-monitor": ["monitors"],
