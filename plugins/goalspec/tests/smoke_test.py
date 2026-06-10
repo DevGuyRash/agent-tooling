@@ -487,6 +487,83 @@ def main() -> int:
         second = run_stop(ws, "All done — implemented and complete.")
         assert_true(second.strip() == "", f"claim without evidence allows the second stop: {second!r}")
 
+    # Verifier-strength heuristics: tautological commands, out-of-scope reads,
+    # and verifier/terminal-state disconnects warn (a weak oracle certifies garbage).
+    with tempfile.TemporaryDirectory() as td14:
+        taut = Path(td14) / "taut.md"
+        taut.write_text(_swap(base, "Verifier",
+                               "Completion must be verified by:\n\n```bash\ntrue\n```\n"),
+                        encoding="utf-8")
+        vt = validate(taut)
+        assert_true(any("tautological" in w for w in vt["warnings"]),
+                    f"tautological verifier warns: {vt['warnings']}")
+
+        oos = Path(td14) / "oos.md"
+        oos.write_text(_swap(_swap(base, "Verifier",
+                                   "Completion must be verified by:\n"
+                                   "- `python3 -c \"import pathlib,sys; sys.exit(0 if 'X' in pathlib.Path('README.md').read_text() else 1)\"`\n"
+                                   "- Expected result: exit code 0."),
+                             "Scope",
+                             "In scope:\n- Files under src/ only.\nOut of scope:\n- README.md must not be modified for any reason."),
+                       encoding="utf-8")
+        vo = validate(oos)
+        assert_true(any("Out of scope" in w and "README.md" in w for w in vo["warnings"]),
+                    f"out-of-scope verifier read warns: {vo['warnings']}")
+
+        weak = Path(td14) / "weak.md"
+        weak.write_text(_swap(_swap(base, "Verifier",
+                                    "Completion must be verified by:\n- `pytest -q`\n- Expected result: exit code 0."),
+                              "Terminal State",
+                              "This goal is complete when:\n- The feature works for users.\n- The documentation is updated."),
+                        encoding="utf-8")
+        vw = validate(weak)
+        assert_true(any("disconnected" in w for w in vw["warnings"]),
+                    f"verifier/terminal disconnect warns: {vw['warnings']}")
+
+    # launch_goal: the external bound + close-out in one command. Achieved path,
+    # hung-executor kill (124), and refuse-unlocked.
+    with tempfile.TemporaryDirectory() as td15:
+        ws = Path(td15)
+        goals = ws / ".goals"
+        (goals / "reports").mkdir(parents=True)
+        c = goals / "current.md"
+        c.write_text(_swap(base, "Verifier",
+                           "Completion must be verified by:\n- `python3 -c \"import sys; sys.exit(0)\"`\n- Expected result: exit code 0."),
+                     encoding="utf-8")
+        (goals / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        (goals / "reports" / "final.md").write_text(
+            "# Goal Report\n\n## Result\nachieved\n\n## Files Changed\n- x\n\n## Commands Run\n- x\n\n"
+            "## Evidence\n- x\n\n## Budget Used\n- x\n\n## Remaining Risks\n- x\n\n## Follow-Up Candidates\n- x\n",
+            encoding="utf-8")
+        launch = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws),
+             "--exec-cmd", "cat > /dev/null", "--timeout", "30", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(launch.returncode == 0,
+                    f"launch achieves with passing verifier + report: rc={launch.returncode} {launch.stderr}")
+        lj = json.loads(launch.stdout)
+        assert_true(lj["outcome"] == "exited" and lj["audit"]["result"] == "achieved", f"launch summary: {lj}")
+        assert_true(Path(lj["transcript"]).exists(), "launch writes a transcript")
+
+        hung = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws),
+             "--exec-cmd", "sleep 5", "--timeout", "1", "--skip-audit"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(hung.returncode == 124, f"launch kills a hung executor with 124: rc={hung.returncode}")
+
+        (goals / "current.sha256").unlink()
+        refused = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws), "--exec-cmd", "cat > /dev/null"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(refused.returncode == 2 and "REFUSED" in refused.stderr,
+                    f"launch refuses an unlocked contract: rc={refused.returncode} {refused.stderr}")
+
     print("GoalSpec full smoke test passed.")
     return 0
 

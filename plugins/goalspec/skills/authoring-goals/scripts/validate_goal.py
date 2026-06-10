@@ -7,7 +7,16 @@ import json
 import re
 from pathlib import Path
 
-from common import REQUIRED_SECTIONS, OPEN_ENDED_PHRASES, bullets, contract_lock_status, parse_sections, sha256_file, verifier_kinds
+from common import (
+    REQUIRED_SECTIONS,
+    OPEN_ENDED_PHRASES,
+    bullets,
+    contract_lock_status,
+    extract_verifier_commands,
+    parse_sections,
+    sha256_file,
+    verifier_kinds,
+)
 
 # Concrete repair hints keyed by a substring of the error message they address.
 REPAIR_HINTS = {
@@ -85,6 +94,32 @@ def validate(path: Path) -> dict:
         # The verifier exists but audit cannot key off it: no runnable command and
         # no declared human/artifact/MCP gate, so audit stays inconclusive forever.
         warnings.append("Verifier has no executable command and declares no human/artifact/MCP gate; audit cannot auto-confirm pass. Add a runnable command (e.g. `pytest -q`) or name the human/artifact/MCP oracle explicitly")
+
+    # Verifier-strength heuristics: a weak oracle certifies garbage, so flag the
+    # mechanical Goodhart cases. Semantic gaming is the red-team pass's job.
+    verifier_cmds = extract_verifier_commands(verifier)
+    if verifier_cmds:
+        for cmd in verifier_cmds:
+            head = cmd.strip()
+            if head in {"true", ":", "exit 0"} or re.match(r"^(echo|printf)\b[^|&;]*$", head):
+                warnings.append(f"Verifier command {cmd!r} is tautological (cannot fail); it certifies nothing")
+        out_parts = re.split(r"Out of scope:", scope, maxsplit=1, flags=re.I)
+        out_text = out_parts[1].lower() if len(out_parts) == 2 else ""
+        if out_text:
+            for cmd in verifier_cmds:
+                for token in re.findall(r"[\w./-]+\.\w{1,6}", cmd):
+                    name = token.lower().lstrip("./")
+                    if name and name in out_text:
+                        warnings.append(f"Verifier reads {token!r}, which appears under 'Out of scope:'; the executor cannot legitimately change what the verifier measures")
+                        break
+        term_l = term.lower()
+        cmd_tokens = set()
+        for cmd in verifier_cmds:
+            cmd_tokens.update(t.lower().lstrip("./") for t in re.findall(r"[\w./-]+\.\w{1,6}", cmd))
+            cmd_tokens.add(cmd.split()[0].lower())
+        linkage_words = ["verifier", "exit 0", "exit code", "pass", "test", "check"]
+        if not any(w in term_l for w in linkage_words) and not any(t and t in term_l for t in cmd_tokens):
+            warnings.append("Terminal State references neither the verifier nor anything it measures; completion and verification may be disconnected")
     # A budget must bind: a concrete numeric ceiling OR an explicit external gate.
     # Keyword-only boilerplate ("Stop when the budget is exhausted") does not bind.
     budget_has_number = re.search(r"\d", budget)

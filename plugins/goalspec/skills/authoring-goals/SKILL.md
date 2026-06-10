@@ -121,6 +121,10 @@ Allowed procedural rails are generic and finite:
 - Decide: complete, continue within budget, stop blocked, stop out-of-scope, or stop budget-exhausted.
 - Record adjacent discoveries as follow-up candidates.
 
+## Red-team before lock
+
+Before writing the hash, attack your own contract once: actively look for a way to make the Verifier pass without satisfying the Intent — trivial or hardcoded outputs, edits to files the verifier reads but the scope forbids, artifacts that exist but are empty, satisfying the letter of a clause while missing the Completeness Dimensions. If you find a gaming path, strengthen the Verifier or Scope to close it, re-validate, and only then lock. If you find none, state that in one line. `validate_goal.py` flags the mechanical cases (tautological verifiers, out-of-scope reads, verifier/terminal-state disconnects); this pass exists for the semantic ones lint cannot see.
+
 ## Contract freeze
 
 After writing `.goals/current.md`, instruct the user or executor to run:
