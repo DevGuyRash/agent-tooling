@@ -306,6 +306,22 @@ def main() -> int:
         assert_true(not vs["ok"] and any("at least one bullet under both" in e for e in vs["errors"]),
                     f"empty in/out scope fails: {vs['errors']}")
 
+        # Brackets inside code spans are real code, not placeholders; prose
+        # placeholders still fail (live-fire demo regression, 2026-06-10).
+        codeb = Path(td6) / "codebrackets.md"
+        codeb.write_text(_swap(base, "Verifier",
+                                "Completion must be verified by:\n"
+                                "- `python3 -c \"import sys; sys.exit(0 if all(['a','b']) else 1)\"`\n"
+                                "- Expected result: exit code 0."), encoding="utf-8")
+        vcode = validate(codeb)
+        assert_true(vcode["ok"], f"bracketed code inside backticks validates: {vcode['errors']}")
+        proseb = Path(td6) / "prosebrackets.md"
+        proseb.write_text(_swap(base, "Verifier",
+                                "Completion must be verified by:\n- [command / metric / checklist]"), encoding="utf-8")
+        vprose = validate(proseb)
+        assert_true(not vprose["ok"] and any("bracket placeholders" in e for e in vprose["errors"]),
+                    f"prose bracket placeholders still fail: {vprose['errors']}")
+
         # Unresolved capability placeholders warn.
         badc = Path(td6) / "badcaps.md"
         badc.write_text(_swap(base, "Available Capabilities", "- Skills: [discovered relevant skills]\n- Plugins: [tbd]"), encoding="utf-8")

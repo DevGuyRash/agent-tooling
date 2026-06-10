@@ -24,6 +24,19 @@ REPAIR_HINTS = {
 }
 
 
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`]*`", re.S)
+
+
+def _prose_without_code(text: str) -> str:
+    """Section text with fenced blocks and inline code removed.
+
+    Bracket-placeholder detection must not fire on real code: verifier commands
+    legitimately contain brackets (Python literals, jq filters, regex classes),
+    while template placeholders live in prose.
+    """
+    return _CODE_SPAN_RE.sub(" ", text)
+
+
 def suggest_repairs(errors: list) -> list:
     repairs = []
     for err in errors:
@@ -49,10 +62,13 @@ def validate(path: Path) -> dict:
         elif not sections[name].strip():
             errors.append(f"Empty required section: ## {name}")
 
-    # Critical sections should not contain bracket placeholders.
+    # Critical sections should not contain bracket placeholders (in prose;
+    # brackets inside code spans/fences are real code, not placeholders).
     for name in ["Objective", "Intent", "Completeness Dimensions", "Terminal State", "Verifier", "Scope", "Budget", "Give-Up Conditions", "Evidence Required"]:
-        if name in sections and "[" in sections[name] and "]" in sections[name]:
-            errors.append(f"Section ## {name} still contains bracket placeholders")
+        if name in sections:
+            prose = _prose_without_code(sections[name])
+            if "[" in prose and "]" in prose:
+                errors.append(f"Section ## {name} still contains bracket placeholders")
 
     term = sections.get("Terminal State", "")
     verifier = sections.get("Verifier", "")
@@ -95,7 +111,7 @@ def validate(path: Path) -> dict:
         errors.append("Completeness Dimensions should list at least two dimensions")
 
     # Capabilities should be resolved from a real inventory, not left as placeholders.
-    caps = sections.get("Available Capabilities", "")
+    caps = _prose_without_code(sections.get("Available Capabilities", ""))
     if "[" in caps and "]" in caps:
         warnings.append("Available Capabilities still contains unresolved [placeholders]; resolve them with inventory_capabilities.py before launch")
 
