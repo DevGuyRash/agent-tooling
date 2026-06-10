@@ -88,8 +88,8 @@ def validate(path: Path) -> dict:
 
     if len(bullets(term)) < 2:
         errors.append("Terminal State should contain at least two checkable clauses")
-    if len(bullets(verifier)) < 1:
-        errors.append("Verifier should contain at least one command, artifact, metric, checklist, or gate")
+    if len(bullets(verifier)) < 1 and not extract_verifier_commands(verifier):
+        errors.append("Verifier should contain at least one command, artifact, metric, checklist, or gate (bullets or a fenced command block)")
     elif not verifier_kinds(verifier):
         # The verifier exists but audit cannot key off it: no runnable command and
         # no declared human/artifact/MCP gate, so audit stays inconclusive forever.
@@ -106,12 +106,14 @@ def validate(path: Path) -> dict:
         out_parts = re.split(r"Out of scope:", scope, maxsplit=1, flags=re.I)
         out_text = out_parts[1].lower() if len(out_parts) == 2 else ""
         if out_text:
+            flagged = set()
             for cmd in verifier_cmds:
                 for token in re.findall(r"[\w./-]+\.\w{1,6}", cmd):
                     name = token.lower().lstrip("./")
                     if name and name in out_text:
-                        warnings.append(f"Verifier reads {token!r}, which appears under 'Out of scope:'; the executor cannot legitimately change what the verifier measures")
-                        break
+                        flagged.add(token)
+            for token in sorted(flagged):
+                warnings.append(f"Verifier reads {token!r}, which appears under 'Out of scope:'; the executor cannot legitimately change what the verifier measures")
         term_l = term.lower()
         cmd_tokens = set()
         for cmd in verifier_cmds:

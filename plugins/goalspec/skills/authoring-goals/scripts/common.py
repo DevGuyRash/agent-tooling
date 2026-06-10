@@ -58,8 +58,11 @@ VERIFIER_RESULT_SCHEMA = "goalspec.verifier.v1"
 VERIFIER_RESULT_NAME = "result.json"
 
 # A verifier command is something the runner can execute and read an exit code from.
+# Bias toward extraction: a silently skipped verifier (observed live: a `git diff
+# --exit-code` check never ran while overall_passed reported True) is worse than a
+# loud false failure the author has to look at.
 VERIFIER_COMMAND_RE = re.compile(
-    r"^(npm|pnpm|yarn|pytest|python|python3|go|cargo|mvn|gradle|make|just|tox|ruff|eslint|vitest|jest|bun|deno)\b"
+    r"^(npm|pnpm|yarn|pytest|python|python3|go|cargo|mvn|gradle|make|just|tox|ruff|eslint|vitest|jest|bun|deno|git|bash|sh|node|npx|test)\b"
 )
 
 # Patterns that mark a verifier as a non-executable oracle. A human/artifact/MCP

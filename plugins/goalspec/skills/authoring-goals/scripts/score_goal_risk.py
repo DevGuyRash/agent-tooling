@@ -26,7 +26,9 @@ def score(text: str) -> dict:
             reasons.append(f"open-ended phrase: {phrase}")
     checks = [
         (r"\b(test|tests|exit 0|passes|metric|coverage|benchmark|checklist|review)\b", "mentions verifier", -2),
-        (r"\b(max|maximum|budget|iterations?|timebox|stop after|changed files|dependencies)\b", "mentions budget", -2),
+        # Bare "dependencies" is not a budget signal (live false positive: it made
+        # "keep my project dependencies up to date" read as bounded).
+        (r"\b(max|maximum|budget|iterations?|timebox|stop after|changed files|max (?:new )?dependencies|dependencies added)\b", "mentions budget", -2),
         (r"\b(out of scope|do not|don't|forbidden|only|limited to)\b", "mentions scope edge", -1),
         (r"\b(stop and report|give up|blocked|infeasible|unavailable|requires decision)\b", "mentions give-up", -2),
         (r"\b(done when|complete when|terminal state|is true|must pass)\b", "mentions terminal state", -2),
@@ -45,6 +47,20 @@ def score(text: str) -> dict:
     if re.search(r"\band\b.*\band\b", lowered):
         points += 1
         reasons.append("possible multi-objective bundle")
+    # An enumerated feature list ("streaks, reminders, charts, and cloud sync")
+    # is sprawl even with a single "and" (live miss: app-scale request scored medium).
+    if re.search(r"\b\w[\w\s-]{0,24},\s*\w[\w\s-]{0,24},\s*(?:and\s+)?\w", lowered):
+        points += 2
+        reasons.append("enumerated feature list")
+    if re.search(r"\b(build|create|make)\b.*\b(app|application|platform|system|website|service|product)\b", lowered):
+        points += 1
+        reasons.append("app-scale target")
+    if re.search(r"\bup[\s-]to[\s-]date\b", lowered) and "as of" not in lowered:
+        points += 2
+        reasons.append("maintenance loop phrasing (up to date)")
+    if re.search(r"\b(force[\s-]?push|rewrite\s+history|squash\b.*\bhistory|rm\s+-rf|delete\s+(?:all|every)|drop\s+table|wipe\b|hard\s+reset)\b", lowered):
+        points += 2
+        reasons.append("destructive operation requested")
     if points <= RISK_LOW_MAX:
         level = "low"
     elif points <= RISK_MEDIUM_MAX:

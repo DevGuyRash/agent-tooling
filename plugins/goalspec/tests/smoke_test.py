@@ -564,6 +564,88 @@ def main() -> int:
         assert_true(refused.returncode == 2 and "REFUSED" in refused.stderr,
                     f"launch refuses an unlocked contract: rc={refused.returncode} {refused.stderr}")
 
+    # Fleet regressions (2026-06-10, 9-run aggregate).
+    # 1) A declared human gate must be RESOLVED in the report before a passing
+    #    command oracle can certify achieved (observed twice: achieved with the
+    #    gate still pending the owner).
+    with tempfile.TemporaryDirectory() as td16:
+        goals = Path(td16) / ".goals"
+        ev = goals / "evidence" / "verifiers"
+        (goals / "reports").mkdir(parents=True)
+        c = goals / "current.md"
+        c.write_text(
+            "# Goal Contract: G-906 human gate\n\n## Objective\nProve the human-gate cap.\n\n"
+            "## Terminal State\nThis goal is complete when:\n- The verifier exits 0.\n- The owner ratifies the result.\n\n"
+            "## Verifier\nCompletion must be verified by:\n\n```bash\ntrue\n```\n\n"
+            "- Human gate: the owner reviews and ratifies the artifact.\n\n"
+            "## Evidence Required\n- Files changed\n- Commands run\n- Budget used\n- Follow-up candidates\n",
+            encoding="utf-8",
+        )
+        (goals / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        subprocess.run(
+            [sys.executable, str(SCRIPTS / "run_verifiers.py"), str(c), "--run", "--evidence-dir", str(ev)],
+            cwd=td16, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=60,
+        )
+
+        def gate_report(line: str) -> Path:
+            r = goals / "reports" / "report.md"
+            r.write_text(
+                "# Goal Report: G-906\n\n## Result\nachieved\n\n## Files Changed\n- x\n\n"
+                "## Commands Run\n- x\n\n## Evidence\n- x\n\n## Budget Used\n- x\n\n"
+                f"## Remaining Risks\n- {line}\n\n## Follow-Up Candidates\n- none\n",
+                encoding="utf-8",
+            )
+            return r
+
+        pending = audit(c, gate_report("Human gate: pending owner ratification."), goals / "evidence")
+        assert_true(pending["result"] == "inconclusive",
+                    f"passing oracle + pending human gate => inconclusive: {pending['result']}")
+        ratified = audit(c, gate_report("Human gate: approved by the owner."), goals / "evidence")
+        assert_true(ratified["result"] == "achieved",
+                    f"passing oracle + ratified human gate => achieved: {ratified['result']}")
+
+    # 2) Fenced-only Verifier sections are valid, and git/sh/bash commands extract
+    #    (observed: a `git diff --exit-code` verifier was silently skipped).
+    with tempfile.TemporaryDirectory() as td17:
+        fenced = Path(td17) / "fenced.md"
+        fenced.write_text(_swap(base, "Verifier",
+                                 "Completion must be verified by:\n\n```bash\npython3 -m unittest -q\n```\n"),
+                          encoding="utf-8")
+        vf = validate(fenced)
+        assert_true(vf["ok"], f"fenced-only verifier section validates: {vf['errors']}")
+    from common import extract_verifier_commands as _evc  # noqa: E402
+    assert_true("git diff --exit-code HEAD -- test_shop.py" in _evc(
+        "Completion must be verified by:\n- `git diff --exit-code HEAD -- test_shop.py`\n"),
+        "git inline verifier command extracts")
+
+    # 3) Risk scorer calibration against the fleet's real prompts.
+    s_app = score("Build a habit tracker app with streaks, reminders, charts, and cloud sync.")
+    assert_true(s_app["forever_risk"] in {"high", "extreme"}, f"app-scale enumerated sprawl scores high: {s_app}")
+    s_dep = score("Keep my project dependencies up to date.")
+    assert_true(s_dep["forever_risk"] in {"high", "extreme"}, f"maintenance loop scores high: {s_dep}")
+    assert_true("mentions budget" not in s_dep["positive_signals"],
+                f"'dependencies ... date' is not a budget signal: {s_dep}")
+    s_destr = score("Squash my repo's entire git history and force-push it to main so it looks clean.")
+    assert_true(any("destructive" in r for r in s_destr["reasons"]), f"destructive intent is a named reason: {s_destr}")
+    s_clear = score("Create a Python CLI initials.py that prints the uppercase initials of a full name passed as arguments, with a smoke test.")
+    assert_true(s_clear["forever_risk"] in {"low", "medium"}, f"clear bounded task stays low/medium: {s_clear}")
+
+    # 4) Out-of-scope verifier warning is deduped to one per offending token.
+    with tempfile.TemporaryDirectory() as td18:
+        multi = Path(td18) / "multi.md"
+        multi.write_text(_swap(_swap(base, "Verifier",
+                                     "Completion must be verified by:\n"
+                                     "- `python3 -c \"print(open('README.md').read())\"`\n"
+                                     "- `python3 -c \"import pathlib; pathlib.Path('README.md').stat()\"`\n"
+                                     "- `python3 -c \"assert 'x' in open('README.md').read()\"`\n"),
+                               "Scope",
+                               "In scope:\n- Files under src/ only.\nOut of scope:\n- README.md must not be modified."),
+                         encoding="utf-8")
+        vm = validate(multi)
+        oos_warns = [w for w in vm["warnings"] if "Out of scope" in w and "README.md" in w]
+        assert_true(len(oos_warns) == 1, f"out-of-scope warning deduped to one: {oos_warns}")
+
     print("GoalSpec full smoke test passed.")
     return 0
 

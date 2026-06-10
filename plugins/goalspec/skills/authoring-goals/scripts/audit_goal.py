@@ -80,6 +80,27 @@ def _provenance_check(contract_sections: dict, contract: Path) -> dict:
     return info
 
 
+def _human_gate_resolved(report_text: str) -> bool:
+    """True when the report records an explicit human ratification.
+
+    A declared human gate is an oracle the executor cannot satisfy itself;
+    certifying achieved while it is pending is self-ratification by omission
+    (observed live: two runs audited achieved off the command oracle alone
+    while the human gate was still pending the owner).
+    """
+    for line in report_text.splitlines():
+        lowered = line.lower()
+        if "human" not in lowered:
+            continue
+        if not re.search(r"\b(gate|review|ratif\w*|sign[\s-]?off|approv\w*)\b", lowered):
+            continue
+        if re.search(r"\b(pending|awaiting|not yet|unratified|unresolved|todo)\b", lowered):
+            continue
+        if re.search(r"\b(ratified|approved|confirmed|accepted|signed[\s-]?off)\b", lowered):
+            return True
+    return False
+
+
 def _report_result_decl(report_text: str) -> str:
     body = parse_sections(report_text).get("Result", "")
     for line in body.splitlines():
@@ -137,6 +158,7 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
     # --- Report sections (presence is necessary but never sufficient) ---
     report_sections_ok = True
     report_decl = ""
+    rtext = ""
     if report and report.exists():
         rtext = report.read_text(encoding="utf-8")
         report_decl = _report_result_decl(rtext)
@@ -202,7 +224,13 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
         result["errors"].append("Verifier evidence did not pass; goal is not achieved")
     elif overall_passed is True:
         if report_sections_ok and evidence_present and hash_matched is True:
-            result["result"] = "achieved"
+            if "human" in declared_kinds and not _human_gate_resolved(rtext):
+                result["result"] = "inconclusive"
+                result["missing_checks"].append(
+                    "Declared human gate is unresolved: the report must record explicit human ratification "
+                    "(e.g. 'human gate: approved by owner') before achieved can be certified")
+            else:
+                result["result"] = "achieved"
         else:
             result["result"] = "inconclusive"
             if hash_matched is not True:

@@ -140,6 +140,8 @@ During execution, the agent may read `.goals/current.md` but must not modify it.
 
 Any mid-run change to `.goals/current.md` or `.goals/current.sha256` is an audit failure unless the user explicitly restarts authoring and re-locks the contract.
 
+For unattended runs, launch through `scripts/launch_goal.py`: it refuses unlocked contracts, enforces an external wall-clock ceiling on the executor (the only bound that does not depend on the executor's cooperation), captures the transcript under `.goals/evidence/transcripts/`, and runs the verifiers and audit at close.
+
 ## Mandatory response structure
 
 For author/compile/lint outputs, include:
@@ -250,6 +252,7 @@ Individual scripts:
 - `scripts/select_goal.py`
 - `scripts/graph_goal.py`
 - `scripts/run_verifiers.py`
+- `scripts/launch_goal.py`
 - `scripts/audit_goal.py`
 - `scripts/update_ledger.py`
 - `scripts/goalspec.py`
