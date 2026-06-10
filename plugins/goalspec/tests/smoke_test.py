@@ -451,6 +451,42 @@ def main() -> int:
                     "## Budget Used", "## Remaining Risks", "## Follow-Up Candidates"]:
         assert_true(heading in rendered_headings, f"rendered /goal names report heading {heading}")
 
+    # Live-fire regression (Codex LF-1x, 2026-06-10): every Stop block is once per
+    # cause. A mutated contract blocked the stop on every attempt (71 consecutive
+    # blocks until external timeout) because the executor cannot restore the hash;
+    # the marker under .goals/evidence/ must let the second stop through, without
+    # relying on the harness's stop_hook_active field.
+    def run_stop(ws: Path, msg: str) -> str:
+        proc = subprocess.run(
+            [sys.executable, str(HOOKS / "stop_guard.py")],
+            input=json.dumps({"cwd": str(ws), "last_assistant_message": msg}),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        return proc.stdout
+
+    with tempfile.TemporaryDirectory() as td12:
+        ws = Path(td12)
+        (ws / ".goals").mkdir(parents=True)
+        (ws / ".goals" / "current.md").write_text("# Goal Contract: G-904\n\n## Objective\nx\n", encoding="utf-8")
+        (ws / ".goals" / "current.sha256").write_text("0" * 64 + "  current.md\n", encoding="utf-8")
+        first = run_stop(ws, "still working")
+        assert_true('"block"' in first, f"mutated contract blocks the first stop: {first!r}")
+        second = run_stop(ws, "still working")
+        assert_true(second.strip() == "", f"mutated contract allows the second stop: {second!r}")
+
+    with tempfile.TemporaryDirectory() as td13:
+        ws = Path(td13)
+        goals = ws / ".goals"
+        goals.mkdir(parents=True)
+        c = goals / "current.md"
+        c.write_text("# Goal Contract: G-905\n\n## Objective\nx\n", encoding="utf-8")
+        (goals / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        first = run_stop(ws, "All done — implemented and complete.")
+        assert_true('"block"' in first, f"claim without evidence blocks the first stop: {first!r}")
+        second = run_stop(ws, "All done — implemented and complete.")
+        assert_true(second.strip() == "", f"claim without evidence allows the second stop: {second!r}")
+
     print("GoalSpec full smoke test passed.")
     return 0
 

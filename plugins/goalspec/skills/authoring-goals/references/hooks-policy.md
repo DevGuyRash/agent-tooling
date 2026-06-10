@@ -20,6 +20,12 @@ render-refuse-unlocked plus the audit hash, not the hooks.
 - Because interception is incomplete and irreversible after the fact, the
   authoritative freeze is the audit hash (`audit_goal.py`) and render refusing to
   project an unlocked contract — not the hooks.
+- **Observed live coverage (Codex 0.138.0, 2026-06-10, `approval_policy = never` +
+  `danger-full-access`):** UserPromptSubmit, PostToolUse, and Stop fired;
+  **PreToolUse never fired** despite using the same matcher as PostToolUse, so a
+  direct append to the frozen contract executed undenied. On such runtimes the
+  freeze is **detect-only**: the mutation is caught by the audit hash and the Stop
+  gate, not prevented. Re-confirm per runtime with `conformance_probe.py observe`.
 - `conformance_probe.py` reports coverage on the installed runtime. `selftest`
   drives each wired hook with synthetic input and checks the documented decision
   shape offline; `observe`/`report` record and summarize what actually fired on a
@@ -67,6 +73,8 @@ If a user prompt starts `/goal` but does not reference `.goals/current.md` or `$
 ## Stop: final evidence gate
 
 If the last assistant message appears to claim completion but omits required report fields, continue with a prompt asking for missing evidence. An achievement claim must reference the verifier pass/fail result (the oracle), not merely that files changed — evidence presence is not verification success. A completion claim against an unlocked contract (no `current.sha256`) is blocked: it cannot be certified, so it must be locked or reported inconclusive/blocked. If the contract hash changed, continue and require the agent to report the contract mutation as failure.
+
+Every block is **once per cause per contract**, tracked in `.goals/evidence/stop_guard_state.json` (and via `stop_hook_active` where the harness provides it). A mutated contract cannot be un-mutated by the executor, so re-blocking forever turns the anti-runaway gate into the runaway — observed live on Codex as 71 consecutive Stop blocks ended only by an external timeout. The marker fails open: when state cannot be read or written, the stop is allowed and the audit hash remains the authoritative gate.
 
 Codex Stop I/O: allow/no-op is exit 0 with **no stdout**; continue the agent (block the stop) with `{"decision":"block","reason":"..."}` (or exit 2). A bare `{"continue": true}` is ambiguous on Codex, so allow paths stay silent — `conformance_probe.py` verifies this empirically.
 
