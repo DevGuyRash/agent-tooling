@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from _hook_common import SCRIPTS  # noqa: F401
-from common import active_goal_paths, git_root_or_cwd, load_json_stdin, relpath, write_event
+from common import git_root_or_cwd, load_json_stdin, relpath, write_event
 
 # Per-string capture ceiling; override with GOALSPEC_EVIDENCE_MAX_BYTES.
 DEFAULT_MAX_BYTES = 16384
@@ -50,10 +50,39 @@ def sanitize(value, max_bytes: int):
     return value
 
 
+def goal_workspace_for_event(event: dict, cwd: str):
+    """Workspace of the files the tool touched, when one holds an active contract.
+
+    The event's cwd is the session cwd, which can sit in a different directory
+    than the files the tool acted on (multi-workspace sessions, subagents).
+    Anchoring evidence to the tool's target paths keeps each goal workspace's
+    evidence stream self-contained; the session cwd remains the fallback.
+    """
+    candidates: list[str] = []
+    tool_input = event.get("tool_input")
+    if isinstance(tool_input, dict):
+        for key in ("file_path", "path", "notebook_path"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+        command = tool_input.get("command")
+        if isinstance(command, str):
+            candidates.extend(re.findall(r"/[^\s'\"`;|&)]+", command))
+    for raw in candidates:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = Path(cwd) / p
+        for parent in [p, *p.parents]:
+            if (parent / ".goals" / "current.md").exists():
+                return parent
+    return None
+
+
 def main() -> int:
     event = load_json_stdin()
     cwd = event.get("cwd") or os.getcwd()
-    _, current, lock = active_goal_paths(cwd)
+    root = goal_workspace_for_event(event, cwd) or git_root_or_cwd(cwd)
+    current = root / ".goals" / "current.md"
     if not current.exists():
         return 0
     try:
@@ -70,9 +99,8 @@ def main() -> int:
         "permission_mode": event.get("permission_mode"),
         "cwd": cwd,
     }
-    path = write_event(cwd, payload, prefix=(event.get("tool_name") or "tool").replace("/", "_"))
+    path = write_event(cwd, payload, prefix=(event.get("tool_name") or "tool").replace("/", "_"), root=root)
     # Maintain a simple runtime state file for audits and budget reports.
-    root = git_root_or_cwd(cwd)
     state_path = root / ".goals" / "evidence" / "run_state.json"
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +112,7 @@ def main() -> int:
         state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     except Exception:
         pass
-    msg = f"GoalSpec captured tool evidence at `{relpath(path, Path(cwd))}`. Use raw command results/artifact paths in the final goal report."
+    msg = f"GoalSpec captured tool evidence at `{relpath(path, root)}`. Use raw command results/artifact paths in the final goal report."
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",

@@ -50,6 +50,11 @@ def context(msg: str) -> None:
     }))
 
 
+def _mention_is_allowed(mention: str) -> bool:
+    return any(mention == prefix.rstrip("/") or mention.startswith(prefix)
+               for prefix in ALLOWED_GOALS_PREFIXES)
+
+
 def path_is_protected(path: str) -> bool:
     p = path.strip()
     if p.startswith("./"):
@@ -95,11 +100,19 @@ def main() -> int:
             return 0
 
     if tool == "Bash" and command:
-        hit = command_mentions_write_to_protected(command, PROTECTED + [".goals/"])
-        if hit:
-            deny(f"GoalSpec blocked write-like command touching protected goal artifact: {hit}. Use $authoring-goals to revise and re-lock the contract before execution.")
-            return 0
-        if re.search(r"\b(git\s+checkout|git\s+reset|git\s+clean)\b", command) and ".goals" in command:
+        # Bash only exposes the raw command string, so mirror path_is_protected's
+        # allow-list here: mentions under .goals/evidence|reports are executor
+        # space. The previous bare ".goals/" entry denied the plugin's own
+        # run_verifiers/audit invocations and any allowed-path command carrying
+        # an incidental redirect like 2>&1.
+        mentions = re.findall(r"\.goals/[^\s'\"`;|&)]*", command)
+        frozen_mentions = sorted({m for m in mentions if not _mention_is_allowed(m)})
+        if frozen_mentions:
+            hit = command_mentions_write_to_protected(command, frozen_mentions)
+            if hit:
+                deny(f"GoalSpec blocked write-like command touching protected goal artifact: {hit}. Use $authoring-goals to revise and re-lock the contract before execution.")
+                return 0
+        if re.search(r"\b(git\s+checkout|git\s+reset|git\s+clean)\b", command) and (frozen_mentions or re.search(r"\.goals(?!/)", command)):
             deny("GoalSpec blocked git command targeting .goals artifacts during an active run.")
             return 0
 

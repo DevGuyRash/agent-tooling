@@ -371,6 +371,70 @@ def main() -> int:
         assert_true((g / "evidence" / "run_state.json").exists() and not (g / "run_state.json").exists(),
                     "runtime state lives under .goals/evidence/run_state.json")
 
+    # Live-fire regressions (2026-06-10): the Bash scope guard must mirror the
+    # path-level allow-list, evidence must anchor to the tool's target workspace,
+    # and the rendered /goal must name the exact report headings the audit checks.
+    with tempfile.TemporaryDirectory() as td10:
+        ws = Path(td10) / "ws"
+        (ws / ".goals").mkdir(parents=True)
+        (ws / ".goals" / "current.md").write_text("# Goal Contract: G-901\n\n## Objective\nx\n", encoding="utf-8")
+        (ws / ".goals" / "current.sha256").write_text("deadbeef  current.md\n", encoding="utf-8")
+
+        def run_scope(command: str) -> str:
+            proc = subprocess.run(
+                [sys.executable, str(HOOKS / "scope_guard.py")],
+                input=json.dumps({"cwd": str(ws), "tool_name": "Bash", "tool_input": {"command": command}}),
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+            )
+            return proc.stdout
+
+        assert_true("permissionDecision" not in run_scope(
+            "python3 audit_goal.py --json --report .goals/reports/r.md 2>&1 | tail -5"),
+            "read-only audit command over allowed reports path is not denied")
+        assert_true("permissionDecision" not in run_scope(
+            "echo done > .goals/evidence/verifier-run.txt"),
+            "write into allowed .goals/evidence/ is not denied")
+        assert_true("permissionDecision" not in run_scope(
+            "ls .goals/evidence 2>&1"),
+            "listing the allowed evidence dir with a redirect is not denied")
+        assert_true("permissionDecision" in run_scope(
+            "echo '# canary' >> .goals/current.md"),
+            "append to the frozen contract is still denied")
+        assert_true("permissionDecision" in run_scope(
+            "mv .goals/GOALS.md /tmp/x"),
+            "moving a protected registry file is still denied")
+        assert_true("permissionDecision" in run_scope(
+            "git checkout .goals/current.md"),
+            "git restore of the frozen contract is still denied")
+
+    with tempfile.TemporaryDirectory() as td11:
+        session = Path(td11) / "session"
+        target = Path(td11) / "target"
+        for d in (session, target):
+            (d / ".goals").mkdir(parents=True)
+        (session / ".goals" / "current.md").write_text("# Goal Contract: G-902\n\n## Objective\nsession\n", encoding="utf-8")
+        (target / ".goals" / "current.md").write_text("# Goal Contract: G-903\n\n## Objective\ntarget\n", encoding="utf-8")
+        cap_event = {
+            "hook_event_name": "PostToolUse", "tool_name": "Write",
+            "tool_input": {"file_path": str(target / "hello.txt"), "content": "hi"},
+            "tool_response": "ok", "cwd": str(session),
+        }
+        subprocess.run(
+            [sys.executable, str(HOOKS / "evidence_capture.py")],
+            input=json.dumps(cap_event), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true(bool(list((target / ".goals" / "evidence" / "events").glob("*.json"))),
+                    "evidence anchors to the workspace of the tool's target path")
+        assert_true(not (session / ".goals" / "evidence").exists(),
+                    "evidence does not leak into the session-cwd workspace")
+
+    rendered_headings = render(contract, allow_unlocked=True)
+    for heading in ["## Files Changed", "## Commands Run", "## Evidence",
+                    "## Budget Used", "## Remaining Risks", "## Follow-Up Candidates"]:
+        assert_true(heading in rendered_headings, f"rendered /goal names report heading {heading}")
+
     print("GoalSpec full smoke test passed.")
     return 0
 

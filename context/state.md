@@ -1,5 +1,7 @@
 Active risks:
 
+- GoalSpec live-fire gauntlet in flight (`plugins/goalspec/tests/live-fire-gauntlet.md`): Codex-side probes blocked — every `codex exec` fails with the spawn_agent encrypted-parameters 400 (friction evt-0172); fix the Codex environment, then rerun LF-1/LF-2 there on goalspec 1.0.1 (only UserPromptSubmit was observed firing on Codex before the failure). Claude-side LF-1/LF-2 done; LF-3 (three owner-selected real tasks) not started. Long-running Claude sessions opened before the 1.0.1 install may still execute 1.0.0 hooks until restarted.
+- GoalSpec frame-review corrections pending decision (plan 2026-06-10): restate deliverable (refusal outputs are first-class), and add a runtime budget meter or strike the enforced-"stoppable" claim; LF-2 Claude-side showed the voluntary give-up path working once — no evidence yet for Codex or for the budget-exhaustion path.
 - Friction diagnostics helper is hanging on this Windows event stream; do not leave stale `.report-friction.lock` behind after attempts to log.
 - Excel Foundry cloud commands still need opt-in live Graph/Fabric/Power BI validation with tenant env vars and safe test resources before any cloud surface is promoted to supported.
 - Claude `agents/*.md` surfaces are now reported as `preserved_only` in claude→codex conversion but still have no Codex mapping; decide whether a Codex-side agent equivalent should exist or whether preserved-only is the end state.

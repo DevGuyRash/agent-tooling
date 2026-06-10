@@ -1,6 +1,6 @@
 {
   "name": "goalspec",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Compile messy intent and project context into bounded, verifiable Codex /goal contracts with capability inventory, validation scripts, lifecycle hooks, and goal ledger artifacts.",
   "author": {
     "name": "GoalSpec Contributors"

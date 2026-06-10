@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from common import bullets, contract_lock_status, parse_sections, sha256_file
+from common import REPORT_FIELDS, bullets, contract_lock_status, parse_sections, sha256_file
 
 
 class RenderRefused(Exception):
@@ -59,8 +59,11 @@ def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = F
     giveup = compact_list(bullets(sections.get("Give-Up Conditions", "")), max_items=6, max_len=700)
     evidence = compact_list(bullets(sections.get("Evidence Required", "")), max_items=6, max_len=600)
     completeness = compact_list(bullets(sections.get("Completeness Dimensions", "")), max_items=6, max_len=500)
+    # Name the exact section headings the audit oracle checks (common.REPORT_FIELDS):
+    # executors otherwise improvise headings and honest reports audit as incomplete.
+    report_headings = "; ".join(f"## {field}" for field in REPORT_FIELDS)
 
-    rendered = f"""/goal Complete the frozen goal contract in .goals/current.md. First read that file and treat it as the source of truth. Contract sha256 at render time: {h}. Completeness dimensions: {completeness}. Terminal state summary: {terminal}. Verifier summary: {verifier}. Respect out-of-scope boundaries, including: {out_text}. Budget summary: {budget}. Stop and report blocked/incomplete if any give-up condition occurs, including: {giveup}. Do not treat .goals/GOALS.md or .goals/provenance/ as execution scope; provenance preserves the original request for reference only and must not be executed or re-derived. Do not modify .goals/current.md or .goals/current.sha256 during execution. Write only .goals/evidence/ and .goals/reports/ inside .goals/. Final report must include: {evidence}. Record adjacent work as follow-up candidates, not implicit scope."""
+    rendered = f"""/goal Complete the frozen goal contract in .goals/current.md. First read that file and treat it as the source of truth. Contract sha256 at render time: {h}. Completeness dimensions: {completeness}. Terminal state summary: {terminal}. Verifier summary: {verifier}. Respect out-of-scope boundaries, including: {out_text}. Budget summary: {budget}. Stop and report blocked/incomplete if any give-up condition occurs, including: {giveup}. Do not treat .goals/GOALS.md or .goals/provenance/ as execution scope; provenance preserves the original request for reference only and must not be executed or re-derived. Do not modify .goals/current.md or .goals/current.sha256 during execution. Write only .goals/evidence/ and .goals/reports/ inside .goals/. Final report must use these exact section headings: {report_headings} — and must include: {evidence}. Record adjacent work as follow-up candidates, not implicit scope."""
     rendered = " ".join(rendered.split())
     full_chars = len(rendered)
     truncated = full_chars > max_chars

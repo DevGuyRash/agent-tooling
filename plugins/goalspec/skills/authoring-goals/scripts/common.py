@@ -180,9 +180,9 @@ def relpath(path: Path, root: Optional[Path] = None) -> str:
         return path.as_posix()
 
 
-def write_event(cwd: str, payload: dict, prefix: str = "event") -> Path:
+def write_event(cwd: str, payload: dict, prefix: str = "event", root: Optional[Path] = None) -> Path:
     from datetime import datetime, timezone
-    root = git_root_or_cwd(cwd)
+    root = Path(root) if root else git_root_or_cwd(cwd)
     events = root / ".goals" / "evidence" / "events"
     events.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
