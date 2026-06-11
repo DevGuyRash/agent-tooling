@@ -99,6 +99,43 @@ class PluginPortLiveTests(unittest.TestCase):
             ).lstrip(),
         )
 
+    def _codex_binary_honoring_home(self, codex_home: Path) -> str | None:
+        """A codex executable that respects CODEX_HOME=<temp dir>.
+
+        Wrapper launchers may pin CODEX_HOME to the user's real home (observed
+        live: temp-home isolation silently broken, with installs landing in the
+        real cache). Such wrappers advertise the resolved home in a banner
+        line, so reject any candidate that reports a different CODEX_HOME than
+        the one we set.
+        """
+        candidates: list[str] = []
+        if os.environ.get("PLUGIN_PORT_CODEX_BIN"):
+            candidates.append(os.environ["PLUGIN_PORT_CODEX_BIN"])
+        which = shutil.which("codex")
+        if which:
+            candidates.append(which)
+        candidates.extend(p for p in ("/usr/bin/codex", "/usr/local/bin/codex") if Path(p).exists())
+        env = {**os.environ, "CODEX_HOME": str(codex_home)}
+        for cand in dict.fromkeys(candidates):
+            try:
+                probe = subprocess.run(
+                    [cand, "plugin", "marketplace", "list"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    check=False,
+                    timeout=60,
+                )
+            except OSError:
+                continue
+            out = probe.stdout + probe.stderr
+            if "CODEX_HOME=" in out and f"CODEX_HOME={codex_home}" not in out:
+                continue
+            if probe.returncode == 0:
+                return cand
+        return None
+
     def test_claude_validator_accepts_converted_codex_plugin(self) -> None:
         if os.environ.get("PLUGIN_PORT_CLAUDE") != "1":
             self.skipTest("set PLUGIN_PORT_CLAUDE=1 to run Claude CLI checks")
@@ -152,16 +189,29 @@ class PluginPortLiveTests(unittest.TestCase):
             )
             + "\n",
         )
-        write(
-            codex_home / "config.toml",
-            "[marketplaces.plugin-port-live]\n"
-            'source_type = "local"\n'
-            f'source = "{marketplace.as_posix()}"\n',
-        )
+        codex_home.mkdir(parents=True, exist_ok=True)
+        codex = self._codex_binary_honoring_home(codex_home)
+        if codex is None:
+            self.skipTest(
+                "no codex executable honors CODEX_HOME (wrapper pins the real home); "
+                "set PLUGIN_PORT_CODEX_BIN to a vanilla binary")
         env = {**os.environ, "CODEX_HOME": str(codex_home)}
 
+        # Register through the explicit add flow (the production path used by
+        # scripts/install-all), not a hand-written config declaration.
+        add_market = subprocess.run(
+            [codex, "plugin", "marketplace", "add", str(marketplace)],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=120,
+        )
+        self.assertEqual(0, add_market.returncode, add_market.stdout + add_market.stderr)
+
         add = subprocess.run(
-            ["codex", "plugin", "add", "live-claude@plugin-port-live"],
+            [codex, "plugin", "add", "live-claude@plugin-port-live"],
             env=env,
             capture_output=True,
             text=True,
@@ -172,7 +222,7 @@ class PluginPortLiveTests(unittest.TestCase):
         self.assertEqual(0, add.returncode, add.stdout + add.stderr)
 
         prompt = subprocess.run(
-            ["codex", "debug", "prompt-input", "$live-claude:ping Confirm visibility without running tools."],
+            [codex, "debug", "prompt-input", "$live-claude:ping Confirm visibility without running tools."],
             env=env,
             capture_output=True,
             text=True,
