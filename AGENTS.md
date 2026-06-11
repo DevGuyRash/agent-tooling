@@ -74,6 +74,29 @@ WHEN command discovery is needed for `plugins/gitops-workflow/skills/gitops-work
 
 You SHALL NOT add another manually maintained command catalog or alias inventory for `plugins/gitops-workflow/skills/gitops-workflow/` unless runtime behavior requires it.
 
+## Plugin installation and portability
+
+Installing plugins into the local CLIs goes through `scripts/install-all` (or `just install-all`): it adds the agent-tooling marketplace to both Codex and Claude Code and installs matching plugins (`--include`/`--exclude` CSV globs, `--codex-only`/`--claude-only`, `--dry-run`). The registered marketplaces track GitHub `DevGuyRash/agent-tooling@main`, so a local change reaches the installed caches only after it is pushed; sessions opened before an install keep running the previously cached plugin version.
+
+Both host variants of a plugin must demonstrably work before they ship:
+
+WHEN preparing a final push that changes anything under `plugins/` THEN you SHALL create both host variants of each changed plugin with `scripts/plugin_port.py` and verify them working before pushing:
+
+```bash
+# Round-trip each changed plugin through the other host and back (conversion fidelity):
+python3 scripts/plugin_port.py roundtrip plugins/<name> --to codex --tmp .local/tmp/rt-codex
+python3 scripts/plugin_port.py roundtrip plugins/<name> --to claude --tmp .local/tmp/rt-claude
+
+# Validate each converted variant for its target host:
+python3 scripts/plugin_port.py validate .local/tmp/rt-codex/<name>-codex --host codex
+python3 scripts/plugin_port.py validate .local/tmp/rt-claude/<name>-claude --host claude
+
+# Converter unit tests; live CLI checks when local tools are available:
+just test-plugin-port
+just test-plugin-port-live
+```
+
+IF any roundtrip, validation, or test step fails THEN you SHALL fix the plugin (or the converter) and re-verify before the push. You SHALL NOT commit the conversion artifacts — they are scratch output and stay under `.local/tmp/`.
 
 ---
 
