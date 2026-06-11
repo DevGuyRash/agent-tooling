@@ -686,7 +686,7 @@ def main() -> int:
         manifest.write_text(
             "# Campaign: Chain Test\n\n## Intent\nProve the chain spine.\n\n"
             "## Completeness Dimensions\n- correctness\n- coverage\n\n"
-            f"## Chain Budget\n- Max {budget} child attempts.\n\n"
+            f"## Chain Budget\n- Max children attempted: {budget}.\n\n"
             f"## Chain Failure Policy\n- {policy}\n\n"
             "## Coverage\n- chain executes -> " + specs[0]["id"] + "\n\n"
             "## Goal Graph\n\n" + "\n\n".join(blocks) + "\n\n"
@@ -736,7 +736,7 @@ def main() -> int:
             assert_true(vres["ok"], f"campaign with {policy} validates: {vres['errors']}")
         ws = Path(tc1) / "nobudget"
         m = make_campaign(ws, two_chain, lock=False)
-        m.write_text(m.read_text(encoding="utf-8").replace("- Max 5 child attempts.", "- Stop when done."),
+        m.write_text(m.read_text(encoding="utf-8").replace("- Max children attempted: 5.", "- Stop when done."),
                      encoding="utf-8")
         v = validate_campaign(m)
         assert_true(any("Chain Budget" in e for e in v["errors"]), f"non-numeric chain budget fails: {v['errors']}")

@@ -150,7 +150,7 @@ The sanctioned autonomous outer loop: one `/goal` that executes an entire decomp
 
 Structure:
 
-- Manifest: `.goals/campaign-<slug>.md` (campaign template) with `## Chain Budget` (numeric ceiling on child attempts) and `## Chain Failure Policy` (exactly one of `halt-on-failure` | `skip-dependents-and-continue`). Dependency truth lives in this hash-locked manifest, never in `graph.json` (an unlocked, validated mirror).
+- Manifest: `.goals/campaign-<slug>.md` (campaign template) with `## Chain Budget` (numeric ceiling on children attempted; retries of one child count once — the wall clock bounds retry grinding) and `## Chain Failure Policy` (exactly one of `halt-on-failure` | `skip-dependents-and-continue`). Dependency truth lives in this hash-locked manifest, never in `graph.json` (an unlocked, validated mirror).
 - Children: every ready child is a **full contract** at `.goals/children/G-00N/current.md`, individually validated and locked (`validate_goal.py <path> --write-hash`) — the same spine, applied recursively.
 - Evidence/reports per child: `.goals/evidence/children/G-00N/` and `.goals/reports/G-00N-report.md`. Both already inside the executor's allowed write paths.
 

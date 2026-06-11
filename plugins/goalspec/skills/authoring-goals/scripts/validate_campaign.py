@@ -85,10 +85,10 @@ def validate_campaign(campaign: Path) -> dict:
         elif not sections[name].strip():
             errors.append(f"Empty required section: ## {name}")
 
-    # Chain Budget must bind: a concrete numeric ceiling on child attempts.
+    # Chain Budget must bind: a concrete numeric ceiling on children attempted.
     budget = sections.get("Chain Budget", "")
     if budget and campaign_chain_budget(budget) is None:
-        errors.append("Chain Budget must state a concrete numeric ceiling (max child attempts)")
+        errors.append("Chain Budget must state a concrete numeric ceiling (max children attempted)")
 
     policies = campaign_failure_policies(sections.get("Chain Failure Policy", ""))
     if "Chain Failure Policy" in sections:

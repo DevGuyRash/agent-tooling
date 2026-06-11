@@ -140,7 +140,7 @@ def derive_status(campaign: Path) -> dict:
     ready_n = len(statuses)
     chain_should_stop, stop_reason = False, None
     if budget is not None and attempted >= budget and achieved_n < ready_n:
-        chain_should_stop, stop_reason = True, f"chain budget exhausted ({attempted}/{budget} attempts)"
+        chain_should_stop, stop_reason = True, f"chain budget exhausted ({attempted}/{budget} children attempted)"
     elif policy == "halt-on-failure" and failed_ids:
         chain_should_stop, stop_reason = True, f"halt-on-failure: {', '.join(sorted(failed_ids))} failed"
     elif not next_child:

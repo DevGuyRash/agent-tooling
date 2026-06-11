@@ -18,7 +18,10 @@ def main() -> int:
     _, current, lock = active_goal_paths(cwd)
     lowered = prompt.lower().strip()
     if lowered.startswith("/goal"):
-        safe_refs = [".goals/current.md", ".goals/campaign", "$authoring-goals", "authoring-goals"]
+        # ".goals/campaign-" (hyphenated) matches real manifest references like
+        # .goals/campaign-<slug>.md without treating any mention of the word
+        # "campaign" near .goals as a compiled-goal reference.
+        safe_refs = [".goals/current.md", ".goals/campaign-", "$authoring-goals", "authoring-goals"]
         if not any(ref in prompt for ref in safe_refs):
             msg = "GoalSpec: direct /goal detected. For long-running work, first use $authoring-goals to create/validate .goals/current.md, then run /goal against that frozen contract."
             print(json.dumps({

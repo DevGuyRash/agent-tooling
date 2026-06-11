@@ -19,7 +19,7 @@
 
 ## Chain Budget
 
-- Max [N] child attempts before the chain stops, regardless of remaining children.
+- Max children attempted: [N] — the chain stops once N distinct children have attempt evidence, regardless of remaining children. (Retries of one child count once; the wall clock bounds retry grinding.)
 
 ## Chain Failure Policy
 
