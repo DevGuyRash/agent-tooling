@@ -625,6 +625,39 @@ def main() -> int:
         "Completion must be verified by:\n- `git diff --exit-code HEAD -- test_shop.py`\n"),
         "git inline verifier command extracts")
 
+    # evt-0182 regression pin: an inline-span regex that crosses newlines pairs
+    # the opening fence's 3rd backtick with the closing fence's 1st and re-emits
+    # the whole fence interior as one spurious multi-line 'bash ...' command.
+    evt_section = (
+        "Completion must be verified by running:\n\n"
+        "```bash\npython3 verify.py\ngit diff --quiet -- data.csv\n```\n\n"
+        "Expected: both exit 0. A rigged `verify.py` cannot fool the oracle; "
+        "run `python3 -m pytest -q` when a suite exists.\n"
+    )
+    evt_cmds = _evc(evt_section)
+    assert_true(evt_cmds == ["python3 verify.py", "git diff --quiet -- data.csv", "python3 -m pytest -q"],
+                f"evt-0182: exactly the fence lines + qualifying spans, no fence-bleed command: {evt_cmds}")
+
+    # Projection truthfulness (fleet run v11-b): a fence-style Verifier section
+    # has no bullets; the rendered summary falls back to the extracted commands
+    # and this field never projects "not specified".
+    with tempfile.TemporaryDirectory() as td17b:
+        fence_only = Path(td17b) / "fenceonly.md"
+        fence_only.write_text(_swap(base, "Verifier",
+                                    "Completion must be verified by running:\n\n"
+                                    "```bash\npython3 verify_contacts_clean.py\ngit diff --quiet -- contacts.csv\n```\n"),
+                              encoding="utf-8")
+        rfo = render(fence_only, allow_unlocked=True)
+        assert_true("Verifier summary: python3 verify_contacts_clean.py; git diff --quiet -- contacts.csv" in rfo,
+                    "fence-only verifier commands appear in the rendered summary")
+        assert_true("Verifier summary: not specified" not in rfo, "verifier summary is never 'not specified'")
+        prose_only = Path(td17b) / "proseonly.md"
+        prose_only.write_text(_swap(base, "Verifier",
+                                    "The owner reviews and ratifies the artifact by hand.\n"), encoding="utf-8")
+        rpo = render(prose_only, allow_unlocked=True)
+        assert_true("Verifier summary: see the Verifier section in .goals/current.md." in rpo,
+                    "bullet-less, command-less verifier points at the section instead of 'not specified'")
+
     # 3) Risk scorer calibration against the fleet's real prompts.
     s_app = score("Build a habit tracker app with streaks, reminders, charts, and cloud sync.")
     assert_true(s_app["forever_risk"] in {"high", "extreme"}, f"app-scale enumerated sprawl scores high: {s_app}")
@@ -966,6 +999,68 @@ def main() -> int:
         )
         assert_true(refused.returncode == 2 and "REFUSED" in refused.stderr,
                     f"campaign launch refuses an unlocked campaign: rc={refused.returncode} {refused.stderr}")
+
+    # Pointer render mode: a limit-independent dual-hash launch line; the full
+    # render lives in a written file the executor reads, never in the prompt.
+    def render_cli(*argv: str):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "render_goal.py"), *argv],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+
+    with tempfile.TemporaryDirectory() as tp1:
+        goals = Path(tp1) / ".goals"
+        goals.mkdir(parents=True)
+        shutil.copyfile(contract, goals / "current.md")
+        (goals / "current.sha256").write_text(f"{sha256_file(goals / 'current.md')}  current.md\n", encoding="utf-8")
+        pj = render_cli(str(goals / "current.md"), "--pointer", "--json")
+        assert_true(pj.returncode == 0, f"pointer render of a locked goal succeeds: {pj.stderr}")
+        pm = json.loads(pj.stdout)
+        line, pfile = pm["pointer_line"], Path(pm["pointer_file"])
+        assert_true(len(line) <= 400, f"pointer line stays <= 400 chars: {len(line)}")
+        assert_true(line.startswith("/goal "), "pointer line is a paste-ready /goal")
+        assert_true(pm["mission_sha256"] in line and pm["pointer_file_sha256"] in line,
+                    "pointer line carries both hashes")
+        assert_true(".goals/rendered-goal.md" in line and ".goals/current.md" in line,
+                    "pointer line names the pointer file and keeps the prompt_guard anchor")
+        assert_true("stop and report contract mutated" in line, "pointer line carries the stop rule")
+        assert_true(pfile.read_text(encoding="utf-8") == pm["rendered"] + "\n",
+                    "written pointer file matches the rendered text")
+        assert_true(pm["pointer_file_sha256"] == sha256_file(pfile),
+                    "pointer line hash is computed from the written bytes")
+        ph = render_cli(str(goals / "current.md"), "--pointer")
+        assert_true(pm["rendered"] in ph.stdout and ph.stdout.rstrip().endswith(line),
+                    "human mode prints the full render first and the launch line last")
+        # Tamper one byte (simulating a formatter rewrite): the recomputed sha
+        # must diverge from the line's, i.e. the mismatch is loudly detectable.
+        pfile.write_text(pfile.read_text(encoding="utf-8").replace("frozen", "frozen ", 1), encoding="utf-8")
+        assert_true(sha256_file(pfile) != pm["pointer_file_sha256"],
+                    "tampered pointer file is detectable against the line's file sha")
+        # Pointer never renders unlocked/mismatched and never composes with --allow-unlocked.
+        (goals / "current.sha256").unlink()
+        pun = render_cli(str(goals / "current.md"), "--pointer")
+        assert_true(pun.returncode == 2 and "REFUSED" in pun.stderr,
+                    f"pointer refuses an unlocked contract: rc={pun.returncode}")
+        pao = render_cli(str(goals / "current.md"), "--pointer", "--allow-unlocked")
+        assert_true(pao.returncode == 2 and "REFUSED" in pao.stderr,
+                    f"--pointer --allow-unlocked is refused: rc={pao.returncode}")
+
+    with tempfile.TemporaryDirectory() as tp2:
+        ws = Path(tp2)
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"}])
+        cj = render_cli("--campaign", str(m), "--pointer", "--json")
+        assert_true(cj.returncode == 0, f"campaign pointer render succeeds: {cj.stderr}")
+        cm = json.loads(cj.stdout)
+        cline = cm["pointer_line"]
+        assert_true(len(cline) <= 400, f"campaign pointer line stays <= 400 chars: {len(cline)}")
+        assert_true(".goals/rendered-campaign.md" in cline and ".goals/campaign-" in cline,
+                    "campaign pointer line names the pointer file and keeps the prompt_guard anchor")
+        assert_true(cm["mission_sha256"] in cline and cm["pointer_file_sha256"] in cline,
+                    "campaign pointer line carries both hashes")
+        cfile = ws / ".goals" / "rendered-campaign.md"
+        assert_true(cfile.read_text(encoding="utf-8") == cm["rendered"] + "\n",
+                    "campaign pointer file matches the rendered chain text")
 
     print("GoalSpec full smoke test passed.")
     return 0

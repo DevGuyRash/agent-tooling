@@ -303,6 +303,11 @@ def extract_verifier_commands(section: str) -> List[str]:
     Fenced shell blocks contribute every non-comment line; inline `code` spans
     contribute only when they begin with a recognized runner so prose backticks
     do not masquerade as commands. Order-preserving and de-duplicated.
+
+    Inline spans must not cross newlines (evt-0182): a single-newline-tolerant
+    class let the span regex pair the opening fence's third backtick with the
+    closing fence's first, re-extracting the whole fence interior as one
+    spurious multi-line command beginning with the language tag 'bash'.
     """
     commands: List[str] = []
     for m in re.finditer(r"```(?:bash|sh|shell)?\s*\n(.*?)```", section, re.S | re.I):
@@ -310,7 +315,7 @@ def extract_verifier_commands(section: str) -> List[str]:
             s = line.strip()
             if s and not s.startswith("#"):
                 commands.append(s)
-    for m in re.finditer(r"`([^`]+)`", section):
+    for m in re.finditer(r"`([^`\n]+)`", section):
         c = m.group(1).strip()
         if VERIFIER_COMMAND_RE.match(c):
             commands.append(c)

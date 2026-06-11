@@ -13,6 +13,7 @@ from common import (
     campaign_lock_status,
     child_contract_path,
     contract_lock_status,
+    extract_verifier_commands,
     parse_campaign_children,
     parse_sections,
     sha256_file,
@@ -40,6 +41,37 @@ def compact_list(items, max_items=5, max_len=600):
     return text
 
 
+def goals_relative(path: Path) -> str:
+    """Spell a path from its last '.goals' component onward.
+
+    The launch line is pasted into an executor whose cwd is the workspace root,
+    so '.goals/...' is the spelling that resolves there even when this process
+    was handed an absolute path. Paths outside any .goals/ pass through as-is.
+    """
+    parts = Path(path).parts
+    if ".goals" in parts:
+        idx = len(parts) - 1 - tuple(reversed(parts)).index(".goals")
+        return "/".join(parts[idx:])
+    return Path(path).as_posix()
+
+
+def pointer_launch_line(pointer_ref: str, pointer_sha256: str, mission_anchor: str) -> str:
+    """The limit-independent launch line shared by both render modes (target <= 400 chars).
+
+    Dual anchors: the mission hash freezes the contract/campaign and the file
+    hash freezes the rendered pointer bytes, so a post-render rewrite of the
+    pointer file (e.g. a markdown formatter) fails loud at launch instead of
+    silently launching a drifted payload.
+    """
+    return (
+        f"/goal Read {pointer_ref} first and execute that frozen mission; "
+        "the file is the source of truth over this line. "
+        f"File sha256 {pointer_sha256}. "
+        f"Mission: {mission_anchor}. "
+        "If either hash does not match, stop and report contract mutated."
+    )
+
+
 def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = False) -> dict:
     text = path.read_text(encoding="utf-8")
     # Freeze gate: refuse to project an unlocked or mismatched contract into a
@@ -56,7 +88,15 @@ def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = F
     sections = parse_sections(text)
     h = status.get("current_hash") or sha256_file(path)
     terminal = compact_list(bullets(sections.get("Terminal State", "")), max_items=6, max_len=900)
-    verifier = compact_list(bullets(sections.get("Verifier", "")), max_items=5, max_len=700)
+    # Fence-style Verifier sections have no bullets (fleet run v11-b projected
+    # "Verifier summary: not specified" while four verifiers ran green), so fall
+    # back to the extracted commands; this field never projects "not specified".
+    verifier_section = sections.get("Verifier", "")
+    verifier_items = bullets(verifier_section) or extract_verifier_commands(verifier_section)
+    if verifier_items:
+        verifier = compact_list(verifier_items, max_items=5, max_len=700)
+    else:
+        verifier = "see the Verifier section in .goals/current.md"
     out_scope = sections.get("Scope", "")
     # Extract out-of-scope bullets after marker.
     out_items = []
@@ -135,9 +175,16 @@ def main() -> int:
     parser.add_argument("path", nargs="?", default=None)
     parser.add_argument("--campaign", help="Render a locked campaign manifest as ONE chain /goal (mutually exclusive with a contract path)")
     parser.add_argument("--write", help="Write rendered objective to this path")
-    parser.add_argument("--max-chars", type=int, default=4000)
+    parser.add_argument("--max-chars", type=int, default=None,
+                        help="Character budget for the rendered objective (default 4000; "
+                             "unlimited in --pointer mode unless set, since the pointer file "
+                             "is read by the executor, never pasted into a prompt).")
     parser.add_argument("--allow-unlocked", action="store_true",
                         help="Render even if the contract is unlocked or hash-mismatched (preview only; not for launch; single goals only).")
+    parser.add_argument("--pointer", action="store_true",
+                        help="Write the full render to a file (default .goals/rendered-goal.md / "
+                             ".goals/rendered-campaign.md) and print a short dual-hash launch line "
+                             "for prompt-length-limited platforms (locked missions only).")
     parser.add_argument("--json", action="store_true", help="Emit JSON with rendered text and truncation metadata")
     args = parser.parse_args()
     if args.campaign and args.path:
@@ -146,11 +193,17 @@ def main() -> int:
     if args.campaign and args.allow_unlocked:
         print("RENDER REFUSED: --allow-unlocked does not apply to campaigns; lock everything first.", file=sys.stderr)
         return 2
+    if args.pointer and args.allow_unlocked:
+        print("RENDER REFUSED: --pointer never renders an unlocked or mismatched mission; "
+              "lock it first (validate_goal.py --write-hash). --allow-unlocked is preview-only.",
+              file=sys.stderr)
+        return 2
+    max_chars = args.max_chars if args.max_chars is not None else (10**9 if args.pointer else 4000)
     try:
         if args.campaign:
-            meta = render_campaign_with_meta(Path(args.campaign), args.max_chars)
+            meta = render_campaign_with_meta(Path(args.campaign), max_chars)
         else:
-            meta = render_with_meta(Path(args.path or ".goals/current.md"), args.max_chars,
+            meta = render_with_meta(Path(args.path or ".goals/current.md"), max_chars,
                                     allow_unlocked=args.allow_unlocked)
     except RenderRefused as exc:
         print(f"RENDER REFUSED: {exc.reason}", file=sys.stderr)
@@ -159,13 +212,32 @@ def main() -> int:
                              indent=2, ensure_ascii=False))
         return 2
     output = meta["rendered"]
-    if args.write:
+    if args.pointer:
+        mission_path = Path(args.campaign) if args.campaign else Path(args.path or ".goals/current.md")
+        default_name = "rendered-campaign.md" if args.campaign else "rendered-goal.md"
+        pointer_file = Path(args.write) if args.write else mission_path.with_name(default_name)
+        pointer_file.parent.mkdir(parents=True, exist_ok=True)
+        pointer_file.write_text(output + "\n", encoding="utf-8")
+        mission_hash = meta["lock_status"]["current_hash"]
+        if args.campaign:
+            mission_anchor = f"campaign {goals_relative(mission_path)} aggregate sha256 {mission_hash}"
+        else:
+            # Anchor on the literal '.goals/current.md' (like the rendered text
+            # itself does): the launch line must keep the substring that
+            # prompt_guard's /goal launch checks engage on.
+            mission_anchor = f"contract .goals/current.md sha256 {mission_hash}"
+        meta["pointer_file"] = str(pointer_file)
+        meta["pointer_file_sha256"] = sha256_file(pointer_file)
+        meta["mission_sha256"] = mission_hash
+        meta["pointer_line"] = pointer_launch_line(
+            goals_relative(pointer_file), meta["pointer_file_sha256"], mission_anchor)
+    elif args.write:
         out = Path(args.write)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(output + "\n", encoding="utf-8")
     if meta["truncated"]:
         print(
-            f"WARNING: rendered objective truncated to {args.max_chars} chars "
+            f"WARNING: rendered objective truncated to {max_chars} chars "
             f"({meta['full_chars']} projected); full contract remains in .goals/current.md.",
             file=sys.stderr,
         )
@@ -173,6 +245,11 @@ def main() -> int:
         print(json.dumps(meta, indent=2, ensure_ascii=False))
     else:
         print(output)
+        if args.pointer:
+            print()
+            print(f"--- pointer launch line (paste only the line below; "
+                  f"the full mission stays in {meta['pointer_file']}) ---")
+            print(meta["pointer_line"])
     return 0
 
 

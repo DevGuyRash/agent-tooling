@@ -30,3 +30,9 @@ The rendered `/goal` objective should be compact but verifier-complete.
 ```text
 /goal Complete the frozen goal contract in .goals/current.md. First read that file and treat it as the source of truth. The task is complete only when all terminal-state clauses are satisfied, the verifier requirements pass or are reported unavailable, scope edges are respected, the budget and give-up conditions are honored, and required evidence is written to the final report. Do not treat .goals/GOALS.md as execution scope. Do not modify .goals/current.md or .goals/current.sha256 during execution. Write only .goals/evidence/ and .goals/reports/ inside .goals/. Stop and report blocked/incomplete if the verifier cannot run, the budget is exhausted, or satisfying the goal requires out-of-scope changes. Final report must include files changed, commands run, raw results or artifact paths, budget used, risks, and follow-up candidates.
 ```
+
+## Pointer mode (prompt-length-limited targets)
+
+`render_goal.py --pointer` writes the full render to `.goals/rendered-goal.md` (or `.goals/rendered-campaign.md` for `--campaign`) and prints one short launch line carrying two hashes: the mission hash (contract sha256 / campaign aggregate sha256) and the pointer file's own sha256. The executor reads the pointer file first — the file, not the line, carries the projection, and `.goals/current.md` stays the source of truth over both. WHEN either hash does not match at launch THEN you SHALL stop and report contract mutated.
+
+Rendered files are byte-exact payloads, not editable documents: exempt `.goals/rendered-*.md` from markdown formatters (e.g. via `.prettierignore`) or expect to re-render after any rewrite — a formatter edit breaks the launch line's file hash loudly, by design.

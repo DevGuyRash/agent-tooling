@@ -57,7 +57,7 @@ Required for non-trivial work (multi-step authoring, scanning, decomposing, sele
 - **`score_goal_risk.py`** — on any raw or vague request, campaign parent, or lint. State the forever-risk level and whether you accepted, repaired, or decomposed it, and why.
 - **`extract_candidates.py`** — whenever files, folders, logs, or specs are supplied (NOT for a pure greenfield prompt with no source). Name the extraction frontier: what was inspected and what was left.
 - **`validate_goal.py`** — before rendering any contract; do not render an invalid contract.
-- **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate).
+- **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate). WHEN the launch target imposes a prompt-length limit THEN you SHALL render with `--pointer` and paste only the launch line; the full mission stays in the written `.goals/rendered-goal.md` / `.goals/rendered-campaign.md` file.
 
 Respond to the signals explicitly in your output: state the risk level and your decision, name the discovered capabilities you used, and name the extraction frontier when you scanned.
 
@@ -269,7 +269,7 @@ Use scripts for deterministic checks and project artifact operations. Prefer the
 python3 <skills-file-root>/scripts/goalspec.py init
 python3 <skills-file-root>/scripts/goalspec.py inventory --format markdown
 python3 <skills-file-root>/scripts/goalspec.py validate .goals/current.md --write-hash
-python3 <skills-file-root>/scripts/goalspec.py render .goals/current.md --write .goals/rendered-goal.txt
+python3 <skills-file-root>/scripts/goalspec.py render .goals/current.md --write .goals/rendered-goal.md
 python3 <skills-file-root>/scripts/goalspec.py select
 python3 <skills-file-root>/scripts/goalspec.py audit .goals/current.md --report .goals/reports/latest.md
 python3 <skills-file-root>/scripts/goalspec.py validate-campaign .goals/campaign-<slug>.md --write-hash
