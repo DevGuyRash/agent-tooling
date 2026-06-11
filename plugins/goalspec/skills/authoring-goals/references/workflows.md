@@ -45,11 +45,25 @@ the sole upgrade path to `achieved`.
 For a high/extreme-risk or broad/multi-objective/activity-shaped request:
 
 1. Score the raw request (`score_goal_risk.py`) and name the risk level and why.
-2. Do not compile it into one contract. Write a non-executable campaign from the campaign template (`.goals/campaign-*.md`).
+2. Do not compile it into one contract. Write a campaign from the campaign template (`.goals/campaign-*.md`), record provenance for the original request, and fill the `## Coverage` map (each explicit requirement → child id or `deferred: <reason>`).
 3. Split it into finite child candidates, each with a readiness status: `ready | conditional | blocked | not-launchable`.
-4. Compile at most one ready child into `.goals/current.md`; validate and lock it. The campaign parent is never executed, never rendered, and gets no contract hash.
+4. Choose the execution path. Human-stepped: compile at most one ready child into `.goals/current.md`; validate and lock it. Autonomous: give every ready child a full locked contract and run the chain workflow below. Either way the campaign parent is never compiled or run as a single goal.
 5. If no child is ready, stop at the campaign/backlog and report the missing fields or decisions blocking the most promising child.
 6. Record the remaining children as candidates/backlog, not as implicit scope of the launched child.
+7. Chain-level red-team: re-read the original request; name anything it explicitly asks that no child covers; cover it or record it as deferred with a reason.
+
+## Run a campaign autonomously
+
+The chain executes every ready child of a frozen campaign in one `/goal`. The plan is frozen, evidence is the truth, checkmarks are a derived view.
+
+1. Author each ready child as a full contract at `.goals/children/G-00N/current.md` (six-field spine, same as any goal); validate and lock each one (`validate_goal.py <path> --write-hash`).
+2. In the manifest, set `## Chain Budget` (numeric max child attempts) and `## Chain Failure Policy` (`halt-on-failure` or `skip-dependents-and-continue`); give each ready child `- Contract:` and `- Depends on:` lines. The hash-locked manifest is the dependency truth; `graph.json` is only a mirror.
+3. Lock the campaign: `validate_campaign.py .goals/campaign-<slug>.md --write-hash` (writes the aggregate `.goals/campaign.sha256`; any manifest edit or child swap breaks it).
+4. Render ONE chain `/goal`: `render_goal.py --campaign .goals/campaign-<slug>.md`. It refuses unless the campaign lock and every ready child lock match — no unlocked override.
+5. Execute. Unattended: `launch_goal.py <workspace> --campaign .goals/campaign-<slug>.md` (external wall-clock ceiling; the wrapper re-runs verifiers per attempted child at close, then audits). Interactive: paste the rendered `/goal`; afterwards re-run `run_verifiers.py` per child yourself before auditing.
+6. During the run the executor only writes `.goals/evidence/` and `.goals/reports/`; after each child it follows `campaign_status.py`'s `next_child` and stops on `chain_should_stop`. If the status helper itself fails, it stops and reports blocked.
+7. Audit: `audit_campaign.py .goals/campaign-<slug>.md` — verdicts `campaign achieved | partial: n/m | not achieved | campaign mutated`; skipped children are labeled by the failed dependency. Harvested `follow_up_candidates` are the next campaign's input.
+8. Close: set `GOALSPEC_ALLOW_CONTRACT_WRITE=1` for the close commands (the armed scope guard otherwise denies them all, including removing the lock itself), then archive/remove `.goals/campaign.sha256` and run `graph_goal.py --status` / `update_ledger.py` per child.
 
 ## Greenfield / from spec
 

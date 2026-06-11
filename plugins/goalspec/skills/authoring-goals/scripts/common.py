@@ -52,6 +52,22 @@ REPORT_FIELDS = [
     "Follow-Up Candidates",
 ]
 
+# Campaign manifests (.goals/campaign-<slug>.md) are the frozen chain spine for
+# autonomous multi-child execution. "Coverage" is intentionally absent here: its
+# absence is a validation warning, not an error.
+CAMPAIGN_REQUIRED_SECTIONS = [
+    "Intent",
+    "Completeness Dimensions",
+    "Goal Graph",
+    "Chain Budget",
+    "Chain Failure Policy",
+    "Selection Recommendation",
+]
+
+FAILURE_POLICIES = ["halt-on-failure", "skip-dependents-and-continue"]
+
+CAMPAIGN_LOCK_NAME = "campaign.sha256"
+
 # Machine-readable verifier result contract shared by run_verifiers.py (writer)
 # and audit_goal.py (the deterministic oracle reader).
 VERIFIER_RESULT_SCHEMA = "goalspec.verifier.v1"
@@ -226,6 +242,17 @@ def command_mentions_write_to_protected(command: str, protected_paths: Sequence[
     return None
 
 
+def _lock_expected_hash(lock: Path) -> str:
+    """First token of a lock file; '' when empty/whitespace-only.
+
+    An empty token can never equal a real sha256, so a corrupted/truncated lock
+    reads as a hash mismatch ('mutated') instead of crashing the gate with an
+    IndexError.
+    """
+    parts = lock.read_text(encoding="utf-8").split()
+    return parts[0] if parts else ""
+
+
 def current_hash_status(cwd: Optional[str] = None) -> dict:
     _, current, lock = active_goal_paths(cwd)
     if not current.exists():
@@ -233,7 +260,7 @@ def current_hash_status(cwd: Optional[str] = None) -> dict:
     current_hash = sha256_file(current)
     if not lock.exists():
         return {"exists": True, "matched": None, "current_hash": current_hash, "reason": "no current.sha256"}
-    expected = lock.read_text(encoding="utf-8").strip().split()[0]
+    expected = _lock_expected_hash(lock)
     return {
         "exists": True,
         "matched": expected == current_hash,
@@ -259,7 +286,7 @@ def contract_lock_status(path: Path) -> dict:
     if not lock.exists():
         return {"locked": False, "matched": None, "lock": str(lock),
                 "current_hash": current_hash, "reason": "no current.sha256 lock"}
-    expected = lock.read_text(encoding="utf-8").strip().split()[0]
+    expected = _lock_expected_hash(lock)
     return {
         "locked": True,
         "matched": expected == current_hash,
@@ -309,3 +336,209 @@ def verifier_kinds(section: str) -> set:
 def verifier_result_path(goals_dir: Path) -> Path:
     """Canonical location of the machine-readable verifier result file."""
     return Path(goals_dir) / "evidence" / "verifiers" / VERIFIER_RESULT_NAME
+
+
+# --- Campaign (chain) helpers ---
+
+
+def parse_campaign_children(markdown: str) -> List[Dict[str, str]]:
+    """Parse '### G-00N: Title' child blocks from a campaign's Goal Graph.
+
+    Returns entries shaped for select_goal.select(): each carries an explicit
+    'id' plus the '- Field:' values (status, depends_on, contract, ...).
+    """
+    children: List[Dict[str, str]] = []
+    for block in re.split(r"(?m)^###\s+", markdown)[1:]:
+        lines = block.splitlines()
+        if not lines:
+            continue
+        raw_title = lines[0].strip()
+        body = "\n".join(lines[1:])
+
+        def field(name: str, default: str = "") -> str:
+            m = re.search(rf"(?mi)^-\s*{re.escape(name)}:\s*(.+?)\s*$", body)
+            return m.group(1).strip() if m else default
+
+        gid, title = split_goal_id_title(raw_title)
+        children.append({
+            "id": gid or raw_title,
+            "title": title,
+            "status": field("Status", "conditional").lower(),
+            "risk": field("Risk", "medium").lower(),
+            "depends_on": field("Depends on", "none"),
+            "contract": field("Contract", ""),
+            "terminal_state": field("Terminal state", ""),
+            "verifier": field("Verifier", ""),
+        })
+    return children
+
+
+def campaign_workspace_root(campaign: Path) -> Path:
+    """Workspace root for a campaign manifest living at <root>/.goals/campaign-*.md."""
+    campaign = Path(campaign).resolve()
+    return campaign.parent.parent if campaign.parent.name == ".goals" else campaign.parent
+
+
+def child_evidence_dir(root: Path, child_id: str) -> Path:
+    """Per-child evidence directory under the campaign workspace."""
+    return Path(root) / ".goals" / "evidence" / "children" / child_id
+
+
+def child_report_path(root: Path, child_id: str) -> Path:
+    """Per-child run report path; status checks it, audit reads it, render names it."""
+    return Path(root) / ".goals" / "reports" / f"{child_id}-report.md"
+
+
+def campaign_failure_policies(section: str) -> List[str]:
+    """Policies declared in a '## Chain Failure Policy' section body, in canonical order."""
+    return [p for p in FAILURE_POLICIES if re.search(rf"\b{re.escape(p)}\b", section)]
+
+
+def campaign_chain_budget(section: str) -> Optional[int]:
+    """Numeric ceiling from a '## Chain Budget' section body; None when absent."""
+    m = re.search(r"\d+", section)
+    return int(m.group(0)) if m else None
+
+
+def infer_campaign_manifest(goals_dir: Path = Path(".goals")) -> Tuple[Optional[Path], str]:
+    """The single .goals/campaign-*.md, or (None, reason) when ambiguous/absent."""
+    candidates = sorted(Path(goals_dir).glob("campaign-*.md"))
+    if len(candidates) == 1:
+        return candidates[0], ""
+    return None, f"Cannot infer campaign manifest (found {len(candidates)}); pass it explicitly."
+
+
+def goal_mission_active(goals_dir: Path) -> bool:
+    """A mission exists: a root contract (even unlocked) or a locked campaign chain."""
+    goals = Path(goals_dir)
+    return (goals / "current.md").exists() or (goals / CAMPAIGN_LOCK_NAME).exists()
+
+
+def goal_workspace_locked(goals_dir: Path) -> bool:
+    """The workspace is frozen: a complete root contract+lock pair or a campaign lock."""
+    goals = Path(goals_dir)
+    return ((goals / "current.md").exists() and (goals / "current.sha256").exists()) \
+        or (goals / CAMPAIGN_LOCK_NAME).exists()
+
+
+def child_contract_path(campaign: Path, child: Dict[str, str]) -> Optional[Path]:
+    """Resolve a child's Contract: path relative to the campaign workspace root."""
+    contract = (child.get("contract") or "").strip().strip("`")
+    if not contract:
+        return None
+    p = Path(contract)
+    return p if p.is_absolute() else campaign_workspace_root(campaign) / p
+
+
+def campaign_aggregate_hash(campaign: Path) -> str:
+    """Aggregate freeze hash: campaign bytes + every ready child's contract hash.
+
+    Any manifest edit or ready-child contract swap changes this value, which is
+    what .goals/campaign.sha256 records. Children are folded in sorted-id order
+    so the hash does not depend on manifest ordering. Missing contracts fold in
+    a sentinel so an unresolvable child can never hash-collide with a real one.
+    """
+    campaign = Path(campaign)
+    text = read_text(campaign)
+    h = hashlib.sha256()
+    h.update(text.encode("utf-8"))
+    children = parse_campaign_children(text)
+    ready = sorted((c for c in children if c.get("status") == "ready"), key=lambda c: c["id"])
+    for child in ready:
+        contract = child_contract_path(campaign, child)
+        h.update(f"\n{child['id']}\n".encode("utf-8"))
+        if contract and contract.exists():
+            h.update(sha256_file(contract).encode("utf-8"))
+        else:
+            h.update(b"missing-contract")
+    return h.hexdigest()
+
+
+def campaign_lock_path(campaign: Path) -> Path:
+    return Path(campaign).with_name(CAMPAIGN_LOCK_NAME)
+
+
+def campaign_lock_status(campaign: Path) -> dict:
+    """Lock status for a campaign manifest against its sibling campaign.sha256.
+
+    Mirrors contract_lock_status's shape so callers (render/audit gates) can
+    share one definition of locked / matched / mismatch.
+    """
+    campaign = Path(campaign)
+    lock = campaign_lock_path(campaign)
+    if not campaign.exists():
+        return {"locked": False, "matched": None, "lock": str(lock), "reason": "missing campaign manifest"}
+    current_hash = campaign_aggregate_hash(campaign)
+    if not lock.exists():
+        return {"locked": False, "matched": None, "lock": str(lock),
+                "current_hash": current_hash, "reason": "no campaign.sha256 lock"}
+    expected = _lock_expected_hash(lock)
+    return {
+        "locked": True,
+        "matched": expected == current_hash,
+        "lock": str(lock),
+        "expected_hash": expected,
+        "current_hash": current_hash,
+        "reason": "matched" if expected == current_hash else "hash mismatch",
+    }
+
+
+def dependency_tokens(raw: str) -> List[str]:
+    """All cleaned tokens of a 'Depends on:' value ('none'/'n/a'/'[]' -> [])."""
+    if not raw or raw.strip().lower() in {"none", "n/a", "[]"}:
+        return []
+    return [p.strip(" `[]") for p in re.split(r"[,\s]+", raw) if p.strip(" `[]")]
+
+
+def _dependency_ids(raw: str) -> List[str]:
+    # Only well-formed G-<n> ids participate in graph math. Tokens this filter
+    # drops are NOT silently ignorable for validation: select_goal.is_unblocked
+    # parses dependencies more loosely at runtime, so validate_campaign must
+    # reject anything dependency_tokens() yields that this does not.
+    return [p for p in dependency_tokens(raw) if re.match(r"^G-\d+$", p)]
+
+
+def dependency_map(children: Sequence[Dict[str, str]]) -> Dict[str, List[str]]:
+    """child id -> list of ids it depends on (declared in the manifest)."""
+    return {c["id"]: _dependency_ids(c.get("depends_on", "")) for c in children}
+
+
+def find_cycles(deps: Dict[str, List[str]]) -> List[List[str]]:
+    """Dependency cycles as id lists, via iterative DFS over the declared edges."""
+    cycles: List[List[str]] = []
+    visited: set = set()
+    for start in deps:
+        if start in visited:
+            continue
+        stack: List[Tuple[str, List[str]]] = [(start, [start])]
+        while stack:
+            node, path = stack.pop()
+            for dep in deps.get(node, []):
+                if dep in path:
+                    cycle = path[path.index(dep):] + [dep]
+                    if not any(set(cycle) == set(c) for c in cycles):
+                        cycles.append(cycle)
+                    continue
+                if dep in deps:
+                    stack.append((dep, path + [dep]))
+        visited.add(start)
+    return cycles
+
+
+def propagate_dependency_failures(deps: Dict[str, List[str]], failed: Sequence[str]) -> Dict[str, str]:
+    """Map of skipped child id -> the failed dependency that blocks it (transitive)."""
+    blocked: Dict[str, str] = {}
+    frontier = {f: f for f in failed}
+    changed = True
+    while changed:
+        changed = False
+        for gid, dep_ids in deps.items():
+            if gid in blocked or gid in frontier:
+                continue
+            for dep in dep_ids:
+                root_cause = frontier.get(dep) or blocked.get(dep)
+                if root_cause:
+                    blocked[gid] = root_cause
+                    changed = True
+                    break
+    return blocked

@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from _hook_common import SCRIPTS  # noqa: F401
-from common import git_root_or_cwd, load_json_stdin, relpath, write_event
+from common import git_root_or_cwd, goal_mission_active, load_json_stdin, relpath, write_event
 
 # Per-string capture ceiling; override with GOALSPEC_EVIDENCE_MAX_BYTES.
 DEFAULT_MAX_BYTES = 16384
@@ -73,7 +73,7 @@ def goal_workspace_for_event(event: dict, cwd: str):
         if not p.is_absolute():
             p = Path(cwd) / p
         for parent in [p, *p.parents]:
-            if (parent / ".goals" / "current.md").exists():
+            if goal_mission_active(parent / ".goals"):
                 return parent
     return None
 
@@ -82,8 +82,9 @@ def main() -> int:
     event = load_json_stdin()
     cwd = event.get("cwd") or os.getcwd()
     root = goal_workspace_for_event(event, cwd) or git_root_or_cwd(cwd)
-    current = root / ".goals" / "current.md"
-    if not current.exists():
+    # Active mission = a root contract OR a locked campaign chain; either one
+    # makes tool events evidence-worthy.
+    if not goal_mission_active(root / ".goals"):
         return 0
     try:
         max_bytes = int(os.environ.get("GOALSPEC_EVIDENCE_MAX_BYTES", DEFAULT_MAX_BYTES))

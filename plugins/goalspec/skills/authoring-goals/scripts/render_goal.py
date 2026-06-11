@@ -7,7 +7,16 @@ import json
 import sys
 from pathlib import Path
 
-from common import REPORT_FIELDS, bullets, contract_lock_status, parse_sections, sha256_file
+from common import (
+    REPORT_FIELDS,
+    bullets,
+    campaign_lock_status,
+    child_contract_path,
+    contract_lock_status,
+    parse_campaign_children,
+    parse_sections,
+    sha256_file,
+)
 
 
 class RenderRefused(Exception):
@@ -77,17 +86,72 @@ def render(path: Path, max_chars: int = 4000, allow_unlocked: bool = False) -> s
     return render_with_meta(path, max_chars, allow_unlocked)["rendered"]
 
 
+def render_campaign_with_meta(path: Path, max_chars: int = 4000) -> dict:
+    """Render a locked campaign into ONE chain /goal.
+
+    There is no --allow-unlocked for campaigns: an unattended chain with no
+    frozen mission is exactly the runaway this plugin exists to prevent. The
+    gate requires the aggregate campaign lock AND every ready child's own
+    sibling lock to match.
+    """
+    status = campaign_lock_status(path)
+    if not status.get("locked") or status.get("matched") is False:
+        raise RenderRefused(
+            f"GoalSpec refuses to render an unlocked or mismatched campaign ({status.get('reason')}). "
+            f"Lock it first: validate_campaign.py {path} --write-hash. "
+            "There is no unlocked override for campaigns.",
+            status,
+        )
+    children = parse_campaign_children(path.read_text(encoding="utf-8"))
+    ready = [c for c in children if c.get("status") == "ready"]
+    if not ready:
+        raise RenderRefused("Campaign has no ready child; nothing to chain.", status)
+    for child in ready:
+        contract = child_contract_path(path, child)
+        cls = contract_lock_status(contract) if contract else {"locked": False, "reason": "no Contract: path"}
+        if not cls.get("locked") or cls.get("matched") is False:
+            raise RenderRefused(
+                f"GoalSpec refuses to render the campaign: child {child['id']} is not locked/matched "
+                f"({cls.get('reason')}). Lock it: validate_goal.py {contract} --write-hash.",
+                status,
+            )
+
+    ids = ", ".join(c["id"] for c in ready)
+    scripts_dir = Path(__file__).resolve().parent
+    report_headings = "; ".join(f"## {field}" for field in REPORT_FIELDS)
+    rendered = f"""/goal Execute the frozen campaign chain in {path}. The campaign manifest and every child contract are frozen; campaign aggregate sha256 at render time: {status['current_hash']}. Ready children (each a full contract at .goals/children/<id>/current.md): {ids}. Chain procedure, per child: (1) run `python3 {scripts_dir}/campaign_status.py {path} --json` and take its next_child — skip children already marked achieved when resuming; (2) re-read that child's .goals/children/<id>/current.md and treat it as the source of truth, honoring its own budget, scope, and give-up conditions; (3) do the work; (4) run `python3 {scripts_dir}/run_verifiers.py .goals/children/<id>/current.md --run --evidence-dir .goals/evidence/children/<id>/verifiers`; (5) write the child report at .goals/reports/<id>-report.md using these exact section headings: {report_headings}; (6) refresh campaign_status.py and continue with its next_child. Stop the chain when campaign_status.py reports chain_should_stop (chain budget exhausted, failure policy triggered, or no ready unblocked child remains). If campaign_status.py itself fails or its output is unreadable, stop immediately and report blocked — do not improvise the chain order. Never modify the campaign manifest, any child contract, any .sha256 lock, .goals/GOALS.md, or .goals/graph.json; write only under .goals/evidence/ and .goals/reports/. Record adjacent discoveries in each child report's Follow-Up Candidates, never as new scope. When the chain stops, write a final informational summary at .goals/reports/campaign-report.md (the audit reads per-child evidence, not this summary)."""
+    rendered = " ".join(rendered.split())
+    full_chars = len(rendered)
+    truncated = full_chars > max_chars
+    if truncated:
+        rendered = rendered[: max_chars - 160].rstrip() + f" ... See {path} and the child contracts for full non-droppable clauses; if this projection conflicts with them, they win."
+    return {"rendered": rendered, "truncated": truncated, "chars": len(rendered),
+            "full_chars": full_chars, "lock_status": status,
+            "ready_children": [c["id"] for c in ready]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", nargs="?", default=".goals/current.md")
+    parser.add_argument("path", nargs="?", default=None)
+    parser.add_argument("--campaign", help="Render a locked campaign manifest as ONE chain /goal (mutually exclusive with a contract path)")
     parser.add_argument("--write", help="Write rendered objective to this path")
     parser.add_argument("--max-chars", type=int, default=4000)
     parser.add_argument("--allow-unlocked", action="store_true",
-                        help="Render even if the contract is unlocked or hash-mismatched (preview only; not for launch).")
+                        help="Render even if the contract is unlocked or hash-mismatched (preview only; not for launch; single goals only).")
     parser.add_argument("--json", action="store_true", help="Emit JSON with rendered text and truncation metadata")
     args = parser.parse_args()
+    if args.campaign and args.path:
+        print("RENDER REFUSED: pass either a contract path or --campaign, not both.", file=sys.stderr)
+        return 2
+    if args.campaign and args.allow_unlocked:
+        print("RENDER REFUSED: --allow-unlocked does not apply to campaigns; lock everything first.", file=sys.stderr)
+        return 2
     try:
-        meta = render_with_meta(Path(args.path), args.max_chars, allow_unlocked=args.allow_unlocked)
+        if args.campaign:
+            meta = render_campaign_with_meta(Path(args.campaign), args.max_chars)
+        else:
+            meta = render_with_meta(Path(args.path or ".goals/current.md"), args.max_chars,
+                                    allow_unlocked=args.allow_unlocked)
     except RenderRefused as exc:
         print(f"RENDER REFUSED: {exc.reason}", file=sys.stderr)
         if args.json:

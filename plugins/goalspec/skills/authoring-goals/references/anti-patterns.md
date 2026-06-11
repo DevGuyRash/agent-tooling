@@ -37,8 +37,8 @@ Good: select one ready goal and compile `.goals/current.md`.
 
 ## Campaign-parent-as-goal
 
-Bad: render or run a campaign parent (or a multi-objective aspiration) as one `/goal`.
-Good: decompose into finite children, compile at most one ready child into `.goals/current.md`; the parent is never executed.
+Bad: render or run a campaign parent (or a multi-objective aspiration) as one *single-goal* `/goal` — one contract, one hash, unbounded scope.
+Good: decompose into finite children, each a full contract. Then either compile at most one ready child into `.goals/current.md` (human-stepped), or render the **locked** campaign as a *chain* via `render_goal.py --campaign` — every child individually frozen, the chain bounded by its own budget and failure policy. The parent is never executed as a single goal.
 
 ## Kitchen-sink single goal
 

@@ -11,7 +11,7 @@ from common import (
     REPORT_FIELDS,
     VERIFIER_RESULT_SCHEMA,
     bullets,
-    current_hash_status,
+    contract_lock_status,
     extract_verifier_commands,
     parse_sections,
     sha256_text,
@@ -126,13 +126,16 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
         result["errors"].append(f"Missing contract: {contract}")
         return result
 
-    hash_status = current_hash_status(str(contract.parent.parent if contract.parent.name == ".goals" else Path.cwd()))
+    # Anchor the freeze check at the contract's sibling lock, not the workspace
+    # root: campaign children live at .goals/children/G-00N/current.md and the
+    # root pair (if any) says nothing about them.
+    hash_status = contract_lock_status(contract)
     result["hash_status"] = hash_status
     hash_matched = hash_status.get("matched")
-    # An active contract with no .goals/current.sha256 is not frozen: it can never
-    # be certified achieved, only inconclusive (or contract mutated on mismatch).
-    if hash_status.get("exists") and hash_matched is None and "no current.sha256" in (hash_status.get("reason") or ""):
-        result["missing_checks"].append("No hash lock (.goals/current.sha256); active contract is not frozen — cannot certify achieved")
+    # A contract with no sibling current.sha256 is not frozen: it can never be
+    # certified achieved, only inconclusive (or contract mutated on mismatch).
+    if hash_matched is None and "no current.sha256" in (hash_status.get("reason") or ""):
+        result["missing_checks"].append(f"No hash lock ({hash_status.get('lock')}); contract is not frozen — cannot certify achieved")
 
     contract_sections = parse_sections(contract.read_text(encoding="utf-8"))
     verifier_section = contract_sections.get("Verifier", "")

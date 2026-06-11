@@ -93,10 +93,12 @@ Choose the artifact based on input shape:
 
 Route by risk and shape, not just by the literal input:
 
-- If `score_goal_risk.py` reports **high or extreme** forever-risk, OR the request is **broad, multi-objective, or activity-shaped** (e.g. "modernize the app", "fix everything in the backlog", "improve onboarding and checkout and search"), do NOT compile it into a single executable contract. Produce a **non-executable campaign** (`.goals/campaign-*.md` from the campaign template) and split it into finite child candidates with readiness statuses: **ready | conditional | blocked | not-launchable**.
-- Compile **at most one ready child** into `.goals/current.md`. A campaign parent is never executed; it has no contract hash and is never rendered to a `/goal`.
+- If `score_goal_risk.py` reports **high or extreme** forever-risk, OR the request is **broad, multi-objective, or activity-shaped** (e.g. "modernize the app", "fix everything in the backlog", "improve onboarding and checkout and search"), do NOT compile it into a single executable contract. Produce a **campaign** (`.goals/campaign-*.md` from the campaign template — never itself a single goal) and split it into finite child candidates with readiness statuses: **ready | conditional | blocked | not-launchable**.
+- A campaign parent is **never compiled or run as a single goal**; it has no single-goal contract hash. Two supported execution paths: human-stepped — compile **at most one ready child** into `.goals/current.md`; or autonomous — render a **locked** campaign as a *chain* via `render_goal.py --campaign` (see "Autonomous campaign execution").
 - If **no child is ready**, stop at the campaign/backlog and report the missing fields or decisions that block the most promising child. Do not force a not-ready child into `current.md`.
 - Record the remaining children as candidates/backlog, not as implicit scope of the one launched child.
+- When decomposing, record provenance for the original request (`record_provenance.py`) and write the campaign's `## Coverage` map: each explicit requirement of the original request → a child id, or `deferred: <reason>`.
+- Chain-level red-team before lock: re-read the original request; name anything it explicitly asks that no child covers; cover it or record it as deferred with a reason.
 
 ## Greenfield / from spec
 
@@ -141,6 +143,37 @@ During execution, the agent may read `.goals/current.md` but must not modify it.
 Any mid-run change to `.goals/current.md` or `.goals/current.sha256` is an audit failure unless the user explicitly restarts authoring and re-locks the contract.
 
 For unattended runs, launch through `scripts/launch_goal.py`: it refuses unlocked contracts, enforces an external wall-clock ceiling on the executor (the only bound that does not depend on the executor's cooperation), captures the transcript under `.goals/evidence/transcripts/`, and runs the verifiers and audit at close.
+
+## Autonomous campaign execution
+
+The sanctioned autonomous outer loop: one `/goal` that executes an entire decomposed tasklist as a **chain** of frozen child contracts, with its own budget and stop conditions. The core rule: **the plan is frozen, evidence is the truth, checkmarks are a derived view.** The executor never authors mid-run and never edits the manifest; status is recomputed from per-child verifier evidence; the roll-up audit recomputes everything.
+
+Structure:
+
+- Manifest: `.goals/campaign-<slug>.md` (campaign template) with `## Chain Budget` (numeric ceiling on child attempts) and `## Chain Failure Policy` (exactly one of `halt-on-failure` | `skip-dependents-and-continue`). Dependency truth lives in this hash-locked manifest, never in `graph.json` (an unlocked, validated mirror).
+- Children: every ready child is a **full contract** at `.goals/children/G-00N/current.md`, individually validated and locked (`validate_goal.py <path> --write-hash`) — the same spine, applied recursively.
+- Evidence/reports per child: `.goals/evidence/children/G-00N/` and `.goals/reports/G-00N-report.md`. Both already inside the executor's allowed write paths.
+
+Freeze procedure:
+
+```bash
+python3 <skills-file-root>/scripts/validate_goal.py .goals/children/G-001/current.md --write-hash   # per child
+python3 <skills-file-root>/scripts/validate_campaign.py .goals/campaign-<slug>.md --write-hash      # aggregate lock
+python3 <skills-file-root>/scripts/render_goal.py --campaign .goals/campaign-<slug>.md              # ONE chain /goal
+```
+
+`validate_campaign.py` writes `.goals/campaign.sha256`, an aggregate hash over the manifest bytes plus every ready child's contract hash — any manifest edit or child swap breaks it, and `render_goal.py --campaign` refuses unlocked/mismatched campaigns with no override.
+
+Runtime (encoded in the rendered `/goal`): per child, the executor re-reads the child contract, works within that child's own budget/scope/give-up, runs `run_verifiers.py` into the child's evidence dir, writes the child report, then refreshes `campaign_status.py` and executes its `next_child` (achieved children are skipped on resume). `campaign_status.py` derives ✓/✗/skipped/pending purely from verifier evidence (`overall_passed` + matching `contract_sha256` + report present) and reports `chain_should_stop`. If the status helper itself fails, the executor stops and reports blocked.
+
+Constraints and caveats:
+
+- Sequential only; no parallel children in v1.
+- The child set is frozen at launch. Work discovered mid-run goes into each child report's `## Follow-Up Candidates`; `audit_campaign.py` harvests these into the roll-up as the input to the *next* campaign.
+- On Codex, hooks are detect-only: the real bounds are the freeze gates, the wall clock, and the audit. For unattended chains use `launch_goal.py --campaign <manifest>` — same external wall-clock ceiling; at close it re-runs verifiers wrapper-side for every attempted child (the wrapper-produced oracle is the trust anchor; unattempted children stay pending, never force-failed) and then runs `audit_campaign.py`. Exit 0 only on `campaign achieved`, 124 on timeout.
+- After an **interactive** (non-wrapper) chain, re-run `run_verifiers.py` per child yourself before auditing — never certify off executor-produced results alone.
+- Close: run `audit_campaign.py` (verdicts: `campaign achieved` | `partial: n/m` | `not achieved` | `campaign mutated`). Then set `GOALSPEC_ALLOW_CONTRACT_WRITE=1` for the close commands — the armed scope guard otherwise denies them all, including removing the lock itself — and archive/remove `.goals/campaign.sha256` and update statuses with `graph_goal.py --status` / `update_ledger.py` per child.
+- Known gap: `stop_guard` is not campaign-aware (nudge-only value); the wall clock and the audit are the bounds.
 
 ## Mandatory response structure
 
@@ -239,6 +272,10 @@ python3 <skills-file-root>/scripts/goalspec.py validate .goals/current.md --writ
 python3 <skills-file-root>/scripts/goalspec.py render .goals/current.md --write .goals/rendered-goal.txt
 python3 <skills-file-root>/scripts/goalspec.py select
 python3 <skills-file-root>/scripts/goalspec.py audit .goals/current.md --report .goals/reports/latest.md
+python3 <skills-file-root>/scripts/goalspec.py validate-campaign .goals/campaign-<slug>.md --write-hash
+python3 <skills-file-root>/scripts/goalspec.py campaign-status .goals/campaign-<slug>.md --json
+python3 <skills-file-root>/scripts/goalspec.py audit-campaign .goals/campaign-<slug>.md
+python3 <skills-file-root>/scripts/goalspec.py launch --campaign .goals/campaign-<slug>.md
 ```
 
 Individual scripts:
@@ -255,6 +292,9 @@ Individual scripts:
 - `scripts/launch_goal.py`
 - `scripts/audit_goal.py`
 - `scripts/update_ledger.py`
+- `scripts/validate_campaign.py`
+- `scripts/campaign_status.py`
+- `scripts/audit_campaign.py`
 - `scripts/goalspec.py`
 
 Optional read-only custom-agent templates live in `assets/codex-agents/`. They are templates for project `.codex/agents/`; use `init_project.py --install-agents` only when the user wants them copied into the project.

@@ -31,6 +31,12 @@ from graph_goal import load as load_graph, contract_metadata  # noqa: E402
 from run_verifiers import extract_commands  # noqa: E402
 from inventory_capabilities import inventory  # noqa: E402
 from common import sha256_file  # noqa: E402
+from validate_campaign import validate_campaign  # noqa: E402
+from campaign_status import derive_status  # noqa: E402
+from audit_campaign import audit_campaign  # noqa: E402
+from render_goal import render_campaign_with_meta  # noqa: E402
+from common import campaign_aggregate_hash, campaign_lock_path, child_evidence_dir  # noqa: E402
+from common import campaign_lock_status, contract_lock_status  # noqa: E402
 
 
 def assert_true(condition: bool, message: str) -> None:
@@ -645,6 +651,321 @@ def main() -> int:
         vm = validate(multi)
         oos_warns = [w for w in vm["warnings"] if "Out of scope" in w and "README.md" in w]
         assert_true(len(oos_warns) == 1, f"out-of-scope warning deduped to one: {oos_warns}")
+
+    # --- Campaign chain execution (autonomous multi-child /goal) ---
+    # The plan is frozen, evidence is the truth, checkmarks are a derived view.
+
+    def make_campaign(root: Path, specs: list, policy: str = "halt-on-failure",
+                      budget: int = 5, lock: bool = True) -> Path:
+        """Build a campaign workspace: manifest + a full locked contract per ready child.
+
+        specs: [{"id", "status", "depends_on", "cmd"}] — cmd is the child's verifier command.
+        """
+        goals = root / ".goals"
+        (goals / "reports").mkdir(parents=True, exist_ok=True)
+        blocks = []
+        for spec in specs:
+            cid, status = spec["id"], spec.get("status", "ready")
+            deps = spec.get("depends_on", "none")
+            lines = [f"### {cid}: Chain child {cid}", "", f"- Status: {status}", f"- Depends on: {deps}"]
+            if status == "ready":
+                lines.append(f"- Contract: .goals/children/{cid}/current.md")
+                cdir = goals / "children" / cid
+                cdir.mkdir(parents=True, exist_ok=True)
+                ctext = base.replace("# Goal Contract: G-001 Fix Password Reset Flow",
+                                     f"# Goal Contract: {cid} Chain Child", 1)
+                ctext = _swap(ctext, "Verifier",
+                              "Completion must be verified by:\n- `" + spec.get("cmd", "python3 -c \"import sys; sys.exit(0)\"")
+                              + "`\n- Expected result: exit code 0.")
+                (cdir / "current.md").write_text(ctext, encoding="utf-8")
+                if spec.get("lock_child", True):
+                    (cdir / "current.sha256").write_text(
+                        f"{sha256_file(cdir / 'current.md')}  current.md\n", encoding="utf-8")
+            blocks.append("\n".join(lines))
+        manifest = goals / "campaign-test.md"
+        manifest.write_text(
+            "# Campaign: Chain Test\n\n## Intent\nProve the chain spine.\n\n"
+            "## Completeness Dimensions\n- correctness\n- coverage\n\n"
+            f"## Chain Budget\n- Max {budget} child attempts.\n\n"
+            f"## Chain Failure Policy\n- {policy}\n\n"
+            "## Coverage\n- chain executes -> " + specs[0]["id"] + "\n\n"
+            "## Goal Graph\n\n" + "\n\n".join(blocks) + "\n\n"
+            "## Selection Recommendation\nFollow campaign_status.py next_child.\n",
+            encoding="utf-8")
+        if lock:
+            campaign_lock_path(manifest).write_text(
+                f"{campaign_aggregate_hash(manifest)}  {manifest.name}\n", encoding="utf-8")
+        return manifest
+
+    def chain_report(root: Path, cid: str, follow_up: str = "none") -> Path:
+        r = root / ".goals" / "reports" / f"{cid}-report.md"
+        r.write_text(
+            f"# Goal Report: {cid}\n\n## Result\nachieved\n\n## Files Changed\n- x\n\n"
+            "## Commands Run\n- x\n\n## Evidence\n- x\n\n## Budget Used\n- x\n\n"
+            f"## Remaining Risks\n- none\n\n## Follow-Up Candidates\n- {follow_up}\n",
+            encoding="utf-8")
+        return r
+
+    def chain_evidence(root: Path, manifest: Path, cid: str, passed: bool = True,
+                       sha: str | None = None, malformed: bool = False) -> Path:
+        vdir = child_evidence_dir(root, cid) / "verifiers"
+        vdir.mkdir(parents=True, exist_ok=True)
+        rf = vdir / "result.json"
+        if malformed:
+            rf.write_text("{not json", encoding="utf-8")
+            return rf
+        contract = root / ".goals" / "children" / cid / "current.md"
+        rf.write_text(json.dumps({
+            "schema": "goalspec.verifier.v1",
+            "contract_sha256": sha if sha is not None else sha256_file(contract),
+            "overall_passed": passed,
+            "verifiers": [{"verifier": "x", "kind": "command", "exit_code": 0 if passed else 1,
+                           "evidence": "e", "passed": passed}],
+        }), encoding="utf-8")
+        return rf
+
+    two_chain = [{"id": "G-001", "status": "ready", "depends_on": "none"},
+                 {"id": "G-002", "status": "ready", "depends_on": "G-001"}]
+
+    # Validation: happy path (both policies), then each authored failure mode.
+    with tempfile.TemporaryDirectory() as tc1:
+        for policy in ("halt-on-failure", "skip-dependents-and-continue"):
+            ws = Path(tc1) / policy
+            m = make_campaign(ws, two_chain, policy=policy, lock=False)
+            vres = validate_campaign(m)
+            assert_true(vres["ok"], f"campaign with {policy} validates: {vres['errors']}")
+        ws = Path(tc1) / "nobudget"
+        m = make_campaign(ws, two_chain, lock=False)
+        m.write_text(m.read_text(encoding="utf-8").replace("- Max 5 child attempts.", "- Stop when done."),
+                     encoding="utf-8")
+        v = validate_campaign(m)
+        assert_true(any("Chain Budget" in e for e in v["errors"]), f"non-numeric chain budget fails: {v['errors']}")
+        ws = Path(tc1) / "bothpolicies"
+        m = make_campaign(ws, two_chain, lock=False)
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "- halt-on-failure", "- halt-on-failure\n- skip-dependents-and-continue"), encoding="utf-8")
+        v = validate_campaign(m)
+        assert_true(any("exactly one" in e for e in v["errors"]), f"two failure policies fail: {v['errors']}")
+        ws = Path(tc1) / "unlockedchild"
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none", "lock_child": False}],
+                          lock=False)
+        v = validate_campaign(m)
+        assert_true(any("not locked" in e for e in v["errors"]), f"unlocked ready child fails: {v['errors']}")
+        ws = Path(tc1) / "noready"
+        m = make_campaign(ws, [{"id": "G-001", "status": "blocked", "depends_on": "none"}], lock=False)
+        v = validate_campaign(m)
+        assert_true(any("no ready child" in e for e in v["errors"]), f"no ready child fails: {v['errors']}")
+        ws = Path(tc1) / "cycle"
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "G-002"},
+                               {"id": "G-002", "status": "ready", "depends_on": "G-001"}], lock=False)
+        v = validate_campaign(m)
+        assert_true(any("cycle" in e.lower() for e in v["errors"]), f"dependency cycle fails: {v['errors']}")
+        ws = Path(tc1) / "idmismatch"
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"}], lock=False)
+        m.write_text(m.read_text(encoding="utf-8").replace("### G-001:", "### G-009:"), encoding="utf-8")
+        v = validate_campaign(m)
+        assert_true(any("id mismatch" in e for e in v["errors"]), f"heading/contract id mismatch fails: {v['errors']}")
+        # Review fix: a dep token graph math drops but select_goal would parse
+        # (e.g. 'T-001') must fail validation, or the selector blocks the child forever.
+        ws = Path(tc1) / "baddep"
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"},
+                               {"id": "G-002", "status": "ready", "depends_on": "T-001"}], lock=False)
+        v = validate_campaign(m)
+        assert_true(any("malformed dependency token" in e and "T-001" in e for e in v["errors"]),
+                    f"non-G dependency token fails validation: {v['errors']}")
+        # Review fix: an empty/whitespace lock file degrades to mismatch, never IndexError.
+        ws = Path(tc1) / "emptylock"
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"}], lock=False)
+        campaign_lock_path(m).write_text("\n", encoding="utf-8")
+        ls = campaign_lock_status(m)
+        assert_true(ls["locked"] and ls["matched"] is False, f"empty campaign lock reads as mismatch: {ls}")
+        assert_true(audit_campaign(m)["result"] == "campaign mutated",
+                    "empty campaign lock audits as campaign mutated, not a crash")
+        empty_child_lock = ws / ".goals" / "children" / "G-001" / "current.sha256"
+        empty_child_lock.write_text("  \n", encoding="utf-8")
+        cls = contract_lock_status(ws / ".goals" / "children" / "G-001" / "current.md")
+        assert_true(cls["locked"] and cls["matched"] is False, f"empty contract lock reads as mismatch: {cls}")
+
+    # Freeze: a child swap after lock breaks the aggregate — render refuses, audit says mutated.
+    with tempfile.TemporaryDirectory() as tc2:
+        ws = Path(tc2)
+        m = make_campaign(ws, two_chain)
+        meta = render_campaign_with_meta(m)
+        assert_true(meta["rendered"].startswith("/goal "), "locked campaign renders a chain /goal")
+        child = ws / ".goals" / "children" / "G-001" / "current.md"
+        swapped = child.read_text(encoding="utf-8").replace("Chain Child", "Swapped Child")
+        child.write_text(swapped, encoding="utf-8")
+        # Re-lock the child's own sibling lock: only the aggregate must catch the swap.
+        (child.parent / "current.sha256").write_text(f"{sha256_file(child)}  current.md\n", encoding="utf-8")
+        try:
+            render_campaign_with_meta(m)
+            raise AssertionError("render must refuse a campaign whose child was swapped after lock")
+        except RenderRefused:
+            pass
+        a_swap = audit_campaign(m)
+        assert_true(a_swap["result"] == "campaign mutated", f"child swap audits as campaign mutated: {a_swap['result']}")
+
+    # Render: 8 children stay under 4000 chars, rules present, contracts never inlined.
+    with tempfile.TemporaryDirectory() as tc3:
+        ws = Path(tc3)
+        specs = [{"id": f"G-00{i}", "status": "ready",
+                  "depends_on": "none" if i == 1 else f"G-00{i-1}"} for i in range(1, 9)]
+        m = make_campaign(ws, specs)
+        meta = render_campaign_with_meta(m)
+        r = meta["rendered"]
+        assert_true(not meta["truncated"] and len(r) <= 4000, f"8-child chain render fits: {len(r)} chars")
+        for needle in ["campaign_status.py", "run_verifiers.py", "next_child", "chain_should_stop",
+                       "## Follow-Up Candidates", "report blocked", meta["lock_status"]["current_hash"],
+                       "G-001", "G-008"]:
+            assert_true(needle in r, f"chain render contains {needle!r}")
+        assert_true("password reset" not in r.lower() and "## Objective" not in r,
+                    "chain render never inlines child contract bodies")
+
+    # Status projection: evidence drives the checkmarks; select() unblocks dependents (A2).
+    with tempfile.TemporaryDirectory() as tc4:
+        ws = Path(tc4)
+        m = make_campaign(ws, two_chain, budget=3)
+        s0 = derive_status(m)
+        assert_true(s0["next_child"] == "G-001" and not s0["chain_should_stop"],
+                    f"fresh chain selects the unblocked root child: {s0}")
+        chain_evidence(ws, m, "G-001", passed=True)
+        chain_report(ws, "G-001")
+        s1 = derive_status(m)
+        assert_true(s1["achieved_pending_audit"] == 1 and s1["next_child"] == "G-002",
+                    f"A2: dependent becomes selectable after dep is evidence-achieved: {s1}")
+        # Stale evidence (sha for an older contract version) must never count.
+        chain_evidence(ws, m, "G-001", passed=True, sha="0" * 64)
+        s_stale = derive_status(m)
+        assert_true(s_stale["achieved_pending_audit"] == 0 and any("stale" in w for w in s_stale["warnings"]),
+                    f"stale contract_sha256 degrades to pending: {s_stale}")
+        # Malformed evidence degrades to pending with a warning, never crashes.
+        chain_evidence(ws, m, "G-001", malformed=True)
+        s_bad = derive_status(m)
+        assert_true(s_bad["achieved_pending_audit"] == 0 and any("unreadable" in w for w in s_bad["warnings"]),
+                    f"malformed result.json => pending + warning: {s_bad}")
+        # halt-on-failure: a failed child stops the chain.
+        chain_evidence(ws, m, "G-001", passed=False)
+        s_fail = derive_status(m)
+        assert_true(s_fail["chain_should_stop"] and "halt-on-failure" in (s_fail["stop_reason"] or ""),
+                    f"halt-on-failure stops on a failed child: {s_fail}")
+        assert_true(any(row["status"].startswith("skipped:dependency-failed:G-001")
+                        for row in s_fail["children"] if row["id"] == "G-002"),
+                    f"dependent of a failed child is skipped with the cause named: {s_fail['children']}")
+
+    with tempfile.TemporaryDirectory() as tc5:
+        # Budget: attempts (not successes) exhaust the chain.
+        ws = Path(tc5)
+        m = make_campaign(ws, two_chain, budget=1, policy="skip-dependents-and-continue")
+        chain_evidence(ws, m, "G-001", passed=True)
+        chain_report(ws, "G-001")
+        s = derive_status(m)
+        assert_true(s["attempted_count"] == 1 and s["chain_should_stop"]
+                    and "budget exhausted" in (s["stop_reason"] or ""),
+                    f"chain budget exhaustion stops the chain: {s}")
+        assert_true(s["next_child"] is None,
+                    f"a stopping chain never also names a next child: {s['next_child']}")
+
+    # Roll-up audit: all four verdicts + follow-up harvest.
+    with tempfile.TemporaryDirectory() as tc6:
+        ws = Path(tc6)
+        m = make_campaign(ws, two_chain)
+        a0 = audit_campaign(m)
+        assert_true(a0["result"] == "not achieved", f"unattempted chain audits not achieved: {a0['result']}")
+        for cid in ("G-001", "G-002"):
+            chain_evidence(ws, m, cid, passed=True)
+            chain_report(ws, cid, follow_up=f"harvest-me-{cid}")
+        a_all = audit_campaign(m)
+        assert_true(a_all["result"] == "campaign achieved", f"all children achieved => campaign achieved: {a_all}")
+        assert_true(any("harvest-me-G-002" in f for f in a_all["follow_up_candidates"]),
+                    f"audit harvests follow-up candidates from child reports: {a_all['follow_up_candidates']}")
+        chain_evidence(ws, m, "G-002", passed=False)
+        a_part = audit_campaign(m)
+        assert_true(a_part["result"] == "partial: 1/2", f"one failed child => partial: {a_part['result']}")
+
+    with tempfile.TemporaryDirectory() as tc6b:
+        # A failed dependency labels its never-attempted dependents as skipped, not failed.
+        ws = Path(tc6b)
+        m = make_campaign(ws, two_chain)
+        chain_evidence(ws, m, "G-001", passed=False)
+        a_skip = audit_campaign(m)
+        skip_row = next(r for r in a_skip["children"] if r["id"] == "G-002")
+        assert_true(skip_row["result"].startswith("skipped:dependency-failed:G-001"),
+                    f"skipped child labeled by failed dependency: {skip_row}")
+        assert_true(a_skip["result"] == "not achieved", f"halted chain audits not achieved: {a_skip['result']}")
+
+    # A1 regression pin: child audits anchor at the SIBLING lock, never the root pair.
+    with tempfile.TemporaryDirectory() as tc7:
+        ws = Path(tc7)
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"}])
+        chain_evidence(ws, m, "G-001", passed=True)
+        rep = chain_report(ws, "G-001")
+        child = ws / ".goals" / "children" / "G-001" / "current.md"
+        a_child = audit(child, rep, child_evidence_dir(ws, "G-001"))
+        assert_true(a_child["result"] == "achieved",
+                    f"A1: child with sibling lock and NO root contract audits achieved: {a_child['result']}")
+        # Mutate the child while an intact, matching ROOT pair exists: the old
+        # root-anchored check would have certified against the wrong lock.
+        (ws / ".goals" / "current.md").write_text("# Goal Contract: G-999 Root\n\n## Objective\nx\n", encoding="utf-8")
+        (ws / ".goals" / "current.sha256").write_text(
+            f"{sha256_file(ws / '.goals' / 'current.md')}  current.md\n", encoding="utf-8")
+        child.write_text(child.read_text(encoding="utf-8") + "\n<!-- mutated -->\n", encoding="utf-8")
+        a_mut = audit(child, rep, child_evidence_dir(ws, "G-001"))
+        assert_true(a_mut["result"] == "contract mutated",
+                    f"A1: mutated child + intact root pair => contract mutated: {a_mut['result']}")
+
+    # A3: the scope guard arms on campaign.sha256 alone (no root current.md).
+    with tempfile.TemporaryDirectory() as tc8:
+        ws = Path(tc8)
+        (ws / ".goals").mkdir(parents=True)
+        (ws / ".goals" / "campaign.sha256").write_text("0" * 64 + "  campaign-test.md\n", encoding="utf-8")
+        guard = subprocess.run(
+            [sys.executable, str(HOOKS / "scope_guard.py")],
+            input=json.dumps({"cwd": str(ws), "tool_name": "Bash",
+                              "tool_input": {"command": "echo x >> .goals/children/G-001/current.md"}}),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true("permissionDecision" in guard.stdout,
+                    f"campaign lock alone arms the scope guard for child contracts: {guard.stdout}")
+
+    # launch --campaign: achieved close-out, refuse-unlocked, and the 124 wall-clock kill.
+    with tempfile.TemporaryDirectory() as tc9:
+        ws = Path(tc9)
+        m = make_campaign(ws, [{"id": "G-001", "status": "ready", "depends_on": "none"}])
+        # Simulate an executor attempt: evidence present, report written. The
+        # wrapper re-runs the verifiers itself and then audits.
+        chain_evidence(ws, m, "G-001", passed=True)
+        chain_report(ws, "G-001")
+        launch = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws),
+             "--campaign", ".goals/campaign-test.md",
+             "--exec-cmd", "cat > /dev/null", "--timeout", "30", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(launch.returncode == 0, f"campaign launch achieves: rc={launch.returncode} {launch.stderr}")
+        lj = json.loads(launch.stdout)
+        assert_true(lj["audit"]["result"] == "campaign achieved", f"campaign launch close-out: {lj['audit']}")
+        assert_true("G-001" in lj["verifiers"], "wrapper re-ran verifiers for the attempted child")
+
+        hung = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws),
+             "--campaign", ".goals/campaign-test.md",
+             "--exec-cmd", "sleep 5", "--timeout", "1", "--skip-audit"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(hung.returncode == 124, f"campaign launch kills a hung executor with 124: rc={hung.returncode}")
+
+        campaign_lock_path(m).unlink()
+        refused = subprocess.run(
+            [sys.executable, str(SCRIPTS / "launch_goal.py"), str(ws),
+             "--campaign", ".goals/campaign-test.md", "--exec-cmd", "cat > /dev/null"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=120,
+        )
+        assert_true(refused.returncode == 2 and "REFUSED" in refused.stderr,
+                    f"campaign launch refuses an unlocked campaign: rc={refused.returncode} {refused.stderr}")
 
     print("GoalSpec full smoke test passed.")
     return 0

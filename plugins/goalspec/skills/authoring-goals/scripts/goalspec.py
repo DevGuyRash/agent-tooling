@@ -26,6 +26,10 @@ COMMANDS = {
     "ledger": ("update_ledger", "Update .goals/GOALS.md"),
     "audit": ("audit_goal", "Audit a run against the current contract"),
     "verifiers": ("run_verifiers", "List or run verifier commands from a contract"),
+    "launch": ("launch_goal", "Launch a frozen goal or campaign with an external wall-clock bound"),
+    "validate-campaign": ("validate_campaign", "Validate/lock a campaign manifest for chain execution"),
+    "campaign-status": ("campaign_status", "Derive chain status from per-child verifier evidence"),
+    "audit-campaign": ("audit_campaign", "Audit a completed campaign chain (lock gate + per-child roll-up)"),
 }
 
 

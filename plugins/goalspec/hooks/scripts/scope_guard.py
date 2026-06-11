@@ -11,6 +11,7 @@ from common import (
     active_goal_paths,
     command_mentions_write_to_protected,
     extract_patch_paths,
+    goal_workspace_locked,
     load_json_stdin,
 )
 
@@ -74,8 +75,11 @@ def main() -> int:
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input", {}) or {}
     command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-    _, current, lock = active_goal_paths(cwd)
-    locked = current.exists() and lock.exists() and os.environ.get("GOALSPEC_ALLOW_CONTRACT_WRITE") != "1"
+    goals_dir, _, _ = active_goal_paths(cwd)
+    # Arms on a complete root contract+lock pair OR a campaign lock (campaign-only
+    # runs have no root current.md but their children must stay frozen too).
+    locked = goal_workspace_locked(goals_dir) \
+        and os.environ.get("GOALSPEC_ALLOW_CONTRACT_WRITE") != "1"
 
     for pat in DANGEROUS_PATTERNS:
         if command and re.search(pat, command):

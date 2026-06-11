@@ -44,7 +44,7 @@ Input:
 Modernize the whole app: upgrade deps, add tests everywhere, refactor the API, and improve performance.
 ```
 
-Output: not one contract. A non-executable campaign (`.goals/campaign-modernize.md`) splitting the aspiration into finite children with readiness statuses, e.g.:
+Output: not one contract. A campaign manifest (`.goals/campaign-modernize.md`) splitting the aspiration into finite children with readiness statuses, e.g.:
 
 1. `ready` — Upgrade dependency set S to versions available as of date D; build and test command C exit 0.
 2. `conditional` — Add tests for module M once its public API is frozen (needs decision).
