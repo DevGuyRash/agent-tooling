@@ -300,12 +300,15 @@ Repo root: `{inv['repo_root']}`
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
+    parser.add_argument("--json", action="store_true",
+                        help="Alias for --format json (flag parity with the other goalspec scripts).")
     parser.add_argument("--include-home", action="store_true",
                         help="Also scan home/user directories (~/.codex, ~/.agents, plugin cache). Default is repo-local only.")
     parser.add_argument("--write", help="Write inventory to file")
     args = parser.parse_args()
     inv = inventory(include_home=args.include_home)
-    output = json.dumps(inv, indent=2, ensure_ascii=False) if args.format == "json" else to_markdown(inv)
+    fmt = "json" if args.json else args.format
+    output = json.dumps(inv, indent=2, ensure_ascii=False) if fmt == "json" else to_markdown(inv)
     if args.write:
         p = Path(args.write)
         p.parent.mkdir(parents=True, exist_ok=True)

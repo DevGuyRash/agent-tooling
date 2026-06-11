@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 from common import (
+    PROVENANCE_REQUEST_BEGIN,
+    PROVENANCE_REQUEST_END,
     REPORT_FIELDS,
     VERIFIER_RESULT_SCHEMA,
     bullets,
@@ -49,6 +51,36 @@ def _load_verifier_result(evidence_dir: Path | None, explicit: Path | None) -> t
     return None, None
 
 
+def _request_candidates(text: str) -> list:
+    """Admissible readings of a provenance artifact's verbatim request.
+
+    The request is arbitrary text (a PRD carries its own ## headings), so no
+    single markdown parse is canonical (evt-0188). sha256 equality against the
+    contract pointer decides the match, which makes extra candidates safe:
+    they can only clear false drift alarms, never falsely accept. Ordered most
+    exact first: marker envelope (current writer; first-BEGIN to last-END, so
+    marker strings inside the request still round-trip), then the span from
+    '## Original Request' to the artifact's own trailing '## Source' heading
+    (legacy marker-less artifacts, including heading-bearing requests), then
+    the plain section parse (hand-written artifacts without a Source section).
+    """
+    candidates: list = []
+    begin = text.find(PROVENANCE_REQUEST_BEGIN)
+    end = text.rfind(PROVENANCE_REQUEST_END)
+    if begin != -1 and end > begin:
+        candidates.append(("markers", text[begin + len(PROVENANCE_REQUEST_BEGIN):end]))
+    head = re.search(r"^##\s+Original Request\s*$", text, re.M)
+    if head:
+        trailing_sources = [m for m in re.finditer(r"^##\s+Source\s*$", text, re.M)
+                            if m.start() > head.end()]
+        if trailing_sources:
+            candidates.append(("heading-span", text[head.end():trailing_sources[-1].start()]))
+    section = parse_sections(text).get("Original Request", "")
+    if section.strip():
+        candidates.append(("section", section))
+    return [(via, c.strip()) for via, c in candidates if c.strip()]
+
+
 def _provenance_check(contract_sections: dict, contract: Path) -> dict:
     """Read the ## Provenance pointer as a drift/completeness anchor (informational).
 
@@ -71,12 +103,20 @@ def _provenance_check(contract_sections: dict, contract: Path) -> dict:
     info["artifact_exists"] = art_path.exists()
     if art_path.exists():
         try:
-            req = parse_sections(art_path.read_text(encoding="utf-8")).get("Original Request", "")
-            info["artifact_request_hash"] = sha256_text(req.strip()) if req.strip() else None
-            info["matched"] = (info.get("pointer_hash") not in (None, "pending")
-                               and info["artifact_request_hash"] == info["pointer_hash"])
+            candidates = _request_candidates(art_path.read_text(encoding="utf-8"))
         except OSError:
             info["matched"] = None
+            return info
+        info["artifact_request_hash"] = sha256_text(candidates[0][1]) if candidates else None
+        pointer = info.get("pointer_hash")
+        if pointer in (None, "pending"):
+            info["matched"] = False
+        else:
+            matched_via = next((via for via, c in candidates if sha256_text(c) == pointer), None)
+            info["matched"] = matched_via is not None
+            if matched_via:
+                info["matched_via"] = matched_via
+                info["artifact_request_hash"] = pointer
     return info
 
 

@@ -73,6 +73,16 @@ CAMPAIGN_LOCK_NAME = "campaign.sha256"
 VERIFIER_RESULT_SCHEMA = "goalspec.verifier.v1"
 VERIFIER_RESULT_NAME = "result.json"
 
+# Provenance artifacts embed the verbatim original request between these
+# markers so the audit drift anchor can extract it without markdown parsing.
+# Requests are arbitrary text — a PRD carries its own ## headings, which break
+# any section-based extraction (evt-0188) — and must round-trip byte-exact.
+# Extraction is first-BEGIN to last-END, so a request that itself contains the
+# marker strings still round-trips. Writer: record_provenance.py; reader:
+# audit_goal.py.
+PROVENANCE_REQUEST_BEGIN = "<!-- goalspec:original-request:begin -->"
+PROVENANCE_REQUEST_END = "<!-- goalspec:original-request:end -->"
+
 # A verifier command is something the runner can execute and read an exit code from.
 # Bias toward extraction: a silently skipped verifier (observed live: a `git diff
 # --exit-code` check never ran while overall_passed reported True) is worse than a

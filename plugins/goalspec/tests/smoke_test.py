@@ -290,6 +290,61 @@ def main() -> int:
         assert_true(a_prov.get("provenance", {}).get("matched") is True,
                     f"audit reads provenance as a matching drift anchor: {a_prov.get('provenance')}")
 
+        # evt-0188: requests are arbitrary text. A PRD-shaped request carrying
+        # its own ## headings — including hostile ones that collide with the
+        # artifact's template sections — must round-trip the drift anchor.
+        prd = ("# PRD: sprawling product\n\n## Vision\nEverything forever.\n\n"
+               "## Features\n- feature one\n- feature two\n\n"
+               "## Source\nthis hostile heading lives inside the request\n\n"
+               "## Compiled-Into\nso does this one\n")
+        req2 = Path(td5) / "request-prd.md"
+        req2.write_text(prd, encoding="utf-8")
+        rec2 = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_provenance.py"),
+             "--request", str(req2), "--id", "G-001", "--source", "PRD.md",
+             "--goals-dir", str(goals), "--contract", str(goals / "current.md"),
+             "--update-contract", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true(rec2.returncode == 0, f"record_provenance accepts a PRD-shaped request: {rec2.stderr}")
+        art2 = (goals / "provenance" / "G-001.md").read_text(encoding="utf-8")
+        # Writer immunity: the hostile request headings appear exactly once,
+        # inside the marker envelope, and the template's own Source /
+        # Compiled-Into sections survive intact after the request insertion.
+        from common import PROVENANCE_REQUEST_BEGIN, PROVENANCE_REQUEST_END  # noqa: E402
+        b_idx, e_idx = art2.find(PROVENANCE_REQUEST_BEGIN), art2.rfind(PROVENANCE_REQUEST_END)
+        assert_true(0 < b_idx < e_idx, "provenance artifact wraps the request in markers")
+        hostile = art2.find("this hostile heading lives inside the request")
+        assert_true(b_idx < hostile < e_idx and art2.count("hostile heading") == 1,
+                    "hostile request headings stay inside the marker envelope")
+        assert_true(re.search(r"^- Request hash: [0-9a-f]{64}$", art2[e_idx:], re.M) is not None,
+                    "template Compiled-Into section survives a hostile request")
+        a_prd = audit(goals / "current.md", None, goals / "evidence")
+        assert_true(a_prd["provenance"]["matched"] is True
+                    and a_prd["provenance"].get("matched_via") == "markers",
+                    f"PRD-shaped request anchors via markers: {a_prd['provenance']}")
+
+        # Backward compat: a legacy marker-less artifact (old writer shape,
+        # request inlined before the template's ## Source) still anchors via
+        # the heading-span candidate — even when the request itself contains
+        # a ## Source heading (the artifact's own trailing one wins).
+        legacy = ("# Provenance: G-001\n\n> Reference only.\n\n## Original Request\n\n"
+                  + prd.strip() + "\n\n## Source\n\nPRD.md\n\n## Compiled-Into\n\n"
+                  "- Contract: .goals/current.md\n")
+        (goals / "provenance" / "G-001.md").write_text(legacy, encoding="utf-8")
+        a_leg = audit(goals / "current.md", None, goals / "evidence")
+        assert_true(a_leg["provenance"]["matched"] is True
+                    and a_leg["provenance"].get("matched_via") == "heading-span",
+                    f"legacy heading-bearing artifact anchors via heading-span: {a_leg['provenance']}")
+
+        # Real drift must still alarm: tamper one byte of the preserved request.
+        (goals / "provenance" / "G-001.md").write_text(
+            legacy.replace("Everything forever.", "Everything, forever."), encoding="utf-8")
+        a_drift = audit(goals / "current.md", None, goals / "evidence")
+        assert_true(a_drift["provenance"]["matched"] is False,
+                    f"tampered request still reads as drift: {a_drift['provenance']}")
+
     # G-4: spine fields are real constraints, not boilerplate.
     base = (FIXTURES / "contracts" / "G-001-fix-password-reset.md").read_text(encoding="utf-8")
 

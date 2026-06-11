@@ -17,7 +17,12 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from common import contract_lock_status, sha256_text
+from common import (
+    PROVENANCE_REQUEST_BEGIN,
+    PROVENANCE_REQUEST_END,
+    contract_lock_status,
+    sha256_text,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE = SCRIPT_DIR.parent / "assets" / "templates" / "provenance.md"
@@ -55,7 +60,6 @@ def build_provenance(request: str, goal_id: str, source: str, contract: Path) ->
     contract_hash = ls.get("expected_hash") or ls.get("current_hash") or "pending"
     text = TEMPLATE.read_text(encoding="utf-8") if TEMPLATE.exists() else _FALLBACK_TEMPLATE
     text = re.sub(r"^# Provenance:.*$", f"# Provenance: {goal_id}", text, count=1, flags=re.M)
-    text = _replace_section(text, "Original Request", request.strip())
     text = _replace_section(text, "Source", source.strip() or "[unspecified]")
     compiled = (
         "- Contract: .goals/current.md\n"
@@ -64,6 +68,12 @@ def build_provenance(request: str, goal_id: str, source: str, contract: Path) ->
         f"- Compiled: {date.today().isoformat()}"
     )
     text = _replace_section(text, "Compiled-Into", compiled)
+    # The verbatim request is arbitrary text: insert it LAST, after every
+    # template substitution, so its content (e.g. a PRD's own '## Source'
+    # heading) can never be matched and corrupted by section replacement; the
+    # shared markers let the audit anchor extract it back without parsing.
+    wrapped = f"{PROVENANCE_REQUEST_BEGIN}\n{request.strip()}\n{PROVENANCE_REQUEST_END}"
+    text = _replace_section(text, "Original Request", wrapped)
     return text, request_hash, contract_hash
 
 
