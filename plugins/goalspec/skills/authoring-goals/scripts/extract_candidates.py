@@ -85,10 +85,19 @@ def main() -> int:
     parser.add_argument("--max-files", type=int, default=200)
     parser.add_argument("--max-candidates", type=int, default=50)
     parser.add_argument("--write", help="Write candidates markdown to file")
+    parser.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    parser.add_argument("--json", action="store_true",
+                        help="Alias for --format json (flag parity with the other goalspec scripts).")
     args = parser.parse_args()
     cands = extract(args.paths, args.max_files, args.max_candidates)
-    out = "# Candidate Goals\n\n" + ("\n".join(cands) if cands else "No candidate goals found within the exploration budget.\n")
-    out += f"\n## Frontier\n\n- Max files inspected: {args.max_files}\n- Max candidates: {args.max_candidates}\n- Inputs: {', '.join(args.paths)}\n"
+    if args.json or args.format == "json":
+        import json
+        out = json.dumps({"candidates": cands, "max_files": args.max_files,
+                          "max_candidates": args.max_candidates, "inputs": args.paths},
+                         indent=2, ensure_ascii=False)
+    else:
+        out = "# Candidate Goals\n\n" + ("\n".join(cands) if cands else "No candidate goals found within the exploration budget.\n")
+        out += f"\n## Frontier\n\n- Max files inspected: {args.max_files}\n- Max candidates: {args.max_candidates}\n- Inputs: {', '.join(args.paths)}\n"
     if args.write:
         p = Path(args.write)
         p.parent.mkdir(parents=True, exist_ok=True)

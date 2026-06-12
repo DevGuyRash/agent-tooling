@@ -170,6 +170,16 @@ def validate(path: Path) -> dict:
             "substrate inside a value-bearing goal instead; if this is a false positive, name a "
             "concrete workspace artifact this goal delivers")
 
+    # Gate coherence: the audit oracle classifies gates from the Verifier
+    # section alone, so a sign-off declared only in Terminal State can never
+    # be enforced — a passing command oracle would certify past it.
+    if (re.search(r"\b(sign(?:s|ed)?[\s-]?off|ratif\w+|human (?:review|gate|approval)|approv(?:ed|al) by)\b",
+                  sections.get("Terminal State", ""), re.I)
+            and "human" not in verifier_kinds(sections.get("Verifier", ""))):
+        warnings.append(
+            "Terminal State declares a sign-off/ratification gate but the Verifier section declares "
+            "no human gate; the audit cannot enforce it — name the human gate inside ## Verifier")
+
     # Evidence section needs commands/results/artifacts. Accept common phrasings, not exact labels.
     evidence = sections.get("Evidence Required", "").lower()
     evidence_needs = {

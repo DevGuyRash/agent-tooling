@@ -81,10 +81,12 @@ Also check target stability, priority order, evidence requirements, and contract
 
 A decomposition must add execution information over its sources, or it is theater.
 
-- Every ready or conditional child SHALL sketch its Terminal state and Verifier in the manifest. WHEN a child cannot be sketched beyond restating its source document THEN you SHALL record the single missing owner decision on an `Owner decision required:` line instead of emitting a stub child.
+- Intent stays the user's. WHEN you write an Intent section (contract or campaign) THEN you SHALL quote or tightly paraphrase the user's own words from the verbatim request; you SHALL NOT restate their intent in GoalSpec vocabulary. WHEN the request carries multiple intents THEN Coverage SHALL map every one of them to a child or an explicit deferral.
+- Contracts state outcomes and constraints. You SHALL NOT prescribe step-by-step procedures inside goal sections — the executor owns the how, and binds tighter to declared outcomes than to scripts of steps.
+- Every ready or conditional child SHALL sketch its Terminal state and Verifier in the manifest, and SHOULD cite the specific source sections it implements — one generic roadmap pointer is not binding. WHEN a child cannot be sketched beyond restating its source document THEN you SHALL record the single missing owner decision on an `Owner decision required:` line instead of emitting a stub child.
 - You SHALL NOT author meta-goals whose deliverables are GoalSpec artifacts or checks; verify the substrate inside a value-bearing goal, never as the goal.
 - WHEN the manifest changes THEN you SHALL refresh the mirror with `graph_goal.py --sync-campaign <manifest>` so graph tooling sees the same nodes and edges the manifest declares.
-- WHEN the manifest passes deterministic validation THEN you SHOULD have an independent reviewer agent judge it against the decomposition value-add check in `references/launchability-rubric.md` and record the verdict; deterministic signals set the floor, reviewer judgment raises the ceiling.
+- WHEN the manifest passes deterministic validation THEN you SHALL run an adversarial review — an independent reviewer subagent where the host supports one, otherwise a fresh self-review against the decomposition value-add check in `references/launchability-rubric.md` — and record the verdict and what it changed in a `## Decomposition Review` section of the manifest before handing off. Deterministic signals set the floor; reviewer judgment raises the ceiling.
 
 ## Output resolution
 

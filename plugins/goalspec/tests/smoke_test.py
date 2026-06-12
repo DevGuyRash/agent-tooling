@@ -77,6 +77,12 @@ def main() -> int:
     assert_true(risk["forever_risk"] in {"high", "extreme"}, "risk scoring catches runaway phrasing")
     cands = extract([str(FIXTURES / "raw-inputs")], max_files=20, max_candidates=10)
     assert_true(len(cands) >= 1, "candidate extraction finds sample candidates")
+    ec_cli = subprocess.run(
+        [sys.executable, str(SCRIPTS / "extract_candidates.py"), str(FIXTURES / "raw-inputs"), "--format", "json"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30)
+    assert_true(ec_cli.returncode == 0 and "candidates" in json.loads(ec_cli.stdout),
+                f"extract_candidates --format json works (flag parity): {ec_cli.stderr}")
     a = audit(contract, FIXTURES / "reports" / "G-001-sample-report.md", FIXTURES / "reports")
     # The sample report declares "inconclusive" and there is no verifier result file:
     # report headings + a non-empty evidence dir must NOT certify achievement (G-1 oracle gate).
@@ -612,6 +618,26 @@ def main() -> int:
         assert_true(any("disconnected" in w for w in vw["warnings"]),
                     f"verifier/terminal disconnect warns: {vw['warnings']}")
 
+        # Gate coherence: a sign-off declared only in Terminal State is invisible
+        # to the audit oracle; declared inside ## Verifier it is enforceable.
+        gated = Path(td14) / "gated.md"
+        gated.write_text(_swap(base, "Terminal State",
+                               "This goal is complete when:\n- The feature suite exits 0.\n"
+                               "- The owner signs off on the artifact."), encoding="utf-8")
+        vg = validate(gated)
+        assert_true(any("cannot enforce it" in w for w in vg["warnings"]),
+                    f"sign-off outside ## Verifier warns: {vg['warnings']}")
+        gated_ok = Path(td14) / "gatedok.md"
+        gated_ok.write_text(_swap(_swap(base, "Terminal State",
+                                        "This goal is complete when:\n- The feature suite exits 0.\n"
+                                        "- The owner signs off on the artifact."),
+                                  "Verifier",
+                                  "Completion must be verified by:\n- `pytest -q`\n"
+                                  "- Human gate: the owner reviews and signs off."), encoding="utf-8")
+        vgo = validate(gated_ok)
+        assert_true(not any("cannot enforce it" in w for w in vgo["warnings"]),
+                    f"gate inside ## Verifier does not warn: {vgo['warnings']}")
+
     # launch_goal: the external bound + close-out in one command. Achieved path,
     # hung-executor kill (124), and refuse-unlocked.
     with tempfile.TemporaryDirectory() as td15:
@@ -990,6 +1016,14 @@ def main() -> int:
         v_synced = validate_campaign(manifest)
         assert_true(not any("graph.json mirror" in w for w in v_synced["warnings"]),
                     f"synced mirror clears the graph warnings: {v_synced['warnings']}")
+        assert_true(any("Decomposition Review" in w for w in v_synced["warnings"]),
+                    f"missing adversarial-review record warns: {v_synced['warnings']}")
+        manifest.write_text(sketched + "\n## Decomposition Review\n\n"
+                            "Reviewer verdict: value-add confirmed; tightened the G-002 verifier sketch.\n",
+                            encoding="utf-8")
+        v_rev = validate_campaign(manifest)
+        assert_true(not any("Decomposition Review" in w for w in v_rev["warnings"]),
+                    f"recorded review verdict clears the warning: {v_rev['warnings']}")
 
     # Meta-goal smell at the single-contract level.
     with tempfile.TemporaryDirectory() as tmeta:

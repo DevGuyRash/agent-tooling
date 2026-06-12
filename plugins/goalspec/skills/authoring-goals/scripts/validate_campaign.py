@@ -227,6 +227,11 @@ def validate_campaign(campaign: Path) -> dict:
         warnings.append(
             "No ## Provenance pointer; record the verbatim request (record_provenance.py) so the audit "
             "has a drift anchor")
+    if "Decomposition Review" not in sections:
+        warnings.append(
+            "No ## Decomposition Review section: after the manifest validates, an independent "
+            "adversarial review (launchability rubric check 10) must record its verdict and what it "
+            "changed before handoff")
 
     root = campaign_workspace_root(campaign)
     warnings.extend(_graph_mirror_divergence(root, children))

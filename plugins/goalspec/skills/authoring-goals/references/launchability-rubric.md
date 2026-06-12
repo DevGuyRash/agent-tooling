@@ -79,6 +79,9 @@ The final `.goals/current.md` must be hashed. The executor may not modify it dur
 For each child, judged against the source documents it derives from:
 
 - Does the child name at least one concrete workspace artifact or behavior the source does not already state verbatim? A renamed milestone with a status label adds nothing.
+- Does each child cite the specific source sections it implements (PRD sections, architecture invariants, design tokens, failure families) rather than one generic roadmap pointer? Uniform, cookie-cutter children are a smell that the authoring loop stamped a template instead of thinking per child.
+- Does the Intent layer preserve the user's own words and every distinct intent in the request, or has plugin vocabulary replaced what the user actually asked for?
+- Are gates declared where the audit can enforce them (human gates inside ## Verifier, not only in Terminal State prose)?
 - Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"?
 - Is there a bounded first slice that fits a real budget, rather than the whole milestone restated?
 - Is any child a meta-goal about GoalSpec itself? Substrate checks belong inside a value-bearing child.
