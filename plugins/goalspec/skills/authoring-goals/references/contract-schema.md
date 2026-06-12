@@ -53,6 +53,9 @@ Completion must be verified by:
   lock time. run_verifiers.py checks pins before executing and audit_goal.py
   re-checks them — a mutated companion fails loudly.)
 
+Fenced ```bash blocks run each non-comment line as its own command; a heredoc
+(`python3 - <<'PY' … PY`) spans as one command, body verbatim.
+
 ## Scope
 
 In scope:

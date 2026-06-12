@@ -740,6 +740,43 @@ def main() -> int:
         "Completion must be verified by:\n- `git diff --exit-code HEAD -- test_shop.py`\n"),
         "git inline verifier command extracts")
 
+    # Live-run regression (EdgeCourt 1.6.0 authoring): a fenced heredoc verifier
+    # (`python3 - <<'PY' ... PY`) must extract as ONE multi-line command, not as
+    # per-line shell commands that 127 a perfect artifact into a false failure.
+    heredoc_section = (
+        "Completion must be verified by:\n\n"
+        "```bash\n"
+        "python3 - <<'PY'\n"
+        "from pathlib import Path\n"
+        "# a python comment inside the body must not be dropped\n"
+        "required = [\"# EC-V001\"]\n"
+        "raise SystemExit(0)\n"
+        "PY\n"
+        "git diff --quiet -- data.csv\n"
+        "```\n"
+    )
+    heredoc_cmds = _evc(heredoc_section)
+    assert_true(len(heredoc_cmds) == 2 and heredoc_cmds[1] == "git diff --quiet -- data.csv",
+                f"heredoc consumes its body as one command; trailing commands still extract: {len(heredoc_cmds)}")
+    assert_true(heredoc_cmds[0].startswith("python3 - <<'PY'") and heredoc_cmds[0].rstrip().endswith("PY")
+                and "# a python comment inside the body" in heredoc_cmds[0],
+                f"heredoc body survives verbatim, comments included: {heredoc_cmds[0]!r}")
+    with tempfile.TemporaryDirectory() as thd:
+        goals = Path(thd) / ".goals"
+        goals.mkdir(parents=True)
+        c = goals / "current.md"
+        c.write_text(_swap(base, "Verifier",
+                           "Completion must be verified by:\n\n```bash\npython3 - <<'PY'\n"
+                           "import sys\nsys.exit(0)\nPY\n```\n"), encoding="utf-8")
+        hd = subprocess.run(
+            [sys.executable, str(SCRIPTS / "run_verifiers.py"), str(c), "--run",
+             "--evidence-dir", str(goals / "evidence" / "verifiers"), "--json"],
+            cwd=thd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=60)
+        hj = json.loads(hd.stdout)
+        assert_true(hd.returncode == 0 and hj["overall_passed"] is True and len(hj["verifiers"]) == 1,
+                    f"heredoc verifier runs as one passing command: rc={hd.returncode} {hj.get('verifiers')}")
+
     # evt-0182 regression pin: an inline-span regex that crosses newlines pairs
     # the opening fence's 3rd backtick with the closing fence's 1st and re-emits
     # the whole fence interior as one spurious multi-line 'bash ...' command.

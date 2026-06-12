@@ -331,12 +331,21 @@ def contract_lock_status(path: Path) -> dict:
     }
 
 
+_HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
 def extract_verifier_commands(section: str) -> List[str]:
     """Pull executable verifier commands from a ## Verifier section body.
 
-    Fenced shell blocks contribute every non-comment line; inline `code` spans
-    contribute only when they begin with a recognized runner so prose backticks
-    do not masquerade as commands. Order-preserving and de-duplicated.
+    Fenced shell blocks contribute every non-comment line; a line opening a
+    heredoc (e.g. `python3 - <<'PY'`) consumes its body through the terminator
+    as ONE multi-line command — authors naturally write inline scripts that
+    way, and splitting the body into per-line shell commands produces a
+    false-failing oracle (each Python line exits 127). An unterminated heredoc
+    consumes to the end of its fence, degrading to one loud failure instead of
+    many spurious ones. Inline `code` spans contribute only when they begin
+    with a recognized runner so prose backticks do not masquerade as commands.
+    Order-preserving and de-duplicated.
 
     Inline spans must not cross newlines: a newline-tolerant class lets the
     span regex pair the opening fence's third backtick with the closing
@@ -345,10 +354,28 @@ def extract_verifier_commands(section: str) -> List[str]:
     """
     commands: List[str] = []
     for m in re.finditer(r"```(?:bash|sh|shell)?\s*\n(.*?)```", section, re.S | re.I):
-        for line in m.group(1).splitlines():
-            s = line.strip()
-            if s and not s.startswith("#"):
-                commands.append(s)
+        lines = m.group(1).splitlines()
+        i = 0
+        while i < len(lines):
+            s = lines[i].strip()
+            if not s or s.startswith("#"):
+                i += 1
+                continue
+            heredoc = _HEREDOC_START_RE.search(s)
+            if heredoc:
+                tag = heredoc.group(2)
+                block = [lines[i]]
+                i += 1
+                while i < len(lines):
+                    block.append(lines[i])
+                    if lines[i].strip() == tag:
+                        break
+                    i += 1
+                commands.append("\n".join(block))
+                i += 1
+                continue
+            commands.append(s)
+            i += 1
     for m in re.finditer(r"`([^`\n]+)`", section):
         c = m.group(1).strip()
         if VERIFIER_COMMAND_RE.match(c):
