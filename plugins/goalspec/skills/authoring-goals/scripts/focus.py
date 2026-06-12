@@ -85,6 +85,12 @@ def resolve_goal(root: Path, goal_override: str | None = None) -> dict:
     raw_title = contract.read_text(encoding="utf-8").splitlines()[0]
     _, title = split_goal_id_title(re.sub(r"^#\s*Goal Contract:\s*", "", raw_title))
     out["title"] = title
+    # Human-stepped campaigns keep an unlocked manifest beside the selected
+    # root-slot child; surface that context without changing mode semantics.
+    manifest, _ = infer_campaign_manifest(goals)
+    if manifest is not None:
+        out["campaign_note"] = (f"{goals_relative(manifest)} (human-stepped — this contract is "
+                                "the selected child; the aggregate is not chain-locked)")
     return out
 
 
@@ -126,6 +132,8 @@ def build_focus(root: Path, goal_override: str | None = None) -> dict:
     lines.append(f"- Contract: {goals_relative(contract)} (sha256 {ls.get('current_hash', '')[:16]}… — {lock_word})")
     if info["mode"] == "campaign":
         lines.append(f"- Campaign: {goals_relative(Path(info['manifest']))} — {info['position']}")
+    elif info.get("campaign_note"):
+        lines.append(f"- Campaign: {info['campaign_note']}")
     if info.get("chain_note"):
         lines.append(f"- Chain note: {info['chain_note']}")
 

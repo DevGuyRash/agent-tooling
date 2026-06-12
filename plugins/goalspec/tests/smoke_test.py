@@ -1310,20 +1310,68 @@ def main() -> int:
         assert_true(a_mut["result"] == "contract mutated",
                     f"A1: mutated child + intact root pair => contract mutated: {a_mut['result']}")
 
-    # A3: the scope guard arms on campaign.sha256 alone (no root current.md).
+    # A3 (per-artifact freeze): the guard arms on campaign.sha256 alone, and
+    # protection attaches to artifacts whose OWN lock exists — a locked child
+    # stays frozen while an unlocked draft (tail child, root slot, unlocked
+    # manifest) remains writable for authoring/promotion without the env var.
     with tempfile.TemporaryDirectory() as tc8:
         ws = Path(tc8)
-        (ws / ".goals").mkdir(parents=True)
+        cdir = ws / ".goals" / "children" / "G-001"
+        cdir.mkdir(parents=True)
+        (cdir / "current.md").write_text("# Goal Contract: G-001 X\n\n## Objective\nx\n", encoding="utf-8")
+        (cdir / "current.sha256").write_text(f"{sha256_file(cdir / 'current.md')}  current.md\n", encoding="utf-8")
         (ws / ".goals" / "campaign.sha256").write_text("0" * 64 + "  campaign-test.md\n", encoding="utf-8")
-        guard = subprocess.run(
-            [sys.executable, str(HOOKS / "scope_guard.py")],
-            input=json.dumps({"cwd": str(ws), "tool_name": "Bash",
-                              "tool_input": {"command": "echo x >> .goals/children/G-001/current.md"}}),
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
-        )
-        assert_true("permissionDecision" in guard.stdout,
-                    f"campaign lock alone arms the scope guard for child contracts: {guard.stdout}")
+        (ws / ".goals" / "campaign-test.md").write_text("# Campaign: X\n", encoding="utf-8")
+
+        def guard_ws(command: str) -> str:
+            proc = subprocess.run(
+                [sys.executable, str(HOOKS / "scope_guard.py")],
+                input=json.dumps({"cwd": str(ws), "tool_name": "Bash", "tool_input": {"command": command}}),
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+            )
+            return proc.stdout
+
+        assert_true("permissionDecision" in guard_ws("echo x >> .goals/children/G-001/current.md"),
+                    "a LOCKED child contract stays frozen while armed")
+        assert_true("permissionDecision" not in guard_ws("echo x >> .goals/children/G-002/current.md"),
+                    "an unlocked tail child is a writable draft while armed (promotion flow)")
+        assert_true("permissionDecision" not in guard_ws("echo x >> .goals/current.md"),
+                    "the root slot is writable while armed only via the campaign lock (human-stepped compile)")
+        assert_true("permissionDecision" in guard_ws("echo x >> .goals/campaign-test.md"),
+                    "the manifest is frozen once the aggregate lock exists")
+        assert_true("permissionDecision" in guard_ws("rm .goals/children/G-001/current.sha256"),
+                    "lock files themselves stay frozen")
+
+    # Per-artifact freeze, the observed live friction: armed via the ROOT pair,
+    # editing a NOT-yet-locked campaign manifest needs no escape hatch.
+    with tempfile.TemporaryDirectory() as tc8b:
+        ws = Path(tc8b)
+        (ws / ".goals").mkdir(parents=True)
+        c = ws / ".goals" / "current.md"
+        shutil.copyfile(contract, c)
+        (ws / ".goals" / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        (ws / ".goals" / "campaign-edge.md").write_text("# Campaign: Edge\n\n## Decomposition Review\n\nAnchor: pending-validation\n", encoding="utf-8")
+
+        def guard_b(command: str) -> str:
+            proc = subprocess.run(
+                [sys.executable, str(HOOKS / "scope_guard.py")],
+                input=json.dumps({"cwd": str(ws), "tool_name": "Bash", "tool_input": {"command": command}}),
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+            )
+            return proc.stdout
+
+        perl_cmd = "perl -0pi -e 's/Anchor: pending-validation/Anchor: abc/' .goals/campaign-edge.md"
+        assert_true("permissionDecision" not in guard_b(perl_cmd),
+                    "anchoring an unlocked manifest while the root pair is locked needs no override")
+        assert_true("permissionDecision" in guard_b("echo x >> .goals/current.md"),
+                    "the locked root contract stays frozen in the same workspace")
+        (ws / ".goals" / "campaign.sha256").write_text("0" * 64 + "  campaign-edge.md\n", encoding="utf-8")
+        assert_true("permissionDecision" in guard_b(perl_cmd),
+                    "the same manifest edit is denied once the aggregate lock exists")
+        assert_true("permissionDecision" in guard_b("echo x >> .goals/campaign-template.md"),
+                    "the scaffolded campaign template keeps the blanket armed-freeze")
 
     # launch --campaign: achieved close-out, refuse-unlocked, and the 124 wall-clock kill.
     with tempfile.TemporaryDirectory() as tc9:
@@ -1732,6 +1780,18 @@ def main() -> int:
         sm = json.loads(fs.stdout)
         assert_true(sm["tasks_done"] == 0 and any("stale" in w for w in sm["warnings"]),
                     f"a re-locked contract invalidates the cursor with a warning: {sm['warnings']}")
+        # Pure single-goal workspace: no campaign context line.
+        assert_true("- Campaign:" not in (ws / ".goals" / "focus.md").read_text(encoding="utf-8"),
+                    "single-goal focus carries no campaign line when no manifest exists")
+        # Human-stepped shape: an unlocked manifest beside the locked root slot
+        # surfaces as context without flipping focus into campaign mode.
+        (ws / ".goals" / "campaign-human.md").write_text("# Campaign: Human Stepped\n", encoding="utf-8")
+        hs = json.loads(focus_cli(ws, "show", "--json").stdout)
+        assert_true(hs["mode"] == "single" and "human-stepped" in hs.get("campaign_note", ""),
+                    f"unlocked manifest surfaces as a human-stepped note: {hs.get('campaign_note')}")
+        assert_true("- Campaign: .goals/campaign-human.md (human-stepped"
+                    in (ws / ".goals" / "focus.md").read_text(encoding="utf-8"),
+                    "focus.md renders the human-stepped campaign line")
 
     # --- Focus cursor: campaign mode follows the chain and pauses with it ---
     with tempfile.TemporaryDirectory() as tf2:
@@ -1831,6 +1891,16 @@ def main() -> int:
         v_mat2 = validate_campaign(m)
         assert_true(v_mat2["ok"] and any("before promotion" in w and "G-002" in w for w in v_mat2["warnings"]),
                     f"invalid tail contract surfaces promotion warnings: {v_mat2['warnings']}")
+        # Reviewer availability is surfaced where the author is already looking.
+        assert_true(any("decomposition-reviewer agent template is not installed" in w
+                        for w in v_mat2["warnings"]),
+                    f"missing reviewer template warns at validation: {v_mat2['warnings']}")
+        agents_dir = ws / ".codex" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "decomposition-reviewer.toml").write_text("name = \"decomposition_reviewer\"\n", encoding="utf-8")
+        v_mat3 = validate_campaign(m)
+        assert_true(not any("decomposition-reviewer agent template" in w for w in v_mat3["warnings"]),
+                    f"installed reviewer template clears the availability warning: {v_mat3['warnings']}")
 
     # Worked examples stay structurally honest (cheap drift guard).
     examples_text = (ROOT / "skills" / "authoring-goals" / "references" / "examples.md").read_text(encoding="utf-8")

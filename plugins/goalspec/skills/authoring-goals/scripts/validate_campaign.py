@@ -291,6 +291,15 @@ def validate_campaign(campaign: Path) -> dict:
                 + " — record one verdict per child (confirmed | weak | theater)")
 
     root = campaign_workspace_root(campaign)
+    # Reviewer availability is a capability fact (same class as the mirror
+    # check): when the adversary is absent, the review can only have been a
+    # self-review — say so where the author is already looking.
+    if not (root / ".codex" / "agents" / "decomposition-reviewer.toml").exists():
+        warnings.append(
+            "decomposition-reviewer agent template is not installed in this project "
+            "(.codex/agents/decomposition-reviewer.toml); install it with goalspec.py init "
+            "(installed by default) or self-review against rubric check 10 — and note which "
+            "one the recorded review reflects")
     warnings.extend(_graph_mirror_divergence(root, children))
 
     result["ok"] = not errors

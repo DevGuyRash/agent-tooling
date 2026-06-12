@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 
 from _hook_common import SCRIPTS  # noqa: F401
 from common import (
@@ -60,6 +61,22 @@ def _mention_is_allowed(mention: str) -> bool:
                for prefix in ALLOWED_GOALS_PREFIXES)
 
 
+def _unlocked_draft(goals_dir: Path, mention: str) -> bool:
+    """A lockable mission artifact whose OWN lock is absent is an authoring or
+    promotion draft: write-protection attaches to locked artifacts, not to the
+    whole directory once anything locks. Registries, lock files, focus.md, and
+    everything else under .goals/ keep the blanket armed-freeze."""
+    p = mention[2:] if mention.startswith("./") else mention
+    if re.match(r"\.goals/campaign-[^/]+\.md$", p) and p != ".goals/campaign-template.md":
+        return not (goals_dir / "campaign.sha256").exists()
+    m = re.match(r"\.goals/children/([^/]+)/current\.md$", p)
+    if m:
+        return not (goals_dir / "children" / m.group(1) / "current.sha256").exists()
+    if p == ".goals/current.md":
+        return not (goals_dir / "current.sha256").exists()
+    return False
+
+
 def path_is_protected(path: str) -> bool:
     p = path.strip()
     if p.startswith("./"):
@@ -102,7 +119,8 @@ def main() -> int:
 
     if tool in {"apply_patch", "Edit", "Write"}:
         paths = extract_patch_paths(command)
-        protected_hits = [p for p in paths if path_is_protected(p)]
+        protected_hits = [p for p in paths
+                          if path_is_protected(p) and not _unlocked_draft(goals_dir, p)]
         if protected_hits:
             deny("GoalSpec blocked modification to frozen goal artifacts: " + ", ".join(protected_hits) + ". Executor may only write .goals/evidence/, .goals/reports/, and .goals/rendered-* during a run.")
             return 0
@@ -114,7 +132,8 @@ def main() -> int:
         # run_verifiers/audit invocations and any allowed-path command carrying
         # an incidental redirect like 2>&1.
         mentions = re.findall(r"\.goals/[^\s'\"`;|&)]*", command)
-        frozen_mentions = sorted({m for m in mentions if not _mention_is_allowed(m)})
+        frozen_mentions = sorted({m for m in mentions
+                                  if not _mention_is_allowed(m) and not _unlocked_draft(goals_dir, m)})
         if frozen_mentions:
             hit = command_mentions_write_to_protected(command, frozen_mentions)
             if hit:

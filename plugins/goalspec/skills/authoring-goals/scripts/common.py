@@ -254,7 +254,9 @@ def extract_patch_paths(command: str) -> List[str]:
 
 def command_mentions_write_to_protected(command: str, protected_paths: Sequence[str]) -> Optional[str]:
     compact = command.replace("\\ ", " ")
-    write_verbs = r"(?:>|>>|tee\s+|cp\s+|mv\s+|rm\s+|sed\s+-i|perl\s+-pi|python\S*\s+.*open\()"
+    # perl in-place spellings: -pi, -0pi, -ni, -i (optionally with a null/record
+    # separator digit) — the live-observed shape was `perl -0pi`.
+    write_verbs = r"(?:>|>>|tee\s+|cp\s+|mv\s+|rm\s+|sed\s+-i|perl\s+-0?[pn]?i|python\S*\s+.*open\()"
     for p in protected_paths:
         if p in compact:
             if re.search(rf"\b(cat|less|grep|rg|sed\s+-n|head|tail|wc|sha256sum|shasum)\b[^\n;]*{re.escape(p)}", compact):
