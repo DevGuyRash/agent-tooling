@@ -153,6 +153,14 @@ def validate(path: Path) -> dict:
     if "[" in caps and "]" in caps:
         warnings.append("Available Capabilities still contains unresolved [placeholders]; resolve them with inventory_capabilities.py before launch")
 
+    # Depth: substantive goals decompose their definition of done into a
+    # declarative outcome tree the focus cursor can project across threads.
+    if not bullets(sections.get("Tasks", "")):
+        warnings.append(
+            "No ## Tasks outcome tree: decompose the definition of done into nested declarative "
+            "outcomes (tasks/subtasks/sub-subtasks — states to make true, never steps) so focus.py "
+            "can track progress across threads; a deliberate micro-goal may ignore this")
+
     lowered = term.lower()
     for phrase in OPEN_ENDED_PHRASES:
         if phrase in lowered:

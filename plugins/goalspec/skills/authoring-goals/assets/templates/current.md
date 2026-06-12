@@ -6,6 +6,8 @@
 - Created: YYYY-MM-DD
 - Source: user prompt
 - Contract hash: pending
+- Blocks: [child ids this goal unblocks, or none — informational mirror; the campaign manifest stays the dependency truth]
+- Blocked by: [ids or none]
 
 ## Provenance
 
@@ -23,7 +25,10 @@
 
 ## Context
 
-[Relevant files, logs, docs, tickets, previous attempts, assumptions.]
+[Source anchors, prior attempts, assumptions. Line-level anchors are right for
+a goal that executes now; for an unlocked tail goal prefer section/outcome
+anchors — files will have changed by the time it runs. Either way the executor
+re-verifies anchors during its discovery pass before acting.]
 
 ## Available Capabilities
 
@@ -45,9 +50,23 @@ This goal must cover:
 ## Terminal State
 
 This goal is complete when:
+- [Checkable proposition — enumerate the source's acceptance criteria]
 - [Checkable proposition]
 - [Checkable proposition]
-- [Checkable proposition]
+
+## Tasks
+
+[The definition of done decomposed into a declarative outcome tree: every item
+is a state to make true, never a step; nest subtasks and sub-subtasks freely
+(2-space indent per level). Order implies nothing — dependency lives in
+Blocked by/Blocks and the campaign graph. Boxes stay unticked in this frozen
+contract; the live cursor is projected into .goals/focus.md and moved with
+`focus.py done <id>`. Marks are bookkeeping; the Verifier is the oracle.]
+
+- [ ] [Outcome]
+  - [ ] [Sub-outcome]
+    - [ ] [Sub-sub-outcome]
+- [ ] [Outcome]
 
 ## Verifier
 

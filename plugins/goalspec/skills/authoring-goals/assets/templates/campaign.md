@@ -52,13 +52,20 @@ a coverage gap.]
 - Terminal state: [one sentence: the checkable state of the workspace when this child is done]
 - Verifier: [runnable command / metric / named gate that checks it]
 
-### G-002: Blocked child
+### G-002: Conditional child (materialized, unlocked)
 
-- Status: blocked
+- Status: conditional
 - Depends on: G-001
-- Missing decision: [the single owner decision that unblocks this child]
-- Terminal state: [sketch it even while blocked — a child with no sketch is a stub, not a goal]
+- Contract: .goals/children/G-002/current.md
+- Missing decision: Owner decision required: [the single owner decision that unblocks this child]
+- Terminal state: [one sentence; the full contract carries the rest]
 - Verifier: [sketch the check; "TBD" is not a verifier]
+
+[Materialize everything, lock the horizon: every named child gets a FULL
+contract written with its sources open — conditional and blocked children
+included, just unlocked, with the owner decision in their give-up conditions.
+At selection the tail contract is re-validated against current reality,
+updated, then locked. A manifest sketch is a skeleton, never an end state.]
 
 ### G-003: Not-launchable child
 

@@ -27,6 +27,20 @@ _No active goal._
 - Missing: [verifier / scope / budget / decision]
 - Suggested repair: [finite version]
 
+## Deferred (far map)
+
+[The destination beyond the active wave, enumerated so nothing the sources
+name is invisible. One entry per far work unit (milestone grain is fine),
+each naming the gate or decision that opens it. These are map entries, not
+launchable goals — they materialize into campaign children when their gate
+opens.]
+
+### [M2: Example far milestone]
+
+- Status: deferred
+- Opens when: [the gate/verdict/decision that unlocks this work]
+- Source: [the section of the source document that defines it]
+
 ## Blocked / Not Launchable
 
 ### G-003: Example vague goal

@@ -178,6 +178,27 @@ def validate_campaign(campaign: Path) -> dict:
                "nothing over its source documents")
         (warnings if status == "blocked" else errors).append(msg)
 
+    # Materialize everything, lock the horizon: the tail (conditional/blocked
+    # children) carries full UNLOCKED contracts — depth is always maximal, only
+    # locking is horizon-scoped. A manifest sketch is a skeleton, not an end state.
+    for child in children:
+        if child.get("status") not in {"conditional", "blocked"}:
+            continue
+        contract = child_contract_path(campaign, child)
+        if contract is None:
+            warnings.append(
+                f"Child {child['id']} ({child.get('status')}) has no 'Contract:' path — materialize the "
+                "tail as a full unlocked contract (lock it at selection); a manifest sketch is not an "
+                "end state")
+        elif not contract.exists():
+            warnings.append(
+                f"Child {child['id']} ({child.get('status')}) names a contract that does not exist yet: "
+                f"{contract} — write the full unlocked contract now; lock it at selection")
+        else:
+            v_tail = validate_contract(contract)
+            for err in v_tail.get("errors", []):
+                warnings.append(f"Child {child['id']} tail contract will need this fixed before promotion: {err}")
+
     # Meta-goal smell: GoalSpec machinery as the deliverable. One meta child is
     # a warning; a campaign whose ENTIRE ready set is meta has no launchable
     # value and must either materialize real work or name the blocking decision.

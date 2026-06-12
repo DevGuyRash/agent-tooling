@@ -30,6 +30,7 @@ COMMANDS = {
     "validate-campaign": ("validate_campaign", "Validate/lock a campaign manifest for chain execution"),
     "campaign-status": ("campaign_status", "Derive chain status from per-child verifier evidence"),
     "audit-campaign": ("audit_campaign", "Audit a completed campaign chain (lock gate + per-child roll-up)"),
+    "focus": ("focus", "Project the current goal + task cursor into .goals/focus.md (show/done/undo)"),
 }
 
 

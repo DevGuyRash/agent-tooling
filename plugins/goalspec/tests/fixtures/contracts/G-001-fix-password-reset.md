@@ -44,6 +44,17 @@ This goal is complete when:
 - Existing login, signup, and session tests still pass or are reported unavailable with reason.
 - No production secrets, deployment configuration, auth redesign, email provider migration, or unrelated auth behavior changed.
 
+## Tasks
+
+- [ ] The reset request path issues a valid, single-use reset token
+  - [ ] A reset email is produced for a known account
+  - [ ] Unknown accounts produce no account-existence oracle
+- [ ] The reset link sets a new password that satisfies existing policy checks
+  - [ ] Used and expired tokens are rejected
+    - [ ] Rejection produces no information beyond invalid-or-expired
+- [ ] A regression test pins the originally failing path
+- [ ] Unrelated login, signup, and session behavior is demonstrably unchanged
+
 ## Verifier
 
 Completion must be verified by:

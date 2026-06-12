@@ -49,6 +49,20 @@ each time, skips achieved children, pauses at attestation-only children until
 their report records the gate outcome, and stops when the status tool says
 stop. The same rendered line stays correct for the whole campaign lifecycle.
 
+## Focus projection
+
+Rendering a locked mission (single or campaign) also writes the initial
+`.goals/focus.md`: the executor's first read in every thread — current goal,
+its `## Tasks` outcome tree with the live cursor, chain position, and the
+commands that advance it. It is a regenerated projection (`focus.py`), never
+hand-edited and never authoritative: the locked contract is the truth, the
+verifier is the oracle, and task marks are bookkeeping stored under
+`.goals/evidence/tasks/`, stamped with the contract hash so a re-lock reads
+as stale. Both renders inject the executor doctrine mechanically: open-world
+discovery first (re-verify drifted reality), closed-world execution (any
+path satisfying the contract is valid; out-of-scope discoveries become
+follow-up candidates).
+
 ## Pointer mode (prompt-length-limited targets)
 
 `render_goal.py --pointer` writes the full render to `.goals/rendered-goal.md` (or `.goals/rendered-campaign.md` for `--campaign`) and prints one short launch line carrying two hashes: the mission hash (contract sha256 / campaign aggregate sha256) and the pointer file's own sha256. The executor reads the pointer file first — the file, not the line, carries the projection, and `.goals/current.md` stays the source of truth over both. WHEN either hash does not match at launch THEN you SHALL stop and report contract mutated.

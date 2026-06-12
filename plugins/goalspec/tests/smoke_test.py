@@ -35,7 +35,7 @@ from common import sha256_file  # noqa: E402
 from validate_campaign import validate_campaign  # noqa: E402
 from campaign_status import derive_status  # noqa: E402
 from audit_campaign import audit_campaign  # noqa: E402
-from render_goal import render_campaign_with_meta  # noqa: E402
+from render_goal import render_campaign_with_meta, render_with_meta  # noqa: E402
 from common import campaign_aggregate_hash, campaign_lock_path, child_evidence_dir  # noqa: E402
 from common import campaign_lock_status, contract_lock_status  # noqa: E402
 
@@ -1656,8 +1656,187 @@ def main() -> int:
 
     # Single-goal renders are re-injection-safe too: an already-achieved contract
     # is verified and reported, never redone.
-    assert_true("already certify this contract achieved" in render(contract, allow_unlocked=True),
+    single_render = render(contract, allow_unlocked=True)
+    assert_true("already certify this contract achieved" in single_render,
                 "single-goal render carries the idempotent re-entry sentence")
+    assert_true("open-world discovery" in single_render and "Execute closed-world" in single_render
+                and ".goals/focus.md" in single_render,
+                "single-goal render carries the executor doctrine and the focus-first read")
+
+    # --- Task trees: declarative outcome decomposition with positional ids ---
+    from common import excise_section, flatten_task_tree, parse_task_tree  # noqa: E402
+    tree = parse_task_tree(
+        "- [ ] Outcome one\n"
+        "  - [x] Sub one (authored box state is ignored)\n"
+        "    - [ ] Sub-sub one\n"
+        "      - extra-indented child clamps to the next level\n"
+        "  - [ ] Sub two\n"
+        "- Outcome two (plain bullet accepted)\n")
+    ids = [n["id"] for n in flatten_task_tree(tree)]
+    assert_true(ids == ["1", "1.1", "1.1.1", "1.1.1.1", "1.2", "2"],
+                f"task tree ids are positional dotted paths: {ids}")
+    assert_true(parse_task_tree("") == [] and parse_task_tree("prose only\n") == [],
+                "empty/prose Tasks sections parse to an empty tree")
+
+    # validate_goal nudges toward depth: the fixture carries a tree (no warning);
+    # removing the section warns.
+    v_tasks = validate(contract)
+    assert_true(not any("## Tasks" in w for w in v_tasks["warnings"]),
+                f"fixture with a Tasks tree does not warn: {v_tasks['warnings']}")
+    with tempfile.TemporaryDirectory() as tnt:
+        no_tree = Path(tnt) / "notree.md"
+        no_tree.write_text(excise_section(base, "Tasks"), encoding="utf-8")
+        v_nt = validate(no_tree)
+        assert_true(v_nt["ok"] and any("No ## Tasks outcome tree" in w for w in v_nt["warnings"]),
+                    f"missing Tasks tree warns (never errors): {v_nt['warnings']}")
+
+    # --- Focus cursor: single-goal lifecycle (show -> done -> undo -> stale) ---
+    def focus_cli(ws: Path, *argv: str):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "focus.py"), *argv, "--root", str(ws)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=60)
+
+    with tempfile.TemporaryDirectory() as tf1:
+        ws = Path(tf1)
+        (ws / ".goals").mkdir(parents=True)
+        c = ws / ".goals" / "current.md"
+        shutil.copyfile(contract, c)
+        (ws / ".goals" / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        fj = focus_cli(ws, "show", "--json")
+        assert_true(fj.returncode == 0, f"focus show works: {fj.stderr}")
+        fmeta = json.loads(fj.stdout)
+        assert_true(fmeta["goal_id"] == "G-001" and fmeta["tasks_done"] == 0 and fmeta["tasks_total"] >= 6,
+                    f"focus projects the goal and its open tree: {fmeta.get('goal_id')} {fmeta.get('tasks_total')}")
+        ftext = (ws / ".goals" / "focus.md").read_text(encoding="utf-8")
+        assert_true("never authoritative" in ftext and "focus.py done" in ftext
+                    and "Open-world discovery first" in ftext,
+                    "focus.md carries the cursor doctrine and the advance commands")
+        fd = focus_cli(ws, "done", "1.1", "2.1", "--json")
+        assert_true(fd.returncode == 0 and json.loads(fd.stdout)["tasks_done"] == 2,
+                    f"focus done marks outcomes: {fd.stderr}")
+        assert_true("- [x] 1.1 " in (ws / ".goals" / "focus.md").read_text(encoding="utf-8"),
+                    "marked outcomes render as [x] in the projection")
+        state = json.loads((ws / ".goals" / "evidence" / "tasks" / "G-001.json").read_text(encoding="utf-8"))
+        assert_true(state["schema"] == "goalspec.tasks.v1" and set(state["done"]) == {"1.1", "2.1"},
+                    f"task state persists under evidence with the schema: {state}")
+        bad = focus_cli(ws, "done", "9.9")
+        assert_true(bad.returncode == 2 and "unknown task id" in bad.stderr,
+                    f"unknown task ids are refused loudly: rc={bad.returncode}")
+        fu = focus_cli(ws, "undo", "2.1", "--json")
+        assert_true(json.loads(fu.stdout)["tasks_done"] == 1, "undo reverses a mark")
+        # Re-lock with changed content: the cursor is stale and discarded loudly.
+        c.write_text(c.read_text(encoding="utf-8") + "\n<!-- revised -->\n", encoding="utf-8")
+        (ws / ".goals" / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        fs = focus_cli(ws, "show", "--json")
+        sm = json.loads(fs.stdout)
+        assert_true(sm["tasks_done"] == 0 and any("stale" in w for w in sm["warnings"]),
+                    f"a re-locked contract invalidates the cursor with a warning: {sm['warnings']}")
+
+    # --- Focus cursor: campaign mode follows the chain and pauses with it ---
+    with tempfile.TemporaryDirectory() as tf2:
+        ws = Path(tf2)
+        m = make_campaign(ws, [{"id": "G-001", "attestation": True, "depends_on": "none"},
+                               {"id": "G-002", "depends_on": "G-001"}])
+        # init's scaffolded template must never make a one-campaign workspace ambiguous.
+        (ws / ".goals" / "campaign-template.md").write_text("# Campaign: Replace With Name\n", encoding="utf-8")
+        f0 = json.loads(focus_cli(ws, "show", "--json").stdout)
+        assert_true(f0["mode"] == "campaign" and f0["goal_id"] == "G-001",
+                    f"campaign focus names the derived next child: {f0.get('goal_id')}")
+        ev1 = child_evidence_dir(ws, "G-001")
+        ev1.mkdir(parents=True, exist_ok=True)
+        (ev1 / "artifact.txt").write_text("x\n", encoding="utf-8")
+        rep1 = ws / ".goals" / "reports" / "G-001-report.md"
+        rep1.write_text("# r\n\n## Result\nachieved\n\n## Files Changed\n- x\n\n## Commands Run\n- x\n\n"
+                        "## Evidence\n- x\n\n## Budget Used\n- x\n\n"
+                        "## Remaining Risks\n- Human gate: approved by the owner.\n\n## Follow-Up Candidates\n- none\n",
+                        encoding="utf-8")
+        f1 = json.loads(focus_cli(ws, "show", "--json").stdout)
+        assert_true(f1["goal_id"] == "G-002", f"focus advances with the chain: {f1.get('goal_id')}")
+        chain_evidence(ws, m, "G-002", passed=True)
+        chain_report(ws, "G-002")
+        f2 = json.loads(focus_cli(ws, "show", "--json").stdout)
+        assert_true(f2.get("goal_id") is None and "achieved" in (f2.get("chain_note") or ""),
+                    f"a completed chain projects its stop note, not a goal: {f2.get('chain_note')}")
+
+    # --- Focus + guard + vendoring: the cursor moves through the armed run ---
+    with tempfile.TemporaryDirectory() as tf3:
+        ws = Path(tf3)
+        m = make_campaign(ws, two_chain)
+        meta_f = render_campaign_with_meta(m)
+        assert_true("Read .goals/focus.md first" in meta_f["rendered"],
+                    "chain text opens with the focus-first read")
+        assert_true(meta_f["focus"].get("file", "").endswith("focus.md")
+                    and (ws / ".goals" / "focus.md").exists(),
+                    f"campaign render writes the initial focus projection: {meta_f['focus']}")
+        assert_true((ws / ".goals" / "bin" / "focus.py").exists(),
+                    "focus.py is vendored with the chain runtime")
+        vf = subprocess.run([sys.executable, ".goals/bin/focus.py", "show", "--root", str(ws), "--json"],
+                            cwd=tf3, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"} | {"GOALSPEC_NO_GIT": "1"},
+                            timeout=60)
+        assert_true(vf.returncode == 0 and json.loads(vf.stdout)["goal_id"] == "G-001",
+                    f"vendored focus.py runs import-clean from the workspace: {vf.stderr}")
+
+        def run_scope_ws(command: str) -> str:
+            proc = subprocess.run(
+                [sys.executable, str(HOOKS / "scope_guard.py")],
+                input=json.dumps({"cwd": str(ws), "tool_name": "Bash", "tool_input": {"command": command}}),
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30)
+            return proc.stdout
+
+        assert_true("permissionDecision" not in run_scope_ws("python3 .goals/bin/focus.py done 1.1"),
+                    "moving the cursor via the vendored CLI passes the armed guard")
+        assert_true("permissionDecision" in run_scope_ws("echo x >> .goals/focus.md"),
+                    "hand-writing the focus projection is denied while armed")
+
+    # Single-goal render of the canonical mission slot vendors the runtime and
+    # writes the projection; --allow-unlocked previews never write anything.
+    with tempfile.TemporaryDirectory() as tf4:
+        ws = Path(tf4)
+        (ws / ".goals").mkdir(parents=True)
+        c = ws / ".goals" / "current.md"
+        shutil.copyfile(contract, c)
+        (ws / ".goals" / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        meta_s = render_with_meta(c)
+        assert_true(meta_s.get("focus", {}).get("file", "").endswith("focus.md")
+                    and (ws / ".goals" / "bin" / "focus.py").exists(),
+                    "locked single-goal render vendors the runtime and writes focus.md")
+    assert_true("focus" not in render_with_meta(contract, allow_unlocked=True),
+                "preview renders write no focus projection")
+
+    # --- Materialize-everything floor: contract-less tail children warn ---
+    with tempfile.TemporaryDirectory() as tmm:
+        ws = Path(tmm)
+        m = make_campaign(ws, [{"id": "G-001", "depends_on": "none"}], lock=False)
+        cond = ("\n### G-002: Conditional without a contract\n\n- Status: conditional\n- Depends on: G-001\n"
+                "- Missing decision: Owner decision required: pick the provider.\n"
+                "- Terminal state: the provider integration exists and its suite passes.\n"
+                "- Verifier: `pytest -q tests/provider`\n")
+        m.write_text(m.read_text(encoding="utf-8").replace("\n## Selection Recommendation",
+                                                            cond + "\n## Selection Recommendation"),
+                     encoding="utf-8")
+        v_mat = validate_campaign(m)
+        assert_true(v_mat["ok"] and any("materialize the tail" in w and "G-002" in w for w in v_mat["warnings"]),
+                    f"contract-less conditional child warns: {v_mat['warnings']}")
+        # Materialized but invalid tail contract: errors surface as promotion warnings.
+        cdir = ws / ".goals" / "children" / "G-002"
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "current.md").write_text("# Goal Contract: G-002 Tail\n\n## Objective\nx\n", encoding="utf-8")
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "- Missing decision: Owner decision required: pick the provider.",
+            "- Contract: .goals/children/G-002/current.md\n- Missing decision: Owner decision required: pick the provider."),
+            encoding="utf-8")
+        v_mat2 = validate_campaign(m)
+        assert_true(v_mat2["ok"] and any("before promotion" in w and "G-002" in w for w in v_mat2["warnings"]),
+                    f"invalid tail contract surfaces promotion warnings: {v_mat2['warnings']}")
+
+    # Worked examples stay structurally honest (cheap drift guard).
+    examples_text = (ROOT / "skills" / "authoring-goals" / "references" / "examples.md").read_text(encoding="utf-8")
+    assert_true("## Tasks" in examples_text and ".goals/focus.md:" in examples_text
+                and ".goals/children/G-001/current.md:" in examples_text,
+                "examples.md carries the file-block artifacts (contract with Tasks, focus projection)")
 
     print("GoalSpec full smoke test passed.")
     return 0

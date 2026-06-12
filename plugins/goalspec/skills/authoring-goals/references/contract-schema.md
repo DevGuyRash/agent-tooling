@@ -11,6 +11,8 @@ Use this schema for `.goals/current.md`.
 - Created: YYYY-MM-DD
 - Source: user prompt | file | issue | scan | follow-up
 - Contract hash: set by validate_goal.py --write-hash
+- Blocks: [ids] | none      (informational mirror — the campaign manifest is dependency truth)
+- Blocked by: [ids] | none
 
 ## Objective
 
@@ -22,7 +24,10 @@ Use this schema for `.goals/current.md`.
 
 ## Context
 
-[Relevant files, logs, issues, docs, prior attempts, assumptions.]
+[Source anchors, prior attempts, assumptions. Line-level anchors suit a goal
+that executes now; an unlocked tail goal prefers section/outcome anchors —
+files will have changed by the time it runs. The executor re-verifies anchors
+during its discovery pass before acting.]
 
 ## Available Capabilities
 
@@ -39,9 +44,23 @@ This goal must cover:
 ## Terminal State
 
 This goal is complete when:
+- [Checkable proposition — enumerate the source's acceptance criteria]
 - [Checkable proposition]
 - [Checkable proposition]
-- [Checkable proposition]
+
+## Tasks
+
+[The definition of done as a declarative outcome tree. Every item is a state
+to make true, never a step; nest freely (2-space indent per level — tasks,
+subtasks, sub-subtasks). Order implies nothing; dependency lives in
+Blocked by/Blocks and the campaign graph. Boxes stay unticked here: the frozen
+contract is immutable, and the live cursor is projected into .goals/focus.md
+and moved with `focus.py done <id>` (positional dotted ids: 1, 1.2, 1.2.3).
+Marks are progress bookkeeping; the Verifier remains the only oracle.]
+
+- [ ] [Outcome]
+  - [ ] [Sub-outcome]
+    - [ ] [Sub-sub-outcome]
 
 ## Verifier
 

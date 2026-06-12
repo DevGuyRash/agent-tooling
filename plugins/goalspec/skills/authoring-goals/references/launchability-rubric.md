@@ -84,6 +84,10 @@ For each child, judged against the source documents it derives from:
 - Lock-horizon sanity: is the locked set the execution horizon — what can run next — with the tail sketched-conditional, materializing at selection? Far-future children locked on today's guesses are the inverse of stub children: judge the horizon case by case, not by a rule.
 - Are gates declared where the audit can enforce them (human gates inside ## Verifier, not only in Terminal State prose)?
 - Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"? Do children that share a companion verifier artifact pin it (`Pinned: <path> sha256 <hash>`)?
+- Materialization completeness: does EVERY named child carry a full contract (conditional/blocked included, unlocked), or is the tail a pile of 5-line manifest sketches? Depth is always maximal; only locking is horizon-scoped.
+- Task-tree depth: does each contract's `## Tasks` decompose the definition of done into nested declarative outcomes derived from the source's acceptance criteria — and is every item a state, never a step?
+- Map completeness: does everything the sources name appear somewhere visible — wave in the manifest, far destination as deferred `GOALS.md` entries naming their opening gates?
+- Nuance fidelity: did qualifiers and hedges from the verbatim request ("basically", "for now", "without breaking X") survive into the inventory and the contracts that serve them?
 - Agent-executability: is any child actually human field work (recruiting, payments, sign-ups, physical checks)? Gate it explicitly or split the agent-executable part out.
 - Escape hatches: does each child have a reachable terminal state when its decision or input never arrives — and could a child read as "complete" with most of its work blocked-with-rationale?
 - Budget realism: do the per-child budgets and the chain budget plus wall clock plausibly fit the work, or are the numbers ceremony that satisfies the validator?

@@ -261,11 +261,11 @@ def command_mentions_write_to_protected(command: str, protected_paths: Sequence[
                 continue
             # GoalSpec's own verification scripts name the contract by path as
             # the sanctioned close-out flow (validate --check-hash, render,
-            # audit, run_verifiers, campaign_status). Exempt them as read
-            # context, but never when the same command can write the mentioned
-            # path back (--write <path>) or re-arm the lock after a mutation
-            # (--write-hash): those must stay deniable post-freeze.
-            if (re.search(rf"\b(?:validate_goal|render_goal|audit_goal|run_verifiers|campaign_status)\.py\b[^\n;]*{re.escape(p)}", compact)
+            # audit, run_verifiers, campaign_status, focus). Exempt them as
+            # read context, but never when the same command can write the
+            # mentioned path back (--write <path>) or re-arm the lock after a
+            # mutation (--write-hash): those must stay deniable post-freeze.
+            if (re.search(rf"\b(?:validate_goal|render_goal|audit_goal|run_verifiers|campaign_status|focus)\.py\b[^\n;]*{re.escape(p)}", compact)
                     and "--write-hash" not in compact
                     and not re.search(rf"--write[=\s]+(?:\./)?{re.escape(p)}", compact)):
                 continue
@@ -475,6 +475,102 @@ def excise_section(text: str, title: str) -> str:
     return re.sub(rf"(?ms)^##[ \t]+{re.escape(title)}[ \t]*\n.*?(?=^##\s|\Z)", "", text)
 
 
+# --- Task trees (## Tasks) and the focus cursor's state ---
+#
+# A contract's ## Tasks section is a declarative outcome tree: nested checkbox
+# bullets, every item a state to make true, never a step. The frozen contract
+# never gets its boxes ticked — live completion is a cursor stored under the
+# executor-writable evidence tree and projected into .goals/focus.md. Marks are
+# progress bookkeeping for cross-thread continuity; the goal's Verifier remains
+# the only oracle of achievement.
+
+TASKS_STATE_SCHEMA = "goalspec.tasks.v1"
+_TASK_ITEM_RE = re.compile(r"^(\s*)(?:[-*+])\s*(?:\[(?: |x|X)\]\s*)?(.+?)\s*$")
+
+
+def parse_task_tree(section: str) -> List[dict]:
+    """Parse a ## Tasks section body into a tree of outcome nodes.
+
+    Returns top-level nodes {id, text, depth, children}; ids are positional
+    dotted paths ("1", "1.2", "1.2.3") — stable because contracts are frozen
+    (task state is stamped with the contract hash, so a re-lock invalidates
+    marks exactly like stale verifier evidence). Indentation: 2 spaces per
+    level, tolerant of deeper indents (clamped to parent+1). Authored box
+    state ([ ]/[x]) is accepted and ignored.
+    """
+    roots: List[dict] = []
+    stack: List[dict] = []  # current ancestry, index = depth
+    for line in section.splitlines():
+        if not line.strip():
+            continue
+        m = _TASK_ITEM_RE.match(line)
+        if not m:
+            continue
+        depth = min(len(m.group(1)) // 2, len(stack))
+        node = {"text": m.group(2), "depth": depth, "children": []}
+        stack = stack[:depth]
+        if stack:
+            parent = stack[-1]
+            parent["children"].append(node)
+            node["id"] = f"{parent['id']}.{len(parent['children'])}"
+        else:
+            roots.append(node)
+            node["id"] = str(len(roots))
+        stack.append(node)
+    return roots
+
+
+def flatten_task_tree(nodes: List[dict]) -> List[dict]:
+    """Depth-first flat list of all nodes in a parse_task_tree result."""
+    out: List[dict] = []
+    for node in nodes:
+        out.append(node)
+        out.extend(flatten_task_tree(node["children"]))
+    return out
+
+
+def task_state_path(root: Path, goal_id: str) -> Path:
+    """Where a goal's task-completion cursor lives (executor-writable evidence)."""
+    return Path(root) / ".goals" / "evidence" / "tasks" / f"{goal_id}.json"
+
+
+def load_task_state(root: Path, goal_id: str, contract: Path) -> Tuple[Dict[str, str], List[str]]:
+    """(done-map, warnings) for a goal's task cursor.
+
+    Stale state — recorded against a different contract version — is discarded
+    with a warning, never silently honored: a re-locked contract renumbers
+    nothing an executor may trust.
+    """
+    path = task_state_path(root, goal_id)
+    if not path.exists():
+        return {}, []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}, [f"task state unreadable ({path}); treating all tasks as open"]
+    if not isinstance(data, dict):
+        return {}, [f"task state malformed ({path}); treating all tasks as open"]
+    if contract.exists() and data.get("contract_sha256") not in (None, sha256_file(contract)):
+        return {}, [f"task state is for a different contract version (stale); ignored: {path}"]
+    done = data.get("done")
+    return (done if isinstance(done, dict) else {}), []
+
+
+def save_task_state(root: Path, goal_id: str, contract: Path, done: Dict[str, str]) -> Path:
+    from datetime import datetime, timezone
+    path = task_state_path(root, goal_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": TASKS_STATE_SCHEMA,
+        "contract": str(contract),
+        "contract_sha256": sha256_file(contract) if contract.exists() else None,
+        "done": done,
+        "updated": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
 def campaign_review_anchor(text: str) -> str:
     """Anchor hash binding a Decomposition Review to the manifest it reviewed.
 
@@ -596,8 +692,13 @@ def campaign_chain_budget(section: str) -> Optional[int]:
 
 
 def infer_campaign_manifest(goals_dir: Path = Path(".goals")) -> Tuple[Optional[Path], str]:
-    """The single .goals/campaign-*.md, or (None, reason) when ambiguous/absent."""
-    candidates = sorted(Path(goals_dir).glob("campaign-*.md"))
+    """The single real .goals/campaign-*.md, or (None, reason) when ambiguous/absent.
+
+    init scaffolds .goals/campaign-template.md as authoring material; it is
+    never a manifest and must not make a one-campaign workspace ambiguous.
+    """
+    candidates = sorted(p for p in Path(goals_dir).glob("campaign-*.md")
+                        if p.name != "campaign-template.md")
     if len(candidates) == 1:
         return candidates[0], ""
     return None, f"Cannot infer campaign manifest (found {len(candidates)}); pass it explicitly."

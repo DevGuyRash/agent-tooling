@@ -83,4 +83,9 @@ Good: validate (copy the review anchor) → independent adversarial review → a
 ## Milestone-wrapper decomposition
 
 Bad: children are the source roadmap's milestone names with status labels and by-reference acceptance criteria — one child bundles a dozen work units the source already defined.
-Good: the near wave decomposes to the source's own handoff grain (epics, tickets, numbered work packages), each child fitting its own budget with an oracle derived from its own clauses; the far tail stays sketched-conditional.
+Good: the wave decomposes to the source's own handoff grain (epics, tickets, numbered work packages), each child fitting its own budget with an oracle derived from its own clauses; the far destination stays visible as deferred GOALS.md entries naming their opening gates.
+
+## Sketch-only tail
+
+Bad: one deep, locked goal plus a tail of 5-line manifest entries — "materialize at selection" read as "author as little as possible now"; the user asked for goals and got a map legend.
+Good: every named child is a FULL contract written with its sources open — Terminal State enumerating acceptance criteria, a nested `## Tasks` outcome tree — with only the executable horizon locked. Depth is always maximal; locks are the only thing the horizon scopes.
