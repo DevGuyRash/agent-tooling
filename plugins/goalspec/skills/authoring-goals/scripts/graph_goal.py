@@ -45,10 +45,30 @@ def main() -> int:
     parser.add_argument("--id", help="Node id override")
     parser.add_argument("--status", help="Node status override")
     parser.add_argument("--edge", nargs=3, metavar=("FROM", "TYPE", "TO"), action="append", help="Add edge, e.g. G-002 depends_on G-001")
+    parser.add_argument("--sync-campaign", metavar="MANIFEST",
+                        help="Mirror nodes and depends_on edges from a campaign manifest's Goal Graph "
+                             "(the manifest is the truth; the graph is its derived mirror)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     path = Path(args.graph)
     data = load(path)
+    if args.sync_campaign:
+        from common import dependency_map, parse_campaign_children
+        children = parse_campaign_children(Path(args.sync_campaign).read_text(encoding="utf-8"))
+        nodes = data.setdefault("nodes", {})
+        for child in children:
+            node = nodes.get(child["id"], {})
+            nodes[child["id"]] = {**node,
+                                  "title": child["title"],
+                                  "status": child["status"],
+                                  "contract": child.get("contract") or node.get("contract", ""),
+                                  "updated": date.today().isoformat()}
+        existing = {(e.get("from"), e.get("type"), e.get("to")) for e in data.setdefault("edges", [])}
+        for gid, dep_ids in dependency_map(children).items():
+            for dep in dep_ids:
+                if (gid, "depends_on", dep) not in existing:
+                    data["edges"].append({"from": gid, "type": "depends_on", "to": dep})
+                    existing.add((gid, "depends_on", dep))
     if args.add_contract:
         gid, node = contract_metadata(Path(args.add_contract))
         if args.id:

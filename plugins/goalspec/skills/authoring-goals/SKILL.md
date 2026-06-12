@@ -57,6 +57,7 @@ Required for non-trivial work (multi-step authoring, scanning, decomposing, sele
 - **`score_goal_risk.py`** — on any raw or vague request, campaign parent, or lint. State the forever-risk level and whether you accepted, repaired, or decomposed it, and why.
 - **`extract_candidates.py`** — whenever files, folders, logs, or specs are supplied (NOT for a pure greenfield prompt with no source). Name the extraction frontier: what was inspected and what was left.
 - **`validate_goal.py`** — before rendering any contract; do not render an invalid contract.
+- **`validate_campaign.py`** — after authoring or revising any campaign manifest, human-stepped or autonomous; you SHALL NOT report a request as decomposed while it errors (the lock itself stays autonomous-chain-only).
 - **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate). WHEN the launch target imposes a prompt-length limit THEN you SHALL render with `--pointer` and paste only the launch line; the full mission stays in the written `.goals/rendered-goal.md` / `.goals/rendered-campaign.md` file.
 
 Respond to the signals explicitly in your output: state the risk level and your decision, name the discovered capabilities you used, and name the extraction frontier when you scanned.
@@ -68,13 +69,22 @@ Keep it proportionate. A micro-goal — a single concrete one-file change with a
 A goal is launchable only if it has all six fields:
 
 1. **Terminal state** — a state the world is either in or not in.
-2. **Verifier** — a test, command, metric, artifact, checklist, MCP/source query, or human gate that can check the state.
+2. **Verifier** — a test, command, metric, artifact, checklist, MCP/source query, or human gate that can check the state. WHEN you freeze verifier commands that name `.goals/` artifacts THEN you SHOULD use the GoalSpec verification scripts or default-path invocations run from the workspace root; generic write-capable commands naming `.goals/current.md` stay deny-prone under the scope guard.
 3. **Budget** — a hard ceiling in iterations, time, cost, changed files, dependencies, or exploration scope.
 4. **Scope edges** — explicit in-scope and out-of-scope boundaries.
 5. **Give-up conditions** — named failure states that require stopping unsuccessfully.
 6. **Completeness dimensions** — the value dimensions the clauses must cover, so the agent does not satisfy a narrow proxy while missing the user's actual intent.
 
 Also check target stability, priority order, evidence requirements, and contract immutability.
+
+## Decomposition quality
+
+A decomposition must add execution information over its sources, or it is theater.
+
+- Every ready or conditional child SHALL sketch its Terminal state and Verifier in the manifest. WHEN a child cannot be sketched beyond restating its source document THEN you SHALL record the single missing owner decision on an `Owner decision required:` line instead of emitting a stub child.
+- You SHALL NOT author meta-goals whose deliverables are GoalSpec artifacts or checks; verify the substrate inside a value-bearing goal, never as the goal.
+- WHEN the manifest changes THEN you SHALL refresh the mirror with `graph_goal.py --sync-campaign <manifest>` so graph tooling sees the same nodes and edges the manifest declares.
+- WHEN the manifest passes deterministic validation THEN you SHOULD have an independent reviewer agent judge it against the decomposition value-add check in `references/launchability-rubric.md` and record the verdict; deterministic signals set the floor, reviewer judgment raises the ceiling.
 
 ## Output resolution
 

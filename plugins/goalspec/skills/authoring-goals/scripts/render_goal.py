@@ -88,9 +88,9 @@ def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = F
     sections = parse_sections(text)
     h = status.get("current_hash") or sha256_file(path)
     terminal = compact_list(bullets(sections.get("Terminal State", "")), max_items=6, max_len=900)
-    # Fence-style Verifier sections have no bullets (fleet run v11-b projected
-    # "Verifier summary: not specified" while four verifiers ran green), so fall
-    # back to the extracted commands; this field never projects "not specified".
+    # Fence-style Verifier sections have no bullets, so fall back to the
+    # extracted commands; this field must never project "not specified" while
+    # real verifier commands exist in the contract.
     verifier_section = sections.get("Verifier", "")
     verifier_items = bullets(verifier_section) or extract_verifier_commands(verifier_section)
     if verifier_items:

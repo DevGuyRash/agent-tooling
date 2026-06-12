@@ -76,7 +76,7 @@ VERIFIER_RESULT_NAME = "result.json"
 # Provenance artifacts embed the verbatim original request between these
 # markers so the audit drift anchor can extract it without markdown parsing.
 # Requests are arbitrary text — a PRD carries its own ## headings, which break
-# any section-based extraction (evt-0188) — and must round-trip byte-exact.
+# any section-based extraction — and must round-trip byte-exact.
 # Extraction is first-BEGIN to last-END, so a request that itself contains the
 # marker strings still round-trips. Writer: record_provenance.py; reader:
 # audit_goal.py.
@@ -84,9 +84,9 @@ PROVENANCE_REQUEST_BEGIN = "<!-- goalspec:original-request:begin -->"
 PROVENANCE_REQUEST_END = "<!-- goalspec:original-request:end -->"
 
 # A verifier command is something the runner can execute and read an exit code from.
-# Bias toward extraction: a silently skipped verifier (observed live: a `git diff
-# --exit-code` check never ran while overall_passed reported True) is worse than a
-# loud false failure the author has to look at.
+# Bias toward extraction: a silently skipped verifier (e.g. a `git diff
+# --exit-code` check that never runs while overall_passed reports True) is worse
+# than a loud false failure the author has to look at.
 VERIFIER_COMMAND_RE = re.compile(
     r"^(npm|pnpm|yarn|pytest|python|python3|go|cargo|mvn|gradle|make|just|tox|ruff|eslint|vitest|jest|bun|deno|git|bash|sh|node|npx|test)\b"
 )
@@ -245,6 +245,16 @@ def command_mentions_write_to_protected(command: str, protected_paths: Sequence[
         if p in compact:
             if re.search(rf"\b(cat|less|grep|rg|sed\s+-n|head|tail|wc|sha256sum|shasum)\b[^\n;]*{re.escape(p)}", compact):
                 continue
+            # GoalSpec's own verification scripts name the contract by path as
+            # the sanctioned close-out flow (validate --check-hash, render,
+            # audit, run_verifiers, campaign_status). Exempt them as read
+            # context, but never when the same command can write the mentioned
+            # path back (--write <path>) or re-arm the lock after a mutation
+            # (--write-hash): those must stay deniable post-freeze.
+            if (re.search(rf"\b(?:validate_goal|render_goal|audit_goal|run_verifiers|campaign_status)\.py\b[^\n;]*{re.escape(p)}", compact)
+                    and "--write-hash" not in compact
+                    and not re.search(rf"--write[=\s]+(?:\./)?{re.escape(p)}", compact)):
+                continue
             if re.search(write_verbs, compact) or any(v in compact for v in ["rm -rf .goals", "truncate", "chmod"]):
                 return p
             if p in [".goals/current.md", ".goals/current.sha256"] and not re.search(r"\b(read|cat|grep|rg|sed -n|head|tail)\b", compact):
@@ -314,10 +324,10 @@ def extract_verifier_commands(section: str) -> List[str]:
     contribute only when they begin with a recognized runner so prose backticks
     do not masquerade as commands. Order-preserving and de-duplicated.
 
-    Inline spans must not cross newlines (evt-0182): a single-newline-tolerant
-    class let the span regex pair the opening fence's third backtick with the
-    closing fence's first, re-extracting the whole fence interior as one
-    spurious multi-line command beginning with the language tag 'bash'.
+    Inline spans must not cross newlines: a newline-tolerant class lets the
+    span regex pair the opening fence's third backtick with the closing
+    fence's first, re-extracting the whole fence interior as one spurious
+    multi-line command beginning with the language tag 'bash'.
     """
     commands: List[str] = []
     for m in re.finditer(r"```(?:bash|sh|shell)?\s*\n(.*?)```", section, re.S | re.I):
@@ -351,6 +361,49 @@ def verifier_kinds(section: str) -> set:
 def verifier_result_path(goals_dir: Path) -> Path:
     """Canonical location of the machine-readable verifier result file."""
     return Path(goals_dir) / "evidence" / "verifiers" / VERIFIER_RESULT_NAME
+
+
+# The meta-goal smell: a goal whose terminal state and verifier are about
+# GoalSpec itself (locks, renders, hooks, probes) delivers no workspace value —
+# substrate checks belong inside a value-bearing goal, never as the goal.
+_GOALSPEC_MACHINERY_RE = re.compile(
+    r"\.goals/|goalspec|conformance_probe|validate_goal|validate_campaign|render_goal|audit_goal|"
+    r"audit_campaign|run_verifiers|campaign_status|record_provenance|launch_goal|select_goal|"
+    r"graph_goal|init_project|inventory_capabilities|score_goal_risk|extract_candidates|"
+    r"\bhooks?\b|prompt_guard|scope_guard|evidence_capture|stop_guard",
+    re.I,
+)
+_ARTIFACT_PATH_RE = re.compile(
+    r"[A-Za-z0-9_.][A-Za-z0-9_./-]*\.(?:py|md|rs|ts|tsx|js|jsx|json|toml|yaml|yml|html|css|sh|sql|txt|csv|png|svg)\b"
+)
+_GOALSPEC_SCRIPT_NAMES = frozenset({
+    "validate_goal.py", "validate_campaign.py", "render_goal.py", "audit_goal.py",
+    "audit_campaign.py", "run_verifiers.py", "campaign_status.py", "record_provenance.py",
+    "launch_goal.py", "select_goal.py", "graph_goal.py", "init_project.py",
+    "inventory_capabilities.py", "score_goal_risk.py", "extract_candidates.py",
+    "conformance_probe.py", "goalspec.py", "prompt_guard.py", "scope_guard.py",
+    "evidence_capture.py", "stop_guard.py",
+})
+
+
+def references_only_goalspec_machinery(text: str) -> bool:
+    """True when text leans on GoalSpec machinery and names no other artifact.
+
+    Heuristic, biased toward under-flagging: any concrete non-GoalSpec artifact
+    path in the text clears it. Callers should emit warnings (or errors only at
+    the campaign level when ALL ready work is meta), with wording that tells a
+    false-positive author the fix: name a workspace artifact the goal delivers.
+    """
+    if not _GOALSPEC_MACHINERY_RE.search(text):
+        return False
+    for match in _ARTIFACT_PATH_RE.finditer(text):
+        path = match.group(0)
+        if path.startswith(".goals/") or "/.goals/" in path:
+            continue
+        if path.rsplit("/", 1)[-1] in _GOALSPEC_SCRIPT_NAMES:
+            continue
+        return False
+    return True
 
 
 # --- Campaign (chain) helpers ---

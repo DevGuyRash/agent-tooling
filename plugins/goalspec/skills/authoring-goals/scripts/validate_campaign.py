@@ -31,6 +31,7 @@ from common import (
     find_cycles,
     parse_campaign_children,
     parse_sections,
+    references_only_goalspec_machinery,
 )
 from validate_goal import validate as validate_contract
 
@@ -56,7 +57,16 @@ def _graph_mirror_divergence(root: Path, children: list[dict]) -> list[str]:
         graph_entries = {e["id"]: e for e in parse_graph(graph_path) if e.get("id")}
     except Exception:
         return [f"graph.json mirror is unreadable: {graph_path}"]
+    # An empty or partial mirror is a dead artifact: tooling that reads the
+    # graph sees nothing while the manifest declares a whole dependency tree.
+    if children and not graph_entries:
+        return [f"graph.json mirror is empty while the manifest declares {len(children)} children; "
+                "run graph_goal.py --sync-campaign <manifest> to mirror nodes/edges, or remove the mirror"]
     out = []
+    missing_nodes = [c["id"] for c in children if c["id"] not in graph_entries]
+    if missing_nodes:
+        shown = ", ".join(missing_nodes[:8]) + ("..." if len(missing_nodes) > 8 else "")
+        out.append(f"graph.json mirror lacks node(s): {shown} (run graph_goal.py --sync-campaign)")
     for child in children:
         mirror = graph_entries.get(child["id"])
         if not mirror:
@@ -127,13 +137,56 @@ def validate_campaign(campaign: Path) -> dict:
             errors.append(f"Ready child {child['id']} contract is not locked: {ls.get('reason')}")
         elif ls.get("matched") is False:
             errors.append(f"Ready child {child['id']} contract hash mismatch: {contract}")
-        # Id coherence: manifest heading id == contract directory name == contract title id.
-        if contract.name == "current.md" and contract.parent.name != child["id"]:
+        # Id coherence: manifest heading id == contract directory name == contract
+        # title id. The workspace root slot (.goals/current.md) is exempt from the
+        # directory check: it is the documented human-stepped compile target, and
+        # only chain children live under .goals/children/<id>/.
+        if (contract.name == "current.md" and contract.parent.name != child["id"]
+                and contract.parent.name != ".goals"):
             errors.append(
                 f"Child id mismatch: heading {child['id']} vs contract directory {contract.parent.name}")
         title_id = _contract_title_id(contract)
         if title_id and title_id != child["id"]:
             errors.append(f"Child id mismatch: heading {child['id']} vs contract title id {title_id}")
+
+    # A child entry must BE a goal sketch, not deferred homework: a milestone
+    # name plus "Missing decision" restates the source roadmap and adds no
+    # execution information. Ready and conditional children must sketch their
+    # Terminal state and Verifier; blocked children warn (their gate may hide
+    # the work's shape); not-launchable children are an explicit parking lane.
+    for child in children:
+        status = child.get("status", "")
+        if status == "not-launchable":
+            continue
+        missing = [label for key, label in (("terminal_state", "Terminal state"), ("verifier", "Verifier"))
+                   if not child.get(key, "").strip()]
+        if not missing:
+            continue
+        msg = (f"Child {child['id']} ({status}) is a stub: missing {' and '.join(missing)} — "
+               "sketch what done means and how it is checked, or the decomposition adds "
+               "nothing over its source documents")
+        (warnings if status == "blocked" else errors).append(msg)
+
+    # Meta-goal smell: GoalSpec machinery as the deliverable. One meta child is
+    # a warning; a campaign whose ENTIRE ready set is meta has no launchable
+    # value and must either materialize real work or name the blocking decision.
+    meta_ids = {c["id"] for c in children
+                if references_only_goalspec_machinery(
+                    " ".join([c.get("title", ""), c.get("terminal_state", ""), c.get("verifier", "")]))}
+    for cid in sorted(meta_ids):
+        warnings.append(
+            f"Child {cid} is a meta-goal: its terminal state and verifier reference only GoalSpec "
+            "machinery. Verify the substrate inside a value-bearing child; if this is a false "
+            "positive, name a concrete workspace artifact the child delivers")
+    if ready and all(c["id"] in meta_ids for c in ready):
+        if re.search(r"(?mi)^\s*-?\s*Owner decision required:\s*\S", text):
+            warnings.append(
+                "Every ready child is a meta-goal; the declared 'Owner decision required:' line is "
+                "the only path to value-bearing work — resolve it before launching anything")
+        else:
+            errors.append(
+                "Every ready child is a meta-goal (GoalSpec machinery only). Materialize at least one "
+                "value-bearing ready child, or declare the blocker on an 'Owner decision required:' line")
 
     # Dependency sanity over declared manifest edges (the hash-locked truth).
     # Reject tokens graph math drops but the runtime selector would parse:

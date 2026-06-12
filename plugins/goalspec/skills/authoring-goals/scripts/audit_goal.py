@@ -55,7 +55,7 @@ def _request_candidates(text: str) -> list:
     """Admissible readings of a provenance artifact's verbatim request.
 
     The request is arbitrary text (a PRD carries its own ## headings), so no
-    single markdown parse is canonical (evt-0188). sha256 equality against the
+    single markdown parse is canonical. sha256 equality against the
     contract pointer decides the match, which makes extra candidates safe:
     they can only clear false drift alarms, never falsely accept. Ordered most
     exact first: marker envelope (current writer; first-BEGIN to last-END, so
@@ -125,8 +125,8 @@ def _human_gate_resolved(report_text: str) -> bool:
 
     A declared human gate is an oracle the executor cannot satisfy itself;
     certifying achieved while it is pending is self-ratification by omission
-    (observed live: two runs audited achieved off the command oracle alone
-    while the human gate was still pending the owner).
+    (a passing command oracle alone must never certify a goal whose human
+    gate is still pending the owner).
     """
     for line in report_text.splitlines():
         lowered = line.lower()

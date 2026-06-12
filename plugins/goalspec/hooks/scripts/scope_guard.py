@@ -22,7 +22,11 @@ PROTECTED = [
     ".goals/graph.json",
     ".goals/frontier.md",
 ]
-ALLOWED_GOALS_PREFIXES = [".goals/evidence/", ".goals/reports/"]
+# rendered-* files are re-renderable projections, not frozen state: their
+# integrity is enforced by the pointer launch line's file hash (fails loud at
+# launch), not by write-prevention — and blocking them would deny the plugin's
+# own `render_goal.py --write .goals/rendered-goal.md` close-out.
+ALLOWED_GOALS_PREFIXES = [".goals/evidence/", ".goals/reports/", ".goals/rendered-"]
 DANGEROUS_PATTERNS = [
     r"\brm\s+-rf\s+/(?:\s|$)",
     r"\brm\s+-rf\s+\.goals(?:/|\s|$)",
@@ -100,7 +104,7 @@ def main() -> int:
         paths = extract_patch_paths(command)
         protected_hits = [p for p in paths if path_is_protected(p)]
         if protected_hits:
-            deny("GoalSpec blocked modification to frozen goal artifacts: " + ", ".join(protected_hits) + ". Executor may only write .goals/evidence/ and .goals/reports/ during a run.")
+            deny("GoalSpec blocked modification to frozen goal artifacts: " + ", ".join(protected_hits) + ". Executor may only write .goals/evidence/, .goals/reports/, and .goals/rendered-* during a run.")
             return 0
 
     if tool == "Bash" and command:

@@ -14,6 +14,7 @@ from common import (
     contract_lock_status,
     extract_verifier_commands,
     parse_sections,
+    references_only_goalspec_machinery,
     sha256_file,
     verifier_kinds,
 )
@@ -159,6 +160,15 @@ def validate(path: Path) -> dict:
 
     if ".goals/GOALS.md" in text and "Do not" not in text:
         warnings.append("Contract mentions GOALS.md; ensure it is a registry, not execution scope")
+
+    # Meta-goal smell: a contract whose Objective and Terminal State deliver
+    # only GoalSpec machinery produces no workspace value.
+    if references_only_goalspec_machinery(
+            " ".join([sections.get("Objective", ""), sections.get("Terminal State", "")])):
+        warnings.append(
+            "Meta-goal: Objective and Terminal State reference only GoalSpec machinery — verify the "
+            "substrate inside a value-bearing goal instead; if this is a false positive, name a "
+            "concrete workspace artifact this goal delivers")
 
     # Evidence section needs commands/results/artifacts. Accept common phrasings, not exact labels.
     evidence = sections.get("Evidence Required", "").lower()

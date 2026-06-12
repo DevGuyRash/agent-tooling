@@ -74,6 +74,18 @@ Inventory available skills, plugins, MCP servers, hooks, subagents, and project 
 
 The final `.goals/current.md` must be hashed. The executor may not modify it during the run.
 
+### 10. Decomposition value-add check (campaigns)
+
+For each child, judged against the source documents it derives from:
+
+- Does the child name at least one concrete workspace artifact or behavior the source does not already state verbatim? A renamed milestone with a status label adds nothing.
+- Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"?
+- Is there a bounded first slice that fits a real budget, rather than the whole milestone restated?
+- Is any child a meta-goal about GoalSpec itself? Substrate checks belong inside a value-bearing child.
+- Does `graph.json` mirror the manifest's nodes and edges (`graph_goal.py --sync-campaign`)?
+
+`validate_campaign.py` enforces the floor deterministically (stub children, meta-only ready sets, empty mirrors). This check is for a reviewer agent to raise the ceiling: answer each question with evidence from the manifest and sources, and record the verdict in the campaign report.
+
 ## Forever-risk levels
 
 - Low: concrete terminal state, strong verifier, narrow scope, explicit budget.

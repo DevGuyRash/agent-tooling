@@ -485,6 +485,37 @@ def main() -> int:
             "git checkout .goals/current.md"),
             "git restore of the frozen contract is still denied")
 
+        # Authoring-closure gap (live EdgeCourt run, 2026-06-11): the plugin's
+        # own verification scripts naming the contract are the sanctioned
+        # close-out flow and must pass the guard post-lock...
+        assert_true("permissionDecision" not in run_scope(
+            f"python3 {SCRIPTS}/validate_goal.py .goals/current.md --check-hash --json"),
+            "post-lock validate --check-hash naming the contract is not denied")
+        assert_true("permissionDecision" not in run_scope(
+            f"python3 {SCRIPTS}/render_goal.py .goals/current.md --write .goals/rendered-goal.md --json"),
+            "post-lock render --write to the rendered projection is not denied")
+        assert_true("permissionDecision" not in run_scope(
+            f"python3 {SCRIPTS}/audit_goal.py .goals/current.md --report .goals/reports/r.md --json"),
+            "post-lock audit naming the contract is not denied")
+        # ...while the write-capable shapes of the same scripts stay deniable.
+        assert_true("permissionDecision" in run_scope(
+            f"python3 {SCRIPTS}/validate_goal.py .goals/current.md --write-hash"),
+            "post-lock --write-hash re-arm is still denied")
+        assert_true("permissionDecision" in run_scope(
+            f"python3 {SCRIPTS}/render_goal.py --write .goals/current.md"),
+            "render --write targeting the frozen contract is still denied")
+        # rendered-* projections are executor-writable (re-render is the
+        # recovery path; the launch line's file hash makes tampering loud).
+        patch_rendered = subprocess.run(
+            [sys.executable, str(HOOKS / "scope_guard.py")],
+            input=json.dumps({"cwd": str(ws), "tool_name": "apply_patch",
+                              "tool_input": {"command": "*** Begin Patch\n*** Update File: .goals/rendered-goal.md\n@@\n-a\n+b\n*** End Patch"}}),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PLUGIN_ROOT": str(ROOT), "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true("permissionDecision" not in patch_rendered.stdout,
+                    "patching the rendered projection is not denied")
+
     with tempfile.TemporaryDirectory() as td11:
         session = Path(td11) / "session"
         target = Path(td11) / "target"
@@ -755,7 +786,9 @@ def main() -> int:
         for spec in specs:
             cid, status = spec["id"], spec.get("status", "ready")
             deps = spec.get("depends_on", "none")
-            lines = [f"### {cid}: Chain child {cid}", "", f"- Status: {status}", f"- Depends on: {deps}"]
+            lines = [f"### {cid}: Chain child {cid}", "", f"- Status: {status}", f"- Depends on: {deps}",
+                     f"- Terminal state: child {cid} delivers its contracted workspace change.",
+                     "- Verifier: `python3 -c \"import sys; sys.exit(0)\"`"]
             if status == "ready":
                 lines.append(f"- Contract: .goals/children/{cid}/current.md")
                 cdir = goals / "children" / cid
@@ -873,6 +906,107 @@ def main() -> int:
         empty_child_lock.write_text("  \n", encoding="utf-8")
         cls = contract_lock_status(ws / ".goals" / "children" / "G-001" / "current.md")
         assert_true(cls["locked"] and cls["matched"] is False, f"empty contract lock reads as mismatch: {cls}")
+
+    # Anti-theater gates: a decomposition must add execution information over
+    # its sources. Stub children error, a meta-only ready set errors (unless an
+    # owner decision is declared), and an empty graph mirror warns until synced.
+    with tempfile.TemporaryDirectory() as tat:
+        goals = Path(tat) / ".goals"
+        goals.mkdir(parents=True)
+        manifest = goals / "campaign-anti-theater.md"
+        base_manifest = (
+            "# Campaign: Anti Theater\n\n## Intent\nProve the decomposition quality gates.\n\n"
+            "## Completeness Dimensions\n- value\n\n## Chain Budget\n- Max children attempted: 3.\n\n"
+            "## Chain Failure Policy\n- halt-on-failure\n\n## Coverage\n- request -> G-002\n\n"
+            "## Goal Graph\n\n"
+            "### G-001: Substrate readiness preflight\n\n"
+            "- Status: ready\n- Depends on: none\n- Contract: .goals/children/G-001/current.md\n"
+            "- Terminal state: GoalSpec artifacts validate, render, and the hook selftest conforms.\n"
+            "- Verifier: `validate_goal.py .goals/current.md --check-hash`; `conformance_probe.py selftest`\n\n"
+            "### G-002: Milestone two\n\n- Status: conditional\n- Depends on: G-001\n- Missing decision: owner sign-off\n\n"
+            "### G-003: Milestone three\n\n- Status: blocked\n- Depends on: G-002\n- Missing decision: legal gate\n\n"
+            "## Selection Recommendation\nRun G-001 first.\n")
+        manifest.write_text(base_manifest, encoding="utf-8")
+        (goals / "graph.json").write_text(json.dumps(
+            {"schema": "goalspec.graph.v1", "nodes": {}, "edges": []}), encoding="utf-8")
+        v_at = validate_campaign(manifest)
+        assert_true(any("G-002 (conditional) is a stub" in e for e in v_at["errors"]),
+                    f"conditional stub child errors: {v_at['errors']}")
+        assert_true(any("G-003 (blocked) is a stub" in w for w in v_at["warnings"]),
+                    f"blocked stub child warns: {v_at['warnings']}")
+        assert_true(any("G-001 is a meta-goal" in w for w in v_at["warnings"]),
+                    f"meta child warns: {v_at['warnings']}")
+        assert_true(any("Every ready child is a meta-goal" in e for e in v_at["errors"]),
+                    f"meta-only ready set errors: {v_at['errors']}")
+        assert_true(any("graph.json mirror is empty" in w for w in v_at["warnings"]),
+                    f"empty graph mirror warns: {v_at['warnings']}")
+
+        # Sketched children + a declared owner decision turn the hard failures
+        # into the loud-but-explicit refusal path.
+        sketched = base_manifest.replace(
+            "- Missing decision: owner sign-off\n",
+            "- Missing decision: owner sign-off\n"
+            "- Terminal state: the milestone-two artifact set exists and its suite passes.\n"
+            "- Verifier: `pytest -q tests/milestone_two`\n").replace(
+            "- Missing decision: legal gate\n",
+            "- Missing decision: legal gate\n"
+            "- Terminal state: the gated integration ships behind the approved flag.\n"
+            "- Verifier: `pytest -q tests/milestone_three`\n").replace(
+            "## Selection Recommendation\nRun G-001 first.\n",
+            "## Selection Recommendation\nRun G-001 first.\n\n- Owner decision required: approve milestone-two sign-off.\n")
+        manifest.write_text(sketched, encoding="utf-8")
+        v_ok = validate_campaign(manifest)
+        assert_true(not any("is a stub" in e for e in v_ok["errors"]),
+                    f"sketched children clear the stub gate: {v_ok['errors']}")
+        assert_true(not any("Every ready child is a meta-goal" in e for e in v_ok["errors"]),
+                    f"owner-decision line downgrades the meta-only error: {v_ok['errors']}")
+        assert_true(any("Owner decision required" in w for w in v_ok["warnings"]),
+                    f"declared owner decision still warns loudly: {v_ok['warnings']}")
+
+        # Human-stepped campaigns compile the active child into the workspace
+        # root slot; that layout must not read as an id mismatch.
+        root_slot = sketched.replace("- Contract: .goals/children/G-001/current.md",
+                                     "- Contract: .goals/current.md")
+        manifest.write_text(root_slot, encoding="utf-8")
+        (goals / "current.md").write_text("# Goal Contract: G-001 Substrate readiness preflight\n\n"
+                                          "## Objective\nx\n", encoding="utf-8")
+        v_root = validate_campaign(manifest)
+        assert_true(not any("id mismatch" in e for e in v_root["errors"]),
+                    f"root-slot contract is not an id mismatch: {v_root['errors']}")
+        manifest.write_text(sketched, encoding="utf-8")
+
+        # Deterministic mirror sync: the manifest is the truth, the graph follows.
+        sync = subprocess.run(
+            [sys.executable, str(SCRIPTS / "graph_goal.py"), "--graph", str(goals / "graph.json"),
+             "--sync-campaign", str(manifest)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30,
+        )
+        assert_true(sync.returncode == 0, f"graph sync runs: {sync.stderr}")
+        gdata = json.loads((goals / "graph.json").read_text(encoding="utf-8"))
+        assert_true(set(gdata["nodes"]) == {"G-001", "G-002", "G-003"}
+                    and {"from": "G-002", "type": "depends_on", "to": "G-001"} in gdata["edges"],
+                    f"sync mirrors nodes and edges from the manifest: {gdata}")
+        v_synced = validate_campaign(manifest)
+        assert_true(not any("graph.json mirror" in w for w in v_synced["warnings"]),
+                    f"synced mirror clears the graph warnings: {v_synced['warnings']}")
+
+    # Meta-goal smell at the single-contract level.
+    with tempfile.TemporaryDirectory() as tmeta:
+        meta_c = Path(tmeta) / "meta.md"
+        meta_c.write_text(_swap(_swap(base, "Objective",
+                                      "The workspace has a validated GoalSpec readiness package and hook conformance is reported."),
+                                "Terminal State",
+                                "This goal is complete when:\n"
+                                "- `.goals/current.md` validates and `.goals/rendered-goal.md` is produced by `render_goal.py`.\n"
+                                "- `conformance_probe.py selftest` conforms and hook status is recorded in `.goals/reports/preflight.md`.\n"),
+                          encoding="utf-8")
+        v_meta = validate(meta_c)
+        assert_true(any("Meta-goal" in w for w in v_meta["warnings"]),
+                    f"GoalSpec-machinery-only contract warns as meta-goal: {v_meta['warnings']}")
+        v_base = validate(contract)
+        assert_true(not any("Meta-goal" in w for w in v_base["warnings"]),
+                    f"value-bearing contract does not warn as meta-goal: {v_base['warnings']}")
 
     # Freeze: a child swap after lock breaks the aggregate — render refuses, audit says mutated.
     with tempfile.TemporaryDirectory() as tc2:

@@ -26,6 +26,13 @@ render-refuse-unlocked plus the audit hash, not the hooks.
   direct append to the frozen contract executed undenied. On such runtimes the
   freeze is **detect-only**: the mutation is caught by the audit hash and the Stop
   gate, not prevented. Re-confirm per runtime with `conformance_probe.py observe`.
+- **Observed live coverage (Codex, 2026-06-11, `permission_mode: bypassPermissions`,
+  goalspec 1.2.0, real authoring run):** PostToolUse fired (29 captured events) and
+  **PreToolUse fired and denied** protected-path commands live — the freeze
+  *enforced* under full-access mode on this runtime, contradicting the 2026-06-10
+  observation. Coverage varies by runtime and version: never assume either way;
+  re-confirm per environment and keep the render-refuse + audit-hash backstop
+  authoritative regardless.
 - `conformance_probe.py` reports coverage on the installed runtime. `selftest`
   drives each wired hook with synthetic input and checks the documented decision
   shape offline; `observe`/`report` record and summarize what actually fired on a
@@ -46,6 +53,15 @@ Allow executor writes only under:
 
 - `.goals/evidence/`
 - `.goals/reports/`
+- `.goals/rendered-*` (re-renderable projections; the pointer launch line's file
+  hash makes tampering loud at launch, so write-prevention adds nothing here)
+
+The guard exempts GoalSpec's own verification scripts (`validate_goal.py`,
+`render_goal.py`, `audit_goal.py`, `run_verifiers.py`, `campaign_status.py`)
+when they name protected paths read-only — the sanctioned close-out flow — but
+still denies them when the command carries `--write-hash` (re-arming the lock
+after a mutation) or `--write <protected-path>` (clobbering frozen state via
+the renderer).
 
 Matcher: `Bash|apply_patch|Edit|Write|mcp__.*` (MCP parity with PostToolUse). MCP
 tool I/O is opaque, so there is no deterministic protected-path check for `mcp__*`

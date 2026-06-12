@@ -44,14 +44,16 @@ a coverage gap.]
 - Depends on: none
 - Blocks: [ids]
 - Contract: .goals/children/G-001/current.md
-- Terminal state:
-- Verifier:
+- Terminal state: [one sentence: the checkable state of the workspace when this child is done]
+- Verifier: [runnable command / metric / named gate that checks it]
 
 ### G-002: Blocked child
 
 - Status: blocked
 - Depends on: G-001
-- Missing decision:
+- Missing decision: [the single owner decision that unblocks this child]
+- Terminal state: [sketch it even while blocked — a child with no sketch is a stub, not a goal]
+- Verifier: [sketch the check; "TBD" is not a verifier]
 
 ### G-003: Not-launchable child
 
