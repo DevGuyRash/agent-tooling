@@ -338,3 +338,6 @@ if [ "$claude_enabled" = "1" ]; then
 fi
 
 log "done"
+log "note: open Codex/Claude sessions resolved the OLD plugin root at session start;"
+log "      installers may prune that directory, which breaks their hooks (a failing"
+log "      UserPromptSubmit hook can block prompts). Restart open sessions now."

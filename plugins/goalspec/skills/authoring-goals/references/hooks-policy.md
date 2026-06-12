@@ -38,6 +38,13 @@ render-refuse-unlocked plus the audit hash, not the hooks.
   shape offline; `observe`/`report` record and summarize what actually fired on a
   live session. If the runtime lags the docs, degrade gracefully and lean on the
   render-refuse-unlocked + audit-hash backstop, stating the observed coverage.
+- **Upgrades break live sessions, loudly**: hook commands resolve the versioned
+  plugin root at session start, and installers may prune the old version
+  directory on upgrade. A hook error of the shape
+  `can't open file '.../goalspec/<old-version>/hooks/scripts/...'` means a stale
+  live session, not a broken install — restart the session; do not re-trust,
+  reinstall, or weaken hooks to work around it. A failing UserPromptSubmit hook
+  can block every prompt in that session until restart.
 
 ## PreToolUse: scope guard
 

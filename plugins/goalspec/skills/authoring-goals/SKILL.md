@@ -58,7 +58,7 @@ Required for non-trivial work (multi-step authoring, scanning, decomposing, sele
 - **`extract_candidates.py`** — whenever files, folders, logs, or specs are supplied (NOT for a pure greenfield prompt with no source). Name the extraction frontier: what was inspected and what was left.
 - **`validate_goal.py`** — before rendering any contract; do not render an invalid contract.
 - **`validate_campaign.py`** — after authoring or revising any campaign manifest, human-stepped or autonomous; you SHALL NOT report a request as decomposed while it errors (the lock itself stays autonomous-chain-only).
-- **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate). WHEN the launch target imposes a prompt-length limit THEN you SHALL render with `--pointer` and paste only the launch line; the full mission stays in the written `.goals/rendered-goal.md` / `.goals/rendered-campaign.md` file.
+- **`render_goal.py`** — to produce the final paste-ready `/goal` objective (it also enforces the freeze gate). You SHOULD render with `--pointer` by default: the full mission lands in `.goals/rendered-goal.md` / `.goals/rendered-campaign.md` and the launch line stays a constant size no prompt limit can truncate. WHEN authoring ends with a locked contract or campaign THEN your final message SHALL include the launch line verbatim — it is the deliverable the user pastes next.
 
 Respond to the signals explicitly in your output: state the risk level and your decision, name the discovered capabilities you used, and name the extraction frontier when you scanned.
 
