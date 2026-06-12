@@ -254,24 +254,32 @@ def extract_patch_paths(command: str) -> List[str]:
 
 def command_mentions_write_to_protected(command: str, protected_paths: Sequence[str]) -> Optional[str]:
     compact = command.replace("\\ ", " ")
-    # perl in-place spellings: -pi, -0pi, -ni, -i (optionally with a null/record
-    # separator digit) — the live-observed shape was `perl -0pi`.
-    write_verbs = r"(?:>|>>|tee\s+|cp\s+|mv\s+|rm\s+|sed\s+-i|perl\s+-0?[pn]?i|python\S*\s+.*open\()"
+    # Argument-class verbs (their arguments ARE paths) match anywhere in the
+    # command. perl in-place spellings: -pi, -0pi, -ni, -i (optionally with a
+    # null/record separator digit) — the live-observed shape was `perl -0pi`.
+    arg_write_verbs = r"(?:\bcp\s+|\bmv\s+|\brm\s+|\bsed\s+-i|\bperl\s+-0?[pn]?i|python\S*\s+.*open\()"
+    # Redirect-class writes bind to their TARGET: a command that merely quotes
+    # a frozen path while writing elsewhere (e.g. logging JSON whose payload
+    # names .goals artifacts, or text containing '->') is not a write to it.
+    redirect_targets = re.findall(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*([^\s;|&><]+)", compact)
     for p in protected_paths:
         if p in compact:
             if re.search(rf"\b(cat|less|grep|rg|sed\s+-n|head|tail|wc|sha256sum|shasum)\b[^\n;]*{re.escape(p)}", compact):
                 continue
-            # GoalSpec's own verification scripts name the contract by path as
-            # the sanctioned close-out flow (validate --check-hash, render,
-            # audit, run_verifiers, campaign_status, focus). Exempt them as
-            # read context, but never when the same command can write the
-            # mentioned path back (--write <path>) or re-arm the lock after a
-            # mutation (--write-hash): those must stay deniable post-freeze.
-            if (re.search(rf"\b(?:validate_goal|render_goal|audit_goal|run_verifiers|campaign_status|focus)\.py\b[^\n;]*{re.escape(p)}", compact)
+            # GoalSpec's own verification scripts (and the goalspec.py wrapper
+            # that dispatches to them) name the contract by path as the
+            # sanctioned close-out flow (validate --check-hash, render, audit,
+            # run_verifiers, campaign_status, focus). Exempt them as read
+            # context, but never when the same command can write the mentioned
+            # path back (--write <path>) or re-arm the lock after a mutation
+            # (--write-hash): those must stay deniable post-freeze.
+            if (re.search(rf"\b(?:validate_goal|render_goal|audit_goal|run_verifiers|campaign_status|focus|goalspec)\.py\b[^\n;]*{re.escape(p)}", compact)
                     and "--write-hash" not in compact
                     and not re.search(rf"--write[=\s]+(?:\./)?{re.escape(p)}", compact)):
                 continue
-            if re.search(write_verbs, compact) or any(v in compact for v in ["rm -rf .goals", "truncate", "chmod"]):
+            if any(p in target for target in redirect_targets):
+                return p
+            if re.search(arg_write_verbs, compact) or any(v in compact for v in ["rm -rf .goals", "truncate", "chmod"]):
                 return p
             if p in [".goals/current.md", ".goals/current.sha256"] and not re.search(r"\b(read|cat|grep|rg|sed -n|head|tail)\b", compact):
                 return p

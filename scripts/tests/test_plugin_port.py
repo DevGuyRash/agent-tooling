@@ -622,5 +622,23 @@ class PluginPortTests(unittest.TestCase):
         self.assertIn("executable_surfaces_count", payload)
 
 
+
+
+class DualHostRootPreservationTest(unittest.TestCase):
+    def test_dual_host_fallback_survives_both_directions(self) -> None:
+        from plugin_port import DUAL_HOST_ROOT, recursive_replace
+
+        command = 'python3 "%s/hooks/scripts/scope_guard.py"' % DUAL_HOST_ROOT
+        for replacements in (
+            {"${CLAUDE_PLUGIN_ROOT}": "${PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT": "$PLUGIN_ROOT"},
+            {"${PLUGIN_ROOT}": "${CLAUDE_PLUGIN_ROOT}", "$PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"},
+        ):
+            self.assertEqual(command, recursive_replace(command, replacements))
+        # Plain single-host references still rewrite.
+        self.assertEqual(
+            "${PLUGIN_ROOT}/x",
+            recursive_replace("${CLAUDE_PLUGIN_ROOT}/x", {"${CLAUDE_PLUGIN_ROOT}": "${PLUGIN_ROOT}"}),
+        )
+
 if __name__ == "__main__":
     unittest.main()

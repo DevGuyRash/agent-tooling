@@ -334,12 +334,19 @@ def write_frontmatter(path: Path, data: dict[str, Any], body: str) -> None:
     path.write_text(f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}", encoding="utf-8")
 
 
+# A command already written against the dual-host fallback is correct on BOTH
+# hosts; rewriting either variable inside it degrades portability (observed:
+# claude->codex turned it into the degenerate ${PLUGIN_ROOT:-${PLUGIN_ROOT}}).
+DUAL_HOST_ROOT = "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}"
+_DUAL_HOST_SENTINEL = "\x00plugin-port-dual-root\x00"
+
+
 def recursive_replace(value: Any, replacements: dict[str, str]) -> Any:
     if isinstance(value, str):
-        result = value
+        result = value.replace(DUAL_HOST_ROOT, _DUAL_HOST_SENTINEL)
         for old, new in replacements.items():
             result = result.replace(old, new)
-        return result
+        return result.replace(_DUAL_HOST_SENTINEL, DUAL_HOST_ROOT)
     if isinstance(value, list):
         return [recursive_replace(item, replacements) for item in value]
     if isinstance(value, dict):

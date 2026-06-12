@@ -45,7 +45,7 @@
       "name": "goalspec",
       "source": "./plugins/goalspec",
       "description": "Compile messy intent and project context into bounded, verifiable goal contracts.",
-      "version": "1.8.0"
+      "version": "1.8.1"
     },
     {
       "name": "playwright-testing",

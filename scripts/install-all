@@ -334,6 +334,12 @@ if [ "$claude_enabled" = "1" ]; then
     [ -n "$plugin_name" ] || continue
     log "installing Claude Code plugin $plugin_name@$marketplace_name"
     run claude plugin install --scope "$claude_scope" "$plugin_name@$marketplace_name"
+    # 'install' no-ops when the plugin is already installed, leaving the
+    # installed_plugins.json record (and therefore every fresh session) pinned
+    # to the OLD cached version; 'update' advances the record to the latest
+    # cache and is a harmless no-op on a fresh install.
+    log "updating Claude Code plugin record $plugin_name@$marketplace_name"
+    run claude plugin update --scope "$claude_scope" "$plugin_name@$marketplace_name"
   done
 fi
 

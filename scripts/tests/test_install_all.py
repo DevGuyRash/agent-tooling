@@ -87,15 +87,21 @@ class InstallAllTests(unittest.TestCase):
         self.assertEqual(["plugin", "marketplace", "update", "agent-tooling"], claude_calls[1])
 
         codex_installs = codex_calls[2:]
-        claude_installs = claude_calls[2:]
+        claude_installs = [args for args in claude_calls[2:] if args[:2] == ["plugin", "install"]]
+        # 'install' no-ops on an already-installed plugin, so each install is
+        # followed by 'update' to advance the installed_plugins.json record.
+        claude_updates = [args for args in claude_calls[2:] if args[:2] == ["plugin", "update"]]
         self.assertEqual(11, len(codex_installs))
         self.assertEqual(11, len(claude_installs))
+        self.assertEqual(11, len(claude_updates))
         self.assertEqual(["plugin", "add", "goalspec@agent-tooling"], codex_installs[6])
         self.assertEqual(["plugin", "install", "--scope", "local", "goalspec@agent-tooling"], claude_installs[6])
+        self.assertEqual(["plugin", "update", "--scope", "local", "goalspec@agent-tooling"], claude_updates[6])
 
         codex_plugins = [args[-1] for args in codex_installs]
         claude_plugins = [args[-1] for args in claude_installs]
         self.assertEqual(codex_plugins, claude_plugins)
+        self.assertEqual(claude_plugins, [args[-1] for args in claude_updates])
 
     def test_local_source_omits_sparse_and_ref_flags(self) -> None:
         calls = self.run_install_all("--source", str(REPO_ROOT), "--codex-only")
@@ -118,6 +124,7 @@ class InstallAllTests(unittest.TestCase):
                 {"command": "claude", "args": ["plugin", "marketplace", "remove", "agent-tooling"]},
                 {"command": "claude", "args": ["plugin", "marketplace", "add", "--scope", "user", str(REPO_ROOT)]},
                 {"command": "claude", "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "update", "--scope", "user", "goalspec@agent-tooling"]},
             ],
             calls,
         )
@@ -139,6 +146,10 @@ class InstallAllTests(unittest.TestCase):
                 {
                     "command": "claude",
                     "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"],
+                },
+                {
+                    "command": "claude",
+                    "args": ["plugin", "update", "--scope", "user", "goalspec@agent-tooling"],
                 },
             ],
             calls,

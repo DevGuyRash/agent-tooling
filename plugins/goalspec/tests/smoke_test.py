@@ -1374,6 +1374,22 @@ def main() -> int:
                     "anchoring an unlocked manifest while the root pair is locked needs no override")
         assert_true("permissionDecision" in guard_b("echo x >> .goals/current.md"),
                     "the locked root contract stays frozen in the same workspace")
+        # Redirect-class writes bind to their TARGET (live false positive: a
+        # logging command whose quoted JSON payload mentioned frozen paths and
+        # contained '->' was denied despite writing only to .local/).
+        assert_true("permissionDecision" not in guard_b(
+            "sh report.sh --from-json - <<'J'\n{\"ref\": \".goals/campaign-edge.md\", \"x\": \"a -> b\"}\nJ\n >> .local/log.jsonl"),
+            "quoting a frozen path while writing elsewhere is not a write to it")
+        assert_true("permissionDecision" in guard_b("printf x >> .goals/focus.md"),
+                    "redirecting INTO a frozen artifact still denies")
+        # The goalspec.py wrapper is sanctioned read context like the scripts
+        # it dispatches to (live friction: post-lock `goalspec render` denied).
+        assert_true("permissionDecision" not in guard_b(
+            "python3 /x/goalspec.py render .goals/current.md --pointer"),
+            "wrapper render naming the locked contract is not denied")
+        assert_true("permissionDecision" in guard_b(
+            "python3 /x/goalspec.py validate .goals/current.md --write-hash"),
+            "wrapper --write-hash re-arm stays deniable post-freeze")
         (ws / ".goals" / "campaign.sha256").write_text("0" * 64 + "  campaign-edge.md\n", encoding="utf-8")
         assert_true("permissionDecision" in guard_b(perl_cmd),
                     "the same manifest edit is denied once the aggregate lock exists")
