@@ -48,6 +48,10 @@ This goal is complete when:
 Completion must be verified by:
 - [Command / metric / checklist / artifact / human gate]
 - [Expected result]
+- Pinned: [path] sha256 [64-hex]   (optional: freezes a companion artifact the
+  verifier depends on, e.g. a shared verify script; sha256sum of its bytes at
+  lock time. run_verifiers.py checks pins before executing and audit_goal.py
+  re-checks them — a mutated companion fails loudly.)
 
 ## Scope
 
@@ -99,3 +103,7 @@ Final report must include:
 ## Source of truth rule
 
 `.goals/current.md` is the source of truth. A rendered `/goal` objective is a projection. The auditor checks against `current.md`, not against a shortened prompt.
+
+## Register
+
+Write contract sections in natural declarative prose: terminal outcomes, constraints, and what proves them. An EARS-style WHEN/THEN/SHALL clause belongs in a contract only for its few hard stop/scope gates; a contract that reads as a procedure script binds the executor to a method instead of an outcome.

@@ -19,7 +19,7 @@
 
 ## Intent
 
-[Why this matters and how to make tradeoffs.]
+[Why this matters, anchored in the user's own words — quote the Intent Inventory item this goal serves; tradeoffs follow from it.]
 
 ## Context
 

@@ -363,6 +363,52 @@ def verifier_result_path(goals_dir: Path) -> Path:
     return Path(goals_dir) / "evidence" / "verifiers" / VERIFIER_RESULT_NAME
 
 
+# Pinned companions: a contract MAY pin shared artifacts its verifier depends
+# on (e.g. one verify script referenced by many chain children) with a
+# '- Pinned: <path> sha256 <hash>' line in ## Verifier. run_verifiers.py checks
+# pins before executing commands and audit_goal.py re-checks them, so a
+# companion mutated after lock fails loudly instead of silently re-defining
+# the oracle. Pins hash raw bytes (sha256sum-compatible), not decoded text.
+PINNED_COMPANION_RE = re.compile(r"(?mi)^\s*-\s*Pinned:\s*`?(\S+?)`?\s+sha256\s+([0-9a-fA-F]{64})\s*$")
+
+
+def extract_pinned_companions(section: str) -> List[Tuple[str, str]]:
+    """(path, expected_sha256) pairs declared in a ## Verifier section body."""
+    return [(m.group(1), m.group(2).lower()) for m in PINNED_COMPANION_RE.finditer(section)]
+
+
+def contract_workspace_root(contract: Path) -> Path:
+    """Workspace root for a contract: the parent of its enclosing .goals dir.
+
+    Covers root contracts (.goals/current.md) and chain children
+    (.goals/children/G-00N/current.md); falls back to the contract's own
+    directory for loose files outside any .goals tree, so relative pin paths
+    in fixtures resolve next to the contract instead of against the cwd.
+    """
+    contract = Path(contract).resolve()
+    for p in contract.parents:
+        if p.name == ".goals":
+            return p.parent
+    return contract.parent
+
+
+def check_pinned_companions(section: str, root: Path) -> List[dict]:
+    """Integrity rows for the section's declared pins; passed=False on missing/mutated."""
+    rows: List[dict] = []
+    for rel, expected in extract_pinned_companions(section):
+        p = Path(rel)
+        target = p if p.is_absolute() else Path(root) / p
+        if not target.exists():
+            rows.append({"path": rel, "expected_sha256": expected, "actual_sha256": None,
+                         "passed": False, "reason": "pinned companion missing"})
+            continue
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        rows.append({"path": rel, "expected_sha256": expected, "actual_sha256": actual,
+                     "passed": actual == expected,
+                     "reason": "matched" if actual == expected else "pinned companion mutated"})
+    return rows
+
+
 # The meta-goal smell: a goal whose terminal state and verifier are about
 # GoalSpec itself (locks, renders, hooks, probes) delivers no workspace value —
 # substrate checks belong inside a value-bearing goal, never as the goal.

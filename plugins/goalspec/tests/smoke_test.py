@@ -2,6 +2,7 @@
 """Fast smoke test for GoalSpec plugin packaging and deterministic helpers."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import py_compile
@@ -95,6 +96,8 @@ def main() -> int:
         assert_true((tmp / ".goals" / "graph.json").exists(), "init creates graph")
         assert_true((tmp / "AGENTS.md").exists(), "init appends AGENTS.md")
         assert_true((tmp / ".codex" / "agents" / "goal-auditor.toml").exists(), "init installs agent template")
+        assert_true((tmp / ".codex" / "agents" / "decomposition-reviewer.toml").exists(),
+                    "init installs the decomposition-reviewer template")
         assert_true((tmp / ".goals" / "provenance").is_dir(), "init scaffolds provenance dir")
         gitignore_text = (tmp / ".gitignore").read_text(encoding="utf-8") if (tmp / ".gitignore").exists() else ""
         assert_true(".goals/evidence/" in gitignore_text and ".goals/run_state.json" in gitignore_text,
@@ -796,6 +799,73 @@ def main() -> int:
         vm = validate(multi)
         oos_warns = [w for w in vm["warnings"] if "Out of scope" in w and "README.md" in w]
         assert_true(len(oos_warns) == 1, f"out-of-scope warning deduped to one: {oos_warns}")
+
+    # Pinned companions: a contract MAY freeze shared verifier artifacts
+    # ('- Pinned: <path> sha256 <h>' in ## Verifier). A missing/mutated
+    # companion fails run_verifiers loudly with no commands executed, and the
+    # audit re-checks pins itself so a post-run mutation can never certify.
+    with tempfile.TemporaryDirectory() as td19:
+        ws = Path(td19)
+        goals = ws / ".goals"
+        (goals / "reports").mkdir(parents=True)
+        companion = ws / "scripts" / "verify_shop.py"
+        companion.parent.mkdir(parents=True)
+        companion.write_bytes(b"import sys; sys.exit(0)\n")
+        pin_hash = hashlib.sha256(companion.read_bytes()).hexdigest()
+        c = goals / "current.md"
+        c.write_text(_swap(base, "Verifier",
+                           "Completion must be verified by:\n"
+                           "- `python3 scripts/verify_shop.py`\n"
+                           f"- Pinned: scripts/verify_shop.py sha256 {pin_hash}\n"
+                           "- Expected result: exit code 0."), encoding="utf-8")
+        (goals / "current.sha256").write_text(f"{sha256_file(c)}  current.md\n", encoding="utf-8")
+        v_pin = validate(c)
+        assert_true(v_pin["ok"], f"pin-bearing contract validates: {v_pin['errors']}")
+        rep = goals / "reports" / "r.md"
+        rep.write_text("## Result\nachieved\n\n## Files Changed\n- x\n\n## Commands Run\n- x\n\n"
+                       "## Evidence\n- x\n\n## Budget Used\n- x\n\n## Remaining Risks\n- x\n\n"
+                       "## Follow-Up Candidates\n- x\n", encoding="utf-8")
+
+        def run_pin_verifiers():
+            return subprocess.run(
+                [sys.executable, str(SCRIPTS / "run_verifiers.py"), str(c), "--run",
+                 "--evidence-dir", str(goals / "evidence" / "verifiers"), "--json"],
+                cwd=td19, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=60)
+
+        ok_run = run_pin_verifiers()
+        oj = json.loads(ok_run.stdout)
+        assert_true(ok_run.returncode == 0 and oj["overall_passed"] is True,
+                    f"matching pin + passing command => overall pass: rc={ok_run.returncode} {oj}")
+        assert_true(any(v["kind"] == "pin" and v["passed"] for v in oj["verifiers"]),
+                    f"pin check recorded in the oracle result: {oj['verifiers']}")
+        a_pin_ok = audit(c, rep, goals / "evidence")
+        assert_true(a_pin_ok["result"] == "achieved", f"intact pin certifies normally: {a_pin_ok['result']}")
+
+        # 1-byte tamper: the run fails loudly and never executes commands
+        # against the mutated companion.
+        companion.write_bytes(b"import sys; sys.exit(0) \n")
+        bad_run = run_pin_verifiers()
+        bj = json.loads(bad_run.stdout)
+        assert_true(bad_run.returncode == 1 and bj["overall_passed"] is False,
+                    f"tampered companion fails the verifier run: rc={bad_run.returncode}")
+        assert_true(any(v["kind"] == "pin" and v["evidence"] == "pinned companion mutated"
+                        for v in bj["verifiers"]),
+                    f"failure names the mutated pin: {bj['verifiers']}")
+        assert_true(not any(v["kind"] == "command" for v in bj["verifiers"]),
+                    f"no command executes against a mutated companion: {bj['verifiers']}")
+        a_pin_bad = audit(c, rep, goals / "evidence")
+        assert_true(a_pin_bad["result"] == "not achieved"
+                    and any("pinned companion mutated" in e for e in a_pin_bad["errors"]),
+                    f"audit refuses achieved on a mutated pin: {a_pin_bad}")
+
+        # Post-run mutation: a stale passing result file alone must not certify.
+        companion.write_bytes(b"import sys; sys.exit(0)\n")
+        run_pin_verifiers()
+        companion.write_bytes(b"# late edit\nimport sys; sys.exit(0)\n")
+        a_pin_late = audit(c, rep, goals / "evidence")
+        assert_true(a_pin_late["result"] == "not achieved",
+                    f"companion mutated after the run still refuses achieved: {a_pin_late['result']}")
 
     # --- Campaign chain execution (autonomous multi-child /goal) ---
     # The plan is frozen, evidence is the truth, checkmarks are a derived view.

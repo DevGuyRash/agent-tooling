@@ -11,11 +11,26 @@ from pathlib import Path
 from common import (
     VERIFIER_RESULT_NAME,
     VERIFIER_RESULT_SCHEMA,
+    check_pinned_companions,
+    contract_workspace_root,
     extract_verifier_commands,
     parse_sections,
     sha256_file,
     verifier_kinds,
 )
+
+
+def pin_rows(pins: list[dict]) -> list[dict]:
+    """Pin checks as verifier result entries, so the oracle file records them."""
+    return [{
+        "verifier": f"pinned companion {p['path']}",
+        "kind": "pin",
+        "exit_code": None,
+        "evidence": p["reason"],
+        "passed": p["passed"],
+        "expected_sha256": p["expected_sha256"],
+        "actual_sha256": p["actual_sha256"],
+    } for p in pins]
 
 
 def verifier_section(contract: Path) -> str:
@@ -86,14 +101,23 @@ def main() -> int:
     section = verifier_section(contract) if contract.exists() else ""
     commands = extract_verifier_commands(section)
     declared = verifier_kinds(section)
+    pins = check_pinned_companions(section, contract_workspace_root(contract)) if contract.exists() else []
+    failed_pins = [p for p in pins if not p["passed"]]
     if not args.run:
         result = {"commands": commands, "ran": False, "declared_kinds": sorted(declared),
+                  "pinned_companions": pins,
                   "note": "Pass --run to execute verifier commands and write the oracle result file."}
     else:
         evidence_dir = Path(args.evidence_dir)
-        run_data = run(commands, evidence_dir, args.timeout)
+        if failed_pins:
+            # A missing/mutated pinned companion invalidates the oracle itself:
+            # never execute commands against it; record a loud failure instead.
+            run_data = {"ok": False, "overall_passed": False, "verifiers": pin_rows(pins)}
+        else:
+            run_data = run(commands, evidence_dir, args.timeout)
+            run_data["verifiers"] = pin_rows(pins) + run_data["verifiers"]
         result = {"commands": commands, "ran": True, "declared_kinds": sorted(declared), **run_data}
-        if commands:
+        if commands or failed_pins:
             result_file = Path(args.result_file) if args.result_file else evidence_dir / VERIFIER_RESULT_NAME
             write_result(contract, run_data, result_file, declared)
             result["result_file"] = str(result_file)
@@ -108,9 +132,11 @@ def main() -> int:
             print("No executable verifier commands found in contract. Use the declared human/artifact/MCP verifier and record its outcome in the report.")
             if declared:
                 print(f"Declared verifier kinds: {', '.join(sorted(declared))}")
+        for p in pins:
+            print(f"pin {'ok' if p['passed'] else 'FAIL'} ({p['reason']}): {p['path']}")
         for c in commands:
             print(c)
-        if args.run and commands:
+        if args.run and (commands or failed_pins):
             for v in result["verifiers"]:
                 print(f"exit {v['exit_code']} ({'pass' if v['passed'] else 'FAIL'}): {v['verifier']} -> {v['evidence']}")
             print(f"overall_passed={result['overall_passed']} -> {result.get('result_file')}")

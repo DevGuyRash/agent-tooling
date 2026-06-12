@@ -80,14 +80,15 @@ For each child, judged against the source documents it derives from:
 
 - Does the child name at least one concrete workspace artifact or behavior the source does not already state verbatim? A renamed milestone with a status label adds nothing.
 - Does each child cite the specific source sections it implements (PRD sections, architecture invariants, design tokens, failure families) rather than one generic roadmap pointer? Uniform, cookie-cutter children are a smell that the authoring loop stamped a template instead of thinking per child.
-- Does the Intent layer preserve the user's own words and every distinct intent in the request, or has plugin vocabulary replaced what the user actually asked for?
+- Intent-inventory fidelity: does an Intent Inventory of short verbatim quotes anchor the campaign, with `## Coverage` mapping every inventory item — including the second intent of a dual-intent request — to a child or an explicit deferral? Intent sections quoting the inventory, or plugin vocabulary replacing what the user actually asked for?
+- Lock-horizon sanity: is the locked set the execution horizon — what can run next — with the tail sketched-conditional, materializing at selection? Far-future children locked on today's guesses are the inverse of stub children: judge the horizon case by case, not by a rule.
 - Are gates declared where the audit can enforce them (human gates inside ## Verifier, not only in Terminal State prose)?
-- Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"?
+- Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"? Do children that share a companion verifier artifact pin it (`Pinned: <path> sha256 <hash>`)?
 - Is there a bounded first slice that fits a real budget, rather than the whole milestone restated?
 - Is any child a meta-goal about GoalSpec itself? Substrate checks belong inside a value-bearing child.
 - Does `graph.json` mirror the manifest's nodes and edges (`graph_goal.py --sync-campaign`)?
 
-`validate_campaign.py` enforces the floor deterministically (stub children, meta-only ready sets, empty mirrors). This check is for a reviewer agent to raise the ceiling: answer each question with evidence from the manifest and sources, and record the verdict in the campaign report.
+`validate_campaign.py` enforces the floor deterministically (stub children, meta-only ready sets, empty mirrors). This check is the reviewer's: the `decomposition-reviewer` agent template (`init_project.py --install-agents`) carries it with a refute bias and per-child verdicts. Answer each question with evidence from the manifest and sources; the authoring agent applies or explicitly declines each finding in the manifest's `## Decomposition Review` section.
 
 ## Forever-risk levels
 

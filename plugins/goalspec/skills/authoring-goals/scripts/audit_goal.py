@@ -13,7 +13,9 @@ from common import (
     REPORT_FIELDS,
     VERIFIER_RESULT_SCHEMA,
     bullets,
+    check_pinned_companions,
     contract_lock_status,
+    contract_workspace_root,
     extract_verifier_commands,
     parse_sections,
     sha256_text,
@@ -187,6 +189,15 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
         result["satisfied_checks"].append(f"Contract has {terminal_count} terminal-state clause(s)")
     result["satisfied_checks"].append(f"Contract verifier kinds: {sorted(declared_kinds) or ['unclassified']}")
 
+    # Pinned companions are part of the frozen oracle: re-verify at audit time so
+    # a companion mutated after the run can never certify achieved.
+    pins = check_pinned_companions(verifier_section, contract_workspace_root(contract))
+    failed_pins = [p for p in pins if not p["passed"]]
+    if pins:
+        result["pinned_companions"] = pins
+        if not failed_pins:
+            result["satisfied_checks"].append(f"Pinned companion(s) match the contract pins ({len(pins)})")
+
     # Provenance drift/completeness anchor (informational; never gates the verdict).
     prov = _provenance_check(contract_sections, contract)
     result["provenance"] = prov
@@ -259,6 +270,12 @@ def audit(contract: Path, report: Path | None = None, evidence_dir: Path | None 
     if hash_matched is False:
         result["result"] = "contract mutated"
         result["errors"].append("Contract hash mismatch; current.md changed after launch")
+    elif failed_pins:
+        result["result"] = "not achieved"
+        for p in failed_pins:
+            result["errors"].append(
+                f"{p['reason']}: {p['path']} (expected sha256 {p['expected_sha256']}, "
+                f"actual {p['actual_sha256'] or 'missing'})")
     elif report_decl and _SCOPE_DECL.search(report_decl):
         result["result"] = "scope violation"
         result["errors"].append(f"Run report declares a scope violation: {report_decl!r}")

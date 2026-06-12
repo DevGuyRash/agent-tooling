@@ -6,6 +6,8 @@ The rendered `/goal` objective should be compact but verifier-complete.
 
 `.goals/current.md` is the source of truth. The `/goal` text points to it and summarizes non-droppable clauses.
 
+The render binds outcomes, scope, budget, and oracles — never method. Any execution path that satisfies them is valid; the executing agent owns the how exactly as the authoring agent does.
+
 ## Do not drop
 
 - terminal-state clauses

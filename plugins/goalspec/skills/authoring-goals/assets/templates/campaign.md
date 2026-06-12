@@ -11,7 +11,12 @@
 
 ## Intent
 
-[Parent aspiration.]
+[The parent aspiration anchored in the user's own words. Open with the Intent
+Inventory — each distinct ask as a short verbatim quote:]
+
+1. "[verbatim quote]"
+2. "[verbatim quote — a second intent in the same request is the one that
+   usually gets dropped]"
 
 ## Completeness Dimensions
 
@@ -29,12 +34,12 @@
 
 ## Coverage
 
-[Map each explicit requirement of the original request to a child id, or mark it
+[Map each Intent Inventory item — not a paraphrase — to a child id, or mark it
 `deferred: <reason>`. Anything the request asks for that appears nowhere here is
 a coverage gap.]
 
-- [requirement] -> G-001
-- [requirement] -> deferred: [reason]
+- Inventory 1 "[quote]" -> G-001
+- Inventory 2 "[quote]" -> deferred: [reason]
 
 ## Goal Graph
 
