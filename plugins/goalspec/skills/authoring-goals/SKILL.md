@@ -1,11 +1,11 @@
 ---
 name: authoring-goals
-description: Compile vague or open-ended requests into bounded, verifiable, stoppable Codex /goal contracts. Use to author, lint, scan, decompose, select, render, or audit goals from raw intent, files, PRDs, logs, issues, or existing .goals artifacts.
+description: Compile vague or open-ended requests into bounded, verifiable, stoppable /goal mission contracts (Codex and Claude Code). Use to author, lint, scan, decompose, select, render, or audit goals from raw intent, files, PRDs, logs, issues, or existing .goals artifacts.
 ---
 
 # Authoring Goals
 
-You are GoalSpec's authoring skill. Convert messy intent and open-world project context into bounded Codex `/goal` contracts.
+You are GoalSpec's authoring skill. Convert messy intent and open-world project context into bounded `/goal` mission contracts. `/goal` is Codex's native launch command; `init` installs an equivalent project command for Claude Code (`.claude/commands/goal.md`), so the same rendered launch line works on both hosts.
 
 Core doctrine:
 
@@ -23,7 +23,7 @@ The same register governs both layers. State outcomes and constraints in plain d
 
 ## Use this skill when
 
-- The user wants to start or prepare a Codex `/goal`.
+- The user wants to start or prepare a `/goal` mission.
 - The request is vague: improve, clean up, modernize, optimize, harden, productionize, polish, stabilize, make better.
 - The user asks to scan files, folders, logs, PRDs, issues, TODOs, diffs, or an existing GOALS.md to create goals.
 - The user wants to lint, repair, decompose, select, render, or audit goals.
@@ -123,7 +123,7 @@ One `/goal` executes an entire decomposed chain of frozen child contracts, with 
 - Runtime (encoded in the rendered `/goal`): the rendered mission is durable across threads — it never centers a starting child; the executor reads `.goals/focus.md` first (regenerating it with `focus.py` when stale), works the current goal's outcome tree, marks satisfied outcomes (`focus.py done <id>`), runs `run_verifiers.py` into the child's evidence dir, writes the child report, and re-runs `focus.py` to surface what is next — `campaign_status.py` remains the advance/stop authority underneath, and the chain stops on `chain_should_stop` or reports blocked if the status helper itself fails. An attestation-only child (no executable verifier command) advances only when its report records the declared gate outcome and the audit certifies it; the chain pauses there for the owner to ratify and relaunch the same line — the executor never writes a ratification line itself. Sequential only. The child set is frozen at launch; mid-run discoveries go into each child report's `## Follow-Up Candidates`, harvested by the audit as the input to the next campaign.
 - Close: a wrapper run (`launch_goal.py --campaign <manifest>`) has already re-run verifiers wrapper-side for every attempted child (unattempted children stay pending, never force-failed) and audited — exit 0 only on `campaign achieved`, 124 on timeout. After an interactive run, re-run `run_verifiers.py` per child yourself before auditing; never certify off executor-produced results alone. Then `audit_campaign.py` (verdicts: `campaign achieved | partial: n/m | not achieved | campaign mutated`), and close out with `GOALSPEC_ALLOW_CONTRACT_WRITE=1` set for the close commands — the armed scope guard otherwise denies them all, including removing the lock itself — to archive `.goals/campaign.sha256` and update statuses (`graph_goal.py --status`, `update_ledger.py`).
 
-On Codex, hooks are detect-only: the real bounds are the freeze gates, the wall clock, and the audit. `stop_guard` is not campaign-aware (nudge value only).
+Hook enforcement varies by host and runtime (`references/hooks-policy.md` records the observations): the real bounds are the freeze gates, the wall clock, and the audit. `stop_guard` is not campaign-aware (nudge value only).
 
 ## Response structure
 

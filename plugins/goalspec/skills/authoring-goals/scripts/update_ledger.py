@@ -11,7 +11,7 @@ from common import parse_sections, split_goal_id_title
 
 DEFAULT_LEDGER = """# GOALS.md
 
-This file is a registry, not an execution target. Do not run Codex `/goal` against this entire file. Compile one ready item into `.goals/current.md` before execution.
+This file is a registry, not an execution target. Do not run `/goal` against this entire file. Compile one ready item into `.goals/current.md` before execution.
 
 ## Active
 

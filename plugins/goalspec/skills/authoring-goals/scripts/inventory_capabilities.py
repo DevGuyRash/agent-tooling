@@ -57,15 +57,18 @@ def scan_skills(root: Path, home: Path, include_home: bool = True) -> List[dict]
     for d in root.glob("plugins/*/skills"):
         if d.exists():
             dirs.append(d)
+    # Claude Code project-scoped skills.
+    if (root / ".claude" / "skills").exists():
+        dirs.append(root / ".claude" / "skills")
     if include_home:
-        for d in [home / ".agents" / "skills", home / ".codex" / "skills"]:
+        for d in [home / ".agents" / "skills", home / ".codex" / "skills", home / ".claude" / "skills"]:
             if d.exists():
                 dirs.append(d)
-        cache = home / ".codex" / "plugins" / "cache"
-        if cache.exists():
-            for d in cache.glob("*/*/*/skills"):
-                if d.exists():
-                    dirs.append(d)
+        for cache in [home / ".codex" / "plugins" / "cache", home / ".claude" / "plugins" / "cache"]:
+            if cache.exists():
+                for d in cache.glob("*/*/*/skills"):
+                    if d.exists():
+                        dirs.append(d)
     seen: Set[Path] = set()
     out = []
     for d in dirs:
@@ -102,25 +105,26 @@ def scan_plugins(root: Path, home: Path, include_home: bool = True) -> List[dict
                 if src.get("source") == "local" and path:
                     candidates.append((mf.parent.parent.parent / path).resolve())
     if include_home:
-        cache = home / ".codex" / "plugins" / "cache"
-        if cache.exists():
-            candidates.extend(cache.glob("*/*/*"))
+        for cache in [home / ".codex" / "plugins" / "cache", home / ".claude" / "plugins" / "cache"]:
+            if cache.exists():
+                candidates.extend(cache.glob("*/*/*"))
     candidates.extend([root / "plugins" / "goalspec", root])
     seen: Set[Path] = set()
     for d in candidates:
-        manifest = d / ".codex-plugin" / "plugin.json"
-        if manifest.exists() and manifest not in seen:
-            seen.add(manifest)
-            data = read_json(manifest) or {}
-            out.append({
-                "name": data.get("name", d.name),
-                "version": data.get("version"),
-                "description": data.get("description"),
-                "path": str(manifest),
-                "skills": data.get("skills"),
-                "hooks": data.get("hooks"),
-                "kind": "manifest",
-            })
+        for manifest in [d / ".codex-plugin" / "plugin.json", d / ".claude-plugin" / "plugin.json"]:
+            if manifest.exists() and manifest not in seen:
+                seen.add(manifest)
+                data = read_json(manifest) or {}
+                out.append({
+                    "name": data.get("name", d.name),
+                    "version": data.get("version"),
+                    "description": data.get("description"),
+                    "path": str(manifest),
+                    "skills": data.get("skills"),
+                    "hooks": data.get("hooks"),
+                    "kind": "manifest",
+                })
+                break  # one manifest per plugin dir is enough
     return out
 
 
@@ -142,16 +146,18 @@ def scan_mcp(root: Path, home: Path, include_home: bool = True) -> List[dict]:
                 for name, spec in servers.items():
                     if isinstance(spec, dict):
                         out.append({"name": name, "source": str(mcp), "spec_keys": sorted(spec.keys())})
-    # Best effort CLI query. This reads the user's ~/.codex config, so it is
-    # home-scoped: only run it when home scanning is explicitly opted in.
+    # Best effort CLI queries. These read user-level config, so they are
+    # home-scoped: only run them when home scanning is explicitly opted in.
     if include_home:
-        try:
-            result = subprocess.run(["codex", "mcp", "list"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
-            if result.returncode == 0 and result.stdout.strip():
-                full = result.stdout.strip()
-                out.append({"name": "codex mcp list", "source": "codex-cli", "output": full[:4000], "truncated": len(full) > 4000})
-        except Exception:
-            pass
+        for argv, label in [(["codex", "mcp", "list"], "codex-cli"),
+                            (["claude", "mcp", "list"], "claude-cli")]:
+            try:
+                result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+                if result.returncode == 0 and result.stdout.strip():
+                    full = result.stdout.strip()
+                    out.append({"name": " ".join(argv), "source": label, "output": full[:4000], "truncated": len(full) > 4000})
+            except Exception:
+                pass
     return out
 
 
@@ -159,10 +165,12 @@ def scan_hooks(root: Path, home: Path, include_home: bool = True) -> List[dict]:
     out = []
     hook_files = [root / ".codex" / "hooks.json", root / "hooks" / "hooks.json"]
     cfgs = [root / ".codex" / "config.toml"]
+    settings_files = [root / ".claude" / "settings.json", root / ".claude" / "settings.local.json"]
     if include_home:
         hook_files.append(home / ".codex" / "hooks.json")
         cfgs.append(home / ".codex" / "config.toml")
-    for hook_file in hook_files:
+        settings_files.append(home / ".claude" / "settings.json")
+    for hook_file in hook_files + settings_files:
         data = read_json(hook_file)
         if isinstance(data, dict):
             hooks = data.get("hooks", {})
@@ -182,16 +190,27 @@ def scan_subagents(root: Path, home: Path, include_home: bool = True) -> List[di
         root.glob(".agents/**/openai.yaml"),
         root.glob("skills/**/agents/openai.yaml"),
         root.glob("**/agents/openai.yaml"),
+        root.glob(".codex/agents/*.toml"),
+        root.glob(".claude/agents/*.md"),
     ]
     if include_home and (home / ".agents").exists():
         patterns.append((home / ".agents").glob("**/openai.yaml"))
+    if include_home and (home / ".claude" / "agents").exists():
+        patterns.append((home / ".claude" / "agents").glob("*.md"))
     seen: Set[Path] = set()
     for pat in patterns:
         for y in pat:
             if y in seen:
                 continue
             seen.add(y)
-            out.append({"path": str(y), "name": y.parent.parent.name if y.parent.name == "agents" else y.parent.name})
+            if y.suffix in {".toml", ".md"}:
+                text = y.read_text(encoding="utf-8", errors="ignore")
+                name = first_yaml_field(text, "name") or re.search(r'(?m)^name\s*=\s*"([^"]+)"', text)
+                if not isinstance(name, str):
+                    name = name.group(1) if name else y.stem
+                out.append({"path": str(y), "name": name})
+            else:
+                out.append({"path": str(y), "name": y.parent.parent.name if y.parent.name == "agents" else y.parent.name})
     return out
 
 

@@ -298,8 +298,9 @@ def validate_campaign(campaign: Path) -> dict:
         warnings.append(
             "decomposition-reviewer agent template is not installed in this project "
             "(.codex/agents/decomposition-reviewer.toml); install it with goalspec.py init "
-            "(installed by default) or self-review against rubric check 10 — and note which "
-            "one the recorded review reflects")
+            "(installed by default), spawn the plugin-shipped goalspec:decomposition-reviewer "
+            "on Claude Code, or self-review against rubric check 10 — and note which one the "
+            "recorded review reflects")
     warnings.extend(_graph_mirror_divergence(root, children))
 
     result["ok"] = not errors

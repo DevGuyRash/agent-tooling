@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GoalSpec helper CLI for Codex projects.
+"""GoalSpec helper CLI (Codex and Claude Code projects).
 
 Semantic authoring belongs to the $authoring-goals skill. This wrapper delegates to
 deterministic helper scripts for scaffolding, validation, rendering, inventory,
@@ -15,9 +15,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 COMMANDS = {
     "init": ("init_project", "Initialize .goals artifacts"),
-    "inventory": ("inventory_capabilities", "Inventory Codex capabilities"),
+    "inventory": ("inventory_capabilities", "Inventory host capabilities (skills, plugins, MCP, hooks, agents)"),
     "validate": ("validate_goal", "Validate/lock .goals/current.md"),
-    "render": ("render_goal", "Render a paste-ready Codex /goal objective"),
+    "render": ("render_goal", "Render a paste-ready /goal objective"),
     "risk": ("score_goal_risk", "Score raw goal text for runaway risk"),
     "extract": ("extract_candidates", "Extract candidate goals from files/folders"),
     "provenance": ("record_provenance", "Record the verbatim request as provenance (not execution scope)"),

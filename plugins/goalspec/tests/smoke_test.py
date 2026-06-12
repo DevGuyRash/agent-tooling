@@ -98,6 +98,13 @@ def main() -> int:
         assert_true((tmp / ".codex" / "agents" / "goal-auditor.toml").exists(), "init installs agent template")
         assert_true((tmp / ".codex" / "agents" / "decomposition-reviewer.toml").exists(),
                     "init installs the decomposition-reviewer template")
+        # Dual-host launch surface: Claude Code has no native /goal, so init
+        # installs a project command — the same rendered line works on both hosts.
+        goal_cmd = tmp / ".claude" / "commands" / "goal.md"
+        assert_true(goal_cmd.exists(), "init installs the Claude /goal project command")
+        cmd_text = goal_cmd.read_text(encoding="utf-8")
+        assert_true(cmd_text.startswith("---") and "description:" in cmd_text and "$ARGUMENTS" in cmd_text,
+                    "the /goal command passes the launch line through verbatim")
         assert_true((tmp / ".goals" / "provenance").is_dir(), "init scaffolds provenance dir")
         gitignore_text = (tmp / ".gitignore").read_text(encoding="utf-8") if (tmp / ".gitignore").exists() else ""
         assert_true(".goals/evidence/" in gitignore_text and ".goals/run_state.json" in gitignore_text,
@@ -1907,6 +1914,25 @@ def main() -> int:
     assert_true("## Tasks" in examples_text and ".goals/focus.md:" in examples_text
                 and ".goals/children/G-001/current.md:" in examples_text,
                 "examples.md carries the file-block artifacts (contract with Tasks, focus projection)")
+
+    # Dual-host language: doctrine text never binds /goal to a single host.
+    for rel in ["skills/authoring-goals/SKILL.md",
+                "skills/authoring-goals/references/renderer-rules.md",
+                "skills/authoring-goals/assets/templates/GOALS.md",
+                "skills/authoring-goals/assets/AGENTS.snippet.md"]:
+        t = (ROOT / rel).read_text(encoding="utf-8")
+        assert_true("Codex `/goal`" not in t and "Codex /goal" not in t,
+                    f"{rel} carries no host-bespoke /goal phrasing")
+    # Claude-side capability scans exist (project-level hooks settings are read).
+    from inventory_capabilities import scan_hooks  # noqa: E402
+    with tempfile.TemporaryDirectory() as tih:
+        wsr = Path(tih)
+        (wsr / ".claude").mkdir()
+        (wsr / ".claude" / "settings.json").write_text(json.dumps(
+            {"hooks": {"PreToolUse": [{"hooks": []}]}}), encoding="utf-8")
+        rows = scan_hooks(wsr, Path("/nonexistent-home"), include_home=False)
+        assert_true(any("settings.json" in r["source"] and r["event"] == "PreToolUse" for r in rows),
+                    f"inventory reads Claude project hook settings: {rows}")
 
     print("GoalSpec full smoke test passed.")
     return 0

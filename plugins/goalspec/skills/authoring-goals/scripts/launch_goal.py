@@ -69,7 +69,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=1800,
                         help="Hard wall-clock ceiling in seconds for the executor (default 1800)")
     parser.add_argument("--exec-cmd", default="codex exec -",
-                        help="Executor command; receives the rendered /goal on stdin (default: 'codex exec -')")
+                        help="Executor command; receives the rendered /goal on stdin. Default 'codex exec -'; "
+                             "for Claude Code use e.g. 'claude -p --dangerously-skip-permissions'.")
     parser.add_argument("--skip-audit", action="store_true", help="Launch only; skip verifier run and audit")
     parser.add_argument("--campaign", help="Launch a locked campaign chain instead of the single root contract "
                         "(path to the manifest, relative to the workspace)")

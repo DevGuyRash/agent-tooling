@@ -7,7 +7,7 @@
 3. Record the verbatim request as provenance: `record_provenance.py --request <file|-> --update-contract`. This writes `.goals/provenance/<id>.md` (reference only, not execution scope) and inserts a `## Provenance` pointer (artifact path + request hash) into `current.md`. Never inline the raw request into `current.md` — the executor reads `current.md` as source of truth and would re-attract the sprawl.
 4. Compile `.goals/current.md` with the six launchability fields.
 5. Validate and lock the contract hash.
-6. Render a paste-ready Codex `/goal` objective, preferably with `--pointer` (render excludes provenance). End with the launch line verbatim — it is the deliverable; do not create or edit a host thread goal during authoring.
+6. Render a paste-ready `/goal` objective, preferably with `--pointer` (render excludes provenance). End with the launch line verbatim — it is the deliverable; do not create or edit a host thread goal during authoring.
 7. Do not execute the goal during authoring unless the user explicitly launches `/goal`.
 
 ## Scan an area for candidate goals

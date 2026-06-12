@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render .goals/current.md into a paste-ready Codex /goal objective."""
+"""Render .goals/current.md into a paste-ready /goal objective (Codex native; Claude Code via the init-installed project command)."""
 from __future__ import annotations
 
 import argparse

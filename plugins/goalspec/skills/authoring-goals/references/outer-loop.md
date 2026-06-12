@@ -16,8 +16,8 @@ Lifecycle:
 5. Select one ready goal, or report why none is launchable.
 6. Compile `.goals/current.md`.
 7. Validate and lock the contract hash.
-8. Render the Codex `/goal` objective.
-9. Run Codex `/goal` against the single contract.
+8. Render the `/goal` objective.
+9. Run `/goal` against the single contract.
 10. Capture verifier evidence and final report.
 11. Audit against `current.md` and hash lock.
 12. Close status in `GOALS.md` and `graph.json`.

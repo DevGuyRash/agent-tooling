@@ -24,15 +24,15 @@ Available skills, MCP servers, plugins, hooks, subagents, and project commands c
 
 ## What to look for
 
-- `.agents/skills/**/SKILL.md`
-- user skills under `~/.agents/skills` and `~/.codex/skills` when readable
+- `.agents/skills/**/SKILL.md` and `.claude/skills/**/SKILL.md`
+- user skills under `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills` when readable
 - `.agents/plugins/marketplace.json`
 - `~/.agents/plugins/marketplace.json`
-- plugin manifests under local plugin directories and `~/.codex/plugins/cache`
-- `.mcp.json` files
+- plugin manifests under local plugin directories, `~/.codex/plugins/cache`, and `~/.claude/plugins/cache`
+- `.mcp.json` files; `codex mcp list` / `claude mcp list` (home-scoped, best-effort)
 - `[mcp_servers.*]` declarations in `~/.codex/config.toml`, `.codex/config.toml`, and discovered config files
-- `hooks.json` and inline hooks in config files
-- `agents/openai.yaml`, subagent configs, or custom agent references
+- `hooks.json`, inline config hooks, and `.claude/settings(.local).json` hook blocks
+- `agents/openai.yaml`, `.codex/agents/*.toml`, `.claude/agents/*.md`, or custom agent references
 - package manager scripts and repo docs that reveal test/build/lint commands
 
 ## Output shape

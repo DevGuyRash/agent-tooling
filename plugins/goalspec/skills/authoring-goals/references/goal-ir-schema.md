@@ -61,4 +61,4 @@ Renderings:
 - `.goals/GOALS.md`: human-readable registry.
 - `.goals/graph.json`: machine-readable relationships and statuses (spec: `references/goal-graph.md`).
 - `.goals/frontier.md`: discovery coverage and limits.
-- Codex `/goal`: compact projection of `current.md`; it must not drop terminal-state, scope, budget, give-up, or evidence obligations (rules: `references/renderer-rules.md`).
+- `/goal`: compact projection of `current.md`; it must not drop terminal-state, scope, budget, give-up, or evidence obligations (rules: `references/renderer-rules.md`).

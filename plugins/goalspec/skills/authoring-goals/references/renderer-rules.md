@@ -1,6 +1,6 @@
-# Renderer Rules for Codex /goal
+# Renderer Rules for /goal Missions
 
-The rendered `/goal` objective should be compact but verifier-complete.
+The rendered `/goal` objective should be compact but verifier-complete. `/goal` is native on Codex; on Claude Code `init` installs a project command of the same name (`.claude/commands/goal.md`), so rendered launch lines are host-portable verbatim.
 
 ## Source of truth
 

@@ -1,6 +1,6 @@
 ## GoalSpec rule
 
-For long-running or autonomous work, do not start Codex `/goal` from a vague request directly.
+For long-running or autonomous work, do not start a `/goal` mission from a vague request directly.
 
 First use `$authoring-goals` to create or validate `.goals/current.md`.
 

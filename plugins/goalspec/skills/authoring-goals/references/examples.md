@@ -517,7 +517,7 @@ Final report must include:
 ````markdown
 # GOALS.md
 
-This file is a registry, not an execution target. Do not run Codex `/goal`
+This file is a registry, not an execution target. Do not run `/goal`
 against this entire file. Execute only a locked contract or rendered campaign
 pointer.
 

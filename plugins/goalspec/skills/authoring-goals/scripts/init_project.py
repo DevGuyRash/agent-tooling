@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize GoalSpec project artifacts in a Codex workspace."""
+"""Initialize GoalSpec project artifacts in a workspace (Codex and Claude Code)."""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,7 @@ SKILL_DIR = SCRIPT_DIR.parent
 TEMPLATES = SKILL_DIR / "assets" / "templates"
 AGENTS_SNIPPET = SKILL_DIR / "assets" / "AGENTS.snippet.md"
 CODEX_AGENT_TEMPLATES = SKILL_DIR / "assets" / "codex-agents"
+CLAUDE_COMMAND_TEMPLATES = SKILL_DIR / "assets" / "claude-commands"
 
 DIRS = [
     "candidates",
@@ -110,6 +111,15 @@ def init(root: Path, overwrite: bool = False, install_agents: bool = True, appen
             dst = target_dir / src.name
             if copy_if_missing(src, dst, overwrite):
                 copied.append(str(dst.relative_to(root)))
+
+    # Claude Code has no native /goal; a project-scoped standalone command is
+    # the only bare-/goal surface (plugin commands are always namespaced), so
+    # the SAME rendered launch line works on both hosts.
+    commands_dir = root / ".claude" / "commands"
+    for src in CLAUDE_COMMAND_TEMPLATES.glob("*.md"):
+        dst = commands_dir / src.name
+        if copy_if_missing(src, dst, overwrite):
+            copied.append(str(dst.relative_to(root)))
 
     if write_gitignore and ensure_gitignore(root):
         copied.append(".gitignore")
