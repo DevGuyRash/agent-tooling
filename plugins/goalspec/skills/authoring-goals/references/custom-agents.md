@@ -1,16 +1,12 @@
 # Custom Agent Templates
 
-Codex custom agents are project/user configuration, not automatically installed by this plugin. GoalSpec includes optional templates under `assets/codex-agents/`:
+GoalSpec ships read-only agent templates under `assets/codex-agents/`:
 
 - `goal-discoverer.toml`: read-only project explorer that returns candidate goals with evidence.
 - `goal-auditor.toml`: read-only auditor that compares reports/evidence against `.goals/current.md`.
-- `decomposition-reviewer.toml`: read-only adversarial reviewer for campaign decompositions — rubric check 10 with a refute bias and a per-child verdict. Spawn it after `validate_campaign.py` passes; apply or explicitly decline each finding in the manifest's `## Decomposition Review` section.
+- `decomposition-reviewer.toml`: read-only adversarial reviewer for campaign decompositions — rubric check 10 with a refute bias and a per-child verdict. Spawn it after `validate_campaign.py` passes; apply or explicitly decline each finding in the manifest's `## Decomposition Review` section, closing with per-child verdicts and the `Anchor:` line from validation output.
 
-Install them when the user wants project-scoped custom agents:
-
-```bash
-python3 <skills-file-root>/scripts/init_project.py --install-agents
-```
+`init_project.py` installs them into `.codex/agents/` by default (`--no-agents` opts out; existing files are never overwritten without `--overwrite`). On Claude Code hosts the plugin additionally ships `decomposition-reviewer` as a plugin agent — available in every session with no install step.
 
 Use custom agents for noisy, read-heavy discovery, skeptical audits, and adversarial review. They are not the source of truth. The source of truth is deterministic evidence: test exit codes, build results, coverage numbers, benchmark output, MCP resource data, artifacts, or human review gates.
 

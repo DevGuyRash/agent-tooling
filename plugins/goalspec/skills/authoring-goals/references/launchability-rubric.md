@@ -84,11 +84,15 @@ For each child, judged against the source documents it derives from:
 - Lock-horizon sanity: is the locked set the execution horizon — what can run next — with the tail sketched-conditional, materializing at selection? Far-future children locked on today's guesses are the inverse of stub children: judge the horizon case by case, not by a rule.
 - Are gates declared where the audit can enforce them (human gates inside ## Verifier, not only in Terminal State prose)?
 - Is the Verifier sketch executable in principle — a command, metric, or named gate, not "TBD"? Do children that share a companion verifier artifact pin it (`Pinned: <path> sha256 <hash>`)?
-- Is there a bounded first slice that fits a real budget, rather than the whole milestone restated?
+- Agent-executability: is any child actually human field work (recruiting, payments, sign-ups, physical checks)? Gate it explicitly or split the agent-executable part out.
+- Escape hatches: does each child have a reachable terminal state when its decision or input never arrives — and could a child read as "complete" with most of its work blocked-with-rationale?
+- Budget realism: do the per-child budgets and the chain budget plus wall clock plausibly fit the work, or are the numbers ceremony that satisfies the validator?
+- Chain-mode sanity: which children are attestation-only pause points (no executable verifier command), and is that pause cadence the intended execution mode? Did discovery follow the sources' own outbound references (files the docs declare authoritative) before declaring coverage?
+- Is there a bounded first slice that fits a real budget, rather than the whole milestone restated? When the source defines its own work units (epics, tickets), does the near wave decompose to that grain?
 - Is any child a meta-goal about GoalSpec itself? Substrate checks belong inside a value-bearing child.
 - Does `graph.json` mirror the manifest's nodes and edges (`graph_goal.py --sync-campaign`)?
 
-`validate_campaign.py` enforces the floor deterministically (stub children, meta-only ready sets, empty mirrors). This check is the reviewer's: the `decomposition-reviewer` agent template (`init_project.py --install-agents`) carries it with a refute bias and per-child verdicts. Answer each question with evidence from the manifest and sources; the authoring agent applies or explicitly declines each finding in the manifest's `## Decomposition Review` section.
+`validate_campaign.py` enforces the floor deterministically (stub children, meta-only ready sets, empty mirrors) and emits the review anchor. This check is the reviewer's: the `decomposition-reviewer` agent (shipped with the plugin on Claude Code; installed into `.codex/agents/` by `init_project.py` by default) carries it with a refute bias and per-child verdicts. Answer each question with evidence from the manifest and sources; the authoring agent applies or explicitly declines each finding in the manifest's `## Decomposition Review` section, closing with one verdict per child and the `Anchor:` line from validation output.
 
 ## Forever-risk levels
 

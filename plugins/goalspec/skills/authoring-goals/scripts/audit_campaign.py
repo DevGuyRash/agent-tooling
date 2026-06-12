@@ -9,6 +9,7 @@ campaign-report.md — those are projections, not evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -29,6 +30,36 @@ from common import (
 )
 
 FAILED_VERDICTS = {"not achieved", "contract mutated", "scope violation"}
+
+
+def _vendored_runtime_warnings(root: Path) -> list[str]:
+    """Integrity check over .goals/bin/MANIFEST.sha256 (informational, never the verdict).
+
+    The verdict derives from primary artifacts re-checked here and wrapper-side;
+    a mutated vendored runtime only means executor-side status/verifier output
+    was untrustworthy along the way.
+    """
+    manifest = Path(root) / ".goals" / "bin" / "MANIFEST.sha256"
+    if not manifest.exists():
+        return []
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return [f"vendored runtime manifest unreadable: {manifest}"]
+    out: list[str] = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        expected, name = parts
+        target = manifest.parent / name
+        if not target.exists():
+            out.append(f"vendored chain runtime missing: .goals/bin/{name} (re-render the campaign to restore)")
+            continue
+        if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            out.append(f"vendored chain runtime mutated: .goals/bin/{name} — executor-side status/verifier "
+                       "runs were untrustworthy; wrapper-side re-runs and this audit remain authoritative")
+    return out
 
 
 def _harvest_follow_ups(report: Path) -> list[str]:
@@ -66,6 +97,7 @@ def audit_campaign(campaign: Path) -> dict:
         return result
 
     root = campaign_workspace_root(campaign)
+    result["warnings"].extend(_vendored_runtime_warnings(root))
     children = parse_campaign_children(campaign.read_text(encoding="utf-8"))
     ready = [c for c in children if c.get("status") == "ready"]
     deps = dependency_map(children)

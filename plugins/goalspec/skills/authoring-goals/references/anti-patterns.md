@@ -64,3 +64,23 @@ Good: current.md hash is written before launch and audited at close.
 
 Bad: while fixing auth, refactor the whole API layer.
 Good: record API refactor as a follow-up candidate.
+
+## Single-goal-centered chain handoff
+
+Bad: the handoff output says "start with G-001" — the same text is injected into every new thread, so every thread re-sees G-001 even after it is done.
+Good: the rendered chain derives the next pending child from `campaign_status.py` every time, skips achieved children, and stops when the status tool says stop; the same line stays correct across the whole campaign lifecycle.
+
+## Authoring-thread goal wrapper
+
+Bad: after rendering the launch line, the author also creates a host thread goal ("execute the locked campaign when launched") — it persists into every new thread and duplicates the launch line under a second system.
+Good: the final message ends with the launch line verbatim; the host's thread-goal tracker belongs to the thread where the user pastes it. GoalSpec goals are workspace artifacts, not host thread goals.
+
+## Pre-baked review
+
+Bad: `## Decomposition Review` written in the same pass as the manifest it claims to have reviewed, before validation ever ran — self-attestation shaped like a review.
+Good: validate (copy the review anchor) → independent adversarial review → apply or decline each finding → record per-child verdicts plus the `Anchor:` line; a stale or missing anchor warns on every later validation.
+
+## Milestone-wrapper decomposition
+
+Bad: children are the source roadmap's milestone names with status labels and by-reference acceptance criteria — one child bundles a dozen work units the source already defined.
+Good: the near wave decomposes to the source's own handoff grain (epics, tickets, numbered work packages), each child fitting its own budget with an oracle derived from its own clauses; the far tail stays sketched-conditional.

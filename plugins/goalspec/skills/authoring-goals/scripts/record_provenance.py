@@ -21,6 +21,7 @@ from common import (
     PROVENANCE_REQUEST_BEGIN,
     PROVENANCE_REQUEST_END,
     contract_lock_status,
+    goals_relative,
     sha256_text,
 )
 
@@ -62,7 +63,7 @@ def build_provenance(request: str, goal_id: str, source: str, contract: Path) ->
     text = re.sub(r"^# Provenance:.*$", f"# Provenance: {goal_id}", text, count=1, flags=re.M)
     text = _replace_section(text, "Source", source.strip() or "[unspecified]")
     compiled = (
-        "- Contract: .goals/current.md\n"
+        f"- Contract: {goals_relative(contract)}\n"
         f"- Contract hash: {contract_hash}\n"
         f"- Request hash: {request_hash}\n"
         f"- Compiled: {date.today().isoformat()}"

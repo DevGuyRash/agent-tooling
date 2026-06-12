@@ -10,6 +10,16 @@ TODO_RE = re.compile(r"\b(TODO|FIXME|HACK|BUG|XXX)\b[:\s-]*(.*)", re.I)
 FAIL_RE = re.compile(r"\b(fail(?:ed|ing)?|error|exception|traceback|assertion|timeout)\b", re.I)
 TEST_SKIP_RE = re.compile(r"\b(skip|xfail|pending)\b", re.I)
 
+# Decision registers: markdown sections where source docs park their own open
+# owner decisions (e.g. a PRD's '## Open Questions'). Surfacing each item as a
+# 'needs human decision' candidate is extraction, not policy — the agent still
+# decides what becomes a conditional child or an 'Owner decision required:' line.
+DECISION_HEAD_RE = re.compile(
+    r"^#{1,6}\s+.*\b(?:open\s+(?:questions?|decisions?|issues?)|unresolved|to\s+be\s+decided)\b", re.I)
+ANY_HEAD_RE = re.compile(r"^#{1,6}\s+\S")
+DECISION_ITEM_RE = re.compile(r"^\s{0,3}(?:\d{1,3}[.)]\s+|[-*+]\s+)(.+\S)\s*$")
+DECISION_ITEMS_PER_FILE = 40
+
 IGNORE_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next", "target", "coverage", "__pycache__"}
 TEXT_SUFFIXES = {".md", ".txt", ".log", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".yml", ".yaml", ".json", ".toml", ".sh", ".css", ".html"}
 
@@ -36,6 +46,7 @@ def iter_files(paths, max_files):
 
 def candidate_from_hit(path: Path, line_no: int, kind: str, text: str) -> str:
     rel = path.as_posix()
+    status = "conditional"
     if kind == "todo":
         title = f"Resolve work marker in {rel}"
         terminal = f"The work marker at {rel}:{line_no} is either implemented, removed as obsolete with justification, or converted into a launchable follow-up goal."
@@ -44,13 +55,18 @@ def candidate_from_hit(path: Path, line_no: int, kind: str, text: str) -> str:
         title = f"Triage skipped or pending test in {rel}"
         terminal = f"The skipped/pending test at {rel}:{line_no} is either enabled and passing, deleted as obsolete with justification, or documented as blocked."
         verifier = "Run the relevant test command and report raw result."
+    elif kind == "decision":
+        status = "needs human decision"
+        title = f"Resolve open decision in {rel}"
+        terminal = f"The open decision at {rel}:{line_no} is decided by its owner and recorded (decision record or updated source section); dependent work is unblocked or explicitly deferred."
+        verifier = "A recorded decision names the chosen option; human gate."
     else:
         title = f"Investigate error signal in {rel}"
         terminal = f"The error/failure signal at {rel}:{line_no} is reproduced, resolved, or recorded as blocked with evidence."
         verifier = "Run reproduction or relevant test/log verification."
     return f"""### Candidate: {title}
 
-- Status: conditional
+- Status: {status}
 - Source: `{rel}:{line_no}`
 - Evidence: `{text.strip()[:180]}`
 - Suggested terminal state: {terminal}
@@ -67,9 +83,22 @@ def extract(paths, max_files=200, max_candidates=50):
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception:
             continue
+        in_register, register_taken = False, 0
         for i, line in enumerate(lines, 1):
             if len(cands) >= max_candidates:
                 return cands
+            if path.suffix == ".md":
+                if ANY_HEAD_RE.match(line):
+                    # Any heading closes a register; only a decision heading opens one.
+                    in_register = bool(DECISION_HEAD_RE.match(line))
+                    if in_register:
+                        continue  # the register heading itself is not an item
+                elif in_register and register_taken < DECISION_ITEMS_PER_FILE:
+                    m = DECISION_ITEM_RE.match(line)
+                    if m:
+                        cands.append(candidate_from_hit(path, i, "decision", m.group(1)))
+                        register_taken += 1
+                        continue  # decision wins over a TODO inside the same item
             if TODO_RE.search(line):
                 cands.append(candidate_from_hit(path, i, "todo", line))
             elif ("test" in path.as_posix().lower() or "spec" in path.as_posix().lower()) and TEST_SKIP_RE.search(line):

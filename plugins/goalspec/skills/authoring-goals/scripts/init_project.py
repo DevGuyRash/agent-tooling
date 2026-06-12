@@ -57,7 +57,7 @@ def ensure_gitignore(root: Path) -> bool:
     return True
 
 
-def init(root: Path, overwrite: bool = False, install_agents: bool = False, append_agents_md: bool = False,
+def init(root: Path, overwrite: bool = False, install_agents: bool = True, append_agents_md: bool = False,
          write_gitignore: bool = True) -> dict:
     root = root.resolve()
     goals = root / ".goals"
@@ -121,13 +121,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=None, help="Workspace root. Defaults to git root or cwd.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing template files.")
-    parser.add_argument("--install-agents", action="store_true", help="Copy optional read-only custom agent templates into .codex/agents/.")
+    parser.add_argument("--install-agents", action="store_true",
+                        help="Deprecated no-op: the read-only agent templates install by default; use --no-agents to opt out.")
+    parser.add_argument("--no-agents", action="store_true",
+                        help="Skip installing the read-only .codex/agents/*.toml agent templates.")
     parser.add_argument("--append-agents-md", action="store_true", help="Append the compact GoalSpec rule to AGENTS.md if absent.")
     parser.add_argument("--no-gitignore", action="store_true", help="Do not write GoalSpec evidence-ignore rules to .gitignore.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     root = Path(args.root).resolve() if args.root else git_root_or_cwd()
-    result = init(root, args.overwrite, args.install_agents, args.append_agents_md, write_gitignore=not args.no_gitignore)
+    # Explicit opt-out beats the deprecated no-op opt-in when both are passed.
+    result = init(root, args.overwrite, install_agents=not args.no_agents,
+                  append_agents_md=args.append_agents_md, write_gitignore=not args.no_gitignore)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

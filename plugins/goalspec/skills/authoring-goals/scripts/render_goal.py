@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -11,9 +12,11 @@ from common import (
     REPORT_FIELDS,
     bullets,
     campaign_lock_status,
+    campaign_workspace_root,
     child_contract_path,
     contract_lock_status,
     extract_verifier_commands,
+    goals_relative,
     parse_campaign_children,
     parse_sections,
     sha256_file,
@@ -29,6 +32,36 @@ class RenderRefused(Exception):
         self.status = status
 
 
+# The dependency-closed chain runtime: campaign_status imports audit_goal,
+# common, select_goal; run_verifiers imports common; everything else is stdlib.
+# Vendored copies must run with ONLY each other — never grow this set without
+# re-verifying the import closure (the smoke test guards it statically).
+CHAIN_RUNTIME_FILES = ("campaign_status.py", "run_verifiers.py", "audit_goal.py", "common.py", "select_goal.py")
+CHAIN_RUNTIME_MANIFEST = "MANIFEST.sha256"
+
+
+def vendor_chain_runtime(root: Path) -> dict:
+    """Freeze the chain runtime into <root>/.goals/bin (unconditional overwrite).
+
+    The rendered chain references these workspace-local copies instead of
+    plugin-cache paths, so a frozen mission survives plugin upgrades that prune
+    old cache versions; re-rendering is the recovery path. Raw-byte hashes land
+    in MANIFEST.sha256 (sha256sum -c compatible) so a mutated runtime is
+    detectable at audit time.
+    """
+    src_dir = Path(__file__).resolve().parent
+    bin_dir = Path(root) / ".goals" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    files: dict[str, str] = {}
+    for name in CHAIN_RUNTIME_FILES:
+        data = (src_dir / name).read_bytes()
+        (bin_dir / name).write_bytes(data)
+        files[name] = hashlib.sha256(data).hexdigest()
+    manifest = bin_dir / CHAIN_RUNTIME_MANIFEST
+    manifest.write_text("".join(f"{files[n]}  {n}\n" for n in sorted(files)), encoding="utf-8")
+    return {"dir": str(bin_dir), "files": files, "manifest": str(manifest)}
+
+
 def compact_list(items, max_items=5, max_len=600):
     if not items:
         return "not specified"
@@ -39,20 +72,6 @@ def compact_list(items, max_items=5, max_len=600):
     if len(text) > max_len:
         text = text[: max_len - 20].rstrip() + "..."
     return text
-
-
-def goals_relative(path: Path) -> str:
-    """Spell a path from its last '.goals' component onward.
-
-    The launch line is pasted into an executor whose cwd is the workspace root,
-    so '.goals/...' is the spelling that resolves there even when this process
-    was handed an absolute path. Paths outside any .goals/ pass through as-is.
-    """
-    parts = Path(path).parts
-    if ".goals" in parts:
-        idx = len(parts) - 1 - tuple(reversed(parts)).index(".goals")
-        return "/".join(parts[idx:])
-    return Path(path).as_posix()
 
 
 def pointer_launch_line(pointer_ref: str, pointer_sha256: str, mission_anchor: str) -> str:
@@ -112,7 +131,7 @@ def render_with_meta(path: Path, max_chars: int = 4000, allow_unlocked: bool = F
     # executors otherwise improvise headings and honest reports audit as incomplete.
     report_headings = "; ".join(f"## {field}" for field in REPORT_FIELDS)
 
-    rendered = f"""/goal Complete the frozen goal contract in .goals/current.md. First read that file and treat it as the source of truth. Contract sha256 at render time: {h}. Completeness dimensions: {completeness}. Terminal state summary: {terminal}. Verifier summary: {verifier}. Respect out-of-scope boundaries, including: {out_text}. Budget summary: {budget}. Stop and report blocked/incomplete if any give-up condition occurs, including: {giveup}. Do not treat .goals/GOALS.md or .goals/provenance/ as execution scope; provenance preserves the original request for reference only and must not be executed or re-derived. Do not modify .goals/current.md or .goals/current.sha256 during execution. Write only .goals/evidence/ and .goals/reports/ inside .goals/. Final report must use these exact section headings: {report_headings} — and must include: {evidence}. Record adjacent work as follow-up candidates, not implicit scope."""
+    rendered = f"""/goal Complete the frozen goal contract in .goals/current.md. First read that file and treat it as the source of truth. If existing verifier evidence and the run report already certify this contract achieved, verify that and stop — report achieved without redoing the work. Contract sha256 at render time: {h}. Completeness dimensions: {completeness}. Terminal state summary: {terminal}. Verifier summary: {verifier}. Respect out-of-scope boundaries, including: {out_text}. Budget summary: {budget}. Stop and report blocked/incomplete if any give-up condition occurs, including: {giveup}. Do not treat .goals/GOALS.md or .goals/provenance/ as execution scope; provenance preserves the original request for reference only and must not be executed or re-derived. Do not modify .goals/current.md or .goals/current.sha256 during execution. Write only .goals/evidence/ and .goals/reports/ inside .goals/. Final report must use these exact section headings: {report_headings} — and must include: {evidence}. Record adjacent work as follow-up candidates, not implicit scope."""
     rendered = " ".join(rendered.split())
     full_chars = len(rendered)
     truncated = full_chars > max_chars
@@ -156,18 +175,20 @@ def render_campaign_with_meta(path: Path, max_chars: int = 4000) -> dict:
                 status,
             )
 
+    runtime = vendor_chain_runtime(campaign_workspace_root(path))
+    campaign_ref = goals_relative(path)
     ids = ", ".join(c["id"] for c in ready)
-    scripts_dir = Path(__file__).resolve().parent
     report_headings = "; ".join(f"## {field}" for field in REPORT_FIELDS)
-    rendered = f"""/goal Execute the frozen campaign chain in {path}. The campaign manifest and every child contract are frozen; campaign aggregate sha256 at render time: {status['current_hash']}. Ready children (each a full contract at .goals/children/<id>/current.md): {ids}. Chain procedure, per child: (1) run `python3 {scripts_dir}/campaign_status.py {path} --json` and take its next_child — skip children already marked achieved when resuming; (2) re-read that child's .goals/children/<id>/current.md and treat it as the source of truth, honoring its own budget, scope, and give-up conditions; (3) do the work; (4) run `python3 {scripts_dir}/run_verifiers.py .goals/children/<id>/current.md --run --evidence-dir .goals/evidence/children/<id>/verifiers`; (5) write the child report at .goals/reports/<id>-report.md using these exact section headings: {report_headings}; (6) refresh campaign_status.py and continue with its next_child. Stop the chain when campaign_status.py reports chain_should_stop (chain budget exhausted, failure policy triggered, or no ready unblocked child remains). If campaign_status.py itself fails or its output is unreadable, stop immediately and report blocked — do not improvise the chain order. Never modify the campaign manifest, any child contract, any .sha256 lock, .goals/GOALS.md, or .goals/graph.json; write only under .goals/evidence/ and .goals/reports/. Record adjacent discoveries in each child report's Follow-Up Candidates, never as new scope. When the chain stops, write a final informational summary at .goals/reports/campaign-report.md (the audit reads per-child evidence, not this summary)."""
+    rendered = f"""/goal Execute the frozen campaign chain in {campaign_ref}. This mission is durable across threads: derive the next pending child from state every time, skip children already achieved, and stop when the status tool says stop — never assume a fixed starting child and never redo finished work. The campaign manifest and every child contract are frozen; campaign aggregate sha256 at render time: {status['current_hash']}. Ready children (each a full contract at .goals/children/<id>/current.md): {ids}. Per child: (1) run `python3 .goals/bin/campaign_status.py {campaign_ref} --json` and take its next_child; (2) re-read that child's .goals/children/<id>/current.md and treat it as the source of truth — it binds outcomes, scope, budget, and give-up conditions, never method; (3) do the work; (4) run `python3 .goals/bin/run_verifiers.py .goals/children/<id>/current.md --run --evidence-dir .goals/evidence/children/<id>/verifiers`; (5) write the child report at .goals/reports/<id>-report.md using these exact section headings: {report_headings}; (6) refresh campaign_status.py and continue with its next_child. A child whose contract declares no executable verifier command completes only when its report records the declared gate outcome and the audit certifies it; never write a ratification line yourself unless the owner explicitly authorized it — if the gate is pending, stop and report blocked so the owner can ratify and relaunch this same line. Stop the chain when campaign_status.py reports chain_should_stop (budget exhausted, failure policy triggered, a pause point awaiting ratification, no ready unblocked child, or everything achieved — then report complete). If campaign_status.py itself fails or its output is unreadable, stop immediately and report blocked — do not improvise the chain order. Never modify the campaign manifest, any child contract, any .sha256 lock, the vendored runtime under .goals/bin/ (integrity recorded in .goals/bin/MANIFEST.sha256), .goals/GOALS.md, or .goals/graph.json; write only under .goals/evidence/ and .goals/reports/. Record adjacent discoveries in each child report's Follow-Up Candidates, never as new scope. When the chain stops, write a final informational summary at .goals/reports/campaign-report.md (the audit reads per-child evidence, not this summary)."""
     rendered = " ".join(rendered.split())
     full_chars = len(rendered)
     truncated = full_chars > max_chars
     if truncated:
-        rendered = rendered[: max_chars - 160].rstrip() + f" ... See {path} and the child contracts for full non-droppable clauses; if this projection conflicts with them, they win."
+        rendered = rendered[: max_chars - 160].rstrip() + f" ... See {campaign_ref} and the child contracts for full non-droppable clauses; if this projection conflicts with them, they win."
     return {"rendered": rendered, "truncated": truncated, "chars": len(rendered),
             "full_chars": full_chars, "lock_status": status,
-            "ready_children": [c["id"] for c in ready]}
+            "ready_children": [c["id"] for c in ready],
+            "vendored_runtime": runtime}
 
 
 def main() -> int:

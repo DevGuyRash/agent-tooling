@@ -874,7 +874,9 @@ def main() -> int:
                       budget: int = 5, lock: bool = True) -> Path:
         """Build a campaign workspace: manifest + a full locked contract per ready child.
 
-        specs: [{"id", "status", "depends_on", "cmd"}] — cmd is the child's verifier command.
+        specs: [{"id", "status", "depends_on", "cmd", "attestation"}] — cmd is the child's
+        verifier command; attestation=True swaps the Verifier to a human-gate-only bullet
+        (no executable command), making the child a chain pause point.
         """
         goals = root / ".goals"
         (goals / "reports").mkdir(parents=True, exist_ok=True)
@@ -891,9 +893,14 @@ def main() -> int:
                 cdir.mkdir(parents=True, exist_ok=True)
                 ctext = base.replace("# Goal Contract: G-001 Fix Password Reset Flow",
                                      f"# Goal Contract: {cid} Chain Child", 1)
-                ctext = _swap(ctext, "Verifier",
-                              "Completion must be verified by:\n- `" + spec.get("cmd", "python3 -c \"import sys; sys.exit(0)\"")
-                              + "`\n- Expected result: exit code 0.")
+                if spec.get("attestation"):
+                    ctext = _swap(ctext, "Verifier",
+                                  "Completion must be verified by:\n"
+                                  "- Human gate: the owner reviews and ratifies the delivered artifact.")
+                else:
+                    ctext = _swap(ctext, "Verifier",
+                                  "Completion must be verified by:\n- `" + spec.get("cmd", "python3 -c \"import sys; sys.exit(0)\"")
+                                  + "`\n- Expected result: exit code 0.")
                 (cdir / "current.md").write_text(ctext, encoding="utf-8")
                 if spec.get("lock_child", True):
                     (cdir / "current.sha256").write_text(
@@ -1086,14 +1093,41 @@ def main() -> int:
         v_synced = validate_campaign(manifest)
         assert_true(not any("graph.json mirror" in w for w in v_synced["warnings"]),
                     f"synced mirror clears the graph warnings: {v_synced['warnings']}")
-        assert_true(any("Decomposition Review" in w for w in v_synced["warnings"]),
+        assert_true(any("No ## Decomposition Review" in w for w in v_synced["warnings"]),
                     f"missing adversarial-review record warns: {v_synced['warnings']}")
+        assert_true(re.fullmatch(r"[0-9a-f]{64}", v_synced.get("review_anchor", "")),
+                    f"validation always emits a 64-hex review anchor: {v_synced.get('review_anchor')}")
+        # A review without an Anchor line or per-child verdicts is recorded but not closed.
         manifest.write_text(sketched + "\n## Decomposition Review\n\n"
                             "Reviewer verdict: value-add confirmed; tightened the G-002 verifier sketch.\n",
                             encoding="utf-8")
         v_rev = validate_campaign(manifest)
-        assert_true(not any("Decomposition Review" in w for w in v_rev["warnings"]),
-                    f"recorded review verdict clears the warning: {v_rev['warnings']}")
+        assert_true(not any("No ## Decomposition Review" in w for w in v_rev["warnings"]),
+                    f"recorded review clears the presence warning: {v_rev['warnings']}")
+        assert_true(any("records no 'Anchor:" in w for w in v_rev["warnings"]),
+                    f"anchor-less review warns: {v_rev['warnings']}")
+        assert_true(any("no per-child verdict" in w and "G-001" in w and "G-003" in w
+                        and "G-002" not in w.split("for:")[1] for w in v_rev["warnings"]),
+                    f"missing verdicts warn naming exactly the unmentioned children: {v_rev['warnings']}")
+        # Close the review properly: fresh anchor + one verdict per child => zero review warnings.
+        anchor = v_rev["review_anchor"]
+        closed = (sketched + "\n## Decomposition Review\n\n"
+                  "- G-001: confirmed — substrate child carries its own oracle.\n"
+                  "- G-002: weak — sketch only; materializes at selection.\n"
+                  "- G-003: weak — blocked on the legal gate, sketch present.\n\n"
+                  f"Anchor: {anchor}\n")
+        manifest.write_text(closed, encoding="utf-8")
+        v_closed = validate_campaign(manifest)
+        assert_true(v_closed["review_anchor"] == anchor,
+                    "review-section edits never move the anchor (self-reference soundness)")
+        assert_true(not any("Decomposition Review" in w or "Anchor" in w for w in v_closed["warnings"]),
+                    f"anchored review with full verdicts is clean: {v_closed['warnings']}")
+        # Any post-review edit OUTSIDE the review section reads as staleness.
+        manifest.write_text(closed.replace("Milestone two", "Milestone two renamed"), encoding="utf-8")
+        v_stale = validate_campaign(manifest)
+        assert_true(any("stale" in w and "changed after this review" in w for w in v_stale["warnings"]),
+                    f"post-review graph edit warns as stale anchor: {v_stale['warnings']}")
+        manifest.write_text(sketched, encoding="utf-8")
 
     # Meta-goal smell at the single-contract level.
     with tempfile.TemporaryDirectory() as tmeta:
@@ -1354,6 +1388,239 @@ def main() -> int:
         cfile = ws / ".goals" / "rendered-campaign.md"
         assert_true(cfile.read_text(encoding="utf-8") == cm["rendered"] + "\n",
                     "campaign pointer file matches the rendered chain text")
+
+    # --- Attestation-advance: human-gated children pause the chain, audit advances it ---
+    # The rendered mission is durable across threads: it never centers a child;
+    # campaign_status derives the next pending one, pauses at unratified gates,
+    # and resumes after the owner records the gate outcome.
+    with tempfile.TemporaryDirectory() as ta1:
+        ws = Path(ta1)
+        m = make_campaign(ws, [{"id": "G-001", "attestation": True, "depends_on": "none"},
+                               {"id": "G-002", "depends_on": "G-001"}])
+        v_att = validate_campaign(m)
+        assert_true(v_att["ok"] and v_att.get("attestation_only") == ["G-001"],
+                    f"attestation-only child validates with the pause-point signal: {v_att.get('attestation_only')}")
+        assert_true(any("attestation-only" in w and "G-001" in w for w in v_att["warnings"]),
+                    f"validate warns about the pause point: {v_att['warnings']}")
+
+        s_fresh = derive_status(m)
+        assert_true(s_fresh["next_child"] == "G-001" and not s_fresh["chain_should_stop"],
+                    f"unattempted attestation child stays workable, not stopped: {s_fresh['next_child']}")
+        assert_true(s_fresh["attestation_only"] == ["G-001"]
+                    and any("pause point" in w for w in s_fresh["warnings"]),
+                    f"status names the pause points: {s_fresh['warnings']}")
+
+        # Attempt: work done, report written, gate still pending => clean pause.
+        ev1 = child_evidence_dir(ws, "G-001")
+        ev1.mkdir(parents=True, exist_ok=True)
+        (ev1 / "artifact.txt").write_text("delivered artifact\n", encoding="utf-8")
+        rep1 = ws / ".goals" / "reports" / "G-001-report.md"
+        rep1.write_text(
+            "# Goal Report: G-001\n\n## Result\nblocked: awaiting owner ratification\n\n"
+            "## Files Changed\n- x\n\n## Commands Run\n- none\n\n"
+            "## Evidence\n- .goals/evidence/children/G-001/artifact.txt\n\n## Budget Used\n- 1\n\n"
+            "## Remaining Risks\n- Human gate: pending owner ratification.\n\n## Follow-Up Candidates\n- none\n",
+            encoding="utf-8")
+        s_pause = derive_status(m)
+        assert_true(s_pause["chain_should_stop"] and s_pause["next_child"] is None,
+                    f"attempted-but-unratified attestation child pauses the chain: {s_pause['stop_reason']}")
+        assert_true("G-001" in (s_pause["stop_reason"] or "") and "relaunch" in s_pause["stop_reason"],
+                    f"pause reason teaches the resume path: {s_pause['stop_reason']}")
+        assert_true(not (s_pause["chain_should_stop"] and s_pause["next_child"]),
+                    "never-both invariant holds at the pause")
+        a_withheld = audit_campaign(m)
+        assert_true(a_withheld["result"] != "campaign achieved",
+                    f"roll-up withholds certification while the gate is pending: {a_withheld['result']}")
+
+        # Owner ratifies => the audit verdict advances the chain to G-002.
+        rep1.write_text(rep1.read_text(encoding="utf-8")
+                        .replace("blocked: awaiting owner ratification", "achieved")
+                        .replace("Human gate: pending owner ratification.",
+                                 "Human gate: approved by the owner."), encoding="utf-8")
+        s_ratified = derive_status(m)
+        g1_row = next(r for r in s_ratified["children"] if r["id"] == "G-001")
+        assert_true(g1_row["status"] == "achieved-pending-audit" and s_ratified["next_child"] == "G-002",
+                    f"ratified attestation child advances the chain: {g1_row['status']} -> {s_ratified['next_child']}")
+
+        # Machine child completes => all achieved; roll-up certifies.
+        chain_evidence(ws, m, "G-002", passed=True)
+        chain_report(ws, "G-002")
+        s_done = derive_status(m)
+        assert_true(s_done["chain_should_stop"] and "all ready children achieved" in (s_done["stop_reason"] or ""),
+                    f"completed chain stops cleanly: {s_done['stop_reason']}")
+        a_done = audit_campaign(m)
+        assert_true(a_done["result"] == "campaign achieved",
+                    f"ratified gate + machine result => campaign achieved: {a_done['result']}")
+
+        # Idempotent re-injection: the rendered mission routes by state, never by name.
+        meta_att = render_campaign_with_meta(m)
+        r_att = meta_att["rendered"]
+        assert_true("take its next_child" in r_att and "durable across threads" in r_att,
+                    "chain text derives the next child from state with the resume framing")
+        assert_true("never write a ratification line yourself" in r_att,
+                    "chain text carries the no-self-ratification constraint")
+        assert_true("start with G-" not in r_att and "begin with G-" not in r_att,
+                    "chain text never centers a specific starting child")
+
+        # Mixed child (command + human gate) still advances on the machine path.
+        ws2 = Path(ta1) / "mixed"
+        m2 = make_campaign(ws2, [{"id": "G-001", "depends_on": "none"}])
+        child2 = ws2 / ".goals" / "children" / "G-001" / "current.md"
+        child2.write_text(_swap(child2.read_text(encoding="utf-8"), "Verifier",
+                                "Completion must be verified by:\n- `python3 -c \"import sys; sys.exit(0)\"`\n"
+                                "- Human gate: the owner reviews and ratifies the artifact."), encoding="utf-8")
+        (child2.parent / "current.sha256").write_text(f"{sha256_file(child2)}  current.md\n", encoding="utf-8")
+        campaign_lock_path(m2).write_text(f"{campaign_aggregate_hash(m2)}  {m2.name}\n", encoding="utf-8")
+        v_mixed = validate_campaign(m2)
+        assert_true(v_mixed["ok"] and not v_mixed.get("attestation_only"),
+                    f"mixed child (command + gate) is not a pause point: {v_mixed.get('attestation_only')}")
+        meta_mixed = render_campaign_with_meta(m2)
+        assert_true(meta_mixed["rendered"].startswith("/goal "), "mixed-child campaign renders")
+        chain_evidence(ws2, m2, "G-001", passed=True)
+        chain_report(ws2, "G-001")
+        s_mixed = derive_status(m2)
+        assert_true(s_mixed["achieved_pending_audit"] == 1,
+                    f"mixed child advances on the machine result: {s_mixed['children']}")
+        a_mixed = audit_campaign(m2)
+        assert_true(a_mixed["result"] != "campaign achieved",
+                    f"roll-up still withholds the mixed child until ratification: {a_mixed['result']}")
+
+    # --- Vendored chain runtime: the frozen mission carries its own instruments ---
+    from render_goal import CHAIN_RUNTIME_FILES  # noqa: E402
+    with tempfile.TemporaryDirectory() as tv1:
+        ws = Path(tv1)
+        m = make_campaign(ws, two_chain)
+        meta_v = render_campaign_with_meta(m)
+        runtime = meta_v["vendored_runtime"]
+        bin_dir = ws / ".goals" / "bin"
+        for name in CHAIN_RUNTIME_FILES:
+            assert_true((bin_dir / name).exists(), f"vendored runtime contains {name}")
+            recomputed = hashlib.sha256((bin_dir / name).read_bytes()).hexdigest()
+            assert_true(runtime["files"][name] == recomputed,
+                        f"vendored hash recorded for {name} matches the written bytes")
+        manifest_text = (bin_dir / "MANIFEST.sha256").read_text(encoding="utf-8")
+        for name, digest in runtime["files"].items():
+            assert_true(f"{digest}  {name}" in manifest_text, f"MANIFEST records {name}")
+        r_v = meta_v["rendered"]
+        assert_true(".goals/bin/campaign_status.py" in r_v and ".goals/bin/run_verifiers.py" in r_v,
+                    "chain text invokes the vendored runtime")
+        assert_true(str(SCRIPTS) not in r_v,
+                    "chain text carries no plugin-tree absolute path (survives upgrades)")
+        # Runtime import-closure proof: the vendored status tool runs from the
+        # workspace with no plugin tree on the path.
+        env_clean = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env_clean["GOALSPEC_NO_GIT"] = "1"
+        vp = subprocess.run([sys.executable, ".goals/bin/campaign_status.py",
+                             ".goals/campaign-test.md", "--json", "--no-write"],
+                            cwd=tv1, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=env_clean, timeout=60)
+        assert_true(vp.returncode == 0, f"vendored campaign_status runs import-clean: {vp.stderr}")
+        assert_true(json.loads(vp.stdout)["next_child"] == "G-001",
+                    "vendored status tool derives the chain state correctly")
+        # Static closure guard: every local import of a vendored file is itself vendored.
+        local_scripts = {p.name for p in SCRIPTS.glob("*.py")}
+        for name in CHAIN_RUNTIME_FILES:
+            for mod in re.findall(r"(?m)^(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                                  (SCRIPTS / name).read_text(encoding="utf-8")):
+                if f"{mod}.py" in local_scripts:
+                    assert_true(f"{mod}.py" in CHAIN_RUNTIME_FILES,
+                                f"vendored {name} imports {mod}.py which is not in CHAIN_RUNTIME_FILES")
+        # Tamper => audit warns; re-render restores.
+        (bin_dir / "run_verifiers.py").write_bytes(b"# tampered\n")
+        a_tamper = audit_campaign(m)
+        assert_true(any("vendored chain runtime mutated" in w for w in a_tamper["warnings"]),
+                    f"audit warns on a mutated vendored runtime: {a_tamper['warnings']}")
+        render_campaign_with_meta(m)
+        restored = hashlib.sha256((bin_dir / "run_verifiers.py").read_bytes()).hexdigest()
+        assert_true(restored == runtime["files"]["run_verifiers.py"],
+                    "re-render restores the vendored runtime")
+
+    # --- Decision-register harvest: sources' own open decisions become candidates ---
+    with tempfile.TemporaryDirectory() as tdh:
+        prd_like = Path(tdh) / "PRD.md"
+        items = "\n".join(f"{i}. Open item number {i}." for i in range(1, 34))
+        prd_like.write_text(
+            "# PRD\n\n## 18. Scope\n\n- in scope thing\n- another\n\n"
+            "## 19. Open Questions for `ARCHITECTURE.md` and `ROADMAP.md`\n\n" + items + "\n\n"
+            "## 20. Rollout\n\n1. step one\n2. step two\n", encoding="utf-8")
+        dh = extract([str(prd_like)], max_files=5, max_candidates=100)
+        decisions = [c for c in dh if "needs human decision" in c]
+        assert_true(len(decisions) == 33, f"PRD-shaped register yields exactly its 33 items: {len(decisions)}")
+        assert_true("Open item number 1." in decisions[0] and "PRD.md:" in decisions[0],
+                    "decision candidates carry the item text and file:line source")
+        assert_true(not any("step one" in c or "in scope thing" in c for c in dh),
+                    "neighboring sections contribute no decision candidates")
+        capped = Path(tdh) / "cap.md"
+        capped.write_text("## Unresolved\n\n" + "\n".join(f"- item {i}" for i in range(60)) + "\n",
+                          encoding="utf-8")
+        dcap = [c for c in extract([str(capped)], max_files=5, max_candidates=100)
+                if "needs human decision" in c]
+        assert_true(len(dcap) == 40, f"per-file decision cap holds: {len(dcap)}")
+        as_txt = Path(tdh) / "notes.txt"
+        as_txt.write_text("## Open Questions\n\n1. not markdown\n", encoding="utf-8")
+        assert_true(not [c for c in extract([str(as_txt)], 5, 100) if "needs human decision" in c],
+                    "non-markdown files never enter register mode")
+        lvl3 = Path(tdh) / "design.md"
+        lvl3.write_text("### To Be Decided\n\n- charting library\n\nProse with open questions inline.\n",
+                        encoding="utf-8")
+        d3 = [c for c in extract([str(lvl3)], 5, 100) if "needs human decision" in c]
+        assert_true(len(d3) == 1 and "charting library" in d3[0],
+                    f"level-3 register harvested; mid-paragraph prose is not: {len(d3)}")
+
+    # --- Reviewer availability: installed by default, shipped on Claude hosts ---
+    with tempfile.TemporaryDirectory() as tag:
+        tmp2 = Path(tag) / "defaults"
+        tmp2.mkdir()
+        init(tmp2)
+        for toml_name in ("goal-auditor.toml", "goal-discoverer.toml", "decomposition-reviewer.toml"):
+            assert_true((tmp2 / ".codex" / "agents" / toml_name).exists(),
+                        f"init installs {toml_name} by default")
+        tmp3 = Path(tag) / "optout"
+        tmp3.mkdir()
+        no_agents = subprocess.run(
+            [sys.executable, str(SCRIPTS / "init_project.py"), "--root", str(tmp3), "--no-agents"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30)
+        assert_true(no_agents.returncode == 0 and not (tmp3 / ".codex" / "agents").exists(),
+                    f"--no-agents opts out of agent templates: {no_agents.stderr}")
+        tmp4 = Path(tag) / "alias"
+        tmp4.mkdir()
+        alias = subprocess.run(
+            [sys.executable, str(SCRIPTS / "init_project.py"), "--root", str(tmp4), "--install-agents"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30)
+        assert_true(alias.returncode == 0 and (tmp4 / ".codex" / "agents" / "decomposition-reviewer.toml").exists(),
+                    "--install-agents stays a working no-op alias")
+    claude_agent = ROOT / "agents" / "decomposition-reviewer.md"
+    assert_true(claude_agent.exists(), "plugin ships the Claude decomposition-reviewer agent")
+    agent_text = claude_agent.read_text(encoding="utf-8")
+    assert_true(agent_text.startswith("---") and "name: decomposition-reviewer" in agent_text
+                and "tools: Read, Grep, Glob" in agent_text,
+                "Claude agent has read-only frontmatter")
+    assert_true("verdict for EVERY child" in agent_text and "Anchor" in agent_text,
+                "Claude agent demands per-child verdicts and the anchor handshake")
+
+    # --- Provenance Compiled-Into names what the request actually compiled into ---
+    with tempfile.TemporaryDirectory() as tpv:
+        ws = Path(tpv)
+        m = make_campaign(ws, [{"id": "G-001", "depends_on": "none"}], lock=False)
+        req = ws / "request.txt"
+        req.write_text("build the whole destination\n", encoding="utf-8")
+        rec3 = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_provenance.py"),
+             "--request", str(req), "--id", "campaign-test", "--source", "user prompt",
+             "--goals-dir", str(ws / ".goals"), "--contract", str(m), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "GOALSPEC_NO_GIT": "1"}, timeout=30)
+        assert_true(rec3.returncode == 0, f"record_provenance accepts a campaign manifest: {rec3.stderr}")
+        art3 = (ws / ".goals" / "provenance" / "campaign-test.md").read_text(encoding="utf-8")
+        assert_true("- Contract: .goals/campaign-test.md" in art3,
+                    "Compiled-Into names the campaign manifest, not a hardcoded current.md")
+
+    # Single-goal renders are re-injection-safe too: an already-achieved contract
+    # is verified and reported, never redone.
+    assert_true("already certify this contract achieved" in render(contract, allow_unlocked=True),
+                "single-goal render carries the idempotent re-entry sentence")
 
     print("GoalSpec full smoke test passed.")
     return 0

@@ -201,6 +201,20 @@ def active_goal_paths(cwd: Optional[str] = None) -> Tuple[Path, Path, Path]:
     return root / ".goals", root / ".goals" / "current.md", root / ".goals" / "current.sha256"
 
 
+def goals_relative(path: Path) -> str:
+    """Spell a path from its last '.goals' component onward.
+
+    Launch lines and provenance artifacts are read from the workspace root, so
+    '.goals/...' is the spelling that resolves there even when this process was
+    handed an absolute path. Paths outside any .goals/ pass through as-is.
+    """
+    parts = Path(path).parts
+    if ".goals" in parts:
+        idx = len(parts) - 1 - tuple(reversed(parts)).index(".goals")
+        return "/".join(parts[idx:])
+    return Path(path).as_posix()
+
+
 def relpath(path: Path, root: Optional[Path] = None) -> str:
     root = root or git_root_or_cwd()
     try:
@@ -407,6 +421,46 @@ def check_pinned_companions(section: str, root: Path) -> List[dict]:
                      "passed": actual == expected,
                      "reason": "matched" if actual == expected else "pinned companion mutated"})
     return rows
+
+
+def contract_verifier_commands(contract: Path) -> Optional[List[str]]:
+    """Executable verifier commands a contract declares, via the runner's own extractor.
+
+    Returns None when the contract cannot be read (nothing can be concluded) vs []
+    when it is readable and certainly attestation-only — only [] may ever drive
+    behavior. Shares extract_verifier_commands with run_verifiers.py, so callers
+    judging chain advanceability can never diverge from what would actually run.
+    """
+    try:
+        text = Path(contract).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return extract_verifier_commands(parse_sections(text).get("Verifier", ""))
+
+
+def excise_section(text: str, title: str) -> str:
+    """Remove every level-2 '## <title>' section (heading + body) from markdown.
+
+    Body extent matches parse_sections: from the heading to the next level-2
+    heading or end of text, so '###' sub-headings are consumed with their parent.
+    No-op when the section is absent.
+    """
+    return re.sub(rf"(?ms)^##[ \t]+{re.escape(title)}[ \t]*\n.*?(?=^##\s|\Z)", "", text)
+
+
+def campaign_review_anchor(text: str) -> str:
+    """Anchor hash binding a Decomposition Review to the manifest it reviewed.
+
+    sha256 over the manifest bytes with the '## Decomposition Review' section
+    removed: writing or extending the review (verdicts, the Anchor line itself)
+    never moves the anchor, while any edit to the graph/coverage/budget does —
+    so a review recorded before the content it claims to have reviewed, or left
+    stale after post-review edits, reads as an anchor mismatch. Threat model:
+    this makes the observed honest failures (pre-baked, stale reviews) loud; it
+    does not defeat an adversarial author who recomputes the anchor — locks
+    defeat tampering, nothing mechanical defeats insincerity.
+    """
+    return sha256_text(excise_section(text, "Decomposition Review"))
 
 
 # The meta-goal smell: a goal whose terminal state and verifier are about

@@ -23,9 +23,11 @@ from common import (
     campaign_failure_policies,
     campaign_lock_path,
     campaign_lock_status,
+    campaign_review_anchor,
     campaign_workspace_root,
     child_contract_path,
     contract_lock_status,
+    contract_verifier_commands,
     dependency_map,
     dependency_tokens,
     find_cycles,
@@ -148,6 +150,15 @@ def validate_campaign(campaign: Path) -> dict:
         title_id = _contract_title_id(contract)
         if title_id and title_id != child["id"]:
             errors.append(f"Child id mismatch: heading {child['id']} vs contract title id {title_id}")
+        # Chain pause points: a child whose contract declares no executable
+        # verifier command can only advance on an audited gate outcome.
+        if contract_verifier_commands(contract) == []:
+            result.setdefault("attestation_only", []).append(child["id"])
+            warnings.append(
+                f"Ready child {child['id']} is attestation-only: its ## Verifier has no executable "
+                "command, so an autonomous chain pauses there until its report records the gate "
+                "outcome (fine human-stepped; add an executable oracle if you want the chain to "
+                "advance unattended)")
 
     # A child entry must BE a goal sketch, not deferred homework: a milestone
     # name plus "Missing decision" restates the source roadmap and adds no
@@ -233,6 +244,31 @@ def validate_campaign(campaign: Path) -> dict:
             "adversarial review (launchability rubric check 10) must record its verdict and what it "
             "changed before handoff")
 
+    # Review anchor: binds the recorded review to the manifest content it
+    # reviewed. Always emitted so the honest flow is copy-paste cheap; all
+    # review checks stay warnings (an error here would deadlock the
+    # apply-findings loop and break legacy campaigns).
+    anchor = campaign_review_anchor(text)
+    result["review_anchor"] = anchor
+    review = sections.get("Decomposition Review", "")
+    if review.strip():
+        declared = re.findall(r"(?mi)^\s*-?\s*Anchor:\s*`?([0-9a-fA-F]{64})`?\s*$", review)
+        if not declared:
+            warnings.append(
+                "## Decomposition Review records no 'Anchor: <sha256>' line; copy the review anchor "
+                "from this validation output so any post-review manifest edit reads as staleness")
+        elif anchor not in (d.lower() for d in declared):
+            warnings.append(
+                f"Decomposition Review is stale: the manifest changed after this review (recorded "
+                f"anchor {declared[-1][:12]}..., current {anchor[:12]}...). Re-review or confirm the "
+                "verdicts still hold, then update the Anchor line")
+        missing_verdicts = [c["id"] for c in children
+                            if not re.search(rf"\b{re.escape(c['id'])}\b", review)]
+        if missing_verdicts:
+            warnings.append(
+                "Decomposition Review has no per-child verdict for: " + ", ".join(missing_verdicts)
+                + " — record one verdict per child (confirmed | weak | theater)")
+
     root = campaign_workspace_root(campaign)
     warnings.extend(_graph_mirror_divergence(root, children))
 
@@ -276,6 +312,8 @@ def main() -> int:
         print(f"Campaign validation: {'OK' if result.get('ok') else 'FAILED'}")
         if result.get("aggregate_sha256"):
             print(f"aggregate sha256: {result['aggregate_sha256']}")
+        if result.get("review_anchor"):
+            print(f"review anchor: {result['review_anchor']}")
         for err in result.get("errors", []):
             print(f"ERROR: {err}")
         for warn in result.get("warnings", []):

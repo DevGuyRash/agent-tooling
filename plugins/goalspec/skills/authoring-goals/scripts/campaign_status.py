@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from audit_goal import audit
 from common import (
     campaign_chain_budget,
     campaign_failure_policies,
@@ -22,6 +23,7 @@ from common import (
     child_contract_path,
     child_evidence_dir,
     child_report_path,
+    contract_verifier_commands,
     dependency_map,
     infer_campaign_manifest,
     parse_campaign_children,
@@ -77,6 +79,8 @@ def derive_status(campaign: Path) -> dict:
     statuses: dict[str, str] = {}
     attempted = 0
     verifier_failures_total = 0
+    attestation_only: list[str] = []
+    attempted_or_reported: set[str] = set()
     rows = []
     for child in children:
         cid = child["id"]
@@ -87,11 +91,19 @@ def derive_status(campaign: Path) -> dict:
             rows.append(row)
             continue
         evidence = child_evidence_dir(root, cid)
+        report = child_report_path(root, cid)
         if evidence.exists() and any(evidence.rglob("*")):
             attempted += 1
             row["attempted"] = True
+            attempted_or_reported.add(cid)
+        if report.exists():
+            attempted_or_reported.add(cid)
         result = _read_result(evidence, warnings, cid)
         contract = child_contract_path(campaign, child)
+        cmds = contract_verifier_commands(contract) if contract else None
+        if cmds == []:
+            attestation_only.append(cid)
+            row["attestation_only"] = True
         status = PENDING
         if result is not None:
             verifier_failures_total += sum(1 for v in result.get("verifiers", []) if not v.get("passed"))
@@ -109,6 +121,19 @@ def derive_status(campaign: Path) -> dict:
                     status = ACHIEVED
             else:
                 status = FAILED
+        elif cmds == [] and contract is not None and report.exists():
+            # Attestation-only child: no machine result can ever exist, so the
+            # sanctioned oracle is the audit verdict over the recorded report
+            # (hash lock + report sections + evidence + explicit ratification
+            # when a human gate is declared). Anything but a clean verdict
+            # degrades to pending — never to achieved, never to a crash.
+            try:
+                verdict = audit(contract, report, evidence).get("result")
+            except Exception as exc:  # noqa: BLE001 — runtime brainstem must not die
+                warnings.append(f"{cid}: attestation audit failed ({exc.__class__.__name__}); treating as pending")
+                verdict = None
+            if verdict == "achieved":
+                status = ACHIEVED
         row["status"] = status
         statuses[cid] = status
         rows.append(row)
@@ -136,6 +161,12 @@ def derive_status(campaign: Path) -> dict:
     selection = select(entries)
     next_child = (selection.get("selected") or {}).get("id")
 
+    if attestation_only:
+        warnings.append(
+            "attestation-only pause point(s) — no executable verifier command, so these children "
+            "advance only on a recorded gate outcome in their report (audited, never self-ratified): "
+            + ", ".join(attestation_only))
+
     achieved_n = sum(1 for s in statuses.values() if s == ACHIEVED)
     ready_n = len(statuses)
     chain_should_stop, stop_reason = False, None
@@ -143,6 +174,14 @@ def derive_status(campaign: Path) -> dict:
         chain_should_stop, stop_reason = True, f"chain budget exhausted ({attempted}/{budget} children attempted)"
     elif policy == "halt-on-failure" and failed_ids:
         chain_should_stop, stop_reason = True, f"halt-on-failure: {', '.join(sorted(failed_ids))} failed"
+    elif next_child and next_child in attestation_only and next_child in attempted_or_reported:
+        # The work was attempted but the audit has not certified the recorded
+        # gate outcome: pause cleanly between threads instead of treadmilling.
+        chain_should_stop = True
+        stop_reason = (f"{next_child} awaits its recorded gate outcome (e.g. 'Human gate: approved "
+                       f"by owner' in .goals/reports/{next_child}-report.md, with evidence under "
+                       f".goals/evidence/children/{next_child}/); once the owner ratifies, relaunch "
+                       "the same line to resume")
     elif not next_child:
         chain_should_stop = True
         stop_reason = ("all ready children achieved (pending audit)" if achieved_n == ready_n
@@ -160,6 +199,7 @@ def derive_status(campaign: Path) -> dict:
         "skipped": len(skipped),
         "attempted_count": attempted,
         "verifier_failures_total": verifier_failures_total,
+        "attestation_only": attestation_only,
         "chain_budget": budget,
         "failure_policy": policy,
         "next_child": next_child,

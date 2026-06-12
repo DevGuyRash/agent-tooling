@@ -165,11 +165,20 @@ The `Pinned:` line freezes the shared checkout verifier alongside the contract (
 
 ### 4. Decomposition review, recorded in the manifest
 
+The flow: `validate_campaign.py` printed `review anchor: 7c1e0b…` before the
+review; applying findings 1 and 2 changed the Goal Graph, so the manifest was
+re-validated (new anchor `0a9f44…`), the verdicts re-confirmed against the
+edited graph, and the final anchor recorded:
+
 ```markdown
 ## Decomposition Review
 
-Reviewer: decomposition_reviewer (refute bias). Verdicts: G-001 confirmed,
-G-002 confirmed (sketch), G-003 weak, G-004 confirmed.
+Reviewer: decomposition_reviewer (refute bias).
+
+- G-001: confirmed — terminal clauses restate PRD §2/§4 requirements; oracle is its own.
+- G-002: confirmed (sketch) — section-bound; materializes at selection.
+- G-003: weak — cited only "the PRD" before finding 2; rebound to §6.
+- G-004: confirmed — verifier strengthened by finding 1.
 
 1. APPLIED — G-004's verifier was a single `pytest tests/webhooks -q` run: it
    could pass on a lucky run, or by skipping the flaky tests, without making
@@ -179,6 +188,11 @@ G-002 confirmed (sketch), G-003 weak, G-004 confirmed.
 3. DECLINED — reviewer flagged G-002/G-003 as unlocked. Declined: they are the
    sketched tail of the rolling wave; locking now would freeze guesses about a
    PSP decision that has not landed. They materialize at selection.
+
+Anchor: 0a9f44c2e7b15d8a30f6921b4cd07e5f8a36d1c09b274e6f5a801d92c3e4f7ab
 ```
 
-Every finding either changed the manifest or was declined with a reason. A review that only records findings has not closed.
+Every finding either changed the manifest or was declined with a reason, every
+child carries a verdict, and the anchor matches the validated manifest — a
+review recorded before validation, or left stale after edits, warns on every
+later validation. A review that only records findings has not closed.

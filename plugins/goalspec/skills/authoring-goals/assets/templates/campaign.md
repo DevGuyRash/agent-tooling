@@ -68,6 +68,18 @@ a coverage gap.]
 
 ## Selection Recommendation
 
-Run G-001 first because [reason]. For an autonomous chain, after each child run
-`campaign_status.py` and execute the child it names next. If no child is ready,
-stop here and report what blocks the most promising child.
+Execution order is derived, never asserted: `campaign_status.py` names the next
+unblocked child each time, so the handoff stays correct in every new thread.
+[State why the dependency graph starts where it does — e.g. nothing blocks
+G-001 — not "run G-001 first" as an instruction.] If no child is ready, stop
+here and report what blocks the most promising child.
+
+## Decomposition Review
+
+[Closed by the adversarial review: one verdict per child, each finding applied
+or explicitly declined, and the anchor from validate_campaign.py output.]
+
+- G-001: [confirmed | weak | theater] — [one line of evidence]
+- [finding] — APPLIED: [what changed] / DECLINED: [why]
+
+Anchor: [copy the `review anchor:` value from validate_campaign.py output]
