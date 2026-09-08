@@ -78,7 +78,7 @@ Preferred description style:
 Good examples:
 
 - `# Install dependencies, tooling, and local prerequisites for normal development`
-- `# Compile only crates/mpcr in the default build profile`
+- `# Compile only crates/render-table in the default build profile`
 - `# Compile release outputs and stage them into dist/ for local packaging`
 - `# Remove staged dist payloads without touching source files`
 

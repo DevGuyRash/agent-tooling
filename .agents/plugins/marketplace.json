@@ -5,18 +5,6 @@
   },
   "plugins": [
     {
-      "name": "code-review",
-      "source": {
-        "source": "local",
-        "path": "./plugins/code-review"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Development"
-    },
-    {
       "name": "docker-architect",
       "source": {
         "source": "local",

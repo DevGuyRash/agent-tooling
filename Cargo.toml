@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "crates/mpcr",
   "crates/architect-core",
   "crates/docker-architect-compose",
   "crates/docker-architect-image",

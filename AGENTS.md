@@ -101,11 +101,11 @@ tool update --session-id abc123 --status IN_PROGRESS
 Some CLIs offer a `--print-env` flag that outputs the values you need for subsequent commands. Capture them in one command, then pass as flags:
 
 ```bash
-# mpcr example: register prints IDs you'll need later
-mpcr reviewer register --target-ref main --print-env
-# Output: MPCR_REVIEWER_ID=deadbeef MPCR_SESSION_ID=sess0001
+# Example: registration prints IDs to reuse later
+tool register --print-env
+# Output: WORKER_ID=deadbeef SESSION_ID=sess0001
 # Use those values as explicit flags in the next command:
-mpcr reviewer update --reviewer-id deadbeef --session-id sess0001 --status IN_PROGRESS
+tool update --worker-id deadbeef --session-id sess0001 --status IN_PROGRESS
 ```
 
 **Option C: chain commands in a single shell invocation**:
@@ -114,7 +114,7 @@ mpcr reviewer update --reviewer-id deadbeef --session-id sess0001 --status IN_PR
 export MY_SESSION_ID=abc123 && cd /some/project && tool update --use-env
 ```
 
-This applies to any CLI that offers `--use-env` or environment-based configuration (e.g., `mpcr`'s `MPCR_*` variables). Those patterns are designed for shell scripts and CI pipelines where the entire pipeline runs in one shell session. When used by agents — where each command is a separate process — environment-based configuration provides no benefit.
+This applies to any CLI that offers `--use-env` or environment-based configuration. Those patterns are designed for shell scripts and CI pipelines where the entire pipeline runs in one shell session. When used by agents — where each command is a separate process — environment-based configuration provides no benefit.
 
 **Always prefer explicit CLI flags over environment variables when running from agents.**
 
@@ -176,7 +176,6 @@ The body H1 (`# ...`) and `agents/openai.yaml` display name are the human-facing
 
 | Directory / `name:` slug | H1 / display name       |
 | ------------------------ | ----------------------- |
-| `code-review`            | `Code Review`           |
 | `rust-development`       | `Rust Development`      |
 | `docker-architect`       | `Docker Architect`      |
 | `espanso-dynamic-forms`  | `Espanso Dynamic Forms` |
@@ -481,7 +480,7 @@ The recommended pattern:
 2. **Markdown for detailed content.** Full domain specs, phase procedures, scoring rules stay in `references/*.md`. The CLI extracts sections by heading on demand using `sed`/`awk`.
 3. **SKILL.md as fallback router.** "Run `<cli> <command>` for guidance. IF the CLI is unavailable, read `references/X.md` instead."
 
-This pattern is demonstrated by the code-review skill's `mpcr` protocol CLI. Use it when a skill has:
+Use this pattern when a skill has:
 
 - Multiple phases or modes with distinct guidance per phase
 - Enumerable configuration (domains, roles, traits)

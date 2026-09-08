@@ -74,9 +74,6 @@ else
   fi
 fi
 
-# Ensure the default session root exists (gitignored).
-mkdir -p .local/reports/code_reviews
-
 if ! command -v cargo >/dev/null 2>&1; then
   log "setup" "warning: cargo not available; skipping skill prebuilds"
   exit 0
@@ -110,15 +107,7 @@ image_skip_flag="$(resolve_deprecated_flag \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
-mpcr_skip_flag="$(resolve_deprecated_flag \
-  "setup" \
-  "AGENT_TOOLING_SKIP_MPCR_BUILD" \
-  "${AGENT_TOOLING_SKIP_MPCR_BUILD:-}" \
-  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
-  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}")"
-
-if [ "${mpcr_skip_flag}" = "1" ] && \
-   [ "${compose_skip_flag}" = "1" ] && \
+if [ "${compose_skip_flag}" = "1" ] && \
    [ "${image_skip_flag}" = "1" ]; then
   log "setup" "skipping host dist staging because all Rust skill build flags are disabled"
 else

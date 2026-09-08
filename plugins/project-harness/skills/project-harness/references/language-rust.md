@@ -49,7 +49,7 @@ Good workspace-level descriptions:
 
 Good crate-scoped descriptions:
 
-- `# Compile only crates/mpcr in the default build profile`
+- `# Compile only crates/render-table in the default build profile`
 - `# Run automated tests only for crates/render-table`
 - `# Compile optimized outputs only for crates/docker-architect-image`
 

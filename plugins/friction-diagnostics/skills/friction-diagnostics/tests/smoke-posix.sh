@@ -75,9 +75,9 @@ OUTPUT=$(without_session_env "$ROOT/scripts/report-friction.sh" \
   --source-kind artifact \
   --source-ref "$ROOT/SKILL.md" \
   --source-line 160 \
-  --source-claim "Use mpcr protocol dispatch --role <ROLE> to get the architecture prompt." \
+  --source-claim "Use example-tool protocol dispatch --role <ROLE> to get the architecture prompt." \
   --impact blocked \
-  --tags "dispatch,slug-mismatch,mpcr" \
+  --tags "dispatch,slug-mismatch,example-tool" \
   --recurrence-key "dispatch-label-vs-slug" 2>/dev/null)
 
 printf '%s\n' "$OUTPUT" | grep -q "^FRICTION_EVENTS_FILE=$DEFAULT_EVENTS$" || fail "unexpected default events file output"
@@ -101,7 +101,7 @@ KEY_ORDER=$(jq -r 'keys_unsorted | join(",")' "$DEFAULT_EVENTS")
 assert_equals "event_id,recorded_at,schema_version,kind,events_file,repo_root,actual_outcome,expected_outcome,reading,decision,pivot_information,sources,impact,recurrence_key,tags,title" "$KEY_ORDER"
 # sources use kind/claim, not type/excerpt
 assert_contains '"kind":"artifact"' "$DEFAULT_EVENTS"
-assert_contains '"claim":"Use mpcr protocol dispatch' "$DEFAULT_EVENTS"
+assert_contains '"claim":"Use example-tool protocol dispatch' "$DEFAULT_EVENTS"
 assert_not_contains '"excerpt":' "$DEFAULT_EVENTS"
 # deprecated fields absent on v5 records
 assert_not_contains '"fingerprint":' "$DEFAULT_EVENTS"

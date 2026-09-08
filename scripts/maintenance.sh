@@ -32,9 +32,6 @@ if command -v git >/dev/null 2>&1; then
   fi
 fi
 
-# Ensure the default session root exists (gitignored).
-mkdir -p .local/reports/code_reviews
-
 if ! command -v cargo >/dev/null 2>&1; then
   log "maintenance" "warning: cargo not available; run scripts/setup.sh to install Rust"
   exit 0
@@ -68,15 +65,7 @@ image_skip_flag="$(resolve_deprecated_flag \
   "AGENT_SKILLS_SKIP_PIASCS_BUILD" \
   "${AGENT_SKILLS_SKIP_PIASCS_BUILD:-}")"
 
-mpcr_skip_flag="$(resolve_deprecated_flag \
-  "maintenance" \
-  "AGENT_TOOLING_SKIP_MPCR_BUILD" \
-  "${AGENT_TOOLING_SKIP_MPCR_BUILD:-}" \
-  "AGENT_SKILLS_SKIP_MPCR_BUILD" \
-  "${AGENT_SKILLS_SKIP_MPCR_BUILD:-}")"
-
-if [ "${mpcr_skip_flag}" = "1" ] && \
-   [ "${compose_skip_flag}" = "1" ] && \
+if [ "${compose_skip_flag}" = "1" ] && \
    [ "${image_skip_flag}" = "1" ]; then
   log "maintenance" "skipping host dist staging because all Rust skill build flags are disabled"
 else

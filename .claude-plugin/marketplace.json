@@ -6,12 +6,6 @@
   "description": "Local marketplace for cross-host agent tooling plugin packages in this repository.",
   "plugins": [
     {
-      "name": "code-review",
-      "source": "./plugins/code-review",
-      "description": "Recursive machine-first code review, application, and full-cycle convergence with mpcr",
-      "version": "1.0.2"
-    },
-    {
       "name": "docker-architect",
       "source": "./plugins/docker-architect",
       "description": "Generate hardened Dockerfiles, Compose stacks, and container build pipelines",

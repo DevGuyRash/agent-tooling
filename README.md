@@ -20,7 +20,6 @@ Reusable instruction and evaluation decisions, their outcome evidence, and reope
 Current local plugins:
 
 - `plugins/chatgpt-browser/` provides portable ChatGPT conversation, context, attachment, model-selection, and thread-hygiene guidance when an authorized interactive-browser controller is available.
-- `plugins/code-review/`
 - `plugins/docker-architect/`
 - `plugins/espanso-dynamic-forms/`
 - `plugins/excel-foundry/`
@@ -33,19 +32,6 @@ Current local plugins:
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
 
 ## Plugin Packages
-
-### `code-review`
-
-Unified code review skill with two workflows:
-
-- Reviewer: perform adversarial code reviews using UACRP and produce a structured review report
-- Applicator: apply review feedback from completed reports and track dispositions/progress
-
-Both workflows coordinate artifacts under `.local/reports/code_reviews/{YYYY-MM-DD}/` and use a bundled `mpcr` tool for deterministic reviewer/session operations (ID generation, locking, session JSON updates, report writing).
-
-Path: `plugins/code-review/skills/code-review/`
-
-**Migration note:** `perform-code-review` and `apply-code-review` were consolidated into `code-review`. Update any tooling or docs that reference `skills/perform-code-review/` or `skills/apply-code-review/` to use `plugins/code-review/skills/code-review/`.
 
 ### `docker-architect`
 
@@ -221,7 +207,7 @@ Use `markdown` or `list` when Unicode box drawing is undesirable, terminal-width
 
 ## Rust shim pattern
 
-- `plugins/code-review/skills/code-review/scripts/mpcr`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image`, and `plugins/friction-diagnostics/skills/friction-diagnostics/scripts/render-table.sh` are plugin-local skill launchers that execute packaged binaries from the same skill directory.
+- `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image`, and `plugins/friction-diagnostics/skills/friction-diagnostics/scripts/render-table.sh` are plugin-local skill launchers that execute packaged binaries from the same skill directory.
 - `scripts/rust-shim-template.sh` is the copy template for future packaged-binary launchers.
 - Build and staging are centralized at the repo root through `just` and `scripts/package_skills.py`.
 - `packaging/skills.toml` is the single registry for packaged plugin-local skill binaries, their launcher paths, and which platforms are required in git versus built in CI.
@@ -244,7 +230,6 @@ To add or update a packaged binary, append or edit one `[skills.<id>]` entry in 
 Environment flags:
 
 - `AGENT_TOOLING_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`
-- `AGENT_TOOLING_SKIP_MPCR_BUILD=1` — skip the `mpcr` prebuild step in setup/maintenance
 - `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD=1` — skip the `docker-architect-compose` prebuild step in setup/maintenance
 - `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD=1` — skip the `docker-architect-image` prebuild step in setup/maintenance
 - `AGENT_TOOLING_DIST_BUILD_MODE=auto|container|host` — choose host or containerized dist builds

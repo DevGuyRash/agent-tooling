@@ -7,7 +7,7 @@ description: Audit an existing skill or plugin for material evidence about targe
 
 Determine whether an existing skill or plugin earns its place, what materially weakens it, and what evidence supports retaining, changing, narrowing, or removing it. Serve the maintainer's decision, not the appearance of audit thoroughness. A clean result is valid.
 
-Authoring a new skill belongs to `skill-creator`; ordinary source-code review belongs to the repository's code-review workflow. Do not modify the target unless the user asks. An audit does not authorize installation, registration, publication, cache mutation, or other user-level or external writes. Use a disposable environment or faithful simulation for observations that require mutation; otherwise leave the affected claim unverified.
+Authoring a new skill belongs to `skill-creator`; ordinary source-code review is outside this skill’s scope. Do not modify the target unless the user asks. An audit does not authorize installation, registration, publication, cache mutation, or other user-level or external writes. Use a disposable environment or faithful simulation for observations that require mutation; otherwise leave the affected claim unverified.
 
 ## Proven mutation blind spot
 

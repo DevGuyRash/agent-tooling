@@ -4,15 +4,6 @@
 # Each skill declares the exact pre-packaged platform set it supports. Most
 # current entries ship Linux only; exceptions remain explicit per skill.
 
-[skills.code_review]
-package = "mpcr"
-binary = "mpcr"
-skill_dir = "plugins/code-review/skills/code-review"
-launcher = "scripts/mpcr"
-smoke_args = ["--help"]
-required_platforms = ["linux-x86_64"]
-ci_platforms = ["linux-x86_64"]
-
 [skills.docker_architect_compose]
 package = "docker-architect-compose"
 binary = "docker-architect-compose"
