@@ -134,7 +134,7 @@ By default it uses the GitHub marketplace source `DevGuyRash/agent-tooling` with
 - Codex: `.agents/plugins` plus `plugins`
 - Claude Code: `.claude-plugin` plus `plugins`
 
-The script resolves the exact local or remote source, reads each host marketplace independently, and identifies every selected plugin by version plus a canonical source-tree digest. It adds missing marketplace/plugin state and updates only a proven identity difference. A second run against unchanged source performs discovery and verification but invokes no marketplace or plugin mutations. Its atomic receipt is `${XDG_STATE_HOME:-~/.local/state}/agent-tooling/install-all.json`.
+The script resolves the exact local or remote source, reads each host marketplace independently, and identifies every selected plugin by version plus a canonical source-tree digest. It adds missing marketplace/plugin state and updates only a proven identity difference. Before selected installs or updates, it refreshes an existing Git marketplace snapshot so newly published names and artifacts are available. For a mutating run that includes Claude, it snapshots the observed version-2 native registry before any host mutation and restores only missing non-selected registrations, including other scopes and other projects of selected plugins. Guard activation follows the whole selected transaction, even when Claude itself needs no update. Only identities actually being installed or updated are exempt, and receipts and verification retain the requested scope/project identity. Conflicting changed records cause failure instead of being overwritten; an unreadable post-operation registry is restored to its pre-operation state and reported as a failure. This protects a single installation transaction and does not reconcile workstation desired state. A second run against unchanged source performs discovery and verification but invokes no marketplace or plugin mutations. Its atomic receipt is `${XDG_STATE_HOME:-~/.local/state}/agent-tooling/install-all.json`.
 
 Filter the dynamic plugin list with repeatable CSV/glob flags:
 
@@ -173,7 +173,7 @@ claude plugin uninstall --scope user --keep-data skill-auditor@agent-tooling
 claude plugin uninstall --scope user --keep-data split-testing@agent-tooling
 ```
 
-Inspect the actual installed scopes first; do not remove a separate project or local declaration by assumption. These commands preserve unrelated plugins and retain any old Claude plugin data. Removing an old marketplace entry alone does not uninstall its cached copy. A running session can retain old instructions; a fresh session is needed for the new catalog and package.
+For project/local installation, run the installer from the intended native project directory. The observed Claude CLI records its process working directory as `projectPath`, which can differ from the containing Git root or the local settings-file location. Inspect the actual installed scopes first; do not remove a separate project or local declaration by assumption. These commands select the two old user-scope identities and request retention of old Claude plugin data. Verify unrelated registrations and settings before and after retirement; the installation safeguard is not a general rollback or isolation guarantee for arbitrary later CLI commands. Removing an old marketplace entry alone does not uninstall its cached copy. A running session can retain old instructions; a fresh session is needed for the new catalog and package.
 
 ### `software-development` migration
 

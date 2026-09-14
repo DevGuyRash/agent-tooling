@@ -18,6 +18,7 @@ from scripts.install_all import (
     hash_tree,
     parse_args,
     plan_host,
+    preserve_claude_registry,
 )
 
 
@@ -76,9 +77,13 @@ def write_fake_cli(path: Path, command_name: str) -> None:
                 if selector == os.environ.get("AGENT_TOOLING_FAKE_FAIL_PLUGIN"):
                     raise SystemExit("injected plugin mutation failure")
                 versions = json.loads(os.environ["AGENT_TOOLING_FAKE_VERSIONS"])
-                current = next((item for item in state["installed"] if item["pluginId"] == selector), None)
+                scope = args[args.index("--scope") + 1] if "--scope" in args else "user"
+                project_path = os.getcwd() if scope != "user" else None
+                current = next((item for item in state["installed"] if item["pluginId"] == selector and item.get("scope", "user") == scope and item.get("projectPath") == project_path), None)
                 if current is None:
-                    state["installed"].append({{"pluginId": selector, "version": versions[selector], "enabled": True}})
+                    record = {{"pluginId": selector, "version": versions[selector], "enabled": True, "scope": scope}}
+                    if project_path: record["projectPath"] = project_path
+                    state["installed"].append(record)
                 else:
                     current["version"] = versions[selector]
                 save()
@@ -143,6 +148,13 @@ def write_stateful_fake_cli(path: Path, command_name: str, state_path: Path) -> 
 
             def save():
                 state_path.write_text(json.dumps(state), encoding="utf-8")
+                if {command_name!r} == "claude":
+                    registry = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "plugins" / "installed_plugins.json"
+                    registry.parent.mkdir(parents=True, exist_ok=True)
+                    entries = {{}}
+                    for item in state["installed"]:
+                        entries.setdefault(item["pluginId"], []).append({{k:v for k,v in item.items() if k not in ("pluginId", "enabled")}})
+                    registry.write_text(json.dumps({{"version": 2, "plugins": entries}}), encoding="utf-8")
 
             if args == ["plugin", "marketplace", "list", "--json"]:
                 items = state["marketplaces"]
@@ -161,7 +173,7 @@ def write_stateful_fake_cli(path: Path, command_name: str, state_path: Path) -> 
                 version = os.environ["AGENT_TOOLING_FAKE_VERSION"]
                 found = next((item for item in state["installed"] if item["pluginId"] == selector), None)
                 if found is None:
-                    state["installed"].append({{"pluginId": selector, "version": version, "enabled": True}})
+                    state["installed"].append({{"pluginId": selector, "version": version, "enabled": True, "scope": "user"}})
                 else:
                     found["version"] = version
                 save()
@@ -370,6 +382,8 @@ class InstallAllTests(unittest.TestCase):
             "AGENT_TOOLING_FAKE_GIT_LOG": str(git_log_path),
             "AGENT_TOOLING_GIT_COMMAND": str(public_git),
             "XDG_STATE_HOME": str(temp_root / "state"),
+            "CLAUDE_CONFIG_DIR": str(temp_root / "claude-profile"),
+            "CODEX_HOME": str(temp_root / "codex-profile"),
         }
         proc = subprocess.run(
             [str(install_all), *args],
@@ -471,6 +485,27 @@ class InstallAllTests(unittest.TestCase):
         self.assertEqual(marketplace_plugin_selectors(CLAUDE_MARKETPLACE), claude_plugins)
         self.assertFalse(any(args[:2] == ["plugin", "update"] for args in claude_calls))
 
+    def test_new_remote_plugin_refreshes_existing_marketplaces_before_install(self) -> None:
+        proc, calls = self.run_install_all_process(
+            "--include", "agentic-design-and-evaluation",
+            fake_marketplaces={
+                host: [{"name": "agent-tooling", "source": "DevGuyRash/agent-tooling"}]
+                for host in ("codex", "claude")
+            },
+            fake_installed={"codex": [], "claude": []},
+            client_runs_git=True,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertEqual(
+            [
+                {"command": "codex", "args": ["plugin", "marketplace", "upgrade", "agent-tooling"]},
+                {"command": "codex", "args": ["plugin", "add", "agentic-design-and-evaluation@agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "marketplace", "update", "agent-tooling"]},
+                {"command": "claude", "args": ["plugin", "install", "--scope", "user", "agentic-design-and-evaluation@agent-tooling"]},
+            ],
+            mutation_calls(calls),
+        )
+
     def test_client_marketplace_refresh_uses_the_exact_public_git(self) -> None:
         goalspec = json.loads(
             (REPO_ROOT / "plugins" / "goalspec" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -526,6 +561,8 @@ class InstallAllTests(unittest.TestCase):
                 **os.environ,
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}{os.pathsep}{os.defpath}",
                 "XDG_STATE_HOME": str(tmp_path / "state"),
+                "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-profile"),
+                "CODEX_HOME": str(tmp_path / "codex-profile"),
                 "AGENT_TOOLING_FAKE_CLI_LOG": str(log_path),
                 "AGENT_TOOLING_FAKE_VERSION": goalspec["version"],
             }
@@ -665,6 +702,10 @@ class InstallAllTests(unittest.TestCase):
         )
         self.assertEqual(
             [
+                {
+                    "command": "claude",
+                    "args": ["plugin", "marketplace", "update", "agent-tooling"],
+                },
                 {
                     "command": "claude",
                     "args": [
@@ -821,6 +862,98 @@ class InstallAllTests(unittest.TestCase):
             ],
             [call["args"] for call in mutation_calls(calls)],
         )
+
+
+class ClaudeRegistryPreservationTests(unittest.TestCase):
+    def fixture(self, root):
+        args = parse_args(["--claude-only"])
+        args.resolved_source = "DevGuyRash/agent-tooling"
+        args.source_local = False
+        plan = plan_host("claude", HostState("claude", args.resolved_source, True, {}),
+                         {"new@agent-tooling": Identity("1.0.0", "a" * 64)}, {}, args)
+        old = {"scope": "user", "installPath": "/fixture/old", "version": "2.0.0",
+               "gitCommitSha": "b" * 40, "installedAt": "original", "lastUpdated": "original"}
+        other_scope = {**old, "scope": "project", "projectPath": "/fixture/project"}
+        before = {"version": 2, "plugins": {"other@market": [old], "new@agent-tooling": [other_scope]}}
+        path = root / "plugins/installed_plugins.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps(before))
+        path.chmod(0o640)
+        return args, plan, path, before, {"CLAUDE_CONFIG_DIR": str(root)}
+
+    def test_cli_overwrite_preserves_raw_unrelated_and_other_scope_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            new = {"scope": "user", "installPath": "/fixture/new", "version": "1.0.0"}
+            with preserve_claude_registry(plan, args, env):
+                path.write_text(json.dumps({"version": 2, "plugins": {"new@agent-tooling": [new]}}))
+            after = json.loads(path.read_text())
+            self.assertEqual(after['plugins']['other@market'], before['plugins']['other@market'])
+            self.assertIn(before['plugins']['new@agent-tooling'][0], after['plugins']['new@agent-tooling'])
+            self.assertIn(new, after['plugins']['new@agent-tooling'])
+            self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+            self.assertEqual([p.name for p in path.parent.iterdir()], ['installed_plugins.json'])
+
+    def test_failed_cli_still_preserves_missing_unrelated_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            with self.assertRaisesRegex(InstallError, 'native failure'):
+                with preserve_claude_registry(plan, args, env):
+                    path.write_text(json.dumps({"version": 2, "plugins": {}}))
+                    raise InstallError('native failure')
+            self.assertEqual(json.loads(path.read_text()), before)
+
+    def test_conflicting_change_is_detected_without_overwriting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            changed = json.loads(json.dumps(before))
+            changed['plugins']['other@market'][0]['version'] = '3.0.0'
+            with self.assertRaisesRegex(InstallError, 'conflicts'):
+                with preserve_claude_registry(plan, args, env):
+                    path.write_text(json.dumps(changed))
+            self.assertEqual(json.loads(path.read_text()), changed)
+
+    def test_unreadable_after_state_restores_known_registry_and_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            with self.assertRaisesRegex(InstallError, 'restored the pre-operation registry'):
+                with preserve_claude_registry(plan, args, env):
+                    path.write_text('broken JSON')
+            self.assertEqual(json.loads(path.read_text()), before)
+
+    def test_unsupported_before_format_prevents_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            original = json.dumps({"version": 3, "plugins": {}})
+            path.write_text(original)
+            entered = False
+            with self.assertRaisesRegex(InstallError, 'version-2 format'):
+                with preserve_claude_registry(plan, args, env):
+                    entered = True
+            self.assertFalse(entered)
+            self.assertEqual(path.read_text(), original)
+
+    def test_missing_registry_with_observed_installations_blocks_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            path.unlink()
+            plan = plan_host("claude", HostState("claude", args.resolved_source, True,
+                             {"other@market": InstalledArtifact("2.0.0", scope="user")}),
+                             plan.selected, {}, args)
+            entered = False
+            with self.assertRaisesRegex(InstallError, 'registry could not be located'):
+                with preserve_claude_registry(plan, args, env):
+                    entered = True
+            self.assertFalse(entered)
+
+    def test_dry_run_does_not_rewrite_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, plan, path, before, env = self.fixture(Path(tmp))
+            args.dry_run = True
+            original = path.read_bytes()
+            with preserve_claude_registry(plan, args, env):
+                pass
+            self.assertEqual(path.read_bytes(), original)
 
 if __name__ == "__main__":
     unittest.main()

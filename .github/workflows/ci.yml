@@ -366,7 +366,7 @@ jobs:
       - name: Test instruction package integration and reporters
         shell: bash
         run: |
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests scripts.tests.test_install_all scripts.tests.test_install_all_scope
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
 
       - name: Audit the plugins this change touches

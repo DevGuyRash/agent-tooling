@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import dataclasses
 import fnmatch
 import hashlib
@@ -13,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -42,6 +44,8 @@ class Identity:
 class InstalledArtifact:
     version: str
     root: Path | None = None
+    scope: str | None = None
+    project_path: Path | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,6 +54,7 @@ class HostState:
     marketplace_source: str | None
     marketplace_present: bool
     installed: Mapping[str, InstalledArtifact]
+    observed_installation_count: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +99,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.codex_only and args.claude_only:
         parser.error("--codex-only and --claude-only are mutually exclusive")
+    # Native project/local installs record process cwd as projectPath, even
+    # when local settings are written at a containing Git root (observed probe).
+    args.claude_project_path = Path.cwd().resolve() if args.claude_scope != "user" else None
     if args.claude_scope not in {"user", "project", "local"}:
         parser.error("--claude-scope must be user, project, or local")
     args.codex = not args.no_codex and not args.claude_only
@@ -262,10 +270,18 @@ def marketplace_source(item: Mapping[str, object]) -> str | None:
     return next((value for value in candidates if isinstance(value, str) and value), None)
 
 
-def discover(host: str, command: str, environment: Mapping[str, str]) -> HostState:
+def scoped_project_path(scope: str, value: object) -> Path | None:
+    if scope == "user":
+        return None
+    if scope not in {"project", "local"} or not isinstance(value, str) or not Path(value).is_absolute():
+        raise InstallError("Claude project/local installation has no unambiguous absolute projectPath")
+    return Path(value).resolve()
+
+
+def discover(host: str, command: str, environment: Mapping[str, str], *,
+             claude_scope: str = "user", claude_project_path: Path | None = None) -> HostState:
     raw_marketplaces = run_json(
-        [command, "plugin", "marketplace", "list", "--json"],
-        environment=environment,
+        [command, "plugin", "marketplace", "list", "--json"], environment=environment,
     )
     items = raw_marketplaces.get("marketplaces", []) if isinstance(raw_marketplaces, dict) else raw_marketplaces
     if not isinstance(items, list):
@@ -282,16 +298,33 @@ def discover(host: str, command: str, environment: Mapping[str, str]) -> HostSta
         if not isinstance(item, dict):
             continue
         plugin_id = item.get("pluginId") or item.get("id") or item.get("name")
+        if not isinstance(plugin_id, str) or not plugin_id.endswith(f"@{MARKETPLACE}"):
+            continue
+        scope = item.get("scope") if host == "claude" else None
+        project_path = None
+        if host == "claude":
+            if scope not in {"user", "project", "local"}:
+                raise InstallError(f"Claude did not report a supported installation scope: {plugin_id}")
+            project_path = scoped_project_path(scope, item.get("projectPath"))
+            if scope != claude_scope or project_path != claude_project_path:
+                continue
         version = item.get("version")
-        if isinstance(plugin_id, str) and plugin_id.endswith(f"@{MARKETPLACE}"):
-            if not isinstance(version, str) or not version:
-                raise InstallError(f"installed plugin has no version: {plugin_id}")
-            raw_source = item.get("source")
-            root_value = raw_source.get("path") if isinstance(raw_source, dict) else item.get("installPath")
-            root = Path(root_value) if isinstance(root_value, str) and Path(root_value).is_absolute() else None
-            installed[plugin_id] = InstalledArtifact(version, root)
+        if not isinstance(version, str) or not version:
+            raise InstallError(f"installed plugin has no version: {plugin_id}")
+        root_value = item.get("installPath") or item.get("cachePath")
+        root = Path(root_value) if isinstance(root_value, str) and Path(root_value).is_absolute() else None
+        if host == "codex" and root is None:
+            # `source.path` in native list output names the marketplace checkout,
+            # not the installed payload. The observed native cache layout is
+            # profile/plugins/cache/marketplace/name/version.
+            profile = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+            candidate = profile / "plugins" / "cache" / MARKETPLACE / plugin_id.split("@", 1)[0] / version
+            root = candidate if candidate.is_dir() else None
+        if plugin_id in installed:
+            raise InstallError(f"ambiguous duplicate installed identity in the requested scope: {plugin_id}")
+        installed[plugin_id] = InstalledArtifact(version, root, scope, project_path)
     match = matches[0] if matches else None
-    return HostState(command, marketplace_source(match) if match else None, bool(match), installed)
+    return HostState(command, marketplace_source(match) if match else None, bool(match), installed, len(installed_items))
 
 
 def semver_key(version: str) -> tuple[object, ...] | None:
@@ -322,9 +355,16 @@ def read_receipt(path: Path) -> dict[str, object]:
     return payload
 
 
-def receipt_identity(receipt: Mapping[str, object], host: str, plugin_id: str) -> Identity | None:
+def receipt_identity(receipt: Mapping[str, object], host: str, plugin_id: str, *, scope: str | None = None, project_path: Path | None = None) -> Identity | None:
     hosts = receipt.get("hosts", {})
     host_data = hosts.get(host, {}) if isinstance(hosts, dict) else {}
+    if host == "claude":
+        if not isinstance(host_data, dict) or host_data.get("scope") != scope:
+            return None
+        if scope != "user":
+            recorded = host_data.get("projectPath")
+            if not isinstance(recorded, str) or not Path(recorded).is_absolute() or Path(recorded).resolve() != project_path:
+                return None
     plugins = host_data.get("plugins", {}) if isinstance(host_data, dict) else {}
     value = plugins.get(plugin_id) if isinstance(plugins, dict) else None
     if value is None:
@@ -344,11 +384,13 @@ def plan_host(host: str, state: HostState, selected: Mapping[str, Identity], rec
     update: list[str] = []
     for plugin_id, candidate in selected.items():
         installed = state.installed.get(plugin_id)
+        if host == "claude" and installed is not None and (installed.scope, installed.project_path) != (args.claude_scope, args.claude_project_path):
+            installed = None
         if installed is None:
             install.append(plugin_id)
             continue
         current = installed.version
-        previous = None if args.replace_marketplace else receipt_identity(receipt, host, plugin_id)
+        previous = None if args.replace_marketplace else receipt_identity(receipt, host, plugin_id, scope=args.claude_scope, project_path=args.claude_project_path)
         observed_digest = hash_tree(installed.root) if installed.root is not None else None
         exact_candidate = current == candidate.version and observed_digest == candidate.digest
         if (
@@ -390,6 +432,114 @@ def mutation(command: str, host: str, operation: str, plugin_id: str | None, arg
     return [command, "plugin", "update", "--scope", args.claude_scope, plugin_id]
 
 
+def claude_registry_data(raw: bytes) -> dict:
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise InstallError("Claude plugin registry is unreadable; cannot preserve registrations") from exc
+    if (not isinstance(data, dict) or data.get("version") != 2
+            or not isinstance(data.get("plugins"), dict)
+            or any(not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries)
+                   for entries in data["plugins"].values())):
+        raise InstallError("Claude registry preservation supports the observed version-2 format only")
+    return data
+
+
+def replace_registry(path: Path, expected: bytes | None, data: dict, mode: int) -> None:
+    # The lifecycle lock coordinates this installer and syscfg. Detect an
+    # intervening writer as well; never resolve a conflict by overwriting it.
+    current = path.read_bytes() if path.exists() else None
+    if current != expected:
+        raise InstallError("Claude plugin registry changed during preservation; inspect before retrying")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
+                                         prefix=".installed-plugins-preserve-", delete=False) as handle:
+            temporary = Path(handle.name)
+            os.chmod(handle.name, mode)
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if (path.read_bytes() if path.exists() else None) != expected:
+            raise InstallError("Claude plugin registry changed during preservation; inspect before retrying")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def preserve_claude_registry(plan: HostPlan, args: argparse.Namespace,
+                             environment: Mapping[str, str], *, transaction_mutates: bool | None = None) -> Iterator[None]:
+    """Preserve raw non-selected registrations across native installation calls.
+
+    This is a per-operation boundary, not a desired-state reconciler. Existing
+    changed records are conflicts; only missing protected records are restored.
+    """
+    active = plan.mutates if transaction_mutates is None else transaction_mutates
+    if plan.host != "claude" or args.dry_run or not active:
+        yield
+        return
+    config = Path(environment.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    path = config / "plugins" / "installed_plugins.json"
+    if not path.exists():
+        if plan.state.observed_installation_count or plan.state.installed:
+            raise InstallError("Claude reports installed plugins but the native registry could not be located; no mutation attempted")
+        yield
+        return
+    if path.is_symlink():
+        raise InstallError("cannot preserve a symlinked Claude plugin registry; no mutation attempted")
+    original = path.read_bytes()
+    before = claude_registry_data(original)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    mutable_ids = set(plan.install) | set(plan.update)
+    target_project = getattr(args, "claude_project_path", None)
+    # Validate potentially exempt scoped records before any host is mutated.
+    for plugin_id, entries in before["plugins"].items():
+        for entry in entries:
+            if plugin_id in mutable_ids and entry.get("scope") == args.claude_scope:
+                scoped_project_path(args.claude_scope, entry.get("projectPath"))
+    try:
+        yield
+    finally:
+        observed = path.read_bytes() if path.exists() else None
+        try:
+            after = claude_registry_data(observed or b"")
+        except InstallError:
+            replace_registry(path, observed, before, mode)
+            raise InstallError("Claude registry became unreadable during the transaction; restored the pre-operation registry")
+        repaired = copy.deepcopy(after)
+        conflicts: list[str] = []
+        restored = 0
+        for key, value in before.items():
+            if key == "plugins":
+                continue
+            if key not in repaired:
+                repaired[key] = value
+            elif repaired[key] != value:
+                conflicts.append(key)
+        for plugin_id, entries in before["plugins"].items():
+            for entry in entries:
+                if (plugin_id in mutable_ids and entry.get("scope") == args.claude_scope
+                        and scoped_project_path(args.claude_scope, entry.get("projectPath")) == target_project):
+                    continue
+                current = repaired["plugins"].setdefault(plugin_id, [])
+                matches = [e for e in current if (e.get("scope"), e.get("projectPath"))
+                           == (entry.get("scope"), entry.get("projectPath"))]
+                if not matches:
+                    current.append(copy.deepcopy(entry))
+                    restored += 1
+                elif len(matches) != 1 or matches[0] != entry:
+                    conflicts.append(plugin_id)
+        if repaired != after:
+            replace_registry(path, observed, repaired, mode)
+        if restored:
+            log(f"preserved {restored} missing non-selected Claude registration(s) after the installation transaction")
+        if conflicts:
+            raise InstallError("protected Claude registry data changed; preserved missing records but did not overwrite conflicts: " + ", ".join(sorted(set(conflicts))))
+
+
 def apply(plan: HostPlan, args: argparse.Namespace, environment: Mapping[str, str]) -> None:
     command = plan.state.command
     if plan.replace_marketplace:
@@ -404,7 +554,7 @@ def apply(plan: HostPlan, args: argparse.Namespace, environment: Mapping[str, st
             dry_run=args.dry_run,
             environment=environment,
         )
-    elif plan.update and not args.source_local:
+    elif (plan.install or plan.update) and not args.source_local:
         run(
             mutation(command, plan.host, "refresh", None, args),
             dry_run=args.dry_run,
@@ -559,15 +709,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     command = shutil.which(command_name)
                     if command is None:
                         raise InstallError(f"missing required command: {command_name}")
-                    state = discover(host, str(Path(command).resolve()), environment)
+                    state = discover(host, str(Path(command).resolve()), environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
                     plans.append(plan_host(host, state, plugins, receipt, args))
-                for plan in plans:
-                    apply(plan, args, environment)
+                with contextlib.ExitStack() as protections:
+                    for plan in plans:
+                        protections.enter_context(preserve_claude_registry(plan, args, environment, transaction_mutates=any(p.mutates for p in plans)))
+                    for plan in plans:
+                        apply(plan, args, environment)
                 if args.dry_run:
                     return 0
                 next_hosts: dict[str, object] = dict(receipt.get("hosts", {}))
                 for plan in plans:
-                    observed = discover(plan.host, plan.state.command, environment)
+                    observed = discover(plan.host, plan.state.command, environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
                     if not observed.marketplace_present or normalize_source(observed.marketplace_source) != normalize_source(args.resolved_source):
                         raise InstallError(f"{plan.host} marketplace verification failed")
                     for plugin_id, identity in plan.selected.items():
@@ -579,6 +732,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     next_hosts[plan.host] = {
                         "source": args.resolved_source,
                         "scope": args.claude_scope if plan.host == "claude" else "user",
+                        "projectPath": str(args.claude_project_path) if plan.host == "claude" and args.claude_project_path is not None else None,
                         "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in sorted(plan.selected.items())},
                     }
                 next_receipt = {"schema_version": 1, "marketplace": MARKETPLACE, "hosts": next_hosts}

@@ -1,0 +1,66 @@
+{
+  "model_executed": false,
+  "scope": "Disposable Claude profile and local marketplace; not complete filesystem isolation.",
+  "positive_profile_marker": true,
+  "native_registry_before_preservation": {
+    "version": 2,
+    "plugins": {
+      "preserved-profile-marker@agent-tooling": [
+        {
+          "scope": "user",
+          "installPath": "/tmp/agentic-claude-registry-6d5bx4a5/profile/plugins/cache/agent-tooling/preserved-profile-marker/0.0.1",
+          "version": "0.0.1",
+          "installedAt": "2026-09-14T00:00:00.000Z",
+          "lastUpdated": "2026-09-14T00:00:00.000Z",
+          "gitCommitSha": "1111111111111111111111111111111111111111"
+        }
+      ],
+      "agentic-design-and-evaluation@agent-tooling": [
+        {
+          "scope": "user",
+          "installPath": "/tmp/agentic-claude-registry-6d5bx4a5/profile/plugins/cache/agent-tooling/agentic-design-and-evaluation/1.0.0",
+          "version": "1.0.0",
+          "installedAt": "2026-09-14T20:35:24.277Z",
+          "lastUpdated": "2026-09-14T20:35:24.277Z"
+        }
+      ]
+    }
+  },
+  "preserved_marker_exactly": true,
+  "installed_plugin_ids": [
+    "agentic-design-and-evaluation@agent-tooling",
+    "preserved-profile-marker@agent-tooling"
+  ],
+  "native_overwrite_observed": false,
+  "final_cli_list": [
+    {
+      "id": "agentic-design-and-evaluation@agent-tooling",
+      "version": "1.0.0",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "/tmp/agentic-claude-registry-6d5bx4a5/profile/plugins/cache/agent-tooling/agentic-design-and-evaluation/1.0.0",
+      "installedAt": "2026-09-14T20:35:24.277Z",
+      "lastUpdated": "2026-09-14T20:35:24.277Z"
+    },
+    {
+      "id": "preserved-profile-marker@agent-tooling",
+      "version": "0.0.1",
+      "scope": "user",
+      "enabled": true,
+      "installPath": "/tmp/agentic-claude-registry-6d5bx4a5/profile/plugins/cache/agent-tooling/preserved-profile-marker/0.0.1",
+      "installedAt": "2026-09-14T00:00:00.000Z",
+      "lastUpdated": "2026-09-14T00:00:00.000Z",
+      "errors": [
+        "Plugin preserved-profile-marker not found in marketplace agent-tooling"
+      ],
+      "errorDetails": [
+        {
+          "type": "plugin-not-found",
+          "plugin": "preserved-profile-marker",
+          "marketplace": "agent-tooling"
+        }
+      ]
+    }
+  ],
+  "temporary_profile_cleaned": true
+}
