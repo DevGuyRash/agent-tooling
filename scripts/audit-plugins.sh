@@ -1,168 +1,99 @@
 #!/usr/bin/env sh
-
 set -eu
-
-usage() {
-    cat <<'EOF'
-Usage: audit-plugins.sh [--errors-only] [plugin-name ...]
-
-Gather what the skill-auditor's scripts can observe about every plugin, or the
-named ones, and print it for a reader to judge.
-
-The scripts report two kinds of thing. Errors are structural failures such as
-a link pointing at nothing, a required file absent, or two manifests of the
-same plugin disagreeing. They set the exit status but do not establish an
-overall quality verdict.
-
-Everything else is an observation: a fact whose significance depends on the
-target, carrying the reference that owns the rule. They are printed and never
-fail, because whether one is a defect depends on target intent and authority,
-which no structural reporter can decide.
-
-  --errors-only   omit observations; print only what is broken
-
-Exit: 0 no errors, 1 errors found, 2 unusable arguments.
-EOF
-}
-
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-AUDITOR="$REPO_ROOT/plugins/skill-auditor/skills/skill-auditor/scripts"
-SKILL_SCRIPTS="frontmatter_check reference_check script_sanity"
-ERRORS_ONLY=0
-TARGETS=""
-ERROR_TOTAL=0
-OBS_TOTAL=0
-CHECKED=0
-FAILED=""
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -h|--help) usage; exit 0 ;;
-        --errors-only) ERRORS_ONLY=1; shift ;;
-        -*) echo "error: unknown flag: $1" >&2; echo "hint: --errors-only, or a plugin name" >&2; exit 2 ;;
-        *) TARGETS="$TARGETS $1"; shift ;;
-    esac
-done
-
-if [ ! -d "$AUDITOR" ]; then
-    echo "error: skill-auditor scripts not found at $AUDITOR" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+    echo 'error: audit-plugins requires Python 3 to validate reporter output' >&2
     exit 2
 fi
+exec python3 - "$REPO_ROOT" "$@" <<'PY'
+"""Repository selection and strict report consumption, not semantic grading."""
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
 
-if [ -z "$TARGETS" ]; then
-    TARGETS=$(find "$REPO_ROOT/plugins" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r d; do
-        printf '%s ' "$(basename "$d")"
-    done)
-fi
+repo = Path(sys.argv.pop(1))
+parser = argparse.ArgumentParser(prog='audit-plugins.sh', description=(
+    'Run optional structural reporters on all plugins or named plugins. '
+    'A valid report establishes only its declared observations, not overall quality. '
+    'Malformed output or a failed invocation is a tool failure, never a pass.'))
+parser.add_argument('--errors-only', action='store_true', help='omit observations')
+parser.add_argument('plugins', nargs='*')
+args = parser.parse_args()
+reporters = repo / 'plugins/agentic-design-and-evaluation/skills/skill-auditor/scripts'
+if not reporters.is_dir():
+    parser.error(f'reporters not found at {reporters}')
+targets = args.plugins or sorted(p.name for p in (repo / 'plugins').iterdir() if p.is_dir())
+errors = observations = checked = failures = 0
 
-# Print a report, tally its two kinds, and remember whether it failed. The
-# script's own exit status is the only thing that decides failure here; this
-# runner adds no policy of its own.
-run_report() {
-    label="$1"
-    shift
-    status=0
-    output=$("$@" 2>&1) || status=$?
 
-    if [ "$status" -eq 2 ]; then
-        echo "  $label: could not run"
-        printf '%s\n' "$output" | sed 's/^/    /'
-        FAILED="$FAILED
-$label (could not run)"
-        ERROR_TOTAL=$((ERROR_TOTAL + 1))
-        return 0
-    fi
+def validate_report(data, name, status):
+    if not isinstance(data, dict) or data.get('script') != name:
+        raise ValueError('missing or mismatched report identity')
+    for count, items in (('error_count', 'errors'), ('observation_count', 'observations')):
+        if type(data.get(count)) is not int or data[count] < 0 or not isinstance(data.get(items), list):
+            raise ValueError(f'invalid {count} or {items}')
+        if data[count] != len(data[items]):
+            raise ValueError(f'{count} disagrees with {items}')
+        for item in data[items]:
+            if not isinstance(item, dict) or any(not isinstance(item.get(k), str) for k in ('code', 'subject', 'fact')):
+                raise ValueError(f'malformed item in {items}')
+            if 'source' in item and not isinstance(item['source'], str):
+                raise ValueError('invalid observation source')
+    if status != (1 if data['error_count'] else 0):
+        raise ValueError('process status contradicts the report')
 
-    errs=$(printf '%s\n' "$output" | sed -n 's/^errors=//p' | head -1)
-    obs=$(printf '%s\n' "$output" | sed -n 's/^observations=//p' | head -1)
-    [ -n "$errs" ] || errs=0
-    [ -n "$obs" ] || obs=0
-    ERROR_TOTAL=$((ERROR_TOTAL + errs))
-    OBS_TOTAL=$((OBS_TOTAL + obs))
 
-    # The exit status decides, not the parsed count. A checker that crashes or
-    # is killed emits no errors= line, and trusting the parse would report it
-    # as clean — which is how a broken checker hides.
-    if [ "$status" -ne 0 ]; then
-        FAILED="$FAILED
-$label"
-        if [ "$errs" -eq 0 ]; then
-            echo "  $label: exited $status without reporting an error"
-            printf '%s\n' "$output" | sed 's/^/    /'
-            return 0
-        fi
-    fi
+def report(name, target, label):
+    global errors, observations, failures
+    proc = None
+    try:
+        proc = subprocess.run(['sh', str(reporters / (name + '.sh')), str(target), '--format', 'json'],
+                              capture_output=True, text=True)
+        if proc.returncode not in (0, 1):
+            raise ValueError(f'process exited {proc.returncode}')
+        data = json.loads(proc.stdout)
+        validate_report(data, name, proc.returncode)
+    except (OSError, ValueError) as exc:
+        failures += 1
+        print(f'  {label}: tool failure: {exc}')
+        if proc is not None:
+            for line in (proc.stdout + proc.stderr).splitlines():
+                print('    ' + line)
+        return
+    errors += data['error_count']
+    observations += data['observation_count']
+    entries = [(item, 'ERROR ') for item in data['errors']]
+    if not args.errors_only:
+        entries += [(item, '') for item in data['observations']]
+    if entries:
+        print('  ' + label)
+    for item, prefix in entries:
+        print(f"    {prefix}{item['code']}: {item['subject']}\n      {item['fact']}")
+        if 'source' in item:
+            print('      source: ' + item['source'])
 
-    # A pure reporter emits neither count. Print it rather than swallow it.
-    if [ "$errs" -eq 0 ] && [ "$obs" -eq 0 ] &&
-       ! printf '%s\n' "$output" | grep -q '^observations='; then
-        if [ "$ERRORS_ONLY" -eq 0 ]; then
-            echo "  $label"
-            printf '%s\n' "$output" | sed '1d' | sed 's/^/    /'
-        fi
-        return 0
-    fi
 
-    if [ "$errs" -eq 0 ] && { [ "$ERRORS_ONLY" -eq 1 ] || [ "$obs" -eq 0 ]; }; then
-        return 0
-    fi
-
-    echo "  $label"
-    if [ "$ERRORS_ONLY" -eq 1 ]; then
-        # An ERROR line plus its indented continuation, stopping at the next
-        # unindented line. Printing to end-of-output would sweep in the
-        # observations, which errors-only exists to leave out.
-        printf '%s\n' "$output" | awk '
-            /^ERROR / { p = 1; print; next }
-            p && /^[[:space:]]/ { print; next }
-            { p = 0 }
-        ' | sed 's/^/    /'
-    else
-        printf '%s\n' "$output" | sed '1,/^observations=/d' | sed 's/^/    /'
-    fi
-}
-
-for plugin in $TARGETS; do
-    plugin_dir="$REPO_ROOT/plugins/$plugin"
-    # A named plugin that no longer exists is normal input: a change that
-    # deletes or renames one still names it in the diff. Skipping keeps the
-    # rest of the sweep running instead of aborting the whole audit.
-    if [ ! -d "$plugin_dir" ]; then
-        echo "$plugin: no such plugin directory — skipped"
+for name in targets:
+    target = repo / 'plugins' / name
+    # Deletions and renames appear in the changed-file input too.
+    if not target.is_dir():
+        print(f'{name}: no such plugin directory — skipped')
         continue
-    fi
+    print(name)
+    checked += 1
+    report('plugin_check', target, f'{name}: plugin_check')
+    for skill in sorted((target / 'skills').glob('*/SKILL.md')):
+        for helper in ('frontmatter_check', 'reference_check', 'script_sanity'):
+            report(helper, skill.parent, f'{name}/{skill.parent.name}: {helper}')
 
-    echo "$plugin"
-    CHECKED=$((CHECKED + 1))
-
-    run_report "$plugin: plugin_check" sh "$AUDITOR/plugin_check.sh" "$plugin_dir"
-
-    for skill_md in "$plugin_dir"/skills/*/SKILL.md; do
-        [ -f "$skill_md" ] || continue
-        skill_dir=$(dirname "$skill_md")
-        slug=$(basename "$skill_dir")
-        for check in $SKILL_SCRIPTS; do
-            run_report "$plugin/$slug: $check" sh "$AUDITOR/$check.sh" "$skill_dir"
-        done
-    done
-done
-
-echo
-echo "plugins checked: $CHECKED"
-echo "errors: $ERROR_TOTAL"
-echo "observations: $OBS_TOTAL"
-
-FAILED_TRIMMED=$(printf '%s\n' "$FAILED" | sed '/^$/d')
-
-if [ "$ERROR_TOTAL" -eq 0 ] && [ -z "$FAILED_TRIMMED" ]; then
-    echo "result: nothing broken"
-    exit 0
-fi
-
-if [ "$ERROR_TOTAL" -eq 0 ]; then
-    echo "result: a check failed without reporting an error — treat this as broken tooling"
-else
-    echo "result: $ERROR_TOTAL error(s) — each is broken for every target, not a matter of convention"
-fi
-printf '%s\n' "$FAILED_TRIMMED" | sed 's/^/  /'
-exit 1
+print(f'\nplugins checked: {checked}\nerrors: {errors}\nobservations: {observations}\ntool failures: {failures}')
+if failures or errors:
+    print(f'result: {errors} structural error(s), {failures} tool failure(s); required evidence is incomplete where a tool failed')
+    raise SystemExit(1)
+if checked == 0:
+    print('result: no existing plugin selected; no structural checks performed')
+else:
+    print('result: selected structural checks passed')
+PY

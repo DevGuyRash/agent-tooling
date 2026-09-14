@@ -31,3 +31,4 @@ An accepted ADR records the decision horizon at the time it was made. When evide
 | [0023](0023-narrow-assurance-when-coverage-does-not-improve.md) | Narrow assurance claims when repeated interventions do not improve coverage |
 | [0024](0024-compensate-observed-blind-spots-with-boundary-evidence.md) | Compensate a repeated model blind spot with observable boundary evidence |
 | [0025](0025-centralize-comparative-method-declaratively.md) | Centralize comparative method in a declarative skill |
+| [0026](0026-agentic-design-and-evaluation.md) | Share one foundation across prompt/context design, skill audits, and domain-general comparisons |

@@ -54,16 +54,10 @@
       "version": "1.1.0"
     },
     {
-      "name": "skill-auditor",
-      "source": "./plugins/skill-auditor",
-      "description": "Audit skills; delegate new comparisons when available",
-      "version": "4.0.0"
-    },
-    {
-      "name": "split-testing",
-      "source": "./plugins/split-testing",
-      "description": "Defensible evidence for live comparisons",
-      "version": "2.0.0"
+      "name": "agentic-design-and-evaluation",
+      "source": "./plugins/agentic-design-and-evaluation",
+      "description": "Design prompts and context; audit and compare",
+      "version": "1.0.0"
     },
     {
       "name": "chatgpt-browser",

@@ -1,0 +1,10 @@
+{
+  "body_bytes": 149139,
+  "body_sha256": "6ed825a6baa5fef58f815809ba9e8fbc1f887996704e0fe1261685bceaa042fe",
+  "body_preserved": true,
+  "charter_bytes": 7791,
+  "charter_sha256": "dcd2e172594eeb99ab817f8ad5d8dab655ea473251145a7252822d34453df54d",
+  "charter_preserved": true,
+  "navigation_bytes": 923,
+  "scope": "One-time import fidelity; future packaging checks use the current canonical plugin source."
+}

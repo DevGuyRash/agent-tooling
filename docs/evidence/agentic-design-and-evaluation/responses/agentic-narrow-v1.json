@@ -1,0 +1,5 @@
+{
+  "capture": "agentic-narrow-v1",
+  "text": "narrow-v1.zip\nZip Archive\nUse the attached Prompt and Context Design skill. Change only “engineers” to “procurement managers” in this prompt. Return only the revised prompt; preserve everything else exactly:\n\nWrite a 150-word briefing for engineers. Cite the supplied sources. Do not invent figures.\n\nWrite a 150-word briefing for procurement managers. Cite the supplied sources. Do not invent figures.\n\nChatGPT can make mistakes. Check important info.\n\nExtra High",
+  "rendered_sha256": "3c46f455308bfdf4e5d2ee85d367769366be83f93d4daba2c4c193971926efac"
+}

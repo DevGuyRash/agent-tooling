@@ -1,4 +1,0 @@
-interface:
-  display_name: "Split Testing"
-  short_description: "Defensible evidence for live comparisons"
-  default_prompt: "Use $split-testing to obtain the strongest defensible evidence for this decision."

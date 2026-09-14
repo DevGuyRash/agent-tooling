@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prompt and Context Design"
+  short_description: "Write useful AI prompts and arrange their context"
+  default_prompt: "Use $prompt-context-design to draft instructions for this task."

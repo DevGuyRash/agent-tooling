@@ -1,0 +1,1 @@
+Use the attached reminder-drafting skill to write the participant reminder for these event notes. The coordinator will review and send it. Return the draft.

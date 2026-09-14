@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skill Auditor"
+  short_description: "Audit skills and plugins as delivered capabilities"
+  default_prompt: "Use $skill-auditor to assess this skill or plugin."

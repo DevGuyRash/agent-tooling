@@ -1,0 +1,15 @@
+# Arranging Context
+
+Context design concerns what the executor can access, what it actually receives, and what it can still recover when needed. The foundation's sections 7–10 explain why a representation, an interpretation, an available source, and an active memory serve different purposes. You SHOULD choose an arrangement for the live task rather than maximizing or minimizing text in isolation.
+
+You SHOULD inspect the real delivery surface when it matters: host instructions, attachments, retrieved passages, file mounts, tool responses, permissions, and output limits. A listed resource can be unreadable; a successful file read can be truncated; a retained transcript can be absent from the active context. You SHOULD treat these as separate observations. You SHOULD recover missing passages that affect the decision, not an entire already-known corpus by habit.
+
+You SHALL keep consequential source identities and status recoverable. A current operating policy, a historical observation, an example, and a proposed fix can all be useful while carrying different authority. You SHALL preserve original sources or reliable access when a fresh assessment could change the interpretation. An index or summary should help locate evidence without becoming the only permitted view of it.
+
+Partition information around decisions the executor can actually make. You SHALL keep generally needed context near the entry; make substantial conditional material accessible at the point it becomes useful. Search terms, headings, compact navigation, direct links, or structured lookup can help. A short instruction may need no separate reference. References may cross within an explicitly distributed package; verify that the recipient receives that complete boundary and can resolve them from its real location.
+
+You SHOULD avoid turning a route into an ontology. A current index cannot exclude an unanticipated concern, and reading one resource need not forbid opening another. Material that is currently available and unchanged need not be reread; after context loss, a statement that it was read earlier does not restore its meaning. You SHOULD recover the relevant grounds and current decisions.
+
+Context can be useful even if the executor could rediscover it. Useful preparation may save repeated searches or preserve a non-obvious relationship. Too much irrelevant material can obscure a needed distinction. You SHOULD measure the active loading path and resulting work where context cost is consequential; bytes and estimated tokens are signals, not universal quality gates.
+
+For generated artifacts, you SHOULD decide explicitly what travels with the output. The downstream reader should receive the information and authority needed for its own assignment, not references to a private authoring note, invisible conversation, or this plugin's cache. A snapshot preserves a fixed delivery; an intentional live dependency needs reliable access and a clear update relationship. A later source edit does not automatically update an already-delivered artifact.

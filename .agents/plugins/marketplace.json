@@ -101,30 +101,17 @@
       "category": "Development"
     },
     {
-      "name": "skill-auditor",
+      "name": "agentic-design-and-evaluation",
       "source": {
         "source": "local",
-        "path": "./plugins/skill-auditor"
+        "path": "./plugins/agentic-design-and-evaluation"
       },
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
       "category": "Developer Tools",
-      "description": "Audit skills; delegate new comparisons when available"
-    },
-    {
-      "name": "split-testing",
-      "source": {
-        "source": "local",
-        "path": "./plugins/split-testing"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Testing",
-      "description": "Defensible evidence for live comparisons"
+      "description": "Design prompts and context; audit and compare"
     },
     {
       "name": "chatgpt-browser",

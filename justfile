@@ -31,18 +31,17 @@ lint:
 # Run the workspace and repo-level script test suites
 test:
   cargo test --workspace --locked
-  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port scripts.tests.test_install_all scripts.tests.test_comparative_plugins
+  python3 -m unittest scripts.tests.test_render_table scripts.tests.test_package_skills scripts.tests.test_plugin_port scripts.tests.test_install_all scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests
   python3 -m unittest discover -s plugins/excel-foundry/skills/excel-foundry/tests -p 'test_*.py'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/software-development/tests -p 'test_*.py'
-  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/skill-auditor/skills/skill-auditor/tests -p 'test_*.py'
-  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/split-testing/skills/split-testing/tests -p 'test_*.py'
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
   bash plugins/friction-diagnostics/skills/friction-diagnostics/tests/smoke-posix.sh
 
 # Run the friction-diagnostics plugin smoke suite (POSIX)
 test-friction-diagnostics:
   bash plugins/friction-diagnostics/skills/friction-diagnostics/tests/smoke-posix.sh
 
-# Run the skill-auditor deterministic checks over every plugin, or the named ones
+# Run the optional structural reporters over every plugin, or the named ones
 audit-plugins *args:
   scripts/audit-plugins.sh {{args}}
 
@@ -50,7 +49,7 @@ audit-plugins *args:
 test-plugin-port:
   python3 -m unittest scripts.tests.test_plugin_port
 
-# Run opt-in live plugin portability checks against local CLI tools
+# Run live checks; opt into each host with PLUGIN_PORT_CODEX=1 / PLUGIN_PORT_CLAUDE=1
 test-plugin-port-live:
   PLUGIN_PORT_LIVE=1 python3 -m unittest scripts.tests.test_plugin_port_live
 

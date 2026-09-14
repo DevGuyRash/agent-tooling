@@ -1,0 +1,121 @@
+{
+  "model_executed": false,
+  "binary": "/usr/lib/chatgpt/resources/codex",
+  "positive_profile_marker": true,
+  "version": "codex-cli 0.154.0-alpha.6.2",
+  "marketplace": {
+    "marketplaceName": "agentic-final-package-probe",
+    "installedRoot": "/tmp/agentic-final-package-3kketneo/marketplace",
+    "alreadyAdded": false
+  },
+  "install": {
+    "pluginId": "agentic-design-and-evaluation@agentic-final-package-probe",
+    "name": "agentic-design-and-evaluation",
+    "marketplaceName": "agentic-final-package-probe",
+    "version": "1.0.0",
+    "installedPath": "/tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0",
+    "authPolicy": "ON_INSTALL"
+  },
+  "cached_version": "1.0.0",
+  "source_path_removed": true,
+  "package_file_hashes": {
+    "README.md": "c21b742cd6346ff1211d3c1722ce323143fdb4c81e481113614eabc22149be2d",
+    "LICENSE": "6a5a3c39c620ad0b1f2c60af6849403cae77492b0da8046a6d1fd2c58d2ece51",
+    ".codex-plugin/plugin.json": "b57f34bcb42f595f898a4e8bb18f8a103fd09fcbb06d7a15b86937bdbb449f04",
+    ".claude-plugin/plugin.json": "d6d62ea15598e81de30cd057b69a230c8098480a91a3353a3d41bc2f0c2f4edd",
+    "skills/foundational-knowledge/SKILL.md": "fe5d79339992b9d7045f0b9d23a007e0b0b03317bc9ac019ec0995139b9f6ef5",
+    "skills/split-testing/SKILL.md": "97c649e874faa9170292d36fd9b3f06ac1ebcf4a226c11c5d77512be45765006",
+    "skills/skill-auditor/SKILL.md": "d49c869f9941059bbf455563c1c7125e1ab4111a69d17556340929dcdf1d198a",
+    "skills/prompt-context-design/SKILL.md": "6809d3be08eeb9ce7cdf10873dd4cb29b26cee4b8fe4668ff17931e4e3793951",
+    "skills/prompt-context-design/references/continuation-and-handoffs.md": "401b8d5ef846935dcd124b2e582fc834ded95bed14e5000214335e47a3d718d7",
+    "skills/prompt-context-design/references/designing-instructions.md": "f86faeee52f7e0cbbc53c4dbd19d41d18a4e1c5ebc386dc8f68db2d3905d65f3",
+    "skills/prompt-context-design/references/arranging-context.md": "77505b6bd5d0ff97aedf8dc05216bc9682a79e6deb363252b8827ea631685497",
+    "skills/prompt-context-design/agents/openai.yaml": "c14bff9e6d9ebf9423683238b75fb22a889f20bb97288a39df5ecf9229967d6f",
+    "skills/skill-auditor/tests/test_script_sanity.py": "99d721b9c1ce5c36f66aad04943169162aaf9913e3bf697ea3817078e125ba6d",
+    "skills/skill-auditor/tests/test_frontmatter_check.py": "7a42eab87212d960b45da96e935d2f269af03a1999b4e19d1f406ddf58599870",
+    "skills/skill-auditor/tests/test_plugin_check.py": "86ec584d2a7627af9466fe1e260686e3b128f06a5193a353dc1bfd6e0098592a",
+    "skills/skill-auditor/tests/test_reference_check.py": "151a31df877cedad7f93ee1e932eb4d10b84699a95cb53c7336e9df106a4ff49",
+    "skills/skill-auditor/references/reporter-tools.md": "f46b386c55b6daadb96e035f515cfa08b103f251569b0abe8c33b9131a353c15",
+    "skills/skill-auditor/references/executable-evidence.md": "08af8d20b42f3fd7bf944d04a8184526421c3e6a102ec26f53d7481709732edf",
+    "skills/skill-auditor/references/open-standard.md": "3b7b4b84d05c34e70c79907094406e20f30e643d8b4ca68ec95ffeb15f05b128",
+    "skills/skill-auditor/references/instruction-design.md": "0ab6b7de0e497d908daeb6387ad5b3165192a3c601a23b50db66b8d99a52b184",
+    "skills/skill-auditor/references/plugin-fit.md": "294ffc52ac5734c49941336bf02b4cecb206a386d8d9dcd781514a8984653add",
+    "skills/skill-auditor/references/host-contracts.md": "f83b2f425d14a96f1a45a0ab5703f468ff8fa7886eb2d6cc93e90f533446ef9f",
+    "skills/skill-auditor/references/repo-overlay.md": "caf6704a2b4bc7b4a38014d6b868c3069e4295d52fbdb597b03ac78b2da37643",
+    "skills/skill-auditor/references/context-and-source-evidence.md": "1ae8eae981156d45cbe313f5f656392ff7d020481284e1a041978e6baec30d9f",
+    "skills/skill-auditor/scripts/script_sanity.sh": "cba5e25b6bd83e1e627b8665aaf073a96d0811185d0d5555b6097d2ade6d4543",
+    "skills/skill-auditor/scripts/reference_check.sh": "99bf6f0a80fa98937ab836ba7dd28ef8d9261435640dceaa4453059b526923fa",
+    "skills/skill-auditor/scripts/frontmatter_check.sh": "72c46f6c29e1d53148916d14b86b030dca00c3180d333b09282d7c9be0967a33",
+    "skills/skill-auditor/scripts/plugin_check.sh": "9e8f8edc1233c7f5a04a08e68040d85aa2a847c6b892b8c7b39a9b482fc6ec35",
+    "skills/skill-auditor/agents/openai.yaml": "6030cf18febc15ed67079f07fae793254c63cae506e4304bcc635b3da73baf48",
+    "skills/split-testing/references/presenting-evidence.md": "33b27d8a90f4d11062d3d272ba9e0d3f9cdd8ac86101faa161798a2643bd34c3",
+    "skills/split-testing/references/information-and-execution.md": "bb2a695abd5b9dcc26c1aa207cbe2ca2ca9b4e68a3329721f0151818f7115666",
+    "skills/split-testing/references/arranging-evidence.md": "dc807dd462053fd03f4611062ab751b33a2bad7fb886d3bd297a4e01e871aedb",
+    "skills/split-testing/references/validity-and-attribution.md": "63a915dee364120fc61aa24cd3e9134b34afa213dcc57ee71400a91700fb5a17",
+    "skills/split-testing/agents/openai.yaml": "3002277b2a99e54a2b164bdc9030c12569d62a78294fbb767546fd89b634fe7b",
+    "skills/foundational-knowledge/references/foundational-knowledge.md": "f755e6ede14a6d9d8c674a6eed64dfff544489fd9f3c1cff7c8aecb493ff9faf",
+    "skills/foundational-knowledge/references/governing-architecture.md": "dcd2e172594eeb99ab817f8ad5d8dab655ea473251145a7252822d34453df54d",
+    "skills/foundational-knowledge/agents/openai.yaml": "02570e586fb28220256b23034156f1201d554d280c7b1b7d4be15672ba07eb5e"
+  },
+  "entries": [
+    {
+      "slug": "prompt-context-design",
+      "catalog_and_cache_exposed": true,
+      "structural_report": {
+        "script": "reference_check",
+        "skill_dir": "/tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0/skills/prompt-context-design",
+        "linked_references": 8,
+        "active_references": 3,
+        "error_count": 0,
+        "errors": [],
+        "observation_count": 0,
+        "observations": []
+      }
+    },
+    {
+      "slug": "skill-auditor",
+      "catalog_and_cache_exposed": true,
+      "structural_report": {
+        "script": "reference_check",
+        "skill_dir": "/tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0/skills/skill-auditor",
+        "linked_references": 11,
+        "active_references": 8,
+        "error_count": 0,
+        "errors": [],
+        "observation_count": 0,
+        "observations": []
+      }
+    },
+    {
+      "slug": "split-testing",
+      "catalog_and_cache_exposed": true,
+      "structural_report": {
+        "script": "reference_check",
+        "skill_dir": "/tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0/skills/split-testing",
+        "linked_references": 6,
+        "active_references": 4,
+        "error_count": 0,
+        "errors": [],
+        "observation_count": 0,
+        "observations": []
+      }
+    },
+    {
+      "slug": "foundational-knowledge",
+      "catalog_and_cache_exposed": true,
+      "structural_report": {
+        "script": "reference_check",
+        "skill_dir": "/tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0/skills/foundational-knowledge",
+        "linked_references": 2,
+        "active_references": 2,
+        "error_count": 0,
+        "errors": [],
+        "observation_count": 0,
+        "observations": []
+      }
+    }
+  ],
+  "claude_validation": "Validating plugin manifest: /tmp/agentic-final-package-3kketneo/profile/plugins/cache/agentic-final-package-probe/agentic-design-and-evaluation/1.0.0/.claude-plugin/plugin.json\n\n\u2714 Validation passed",
+  "temporary_profile_cleaned": true,
+  "scope": "Actual final package installation, catalog/cache exposure, full byte preservation, and file-reference checks; no model execution, implicit selection, or inferred reading path."
+}

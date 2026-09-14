@@ -1,0 +1,15 @@
+# Plugin Fit
+
+A plugin is a distribution and composition boundary. You SHOULD inspect the capability it actually delivers: skills, resources, tools, hooks, host metadata, dependencies, and the user-visible result. File counts and package symmetry cannot decide whether that arrangement is useful. A single short skill may be sufficient; a package can legitimately share complete resources among independently callable entries.
+
+Discovery differs from execution. A skill that works when explicitly supplied may still fail to activate for a natural request, collide with a sibling, or activate unnecessarily. You SHOULD inspect the actual model-visible catalog and host behavior before attributing routing to frontmatter alone. Names, descriptions, truncation, neighboring skills, invocation policy, host version, and ambient context can all affect exposure. Positive, negative, and near-neighbor requests are useful when a routing boundary is the live uncertainty; they are not a permanent universal suite.
+
+Package membership makes resources available; it does not inherently require every sibling workflow. Trace the composed assignment when one entry refers to another. Reading specialist knowledge can support the same executor without creating another controller, mandatory handoff, or additional review loop. Newly needed comparative work uses Split Testing's maintained method rather than a competing audit-specific method.
+
+You SHOULD check information and outputs at their own delivery boundaries. A sibling reference can be sound inside a complete installed plugin but break when only one skill directory is extracted. A generated prompt may need relevant constraints and sources that were available only to its author. You SHALL verify what the actual consumer receives and can use from its working directory, cache location, permissions, and runtime.
+
+Late integration can make locally correct parts fail together. Where one component produces configuration or artifacts another consumes, follow that interface through actual use. A declared tool, working helper, successful conversion, or clean install cannot establish the next boundary by itself. A host fixture is useful evidence of the fixture; it does not qualify a materially different final package.
+
+You SHALL keep benefit claims tied to the work observed. Historical records include long successful runs, invalid instruments, changing user scope, provider failures, and avoidable detours. They can reveal consequential questions without establishing population failure rates or proving a redesign's benefit. Freshness, blind labels, or reviewer agreement do not establish independence or truth on their own.
+
+Relevant friction records can supply original observations if the user provides or authorizes access. Friction Diagnostics owns its event store, capture, mending, and independent hooks. Its records are neither a dependency of this package nor automatically established causal diagnoses; consulting them does not start a capture–mend–audit cycle.

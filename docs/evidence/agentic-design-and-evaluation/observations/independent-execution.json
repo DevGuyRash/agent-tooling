@@ -1,0 +1,26 @@
+{
+  "revenue_first": {
+    "exit": 0,
+    "stdout": "[{\"job\":\"J1\",\"finish_minute\":7,\"earned\":50},{\"job\":\"J4\",\"finish_minute\":11,\"earned\":40},{\"job\":\"J2\",\"finish_minute\":14,\"earned\":0},{\"job\":\"J3\",\"finish_minute\":16,\"earned\":0}]\n",
+    "stderr": "",
+    "total": 90
+  },
+  "deadline_first": {
+    "exit": 0,
+    "stdout": "[{\"job\":\"J2\",\"finish_minute\":3,\"earned\":30},{\"job\":\"J3\",\"finish_minute\":5,\"earned\":25},{\"job\":\"J1\",\"finish_minute\":12,\"earned\":0},{\"job\":\"J4\",\"finish_minute\":16,\"earned\":0}]\n",
+    "stderr": "",
+    "total": 55
+  },
+  "session-list": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": "",
+    "output": "Workshop: Lamp clinic \u2014 2026-09-21\nWorkshop: Radio clinic \u2014 2026-09-24\n"
+  },
+  "workshop-list": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: [Errno 2] No such file or directory: 'references/settings.json'\n",
+    "output": null
+  }
+}

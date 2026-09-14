@@ -27,8 +27,7 @@ Current local plugins:
 - `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and bundles the agnostic `$authoring-goals` skill payload.
 - `plugins/playwright-testing/`
 - `plugins/project-harness/`
-- `plugins/skill-auditor/` owns audit disposition and delegates newly needed comparative evidence to Split Testing in ordinary context without a hard plugin dependency.
-- `plugins/split-testing/` owns generic comparative-evidence method without owning domain truth, maker values, audit disposition, a caller format, or an execution harness.
+- [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Friction Diagnostics remains a separate plugin.
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
 
 ## Plugin Packages
@@ -160,6 +159,21 @@ just install-all --exclude 'software-development'
 ```
 
 Use `scripts/install-all --help` for source, scope, host, filter, force, and dry-run options. A source mismatch fails before mutation unless `--replace-marketplace` is explicit; replacement invalidates the matching receipt identity and rematerializes selected plugins while limiting Claude removal to the selected `--claude-scope`. `--force` explicitly reinstalls every selected plugin and permits a downgrade. The script shares syscfg's agent-plugin lifecycle lock, does not replace or unset `CODEX_HOME`, and prints a restart warning only after replacing a plugin root.
+
+### `agentic-design-and-evaluation` migration
+
+Agentic Design & Evaluation replaces the `skill-auditor` and `split-testing` plugin identities while retaining their skill invocation slugs inside the new package. After the release reaches `DevGuyRash/agent-tooling@main`, run `scripts/install-all --include agentic-design-and-evaluation` with the normal canonical source. Verify the new package on both intended hosts before retiring either old installation.
+
+For old installations in the user scope, the selected retirement commands are:
+
+```sh
+codex plugin remove skill-auditor@agent-tooling
+codex plugin remove split-testing@agent-tooling
+claude plugin uninstall --scope user --keep-data skill-auditor@agent-tooling
+claude plugin uninstall --scope user --keep-data split-testing@agent-tooling
+```
+
+Inspect the actual installed scopes first; do not remove a separate project or local declaration by assumption. These commands preserve unrelated plugins and retain any old Claude plugin data. Removing an old marketplace entry alone does not uninstall its cached copy. A running session can retain old instructions; a fresh session is needed for the new catalog and package.
 
 ### `software-development` migration
 

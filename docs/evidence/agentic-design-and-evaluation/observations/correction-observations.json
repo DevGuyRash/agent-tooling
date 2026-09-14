@@ -1,0 +1,92 @@
+{
+  "old_revision": "30961873ce134f2e7294aa70a7f29f636e36f0f5",
+  "results": {
+    "old": {
+      "plugin_check_temporary_ownership": {
+        "exit": 0,
+        "stdout": "{\"script\":\"plugin_check\",\"plugin_dir\":\"/tmp/agentic-corrections-s47cgij0/old-plugin_check/target\",\"plugin\":\"target\",\"skills\":1,\"unchecked\":\"catalog,install\",\"error_count\":0,\"errors\":[],\"observation_count\":0,\"observations\":[]}\n",
+        "stderr": "",
+        "protected_before": "UNCHANGED FIXTURE\n",
+        "protected_after": "fixture\tFixture.\n",
+        "source_sha256": "9e8f8edc1233c7f5a04a08e68040d85aa2a847c6b892b8c7b39a9b482fc6ec35"
+      },
+      "script_sanity_temporary_ownership": {
+        "exit": 0,
+        "stdout": "{\"script\":\"script_sanity\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/old-script_sanity/target\",\"script_count\":0,\"error_count\":0,\"errors\":[],\"observation_count\":0,\"observations\":[]}\n",
+        "stderr": "",
+        "protected_before": "UNCHANGED FIXTURE\n",
+        "protected_after": "",
+        "source_sha256": "cba5e25b6bd83e1e627b8665aaf073a96d0811185d0d5555b6097d2ade6d4543"
+      },
+      "mixed_line_endings": {
+        "actual_execution": {
+          "exit": 0,
+          "stdout": "RUN_OK\n",
+          "stderr": ""
+        },
+        "report": {
+          "exit": 1,
+          "stdout": "{\"script\":\"script_sanity\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/old-mixed\",\"script_count\":1,\"error_count\":1,\"errors\":[{\"code\":\"crlf_in_executable\",\"subject\":\"scripts/run.py\",\"fact\":\"the script uses CRLF; the carriage return becomes part of the interpreter path and the shebang fails\"}],\"observation_count\":0,\"observations\":[]}\n",
+          "stderr": ""
+        }
+      },
+      "unicode_description": {
+        "characters_in_supplied_description": 600,
+        "report": {
+          "exit": 0,
+          "stdout": "{\"script\":\"frontmatter_check\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/old-unicode\",\"name\":\"old-unicode\",\"description_chars\":1200,\"error_count\":0,\"errors\":[],\"observation_count\":1,\"observations\":[{\"code\":\"description_length\",\"subject\":\"frontmatter\",\"fact\":\"the description is 1200 characters, over the documented limit of 1024\",\"source\":\"open-standard\"}]}\n",
+          "stderr": ""
+        }
+      },
+      "malformed_report_wrapper": {
+        "exit": 0,
+        "stdout": "fixture\n\nplugins checked: 1\nerrors: 0\nobservations: 0\nresult: nothing broken\n",
+        "stderr": ""
+      }
+    },
+    "repaired": {
+      "plugin_check_temporary_ownership": {
+        "exit": 0,
+        "stdout": "{\"script\":\"plugin_check\",\"plugin_dir\":\"/tmp/agentic-corrections-s47cgij0/repaired-plugin_check/target\",\"plugin\":\"target\",\"skills\":1,\"unchecked\":\"catalog,install\",\"error_count\":0,\"errors\":[],\"observation_count\":0,\"observations\":[]}\n",
+        "stderr": "",
+        "protected_before": "UNCHANGED FIXTURE\n",
+        "protected_after": "UNCHANGED FIXTURE\n",
+        "source_sha256": "48ebbb9dae0abb6ba9a3bc25ebb6a20853c0557a007d84dfd8dfbdf33ca98f74"
+      },
+      "script_sanity_temporary_ownership": {
+        "exit": 0,
+        "stdout": "{\"script\":\"script_sanity\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/repaired-script_sanity/target\",\"script_count\":0,\"error_count\":0,\"errors\":[],\"observation_count\":0,\"observations\":[]}\n",
+        "stderr": "",
+        "protected_before": "UNCHANGED FIXTURE\n",
+        "protected_after": "UNCHANGED FIXTURE\n",
+        "source_sha256": "afea8f5c3d53d47ceb89106001adfb0f6aad32926f99ebe2afc825b9ffe1215e"
+      },
+      "mixed_line_endings": {
+        "actual_execution": {
+          "exit": 0,
+          "stdout": "RUN_OK\n",
+          "stderr": ""
+        },
+        "report": {
+          "exit": 0,
+          "stdout": "{\"script\":\"script_sanity\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/repaired-mixed\",\"script_count\":1,\"error_count\":0,\"errors\":[],\"observation_count\":1,\"observations\":[{\"code\":\"crlf\",\"subject\":\"scripts/run.py\",\"fact\":\"the file uses CRLF line endings\",\"source\":\"repo-overlay\"}]}\n",
+          "stderr": ""
+        }
+      },
+      "unicode_description": {
+        "characters_in_supplied_description": 600,
+        "report": {
+          "exit": 0,
+          "stdout": "{\"script\":\"frontmatter_check\",\"skill_dir\":\"/tmp/agentic-corrections-s47cgij0/repaired-unicode\",\"name\":\"repaired-unicode\",\"description_bytes\":1200,\"error_count\":0,\"errors\":[],\"observation_count\":0,\"observations\":[]}\n",
+          "stderr": ""
+        }
+      },
+      "malformed_report_wrapper": {
+        "exit": 1,
+        "stdout": "fixture\n  fixture/fixture: frontmatter_check: tool failure: Expecting value: line 1 column 1 (char 0)\n    CHECK_SKIPPED\n\nplugins checked: 1\nerrors: 0\nobservations: 0\ntool failures: 1\nresult: 0 structural error(s), 1 tool failure(s); required evidence is incomplete where a tool failed\n",
+        "stderr": ""
+      }
+    }
+  },
+  "temporary_state_cleaned": true
+}

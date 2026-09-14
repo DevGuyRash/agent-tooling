@@ -355,6 +355,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python for instruction package tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install metadata parser for instruction package tests
+        run: python3 -m pip install "PyYAML>=6,<7"
+
+      - name: Test instruction package integration and reporters
+        shell: bash
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
+
       - name: Audit the plugins this change touches
         shell: bash
         run: |
@@ -365,12 +379,10 @@ jobs:
           # Only changed plugins: a whole-repo gate would fail on findings that
           # predate the auditor and block every unrelated change.
           #
-          # Only errors gate: the scripts separate facts with no legitimate
-          # reading (a dead link, a launcher that cannot be invoked, manifests
-          # of one plugin disagreeing) from facts whose significance depends on
-          # the target (lengths, naming, house idiom). The second kind is
-          # printed for a reader and never fails, because whether it is a defect
-          # depends on the target's age and profile, which no script can see.
+          # Reporter errors gate the selected structural contract. Observations
+          # remain facts for target-specific judgment. The repository wrapper
+          # also rejects malformed reports and failed collection; neither this
+          # job nor a valid structural report establishes semantic effectiveness.
           event_name="${{ github.event_name }}"
           base_sha=""
           head_sha="${{ github.sha }}"
@@ -383,8 +395,8 @@ jobs:
           fi
 
           if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
-            echo "No usable base SHA for $event_name; auditing skill-auditor only."
-            exec sh scripts/audit-plugins.sh skill-auditor
+            echo "No usable base SHA for $event_name; checking agentic-design-and-evaluation only."
+            exec sh scripts/audit-plugins.sh agentic-design-and-evaluation
           fi
 
           changed=$(git diff --name-only "$base_sha" "$head_sha" \

@@ -9,6 +9,8 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import uuid
+from unittest import mock
 from pathlib import Path
 
 
@@ -63,7 +65,7 @@ class PluginPortLiveTests(unittest.TestCase):
             textwrap.dedent(
                 """
                 ---
-                name: Live Codex
+                name: live-codex
                 description: Live Codex fixture skill.
                 ---
 
@@ -100,40 +102,51 @@ class PluginPortLiveTests(unittest.TestCase):
         )
 
     def _codex_binary_honoring_home(self, codex_home: Path) -> str | None:
-        """A codex executable that respects CODEX_HOME=<temp dir>.
+        """Require positive model-visible evidence before any install mutation.
 
-        Wrapper launchers may pin CODEX_HOME to the user's real home (observed
-        live: temp-home isolation silently broken, with installs landing in the
-        real cache). Such wrappers advertise the resolved home in a banner
-        line, so reject any candidate that reports a different CODEX_HOME than
-        the one we set.
+        A silent wrapper can return success while resetting CODEX_HOME. A unique
+        skill marker and the intended profile path must appear in developer
+        prompt input from an unrelated cwd. This verifies profile selection,
+        not complete filesystem or ambient-context isolation; no model runs.
         """
         candidates: list[str] = []
-        if os.environ.get("PLUGIN_PORT_CODEX_BIN"):
-            candidates.append(os.environ["PLUGIN_PORT_CODEX_BIN"])
-        which = shutil.which("codex")
-        if which:
-            candidates.append(which)
-        candidates.extend(p for p in ("/usr/bin/codex", "/usr/local/bin/codex") if Path(p).exists())
+        override = os.environ.get("PLUGIN_PORT_CODEX_BIN")
+        if override:
+            candidates.append(override)
+        else:
+            which = shutil.which("codex")
+            if which:
+                candidates.append(which)
+            candidates.extend(p for p in ("/usr/bin/codex", "/usr/local/bin/codex") if Path(p).exists())
         env = {**os.environ, "CODEX_HOME": str(codex_home)}
-        for cand in dict.fromkeys(candidates):
-            try:
-                probe = subprocess.run(
-                    [cand, "plugin", "marketplace", "list"],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    check=False,
-                    timeout=60,
-                )
-            except OSError:
-                continue
-            out = probe.stdout + probe.stderr
-            if "CODEX_HOME=" in out and f"CODEX_HOME={codex_home}" not in out:
-                continue
-            if probe.returncode == 0:
-                return cand
+        marker = "port-profile-" + uuid.uuid4().hex
+        marker_dir = codex_home / "skills" / marker
+        marker_dir.mkdir(parents=True, exist_ok=False)
+        write(marker_dir / "SKILL.md", f"---\nname: {marker}\ndescription: Unique inert profile marker {marker}.\n---\n\n# Profile Marker\n")
+        try:
+            with tempfile.TemporaryDirectory(prefix="plugin-port-profile-cwd-") as working:
+                for candidate in dict.fromkeys(candidates):
+                    try:
+                        probe = subprocess.run(
+                            [candidate, "debug", "prompt-input", "Describe the available skill catalog without running tools."],
+                            cwd=working, env=env, capture_output=True, text=True,
+                            encoding="utf-8", check=False, timeout=45,
+                        )
+                        if probe.returncode != 0:
+                            continue
+                        messages = json.loads(probe.stdout)
+                        developer_text = "\n".join(
+                            part.get("text", "")
+                            for message in messages if message.get("role") == "developer"
+                            for part in message.get("content", [])
+                            if part.get("type") == "input_text"
+                        )
+                    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, AttributeError):
+                        continue
+                    if marker in developer_text and str(codex_home / "skills") in developer_text:
+                        return candidate
+        finally:
+            shutil.rmtree(marker_dir)
         return None
 
     def test_claude_validator_accepts_converted_codex_plugin(self) -> None:
@@ -160,7 +173,7 @@ class PluginPortLiveTests(unittest.TestCase):
     def test_codex_temp_marketplace_accepts_converted_claude_plugin(self) -> None:
         if os.environ.get("PLUGIN_PORT_CODEX") != "1":
             self.skipTest("set PLUGIN_PORT_CODEX=1 to run Codex CLI checks")
-        if shutil.which("codex") is None:
+        if not os.environ.get("PLUGIN_PORT_CODEX_BIN") and shutil.which("codex") is None:
             self.skipTest("codex CLI is not installed")
         source = self.root / "live-claude"
         converted = self.root / "live-codex-out"
@@ -193,7 +206,7 @@ class PluginPortLiveTests(unittest.TestCase):
         codex = self._codex_binary_honoring_home(codex_home)
         if codex is None:
             self.skipTest(
-                "no codex executable honors CODEX_HOME (wrapper pins the real home); "
+                "no codex executable positively exposed the isolated profile marker; "
                 "set PLUGIN_PORT_CODEX_BIN to a vanilla binary")
         env = {**os.environ, "CODEX_HOME": str(codex_home)}
 
@@ -265,6 +278,52 @@ class PluginPortLiveTests(unittest.TestCase):
             developer_text,
         )
 
+
+
+class ProfileSelectionTests(unittest.TestCase):
+    """The safety precondition runs in ordinary tests, without native CLIs."""
+
+    def probe_with(self, response):
+        helper = PluginPortLiveTests()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "profile"
+            with mock.patch.dict(os.environ, {"PLUGIN_PORT_CODEX_BIN": "/fake/codex"}):
+                with mock.patch.object(subprocess, "run", side_effect=response) as run:
+                    selected = helper._codex_binary_honoring_home(home)
+            self.assertEqual(list((home / "skills").iterdir()), [])
+            self.assertTrue(all(call.args[0][1:3] == ["debug", "prompt-input"] for call in run.call_args_list))
+            return selected
+
+    def test_silent_home_reset_is_rejected_despite_success(self):
+        def silent(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, json.dumps([{
+                "role": "developer", "content": [{"type": "input_text", "text": "Real home skills"}]
+            }]), "")
+        self.assertIsNone(self.probe_with(silent))
+
+    def test_marker_in_user_echo_does_not_establish_profile(self):
+        def echoed(argv, **kwargs):
+            profile = Path(kwargs["env"]["CODEX_HOME"])
+            marker = next((profile / "skills").iterdir()).name
+            return subprocess.CompletedProcess(argv, 0, json.dumps([{
+                "role": "user", "content": [{"type": "input_text", "text": f"{marker} {profile / 'skills'}"}]
+            }]), "")
+        self.assertIsNone(self.probe_with(echoed))
+
+    def test_positive_marker_and_profile_are_accepted(self):
+        def rendered(argv, **kwargs):
+            profile = Path(kwargs["env"]["CODEX_HOME"])
+            marker = next((profile / "skills").iterdir()).name
+            self.assertNotEqual(Path(kwargs["cwd"]), profile)
+            return subprocess.CompletedProcess(argv, 0, json.dumps([{
+                "role": "developer", "content": [{"type": "input_text", "text": f"{marker} {profile / 'skills'}"}]
+            }]), "")
+        self.assertEqual(self.probe_with(rendered), "/fake/codex")
+
+    def test_unusable_renderer_is_rejected_and_marker_cleaned(self):
+        def failed(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 45)
+        self.assertIsNone(self.probe_with(failed))
 
 if __name__ == "__main__":
     unittest.main()

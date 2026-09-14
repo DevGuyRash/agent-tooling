@@ -1,0 +1,34 @@
+# Agentic Design & Evaluation qualification evidence
+
+This record distinguishes package delivery, deterministic defects, and bounded task outcomes. Candidate skills supplied guidance to task executors; they did not grade or certify their own replacement. The primary agent and Pro assessed original tasks, artifacts, source contracts, and outcomes. Their shared exposure limits independence. No general behavioral improvement, exact reading path, or implicit routing reliability is established.
+
+## Task observations
+
+The task inputs are under `cases/`; exact rendered responses are under `responses/`. The authored downstream artifact is retained under `artifacts/`. The complete task packets and wider planning/history evidence remain in the task's local research record; these public files preserve the synthetic tasks and actual outcomes without publishing unrelated histories. Response captures include ordinary ChatGPT interface text, which is not part of the authored instruction or participant message.
+
+| Use | Observation | Boundary or limit |
+| --- | --- | --- |
+| Prompt and context design | Produced a reusable reminder prompt, separated policy from mutable event facts, and described what must travel. | Its explanation incorrectly said the assistant was unable to transmit. Draft-only prose does not implement a technical restriction. This failed explanation property is retained. |
+| Scoped continuation into a new skill | Honored the later one-file scope, retained policy, and omitted the example's fixed event facts and authoring-plugin dependency. | The generated file also imposed a two-section reply form and a routine clear-status sentence; their benefit is unproved. This does not establish a general reduction in ceremony. |
+| Fresh downstream use | Used only the authored skill and new event notes; produced the correct September 29 event, location, URL, and participation requirements. | No foundation or authoring conversation was supplied. Account personalization was still enabled; this is not complete ambient-context isolation. |
+| Narrow prompt edit | Replaced only the requested audience and returned the exact revised prompt. | Explicitly supplied skill; no implicit-selection claim. |
+| Existing skill/plugin audit | Kept session-list clean on its declared boundary and reproduced workshop-list's unrelated-CWD failure. | Separate synthetic targets, not a self-audit. The result does not establish comprehensive defect discovery. |
+| Fresh execution comparison | Reported unchanged executions of both schedulers and selected revenue_first.py: 90 earned versus 55. Native stdout matched the primary agent's independently executed programs. | The decision is limited to these jobs and these programs. No manufacturing, population, or causal generalization is claimed. |
+
+The first authoring, continuation, downstream, narrow-edit, and audit tasks used their frozen v1 packets. The first comparison used the prospectively revised v2 packet after Pro's implementation review; no v1 comparison response was obtained. Later corrections are not retrospectively attributed to earlier responses. The six earlier access-pilot runs all returned correct scoped outcomes and did not demonstrate a decisive difference between plain availability and task-connected navigation; this release does not claim that pilot proved a benefit.
+
+The browser trials were serial temporary ChatGPT contexts. Latest was selected, Extra High (4/5) was visible at sends, and Personalized temporary state was verified. The UI explained that plugins and custom instructions could still be referenced. Exact backend identity, complete reading paths, tokens, native Codex/Claude behavior, and long-horizon continuity were not verified by these trials. Displayed work times were 1m25s for initial authoring, 25s for continuation, 11s downstream, 2m13s for the audit, and 22s for comparison; the narrow edit exposed no work duration. These are descriptive UI readings, not causal cost estimates.
+
+## Deterministic corrections
+
+`observations/correction-observations.json` retains old and repaired results from disposable state. Predictable scratch paths redirected writes into protected fixture files under both old reporters; the repaired versions preserved those files. The old wrapper accepted a zero-exit malformed report; the repaired wrapper returned failure. An executable with an LF shebang and CRLF body ran successfully under both conditions, while only the old reporter falsely classified its body line ending as shebang failure. A 600-character Unicode description was previously labeled 1,200 characters; the corrected metric explicitly reports bytes and makes no parsed-character-limit claim.
+
+These are controlled correctness demonstrations, not evidence of a production incident, attack prevalence, or overall skill effectiveness. Functional regressions in the package tests and repository report-consumption tests cover the repaired properties. The reference checker separately verifies complete declared paths, including siblings, from the declaring resource and unrelated working directories; quoted examples and dynamic expressions remain unverified observations.
+
+## Source and host boundaries
+
+`observations/import-fidelity.json` records the initial import: the full 149,139-byte foundation body and 7,791-byte charter were preserved. Subsequent packaging tests compare against the current canonical plugin source, not the retired external snapshot.
+
+The native package probe used Codex CLI 0.154.0-alpha.6.2, required a unique marker in the intended temporary profile before installation, installed the actual package through its marketplace flow, exposed all four catalog entries and their cache location, removed the original source path, and compared all packaged bytes and references. Claude strict validation accepted that cached package. Temporary state was cleaned. The two retained native-probe records identify the source bytes checked before and after the concrete implementation corrections. The final probe again checked every packaged file and all four entries; it remains a delivery observation without model execution.
+
+This probe rendered prompt input without running a model. Conversion, manifest validation, catalog exposure, physical file delivery, explicit browser task use, and native agent execution are different properties. A fresh native catalog does not establish that an agent activated or used the skill correctly. The release's installation record identifies actual selected cache delivery separately.

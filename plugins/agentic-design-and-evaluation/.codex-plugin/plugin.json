@@ -1,0 +1,31 @@
+{
+  "name": "agentic-design-and-evaluation",
+  "version": "1.0.0",
+  "description": "Design AI prompts and context, audit delivered skills and plugins, and conduct domain-general comparisons with one shared foundation.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "prompt-design",
+    "context-engineering",
+    "skills",
+    "plugins",
+    "audit",
+    "split-testing",
+    "comparative-evidence"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agentic Design & Evaluation",
+    "shortDescription": "Design prompts and context; audit and compare",
+    "longDescription": "Design AI prompts and context, audit delivered skills and plugins, and conduct domain-general comparisons with one shared foundation.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use $prompt-context-design to help with this AI instruction or context task."
+  }
+}

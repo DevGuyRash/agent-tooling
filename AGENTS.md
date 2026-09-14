@@ -8,65 +8,7 @@ For Agent Skill and plugin quality, apply repository-level authorities only wher
 
 ## Governing Architecture
 
-These rules apply only when you create or revise instructions for another AI. They govern the instruction system, not the surrounding answer.
-
-The executor's intelligence is the resource. Supply only what it cannot safely provide: mission, environment, relevant reality and authority, decision-relevant state, loop limits, success evidence, precedence, and interfaces. Leave reasoning and methods open unless the route itself carries a named hazard.
-
-Treat the deliverable as an instruction system, not necessarily one prompt. Put stable intent in instructions; changing facts in context; mutable decisions in state; authority in permissions, tools, and schemas; persistence and stopping in the loop; correctness in tests; and handoff in the output contract. Do not duplicate controls.
-
-Completeness means coverage of every material control need, not every possible concern. Remove anything whose absence would not weaken mission, authority, material hazards, continuity, verification, or handoff.
-
-These functions are semantic contracts, not a reasoning sequence, template, or closed ontology. Omit, combine, or add as needed.
-
-### Mission
-
-Define the outcome, whom it serves, the current decision horizon, and what distinguishes done from plausible. Separate required properties from suggested methods. Keep later commitments conditional when earlier evidence could change them.
-
-A mechanism chosen by the author remains a proposal unless the maker fixed it, the task delegates that decision, or a named requirement cannot otherwise be met. Binding force attaches to the required property and hazard. Preserve alternatives satisfying the same mission, boundaries, evidence, and interfaces.
-
-### Environment
-
-Supply what the executor cannot safely infer, inspect, or rediscover: resources, limits, permissions, dependencies, hazards, external effects, and consequential gaps. Explain non-obvious hazards through consequences; mark consequential gaps rather than guessing.
-
-Keep consequential information's source and authority unambiguous. Preserve observation, assumption, proposal, commitment, and evidence distinctions wherever collapsing them could change truth, authorization, or verification. Do not surface the taxonomy merely to prove it exists. Encode any mandatory consequence once.
-
-### State
-
-Keep action-changing state recoverable across turns and handoffs: objective, settled decisions, assumptions, evidence, dependencies, blockers, alternatives, progress, and reopening conditions.
-
-Choose prose, tables, logs, graphs, Mermaid, or another fitting representation. Every representation is a revisable projection, not canonical truth or a closed ontology. Replace it when understanding changes; absence from a view never excludes a possibility.
-
-### Boundaries
-
-Define prohibited outcomes, authority limits, approvals, and constraints whose violation would cause material harm, invalidate the work, or exceed the mandate. Prefer external enforcement where more reliable. State each boundary once.
-
-### Loop
-
-Define progress, continuation, stopping, completion, retry, escalation, handoff, budgets, and blocked behavior. Loop controls govern persistence and commitment, not internal reasoning. Bind only the current evidence horizon. A probe must be able to reopen what it tests; later commitments remain conditional while earlier evidence could invalidate them.
-
-### Verification
-
-Define observable evidence of completion, correctness, safety, and handoff. Prefer executable checks and/or observable evidence. Assertion alone is not evidence. Match verification strength to consequence.
-
-### Precedence
-
-Resolve foreseeable collisions among mission, authority, safety, correctness, scope, and reversibility. Do not invent exhaustive branches for unknown space. Where no safe residual is known, preserve uncertainty and stop or escalate.
-
-### Output Contract
-
-Specify audience, destination, interface or format, completion evidence, and conditions for claiming success. Impose structure or style only when it improves use.
-
-### Binding Language
-
-Use natural prose for purpose, facts, rationale, definitions, and open judgment. Address obligations directly to the executor. SHALL means required, SHALL NOT prohibited, SHOULD a strong default, and MAY permitted.
-
-Use formal clauses only when literal compliance or auditability is part of the outcome: invariants, hard boundaries, recognizable triggers, necessary sequences, and precedence. A clause earns binding force only when it transfers a maker requirement, non-inferable constraint, or compensation for a demonstrated model weakness, and compliance can be checked.
-
-Bind outcomes, not pathways. Prescribe sequence only when order carries a named hazard. Say each obligation once. Keep model-specific compensation separate from stable governance and tie it to an observed failure, evaluation, and removal condition.
-
-Instructions must stand alone, preserve compliant routes, keep consequential information unambiguous, and place controls where it is most reliable.
-
-Do not require private chain-of-thought, named reasoning methods, visible compliance theater, or proof that judgment occurred. Do not promote an inference, recommendation, or assumption into a maker-set requirement. Do not name this architecture or copy its structure unless doing so materially improves the produced artifact.
+When creating or revising instructions for another AI in this repository, you SHALL apply the [canonical governing architecture](plugins/agentic-design-and-evaluation/skills/foundational-knowledge/references/governing-architecture.md). That file is the sole maintained source of the charter. Its scope is authoring decisions and the instruction system produced; it does not prescribe surrounding answers or retroactively govern external targets. The adjacent foundational knowledge supplies explanatory grounds, not another repository workflow.
 
 ---
 
@@ -114,9 +56,9 @@ tool update --worker-id deadbeef --session-id sess0001 --status IN_PROGRESS
 export MY_SESSION_ID=abc123 && cd /some/project && tool update --use-env
 ```
 
-This applies to any CLI that offers `--use-env` or environment-based configuration. Those patterns are designed for shell scripts and CI pipelines where the entire pipeline runs in one shell session. When used by agents — where each command is a separate process — environment-based configuration provides no benefit.
+This applies to any CLI that offers `--use-env` or environment-based configuration. Those patterns are designed for shell scripts and CI pipelines where the entire pipeline runs in one shell session. When used by agents — where each command is a separate process — per-command environment configuration remains useful when it is the tool’s supported interface, but a prior command’s exported values are unavailable.
 
-**Always prefer explicit CLI flags over environment variables when running from agents.**
+**Use an interface that explicitly supplies each command’s needed state.** CLI flags and per-command environment variables can both do this. You SHALL NOT assume that an export from an earlier command persists; choose the supported channel appropriate to the value and its protection requirements.
 
 ---
 
@@ -200,93 +142,13 @@ with open('SKILL.md') as f:
 "
 ```
 
-#### Description structure
+#### Discovery and activation
 
-Descriptions should front-load the capability, then include the strongest positive triggers and the most important sibling exclusions. Numbered trigger lists are optional. Use the smallest wording that still makes routing clear and preserves signal when a host shortens visible descriptions.
+Descriptions SHOULD front-load the actual capability, recognizable requests, and the most consequential sibling boundary. Keep them as short as reliable discovery permits. A catchall or repeated demand to activate does not demonstrate usefulness or solve poor routing.
 
-#### Mandatory trigger variant
+You SHALL require mandatory activation only when an actual user requirement, adopted contract, or demonstrated hazard requires it. State that bounded requirement and its basis directly; do not use a generic activation-pressure pattern. Preserve automatic discovery unless the user explicitly requests an explicit-only entry.
 
-Some skills must fire every time a condition is met — the agent should not treat activation as optional. The standard two-part structure uses passive, opt-in language ("Use when the task involves…") that lets the agent decide whether to bother. For mandatory skills, replace that with imperative language that removes agent discretion.
-
-The mandatory pattern usually combines these parts:
-
-1. **Imperative opener** — lead with `REQUIRED` plus the activation condition. This is the strongest signal an agent parses from a description.
-2. **Prohibition** — immediately follow with a `do not <verb> without this skill active` clause. This closes the escape route where the agent decides it can handle the task itself.
-3. **Keyword trigger span** — `Covers: ...` or an equivalent compact scope summary that names the bounded mandatory surface.
-4. **Closing command** — end the description with a direct imperative that restates the trigger (`Do not skip this skill.` or `If the task involves X, use this skill.`). Agents that skim the middle still hit the bookend.
-
-The extra framing consumes character budget — measure against the 1024-character hard limit (see above) after every edit.
-
-Use this pattern only when the user needs the skill to always fire for its domain. If the agent can produce a correct result without the skill — even if slower or less polished — use the standard opt-in two-part structure instead. Most skills should use the standard pattern.
-
-##### When to use mandatory vs standard
-
-| Use mandatory when | Use standard when |
-| --- | --- |
-| Skipping the skill produces wrong or unsafe output | The skill is one of several valid approaches |
-| The skill enforces constraints the agent wouldn't know on its own (lint profiles, TDD workflow, compliance) | The skill adds convenience but isn't required for correctness |
-| The skill's triggers overlap with tasks the agent would attempt without any skill (general coding, general debugging) | The skill's domain is narrow enough that keyword matching alone is reliable |
-
-##### Good example (mandatory pattern)
-
-```yaml
-description: >-
-  REQUIRED when any part of the task touches Rust code or Rust tooling —
-  do not write, review, debug, or scaffold Rust without this skill active.
-  Covers: (1) Writing new Rust code, features, or bugfixes,
-  (2) Reviewing Rust pull requests or enforcing Rust coding standards,
-  (3) Setting up Rust CI/CD pipelines or GitHub Actions,
-  (4) Debugging Rust compilation errors or borrow-checker issues, or
-  (5) Any task where the primary language is Rust (.rs files).
-  If the task involves Rust, use this skill.
-```
-
-Why this works: the agent sees `REQUIRED` as the first token (part 1), a prohibition that blocks self-handling (part 2), a keyword-rich trigger list (part 3), and a closing command (part 4). All four parts reinforce the same signal from different positions in the text.
-
-#### Good example (standard pattern)
-
-```yaml
-description: >-
-  Generate hardened, production-ready Docker architecture including
-  Dockerfiles, Compose stacks, and Swarm deploy configs. Use when the
-  task involves: (1) Writing or improving a Dockerfile or multi-stage
-  build, (2) Containerizing an application, (3) Creating or modifying
-  compose.yaml or Docker Swarm deployments, (4) Hardening container
-  security, or (5) Any task involving Docker, containers, or container
-  orchestration.
-```
-
-Why this works: the lead sentence tells the agent what the skill produces. The trigger phrases give concrete routing evidence an agent can match against a user's request without wasting description budget.
-
-#### Bad examples
-
-```yaml
-# Too vague — no trigger keywords, agent must guess
-description: Helps with Docker stuff.
-
-# Narrative prose — activation boundary is difficult to distinguish
-description: >-
-  Use this skill when something you followed did not work as the
-  available instructions implied it would. The core pattern is: you
-  read something, acted on it, and the outcome diverged from what you
-  expected. This applies across any surface.
-
-# Implementation details instead of triggers
-description: >-
-  Creates per-task logs under the system temp directory, auto-categorizes
-  each event along surface/mode/run_effect axes, and records what was
-  read, what was tried, and what happened.
-```
-
-The narrative example does not distinguish its activation boundary from nearby tasks. The implementation example describes _how_ the skill works instead of _when_ to use it.
-
-#### What NOT to put in the description
-
-- **Implementation details** (temp dirs, categorization axes, internal data structures) — these belong in the SKILL.md body.
-- **Narrative prose** that obscures the activation boundary — use the clearest compact structure for the actual routing evidence.
-- **Long negative-trigger lists** — one short sentence at the end is enough; detailed "do not use" guidance belongs in the SKILL.md body.
-
-Test the description with realistic positive, negative, and near-neighbor prompts. If the evidence does not show a reliable activation boundary, rewrite it.
+Where discovery is material, examine realistic positive, negative, and near-neighbor requests at the relevant host surface. Distinguish format validation, catalog exposure, explicit invocation, and actual implicit selection. Do not turn a fixed test roster or preferred description wording into the release criterion.
 
 ---
 
@@ -313,19 +175,9 @@ Shell scripts additionally SHALL have executable permission (`chmod +x`) and a v
 
 ## Skill authoring: name consistency between docs and CLI
 
-Every name that appears in a skill's documentation — role names, phase names, mode names, parameter values — SHALL be the exact string the CLI or API accepts. If the CLI accepts `architecture-critic`, the docs say `architecture-critic`, not `Architecture` or `architecture`.
+Document invocation names and parameter values using the forms the actual CLI or API accepts. You SHALL keep this interface consistent with its consumer. When a human-facing label differs, make the correspondence clear where the executor needs it; a table is one option.
 
-Name mismatches between documentation and implementation are the single most common agent failure mode. An agent reads a domain table listing "Architecture," tries `--role architecture`, gets an error, tries `--role Architecture`, gets another error, and either fabricates a workaround (breaking protocol consistency) or enters a retry loop burning tokens.
-
-Rules:
-
-1. **One canonical form.** Pick one representation for each name and use it everywhere: SKILL.md, reference docs, CLI `--help`, error messages, and protocol outputs. If the CLI normalizes input (e.g., lowercases and replaces hyphens with underscores), document the canonical form the user should type, not the internal form.
-
-2. **Discovery command.** If a CLI accepts a set of named values, it SHALL offer a way to list them. For example, `tool dispatch --list` or `tool --help` showing valid values. An agent that hits an invalid name should be one command away from finding the valid names — not searching through docs.
-
-3. **Mapping tables.** When documentation uses a human-friendly name (e.g., "Architecture") that differs from the CLI slug (e.g., `architecture-critic`), the documentation SHALL include an explicit mapping table showing both forms. Don't force the agent to infer the mapping.
-
-4. **Test every name.** Before shipping a skill, execute every named value mentioned in the docs against the CLI. This catches drift between docs and implementation that's invisible during code review.
+A discovery command, help text, schema, or accessible reference SHOULD make valid values recoverable when there are consequential choices. Verify documented invocation information against the actual interface. Execute representative or changed values when that observation is authorized, safe, and necessary; exhaustive execution is not a requirement for commands with external effects or a different adequate source of evidence.
 
 ---
 
@@ -359,132 +211,15 @@ Rules:
 
 ## Skill authoring: progressive disclosure and context budgets
 
-Agent context windows are finite and expensive. Every token of instruction that an agent holds is a token that can't be used for the actual task. Skills SHALL be designed so the agent only loads the instructions it needs for the current step, not everything up front.
+Design context access around the task and actual recipient. Keep essential purpose and constraints in the entry; put substantial conditional detail in supporting resources where that improves use. A short self-contained skill needs no separate router. A resource can link another resource when the relationship helps; reference depth alone is not a defect. Provide navigation, search terms, or a contents section when they make a substantial document usable, without requiring them in every file.
 
-### The three-layer loading model
+Keep complete relevant source material or reliable access where independent assessment can change the work. A summary or index is an aid, not a closed account of what can matter. Choose reading by the live task, broaden when needed, reuse unchanged material still in context, and recover consequential grounds after loss or change. Do not require full-corpus reading on every activation or presume a historical reading is still active knowledge.
 
-Skills follow a three-level progressive disclosure system. Each layer loads at a different time and serves a different purpose.
+Maintain one authoritative source for a fact or rule. Complementary controls can be useful, but copies that must be manually synchronized invite drift and waste context. CLI-served guidance and fallback references SHOULD derive from the same maintained source when they promise the same information. Use a CLI router only when an existing execution surface or substantial conditional content makes it useful; do not build one by default.
 
-| Layer | Loaded when | Target size | Purpose |
-| --- | --- | --- | --- |
-| **Metadata** (name + description in frontmatter) | Always in context | Keep only retrieval evidence | Trigger detection — does this skill apply? |
-| **SKILL.md body** | When skill triggers | Keep the always-loaded route focused | Routing: what workflow am I in? What do I read next? |
-| **Bundled resources** (`references/`, `scripts/`, `assets/`) | On demand | Keep each resource focused on its loading condition | Detail: full procedures, rubrics, templates, domain-specific guidance |
+Declare the actual distribution boundary. Shared references may live within a complete plugin rather than be copied into every skill. Verify that the installed recipient can resolve them. Generated downstream artifacts SHALL carry the meaning, constraints, sources or reliable access, and resources their own executors need; they SHALL NOT rely on an invisible authoring conversation or undeclared local cache.
 
-The critical principle: **the agent reads deeper only when needed.** SKILL.md tells the agent which reference or references the current decision requires, without loading unrelated material.
-
-### SKILL.md is a router, not a manual
-
-SKILL.md answers three questions and stops:
-
-1. "What is this skill and when does it trigger?"
-2. "What workflow am I in?" (mode selection based on user input)
-3. "What do I read next?" (pointer to the right reference file or script)
-
-SKILL.md should NOT contain detailed procedures, full rubrics, or extended specifications unless they are needed on every activation. Put conditional detail in `references/` files so the agent does not pay its context cost when it is irrelevant.
-
-### Reference files are the primary disclosure mechanism
-
-The `references/` directory is how most skills deliver just-in-time instructions. There are three proven patterns for organizing them:
-
-**Pattern 1: Conditional loading with a reference index.** SKILL.md contains a table mapping situations to files. The agent reads only the row that matches.
-
-```markdown
-## Reference index
-
-You SHALL load only the references needed for the current task.
-
-| File                       | When to read                       |
-| -------------------------- | ---------------------------------- |
-| `references/guidelines.md` | Phase 1 of any workflow            |
-| `references/migration.md`  | Converting a non-Rust tool to Rust |
-| `references/monorepo.md`   | Working in a Rust workspace        |
-```
-
-**Pattern 2: Domain-variant organization.** When a skill supports multiple domains or frameworks, split references by variant. The agent loads only the variant it needs.
-
-```bash
-cloud-deploy/
-├── SKILL.md          (workflow selection + routing)
-└── references/
-    ├── aws.md        (loaded only for AWS tasks)
-    ├── gcp.md        (loaded only for GCP tasks)
-    └── azure.md      (loaded only for Azure tasks)
-```
-
-**Pattern 3: Inline links at point of relevance.** SKILL.md contains reference links right where the agent needs them, woven into the workflow narrative. Good for smaller skills.
-
-```markdown
-## Output and clipboard policy
-
-For low-latency expansions, prefer `print_only` when the replacement
-payload is already emitted by script output.
-
-Read: [references/clipboard-latency.md](references/clipboard-latency.md)
-```
-
-All three patterns achieve the same goal: the agent loads only the focused references needed for the current decision instead of everything at once.
-
-### CLI-served protocols (advanced pattern)
-
-Some skills include a CLI that serves instructions dynamically — for example, `tool protocol orchestrator` outputs orchestration guidance, and `tool protocol dispatch --role X` outputs a role-specific prompt. This is a powerful progressive disclosure mechanism because the CLI can tailor output to the current phase or role.
-
-When a skill has this kind of CLI, the `references/` files serve as fallback for when the CLI is unavailable (not built, wrong platform, missing dependency). The SKILL.md should say:
-
-```markdown
-You SHALL run `tool protocol orchestrator` for guidance.
-IF the CLI is unavailable, read `references/orchestrator-fallback.md` instead.
-```
-
-The CLI output and the fallback reference SHALL contain the same information. They are two delivery mechanisms for one source of truth, not two documents that drift apart over time. Ideally the CLI embeds the reference content directly (e.g., from TOML or markdown files compiled into the binary) so they are literally the same text.
-
-### Each fact lives in exactly one place
-
-The most insidious context problem is duplication: the same rule, procedure, or constraint described in SKILL.md AND a reference file AND a CLI output. The agent pays for all three copies, and when they inevitably drift apart, the agent gets conflicting instructions.
-
-Common duplication to watch for:
-
-- **Workflow steps** narrated in SKILL.md and repeated in detail in a reference file. SKILL.md should give a 1-line summary and point to the reference; the reference has the detail.
-- **Rules and constraints** (concurrency caps, forbidden actions, cleanup requirements) stated in SKILL.md and again in reference docs. State the rule once; the other location says "see X."
-- **Command quick-references** in SKILL.md that reproduce what `--help` or a script already provides. If the agent can run a command to get the information, SKILL.md doesn't need to list it.
-
-When in doubt, ask: "If I change this fact, how many files do I need to edit?" If the answer is more than one, there's duplication.
-
-### Reference file sizing and depth
-
-SKILL.md can point to as many reference files as needed — that's the whole point of the reference index pattern. The constraint is on _nesting_: a reference file should not point to another reference file. If Reference A tells the agent to read Reference B, which tells it to read Reference C, the agent is in a context spiral — accumulating instructions without making progress. All references should be reachable directly from SKILL.md, not through other references. If a reference needs information from another file, inline it or restructure.
-
-When a reference becomes difficult to navigate or contains independently triggered material, add navigation or split it into focused files with separate conditional triggers from SKILL.md.
-
-### Measuring your context budget
-
-Before shipping a skill, measure what the agent actually loads during a typical invocation:
-
-```bash
-# Measure every document in the skill
-find <skill-dir> -name '*.md' -exec wc -c {} + | sort -n
-# Report characters as a reproducible proxy when no governing tokenizer is named
-```
-
-The key metric is **peak context** — the maximum number of skill-instruction tokens the agent holds at any single point during the workflow. This is NOT the sum of all files (the agent doesn't load them all at once); it's SKILL.md plus whichever reference file(s) the agent has loaded at the busiest point.
-
-Treat measured characters, physical lines, estimated tokens, file counts, and peak loaded context as review signals. They justify a change only when the active loading path wastes material context or harms task value. An estimated token count is never a release gate unless the governing authority names the tokenizer or the host reports the exact count.
-
-### CLI-served self-documentation
-
-Skills with CLIs SHOULD implement progressive disclosure via CLI commands. The CLI serves as a just-in-time guidance router: the agent runs a command to get exactly the instructions needed for its current step, rather than loading entire reference files.
-
-The recommended pattern:
-
-1. **TOML manifest for routing metadata.** Phase names, domain IDs, activation triggers, hints — structured data the CLI can query.
-2. **Markdown for detailed content.** Full domain specs, phase procedures, scoring rules stay in `references/*.md`. The CLI extracts sections by heading on demand using `sed`/`awk`.
-3. **SKILL.md as fallback router.** "Run `<cli> <command>` for guidance. IF the CLI is unavailable, read `references/X.md` instead."
-
-Use this pattern when a skill has:
-
-- Multiple phases or modes with distinct guidance per phase
-- Enumerable configuration (domains, roles, traits)
-- Deterministic check scripts that benefit from a unified runner
+Measure the actual loading path when context cost affects the task. Characters, lines, estimated tokens, file counts, and maximum loaded material are evidence signals, not universal quality gates. Report characters as a reproducible proxy when no governing tokenizer is named. Retain useful explanatory material even when the executor could reconstruct it; assess the whole collaboration cost and outcome rather than brevity alone.
 
 ---
 
@@ -492,7 +227,7 @@ Use this pattern when a skill has:
 
 Before claiming what a delegated worker does or does not receive, inspect the selected host's actual inheritance, mounted files, ambient instructions, tools, permissions, and conversation behavior. A fresh context may still inherit consequential state, while an isolated worker may still need complete authoritative sources.
 
-Give each delegated function a role-complete instruction: its mission, legitimate authoritative inputs, environment, authority and effect boundaries, observable completion evidence, and the narrowest real output interface. Transfer what the role cannot safely infer; do not pass controller hypotheses, preferred methods, sibling outputs, hidden resolution logic, or broader orchestration state unless they are legitimately part of the role or tested deployment.
+Give each delegated function a role-complete instruction: its mission, legitimate authoritative inputs, environment, authority and effect boundaries, observable completion evidence, and the narrowest real output interface. Transfer the relevant meaning and source material the role needs, including useful information it could otherwise reconstruct; do not pass controller hypotheses, preferred methods, sibling outputs, hidden resolution logic, or broader orchestration state unless they are legitimately part of the role or tested deployment.
 
 Do not impose a semantic response template solely for controller convenience. Preserve native artifacts and free-form judgment when they are the real interface. Require fields, files, identifiers, or structure only when an actual downstream consumer, deterministic transport, custody boundary, or demonstrated failure makes them necessary; keep raw payloads when a normalizer or extractor is used.
 
@@ -512,58 +247,31 @@ Rules:
 
 3. **Separate metadata from content.** If a command returns both structural metadata (IDs, statuses) and large content (full report text), let the agent request them separately rather than dumping everything at once.
 
-4. **Measure your outputs.** Run every command your skill documents and inspect whether the default output contains material the agent does not need. Add filtering or a compact mode when observed output wastes consequential context.
+4. **Measure relevant outputs.** Inspect representative or changed outputs when their size can affect the consumer. Use authorized execution or retained faithful evidence; do not run an external-effect command merely to measure its verbosity. Add filtering or a compact mode when it addresses observed waste.
 
 ---
 
 ## Skill authoring: cold-start readiness
 
-A skill SHALL be usable without requiring the agent to install a toolchain, compile source code, or download large dependencies on first run. Cold-start cost must be proportionate to the task and visible when it cannot be avoided.
+You SHALL make required runtime dependencies and unavoidable first-use costs discoverable. Use the SKILL.md `compatibility` field for relevant host and dependency requirements. A script can be self-contained, use an existing runtime, or depend on explicitly supplied resources according to the task and distribution contract.
 
-If a skill includes compiled tools (Rust binaries, Go binaries, etc.):
+For a packaged compiled tool, the repository's adopted binary delivery policy still governs. A pre-built executable and a bounded build fallback can avoid repeated setup where supported. Do not introduce compilation, vendoring, or download machinery without a concrete delivery need.
 
-- Ship a pre-built binary for the target platform alongside the source.
-- The wrapper script should prefer the pre-built binary and fall back to building from source only if the binary is missing or outdated.
+You SHALL NOT silently install dependencies or treat their necessity as authorization. Carry out setup already authorized by the task; otherwise expose the actual missing dependency and the permission or environment change needed. State the effect and recovery route proportionately.
 
-If a skill depends on runtime tools (Python packages, npm modules):
+## Skill authoring: integration across skills
 
-- Document the dependencies in the SKILL.md `compatibility` field.
-- Prefer vendored or self-contained scripts over tools requiring `pip install` or `npm install`.
-- If installation is unavoidable, make it automatic and silent (the agent should not need to know it's happening).
+When components depend on one another's outputs or resources, you SHALL verify the material relationship at the intended consumer boundary before claiming it works. Configuration generation followed by the actual consumer's check is one useful case; it is not a required topology for every integration.
 
-An agent that spends 3 minutes installing Rust and building a binary is an agent that's not doing the user's task.
+Correct evidence can include an expected refusal, a detected defect, or required human participation. Judge the outcome against the adopted interface rather than requiring zero reported failures or fully unattended execution in every workflow. Structural preservation, host ingestion, model behavior, and downstream use remain different properties.
 
-### Script self-containment
+## Skill authoring: temporary state and reruns
 
-Scripts in `scripts/` SHALL be self-contained or clearly document their dependencies. When an agent runs a script, the script's source code never enters the context window — only its output does. This makes scripts significantly more token-efficient than having the agent write equivalent code inline. A 200-line Python script that produces 5 lines of output costs 5 lines of context, not 200. Lean into this: prefer bundled scripts over inline instructions whenever the task involves deterministic logic, data transformation, or validation that would otherwise consume agent context to reason through.
+You SHALL give scratch state exclusive ownership, and clean up the temporary files or directories owned by the invocation on normal completion and handled termination. A private temporary directory or an equivalent runtime facility can provide that boundary. Do not follow pre-existing predictable paths into someone else's files or delete required outputs, retained evidence, or unrelated state as cleanup.
 
----
+You SHALL preserve determinism and idempotency where the actual interface promises them. Identical-input reruns need not be byte-identical when the task intentionally observes changing reality or produces time-dependent records. Keep intended variation distinguishable from stale caches, mixed partial output, or unintended shared state.
 
-## Skill authoring: integration testing across skills
-
-When a skill references or depends on another skill's outputs (e.g., a code review skill that uses a Rust skill's scaffold to set up lint configs), the integration point SHALL be tested end-to-end.
-
-Common failure: Skill A scaffolds configuration files. Skill B's verification step runs lint checks. The scaffolded config is stricter than the scaffolded test files, so verification fails immediately after setup. Neither skill is broken in isolation — the failure only appears at the integration boundary.
-
-Before shipping interconnected skills:
-
-1. Run Skill A's setup.
-2. Run Skill B's verification on Skill A's output.
-3. Confirm zero failures without manual intervention.
-
----
-
-## Skill authoring: idempotency and state isolation
-
-Scripts SHALL leave no residual state after completion. An agent that re-runs a script and gets different results (because temp files, caches, or lock files were left behind) silently corrupts its workflow.
-
-Rules:
-
-1. **Identical re-runs.** WHEN a script runs twice on the same unchanged input, THEN output SHALL be byte-identical. Non-deterministic output (timestamps, random IDs) SHALL be avoided in default output or deterministically seeded.
-
-2. **Temp file cleanup.** Scripts that create temporary files SHALL clean them up via a `trap` handler on EXIT, INT, and TERM. After normal or abnormal termination, zero artifacts SHALL remain in `/tmp/` or the skill directory.
-
-3. **Safe re-creation.** WHEN a skill documents "create X," THEN re-running when X already exists SHALL be safe — either a no-op or an overwrite with identical content.
+For rerunnable creation or mutation, you SHALL make the existing-output and partial-failure behavior explicit where it changes safe continuation. A no-op, refusal, resume, versioned output, or authorized replacement may be correct for the actual task; identical overwrite is not a universal requirement.
 
 ---
 
@@ -577,7 +285,7 @@ Rules:
 
 2. **Recovery documentation.** WHEN a step fails, the skill SHALL document whether to retry that step, restart from the beginning, or abort.
 
-3. **No silent success.** Scripts SHALL NOT exit 0 when a significant sub-task failed silently. Exit code 0 means "everything worked."
+3. **No silent success.** Scripts SHALL NOT exit 0 when a significant sub-task failed silently. Exit code 0 SHALL mean the command fulfilled its declared interface; a diagnostic may successfully report a target defect. Missing promised evidence is not successful collection.
 
 4. **Partial output safety.** WHEN partial output exists from a failed run, THEN re-running SHALL NOT corrupt the partial output or produce mixed old/new results.
 
@@ -595,6 +303,6 @@ Rules:
 
 3. **No debug tracing around credentials.** WHEN a script uses `set -x`, THEN it SHALL disable tracing around credential-handling sections.
 
-4. **Prefer CLI flags.** WHEN a skill accepts credentials, THEN it SHALL prefer CLI flags over environment variables, and SHALL document the credential flow.
+4. **Credential channels.** You SHALL use the actual tool’s supported credential interface with the protection the task needs, and document the flow where the executor must act. Choose among secret stores, protected input channels, scoped environment variables, or supported flags according to exposure and interface constraints; shell-state persistence does not decide credential handling.
 
 5. **No eval on user input.** Scripts SHALL NOT use `eval` on user-provided input (command injection risk).

@@ -1,9 +1,0 @@
-# Comparative Handoff
-
-Use this route when an unresolved audit claim needs newly gathered comparative evidence. Skill Auditor retains claim selection, governing-authority interpretation, materiality, severity, repair, release, reopening, and final disposition. `$split-testing` owns the generic design, collection, review, and inference needed to compare alternatives. Its result is audit evidence; it does not decide audit disposition.
-
-When Split Testing is available, invoke it with ordinary context. Supply the exact claim and target, applicable authority, existing evidence and its limits, intended use and horizon, constraints and prohibited effects, and the audit consequence that turns on the result. Do not prescribe observations, cases, metrics, graders, counts, topology, or presentation merely for audit convenience; pass a choice only when rightful authority fixed it or the audit decision genuinely depends on it.
-
-Verify the returned evidence against the original claim and authority before using it. Confirm that the tested alternatives and conditions are relevant, direct evidence is available, scope and uncertainty are not overstated, and the result actually bears on the audit decision. Then apply Auditor-owned materiality, severity, repair, release, reopening, and disposition.
-
-When Split Testing is unavailable, assess existing evidence only. Skill Auditor does not recreate comparative method or run an equivalent local fallback. If existing evidence is insufficient, leave the exact claim unresolved, state the unresolved consequence for the audit, and record in plain language the evidence needed, governing authority, known limits, constraints, and consequence so a later context with Split Testing can act without losing meaning. This is material audit state, not a response template or exchange format.
