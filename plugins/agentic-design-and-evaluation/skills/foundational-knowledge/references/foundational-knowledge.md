@@ -1547,14 +1547,14 @@ Evaluation needs task-specific comparisons, representative cases, and measures c
 
 Presentation, demonstration content, information position, decoding restrictions, and required output form change different parts of an arrangement. Their effects need not share a mechanism or direction.
 
-| Intervention | Relevant relationship | Limit of the inference |
-| --- | --- | --- |
-| Prompt formatting | Meaning-preserving presentation changes can affect few-shot performance, and a favorable format need not transfer between models. ([8][8]) | The size and direction of an effect remain conditional on the model, configuration, and task; no permanent hierarchy of influences follows |
-| Demonstration content | Examples can communicate label space, input distribution, and sequence format in addition to individual input-label mappings. ([9][9]) | These contributions do not establish that examples universally outrank applicable instructions |
-| Relevant-information position | Placing the same evidence differently in a long input can change its successful retrieval and use. ([10][10]) | A placement effect does not establish when an internal commitment occurred or how every future architecture will behave |
-| Grammar-constrained decoding | Restricting generated sequences to a grammar can improve information extraction, entity disambiguation, and parsing in some settings. ([11][11]) | This is a specific enforcement mechanism, not evidence that every natural-language template helps |
-| Required output format | Requiring a particular response form can reduce reasoning-task performance in some settings. ([12][12]) | A cost does not establish that all structure is harmful or that a genuinely required interface may be ignored |
-| Demonstration order | Changing few-shot example order can materially affect classification performance, and favorable orderings need not transfer across models. ([13][13]) | Order is an empirical variable, not a universally dominant influence or a portable optimization by default |
+| Intervention                  | Relevant relationship                                                                                                                                 | Limit of the inference                                                                                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Prompt formatting             | Meaning-preserving presentation changes can affect few-shot performance, and a favorable format need not transfer between models. ([8][8])            | The size and direction of an effect remain conditional on the model, configuration, and task; no permanent hierarchy of influences follows |
+| Demonstration content         | Examples can communicate label space, input distribution, and sequence format in addition to individual input-label mappings. ([9][9])                | These contributions do not establish that examples universally outrank applicable instructions                                             |
+| Relevant-information position | Placing the same evidence differently in a long input can change its successful retrieval and use. ([10][10])                                         | A placement effect does not establish when an internal commitment occurred or how every future architecture will behave                    |
+| Grammar-constrained decoding  | Restricting generated sequences to a grammar can improve information extraction, entity disambiguation, and parsing in some settings. ([11][11])      | This is a specific enforcement mechanism, not evidence that every natural-language template helps                                          |
+| Required output format        | Requiring a particular response form can reduce reasoning-task performance in some settings. ([12][12])                                               | A cost does not establish that all structure is harmful or that a genuinely required interface may be ignored                              |
+| Demonstration order           | Changing few-shot example order can materially affect classification performance, and favorable orderings need not transfer across models. ([13][13]) | Order is an empirical variable, not a universally dominant influence or a portable optimization by default                                 |
 
 These relationships can coexist. A decoding restriction that enables a structured task and a response requirement that obstructs another task are not contradictory outcomes.
 
@@ -1795,38 +1795,6 @@ The foundation remains useful only while its own explanations, categories, and i
 > > - [12. Output-format restrictions][12]
 > > - [13. Demonstration-order sensitivity][13]
 > > - [14. Instruction authority and applicability][14]
-
-### ⚙️ Metadata
-
-> [!multi-column]
->
-> > [!info]+ 🕰️ Last Updated
-> >
-> > ```dataviewjs
-> > const file = dv.current().file;
-> > const dateFormat = "yyyy-MM-dd";
-> > const timeFormat = "hh:mm a";
-> > const modifiedDate = dv.date(file.mtime).toFormat(dateFormat);
-> > const modifiedTime = dv.date(file.mtime).toFormat(timeFormat);
-> > dv.paragraph(`
-> > - **Date**: ${modifiedDate}
-> > - **Time**: ${modifiedTime}
-> > `);
-> > ```
->
-> > [!faq]+ 🐣 Created
-> >
-> > ```dataviewjs
-> > const file = dv.current().file;
-> > const dateFormat = "yyyy-MM-dd";
-> > const timeFormat = "hh:mm a";
-> > const creationDate = dv.date(file.ctime).toFormat(dateFormat);
-> > const creationTime = dv.date(file.ctime).toFormat(timeFormat);
-> > dv.paragraph(`
-> > - **Date**: ${creationDate}
-> > - **Time**: ${creationTime}
-> > `);
-> > ```
 
 [1]: <https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra> "OpenAI model guidance for GPT-6 Astra"
 [2]: <https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting> "OpenAI Academy prompting resource"
