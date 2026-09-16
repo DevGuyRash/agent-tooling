@@ -15,7 +15,7 @@ Marketplace manifests:
 
 The catalogs are independent. Most plugins support both hosts; a plugin that depends on a host-native runtime or instruction surface is published only for the capable host.
 
-Reusable instruction and evaluation decisions, their outcome evidence, and reopening conditions are indexed in [`docs/adr/`](docs/adr/README.md). The ADRs record rationale; `AGENTS.md`, target contracts, host schemas, and maker requirements remain authoritative.
+Current usage and resource requirements live with each plugin. The [Agentic Design & Evaluation qualification record](docs/agentic-design-and-evaluation-qualification.md) summarizes the release's checks and limits. Keep development investigations, decision-history archives, raw trial evidence, transcripts, and installation inventories under the ignored `.local/context/` directory; published documentation retains the information users need to use and assess the packages.
 
 Current local plugins:
 

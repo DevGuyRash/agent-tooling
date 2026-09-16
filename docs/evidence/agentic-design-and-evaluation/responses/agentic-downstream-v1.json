@@ -1,5 +1,0 @@
-{
-  "capture": "agentic-downstream-v1",
-  "text": "downstream-v1.zip\nZip Archive\nUse the attached reminder-drafting skill to write the participant reminder for these event notes. The coordinator will review and send it. Return the draft.\nWorked for 11s\nDraft\nEmail\nSend\nRecipients\n\nA reminder that the Harbor Repair Café is on September 29, 2026, from 3:00–5:00 PM at Harbor Community Center, Workshop 4.\n\nPlease bring the item you’d like help with, along with its power adapter if relevant. Repairs are attempted but cannot be guaranteed. Participants under 16 must attend with an adult.\n\nRegistration: https://example.org/repair/sep29\n\nCoordinator check before sending\n\nNo unresolved items; ready for coordinator review.\n\nChatGPT can make mistakes. Check important info.\n\nExtra High",
-  "rendered_sha256": "ca19872a1fc8486a9f682cfbbfb4f9f3e79e70c4798859f4a00ac0fcf2d1c7dd"
-}

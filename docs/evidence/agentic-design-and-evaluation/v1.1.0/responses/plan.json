@@ -1,9 +1,0 @@
-{
-  "case": "plan",
-  "capture": "Rendered browser response transcribed from the completed main-region text; citation line wrapping and table delimiters normalized in plan.txt. Not a tool-execution trace.",
-  "model_ui": "6 Pro; Latest selected",
-  "temporary": "Personalized; plugins and custom instructions may be referenced",
-  "natural_completion": "response present and active controls absent on two checks separated by a settle wait",
-  "displayed_work_seconds": 208,
-  "response_text_sha256": "4e82866fe16cc26de94650d89d48de2837f3f530182068acde208d62b3a1b05e"
-}

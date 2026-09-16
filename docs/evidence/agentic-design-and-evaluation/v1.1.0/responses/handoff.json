@@ -1,9 +1,0 @@
-{
-  "case": "handoff",
-  "capture": "Completed rendered response; citation line wrapping and table delimiters normalized. Not a tool-execution trace.",
-  "model_ui": "6 Pro",
-  "temporary": "Personalized; plugins/custom instructions may be referenced",
-  "natural_completion": "response present and active controls absent on two checks separated by a settle wait",
-  "displayed_work_seconds": 128,
-  "response_text_sha256": "ef7741a3a12eba39bee15ef8ba9af9e278918697329156ba9300c4ae2215e25b"
-}

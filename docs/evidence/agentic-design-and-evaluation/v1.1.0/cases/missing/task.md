@@ -1,1 +1,0 @@
-I need to continue the assignment described by these coordinator notes. What useful work can be completed from the available materials, and what does the continuation need? Do not perform external actions.

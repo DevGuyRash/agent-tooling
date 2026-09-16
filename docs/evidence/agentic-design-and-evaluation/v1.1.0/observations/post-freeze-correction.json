@@ -1,8 +1,0 @@
-{
-  "changed_since_browser_packet": [
-    "skills/skill-auditor/scripts/script_sanity.py",
-    "skills/skill-auditor/tests/test_reporter_integrity.py"
-  ],
-  "instruction_files_unchanged": true,
-  "reason": "Restore the script collector boundary for a regular file named scripts; independently regressed. Trial targets do not contain that layout."
-}

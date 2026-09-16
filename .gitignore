@@ -23,9 +23,19 @@ tmp/
 
 # Local coordination artifacts (if you run skills in this repo)
 .local/
+/.local*/
 .codex/
 .gitnexus/
 ~$*.xls*
+
+# Development records belong in .local/context/, not published documentation.
+# Keep ordinary user guides and concise release qualification trackable.
+/docs/adr/
+/docs/evidence/
+/docs/reports/
+/docs/transcripts/
+/docs/*-field-report*.md
+/docs/*-improvement-report*.md
 
 # Python / test caches
 __pycache__/

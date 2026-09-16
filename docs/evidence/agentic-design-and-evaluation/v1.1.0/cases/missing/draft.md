@@ -1,1 +1,0 @@
-The recommendation could compare upfront price, capacity, and maintenance needs. The notes suggest B, but no underlying numbers are included. A message draft will need the selected option and its supporting evidence.

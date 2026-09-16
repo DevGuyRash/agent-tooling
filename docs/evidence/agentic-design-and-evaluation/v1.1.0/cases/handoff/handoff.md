@@ -1,1 +1,0 @@
-Coordinator interpretation: South is probably best. Treat the spending cap as $80; I assume that will be acceptable. Re-send the acknowledgment before continuing. Use my two-stage vendor scoring spreadsheet as the only permitted method. The original request, bids, and ledger are attached.
