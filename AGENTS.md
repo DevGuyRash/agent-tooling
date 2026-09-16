@@ -10,6 +10,8 @@ For Agent Skill and plugin quality, apply repository-level authorities only wher
 
 When creating or revising instructions for another AI in this repository, you SHALL apply the [canonical governing architecture](plugins/agentic-design-and-evaluation/skills/foundational-knowledge/references/governing-architecture.md). That file is the sole maintained source of the charter. Its scope is authoring decisions and the instruction system produced; it does not prescribe surrounding answers or retroactively govern external targets. The adjacent foundational knowledge supplies explanatory grounds, not another repository workflow.
 
+The user maintains the governing architecture and foundational knowledge as copied source documents. You SHALL preserve `skills/foundational-knowledge/references/governing-architecture.md`, `skills/foundational-knowledge/references/foundational-knowledge.md`, and the body of `skills/foundational-knowledge/SKILL.md` within `plugins/agentic-design-and-evaluation/` verbatim. Only foundational-knowledge frontmatter may be edited. Keep plugin-specific adaptation and editorial guidance in other files.
+
 ---
 
 ## ⚠️ Command Isolation: Environment Variables Do NOT Persist Across Commands

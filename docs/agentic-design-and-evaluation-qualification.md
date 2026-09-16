@@ -46,3 +46,7 @@ A parser check recorded on 2026-08-17 against [Codex revision c6058cc](https://g
 This revision removes unnecessary navigation narration and scope exclusions from the four entries and supporting references. Prompt and Context Design supplies the editing guidance for metadiscourse, self-referential metacommentary, process narration, gratuitous negation, unnecessary negative scoping, "show, don't tell," and timeless present; Skill Auditor links to that guidance. Its retrieval description also explicitly includes execution plans. The charter and reporter implementations are unchanged. Foundation citations, glossary entries, numbered sections, and diagrams are preserved.
 
 Verification covers 14 package/wrapper/profile checks, 29 converter checks, six explicitly enabled native CLI/profile checks, both host roundtrips, and the converted-package validators. Profile checks overlap between groups. The behavioral observations above remain evidence for 1.1.0; this wording revision has no new behavioral trial or old-versus-new performance comparison.
+
+## 1.1.2 source restoration
+
+The foundational knowledge reference and its skill entry body are restored byte-for-byte to their pre-1.1.1 contents. The governing architecture remains identical to its initial import. Repository instructions protect these user-maintained copies, permitting only foundational-knowledge frontmatter edits. The prompting reference replaces its terminology section with one direct editing instruction; the auditor continues to link to that file.

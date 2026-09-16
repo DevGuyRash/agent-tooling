@@ -5,6 +5,8 @@ description: Explain principles of AI delegation, authority, grounding, independ
 
 # Foundational Knowledge
 
-You SHOULD consult the [foundational knowledge](references/foundational-knowledge.md) relevant to the current question or task.
+You SHOULD use the complete [foundational knowledge](references/foundational-knowledge.md) to inform the current question or task. Its contents own navigation and reading guidance; the discussions, diagrams, and glossary offer different ways to understand the same material.
 
-When creating or revising instructions for another AI, you SHALL apply the [governing architecture](references/governing-architecture.md).
+The separate [governing architecture](references/governing-architecture.md) applies when creating or revising instructions for another AI. You SHALL apply it within that authoring role. Explanatory knowledge does not otherwise acquire policy force merely because it is in the same package, and external targets do not automatically adopt this charter.
+
+These files are public maintained resources of the complete plugin and can be consulted directly without invoking another task. You SHOULD explain or apply the knowledge at the requested scope; downstream artifacts carry what their own executors need.

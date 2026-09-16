@@ -1,6 +1,6 @@
 {
   "name": "agentic-design-and-evaluation",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Design AI prompts and context, audit delivered skills and plugins, and conduct domain-general comparisons with one shared foundation.",
   "author": {
     "name": "Agent Tooling Contributors"
