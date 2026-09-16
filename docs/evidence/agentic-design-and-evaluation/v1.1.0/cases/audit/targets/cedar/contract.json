@@ -1,0 +1,9 @@
+{
+  "interface": "AtlasExport",
+  "version": "1.2",
+  "contract_date": "2024-06-01",
+  "allowed_export_modes": [
+    "legacy"
+  ],
+  "sending": "requires explicit user authorization"
+}

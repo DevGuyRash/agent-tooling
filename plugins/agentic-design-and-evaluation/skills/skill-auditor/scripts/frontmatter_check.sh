@@ -2,6 +2,12 @@
 
 set -eu
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo 'error: frontmatter_check requires Python 3 for JSON serialization' >&2
+    echo 'hint: use a host with Python 3, or inspect the frontmatter directly' >&2
+    exit 2
+fi
+
 FORMAT=text
 
 usage() {
@@ -27,7 +33,7 @@ EOF
 }
 
 json_escape() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    printf '%s' "$1" | python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "surrogateescape"), ensure_ascii=True)[1:-1])'
 }
 
 fail_usage() {

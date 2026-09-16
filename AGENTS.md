@@ -64,7 +64,7 @@ This applies to any CLI that offers `--use-env` or environment-based configurati
 
 ## Skill authoring: `<skills-file-root>`
 
-When writing or editing a skill, use either relative paths or `<skills-file-root>` for references to files within the same skill directory (scripts, references, assets). `<skills-file-root>` resolves to the directory containing the skill's `SKILL.md`.
+When writing or editing a skill, use either relative paths or `<skills-file-root>` for references to files within the same skill directory (scripts, references, assets). This repository's `<skills-file-root>` notation denotes the directory containing `SKILL.md`; it is not a variable defined by the portable skill format. Verify the intended host or consumer's interpretation before relying on a root placeholder.
 
 ## Plugin installation and portability
 
@@ -144,7 +144,7 @@ with open('SKILL.md') as f:
 
 #### Discovery and activation
 
-Descriptions SHOULD front-load the actual capability, recognizable requests, and the most consequential sibling boundary. Keep them as short as reliable discovery permits. A catchall or repeated demand to activate does not demonstrate usefulness or solve poor routing.
+Descriptions SHOULD front-load the actual capability and recognizable requests. Include a scope distinction when it prevents likely misrouting; naming sibling skills is not required. Put dependency and composition details where the recipient needs them instead of turning retrieval metadata into an internal routing map. Keep descriptions as short as reliable discovery permits. A catchall or repeated demand to activate does not demonstrate usefulness or solve poor routing.
 
 You SHALL require mandatory activation only when an actual user requirement, adopted contract, or demonstrated hazard requires it. State that bounded requirement and its basis directly; do not use a generic activation-pressure pattern. Preserve automatic discovery unless the user explicitly requests an explicit-only entry.
 
@@ -215,7 +215,7 @@ Design context access around the task and actual recipient. Keep essential purpo
 
 Keep complete relevant source material or reliable access where independent assessment can change the work. A summary or index is an aid, not a closed account of what can matter. Choose reading by the live task, broaden when needed, reuse unchanged material still in context, and recover consequential grounds after loss or change. Do not require full-corpus reading on every activation or presume a historical reading is still active knowledge.
 
-Maintain one authoritative source for a fact or rule. Complementary controls can be useful, but copies that must be manually synchronized invite drift and waste context. CLI-served guidance and fallback references SHOULD derive from the same maintained source when they promise the same information. Use a CLI router only when an existing execution surface or substantial conditional content makes it useful; do not build one by default.
+Maintain one authoritative source for a fact or rule, and keep its navigation with that owner. Complementary controls can be useful, but copied chapter maps and procedures invite drift even when all links resolve. Public shared resources, optional capabilities, and required dependencies need distinguishable contracts; reading knowledge does not require invoking another workflow. CLI-served guidance and fallback references SHOULD derive from the same maintained source when they promise the same information. Use a CLI router only when an existing execution surface or substantial conditional content makes it useful; do not build one by default.
 
 Declare the actual distribution boundary. Shared references may live within a complete plugin rather than be copied into every skill. Verify that the installed recipient can resolve them. Generated downstream artifacts SHALL carry the meaning, constraints, sources or reliable access, and resources their own executors need; they SHALL NOT rely on an invisible authoring conversation or undeclared local cache.
 
@@ -228,6 +228,8 @@ Measure the actual loading path when context cost affects the task. Characters, 
 Before claiming what a delegated worker does or does not receive, inspect the selected host's actual inheritance, mounted files, ambient instructions, tools, permissions, and conversation behavior. A fresh context may still inherit consequential state, while an isolated worker may still need complete authoritative sources.
 
 Give each delegated function a role-complete instruction: its mission, legitimate authoritative inputs, environment, authority and effect boundaries, observable completion evidence, and the narrowest real output interface. Transfer the relevant meaning and source material the role needs, including useful information it could otherwise reconstruct; do not pass controller hypotheses, preferred methods, sibling outputs, hidden resolution logic, or broader orchestration state unless they are legitimately part of the role or tested deployment.
+
+A handoff supplies information and state, not understanding. The recipient SHALL reconstruct consequential understanding from the relevant original assignment and evidence; summaries orient access and do not turn the sender's interpretation into authority. Preserve completed actions and current state so reconstruction does not repeat external effects. This applies to execution plans, review packets, compaction, and continuation as well as explicit delegation. A bounded worker need not own the entire project to derive its own appropriate route or report an upstream defect.
 
 Do not impose a semantic response template solely for controller convenience. Preserve native artifacts and free-form judgment when they are the real interface. Require fields, files, identifiers, or structure only when an actual downstream consumer, deterministic transport, custody boundary, or demonstrated failure makes them necessary; keep raw payloads when a normalizer or extractor is used.
 

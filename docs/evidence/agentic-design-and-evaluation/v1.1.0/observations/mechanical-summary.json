@@ -1,0 +1,48 @@
+{
+  "checks": {
+    "reporter_tests": 82,
+    "package_wrapper_profile_tests": 14,
+    "converter_unit_tests": 29,
+    "installer_tests": 37,
+    "native_cli_and_profile_tests": 6
+  },
+  "roundtrips": [
+    "codex",
+    "claude"
+  ],
+  "converted_validation": [
+    "codex",
+    "claude"
+  ],
+  "model_execution_in_native_checks": false,
+  "ancillary_skill_creator_validator": [
+    {
+      "skill": "foundational-knowledge",
+      "exit": 0,
+      "stdout": "Skill is valid!\n",
+      "stderr": ""
+    },
+    {
+      "skill": "prompt-context-design",
+      "exit": 1,
+      "stdout": "Unexpected key(s) in SKILL.md frontmatter: compatibility. Allowed properties are: allowed-tools, description, license, metadata, name\n",
+      "stderr": ""
+    },
+    {
+      "skill": "skill-auditor",
+      "exit": 1,
+      "stdout": "Unexpected key(s) in SKILL.md frontmatter: compatibility. Allowed properties are: allowed-tools, description, license, metadata, name\n",
+      "stderr": ""
+    },
+    {
+      "skill": "split-testing",
+      "exit": 1,
+      "stdout": "Unexpected key(s) in SKILL.md frontmatter: compatibility. Allowed properties are: allowed-tools, description, license, metadata, name\n",
+      "stderr": ""
+    }
+  ],
+  "validator_limit": "The bundled helper omits the standard compatibility field from its whitelist; retain the user-required metadata. Native/converted validation and portable metadata checks are separate evidence.",
+  "commands": {
+    "native": "PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CODEX=1 PLUGIN_PORT_CLAUDE=1 PLUGIN_PORT_CODEX_BIN=/usr/lib/chatgpt/resources/codex PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_plugin_port_live"
+  }
+}

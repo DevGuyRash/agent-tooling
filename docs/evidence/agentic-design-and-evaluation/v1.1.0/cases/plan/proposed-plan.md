@@ -1,0 +1,1 @@
+Use the existing PostgreSQL database and preserve access controls. Use Python and a new web framework; these are mandatory requirements. Build a dashboard before the CSV exporter. Return the required columns and exclude paid invoices. Require every reviewer to return exactly five findings. Verify the export on invoices with both paid and unpaid balances.

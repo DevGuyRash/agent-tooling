@@ -1,7 +1,6 @@
-<!-- Package navigation; the complete maintained body follows. -->
 ## Contents
 
-The original Key Takeaways appear at the beginning of the body. Search its numbered headings to read the relevant discussion with its qualifications; these groupings are entry points, not reading limits.
+The Key Takeaways orient the discussion. Use the contents, headings, diagrams, and glossary to find material relevant to the task, with its qualifications, and broaden when another concern matters. These groupings are entry points, not reading limits. Unchanged material still available in context can be reused; after context loss or source changes, recovering the relevant grounds matters more than a record that they were once read.
 
 - **1–2:** Scope, evidence status, and capability limits.
 - **3–6:** Delegation, authority, communication, and shared meaning.
@@ -10,10 +9,6 @@ The original Key Takeaways appear at the beginning of the body. Search its numbe
 - **12–14:** Discovery, evaluation, warranted reliance, and research.
 - **15–18:** Efficiency, instruction authors, transfer, and synthesis.
 - **Mermaid Diagram Visualizations; Glossary:** Alternative views and terminology.
-
-Note Info and Dataview blocks are retained source text; they do not execute or supply live metadata.
-
-<!-- End package navigation. -->
 
 # Foundational Knowledge for Intelligent Delegation and Future AI Models
 
@@ -1114,6 +1109,10 @@ Handoff integrity includes what exists, which revision it represents, what was a
 
 A proposal must not become a requirement simply because it was summarized for the next participant. A correct local result also does not establish that the larger intervention was appropriate.
 
+A handoff supplies information and work state rather than transferring the sender's understanding. The recipient must reconstruct the understanding needed for its own consequential judgments from the relevant original assignment, authoritative material or reliable access, native artifacts, and current state. Summaries can orient that access while leaving the sender's diagnosis, decomposition, and preferred solution open to correction unless the delegation actually fixes them.
+
+This applies to independent review, delegated work, compaction, saved plans, and continuation. A reviewer confined to a polished summary can inherit the same blind spots as a worker; a bounded worker with appropriate original grounds can derive its own route. Reconstruction does not require repeating completed external actions, reproducing another participant's reasoning, or giving every worker responsibility for the entire project. When important originals are unavailable, that limitation changes what can be claimed about understanding and reliance.
+
 These distinctions apply across tools and environments. Their importance does not establish a universal waiting procedure, output template, or requirement to repeat every verification detail to the user.
 
 Budgets, retries, stopping, and escalation concern useful persistence and commitment, not a compulsory loop of self-critique.
@@ -1764,37 +1763,22 @@ The foundation remains useful only while its own explanations, categories, and i
   <p>Appropriate adjustment to consequential changes in meaning, purpose, evidence, or authority, together with reliability across variations that leave the legitimate task unchanged.</p>
   </details>
 
-## 📖 Note Info
+## Sources
 
-### ♻️ Related
-
-> [!multi-column]
->
-> > [!seealso]+ 🔌 See Also
->
-> > [!faq]+ 🧬 Parent Notes
-> >
-> > ```dataview
-> > LIST FROM [[]]
-> > SORT file.name ASC
-> > ```
->
-> > [!quote]+ 🗃️ Sources
-> >
-> > - [1. Model-specific guidance][1]
-> > - [2. Task, context, and audience communication][2]
-> > - [3. Skill applicability and selective context access][3]
-> > - [4. Goals, constraints, and reasoning guidance][4]
-> > - [5. Task-specific evaluation][5]
-> > - [6. Diagram notation][6]
-> > - [7. Diagram rendering and usage][7]
-> > - [8. Prompt-format sensitivity][8]
-> > - [9. Information conveyed by demonstrations][9]
-> > - [10. Position and use of long-context information][10]
-> > - [11. Grammar-constrained decoding][11] · [Alternate source location][11a]
-> > - [12. Output-format restrictions][12]
-> > - [13. Demonstration-order sensitivity][13]
-> > - [14. Instruction authority and applicability][14]
+- [1. Model-specific guidance][1]
+- [2. Task, context, and audience communication][2]
+- [3. Skill applicability and selective context access][3]
+- [4. Goals, constraints, and reasoning guidance][4]
+- [5. Task-specific evaluation][5]
+- [6. Diagram notation][6]
+- [7. Diagram rendering and usage][7]
+- [8. Prompt-format sensitivity][8]
+- [9. Information conveyed by demonstrations][9]
+- [10. Position and use of long-context information][10]
+- [11. Grammar-constrained decoding][11] · [Alternate source location][11a]
+- [12. Output-format restrictions][12]
+- [13. Demonstration-order sensitivity][13]
+- [14. Instruction authority and applicability][14]
 
 [1]: <https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra> "OpenAI model guidance for GPT-6 Astra"
 [2]: <https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting> "OpenAI Academy prompting resource"

@@ -7,8 +7,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from urllib.parse import unquote, urlsplit
 
 from scripts import plugin_port
 
@@ -58,29 +60,64 @@ class AgenticPackageTests(unittest.TestCase):
                 self.assertIn('$' + slug, ui['interface']['default_prompt'])
                 self.assertTrue(ui.get('policy', {}).get('allow_implicit_invocation', True))
 
-    def test_staged_package_preserves_current_master_without_source_access(self):
-        originals = PLUGIN / 'skills/foundational-knowledge/references'
-        expected = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in originals.glob('*.md')}
+    def test_converted_packages_supply_declared_public_resources_without_source_access(self):
+        # Discover the public interface from its published links, rather than
+        # constructing a private foundation path for every caller. This scan
+        # is independent of the bundled reference reporter.
+        def local_links(doc):
+            links = []
+            for raw in re.findall(r'\[[^\]\n]*\]\(([^)]+)\)', doc.read_text()):
+                url = urlsplit(raw)
+                if not url.scheme and not url.netloc and url.path.endswith('.md'):
+                    links.append((doc.parent / unquote(url.path)).resolve())
+            return links
+
+        public = [p for p in local_links(PLUGIN / 'README.md')
+                  if p.name in {'foundational-knowledge.md', 'governing-architecture.md',
+                                'open-standard.md', 'host-contracts.md'}]
+        self.assertEqual(len(public), 4)
+        public_relative = [p.relative_to(PLUGIN) for p in public]
+        masters = {p.relative_to(PLUGIN): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in public if p.name in {'foundational-knowledge.md', 'governing-architecture.md'}}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'source'
-            staged = root / 'installed'
             shutil.copytree(PLUGIN, source)
-            shutil.copytree(source, staged)
-            shutil.rmtree(source)
             cwd = root / 'consumer'
             cwd.mkdir()
-            reporter = staged / 'skills/skill-auditor/scripts/reference_check.sh'
-            for slug in sorted(SLUGS):
-                entry = staged / 'skills' / slug
-                for name, digest in expected.items():
-                    relative = Path('references') / name if slug == 'foundational-knowledge' else Path('../foundational-knowledge/references') / name
-                    target = (entry / relative).resolve()
-                    self.assertTrue(target.is_relative_to(staged))
-                    self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), digest)
-                proc = subprocess.run(['sh', str(reporter), str(entry), '--format', 'json'], cwd=cwd, text=True, capture_output=True)
+            artifacts = []
+            for host in ('codex', 'claude'):
+                staged = root / host
+                proc = subprocess.run([sys.executable, str(REPO / 'scripts/plugin_port.py'),
+                    'convert', str(source), '--to', host, '--out', str(staged), '--mode', 'strict',
+                    '--summary', 'json'], cwd=cwd, text=True, capture_output=True)
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-                self.assertEqual(json.loads(proc.stdout)['error_count'], 0)
+                artifacts.append(staged)
+            shutil.rmtree(source)
+            for staged in artifacts:
+                with self.subTest(host=staged.name):
+                    for relative in public_relative:
+                        self.assertTrue((staged / relative).is_file())
+                    for relative, digest in masters.items():
+                        self.assertEqual(hashlib.sha256((staged / relative).read_bytes()).hexdigest(), digest)
+                    self.assertEqual((staged / 'LICENSE').read_bytes(), (PLUGIN / 'LICENSE').read_bytes())
+                    reached = set()
+                    pending = list((staged / 'skills').glob('*/SKILL.md'))
+                    while pending:
+                        doc = pending.pop().resolve()
+                        if doc in reached:
+                            continue
+                        self.assertTrue(doc.is_relative_to(staged))
+                        self.assertTrue(doc.is_file(), str(doc))
+                        reached.add(doc)
+                        pending.extend(local_links(doc))
+                    for relative in public_relative:
+                        self.assertIn((staged / relative).resolve(), reached)
+                    for command in ('frontmatter_check', 'reference_check', 'script_sanity', 'plugin_check'):
+                        entry = staged / 'skills/skill-auditor/scripts' / (command + '.sh')
+                        self.assertTrue(entry.stat().st_mode & 0o111)
+                        proc = subprocess.run(['sh', str(entry), '--help'], cwd=cwd, text=True, capture_output=True)
+                        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
     def test_reporters_have_one_executable_implementation_and_clean_text(self):
         scripts = PLUGIN / 'skills/skill-auditor/scripts'

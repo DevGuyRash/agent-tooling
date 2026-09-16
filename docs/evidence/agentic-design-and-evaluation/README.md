@@ -1,5 +1,7 @@
 # Agentic Design & Evaluation qualification evidence
 
+The [1.1.0 revision record](v1.1.0/README.md) covers the public-resource, handoff, planning, and reporter corrections. [Scoped compatibility evidence](compatibility.md) retains the dated consumer observation separately from runtime guidance. The record below concerns the original 1.0.0 qualification and migration.
+
 This record distinguishes package delivery, deterministic defects, and bounded task outcomes. Candidate skills supplied guidance to task executors; they did not grade or certify their own replacement. The primary agent and Pro assessed original tasks, artifacts, source contracts, and outcomes. Their shared exposure limits independence. No general behavioral improvement, exact reading path, or implicit routing reliability is established.
 
 ## Task observations

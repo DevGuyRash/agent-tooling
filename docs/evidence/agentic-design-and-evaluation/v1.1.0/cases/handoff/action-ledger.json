@@ -1,0 +1,10 @@
+{
+  "request": "workshop-bids",
+  "acknowledgment": {
+    "status": "sent",
+    "receipt_id": "ACK-71"
+  },
+  "purchase": {
+    "status": "not_authorized"
+  }
+}

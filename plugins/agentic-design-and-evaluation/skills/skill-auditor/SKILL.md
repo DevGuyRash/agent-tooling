@@ -1,7 +1,7 @@
 ---
 name: skill-auditor
-description: 'Audit an existing skill or plugin as a delivered capability: instructions, discovery, resources, composition, executable behavior, and usefulness. Use for quality reviews and suspected routing, authority, context, packaging, or completion defects. For writing new instruction content or assessing an ordinary prompt, use Prompt and Context Design; ordinary source-code review is outside this skill’s scope.'
-compatibility: Optional structural reporters require a POSIX shell and standard Unix tools; reference_check.sh also requires Python 3.
+description: Review existing Agent Skills and plugins for instruction quality, discovery, dependencies, portability, executable behavior, and useful completion.
+compatibility: Requires the complete Agentic Design & Evaluation plugin for shared knowledge and comparative guidance. Optional structural reporters require a POSIX shell, standard Unix tools, and Python 3.
 ---
 
 # Skill Auditor
@@ -10,7 +10,7 @@ You SHALL determine what materially helps or weakens the skill or plugin and wha
 
 You SHOULD assess the target against its purpose, legitimate requirements, actual consumer, and delivered boundary. Source, installed copy, catalog exposure, activation, execution, and downstream use establish different properties. Familiar conventions and passing reporters do not decide semantic quality. An audit request alone does not authorize changing the target or user installations; you SHALL proceed with changes already included in the mandate.
 
-You SHOULD use the complete [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) where it informs the assessment: sections 3–5 help distinguish purpose and authority; 8–11 address source access, continuity, and completion; 12–17 address discovery, evidence, and transfer. Its contents remain open to other relevant concerns. You MAY reuse unchanged material still available; you SHOULD recover relevant grounds after context loss or changes. The shared [governing architecture](../foundational-knowledge/references/governing-architecture.md) governs your work when authoring a repair for another AI, and governs a target only through actual adoption.
+The public [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) informs assessment of authority, source access, continuity, and evidence; its own contents provide navigation. The separate [governing architecture](../foundational-knowledge/references/governing-architecture.md) governs authoring a repair for another AI and governs a target only through actual adoption. If a required shared resource is unavailable, you SHALL expose the incomplete installation and its consequence rather than claim that its guidance was applied.
 
 You SHOULD choose evidence and reading by what could change the maintainer's decision:
 

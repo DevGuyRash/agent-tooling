@@ -1,0 +1,11 @@
+{
+  "case": "audit",
+  "capture": "Completed rendered response transcribed from the browser; citation line wrapping and table delimiters normalized. Not a tool-execution trace.",
+  "model_ui": "6 Pro",
+  "temporary": "Personalized; plugins/custom instructions may be referenced",
+  "natural_completion": "response present and active controls absent on two checks separated by a settle wait",
+  "displayed_work_seconds": 627,
+  "response_text_sha256": "82a93f4dbe886bcb566cd8ec5af2d49fb8015d1555e0aa580cef4e50e6823b10",
+  "assessment": "Correctly distinguishes false standalone support from legitimate plugin sharing, detects the stale authorization pointer, and preserves the pinned method/date. Primary independently reproduced the original delivery and section facts.",
+  "limits": "Reported temporary-copy patch checks are not independently authenticated execution history. The Harbor inline proposal leaves an obsolete source policy outside the standalone payload; cleanup/ownership of that unused file is not fully specified."
+}

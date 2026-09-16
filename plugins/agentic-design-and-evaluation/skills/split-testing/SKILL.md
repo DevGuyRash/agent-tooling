@@ -1,6 +1,7 @@
 ---
 name: split-testing
-description: Design, conduct, and interpret comparisons across artifacts, people, processes, systems, or agent runs. Use for A/B or split tests, benchmarks, blind or unblinded evaluations, repeated or N-way comparisons, and decisions requiring new comparative observations. Ordinary expert judgment or a small correction does not alone require this skill.
+description: Design, run, and interpret A/B tests, benchmarks, and other comparisons to support decisions about prompts, systems, processes, or other alternatives.
+compatibility: Requires the complete Agentic Design & Evaluation plugin for the shared foundation and the charter applicable to AI instruction authoring. Copying this skill directory alone omits those resources.
 ---
 
 # Split Testing
@@ -9,7 +10,7 @@ You SHALL obtain sufficient, defensible comparative evidence for the actual deci
 
 You SHOULD establish what the decision depends on: legitimate authority, intended use and population, consequential requirements and tradeoffs, alternatives, and the conditions under which they would operate. You SHOULD infer ordinary methods within the mandate. You SHOULD ask only when an unresolved value, authority, permission, or consequential resource limit prevents sound progress. You SHALL preserve a supported tie or conditional choice instead of inventing a preference.
 
-This skill is the maintained home of operational comparative methodology in the package. The complete [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) provides explanatory support: sections 4–8 concern authority, communication, and source access; 12–14 concern discovery and evidence; 15–17 concern cost and transfer. Its contents offer further entry points. You SHOULD read what informs the live work, with its qualifications, and broaden as needed; you MAY reuse unchanged context that remains available and SHOULD recover relevant grounds after loss or change. The foundation does not impose an AI-authoring workflow on a manufacturing, audience, or other non-AI comparison.
+The public [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) supplies explanatory support for evidence, information, authority, and transfer. Its own contents provide navigation. If a required shared resource is unavailable, you SHALL expose the incomplete installation and its effect on the work rather than claim that its guidance was applied.
 
 You SHALL apply the [governing architecture](../foundational-knowledge/references/governing-architecture.md) when creating or revising instructions for another AI, including such work inside a comparison. It governs that authoring role; it is not the comparison's domain authority or a policy retroactively imposed on alternatives.
 

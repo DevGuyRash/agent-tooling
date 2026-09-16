@@ -28,6 +28,8 @@ Current local plugins:
 - `plugins/playwright-testing/`
 - `plugins/project-harness/`
 - [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Friction Diagnostics remains a separate plugin.
+
+Agentic Design & Evaluation is distributed as a complete plugin. Its task skills depend on the public shared resources listed in its package guide; a copied task-skill directory is not a supported standalone installation. This package boundary is distinct from a launcher or standalone skill that promises to carry all of its dependencies inside one skill directory.
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
 
 ## Plugin Packages

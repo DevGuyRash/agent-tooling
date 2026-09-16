@@ -1,0 +1,23 @@
+{
+  "executions": [
+    {
+      "program": "deadline_first.py",
+      "stdout": "{'earned': 75, 'completed': ['A', 'B', 'D'], 'elapsed': 6}\n",
+      "stderr": "",
+      "exit": 0
+    },
+    {
+      "program": "value_first.py",
+      "stdout": "{'earned': 90, 'completed': ['B', 'C', 'D'], 'elapsed': 5}\n",
+      "stderr": "",
+      "exit": 0
+    }
+  ],
+  "inputs_unchanged": true,
+  "input_hashes": {
+    "value_first.py": "a38ffdd3d870f6bfb3d5e93e9973909964a90d34200781d5788d219ee1d361fd",
+    "deadline_first.py": "910543578da949872e148ec5df382f5da692f64306a6d89ea139b7935745c659",
+    "task.md": "16b236223fcfc29f8358fdcf9eab86edc1061201d0ecf47fa646a585406bd368",
+    "jobs.csv": "afbf741dad4a6bdb7e033c71b1e0278ac799450a7fa96cfe82790785c9699c05"
+  }
+}

@@ -1,4 +1,4 @@
 interface:
   display_name: "Foundational Knowledge"
-  short_description: "Understand delegation, authority, context, and evidence"
+  short_description: "Explain delegation, context, and independent understanding"
   default_prompt: "Use $foundational-knowledge to explain the principles relevant to this question."

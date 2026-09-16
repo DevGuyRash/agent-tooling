@@ -1,0 +1,1 @@
+I need to choose between the two supplied scheduling programs for the jobs in jobs.csv. Run both unchanged. Only one job can run at a time, all jobs are available at time zero, and a job earns its value only when completed by its deadline. Skipped jobs consume no time. Select the program that earns more on these jobs and explain the limit of that conclusion.

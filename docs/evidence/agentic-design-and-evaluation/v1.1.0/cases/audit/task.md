@@ -1,0 +1,1 @@
+I maintain the Harbor, Juniper, and Cedar packages in the attachment. I need a review of their declared distribution and instruction behavior, with warranted corrections. Please keep the target files unchanged. Their supplied local contracts define the intended use; these are synthetic packages, not integrations with a live vendor service.

@@ -1,0 +1,26 @@
+{
+  "harbor": {
+    "full_plugin_target_present": true,
+    "skill_directory_only_target_present": false,
+    "promise": "Install by copying only skills/harbor. It is self-contained and needs no other files."
+  },
+  "juniper": {
+    "full_plugin_target_present": true,
+    "skill_directory_only_target_present": false,
+    "promise": "Install the complete Juniper plugin. The shared rules file is a required public resource; the skill folder alone is not a supported distribution."
+  },
+  "cedar": {
+    "section_1": "Sending authorization",
+    "section_2": "Formatting",
+    "entry_directs_authorization_to_section_2": true,
+    "pinned_contract": {
+      "interface": "AtlasExport",
+      "version": "1.2",
+      "contract_date": "2024-06-01",
+      "allowed_export_modes": [
+        "legacy"
+      ],
+      "sending": "requires explicit user authorization"
+    }
+  }
+}

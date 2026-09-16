@@ -1,0 +1,9 @@
+{
+  "case": "compare",
+  "capture": "Completed rendered response; citation line wrapping and table delimiters normalized. Not a tool-execution trace.",
+  "model_ui": "6 Pro",
+  "temporary": "Personalized; plugins/custom instructions may be referenced",
+  "natural_completion": "response present and active controls absent on two checks separated by a settle wait",
+  "displayed_work_seconds": 222,
+  "response_text_sha256": "cc677197528092cda4492a481acdedb2ff45a2861177c76dd27894643e45dd8f"
+}

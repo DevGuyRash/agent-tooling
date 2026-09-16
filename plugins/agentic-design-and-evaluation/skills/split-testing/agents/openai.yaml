@@ -1,4 +1,4 @@
 interface:
   display_name: "Split Testing"
-  short_description: "Obtain evidence for a useful comparison"
+  short_description: "Run and interpret comparisons for a decision"
   default_prompt: "Use $split-testing to compare these alternatives for this decision."
