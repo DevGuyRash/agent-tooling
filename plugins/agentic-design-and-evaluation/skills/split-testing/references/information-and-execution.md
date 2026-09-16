@@ -2,7 +2,7 @@
 
 You SHOULD identify each condition's effective exposure when it matters: instructions, attachments and source versions, tools, permissions, environment, model and effort, timing, retries, assistance, selection, and the actual consumer interface. A behavior-changing difference should be the intended contrast, a credible native condition, an accounted nuisance, or an acknowledged inference limit.
 
-Authorship, execution, measurement, review, causal investigation, and presentation are functions that may be combined or separated according to the task. They are not mandatory roles or stages. You SHOULD inspect the host's actual inheritance, ambient instructions, mounted files, permissions, and shared state before claiming that a function is fresh, blind, or isolated. A separate directory or coordinator does not prove those properties.
+Authorship, execution, measurement, review, causal investigation, and presentation are functions that may be combined or separated according to the task. You SHOULD inspect the host's actual inheritance, ambient instructions, mounted files, permissions, and shared state before claiming that a function is fresh, blind, or isolated. A separate directory or coordinator does not prove those properties.
 
 You SHALL give each executor complete legitimate authority, original sources or reliable access, task inputs, tools, boundaries, and the real consumer interface. Withhold expected rankings, controller hypotheses, sibling outputs, private resolution logic, or comparative purpose when intended use would not supply them. Fresh context must not become impoverished context. Account for unavoidable prior exposure instead of asserting independence.
 

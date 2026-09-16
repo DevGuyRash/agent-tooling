@@ -1,6 +1,6 @@
 # Validity and Attribution
 
-You SHOULD resolve a property through the nearest legitimate evidence and authority: original sources, executable state, downstream outcomes, qualified expertise, actual users, or the rightful decision owner's values. These examples are not a closed resolver list. You SHOULD use an acceptance relation when several outcomes satisfy the task rather than forcing one reference answer.
+You SHOULD resolve a property through the nearest legitimate evidence and authority, such as original sources, executable state, downstream outcomes, qualified expertise, actual users, or the rightful decision owner's values. You SHOULD use an acceptance relation when several outcomes satisfy the task rather than forcing one reference answer.
 
 Every checker, simulation, rubric, reviewer, and interface is partial. Confidence, agreement, automation, consistency, or secrecy does not give an instrument authority. Before relying on a consequential instrument, you SHOULD examine plausible defects that could reverse the choice, hide a non-compensable failure, or make the property unobservable. Shared unsupported premises can make both generator and evaluator agree incorrectly.
 

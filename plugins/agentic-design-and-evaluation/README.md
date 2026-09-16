@@ -9,13 +9,13 @@ Design useful AI instructions and context, assess delivered skills and plugins, 
 | [Split Testing](skills/split-testing/SKILL.md) | Designing, conducting, and interpreting a genuine comparison, including non-AI work. This is the sole maintained owner of comparative methodology. |
 | [Foundational Knowledge](skills/foundational-knowledge/SKILL.md) | Understanding the shared knowledge and the governing architecture's authoring scope. |
 
-A request to write a prompt can finish with the prompt. Reading a shared reference does not start another workflow; one executor retains the actual assignment. Ordinary draft checking is part of authoring. A comparison that needs new observations includes obtaining them when authorized and feasible. There is no automatic creation–audit–comparison pipeline, required reviewer panel, or session hook.
+A request to write a prompt can finish with the prompt. Ordinary draft checking is part of authoring. A comparison that needs new observations includes obtaining them when authorized and feasible.
 
 ## Shared knowledge
 
-The complete foundation and separate governing architecture are maintained here. The foundation owns its contents and reading guidance. The charter applies when creating or revising instructions for another AI, including an execution plan; explanatory knowledge does not become universal policy for every comparison or external target.
+The governing architecture applies when creating or revising instructions for another AI, including an execution plan. The foundation supplies explanatory knowledge for delegation and evaluation.
 
-These are public shared resource interfaces of the plugin. Their containing directories do not require invoking the corresponding task skill:
+Read these public shared resources directly as needed:
 
 | Public resource | Responsibility |
 | --- | --- |
@@ -24,17 +24,15 @@ These are public shared resource interfaces of the plugin. Their containing dire
 | [Portable skill format](skills/skill-auditor/references/open-standard.md) | Portable-format claims and their distinction from host behavior. |
 | [Host delivery](skills/skill-auditor/references/host-contracts.md) | Ingestion, publication, installed resources, and actual consumer boundaries. |
 
-Consumers link to these maintained resources by purpose; they do not copy their chapter maps or procedures. The four skill entry points are public capability interfaces. Shared knowledge, an optional adjacent capability, and a required resource are different relationships, and none creates an additional agent or controller by itself.
-
 Install the complete plugin. Extracting an individual task-skill directory is unsupported because it omits required shared resources; the dependent entries declare that requirement in `compatibility`. A missing required resource is an incomplete installation, not evidence that its guidance was applied. Generated prompts, plans, and skills have their own delivery boundary and carry the original grounds, constraints, and resources their executors need. They do not depend on this plugin or the author's conversation by default.
 
 ## Hosts and optional tools
 
-Both Codex and Claude Code are supported through this repository's host manifests and marketplaces. These are portable instructions and local resources, without a required browser, model provider, external reviewer, MCP service, or account connection. Available tools and authority still depend on the selected host and assignment.
+Both Codex and Claude Code are supported through this repository's host manifests and marketplaces. Available tools and authority depend on the selected host and assignment.
 
 Skill Auditor includes four optional [structural reporters](skills/skill-auditor/references/reporter-tools.md). They use a POSIX shell, standard Unix utilities, and Python 3's standard library. They install nothing and do not modify the target. Reporter success is a bounded structural observation, not evidence of semantic effectiveness. Repository selection and release policy remain in repository tooling.
 
-Friction Diagnostics remains separate and owns its event store, capture, requested mending, and independent hooks. Relevant records can inform an authorized investigation without creating a dependency or automatic feedback-workflow chain.
+Friction Diagnostics is installed separately for incident capture and mending. Its records can inform an authorized investigation.
 
 ## Installation migration
 

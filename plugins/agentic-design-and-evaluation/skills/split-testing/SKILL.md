@@ -1,7 +1,7 @@
 ---
 name: split-testing
 description: Design, run, and interpret A/B tests, benchmarks, and other comparisons to support decisions about prompts, systems, processes, or other alternatives.
-compatibility: Requires the complete Agentic Design & Evaluation plugin for the shared foundation and the charter applicable to AI instruction authoring. Copying this skill directory alone omits those resources.
+compatibility: Requires the complete Agentic Design & Evaluation plugin for the shared foundation and authoring charter.
 ---
 
 # Split Testing
@@ -10,9 +10,9 @@ You SHALL obtain sufficient, defensible comparative evidence for the actual deci
 
 You SHOULD establish what the decision depends on: legitimate authority, intended use and population, consequential requirements and tradeoffs, alternatives, and the conditions under which they would operate. You SHOULD infer ordinary methods within the mandate. You SHOULD ask only when an unresolved value, authority, permission, or consequential resource limit prevents sound progress. You SHALL preserve a supported tie or conditional choice instead of inventing a preference.
 
-The public [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) supplies explanatory support for evidence, information, authority, and transfer. Its own contents provide navigation. If a required shared resource is unavailable, you SHALL expose the incomplete installation and its effect on the work rather than claim that its guidance was applied.
+Consult [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) for evidence, information, authority, and transfer. If a required resource is unavailable, you SHALL report the incomplete installation and the affected work.
 
-You SHALL apply the [governing architecture](../foundational-knowledge/references/governing-architecture.md) when creating or revising instructions for another AI, including such work inside a comparison. It governs that authoring role; it is not the comparison's domain authority or a policy retroactively imposed on alternatives.
+You SHALL apply the [governing architecture](../foundational-knowledge/references/governing-architecture.md) when creating or revising instructions for another AI, including such work inside a comparison. Assess alternatives against the requirements and authority of the comparison's domain.
 
 You SHOULD use the references whose detail can change the work:
 
@@ -23,4 +23,4 @@ You SHOULD use the references whose detail can change the work:
 
 You SHALL retain the native outcomes and condition facts needed to support the conclusion, including consequential failures, missingness, assistance, replacements, and limits. A prepared result packet can support a decision about those records without qualifying the process that generated them. You SHALL verify decisive factual premises against the strongest available retained evidence. You SHALL keep the conclusion within what the observations and authority support; required evidence still missing leaves that part of the assignment incomplete.
 
-You SHALL return the clearest adequate expression for the consumer: the supported action or tradeoff, its grounds, consequential limits, and what would change it. No fixed scores, counts, roles, report structure, or extra participant is required. You SHALL verify persistent files, links, or other delivered interfaces when they are part of the actual result.
+You SHALL return the clearest adequate expression for the consumer: the supported action or tradeoff, its grounds, consequential limits, and what would change it. You SHALL verify persistent files, links, or other delivered interfaces when they are part of the actual result.

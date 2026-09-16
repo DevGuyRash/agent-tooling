@@ -2,13 +2,13 @@
 
 You SHOULD inspect the instruction as a delegation within a real arrangement. What contribution is entrusted to the executor, which choices are fixed, what original information is available, and what makes completion useful? A target can be flawed because it solves an unnecessary problem, invents authority, or gives the executor the wrong assignment even when its prose and files are consistent.
 
-The shared governing architecture is maintained in the foundation reference linked from SKILL.md. It governs authoring work and targets that adopt it. For an external target, you SHALL use its actual requirements and observed consequences. You SHALL NOT classify a disagreement with this package's preferences as a conformance failure.
+For an external target, you SHALL use its actual requirements and observed consequences.
 
 Examine whether proposed methods have acquired undeserved authority. A suggested output shape, author-chosen probe, or previous assistant interpretation can become a binding requirement through a follow-up or acceptance test. Conversely, explicit structure may carry a real consumer interface, a hazardous ordering constraint, or useful shared meaning. Neither procedural form nor declarative form proves quality.
 
 You SHOULD look at the work an instruction causes as well as its text. A local workflow can finish while the user's result remains incomplete; an added review or process can redirect a narrow assignment. Trace the actual mandate and steering before attributing excess work: an explicit user expansion is different from agent drift. Apply the same distinction to execution plans, where proposed mechanisms can acquire binding force without a corresponding user requirement, delegated decision, or justified contribution.
 
-Reusable guidance should remain understandable without the history of its creation. You SHOULD distinguish present responsibilities from examples, provenance, migration notes, and version-scoped compatibility evidence. A date or fixed value can establish applicability; an unexplained development anecdote cannot establish a universal obligation. Repair the consequential ambiguity rather than removing every dated fact or specific method.
+For wording that burdens or misdirects the recipient, consult [instruction editing](../../prompt-context-design/references/designing-instructions.md). Ground the finding in the target's actual task, reader, and requirements.
 
 Tests can preserve the wrong property. Assertions about a required sentence, heading roster, prohibited word, or absence of scripts may protect the author's design rather than the consumer's needs. You SHALL keep checks that enforce a real interface or observed failure. Removing an incidental assertion does not require a replacement ceremony; determine which actual property still needs evidence.
 

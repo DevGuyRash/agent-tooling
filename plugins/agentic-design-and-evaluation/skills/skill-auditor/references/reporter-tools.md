@@ -1,6 +1,6 @@
 # Reporter Tools
 
-Four optional scripts expose bounded structural observations. You MAY run a reporter when its observation helps the live decision. Their exit status is not an audit verdict, and there is no required opening or closing suite. Source inspection remains useful when a reporter's assumptions could hide a defect or create a false one.
+Four optional scripts expose bounded structural observations. You MAY run a reporter when its observation helps the live decision. Their exit status is not an audit verdict. Source inspection remains useful when a reporter's assumptions could hide a defect or create a false one.
 
 You MAY invoke a script by its installed path, for example `sh <skills-file-root>/scripts/reference_check.sh /absolute/path/to/target-skill --format json`. You SHOULD use each script's `--help` for its accepted arguments. Paths passed as targets resolve from the caller's current directory; an absolute target avoids that ambiguity. The `plugin_check.sh` target is a plugin directory; the other three take a skill directory. They can inspect targets outside this package and do not load the target's instructions as their own authority.
 

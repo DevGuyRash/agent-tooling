@@ -1,6 +1,6 @@
 ## Contents
 
-The Key Takeaways orient the discussion. Use the contents, headings, diagrams, and glossary to find material relevant to the task, with its qualifications, and broaden when another concern matters. These groupings are entry points, not reading limits. Unchanged material still available in context can be reused; after context loss or source changes, recovering the relevant grounds matters more than a record that they were once read.
+Select material by the task and broaden when another concern matters. Reuse unchanged material still available in context; recover consequential grounds after context loss or source changes.
 
 - **1–2:** Scope, evidence status, and capability limits.
 - **3–6:** Delegation, authority, communication, and shared meaning.
@@ -27,8 +27,6 @@ The Key Takeaways orient the discussion. Use the contents, headings, diagrams, a
 > - 🌱 **Foundations can persist while their implementations disappear**: Relevant reality, legitimate decision rights, shared understanding, usable interfaces, recoverable grounds, and adequate evidence can remain necessary even when familiar prompts, procedures, representations, and storage arrangements become unnecessary.
 
 ## 🧜‍♀️ Mermaid Diagram Visualizations
-
-These views describe separate relationships developed in the note. They are explanatory representations, not a required reasoning sequence, storage schema, runtime architecture, or exhaustive account of cognition.
 
 Each diagram is scoped to its heading. An arrow describing a possible influence does not establish a measured causal mechanism. A diagram can make a selected relationship independently understandable without replacing the qualifications and evidence in the prose.
 
@@ -146,7 +144,7 @@ sequenceDiagram
   participant Sources as Authorized original materials
   participant Environment as Tools and external controls
 
-  Note over User,Environment: Illustrative collaboration, not a compulsory sequence
+  Note over User,Environment: Illustrative collaboration
   User->>Author: Situation, developing purposes, genuine requirements, and discretion
   Author->>Expert: Assignment with settled decisions distinct from candidate solutions
   Author->>Expert: Relevant originals or reliable access, including consequential limitations
@@ -193,7 +191,7 @@ sequenceDiagram
   participant Caller as Caller
   participant Model as Executor
 
-  Note over Caller,Model: Alternative arrangements, not a claim that either is better
+  Note over Caller,Model: Alternative arrangements
 
   alt Different positions inside one input
     Caller->>Model: Task and optional schema, with the schema early or late in the same input
@@ -297,7 +295,7 @@ erDiagram
   DECISION }o--o{ ACTIVE_VIEW : selectively_informs
 ```
 
-The entities describe useful distinctions, not a required database. Evidence can have multiple sources. Authority can permit a decision without proving its assumptions, and evidence can support a decision without authorizing an action.
+Evidence can have multiple sources. Authority can permit a decision without proving its assumptions, and evidence can support a decision without authorizing an action.
 
 Stored records need not all become active context. Links support traceability without independently validating their contents.
 
@@ -353,11 +351,9 @@ mindmap
 
 A sound account of excellent judgment does not establish that repeating it improves an already capable judge. Knowledge can help an instruction author omit an unjustified template, provide original evidence, clarify the delegation, choose a useful interface, or offer a suggestion without imposing another obligation on the executor.
 
-These are distinctions, not mandatory stages. Context can inform judgment without prescribing its conclusion. A genuine requirement can remain applicable without repetition. Communication can also legitimately convey a requirement or grant of authority when its source and scope support that act.
+Context can inform judgment without prescribing its conclusion. A genuine requirement can remain applicable without repetition. Communication can also legitimately convey a requirement or grant of authority when its source and scope support that act.
 
 The distinction applies recursively. Moving prescriptions from an executor to its instruction writer does not justify them. A more capable author may discover a better assignment or division of work than the author of a general framework anticipated.
-
-This note concerns collaboration with increasingly capable AI, including systems that design assignments for other systems. It develops explanatory distinctions and research questions, not a universal runtime policy. Its headings organize a reference, not an inventory every interaction must satisfy.
 
 A coherent philosophy can still be an ineffective prompt. **A property of good work is not automatically a useful instruction to the worker.**
 
@@ -373,15 +369,15 @@ A coherent philosophy can still be an ineffective prompt. **A property of good w
 | Mechanistic explanation              | Evidence distinguishing the explanation from plausible alternatives            | Usefulness of every intervention it suggests                                    |
 | Research hypothesis                  | A proposed account with distinguishable implications                           | That either the explanation or its proposed intervention is already validated   |
 
-This note develops conceptual arguments, design judgments, illustrative examples, and research hypotheses. Examples illustrate possibilities rather than establish measured prevalence or comparative performance. Proposed comparisons are study designs, not completed experiments.
+Examples illustrate possibilities; measured prevalence and comparative performance require observations. Proposed study designs require execution before they supply empirical evidence.
 
 Clearer responsibility, relevant evidence access, and discretion over the contribution can support useful work. Rigid enumeration, inherited frames, and mandatory representations can also impose costs. Whether a particular arrangement helps, and which component contributes to that effect, remain separate empirical questions.
 
 Several agents agreeing after sharing material or reading one another's explanations do not create independent confirmation. Agreement does not acquire evidential independence merely by appearing in separate accounts.
 
-Conceptual conclusions depend on the arguments and assumptions given here. Claims about effectiveness, prevalence, transfer, or mechanism require appropriately scoped observations. Source links identify supporting material; they do not substitute for stating the claim or its limits in this note.
+Conceptual conclusions depend on their stated arguments and assumptions. Claims about effectiveness, prevalence, transfer, or mechanism require appropriately scoped observations. A cited source supports a claim only within the source's actual scope.
 
-### 1.3. 🔎 A Foundation Is Not a Catalog of Steering Tricks
+### 1.3. 🔎 Principles and Interventions
 
 Knowing what should govern an executor differs from knowing what influences its behavior or enables a useful contribution. Normative, empirical, and causal questions inform one another without becoming interchangeable.
 
@@ -565,7 +561,7 @@ Communication can describe facts, establish preferences, ask questions, propose 
 | Did the change help?     | The legitimate assignment, quality requirements, and costs    |
 | What caused it?          | A mechanism supported by discriminating evidence              |
 
-These distinctions are not a reporting template for every executor. Interpretation may itself be inferred from behavior and remain uncertain.
+Interpretation may itself be inferred from behavior and remain uncertain.
 
 A cue intended to improve evidence handling might produce more cautious language without better accuracy. "Forensic review" might improve detection, elicit more effort, change tone, or increase unsupported accusations. Those are possible outcomes, not properties guaranteed by the phrase.
 
@@ -1051,7 +1047,7 @@ An important warning buried in a transcript does not establish that it reached s
 
 A finding can be understood yet remain unactionable because of authority, operational dependencies, or completed external effects.
 
-These are different possible failures, not mandatory stages every interaction must visibly traverse. Their combined significance is practical: consequential discoveries need the opportunity to change the relevant decision without granting every participant authority over everything.
+Consequential discoveries need the opportunity to change the relevant decision while preserving each participant's scope of authority.
 
 ### 11.4. 🏗️ Governance Exists in the Arrangement
 
@@ -1113,9 +1109,7 @@ A handoff supplies information and work state rather than transferring the sende
 
 This applies to independent review, delegated work, compaction, saved plans, and continuation. A reviewer confined to a polished summary can inherit the same blind spots as a worker; a bounded worker with appropriate original grounds can derive its own route. Reconstruction does not require repeating completed external actions, reproducing another participant's reasoning, or giving every worker responsibility for the entire project. When important originals are unavailable, that limitation changes what can be claimed about understanding and reliance.
 
-These distinctions apply across tools and environments. Their importance does not establish a universal waiting procedure, output template, or requirement to repeat every verification detail to the user.
-
-Budgets, retries, stopping, and escalation concern useful persistence and commitment, not a compulsory loop of self-critique.
+Budgets, retries, stopping, and escalation support useful persistence and commitment.
 
 ## 12. 🔍 Discovery, Disagreement, and Explanatory Restraint
 
@@ -1336,8 +1330,6 @@ Different supports can interact rather than contribute independently. Their indi
 | How can a stronger result become trustworthy?                     | Match claims with derivations, checks, trials, and appropriately independent review                                                  | Treating persuasive explanation or agreement as sufficient assurance                               |
 | Does a proposed mechanism explain the benefit?                    | Comparisons that vary the claimed mechanism while addressing plausible alternatives such as additional effort or changed information | Mistaking a useful package effect for evidence of one internal process                             |
 
-These are candidate studies, not a fixed program, mandatory test suite, or complete taxonomy.
-
 Components can succeed or fail independently of the framework that originally suggested them. A framework need not survive every comparison for the research it motivates to be valuable.
 
 ### 14.6. 📏 Measure Work Without Rewarding the Theory's Appearance
@@ -1396,7 +1388,7 @@ Another is distinguishing useful semantic compression from dependence on fragile
 
 A capability multiplier does not answer these questions experimentally. Their value is that they can guide inquiry even if the models, tools, communication channels, and original terminology change completely.
 
-A theory improves when failed predictions alter its account rather than merely trigger another search for favorable wording. Findings that challenge this note are grounds for revision, not failures to conform to its framework.
+A theory improves when failed predictions alter its account rather than merely trigger another search for favorable wording. Contrary findings provide grounds for revision.
 
 ## 15. ⚡ Efficiency, Preparation, and Useful Responsiveness
 
@@ -1474,7 +1466,7 @@ No layer becomes exempt from scrutiny merely because it is called governance.
 
 No additional universal cognitive coaching is a legitimate baseline for both roles. It is not a proven optimum or a removal of existing habits and instructions. A recurring failure can justify a targeted correction without establishing a need to impose an entire theory of good judgment.
 
-### 16.2. 📖 A Knowledge Skill Is Not Automatically a Policy Layer
+### 16.2. 📖 Knowledge, Relevance, and Policy
 
 A skill can retain arguments, examples, observations, conventions, methods, local procedures, and research without making every item an obligation whenever retrieved.
 
@@ -1597,7 +1589,7 @@ None of these effects follows from length, force, novelty, grammatical form, or 
 
 A stronger executor may improve the original picture of the task, confirm it and execute directly, or establish that further action is not justified. Its value lies in the warranted contribution, not resemblance to the author's expected answer or a visible performance of skepticism.
 
-**Knowledge worth preserving does not automatically become text worth supplying, and text worth supplying does not automatically become an obligation.** Nonbinding knowledge can still influence the recipient. The same distinctions apply to instruction authors, knowledge skills, and this foundation itself.
+**Knowledge worth preserving does not automatically become text worth supplying, and text worth supplying does not automatically become an obligation.** Nonbinding knowledge can still influence the recipient. The same distinctions apply to instruction authors and knowledge skills.
 
 **A property of good work is not automatically a useful instruction to the worker. A change in behavior is not automatically an improvement. An improvement is not automatically evidence for its proposed explanation.**
 

@@ -1,6 +1,6 @@
 # Continuation and Handoffs
 
-Continuing work needs recoverable decisions and grounds, not a transcript permanently held in context. You SHALL preserve the live objective, settled scope, meaningful progress, dependencies, consequential assumptions, and what still changes the next action. A concise state file, existing issue, structured record, or another available interface can serve this role. You SHALL NOT create parallel state merely because a skill is active.
+Continuing work needs recoverable decisions and grounds. You SHALL preserve the live objective, settled scope, meaningful progress, dependencies, consequential assumptions, and what still changes the next action. Use an existing state file, issue, or other suitable record when available.
 
 A user follow-up may narrow the assignment or redefine success. Update dependent plans and outputs accordingly; finishing a previously planned task can be wrong after it has been withdrawn. You SHALL preserve still-relevant evidence and completed effects, and reopen an informed decision when material new grounds warrant it.
 
@@ -13,5 +13,3 @@ You SHALL give each executor the relevant original assignment, authoritative mat
 This responsibility applies to reviewers, bounded workers, continuation after compaction, saved plans, and synthesized source notes. You SHALL preserve the recipient's freedom to derive an appropriate approach within the mandate and to report a defect beyond its authority to repair. A bounded role need not duplicate the whole project. You SHALL NOT repeat a completed external action merely to reconstruct understanding or require an identical reasoning path as proof of it. Controller hypotheses and sibling conclusions SHOULD remain distinguishable from original evidence and SHOULD be withheld where their exposure would invalidate the intended independence.
 
 A handoff concerns actual status and usable outputs. You SHOULD follow an authored instruction into the intended consumer boundary when its usability matters. Producer-side success does not establish that a copied file, installed resource, remote service, or fresh executor can use the result. You SHALL preserve a partial result as partial, including the dependencies needed to continue; you SHALL NOT recast required verification as an optional follow-up simply to close the task.
-
-Methods and participants remain task choices. Neither continuing work nor this reference requires additional agents, a reviewer panel, a fixed state schema, or a creation–audit–comparison sequence.

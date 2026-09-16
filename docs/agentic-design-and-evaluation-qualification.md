@@ -1,4 +1,4 @@
-# Agentic Design & Evaluation 1.1.0 qualification
+# Agentic Design & Evaluation qualification
 
 This record describes the evidence and limits for [release commit e64fb58](https://github.com/DevGuyRash/agent-tooling/commit/e64fb5825e498208f1eb5e6af580f544fc0efba0). The [package guide](../plugins/agentic-design-and-evaluation/README.md) owns current installation requirements, skill responsibilities, and public resource interfaces. The four entries share knowledge within a complete plugin so callers can use each capability directly without duplicating the foundation or requiring an automatic workflow. Split Testing owns comparative methodology; Friction Diagnostics remains separate.
 
@@ -40,3 +40,9 @@ Installation, catalog exposure, structural preservation, and browser task behavi
 ## Scoped compatibility evidence
 
 A parser check recorded on 2026-08-17 against [Codex revision c6058cc](https://github.com/openai/codex/blob/c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc/codex-rs/core-plugins/src/manifest.rs#L482-L536) found that raw `interface.defaultPrompt` accepted a string or a list. An array-shaped normalized representation did not establish rejection of a string input. This observation is scoped to the cited consumer revision, not a current publication guarantee; check the intended consumer when its revision or ingestion boundary changes.
+
+## 1.1.1 wording revision
+
+This revision removes unnecessary navigation narration and scope exclusions from the four entries and supporting references. Prompt and Context Design supplies the editing guidance for metadiscourse, self-referential metacommentary, process narration, gratuitous negation, unnecessary negative scoping, "show, don't tell," and timeless present; Skill Auditor links to that guidance. Its retrieval description also explicitly includes execution plans. The charter and reporter implementations are unchanged. Foundation citations, glossary entries, numbered sections, and diagrams are preserved.
+
+Verification covers 14 package/wrapper/profile checks, 29 converter checks, six explicitly enabled native CLI/profile checks, both host roundtrips, and the converted-package validators. Profile checks overlap between groups. The behavioral observations above remain evidence for 1.1.0; this wording revision has no new behavioral trial or old-versus-new performance comparison.

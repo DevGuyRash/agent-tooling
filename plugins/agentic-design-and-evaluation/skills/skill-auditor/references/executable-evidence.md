@@ -12,6 +12,6 @@ You SHOULD check the instrument as well as the target. An auditor-chosen working
 
 Parsing, normalization, summaries, and presentation can discard distinctions that the next judgment requires. An equality check that erases characters or link destinations cannot establish identity of those properties. You SHOULD follow a consequential observation from original input through the transformation and actual consumer, retaining enough evidence to expose loss or failed collection. A clean representation is not necessarily complete evidence.
 
-A second observer can be useful when a distinct unresolved property would benefit from separate attention and participation is authorized. You SHALL give it legitimate authority, original material, and the needed evidence boundary. Another context is not automatically isolated or independent, and this skill requires no extra participant.
+A second observer can be useful when a distinct unresolved property would benefit from separate attention and participation is authorized. You SHALL give it legitimate authority, original material, and the needed evidence boundary. Verify the actual isolation and independence required by its role.
 
 For a repair, you SHALL preserve the failure evidence and verify the changed property alongside consequential adjacent behavior. A narrow edit can still have broad effects. A proposed explanation needs evidence that distinguishes it from plausible alternatives before it becomes a causal or generalization claim.
