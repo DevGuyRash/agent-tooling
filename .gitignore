@@ -29,12 +29,13 @@ tmp/
 ~$*.xls*
 
 # Raw task artifacts belong in .local/context/, not published documentation.
-# Keep maintained guides, architecture decisions, and release qualification trackable.
-/docs/evidence/
-/docs/reports/
-/docs/transcripts/
-/docs/*-field-report*.md
-/docs/*-improvement-report*.md
+# Keep maintained guides and architecture decisions trackable.
+/docs/agentic-design-and-evaluation-qualification.md
+/docs/**/evidence/
+/docs/**/reports/
+/docs/**/transcripts/
+/docs/**/*-field-report*.md
+/docs/**/*-improvement-report*.md
 
 # Python / test caches
 __pycache__/

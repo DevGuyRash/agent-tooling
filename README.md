@@ -15,9 +15,9 @@ Marketplace manifests:
 
 The catalogs are independent. Most plugins support both hosts; a plugin that depends on a host-native runtime or instruction surface is published only for the capable host.
 
-Current usage and resource requirements live with each plugin. The [architecture decision records](docs/adr/README.md) preserve consequential decisions, their rationale, evidence, and reopening conditions. They support maintenance without becoming another policy layer; `AGENTS.md`, target contracts, host schemas, and maker requirements remain authoritative.
+Current usage and resource requirements live with each plugin. The [documentation index](docs/README.md) separates repository-wide architecture decisions from plugin-specific documentation. ADRs record current architecture choices and their rationale; `AGENTS.md`, target contracts, host schemas, and maker requirements remain authoritative.
 
-The [Agentic Design & Evaluation qualification record](docs/agentic-design-and-evaluation-qualification.md) summarizes the release's checks and limits. Keep raw trial captures, transcripts, scratch investigations, and installation inventories under the ignored `.local/context/` directory. Maintain durable architecture rationale and useful user documentation in the repository; age or document type alone does not make a record disposable.
+Keep raw trial captures, release verification records, transcripts, scratch investigations, and installation inventories under the ignored `.local/context/` directory. Maintain durable architecture rationale and useful user documentation in the repository; age or document type alone does not make a record disposable.
 
 Current local plugins:
 

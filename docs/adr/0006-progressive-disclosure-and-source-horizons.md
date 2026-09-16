@@ -1,44 +1,21 @@
-# ADR 0006: Route context progressively and choose source horizons deliberately
+# ADR 0006: Separate essential instructions from conditional references
 
 - Status: Accepted
-- Date: 2026-08-15
+- Recorded: 2026-08-15
+- Scope: Skill instruction and reference layout across the repository
+
+## Context
+
+Skills need accessible guidance for different tasks without loading every mode's detail into every assignment. External sources also change at different rates: current host policy and a reproducible observation need different kinds of links.
 
 ## Decision
 
-A skill's `SKILL.md` is a compact semantic kernel and router. Decision-specific detail remains in directly linked references that are loaded only when material. File count, line count, a table of contents, an index, or a one-reference rule is not a goal by itself; navigation and actual loaded context determine the shape.
+Keep the task's essential purpose and constraints in the skill entry. Put substantial conditional detail in focused references when that improves use; a short self-contained skill can remain one document. Maintain guidance and its navigation with one owner, and supply required resources at the declared installation boundary.
 
-Essential execution guidance remains locally sufficient. External sources provide authority, current evidence, or optional depth. Use a canonical rolling link for deliberately current policy, an immutable version or commit for reproducibility and historical claims, a supported version-family link for that release-line contract, and a moving development link only when movement is intended and visible.
+Use rolling sources for deliberately current policy, immutable revisions for exact observations and reproducibility, and release-specific sources for a release-specific contract. Choose the reference layout and source horizon according to the recipient's actual need.
 
-## Why
+## Rationale and consequences
 
-The Skill Auditor 3.1 instruction and reference surface measured 87,048 characters and encouraged a typical preload of roughly 46,000 characters. The 3.2 candidate reduced the total to 42,444 and the activated kernel from 11,006 to 5,945 characters; typical routes now add one relevant reference. Behavior, not byte count, remains decisive—a smaller prompt that causes wandering can be worse.
+An unconditional preload adds irrelevant material; an over-reduced entry can hide a necessary constraint or make the executor search unnecessarily. Focused references allow detail to remain available while preserving a locally useful entry. File count and reference depth alone do not determine that result.
 
-Later fresh Luna audits demonstrated that file layout and router prose did not by themselves realize that intended loading behavior. All three auditors batch-opened four or five references, consumed roughly 353,000–796,000 input tokens versus 114,000–233,000 for matched unguided controls, and did not produce a reliable task-quality advantage. The instruction now makes target evidence and a concrete unresolved decision prerequisites for opening a route, and generic comparative-testing policy lives with Split Testing instead of being duplicated in the auditor. This is an observed context and trajectory correction, not a package-size threshold.
-
-A follow-up tried to compensate by requiring one reference at a time. It reduced simultaneous breadth, but mean input cost rose by roughly six percent over the preceding intervention and all three audits lost the earlier clear diagnosis of unjustified visible-reasoning ritual. The rule was removed. The durable correction is to keep the essential design judgment in the semantic kernel and remove generic experimental policy from the auditor package, leaving reference use open to the target's unresolved evidence rather than optimizing the appearance of a loading trace.
-
-The next structural intervention moved the short context and source-horizon contracts into the kernel and removed their generic reference files. In three fresh high-effort Luna audits, two opened only the instruction-design authority and one additionally consulted the portable and repository contracts; all three preserved the verifier and quality-gate failures, the legitimate Relay ordering constraint, and the unsupported visible-reasoning ritual. Mean input fell to about 471,000 tokens, roughly 13 percent below the preceding intervention and 20 percent below the original candidate round. The remaining run-to-run spread is why neither that mean nor a reference count becomes a universal threshold.
-
-A fresh Split Testing orchestrator exposed the same distinction at an executable boundary. Before running an ordinary comparison, it opened the helper's tests and hundreds of lines of helper source even though `--help` and the execution reference supplied the complete caller contract. Those files were important to package verification but inactive for experiment design. The skill now marks implementation and test code as out of model context unless the helper itself is under inspection or its observed behavior leaves the interface unresolved. This is responsibility-based routing, not a file-type ban: the same code remains authoritative when the mechanism is the object of the work.
-
-The latest CloseKit confirmation showed that the same failure remained in Skill Auditor despite the router language. All three fresh auditors opened most focused references; one batch-opened every reference, and two ran the full deterministic helper set. Mean input rose to about 739,000 tokens from about 615,000 in the prior candidate while discovery and calibration remained heterogeneous. The correction now treats unselected auditor references, scripts, and tests as inactive context and states that no default helper suite exists. This is a model-specific compensation for observed breadth-loading, not a universal reference-count limit.
-
-A subsequent host-discovered run separated two causes that the manual-loading harness had conflated. The agent loaded only the two references serving a live plugin-package question instead of opening the whole reference directory, showing that actual host invocation matters to a context claim. It still ran every deterministic reporter after the kernel named them together, even though the same paragraph said no default suite existed. The named inventory functioned as an affordance stronger than the disclaimer. The kernel now describes reporter responsibility without enumerating the scripts; the files and their tests remain unchanged and discoverable when a target question selects one.
-
-That intervention changed the observed behavior. The named-inventory host run used all four reporters and 839,201 input tokens. None of three fresh host-discovered confirmations used an auditor reporter; all still reproduced the automation confirmation bypass, ignored workspace root, and workspace-prefix escape through target-owned probes. Their mean input was about 735,000 tokens, roughly twelve percent lower, and separate runs also exposed invalid periods, publication failure, repeat-publication risk, and conditional permission drift. Reference loading remained variable—two, five, and six focused references—so the evidence supports removing the helper affordance, not a broader claim that routing cost is solved or that another loading ritual should be added.
-
-The rolling [Agent Skills specification](https://agentskills.io/specification) currently requires the skill name to match its directory slug and defines skill-root-relative resource paths. The stale auditor baseline missed that change while its bundled checks still passed, demonstrating why current authority and reproducible evidence need different link horizons.
-
-The Dispatch audit supplied a second form of the same failure. The repository's installed Codex validator accepted the package, while the current OpenAI submission contract rejected its category and short description. Three otherwise strong audits that relied on local or partial host evidence missed that release boundary. After current primary host authority became explicit, fresh auditors recovered the rejection in two of three runs; the remaining miss spot-checked other manifest fields and generalized from that partial inspection. A validator therefore establishes the contract it implements, not every later publication rule, and a host-facing metadata object must be reconciled as one adopted interface boundary before readiness is claimed.
-
-Post-reveal reconciliation found the inverse source-layer error. Several audits and reviewers treated Codex's normalized `Option<Vec<String>>` representation and array-shaped examples as proof that a scalar `defaultPrompt` was invalid, even though the raw manifest parser at the same pinned revision accepted a scalar and normalized it to one element. A primary source and immutable commit were not enough when the wrong consumer layer was read. An ingestion claim therefore follows the raw input through the actual resolver; a schema, normalized type, example, scaffold, validator, and publication rule may each describe a different boundary without any one silently governing the others.
-
-A later three-way Dispatch comparison exposed the other reproducibility failure. Broader candidate audits sometimes cited current host pages for consequential public-directory findings but retained only URLs. Condition-blind fact-checkers could reproduce the target-owned defects yet could not independently recover the exact external premise from the delivered evidence. The correction is not to copy whole documentation sets. A consequential moving-source claim retains its source identity, horizon, and enough claim-specific support for a fresh checker to recover what was consulted.
-
-## Consequences
-
-Measure what the host actually loads and how it affects a consequential decision. Add or split a reference only when it improves ownership, navigation, or active context. Record a reopening condition for rolling sources rather than a ceremonial last-checked date.
-
-Do not infer progressive disclosure from having reference files. Confirm in execution traces that the agent opens only decision-relevant material after establishing the target question; a router that causes breadth-loading has failed even when every link is well organized.
-
-When a host validator lags the portable standard or current publication contract, preserve both facts: local acceptance and a real compatibility or submission blocker can coexist. Reopen the affected route when the standard, host loading behavior, validator, or consequential source changes.
+Package verification checks reference delivery and resolution. Claims about what a host loads or how loading affects model behavior need observations at that host. These responsibilities are maintained in [AGENTS.md](../../AGENTS.md); individual plugin loading experiments remain with their maintainer evidence.

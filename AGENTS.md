@@ -6,6 +6,10 @@ Skills in this repo follow the portable core defined by the [Open Agent Skills s
 
 For Agent Skill and plugin quality, apply repository-level authorities only where they are genuinely cross-cutting. Keep plugin-local contracts scoped to the plugin that ships them.
 
+## Documentation scope
+
+Keep `docs/` focused on current architecture and maintained guidance. Repository-wide architecture decisions belong in `docs/adr/`; plugin-specific documentation belongs in `docs/<plugin-name>/`, with an `adr/` subdirectory when needed. An ADR records a concrete architecture choice, its context, rationale, and consequences. Keep general operating guidance with its maintained owner and transient investigation or verification records in the ignored local context directory. Remove obsolete architecture from published documentation; Git history retains prior versions.
+
 ## Governing Architecture
 
 When creating or revising instructions for another AI in this repository, you SHALL apply the [canonical governing architecture](plugins/agentic-design-and-evaluation/skills/foundational-knowledge/references/governing-architecture.md). That file is the sole maintained source of the charter. Its scope is authoring decisions and the instruction system produced; it does not prescribe surrounding answers or retroactively govern external targets. The adjacent foundational knowledge supplies explanatory grounds, not another repository workflow.
