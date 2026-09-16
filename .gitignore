@@ -28,9 +28,8 @@ tmp/
 .gitnexus/
 ~$*.xls*
 
-# Development records belong in .local/context/, not published documentation.
-# Keep ordinary user guides and concise release qualification trackable.
-/docs/adr/
+# Raw task artifacts belong in .local/context/, not published documentation.
+# Keep maintained guides, architecture decisions, and release qualification trackable.
 /docs/evidence/
 /docs/reports/
 /docs/transcripts/
