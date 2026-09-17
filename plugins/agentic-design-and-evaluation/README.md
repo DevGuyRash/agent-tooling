@@ -42,4 +42,4 @@ For this repository, use `scripts/install-all --include agentic-design-and-evalu
 
 ## Evidence and limits
 
-Structural tests cover metadata, source reachability, packaged-resource preservation, and reporter behavior. They do not grade instruction quality. The release's design rationale and qualification evidence are recorded in the repository documentation. A successful explicit task, rendered catalog, native install, or physical resource check supports its own boundary; none alone establishes implicit routing reliability, a particular reading path, general behavioral superiority, or long-horizon effectiveness.
+Structural tests cover metadata, source reachability, packaged-resource preservation, and reporter behavior. They do not grade instruction quality. A successful explicit task, rendered catalog, native install, or physical resource check supports its own boundary; none alone establishes implicit routing reliability, a particular reading path, general behavioral superiority, or long-horizon effectiveness.

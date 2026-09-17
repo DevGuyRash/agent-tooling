@@ -10,6 +10,8 @@ You SHALL obtain sufficient, defensible comparative evidence for the actual deci
 
 You SHOULD establish what the decision depends on: legitimate authority, intended use and population, consequential requirements and tradeoffs, alternatives, and the conditions under which they would operate. You SHOULD infer ordinary methods within the mandate. You SHOULD ask only when an unresolved value, authority, permission, or consequential resource limit prevents sound progress. You SHALL preserve a supported tie or conditional choice instead of inventing a preference.
 
+You SHOULD qualify a consequential check by trying to make it give the wrong verdict on a plausible task outcome. A useful challenge preserves a signal the check trusts while changing whether the requirement is met, or varies the representation while preserving adequacy. Derive the challenge and its correct judgment from the original requirements and evidence; repeating the check's assumptions does not qualify it. Existing evidence or a domain-grounded argument may already resolve this uncertainty. If a challenge exposes an error, you SHALL correct the affected check and dependent judgments before relying on them.
+
 Consult [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) for evidence, information, authority, and transfer. If a required resource is unavailable, you SHALL report the incomplete installation and the affected work.
 
 You SHALL apply the [governing architecture](../foundational-knowledge/references/governing-architecture.md) when creating or revising instructions for another AI, including such work inside a comparison. Assess alternatives against the requirements and authority of the comparison's domain.
