@@ -32,6 +32,10 @@ Both Codex and Claude Code are supported through this repository's host manifest
 
 Skill Auditor includes four optional [structural reporters](skills/skill-auditor/references/reporter-tools.md). They use a POSIX shell, standard Unix utilities, and Python 3's standard library. They install nothing and do not modify the target. Reporter success is a bounded structural observation, not evidence of semantic effectiveness. Repository selection and release policy remain in repository tooling.
 
+Split Testing's [workspace helper](skills/split-testing/references/workspaces.md) uses Python 3's standard library to prepare assigned input copies and output locations. Native file tools can prepare equivalent workspaces. Agent allocation, review, adjudication, and completion remain governed by the instructions; actual access restrictions depend on the host.
+
+Its [visual components](skills/split-testing/assets/visuals/catalog.md) support composable comparison reports, optional workspace navigation, focused evidence inspection and grounded interactive views, with a browser-ready bundle and an optional Python 3.10+ assembler for a single offline HTML deliverable. Report readers need only a modern browser. [Development and assembly guidance](skills/split-testing/assets/visuals/PACKAGING.md) separates report authoring from the pinned Node.js/TypeScript development setup.
+
 Friction Diagnostics is installed separately for incident capture and mending. Its records can inform an authorized investigation.
 
 ## Installation migration
