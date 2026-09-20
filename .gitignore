@@ -22,6 +22,7 @@ tmp/
 *.skill
 
 # Local coordination artifacts (if you run skills in this repo)
+/context/
 .local/
 /.local*/
 .codex/
@@ -43,6 +44,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+node_modules/
 .coverage
 .coverage.*
 coverage.xml
