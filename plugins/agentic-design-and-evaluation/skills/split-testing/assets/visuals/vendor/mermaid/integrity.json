@@ -1,0 +1,9 @@
+{
+  "name": "mermaid",
+  "version": "12.0.0",
+  "license": "MIT",
+  "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.0.0.tgz",
+  "packageIntegrity": "sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==",
+  "artifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
+  "upstreamNoticeFiles": []
+}

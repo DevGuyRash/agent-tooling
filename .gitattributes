@@ -1,0 +1,2 @@
+# Preserve vendored Mermaid distribution and license bytes verbatim.
+plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/** -whitespace

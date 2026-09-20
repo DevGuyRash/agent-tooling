@@ -1,0 +1,18 @@
+{
+  "name": "agentic-visuals-development",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Development compiler for the shipped offline visual library; no browser runtime packages.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs --replace",
+    "check": "node build.mjs --check",
+    "test": "python3 -m unittest discover -s tests -v"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
