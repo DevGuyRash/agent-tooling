@@ -363,11 +363,32 @@ jobs:
       - name: Install metadata parser for instruction package tests
         run: python3 -m pip install "PyYAML>=6,<7"
 
+      - name: Set up Node for visual library checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install the pinned visual development compiler
+        shell: bash
+        run: |
+          mkdir -p .local/visual-compiler
+          cp plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json .local/visual-compiler/
+          cp plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package-lock.json .local/visual-compiler/
+          npm --prefix .local/visual-compiler ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          echo "$GITHUB_WORKSPACE/.local/visual-compiler/node_modules/.bin" >> "$GITHUB_PATH"
+
       - name: Test instruction package integration and reporters
         shell: bash
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests scripts.tests.test_install_all scripts.tests.test_install_all_scope
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/tests -p 'test_*.py'
+
+      - name: Verify standalone visual delivery
+        shell: bash
+        run: |
+          node plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs --check
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/tests -p 'test_*.py'
 
       - name: Audit the plugins this change touches
         shell: bash

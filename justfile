@@ -35,7 +35,19 @@ test:
   python3 -m unittest discover -s plugins/excel-foundry/skills/excel-foundry/tests -p 'test_*.py'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/software-development/tests -p 'test_*.py'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/tests -p 'test_*.py'
+  just test-split-testing-visuals
   bash plugins/friction-diagnostics/skills/friction-diagnostics/tests/smoke-posix.sh
+
+# Check the optional comparison workspace and presentation tools
+test-split-testing:
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/tests -p 'test_*.py'
+  just test-split-testing-visuals
+
+# Requires the pinned development compiler; report readers need only a browser
+test-split-testing-visuals:
+  node plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs --check
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/tests -p 'test_*.py'
 
 # Run the friction-diagnostics plugin smoke suite (POSIX)
 test-friction-diagnostics:
