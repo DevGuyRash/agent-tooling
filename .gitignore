@@ -22,7 +22,8 @@ tmp/
 *.skill
 
 # Local coordination artifacts (if you run skills in this repo)
-/context/
+/context/*
+!/context/state.md
 .local/
 /.local*/
 .codex/
