@@ -39,6 +39,16 @@ tmp/
 /docs/**/*-field-report*.md
 /docs/**/*-improvement-report*.md
 
+# Split Testing visual qualification output stays in ignored local context.
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/qualification/
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/tests/qualification/
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/CHANGESET.json
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/controls-comparison-changes.json
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/CONTROLS-COMPARISON-QUALIFICATION.md
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/READER-EXPERIENCE.md
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/REVISION.md
+/plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/SECOND-PASS.md
+
 # Python / test caches
 __pycache__/
 *.py[cod]
