@@ -40,6 +40,9 @@ class NodeDouble extends EventSurface {
   }
   replaceChildren(...nodes) { for (const child of [...this.childNodes]) child.remove(); for (const node of nodes) this.appendChild(node); }
   replaceWith(node) { if (this.parentNode) this.parentNode.replaceChild(node, this); }
+  append(...nodes) { for (const node of nodes) this.appendChild(typeof node === 'string' ? this.ownerDocument.createTextNode(node) : node); }
+  get firstElementChild() { return this.children[0] || null; }
+  get nextElementSibling() { let node = this.nextSibling; while (node && node.nodeType !== 1) node = node.nextSibling; return node || null; }
   get firstChild() { return this.childNodes[0] || null; }
   get lastChild() { return this.childNodes[this.childNodes.length-1] || null; }
   get children() { return this.childNodes.filter(node=>node.nodeType===1); }

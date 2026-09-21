@@ -187,7 +187,7 @@ for (const unavailable of ["noDialog", "rejectDialog"]) {
   const evidenceBefore = a.second.textContent;
   a.search.value = " deadLOCK "; send(a.search, "input");
   assert.equal(a.first.hidden, false); assert.equal(a.second.hidden, true); assert.equal(a.details.open, false);
-  assert.equal(a.second.textContent, evidenceBefore); assert.match(a.status.textContent, /1 matching items/);
+  assert.equal(a.second.textContent, evidenceBefore); assert.match(a.root.querySelector("[data-av-search-results]").textContent, /1 result/);
   assert.equal(b.first.hidden, false); assert.equal(b.second.hidden, true);
   assert.equal(a.firstNav.getAttribute("aria-current"), "page");
   const hit = a.root.querySelector("[data-av-search-hit]");
@@ -195,13 +195,13 @@ for (const unavailable of ["noDialog", "rejectDialog"]) {
   send(hit, "keydown", { key: "ArrowUp" }); assert.equal(document.activeElement, a.search);
   click(hit);
   assert.equal(a.first.hidden, true); assert.equal(a.second.hidden, false); assert.equal(a.details.open, true);
-  assert.equal(document.activeElement, a.details.querySelector("summary")); assert.equal(a.search.value, "");
+  assert.equal(document.activeElement, a.failure); assert.equal(a.search.value, "");
   click(a.showAll); assert.equal(a.first.hidden, false); assert.equal(a.second.hidden, false); assert.match(a.status.textContent, /Full report/);
   click(single); assert.equal(a.first.hidden, true); assert.equal(a.second.hidden, false);
   assert.equal(single.getAttribute("aria-pressed"), "true"); assert.equal(a.showAll.getAttribute("aria-pressed"), "false");
-  a.search.value = "omega"; send(a.search, "input"); assert.match(a.status.textContent, /1 matching items/);
+  a.search.value = "omega"; send(a.search, "input"); assert.match(a.root.querySelector("[data-av-search-results]").textContent, /1 result/);
   a.search.value = "does not exist"; send(a.search, "input");
-  assert.equal(a.first.hidden, true); assert.equal(a.second.hidden, false); assert.match(a.status.textContent, /0 matching items/);
+  assert.equal(a.first.hidden, true); assert.equal(a.second.hidden, false); assert.match(a.root.querySelector("[data-av-search-results]").textContent, /No matches/);
   send(a.search, "keydown", { key: "Escape" }); assert.equal(a.search.value, ""); assert.equal(a.second.hidden, false);
   click(a.firstNav); a.details.open = false;
   const fragmentClick = click(a.link);
@@ -211,8 +211,8 @@ for (const unavailable of ["noDialog", "rejectDialog"]) {
   const crossLink = append(a.first, "a", { href: "#beta-failure" }, "Other workspace evidence");
   document.defaultView.location.hash = "#beta-failure"; click(b.firstNav); click(crossLink);
   assert.equal(b.second.hidden, false); assert.equal(b.details.open, true); assert.equal(document.activeElement, b.failure);
-  a.search.value = "provenance"; send(a.search, "input"); assert.match(a.status.textContent, /1 matching items/); assert.equal(a.footer.hidden, false);
-  a.search.value = "<img onerror=alert(1)>"; send(a.search, "input"); assert.match(a.status.textContent, /0 matching items/);
+  a.search.value = "provenance"; send(a.search, "input"); assert.match(a.root.querySelector("[data-av-search-results]").textContent, /1 result/); assert.equal(a.footer.hidden, false);
+  a.search.value = "<img onerror=alert(1)>"; send(a.search, "input"); assert.match(a.root.querySelector("[data-av-search-results]").textContent, /No matches/);
   assert.equal(a.status.childNodes.length, 1); assert.equal(a.status.childNodes[0].nodeType, 3);
   click(a.root.querySelector("[data-av-search-reset]")); assert.equal(document.activeElement, a.search);
   cleanA(); cleanB();
@@ -684,7 +684,7 @@ for (const explicit of [false, true]) {
   const framedCondition = sectionFixture(document, brief, "Transfer condition", false); framedCondition.evidence.textContent = "The transfer needs local image copies.";
   const hiddenFootnote = append(w.footer, "details"); append(hiddenFootnote, "summary", {}, "Evidence scope"); append(hiddenFootnote, "p", {}, "The retained traverse sample is narrow.");
   const cleanup = enhanceVisuals(w.root); click(w.showAll);
-  for (const [query, target] of [["accelerator permit", brief], ["coastal observation", intro], ["provenance", w.footer]]) {
+  for (const [query, target] of [["accelerator permit", brief], ["coastal observation", intro], ["provenance", w.footer.querySelector("p")]]) {
     w.search.value = query; send(w.search, "input");
     assert.equal(w.root.querySelectorAll("[data-av-search-hit]").length, 1);
     click(w.root.querySelector("[data-av-search-hit]"));
@@ -695,7 +695,7 @@ for (const explicit of [false, true]) {
     w.search.value = query; send(w.search, "input");
     assert.equal(target.open, false);
     click(w.root.querySelector("[data-av-search-hit]"));
-    assert.equal(target.open, true); assert.equal(document.activeElement, target.querySelector("summary"));
+    assert.equal(target.open, true); assert(target.contains(document.activeElement));
     assert.equal(w.root.querySelector("[data-av-search-results]").hidden, true);
     assert.equal(w.showAll.getAttribute("aria-pressed"), "true");
   }

@@ -24,7 +24,7 @@ const S = mod('reader-state');
   const {d,parse}=fixture(),root=parse(V.reportSurface({id:'expanded-test',body:V.scatterPlot({title:'Exact observations',xAxis:'Input',yAxis:'Result',points:[{id:'a',label:'A',x:1,y:2},{id:'b',label:'B',x:2,y:1}]})})).firstChild;d.body.appendChild(root);
   const cleanup=V.enhanceVisuals(root),figure=root.querySelector('[data-av-figure]');
   send(figure.querySelector('[data-av-figure-action="expand"]'),'click');
-  const dialog=root.querySelector('.av-focus-dialog');assert(dialog.open);assert(figure.hasAttribute('data-av-fit-width'));
+  const dialog=root.querySelector('.av-focus-dialog[open]');assert(dialog.open);assert(figure.hasAttribute('data-av-fit-width'));
   send(dialog.querySelector('[data-av-figure-action="select-items"]'),'click');
   send(figure.querySelector('[data-av-inspect]'),'click',{detail:1});
   assert(dialog.querySelector('.av-dialog-context').open);assert(dialog.querySelector('[data-av-selected-context]').querySelector('.av-object-body'));
@@ -86,7 +86,7 @@ assert.equal(anchoredPanel({left:100,right:140,top:300,bottom:336},{left:12,righ
   const notes=append(root,'ul'),bookmarks=append(root,'ul');ui.render([notes],[bookmarks]);ui.render([notes],[bookmarks]);
   assert.equal(bookmarks.querySelectorAll('[data-av-review-bookmark]').length,1);assert(action(bookmarks,'reveal-bookmark').disabled);
   ui.click(action(bookmarks,'remove-bookmark'));assert.equal(notebook.review.bookmarks.length,0,'An explicitly removed unresolved bookmark is not stranded');
-  ui.click(action(notes,'edit'));ui.click(action(editor,'delete'));notes.textContent='';ui.render([notes],[bookmarks]);assert.match(notes.textContent,/No saved notes/);
+  ui.click(action(notes,'edit'));ui.click(action(editor,'delete'));notes.textContent='';ui.render([notes],[bookmarks]);assert.match(notes.textContent,/No notes yet/);
   ui.cleanup();registry.cleanup();assert.equal(d.listenerCount,0);
 }
 console.log('production polish contracts passed: bounded geometry, deferred controls, transactional preflight, native-source model, draft keys and unresolved-bookmark removal (models only)');

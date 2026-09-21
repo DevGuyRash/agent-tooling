@@ -135,6 +135,7 @@ async def run(args):
             check('Expanded context can be opened without hiding Close',await reachable('[data-av-close-focus]'))
             await page.locator('.av-dialog-context>summary').click()
             await shot('expanded-figure-mobile')
+            await page.locator('.av-focus-dialog [data-av-mode-menu]').click()
             await page.locator('.av-focus-dialog [data-av-figure-action="select-items"]').click()
             await page.locator('.av-focus-dialog [data-av-inspect]').first.click();await page.wait_for_timeout(120)
             check('Selecting an expanded item opens its evidence',await page.locator('.av-dialog-context').get_attribute('open') is not None)

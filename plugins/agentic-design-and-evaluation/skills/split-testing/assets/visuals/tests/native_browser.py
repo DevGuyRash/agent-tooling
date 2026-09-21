@@ -92,6 +92,7 @@ async def qualify(args) -> None:
             await page.keyboard.press('Escape')
             check('Menu Escape restores trigger focus', await menu.evaluate('e=>e===document.activeElement'))
             # Native mouse click must not jump the page down to the inspector.
+            await chart.locator('[data-av-mode-menu]').click()
             await chart.locator('[data-av-figure-action="select-items"]').click()
             mark = chart.locator('[data-av-inspect]').last
             await mark.scroll_into_view_if_needed()
@@ -139,12 +140,15 @@ async def qualify(args) -> None:
             select = records.locator('[data-av-select]')
             before = await records.locator('.av-collection-stage').bounding_box()
             scroll = await page.evaluate('scrollY')
-            await select.select_option('artifact-1')
+            await records.locator('[data-av-record-picker]').click()
+            await records.locator('[data-av-open-record="artifact-1"]').click()
             after = await records.locator('.av-collection-stage').bounding_box()
             check('Long/short records keep a stable reading stage', abs(before['height']-after['height'])<2)
             check('Record selection preserves page position', abs(await page.evaluate('scrollY')-scroll)<3)
-            await records.locator('[data-av-compare="artifact-0"]').check()
-            await records.locator('[data-av-compare="artifact-1"]').check()
+            await records.locator('[data-av-read-compare]').click()
+            await records.locator('[data-av-pick-record="artifact-0"]').check()
+            await records.locator('[data-av-pick-record="artifact-1"]').check()
+            await records.locator('[data-av-records-done]').click()
             check('Comparison presents both selected originals', await records.locator('[data-av-object]:not([hidden])').count()==2)
             await screenshot('long-record-comparison')
             await page.locator('[data-av-view="diagrams"]').click()
@@ -170,7 +174,8 @@ async def qualify(args) -> None:
             check('Repeated enhancement creates no duplicate commands', await page.locator('[data-av-command]').count()==commands)
             record = page.locator('#sensor-note--record')
             check('Repeated record names are distinguishable', len(set(await record.locator('[data-av-object] > summary').all_text_contents())) == 3)
-            await record.locator('[data-av-select]').select_option('artifact-2')
+            await record.locator('[data-av-record-picker]').click()
+            await record.locator('[data-av-open-record="artifact-2"]').click()
             passage = 'operator note: <script> is literal evidence text.'
             await record.locator('[data-av-object="artifact-2"] pre').evaluate("""(pre,quote)=>{const text=pre.firstChild,start=text.textContent.indexOf(quote),range=document.createRange();range.setStart(text,start);range.setEnd(text,start+quote.length);getSelection().removeAllRanges();getSelection().addRange(range);}""",passage)
             await record.locator(':scope > summary [data-av-review-action="new-note"]').click()
@@ -188,6 +193,7 @@ async def qualify(args) -> None:
             await page.locator('.av-notebook-popover').wait_for(state='visible')
             check('Aggregate notebook shows anchored draft', exact in await page.locator('[data-av-notebook-notes]').inner_text())
             await screenshot('anchored-notebook')
+            await page.locator('[data-av-notebook-tab=share]').click()
             async with page.expect_download() as pending:
                 await page.locator('[data-av-notebook-action="export-report"]').click()
             download = await pending.value;reviewed=args.output/'reviewed-report.html';await download.save_as(str(reviewed))
@@ -227,9 +233,24 @@ async def qualify(args) -> None:
                     outcome=await page.evaluate("""async ({source,index})=>{
                       const host=document.createElement('div');host.innerHTML=AgenticVisuals.reportSurface({id:'fixture-'+index,body:AgenticVisuals.mermaidDiagram({id:'diagram-'+index,title:'Renderer fixture '+index,source})});document.body.appendChild(host);
                       const scope=host.firstElementChild,cleanup=AgenticVisuals.enhanceVisuals(scope);await cleanup.whenIdle();
-                      const diagram=scope.querySelector('[data-av-mermaid]');const result={state:diagram.getAttribute('data-av-mermaid-state'),message:diagram.querySelector('[data-av-mermaid-status]').textContent,svgCount:scope.querySelectorAll('[data-av-mermaid-output] svg').length};cleanup();host.remove();return result;
+                      const diagram=scope.querySelector('[data-av-mermaid]');const result={state:diagram.getAttribute('data-av-mermaid-state'),message:diagram.querySelector('[data-av-mermaid-status]').textContent,svgCount:scope.querySelectorAll('[data-av-mermaid-output] svg').length};window.__fixtureCleanup=()=>{cleanup();host.remove();};window.__fixtureIdle=()=>cleanup.whenIdle();return result;
                     }""", {'source':source,'index':len(result['mermaid'])})
-                    result['mermaid'].append({**fixture,**outcome});print('Mermaid',fixture['file'],outcome['state'],flush=True)
+                    if outcome['state']=='ready':
+                        try:
+                            # Probe the actual command/export path in addition to
+                            # the representative pointer-driven export journeys.
+                            async with page.expect_download(timeout=7000) as pending:
+                                await page.evaluate("async id=>{document.getElementById(id).querySelector('[data-av-figure-action=svg]').click();await window.__fixtureIdle();}", 'diagram-'+str(len(result['mermaid'])))
+                            artifact=await pending.value
+                            destination=args.output/'mermaid-exports'/(fixture['file']+'.svg');destination.parent.mkdir(exist_ok=True)
+                            await artifact.save_as(destination);raw=destination.read_bytes();tree=ET.fromstring(raw)
+                            outcome['svg_export']={'passed':tree.tag.endswith('svg'),'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+                        except Exception as error:
+                            outcome['svg_export']={'passed':False,'error':str(error),'message':await page.locator('.av-toast').all_inner_texts()}
+                    await page.evaluate('window.__fixtureCleanup();delete window.__fixtureCleanup;delete window.__fixtureIdle')
+                    result['mermaid'].append({**fixture,**outcome});print('Mermaid',fixture['file'],outcome['state'],outcome.get('svg_export',{}).get('passed','not applicable'),flush=True)
+                exports=[row for row in result['mermaid'] if row['state']=='ready']
+                check('Every ready Mermaid fixture exports through its actual SVG command',bool(exports) and all(row['svg_export']['passed'] for row in exports),[row['file'] for row in exports if not row['svg_export']['passed']])
             check('No page-level JavaScript errors', not result['page_errors'], result['page_errors'])
             check('No network requests', not result['network_requests'], result['network_requests'])
             result['status']='passed'

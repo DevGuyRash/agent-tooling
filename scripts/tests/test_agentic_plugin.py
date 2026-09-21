@@ -139,11 +139,13 @@ document.getElementById('consumer-report').innerHTML = AgenticVisuals.annotatedT
         by_id = {block['attributes']['id']: block for block in data_blocks}
         self.assertEqual(set(by_id), {'report-data', 'av-report-recipe', 'av-mermaid-notices'})
         data_blocks = [by_id['report-data']]
-        self.assertEqual(json.loads(by_id['av-report-recipe']['text'])['scripts'], ['av-script-0', 'av-script-1', 'av-script-2'])
+        recipe = json.loads(by_id['av-report-recipe']['text'])
+        self.assertEqual(recipe['headScripts'], ['av-startup'])
+        self.assertEqual(recipe['scripts'], ['av-script-0', 'av-script-1', 'av-script-2'])
         self.assertEqual(json.loads(data_blocks[0]['text']), evidence)
         scripts = [embedded(script['attributes']['src']) for script in document.scripts
                    if script['attributes'].get('type') != 'application/json']
-        self.assertEqual(scripts, [expected_assets['vendor/mermaid/mermaid.min.js'], expected_assets['dist/agentic-visuals.js'], composition.read_bytes()])
+        self.assertEqual(scripts, [expected_assets['dist/agentic-startup.js'], expected_assets['vendor/mermaid/mermaid.min.js'], expected_assets['dist/agentic-visuals.js'], composition.read_bytes()])
         styles = [embedded(attrs['href']) for tag, attrs in document.tags
                   if tag == 'link' and attrs.get('rel') == 'stylesheet']
         self.assertEqual(styles, [expected_assets['styles/agentic-visuals.css']])
@@ -250,7 +252,7 @@ process.stdout.write(report.innerHTML);
                    for p in public if p.name in {'foundational-knowledge.md', 'governing-architecture.md'}}
         visual_root = PLUGIN / 'skills/split-testing/assets/visuals'
         visual_assets = {relative: (visual_root / relative).read_bytes()
-                         for relative in ('dist/agentic-visuals.js', 'styles/agentic-visuals.css', 'assemble.py', 'vendor/mermaid/mermaid.min.js', 'vendor/mermaid/integrity.json', 'vendor/mermaid/LICENSE', 'vendor/mermaid/NOTICE.md')}
+                         for relative in ('dist/agentic-startup.js', 'dist/agentic-visuals.js', 'styles/agentic-visuals.css', 'assemble.py', 'vendor/mermaid/mermaid.min.js', 'vendor/mermaid/integrity.json', 'vendor/mermaid/LICENSE', 'vendor/mermaid/NOTICE.md')}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'source'
