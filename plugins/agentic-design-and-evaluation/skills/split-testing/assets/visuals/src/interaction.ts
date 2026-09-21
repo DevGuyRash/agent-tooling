@@ -1,3 +1,8 @@
+import { attachComparisonReader, ComparisonReader } from './comparison-reader';
+import { notifyReportReady, notifyReportInitializing } from './startup';
+import { attachReportSearch, ReportSearch } from './report-search';
+import { attachInspectors, InspectorController } from './inspectors';
+import { attachItemSelection, ItemSelectionController, selectedFigureItems } from './item-selection';
 import { attachUtilityPanels } from "./utility-panels";
 import { attachNotifications, NotificationController } from './notifications';
 import { attachCommandBar, CommandBar } from './command-bar';
@@ -13,7 +18,7 @@ import { attachPlots, PlotSnapshot } from "./plot-navigation";
 import { attachPreferences } from "./preferences";
 import { attachNotebooks, NotebookController, ReaderPlace } from "./notebook";
 
-export interface EnhancementCleanup { (): void; whenIdle(): Promise<void> }
+export interface EnhancementCleanup { (): void; whenReady(): Promise<void>; whenIdle(): Promise<void> }
 const enhancedRoots = new WeakMap<HTMLElement, EnhancementCleanup>();
 
 interface WorkspaceState {
@@ -31,7 +36,7 @@ interface WorkspaceState {
   journeys: Map<string, { element: HTMLElement; steps: string[] }>;
   query: string;
   results: HTMLElement;
-  hits: Map<HTMLElement, HTMLElement>;
+  finder?: ReportSearch;
 }
 
 interface FocusState {
@@ -71,10 +76,13 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   for (const descendant of Array.from(root.querySelectorAll<HTMLElement>("[data-av-enhanced]"))) {
     if (enhancedRoots.has(descendant)) throw new TypeError("This root contains an independently enhanced report. Enhance sibling reports separately, or clean them up first.");
   }
+  if (shells.length) notifyReportInitializing(root.ownerDocument);
   const refinementCleanup = attachLayoutRefinement(root);
   let diagrams: DiagramController | null = null;
+  let appearanceReady = false;
+  let itemSelection: ItemSelectionController | null = null, inspectors: InspectorController | null = null;
   let notifications:NotificationController|null=null;
-  const preferences = attachPreferences(root, () => { void diagrams?.refresh();notifications?.refresh(); });
+  const preferences = attachPreferences(root, () => { if (appearanceReady) void diagrams?.refresh(); notifications?.refresh(); });
   const document = root.ownerDocument;
   notifications=attachNotifications(root,(target,source)=>preferences.snapshot(target,source));
   const sectionBars:CommandBar[]=[];
@@ -92,7 +100,8 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   catch (error) { notifications.cleanup(); preferences.cleanup(); refinementCleanup(); throw error; }
   const plots = attachPlots(root);
   figures.dock();
-  diagrams = attachMermaid(root, figure => { plots.refresh(figure); });
+  diagrams = attachMermaid(root, figure => { plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
+  const readers=new Map<HTMLElement,ComparisonReader>();
   const collections=new Map<HTMLElement,HTMLElement[]>();
   const collectionOwners=new WeakMap<HTMLElement,HTMLElement>();
   const comparisonSlots = new Map<HTMLElement, Array<Array<{ object: HTMLElement; marker: Comment }>>>();
@@ -243,66 +252,8 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     return (heading?.textContent || element.querySelector("summary,h1,h2,h3,h4")?.textContent || element.getAttribute("aria-label") || "Evidence").trim();
   }
 
-  // One traversal per content region, with offsets for inspectable subregions.
-  // Do not repeatedly walk each nested candidate or compare every candidate pair.
-  // Read live content on each query: no stale index after evidence changes.
-  function searchMatches(panel: HTMLElement, query: string): {target: HTMLElement; text: string}[] {
-    const parts: string[] = [], ranges: {target: HTMLElement; start: number; end: number}[] = [];
-    let length = 0;
-    const append = (text: string): void => { parts.push(text + ' '); length += text.length + 1; };
-    function visit(node: Node): void {
-      if (node.nodeType === 3) { append(node.textContent || ''); return; }
-      if (node.nodeType !== 1) return;
-      const current = node as HTMLElement;
-      if (current.matches('button,input,select,textarea,script,style,[data-av-controls],[data-av-script-only],[data-av-notebook],[data-av-review-ui],[data-av-view-question],[role="status"]')) return;
-      const range = current !== panel && current.matches('details,.av-card,[data-av-content-view="visual"]') ? {target: current, start: length, end: length} : null;
-      if (range) ranges.push(range);
-      const alt = current.getAttribute('alt'); if (alt) append(alt);
-      for (const child of Array.from(current.childNodes)) visit(child);
-      if (range) range.end = length;
-    }
-    visit(panel);
-    const raw = parts.join(''), normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
-    if (!queryText(raw).includes(query)) return [];
-    const matching = ranges.map(range => ({ target: range.target, text: normalize(raw.slice(range.start, range.end)) })).filter(item => queryText(item.text).includes(query));
-    const parents = new Set<Element>();
-    for (const item of matching) for (let parent = item.target.parentElement; parent && parent !== panel; parent = parent.parentElement) parents.add(parent);
-    return matching.length ? matching.filter(item => !parents.has(item.target)) : [{ target: panel, text: normalize(raw) }];
-  }
-  function queryText(value: string): string { return value.replace(/\s+/g, " ").trim().toLocaleLowerCase(); }
   function panelName(panel: Element): string { return (panel.querySelector("h1,h2,h3")?.textContent || panel.getAttribute("data-av-panel") || "View").trim(); }
-
-  function renderSearch(state: WorkspaceState): void {
-    const query = queryText(state.query);
-    state.results.textContent = "";
-    state.hits.clear();
-    hidden(state.results, !query);
-    if (!query) return;
-    const matches: { target: HTMLElement; panel: HTMLElement; text: string }[] = [];
-    const context = inScope<HTMLElement>(state.element, ".av-workspace-heading,.av-report-brief,.av-workspace-footer,[data-av-workspace-footer]", ".av-workspace").filter(element => !element.closest("[data-av-panel]"));
-    for (const panel of [...state.panels, ...context]) {
-      for (const result of searchMatches(panel, query)) matches.push({ ...result, panel });
-    }
-    const heading = document.createElement("p");
-    heading.className = "av-search-result-count";
-    heading.textContent = matches.length ? `${matches.length} matching ${matches.length === 1 ? "item" : "items"}` : "No matches. Try another word.";
-    state.results.appendChild(heading);
-    const list = document.createElement("ul");
-    for (const { target, panel, text } of matches) {
-      const label = target.hasAttribute("data-av-content-view") ? titleOf(target.closest(".av-card") || target) : titleOf(target);
-      const item = document.createElement("li"), choice = button(label);
-      choice.setAttribute("data-av-search-hit", String(state.hits.size));
-      choice.className = "av-search-result";
-      const context = document.createElement("span"); context.className = "av-search-result-context"; context.textContent = panelName(panel);
-      if (panelName(panel) !== titleOf(target)) choice.appendChild(context);
-      const excerpt = document.createElement('span'); excerpt.className = 'av-search-result-excerpt';
-      const at = queryText(text).indexOf(query), from = Math.max(0, at - 48), to = Math.min(text.length, at + query.length + 100);
-      excerpt.textContent = (from ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
-      choice.appendChild(excerpt); item.appendChild(choice); list.appendChild(item); state.hits.set(choice, target);
-    }
-    state.results.appendChild(list);
-    message(state.status, `${matches.length} matching items. Choose a result to read it; your current section remains open.`);
-  }
+  function renderSearch(state: WorkspaceState): void { state.finder?.update(state.query); }
   function placeOf(state: WorkspaceState): ReaderPlace { return { viewId: state.selected, mode: state.mode, journeyId: state.journey }; }
   function recordPlace(state: WorkspaceState): void { notebooks?.recordPlace(state.element, placeOf(state)); }
   function renderWorkspace(state: WorkspaceState, animate = false): void {
@@ -370,6 +321,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   function clearSearch(state: WorkspaceState): void {
     state.query = "";
     if (state.search) state.search.value = "";
+    state.finder?.update("");
   }
   function workspaceFor(element: Element): WorkspaceState | undefined {
     const frame = element.closest(".av-card");
@@ -390,7 +342,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       recordPlace(state);
     } else if (state) renderWorkspace(state);
     const collectionObject=target.closest<HTMLElement>("[data-av-object]");
-    if(collectionObject&&collectionOwners.has(collectionObject)){const explorer=collectionObject.closest<HTMLElement>("[data-av-explorer]");if(explorer){endComparison(explorer);}}
+    if(collectionObject&&collectionOwners.has(collectionObject)){const reader=readers.get(collectionOwners.get(collectionObject)!);if(reader)reader.reveal(collectionObject.getAttribute('data-av-object')!);else{const explorer=collectionObject.closest<HTMLElement>('[data-av-explorer]');if(explorer)endComparison(explorer);}}
     openDisclosures(target);
     const object = target.closest<HTMLElement>("[data-av-object]");
     const explorer = object?.closest<HTMLElement>("[data-av-explorer]");
@@ -567,6 +519,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   }
 
   function endComparison(explorer:HTMLElement):void {
+    for(const reader of readers.values())if(reader.explorer===explorer)reader.reset();
     for(const checkbox of inScope<HTMLInputElement>(explorer,'[data-av-compare]','[data-av-explorer]'))checkbox.checked=false;
     stateClass(explorer,'av-comparing',false);
     for(const item of inScope(explorer,'[data-av-object]','[data-av-explorer]'))stateClass(item,'av-compared',false);
@@ -577,6 +530,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     const compared=new Set(inScope<HTMLInputElement>(explorer,'[data-av-compare]','[data-av-explorer]').filter(control=>control.checked).map(control=>control.getAttribute('data-av-compare')));
     for(const[parent,objects]of collections){
       if(parent.closest('[data-av-explorer]')!==explorer)continue;
+      const reader=readers.get(parent);if(reader){reader.render(key);continue;}
       const current=objects.find(object=>object.getAttribute('data-av-object')===key)||(compared.size===1?objects.find(object=>compared.has(object.getAttribute('data-av-object'))):undefined)||objects.find(object=>object.classList.contains('av-selected'))||objects.find(object=>object.hasAttribute('open'))||objects[0];
       const selected=compared.size>1?objects.filter(object=>compared.has(object.getAttribute('data-av-object'))):current?[current]:[];
       parent.style.setProperty('--av-reader-columns',String(Math.max(1,selected.length)));
@@ -599,7 +553,9 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for (const item of objects) stateClass(item, "av-selected", item.getAttribute("data-av-object") === selected);
     for (const item of inScope(explorer, "[data-av-inspect]", "[data-av-explorer]")) {
       const active = item.getAttribute("data-av-inspect") === selected;
-      attribute(item, "aria-pressed", String(active)); stateClass(item, "av-selected", active);
+      attribute(item, "data-av-inspected", active ? "" : null);
+      // Older custom explorers without the plot tools keep their original single-selection semantics.
+      if (!item.closest(".av-plot-scroll")) attribute(item, "aria-pressed", String(active));
     }
     for (const edge of inScope(explorer, "[data-av-from],[data-av-to]", "[data-av-explorer]")) stateClass(edge, "av-related", !!selected && (edge.getAttribute("data-av-from") === selected || edge.getAttribute("data-av-to") === selected));
     for (const select of inScope<HTMLSelectElement>(explorer, "[data-av-select]", "[data-av-explorer]")) if (Array.from(select.options).some(option => option.value === selected)) select.value = selected;
@@ -617,7 +573,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for (const item of objects) if (item !== object && !explorer.classList.contains("av-comparing") && item.tagName.toLowerCase() === "details") attribute(item, "open", null);
     synchronizeObject(explorer, key);
     if(focused?.kind==='figure'&&focused.card.contains(control)){
-      for(const mark of elements<HTMLElement>(focused.card,'[data-av-inspect]')){const selected=mark.getAttribute('data-av-inspect')===key;attribute(mark,'aria-pressed',String(selected));stateClass(mark,'av-selected',selected);}
+      for(const mark of elements<HTMLElement>(focused.card,'[data-av-inspect]'))attribute(mark,'data-av-inspected',mark.getAttribute('data-av-inspect')===key?'':null);
       if(dialogContext){
         let detail=dialogContext.querySelector<HTMLElement>('[data-av-selected-context]');
         if(!detail){detail=document.createElement('section');detail.setAttribute('data-av-selected-context','');dialogContext.insertBefore(detail,dialogContext.firstChild);}
@@ -648,6 +604,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (next) inspectObject(control, next.getAttribute("data-av-object") || undefined);
   }
   function compareArtifacts(explorer: HTMLElement): void {
+    const managed=[...readers.values()].filter(reader=>reader.explorer===explorer);if(managed.length){for(const reader of managed)reader.compare();return;}
     const selected = new Set(inScope<HTMLInputElement>(explorer, "[data-av-compare]", "[data-av-explorer]").filter(control => control.checked).map(control => control.getAttribute("data-av-compare")));
     for (const object of inScope(explorer, "[data-av-object]", "[data-av-explorer]")) {
       const compared = selected.has(object.getAttribute("data-av-object"));
@@ -703,10 +660,10 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     const close = target.closest("[data-av-close-focus]");
     if (close && dialog?.contains(close)) { closeFocus(); return; }
     if (!contains(target)) return;
-    const collectionSummary=target.closest<HTMLElement>('summary');if(collectionSummary&&collectionOwners.has(collectionSummary.parentElement!)){event.preventDefault();return;}
+    const collectionSummary=target.closest<HTMLElement>('summary');if(collectionSummary&&collectionOwners.has(collectionSummary.parentElement!)&&!target.closest('button,input,a,select,textarea')){event.preventDefault();return;}
     if (figures.click(target)) { event.preventDefault(); return; }
+    if (itemSelection?.click(event,target)) { event.preventDefault(); return; }
     if(target.closest('.av-plot-scroll')&&figureOf(target)?.getAttribute('data-av-selection-mode')==='text')return;
-    if(target.closest('[data-av-mermaid-item]'))selectDiagramItem(target);
     if (notebooks?.click(target)) { if(!target.closest('a[download]'))event.preventDefault(); return; }
     if (preferences.click(target)) return;
     const focusControl = target.closest<HTMLElement>("[data-av-focus]");
@@ -747,14 +704,6 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
         }
         return;
       }
-      const hit = target.closest<HTMLElement>("[data-av-search-hit]");
-      const destination = hit ? state.hits.get(hit) : null;
-      if (destination) {
-        clearSearch(state);
-        if (destination.hasAttribute("data-av-object")) inspectObject(destination, destination.getAttribute("data-av-object") || undefined, true, true);
-        else reveal(destination, true);
-        return;
-      }
       if (target.closest("[data-av-show-all]")) { changeReadingMode(state, "all"); return; }
       if (target.closest("[data-av-show-single]")) { changeReadingMode(state, "single"); return; }
       if (target.closest("[data-av-search-reset]")) { clearSearch(state); renderWorkspace(state, true); state.search?.focus(); return; }
@@ -770,30 +719,41 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       }
     }
   }
-  function selectDiagramItem(target: Element): void {
-    const item=target.closest<HTMLElement>('[data-av-mermaid-item]'),figure=item&&figureOf(item);if(!item||!figure)return;
-    for(const mark of elements<HTMLElement>(figure,'[data-av-mermaid-item]')){attribute(mark,'aria-pressed',String(mark===item));stateClass(mark,'av-selected',mark===item);}
-    notebooks?.click(item);
+  const itemReaders = new Map<HTMLElement, {dialog: HTMLDialogElement; body: HTMLElement; trigger: HTMLElement | null}>();
+  function selectDiagramItem(target: Element, open = false, trigger?: HTMLElement): void {
+    const item = target.closest<HTMLElement>('[data-av-mermaid-item],[data-av-observation]'), figure = item && figureOf(item);
+    if (!item || !figure || !open && !itemReaders.get(figure)?.dialog.open) return;
+    let reader = itemReaders.get(figure);
+    if (!reader) {
+      const panel = document.createElement('dialog'); panel.className = 'av-source-panel av-selected-items-dialog'; panel.setAttribute('data-av-review-ui',''); panel.setAttribute('aria-label','Selected diagram items');
+      if (typeof panel.showModal !== 'function') return;
+      const header = document.createElement('header'); header.className = 'av-source-header'; panel.appendChild(header);
+      const heading = document.createElement('strong'); heading.textContent = 'Selected evidence'; header.appendChild(heading);
+      const close = button('Close'); close.setAttribute('aria-label','Close selected evidence'); header.appendChild(close);
+      const body = document.createElement('div'); body.className = 'av-selected-items-body'; panel.appendChild(body);
+      const actions = document.createElement('div'); actions.className = 'av-button-group'; panel.appendChild(actions);
+      const source = figure.querySelector<HTMLButtonElement>('[data-av-figure-action="source"]');
+      if (source) { const go = button('View original source'); actions.appendChild(go); go.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();source.click();}); }
+      reader = {dialog:panel,body,trigger:null}; itemReaders.set(figure,reader); figure.appendChild(panel);
+      const current = reader;
+      const dismiss = (event:Event) => {event.preventDefault();event.stopPropagation();panel.close();if(current.trigger?.isConnected)current.trigger.focus({preventScroll:true});};
+      close.addEventListener('click',dismiss);panel.addEventListener('cancel',dismiss);
+      undo.push(()=>{if(panel.open)panel.close();panel.remove();itemReaders.delete(figure);});
+    }
+    reader.body.replaceChildren();
+    const selected = selectedFigureItems(figure);
+    for (const mark of selected.length ? selected : [item]) {
+      const section = document.createElement('section'), heading = document.createElement('h3'); heading.textContent = mark.getAttribute('aria-label') || 'Selected item'; section.appendChild(heading);
+      const text = document.createElement('pre'); text.textContent = mark.textContent || mark.getAttribute('aria-label') || ''; section.appendChild(text); reader.body.appendChild(section);
+    }
+    if (open) { reader.trigger=trigger||item; if(!reader.dialog.open)reader.dialog.showModal(); reader.dialog.querySelector<HTMLElement>('button')?.focus({preventScroll:true}); }
   }
   function keydown(event: KeyboardEvent): void {
     if (event.isComposing) return;
-    const origin = targetOf(event), summary=origin?.closest<HTMLElement>('summary');
-    if(summary&&collectionOwners.has(summary.parentElement!)&&['Enter',' '].includes(event.key)){event.preventDefault();return;}
-    const workspace = origin ? workspaceFor(origin) : undefined;
-    if (workspace && !event.altKey && !event.ctrlKey && !event.metaKey) {
-      if (event.key === "Escape" && workspace.query && (origin === workspace.search || !!origin && workspace.results.contains(origin))) {
-        event.preventDefault(); clearSearch(workspace); renderWorkspace(workspace); workspace.search?.focus(); return;
-      }
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        const hits = [...workspace.hits.keys()];
-        const hit = origin?.closest<HTMLElement>("[data-av-search-hit]");
-        if (origin === workspace.search && event.key === "ArrowDown" && hits.length) { event.preventDefault(); focus(hits[0]); return; }
-        if (hit && hits.includes(hit)) {
-          event.preventDefault(); const next = hits.indexOf(hit) + (event.key === "ArrowDown" ? 1 : -1);
-          if (next < 0) workspace.search?.focus(); else if (next < hits.length) focus(hits[next]); return;
-        }
-      }
-    }
+    const origin = targetOf(event);
+    if (origin && itemSelection?.keydown(event,origin)) { event.preventDefault(); event.stopPropagation(); return; }
+    const summary=origin?.closest<HTMLElement>('summary');
+    if(summary&&collectionOwners.has(summary.parentElement!)&&!origin?.closest('button,input,a,select,textarea')&&['Enter',' '].includes(event.key)){event.preventDefault();return;}
     if (event.key === "Escape") {
       const notebook = origin?.closest<HTMLElement>("[data-av-notebook]");
       if (notebook?.hasAttribute("open")) { attribute(notebook, "open", null); notebook.querySelector<HTMLElement>("summary")?.focus(); event.preventDefault(); return; }
@@ -802,7 +762,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || (event.key !== "Enter" && event.key !== " ")) return;
     const target = targetOf(event);
     if(target?.closest('.av-plot-scroll')&&figureOf(target)?.getAttribute('data-av-selection-mode')==='text')return;
-    if(target?.closest('[data-av-mermaid-item]')){event.preventDefault();selectDiagramItem(target);return;}
+    if(target?.closest('.av-plot-scroll'))return;
     const inspect = target?.closest("[data-av-inspect]");
     if (!inspect || !contains(inspect) || target?.closest("input,textarea,select,button,a[href],[contenteditable]")) return;
     event.preventDefault();
@@ -813,11 +773,10 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (!target || !contains(target)) return;
     if (notebooks?.change(target)) return;
     if (preferences.change(target)) {
-      void diagrams?.refresh();
       for (const explorer of inclusive("[data-av-explorer]")) synchronizeObject(explorer);
       return;
     }
-    if (target.matches("[data-av-select]")) inspectObject(target, undefined, false);
+    if (target.matches("[data-av-select]")) { inspectObject(target, undefined, false); inspectors?.refresh(); inspectors?.open(target,target as HTMLElement); }
     else if (target.matches("[data-av-compare]")) {
       const explorer = target.closest<HTMLElement>("[data-av-explorer]");
       if (explorer) compareArtifacts(explorer);
@@ -830,6 +789,13 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   }
   function disclosureToggle(event: Event): void {
     const target = targetOf(event);
+    // Reading panes are owned by their workbench. Reopening or hiding n records
+    // must not fan out into n whole-explorer synchronization passes or move the
+    // current record to whichever native toggle event happened to arrive last.
+    if(target?.matches('[data-av-object]')&&readers.has(collectionOwners.get(target as HTMLElement)!)){
+      if(!target.hasAttribute('hidden')&&!target.hasAttribute('open'))attribute(target,'open','');
+      return;
+    }
     if (target && contains(target)) {
       preferences.toggle(target);
       if (target.matches("details[open]")) plots.refresh(target);
@@ -852,7 +818,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
 
   attribute(root, "data-av-enhanced", "true");
   stateClass(root, "av-enhanced", true);
-  for (const controls of inclusive("[data-av-controls],[data-av-script-only]")) hidden(controls, false);
+  for (const controls of inclusive("[data-av-controls],[data-av-script-only]")) if(!controls.matches(".av-floating-panel")) hidden(controls, false);
 
   for (const card of inclusive<HTMLElement>(".av-card")) {
     for (const control of ownCardParts(card, "[data-av-focus]")) { attribute(control, "aria-haspopup", "dialog"); attribute(control, "aria-expanded", "false"); }
@@ -879,7 +845,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for(const object of inScope<HTMLElement>(explorer,'[data-av-object]','[data-av-explorer]')){const parent=object.parentElement;if(!parent||!(parent.matches('.av-deck-grid,.av-scenario-grid')||parent.matches('.av-object-list')&&parent.closest('.av-inspector')))continue;const values=groups.get(parent)||[];values.push(object);groups.set(parent,values);}
     for(const[parent,objects]of groups){
       collections.set(parent,objects);stateClass(parent,'av-collection-stage',true);const oldColumns=parent.style.getPropertyValue('--av-reader-columns');undo.push(()=>{if(oldColumns)parent.style.setProperty('--av-reader-columns',oldColumns);else parent.style.removeProperty('--av-reader-columns');});
-      for(const object of objects){collectionOwners.set(object,parent);const summary=object.querySelector('summary');if(summary){attribute(summary,'tabindex','-1');attribute(summary,'aria-disabled','true');}}
+      for(const object of objects){collectionOwners.set(object,parent);const summary=object.querySelector('summary');if(summary){attribute(summary,'tabindex','-1');attribute(summary,'aria-disabled',null);}}
       if(parent.matches('.av-scenario-grid')&&objects.length>1&&!inScope(explorer,'[data-av-compare]','[data-av-explorer]').length){const choices=document.createElement('fieldset');choices.className='av-artifact-controls';choices.setAttribute('data-av-controls','');const legend=document.createElement('legend');legend.textContent='Compare scenarios';choices.appendChild(legend);for(const object of objects){const label=document.createElement('label');label.className='av-compare-choice';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.setAttribute('data-av-compare',object.getAttribute('data-av-object')!);label.appendChild(checkbox);label.appendChild(document.createTextNode(titleOf(object)));choices.appendChild(label);}parent.parentNode!.insertBefore(choices,parent);undo.push(()=>choices.remove());}
     }
   }
@@ -908,6 +874,8 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (visibleScope) coordinateScope(explorer, visibleScope.getAttribute("data-av-coordinate-scope")!);
   }
 
+  for(const[parent,objects]of collections)if(parent.matches('.av-deck-grid,.av-scenario-grid')&&objects.length){const explorer=parent.closest<HTMLElement>('[data-av-explorer]')!;readers.set(parent,attachComparisonReader(explorer,parent,objects));}
+
   for (const workspace of inclusive<HTMLElement>(".av-workspace")) {
     const panels = inScope(workspace, "[data-av-panel]", ".av-workspace");
     if (!panels.length) continue;
@@ -934,7 +902,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       } catch { /* Authored malformed route hooks do not hide the underlying views. */ }
     }
     const selected = workspace.getAttribute("data-av-start-view") || navigation.find(link => link.getAttribute("aria-current") === "page")?.getAttribute("data-av-view");
-    const state: WorkspaceState = { element: workspace, panels, navigation, search, status, reset, showAll, showSingle, mode: "single", selected: panels.some(panel => panel.getAttribute("data-av-panel") === selected) ? selected! : panels[0].getAttribute("data-av-panel"), query: search?.value || "", results, hits: new Map(), journey: null, journeys };
+    const state: WorkspaceState = { element: workspace, panels, navigation, search, status, reset, showAll, showSingle, mode: "single", selected: panels.some(panel => panel.getAttribute("data-av-panel") === selected) ? selected! : panels[0].getAttribute("data-av-panel"), query: search?.value || "", results, journey: null, journeys };
     workspaces.push(state);
     for (const card of elements<HTMLElement>(workspace, ".av-card")) {
       const panel = card.closest<HTMLElement>("[data-av-panel]");
@@ -946,6 +914,12 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
 
   notebooks = attachNotebooks(root, { notify: message=>notifications?.show(message), controls: element => element.hasAttribute('data-av-figure') ? figures.toolbar(element) : ownCardParts(element,'.av-frame-tools')[0] || null,
     reveal: target => reveal(target, true),
+    restored: (scope, place) => {
+      const state = workspaces.find(state => state.element === scope);
+      if (!state || !state.panels.some(panel => panel.getAttribute('data-av-panel') === place.viewId)) return;
+      state.selected = place.viewId; state.mode = place.mode; state.journey = place.journeyId;
+      renderWorkspace(state); // Hydration is not a navigation action or a focus request.
+    },
     navigate: (scope, place) => {
       const state = workspaces.find(state => state.element === scope);
       if (!state || !state.panels.some(panel => panel.getAttribute("data-av-panel") === place.viewId)) return;
@@ -956,6 +930,23 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       if (panel) { focus(panel); scroll(panel); }
     },
   });
+  for (const state of workspaces) if (state.search) {
+    state.finder = attachReportSearch(state.element, state.search, state.results, {
+      notes: () => notebooks?.searchEntries(state.element) || [],
+      close: () => { clearSearch(state); if (state.reset) hidden(state.reset, true); },
+      reveal: target => {
+        if (target.hasAttribute('data-av-object')) {
+          inspectObject(target, target.getAttribute('data-av-object') || undefined, false, false);
+          inspectors?.refresh(); inspectors?.open(target, state.search!);
+        } else if (target.matches('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')) {
+          reveal(target, false, false);
+          if (target.hasAttribute('data-av-inspect')) { inspectObject(target, undefined, false, false); inspectors?.refresh(); inspectors?.open(target, state.search!); }
+          else selectDiagramItem(target, true);
+        } else reveal(target, true, false);
+      },
+    });
+    renderSearch(state);
+  }
   const explicitTarget = fragment(window?.location.hash || "");
   figures.dock();
   for(const card of inclusive<HTMLElement>('.av-card')){
@@ -972,6 +963,19 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       state.selected = saved.viewId; state.mode = saved.mode; state.journey = saved.journeyId; renderWorkspace(state);
     }
   }
+  inspectors = attachInspectors(root);
+  itemSelection = attachItemSelection(root, figures.figures, {
+    inspect: (item, open, trigger) => {
+      if (item.hasAttribute('data-av-inspect')) {
+        inspectObject(item,undefined,false); inspectors?.refresh();
+        if (open && focused?.kind !== 'figure') inspectors?.open(item,trigger||item);
+      } else selectDiagramItem(item,open,trigger);
+    },
+    command: (figure,control,options) => figures.command(figure,control,options),
+    updateCommand: (figure,control,options) => figures.updateCommand(figure,control,options),
+    canReview: figure => !!notebooks?.hasReview(figure),
+    review: (figure,action,trigger) => notebooks?.reviewSelection(figure,action,trigger),
+  });
   const utilityCleanup = attachUtilityPanels(root);
   // Reserve the real sticky bar height, including wrapped controls and reader zoom.
   for (const state of workspaces) {
@@ -991,6 +995,8 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   // click still needs to reveal it when the hash already has the same value.
   listen(document, "click", ((event: MouseEvent) => {
     if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    // A generated download is not a reader click outside the active panel.
+    if (targetOf(event)?.closest('[data-av-internal-download]')) return;
     preferences.dismiss(targetOf(event));
     for (const notebook of inclusive<HTMLElement>("[data-av-notebook]")) if (notebook.hasAttribute("open") && !notebook.contains(targetOf(event))) attribute(notebook, "open", null);
     const anchor = targetOf(event)?.closest<HTMLAnchorElement>("a[href]");
@@ -1003,7 +1009,14 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   listen(root, "toggle", disclosureToggle as EventListener, true);
   if (window) listen(window, "hashchange", hashChanged as EventListener);
   hashChanged();
-  void diagrams?.refresh();
+  const initialAppearance = preferences.whenReady().then(() => {
+    if (cleaned) return; appearanceReady = true; return diagrams?.refresh();
+  });
+  const ready = Promise.all([preferences.whenReady(), notebooks.whenReady()]).then(() => {
+    if (cleaned) return;
+    for (const state of workspaces) attribute(state.element, 'data-av-ready', '');
+    notifyReportReady(document);
+  });
   if(window)listen(window,'resize',(()=>{updateFigureBounds();if(focused?.kind==='figure')plots.refresh(focused.card);}) as EventListener);
   for(const select of inclusive<HTMLSelectElement>('select')){
     if(select.parentElement?.classList.contains('av-select-wrap'))continue;
@@ -1018,7 +1031,10 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     cleaned = true;
     closeAllFocus();
     cancelMotion();
+    for (const state of workspaces) state.finder?.cleanup();
     for(const bar of sectionBars)bar.cleanup();
+    itemSelection?.cleanup(); inspectors?.cleanup();
+    for(const reader of readers.values())reader.cleanup();readers.clear();
     for (const restore of undo.reverse()) restore();
     utilityCleanup();
     notebooks?.cleanup();
@@ -1028,7 +1044,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     plots.cleanup(); figures.cleanup();
     refinementCleanup();
     enhancedRoots.delete(root);
-  }, { whenIdle: async (): Promise<void> => { await Promise.all([preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle()]); } });
+  }, { whenReady: () => ready, whenIdle: async (): Promise<void> => { await Promise.all([ready, initialAppearance,preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
   enhancedRoots.set(root, cleanup);
   return cleanup;
 }

@@ -210,7 +210,11 @@ export function attachPlots(root: HTMLElement): PlotController {
     if (!row || !layout || !row.parentElement) return { width: viewportWidth };
     const rowWidth = dimensions(row).width;
     const measured = viewportWidth + Math.max(0, finite(row.parentElement.clientWidth));
-    const availableWidth = declaredWidth > 0 ? declaredWidth : Math.min(measured, Math.max(0, finite(layout.clientWidth, measured)));
+    // Measure the owning grid, not the sum of its already fitted tracks.
+    // Independent clientWidth rounding can alternate that sum by one pixel,
+    // feeding a permanent fit/ResizeObserver loop back into both tracks.
+    const layoutWidth = Math.max(0, finite(layout.clientWidth));
+    const availableWidth = declaredWidth > 0 ? declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
     return { width: availableWidth * box.width / (box.width + rowWidth), availableWidth };
   }
   function requestLayout(plot: Plot, width: number, availableWidth?: number): void {

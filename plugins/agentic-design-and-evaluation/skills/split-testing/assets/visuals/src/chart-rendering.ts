@@ -1,3 +1,4 @@
+import { exactJson } from './exact-json';
 import { ChartContext, CategoryStyle, categoryStyle } from "./categories";
 import { Annotation, Meta, Status } from "./model";
 import { escapeText as e, Scale, svg, xAxis, horizontalAxisLayout } from "./core";
@@ -48,10 +49,7 @@ export type LayoutKind = "paired" | "interval" | "distribution" | "trajectory" |
 export function layoutRecipe(markup: string, kind: LayoutKind, input: Meta): string {
   const context = input.context ? { ...input.context, measureText: undefined } : undefined;
   const value = { ...input, context };
-  const ordinary = JSON.stringify(value);
-  let marker = "\u0000av-negative-zero";
-  while (ordinary.includes(JSON.stringify(marker).slice(1, -1))) marker += "-";
-  const json = JSON.stringify(value, (_key, item) => Object.is(item, -0) ? marker : item).split(JSON.stringify(marker)).join("-0");
+  const json = exactJson(value);
   return markup.replace('data-av-frame="', `data-av-layout-kind="${kind}" data-av-layout-input="${e(json)}" data-av-frame="`);
 }
 export function statusWord(value?: Status): string { return value === undefined ? "" : value.replace(/-/g, " "); }

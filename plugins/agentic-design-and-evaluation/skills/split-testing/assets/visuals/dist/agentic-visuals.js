@@ -479,7 +479,30 @@ define("core", ["require", "exports", "text-layout"], function (require, exports
     }
     function noPlot() { return '<p class="av-empty">No complete numeric observations to plot. Supplied entries and missing values are retained in the data table.</p>'; }
 });
-define("reader-storage", ["require", "exports"], function (require, exports) {
+define("exact-json", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.exactJson = exactJson;
+    /** JSON syntax can represent -0 even though JSON.stringify normally erases its
+     * sign. Preserve it in evidence/reader records without a new wire schema, magic
+     * object fields, or replacements inside evidence strings. Ordinary JSON output
+     * is byte-identical. Callers still validate their own supported data contracts.
+     */
+    function exactJson(value) {
+        let signedZero = false;
+        const ordinary = JSON.stringify(value, (_key, item) => { if (Object.is(item, -0))
+            signedZero = true; return item; });
+        if (ordinary === undefined)
+            throw new TypeError('This value has no JSON representation.');
+        if (!signedZero)
+            return ordinary;
+        let marker = '\u0000av-negative-zero';
+        while (ordinary.includes(JSON.stringify(marker).slice(1, -1)))
+            marker += '-';
+        return JSON.stringify(value, (_key, item) => Object.is(item, -0) ? marker : item).split(JSON.stringify(marker)).join('-0');
+    }
+});
+define("reader-storage", ["require", "exports", "exact-json"], function (require, exports, exact_json_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.createOwnedStore = createOwnedStore;
@@ -488,7 +511,7 @@ define("reader-storage", ["require", "exports"], function (require, exports) {
     const databases = new WeakMap();
     function unavailable() { return { status: "unavailable", message: "Browser saving is unavailable. Keep this report open and export a copy of your records." }; }
     function rawValue(value) { try {
-        return JSON.stringify(value);
+        return (0, exact_json_1.exactJson)(value);
     }
     catch {
         return undefined;
@@ -801,15 +824,26 @@ define("theme", ["require", "exports"], function (require, exports) {
             }
         return result;
     }
+    // Bounded by color choices rather than report size. Return copies so callers
+    // cannot corrupt the next surface's theme through a mutated result object.
+    const propertyCache = new Map();
     /** Trusted CSS properties derived exclusively from validated hex brand colors. */
     function themeColorProperties(colors) {
         if (!exports.colorKeys.every(key => /^#[0-9a-f]{6}$/i.test(colors[key])) || !exports.backgroundColorKeys.every(key => colors[key] === undefined || /^#[0-9a-f]{6}$/i.test(colors[key])))
             throw new TypeError("Theme colors must be six-digit hex colors.");
+        const key = JSON.stringify(exports.customColorKeys.map(name => colors[name]?.toLowerCase() || ''));
+        const cached = propertyCache.get(key);
+        if (cached)
+            return { ...cached };
         const light = resolveTheme(colors, "light"), dark = resolveTheme(colors, "dark");
-        return Object.fromEntries([
+        const properties = Object.fromEntries([
             ...exports.colorKeys.map(key => ["--av-brand-" + key, colors[key].toLowerCase()]),
             ...exports.themeRoles.map(role => ["--av-tone-" + role, `light-dark(${light[role]}, ${dark[role]})`]),
         ]);
+        if (propertyCache.size >= 32)
+            propertyCache.delete(propertyCache.keys().next().value);
+        propertyCache.set(key, properties);
+        return { ...properties };
     }
     exports.themeColorPropertyNames = [...exports.colorKeys.map(key => "--av-brand-" + key), ...exports.themeRoles.map(role => "--av-tone-" + role)];
     const scopes = ".av-report, .av-workspace, .av-card, .av-focus-dialog, .av-surface, .av-settings, .av-toast";
@@ -948,6 +982,7 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
         const undo = [], saved = new WeakMap();
         let disposed = false;
         const pending = new Set();
+        const initialReads = [];
         function track(operation) {
             pending.add(operation);
             void operation.then(() => pending.delete(operation), () => pending.delete(operation));
@@ -1188,10 +1223,32 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
                 }
             }
         }
+        const paintKeys = new WeakMap();
+        const colorFrames = new Map();
+        function pauseColorTransitions(element) {
+            if (!window?.requestAnimationFrame)
+                return;
+            const previous = colorFrames.get(element);
+            if (previous !== undefined)
+                window.cancelAnimationFrame(previous);
+            write(element, 'data-av-theme-changing', '');
+            colorFrames.set(element, window.requestAnimationFrame(() => {
+                if (disposed)
+                    return;
+                colorFrames.set(element, window.requestAnimationFrame(() => { colorFrames.delete(element); if (!disposed)
+                    element.removeAttribute('data-av-theme-changing'); }));
+            }));
+        }
         function apply(scope, announce = false, anchor) {
+            const paintKey = JSON.stringify([scope.value, scope.colors]);
+            const changedPaint = paintKeys.get(scope) !== paintKey;
+            paintKeys.set(scope, paintKey);
             const destinations = [...(scope.explicit || scope.changed ? [scope.element] : []), ...[...mirrors].filter(([, mirror]) => mirror.scope === scope).map(([element]) => element)];
-            for (const element of destinations)
+            for (const element of destinations) {
+                if (changedPaint)
+                    pauseColorTransitions(element);
                 paintDestination(element, scope, mirrors.get(element)?.source);
+            }
             for (const [control, owner] of controls)
                 if (owner === scope)
                     control.checked = control.value === scope.value[control.getAttribute("data-av-setting")];
@@ -1226,7 +1283,8 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
                     write(editor, "hidden", scope.value.canvas === "plain" ? "" : null);
             normalize(scope, anchor);
             showPersistence(scope);
-            changed?.();
+            if (changedPaint)
+                changed?.();
             if (announce) {
                 for (const [status, owner] of statuses)
                     if (owner === scope)
@@ -1270,8 +1328,8 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
         }
         for (const scope of scopes) {
             apply(scope);
-            if (scope.store)
-                track(scope.store.read().then(result => {
+            if (scope.store) {
+                const reading = scope.store.read().then(result => {
                     if (disposed || scope.version !== 0)
                         return;
                     if (result.value) {
@@ -1289,9 +1347,13 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
                     if (result.status === "unavailable")
                         scope.persistence = "Display choices remain in this session; browser saving is unavailable.";
                     apply(scope);
-                }));
+                });
+                initialReads.push(reading);
+                track(reading);
+            }
         }
         return {
+            async whenReady() { await Promise.all(initialReads); },
             async whenIdle() { while (pending.size)
                 await Promise.all([...pending]); },
             change(target) {
@@ -1368,7 +1430,8 @@ define("preferences", ["require", "exports", "core", "reader-storage", "theme"],
                     }
                 return closed;
             },
-            cleanup() { disposed = true; for (const scope of scopes)
+            cleanup() { disposed = true; for (const frame of colorFrames.values())
+                window?.cancelAnimationFrame(frame); colorFrames.clear(); for (const scope of scopes)
                 scope.store?.close(); for (const restore of undo.reverse())
                 restore(); mirrors.clear(); },
         };
@@ -1468,6 +1531,1590 @@ define("story", ["require", "exports", "core"], function (require, exports, core
         const facts = input.facts?.length ? `<dl class="av-brief-facts">${input.facts.map(fact => `<div><dt>${(0, core_2.escapeText)(fact.label)}</dt><dd>${inlineText(fact.text)}${(0, core_2.status)(fact.status)}${(0, core_2.annotation)(fact)}</dd></div>`).join("")}</dl>` : "";
         const finding = input.finding === undefined ? "" : `<div class="av-brief-finding"><h3>${(0, core_2.escapeText)(input.findingLabel || "What the evidence supports")}</h3><p>${inlineText(input.finding)}</p></div>`;
         return `<section class="av-report-brief"${input.id !== undefined ? ` id="${(0, core_2.escapeText)((0, core_2.documentId)(input.id))}"` : ""}><h2>${question}</h2>${paragraphs}${facts}${finding}${input.body || ""}${(0, core_2.annotation)(input)}</section>`;
+    }
+});
+define("overlay-layout", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.visibleViewport = visibleViewport;
+    exports.anchoredPanel = anchoredPanel;
+    const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
+    function visibleViewport(view, margin = 12) {
+        const viewport = view?.visualViewport;
+        const x = finite(viewport?.offsetLeft, 0), y = finite(viewport?.offsetTop, 0);
+        const width = Math.max(0, finite(viewport?.width, view?.innerWidth || 1024));
+        const height = Math.max(0, finite(viewport?.height, view?.innerHeight || 720));
+        const dx = Math.min(margin, width / 2), dy = Math.min(margin, height / 2);
+        return { left: x + dx, right: x + width - dx, top: y + dy, bottom: y + height - dy };
+    }
+    function anchoredPanel(anchor, bounds, width, height, gap = 8) {
+        const availableWidth = Math.max(0, bounds.right - bounds.left), availableHeight = Math.max(0, bounds.bottom - bounds.top);
+        const top = Math.max(bounds.top, Math.min(finite(anchor.top, bounds.top), bounds.bottom));
+        const bottom = Math.max(bounds.top, Math.min(finite(anchor.bottom, top), bounds.bottom));
+        const below = Math.max(0, bounds.bottom - bottom - gap), above = Math.max(0, top - bounds.top - gap);
+        const up = below < Math.min(Math.max(0, height), 280) && above > below;
+        const maxHeight = Math.min(availableHeight, up ? above : below);
+        const fittedWidth = Math.min(availableWidth, Math.max(0, finite(width, availableWidth)));
+        const fittedHeight = Math.min(maxHeight, Math.max(0, finite(height, maxHeight)));
+        return {
+            left: Math.max(bounds.left, Math.min(finite(anchor.right, bounds.right) - fittedWidth, bounds.right - fittedWidth)),
+            top: Math.max(bounds.top, Math.min(up ? top - gap - fittedHeight : bottom + gap, bounds.bottom - fittedHeight)),
+            width: fittedWidth, maxHeight, side: up ? 'up' : 'down',
+        };
+    }
+});
+define("figures", ["require", "exports", "core"], function (require, exports, core_3) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.registerVisualAdapter = registerVisualAdapter;
+    exports.visualAdapter = visualAdapter;
+    exports.visualFigure = visualFigure;
+    exports.mermaidDiagram = mermaidDiagram;
+    exports.figureOf = figureOf;
+    exports.figureTitle = figureTitle;
+    exports.figureSource = figureSource;
+    exports.retainFigureOrigin = retainFigureOrigin;
+    exports.figureOrigin = figureOrigin;
+    exports.figureContext = figureContext;
+    const adapters = new Map();
+    function registerVisualAdapter(name, adapter) {
+        (0, core_3.documentId)(name, 'An adapter name');
+        if (adapters.has(name))
+            throw new TypeError(`Visual adapter ${name} is already registered.`);
+        if (typeof adapter.bounds !== 'function')
+            throw new TypeError('A visual adapter needs bounds.');
+        adapters.set(name, adapter);
+        return () => { if (adapters.get(name) === adapter)
+            adapters.delete(name); };
+    }
+    function visualAdapter(element) { return adapters.get(element.getAttribute('data-av-adapter') || ''); }
+    function visualFigure(input) {
+        if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string')
+            throw new TypeError('A figure needs a title and trusted body markup.');
+        if (input.adapter)
+            (0, core_3.documentId)(input.adapter, 'An adapter name');
+        if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
+            throw new TypeError('Figure source needs a language and its original text.');
+        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_3.escapeText)(input.title)}"${input.id ? ` id="${(0, core_3.escapeText)((0, core_3.documentId)(input.id))}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_3.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_3.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_3.escapeText)(input.title)}${input.caption ? `<span>${(0, core_3.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
+    }
+    function mermaidDiagram(input) {
+        if (typeof input.source !== 'string' || !input.source.trim())
+            throw new TypeError('A Mermaid diagram needs its original source.');
+        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${(0, core_3.escapeText)(input.source)}"${input.config ? ` data-av-mermaid-config="${(0, core_3.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_3.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre>${(0, core_3.escapeText)(input.source)}</pre></details></div>`;
+        return visualFigure({ ...input, source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
+    }
+    function figureOf(element) {
+        const nearest = element.closest('[data-av-figure]');
+        return nearest?.parentElement?.closest('.av-visual-figure') || nearest;
+    }
+    function figureTitle(element) {
+        return element.getAttribute('data-av-figure-title') || element.querySelector('figcaption,svg title')?.textContent?.trim() || figureOrigin(element).owner?.querySelector('.av-card-title')?.textContent || 'Visualization';
+    }
+    function figureSource(element) {
+        const supplied = visualAdapter(element)?.source?.(element);
+        const checked = (value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                throw new Error('Figure source must contain its original text and language.');
+            const source = value;
+            if (typeof source.text !== 'string' || typeof source.language !== 'string' || source.filename !== undefined && typeof source.filename !== 'string')
+                throw new Error('Figure source must contain its original text and language.');
+            return source;
+        };
+        if (supplied !== undefined && supplied !== null)
+            return checked(supplied);
+        const raw = element.getAttribute('data-av-source');
+        if (raw)
+            return checked(JSON.parse(raw));
+        const recipe = (element.closest('[data-av-layout-input]') || figureOrigin(element).owner)?.getAttribute('data-av-layout-input');
+        return recipe ? { language: 'json', text: recipe, filename: 'figure-data.json' } : undefined;
+    }
+    const origins = new WeakMap();
+    function retainFigureOrigin(figure) { if (!origins.has(figure))
+        origins.set(figure, { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }); }
+    function figureOrigin(figure) { return origins.get(figure) || { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }; }
+    function figureContext(figure) {
+        const origin = figureOrigin(figure), nodes = [];
+        const caption = figure.querySelector('figcaption')?.querySelector('span');
+        if (caption)
+            nodes.push(caption);
+        if (origin.scope) {
+            const note = Array.from(origin.scope.children).find(element => element.matches('.av-note'));
+            if (note)
+                nodes.push(note);
+        }
+        for (const element of Array.from(origin.owner?.querySelectorAll('.av-frame-description,.av-legend,.av-frame-footer') || []))
+            if (element.closest('.av-card') === origin.owner)
+                nodes.push(element);
+        return nodes;
+    }
+});
+define("command-bar", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.commandGroups = commandGroups;
+    exports.focusCommand = focusCommand;
+    exports.commandIcon = commandIcon;
+    exports.attachCommandBar = attachCommandBar;
+    function commandGroups(width, entries, reserve = 40, gap = 4) {
+        const groups = new Map();
+        entries.forEach((entry, index) => { const group = groups.get(entry.group); if (group) {
+            group.width += entry.width + gap;
+            group.priority = Math.min(group.priority, entry.priority);
+            group.menuOnly || (group.menuOnly = !!entry.menuOnly);
+        }
+        else
+            groups.set(entry.group, { width: entry.width, priority: entry.priority, index, menuOnly: !!entry.menuOnly }); });
+        const all = [...groups.values()];
+        if (!all.some(group => group.menuOnly) && all.reduce((total, group) => total + group.width, 0) + Math.max(0, all.length - 1) * gap <= width)
+            return new Set(groups.keys());
+        let used = reserve;
+        const selected = new Set();
+        for (const [key, group] of [...groups].sort((a, b) => a[1].priority - b[1].priority || a[1].index - b[1].index))
+            if (!group.menuOnly && used + group.width + gap <= width) {
+                selected.add(key);
+                used += group.width + gap;
+            }
+        return selected;
+    }
+    function focusCommand(control) { if (!control)
+        return; let target = control; for (let owner = control.parentElement; owner; owner = owner.parentElement)
+        if (owner.tagName.toLowerCase() === 'details' && !owner.hasAttribute('open'))
+            target = owner.querySelector('summary') || owner; target.focus({ preventScroll: true }); }
+    function commandIcon(document, path) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '1.7');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        const shape = document.createElementNS(svg.namespaceURI, 'path');
+        shape.setAttribute('d', path);
+        svg.appendChild(shape);
+        return svg;
+    }
+    function attachCommandBar(host, label) {
+        const document = host.ownerDocument, view = document.defaultView, commands = [], undo = [];
+        let stopped = false, refreshing = false, watching = false;
+        const primary = document.createElement('div');
+        primary.className = 'av-command-primary';
+        const more = document.createElement('details');
+        more.className = 'av-command-overflow';
+        more.setAttribute('data-av-review-ui', '');
+        const summary = document.createElement('summary');
+        summary.textContent = '⋯';
+        summary.setAttribute('aria-label', label);
+        summary.setAttribute('aria-expanded', 'false');
+        more.appendChild(summary);
+        const menu = document.createElement('div');
+        menu.className = 'av-command-menu';
+        menu.setAttribute('role', 'group');
+        menu.setAttribute('aria-label', label);
+        more.appendChild(menu);
+        host.appendChild(primary);
+        host.appendChild(more);
+        const preferredWidth = host.style.getPropertyValue('--av-command-preferred-width');
+        let topLayer = typeof menu.showPopover === 'function' && typeof menu.hidePopover === 'function', popoverOpen = false;
+        if (topLayer) {
+            menu.setAttribute('popover', 'manual');
+            menu.setAttribute('data-av-menu-layer', '');
+        }
+        const previous = host.classList.contains('av-command-bar');
+        host.classList.add('av-command-bar');
+        function listen(node, type, fn, capture = false) { node.addEventListener(type, fn, capture); undo.push(() => node.removeEventListener(type, fn, capture)); }
+        const outside = (event) => { if (more.open && !more.contains(event.target))
+            dismiss(); };
+        const choose = (event) => {
+            const target = event.target;
+            if (more.open && !more.contains(target))
+                dismiss();
+            else if (menu.contains(target)) {
+                const element = target.nodeType === 1 ? target : target.parentElement;
+                const button = element?.closest('button');
+                if (button)
+                    dismiss(button.getAttribute('data-av-review-action') !== 'new-note');
+            }
+        };
+        // Closed figures add no document-level pointer or scroll listeners. This is
+        // consequential in a full report with hundreds of independently owned bars.
+        function watchOpen() {
+            const next = more.open && !stopped;
+            if (watching === next)
+                return;
+            watching = next;
+            for (const [type, handler] of [['pointerdown', outside], ['click', choose], ['scroll', placeMenu]]) {
+                if (watching)
+                    document.addEventListener(type, handler, true);
+                else
+                    document.removeEventListener(type, handler, true);
+            }
+            for (const type of ['resize', 'scroll']) {
+                if (watching)
+                    view?.visualViewport?.addEventListener(type, placeMenu);
+                else
+                    view?.visualViewport?.removeEventListener(type, placeMenu);
+            }
+        }
+        function dismiss(returnFocus = false) {
+            const wasOpen = more.open;
+            more.open = false;
+            watchOpen();
+            if (popoverOpen) {
+                try {
+                    menu.hidePopover();
+                }
+                catch { }
+                popoverOpen = false;
+            }
+            summary.setAttribute('aria-expanded', 'false');
+            if (wasOpen && returnFocus)
+                summary.focus({ preventScroll: true });
+        }
+        function placeMenu() {
+            watchOpen();
+            if (!more.open) {
+                if (popoverOpen) {
+                    try {
+                        menu.hidePopover();
+                    }
+                    catch { }
+                    popoverOpen = false;
+                }
+                return;
+            }
+            if (topLayer && !popoverOpen) {
+                try {
+                    menu.showPopover();
+                    popoverOpen = true;
+                }
+                catch {
+                    topLayer = false;
+                    menu.removeAttribute('popover');
+                    menu.removeAttribute('data-av-menu-layer');
+                }
+            }
+            const anchor = summary.getBoundingClientRect();
+            const bounds = (0, overlay_layout_1.visibleViewport)(view);
+            if (!topLayer)
+                for (let ancestor = host.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+                    const style = view?.getComputedStyle?.(ancestor), rect = ancestor.getBoundingClientRect();
+                    if (/auto|scroll|hidden|clip/.test(style?.overflowY || '')) {
+                        bounds.top = Math.max(bounds.top, rect.top + 4);
+                        bounds.bottom = Math.min(bounds.bottom, rect.bottom - 4);
+                    }
+                    if (/auto|scroll|hidden|clip/.test(style?.overflowX || '')) {
+                        bounds.left = Math.max(bounds.left, rect.left + 4);
+                        bounds.right = Math.min(bounds.right, rect.right - 4);
+                    }
+                }
+            menu.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
+            menu.style.setProperty('--av-menu-shift', '0px');
+            const box = menu.getBoundingClientRect();
+            const placed = (0, overlay_layout_1.anchoredPanel)(anchor, bounds, box.width || 256, Math.max(box.height || 0, menu.scrollHeight || 280), 4);
+            more.setAttribute('data-av-menu-side', placed.side);
+            menu.style.setProperty('--av-menu-max-height', placed.maxHeight + 'px');
+            if (topLayer) {
+                menu.style.setProperty('left', placed.left + 'px');
+                const height = menu.getBoundingClientRect().height;
+                menu.style.setProperty('top', (0, overlay_layout_1.anchoredPanel)(anchor, bounds, placed.width, height, 4).top + 'px');
+                menu.style.setProperty('bottom', 'auto');
+            }
+            else
+                menu.style.setProperty('--av-menu-shift', (placed.left - (Number.isFinite(box.left) ? box.left : placed.left)) + 'px');
+        }
+        function hitSize() { return Math.max(36, Number.parseFloat(view?.getComputedStyle?.(host).getPropertyValue?.('--av-command-hit-size') || '') || 36); }
+        // Intrinsic label measurement respects text enlargement without inserting
+        // measurement elements into evidence or depending on a menu's stretched width.
+        const measuring = document.createElement('canvas');
+        let measure = null;
+        try {
+            measure = measuring.getContext?.('2d') || null;
+        }
+        catch { /* Bounded DOM hosts. */ }
+        function commandWidth(command, targetSize) {
+            const style = view?.getComputedStyle?.(command.control);
+            const fontSize = Number.parseFloat(style?.fontSize || '') || 13;
+            let width = Math.max((command.options.width ?? 36) * Math.max(1, fontSize / 13), targetSize);
+            if (command.options.labelled) {
+                if (measure)
+                    measure.font = style?.font || `${fontSize}px sans-serif`;
+                const text = measure?.measureText(command.options.label).width ?? command.options.label.length * fontSize * .62;
+                width = Math.max(width, Math.ceil(text + (command.options.icon ? 22 : 0) + fontSize * 1.4));
+            }
+            command.control.style.setProperty('--av-command-width', width + 'px');
+            return width;
+        }
+        function refresh() {
+            if (stopped || refreshing)
+                return;
+            const targetSize = hitSize(), widthOf = (command) => commandWidth(command, targetSize);
+            const eligible = commands.filter(command => !command.control.hidden), inline = eligible.filter(command => !command.options.menuOnly);
+            host.style.setProperty('--av-command-preferred-width', (inline.reduce((total, command) => total + widthOf(command), 0) + Math.max(0, inline.length - 1) * 4 + (eligible.some(command => command.options.menuOnly) ? targetSize + 4 : 0)) + 'px');
+            const width = host.clientWidth;
+            if (!(width > 0))
+                return;
+            refreshing = true;
+            try {
+                const focused = document.activeElement;
+                const selected = commandGroups(width, commands.filter(command => !command.control.hidden).map(command => ({ width: widthOf(command), priority: command.options.priority ?? 50, group: command.options.group || String(commands.indexOf(command)), menuOnly: command.options.menuOnly })), targetSize + 4);
+                for (const destination of [primary, menu]) {
+                    const wanted = commands.filter((command, index) => selected.has(command.options.group || String(index)) === (destination === primary));
+                    wanted.forEach((command, index) => {
+                        const inline = destination === primary;
+                        const visual = command.control.querySelector('.av-command-visual');
+                        if (visual && !command.options.icon && !visual.querySelector('svg'))
+                            visual.hidden = !inline;
+                        command.control.setAttribute('data-av-command-location', inline ? 'inline' : 'menu');
+                        const current = destination.children[index] || null;
+                        if (current !== command.control) {
+                            const retainsFocus = focused === command.control;
+                            destination.insertBefore(command.control, current);
+                            if (retainsFocus && !inline) {
+                                more.open = true;
+                                summary.setAttribute('aria-expanded', 'true');
+                            }
+                        }
+                    });
+                }
+                const overflow = commands.some(command => command.control.parentNode === menu && !command.control.hidden);
+                more.hidden = !overflow;
+                if (!overflow) {
+                    dismiss();
+                    if (focused === summary)
+                        commands.find(command => !command.control.hidden && !command.control.disabled)?.control.focus();
+                }
+                placeMenu();
+                if (commands.some(command => command.control === focused) && focused?.isConnected && document.activeElement !== focused)
+                    focused.focus({ preventScroll: true });
+            }
+            finally {
+                refreshing = false;
+            }
+        }
+        listen(more, 'toggle', (() => { summary.setAttribute('aria-expanded', String(more.open)); placeMenu(); }));
+        listen(menu, 'toggle', ((event) => { if (event.target === menu && event.newState === 'closed' && popoverOpen && !menu.matches(':popover-open')) {
+            popoverOpen = false;
+            dismiss();
+        } }));
+        // Deliberate menus stay open until an action, outside press, focus exit or Escape.
+        // Pointer transit is not a dismissal request (including magnification and tremor).
+        listen(more, 'focusout', ((event) => { if (!more.contains(event.relatedTarget))
+            dismiss(); }));
+        listen(more, 'keydown', ((event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                dismiss(true);
+                return;
+            }
+            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key))
+                return;
+            const buttons = commands.filter(command => command.control.parentNode === menu && !command.control.disabled && !command.control.hidden).map(command => command.control);
+            if (!buttons.length)
+                return;
+            event.preventDefault();
+            more.open = true;
+            summary.setAttribute('aria-expanded', 'true');
+            placeMenu();
+            const current = buttons.indexOf(document.activeElement);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : event.key === 'ArrowDown' ? (current + 1) % buttons.length : (current <= 0 ? buttons.length : current) - 1;
+            buttons[next].focus();
+        }));
+        if (view?.ResizeObserver) {
+            const observer = new view.ResizeObserver(refresh);
+            observer.observe(host);
+            undo.push(() => observer.disconnect());
+        }
+        if (view && !view.ResizeObserver)
+            listen(view, 'resize', refresh);
+        return {
+            add(control, options) {
+                if (commands.some(command => command.control === control))
+                    return;
+                const marker = document.createComment('av-command');
+                control.parentNode?.insertBefore(marker, control);
+                const original = Array.from(control.childNodes), oldClass = control.className, oldWidth = control.style.getPropertyValue('--av-command-width');
+                const attributes = ['data-av-command-location', 'data-av-command', 'data-av-command-labelled', 'title', 'aria-label'].map(name => [name, control.getAttribute(name)]);
+                control.classList.add('av-command');
+                control.setAttribute('data-av-command', '');
+                if (options.labelled)
+                    control.setAttribute('data-av-command-labelled', '');
+                control.setAttribute('data-av-command-location', 'menu');
+                control.style.setProperty('--av-command-width', (options.width ?? 36) + 'px');
+                control.title = options.label;
+                if (!control.hasAttribute('aria-label'))
+                    control.setAttribute('aria-label', options.label);
+                const visual = document.createElement('span');
+                visual.className = 'av-command-visual';
+                visual.setAttribute('aria-hidden', 'true');
+                if (options.icon)
+                    visual.appendChild(commandIcon(document, options.icon));
+                else
+                    for (const child of original)
+                        visual.appendChild(child);
+                const text = document.createElement('span');
+                text.className = 'av-command-label';
+                text.textContent = options.label;
+                control.replaceChildren(visual, text);
+                commands.push({ control, options, marker, original });
+                menu.appendChild(control);
+                undo.push(() => { if (marker.parentNode)
+                    marker.parentNode.replaceChild(control, marker); control.replaceChildren(...original); control.className = oldClass; if (oldWidth)
+                    control.style.setProperty('--av-command-width', oldWidth);
+                else
+                    control.style.removeProperty('--av-command-width'); for (const [name, value] of attributes) {
+                    if (value === null)
+                        control.removeAttribute(name);
+                    else
+                        control.setAttribute(name, value);
+                } });
+                refresh();
+            },
+            update(control, options) {
+                const command = commands.find(item => item.control === control);
+                if (!command || stopped)
+                    return;
+                command.options = { ...command.options, ...options };
+                control.title = command.options.label;
+                control.setAttribute('aria-label', command.options.label);
+                const text = control.querySelector('.av-command-label');
+                if (text)
+                    text.textContent = command.options.label;
+                if (options.icon !== undefined)
+                    control.querySelector('.av-command-visual')?.replaceChildren(commandIcon(document, options.icon));
+                if (command.options.labelled)
+                    control.setAttribute('data-av-command-labelled', '');
+                else
+                    control.removeAttribute('data-av-command-labelled');
+                refresh();
+            }, refresh, dismiss,
+            cleanup() { if (stopped)
+                return; dismiss(); stopped = true; watchOpen(); for (const restore of undo.reverse())
+                restore(); primary.remove(); more.remove(); if (preferredWidth)
+                host.style.setProperty('--av-command-preferred-width', preferredWidth);
+            else
+                host.style.removeProperty('--av-command-preferred-width'); host.classList.toggle('av-command-bar', previous); }
+        };
+    }
+});
+define("floating-panel", ["require", "exports", "overlay-layout", "command-bar"], function (require, exports, overlay_layout_2, command_bar_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.attachFloatingPanel = attachFloatingPanel;
+    const panels = new WeakMap();
+    let nextPanel = 0;
+    /** A non-modal, viewport-bounded reader panel. The original controls stay in
+     * their owner subtree, including inside an expanded figure. Only open panels
+     * attach document listeners. Native popover is optional, never a dependency. */
+    function attachFloatingPanel(trigger, host, title) {
+        const document = host.ownerDocument, view = document.defaultView;
+        const panel = document.createElement('div');
+        panel.className = 'av-floating-panel';
+        panel.hidden = true;
+        panel.setAttribute('data-av-controls', '');
+        panel.setAttribute('data-av-review-ui', '');
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-label', title);
+        do {
+            panel.id = `av-reader-panel-${++nextPanel}`;
+        } while (document.getElementById(panel.id));
+        const originals = ['aria-haspopup', 'aria-expanded', 'aria-controls'].map(name => [name, trigger.getAttribute(name)]);
+        trigger.setAttribute('aria-haspopup', 'dialog');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.setAttribute('aria-controls', panel.id);
+        const header = document.createElement('header');
+        header.className = 'av-floating-header';
+        const heading = document.createElement('strong');
+        heading.textContent = title;
+        header.appendChild(heading);
+        const dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.className = 'av-button av-panel-close';
+        dismiss.textContent = '×';
+        dismiss.setAttribute('aria-label', `Close ${title.toLowerCase()}`);
+        header.appendChild(dismiss);
+        const body = document.createElement('div');
+        body.className = 'av-floating-body';
+        panel.appendChild(header);
+        panel.appendChild(body);
+        host.appendChild(panel);
+        let active = false, stopped = false, raised = false, scheduled = null;
+        let native = typeof panel.showPopover === 'function' && typeof panel.hidePopover === 'function';
+        if (native)
+            panel.setAttribute('popover', 'manual');
+        const pool = panels.get(document) || new Set();
+        panels.set(document, pool);
+        function place() {
+            scheduled = null;
+            if (!active || stopped)
+                return;
+            if (!trigger.isConnected || trigger.closest('[hidden]')) {
+                close(false);
+                return;
+            }
+            const bounds = (0, overlay_layout_2.visibleViewport)(view, 10);
+            panel.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
+            // Clamp total panel height before measuring so wrapping is reflected in placement.
+            panel.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
+            let anchorControl = trigger;
+            // A command can move into closed overflow during a resize. Anchor and
+            // return to its reachable disclosure rather than an invisible button.
+            for (let owner = trigger.parentElement; owner; owner = owner.parentElement)
+                if (owner.tagName.toLowerCase() === 'details' && !owner.hasAttribute('open'))
+                    anchorControl = owner.querySelector('summary') || owner;
+            const anchor = anchorControl.getBoundingClientRect(), box = panel.getBoundingClientRect();
+            const placed = (0, overlay_layout_2.anchoredPanel)(anchor, bounds, box.width || 352, box.height || 320, 6);
+            // A trigger near the middle of a short viewport can leave neither half
+            // useful. Prefer an overlaid reading panel, never a zero-height sliver.
+            const height = placed.maxHeight < 160 ? Math.max(0, bounds.bottom - bounds.top) : placed.maxHeight;
+            panel.style.setProperty('max-height', height + 'px');
+            panel.style.setProperty('left', Math.max(bounds.left, Math.min(anchor.left, bounds.right - placed.width)) + 'px');
+            panel.style.setProperty('top', (placed.maxHeight < 160 ? bounds.top : (0, overlay_layout_2.anchoredPanel)(anchor, bounds, placed.width, panel.getBoundingClientRect().height || box.height, 6).top) + 'px');
+        }
+        function schedule() {
+            if (!active || stopped || scheduled !== null)
+                return;
+            if (view?.requestAnimationFrame)
+                scheduled = view.requestAnimationFrame(place);
+            else
+                place();
+        }
+        function outside(event) { const node = event.target; if (!panel.contains(node) && !trigger.contains(node))
+            close(false); }
+        function keydown(event) {
+            if (event.key === 'Escape' && active) {
+                event.preventDefault();
+                event.stopPropagation();
+                close(true);
+            }
+        }
+        function watch(enable) {
+            const change = enable ? 'addEventListener' : 'removeEventListener';
+            document[change]('pointerdown', outside, true);
+            document[change]('focusin', outside, true);
+            document[change]('keydown', keydown, true);
+            document[change]('scroll', schedule, true);
+            view?.[change]('resize', schedule);
+            view?.visualViewport?.[change]('resize', schedule);
+            view?.visualViewport?.[change]('scroll', schedule);
+        }
+        function open(focus = true) {
+            if (stopped)
+                return;
+            for (const other of pool)
+                if (other !== controller)
+                    other.close(false);
+            if (!active) {
+                active = true;
+                panel.hidden = false;
+                panel.setAttribute('data-av-open', '');
+                if (native)
+                    try {
+                        panel.showPopover();
+                        raised = true;
+                    }
+                    catch {
+                        native = false;
+                        panel.removeAttribute('popover');
+                    }
+                trigger.setAttribute('aria-expanded', 'true');
+                watch(true);
+            }
+            place();
+            if (focus)
+                (body.querySelector('input:not([disabled]),button:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]') || dismiss).focus({ preventScroll: true });
+        }
+        function close(returnFocus = false) {
+            const wasOpen = active;
+            active = false;
+            watch(false);
+            if (scheduled !== null)
+                view?.cancelAnimationFrame(scheduled);
+            scheduled = null;
+            if (raised) {
+                raised = false;
+                try {
+                    panel.hidePopover();
+                }
+                catch { /* An ancestor may have closed first. */ }
+            }
+            panel.hidden = true;
+            panel.removeAttribute('data-av-open');
+            trigger.setAttribute('aria-expanded', 'false');
+            if (wasOpen && returnFocus && trigger.isConnected)
+                (0, command_bar_1.focusCommand)(trigger);
+        }
+        const click = (event) => { event.preventDefault(); event.stopPropagation(); if (active)
+            close(true);
+        else
+            open(); };
+        const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); close(true); };
+        const toggle = (event) => { if (event.target === panel && event.newState === 'closed' && raised && !panel.matches(':popover-open')) {
+            raised = false;
+            close(false);
+        } };
+        trigger.addEventListener('click', click);
+        dismiss.addEventListener('click', closeClick);
+        panel.addEventListener('toggle', toggle);
+        // Observer scheduling (not direct writes in its callback) avoids feedback loops.
+        const observer = view?.ResizeObserver ? new view.ResizeObserver(schedule) : null;
+        observer?.observe(panel);
+        const controller = { element: panel, body, get isOpen() { return active; }, open, close, toggle: () => active ? close(true) : open(), refresh: schedule,
+            cleanup() { if (stopped)
+                return; close(false); stopped = true; observer?.disconnect(); trigger.removeEventListener('click', click); dismiss.removeEventListener('click', closeClick); panel.removeEventListener('toggle', toggle); panel.remove(); pool.delete(controller); if (!pool.size)
+                panels.delete(document); for (const [name, value] of originals)
+                if (value === null)
+                    trigger.removeAttribute(name);
+                else
+                    trigger.setAttribute(name, value); }
+        };
+        pool.add(controller);
+        return controller;
+    }
+});
+define("item-selection", ["require", "exports", "floating-panel", "figures", "command-bar"], function (require, exports, floating_panel_1, figures_1, command_bar_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.selectedFigureItems = exports.selectableItems = void 0;
+    exports.changeItemSelection = changeItemSelection;
+    exports.attachItemSelection = attachItemSelection;
+    exports.selectableItems = '[data-av-inspect],[data-av-observation],[data-av-mermaid-item]';
+    /** Source order, not a new analytical ordering. Shift replaces a range; an
+     * additive modifier unions it. A toggle retains its pivot after deselection. */
+    function changeItemSelection(state, order, key, toggle = false, range = false) {
+        if (!order.includes(key))
+            return state;
+        let keys;
+        const start = state.pivot === null ? -1 : order.indexOf(state.pivot), end = order.indexOf(key);
+        if (range && start >= 0) {
+            keys = new Set(toggle ? state.keys : []);
+            for (const id of order.slice(Math.min(start, end), Math.max(start, end) + 1))
+                keys.add(id);
+        }
+        else if (toggle) {
+            keys = new Set(state.keys);
+            if (keys.has(key))
+                keys.delete(key);
+            else
+                keys.add(key);
+        }
+        else
+            keys = new Set([key]);
+        return { keys: order.filter(id => keys.has(id)), pivot: range && start >= 0 ? state.pivot : key };
+    }
+    const selectedFigureItems = (figure) => Array.from(figure.querySelectorAll('[data-av-item-selected]')).filter(node => (0, figures_1.figureOf)(node) === figure && !node.closest('[data-av-review-ui]'));
+    exports.selectedFigureItems = selectedFigureItems;
+    const icons = {
+        inspect: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14m5 12 6 6',
+        note: 'M4 3h16v14l-5 4H4zM8 8h8M8 12h6',
+        bookmark: 'M6 3h12v18l-6-4-6 4z', clear: 'm6 6 12 12M6 18 18 6', add: 'M12 4v16M4 12h16'
+    };
+    function attachItemSelection(root, figures, hooks) {
+        const document = root.ownerDocument, view = document.defaultView, states = new Map(), undo = [];
+        let stopped = false;
+        const keyOf = (node) => node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation') || node.getAttribute('data-av-mermaid-item');
+        const sourceOf = (figure) => figure.getAttribute('data-av-source') || figure.querySelector('[data-av-mermaid-source]')?.getAttribute('data-av-mermaid-source') || (0, figures_1.figureOrigin)(figure).owner?.getAttribute('data-av-layout-input') || '';
+        const modeOf = (figure) => figure.getAttribute('data-av-selection-mode') || 'pan';
+        function hasText(state) {
+            const selected = view?.getSelection?.();
+            const parent = selected?.anchorNode?.nodeType === 1 ? selected.anchorNode : selected?.anchorNode?.parentElement;
+            const end = selected?.focusNode?.nodeType === 1 ? selected.focusNode : selected?.focusNode?.parentElement;
+            return !!selected && !selected.isCollapsed && !!parent && !!end && state.figure.contains(parent) && state.figure.contains(end) && !parent.closest('[data-av-review-ui],[data-av-controls]');
+        }
+        function paint(state) {
+            const mode = modeOf(state.figure), selected = new Set(state.selection.keys), text = mode === 'text' && hasText(state);
+            if (!state.active || !state.marks.has(state.active))
+                state.active = state.selection.keys[state.selection.keys.length - 1] || state.marks.keys().next().value || null;
+            for (const [key, mark] of state.marks) {
+                if (selected.has(key))
+                    mark.setAttribute('data-av-item-selected', '');
+                else
+                    mark.removeAttribute('data-av-item-selected');
+                mark.setAttribute('aria-pressed', String(selected.has(key)));
+                mark.setAttribute('tabindex', mode === 'select' && key === state.active ? '0' : '-1');
+                // Do not overwrite any renderer-owned filter, fill, or semantic stroke.
+            }
+            const count = state.selection.keys.length;
+            state.trigger.hidden = mode === 'text' ? !text : !count;
+            const caption = mode === 'text' ? 'Passage' : `${count} selected`;
+            if (hooks.updateCommand)
+                hooks.updateCommand(state.figure, state.trigger, { label: caption });
+            else
+                state.trigger.textContent = caption;
+            if (state.trigger.hidden)
+                state.panel.close(false);
+            const message = mode === 'text' ? (text ? 'Passage selected' : 'Select a passage') : count ? `${count} ${count === 1 ? 'item' : 'items'} selected` : 'No items selected';
+            if (state.status.textContent !== message)
+                state.status.textContent = message;
+            for (const [action, button] of state.buttons) {
+                button.hidden = (action === 'add' && mode !== 'select') || (action === 'inspect' && mode === 'text');
+                if (action === 'add')
+                    button.setAttribute('aria-pressed', String(state.additive));
+                else
+                    button.disabled = action === 'clear' ? !count && !text : action === 'inspect' ? !count : (mode === 'text' ? !text : !count) || !hooks.canReview(state.figure);
+                if (action === 'note' || action === 'bookmark')
+                    button.title = hooks.canReview(state.figure) ? (action === 'note' ? 'Annotate the exact selection' : 'Bookmark the exact selection') : 'This report does not have a notebook';
+            }
+        }
+        function refresh(figure) {
+            if (stopped)
+                return;
+            for (const state of states.values()) {
+                if (figure && state.figure !== figure && !figure.contains(state.figure))
+                    continue;
+                const source = sourceOf(state.figure);
+                if (source !== state.source) {
+                    state.selection = { keys: [], pivot: null };
+                    state.source = source;
+                }
+                const groups = new Map();
+                for (const mark of Array.from(state.figure.querySelectorAll(exports.selectableItems))) {
+                    const key = keyOf(mark);
+                    if (!key || (0, figures_1.figureOf)(mark) !== state.figure || mark.closest('[data-av-review-ui]'))
+                        continue;
+                    const group = groups.get(key) || [];
+                    group.push(mark);
+                    groups.set(key, group);
+                }
+                state.marks = new Map([...groups].filter(([, group]) => group.length === 1).map(([key, group]) => [key, group[0]]));
+                const current = new Set(state.marks.values());
+                for (const [mark, restore] of state.restore)
+                    if (!current.has(mark)) {
+                        restore();
+                        state.restore.delete(mark);
+                    }
+                const added = [...current].filter(mark => !state.restore.has(mark));
+                // Read the author/renderer filter before adding selection chrome. Batch
+                // reads before writes; selection must not erase a meaningful paint filter.
+                const baseFilters = new Map(added.map(mark => [mark, view?.getComputedStyle?.(mark).filter || 'none']));
+                for (const mark of added) {
+                    const attributes = ['tabindex', 'aria-pressed', 'data-av-item-selected'].map(name => [name, mark.getAttribute(name)]);
+                    const properties = ['--av-item-base-filter', '--av-item-filter-chain'].map(name => [name, mark.style.getPropertyValue(name), mark.style.getPropertyPriority?.(name) || '']);
+                    const base = baseFilters.get(mark);
+                    mark.style.setProperty('--av-item-base-filter', base);
+                    mark.style.setProperty('--av-item-filter-chain', base === 'none' ? 'opacity(1)' : base);
+                    state.restore.set(mark, () => {
+                        for (const [name, value] of attributes)
+                            if (value === null)
+                                mark.removeAttribute(name);
+                            else
+                                mark.setAttribute(name, value);
+                        for (const [name, value, priority] of properties)
+                            if (value)
+                                mark.style.setProperty(name, value, priority);
+                            else
+                                mark.style.removeProperty(name);
+                    });
+                }
+                state.selection.keys = state.selection.keys.filter(key => state.marks.has(key));
+                paint(state);
+            }
+        }
+        for (const figure of figures) {
+            const plot = figure.matches('[data-av-plot]') ? figure : figure.querySelector('[data-av-plot]');
+            const toolbar = plot?.querySelector('.av-plot-toolbar');
+            if (!plot || !toolbar)
+                continue;
+            const trigger = document.createElement('button');
+            trigger.type = 'button';
+            trigger.className = 'av-button av-selection-trigger';
+            trigger.hidden = true;
+            trigger.setAttribute('data-av-selection-menu', '');
+            toolbar.appendChild(trigger);
+            const panel = (0, floating_panel_1.attachFloatingPanel)(trigger, figure, 'Selected evidence');
+            panel.element.classList.add('av-selection-panel');
+            const bar = panel.body;
+            bar.classList.add('av-item-selection');
+            const status = document.createElement('output');
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            bar.appendChild(status);
+            const controls = document.createElement('div');
+            controls.className = 'av-selection-actions';
+            bar.appendChild(controls);
+            const buttons = new Map();
+            for (const [action, label] of [['inspect', 'Inspect evidence'], ['note', 'Add a note'], ['bookmark', 'Bookmark selection'], ['clear', 'Clear selection'], ['add', 'Add to selection']]) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'av-button av-button-quiet';
+                button.setAttribute('data-av-selection-command', action);
+                button.appendChild((0, command_bar_2.commandIcon)(document, icons[action]));
+                button.setAttribute('aria-label', label);
+                const caption = document.createElement('span');
+                caption.textContent = label;
+                button.appendChild(caption);
+                controls.appendChild(button);
+                buttons.set(action, button);
+            }
+            const hint = document.createElement('p');
+            hint.className = 'av-note';
+            hint.textContent = 'Notes and bookmarks retain the exact selected evidence. Add to selection keeps earlier items when you tap another.';
+            bar.appendChild(hint);
+            const preserve = (event) => { if (event.target?.closest('button'))
+                event.preventDefault(); };
+            bar.addEventListener('mousedown', preserve);
+            trigger.addEventListener('mousedown', preserve);
+            hooks.command?.(figure, trigger, { label: 'Selection', labelled: true, priority: 5, group: 'selection', icon: icons.inspect });
+            undo.push(() => { panel.cleanup(); bar.removeEventListener('mousedown', preserve); trigger.removeEventListener('mousedown', preserve); trigger.remove(); });
+            states.set(figure, { figure, selection: { keys: [], pivot: null }, additive: false, active: null, marks: new Map(), restore: new Map(), source: sourceOf(figure), trigger, panel, bar, status, buttons });
+        }
+        function choose(state, key, toggle, range) {
+            state.selection = changeItemSelection(state.selection, [...state.marks.keys()], key, toggle, range);
+            state.active = key;
+            paint(state);
+            const inspected = state.marks.get(state.selection.keys.includes(key) ? key : state.selection.keys[state.selection.keys.length - 1] || '');
+            if (inspected)
+                hooks.inspect(inspected);
+        }
+        const invalidated = (event) => { const figure = (0, figures_1.figureOf)(event.target); if (figure)
+            refresh(figure); };
+        root.addEventListener('av-layout-invalidated', invalidated, true);
+        undo.push(() => root.removeEventListener('av-layout-invalidated', invalidated, true));
+        const textChanged = () => { for (const state of states.values())
+            if (modeOf(state.figure) === 'text')
+                paint(state); };
+        document.addEventListener('selectionchange', textChanged);
+        undo.push(() => document.removeEventListener('selectionchange', textChanged));
+        refresh();
+        return {
+            refresh,
+            click(event, target) {
+                if (stopped)
+                    return false;
+                const figure = (0, figures_1.figureOf)(target), state = figure && states.get(figure);
+                if (!state)
+                    return false;
+                const command = target.closest('[data-av-selection-command]');
+                if (command && state.bar.contains(command)) {
+                    const action = command.getAttribute('data-av-selection-command');
+                    if (command.disabled)
+                        return true;
+                    if (action === 'clear') {
+                        state.selection = { keys: [], pivot: null };
+                        if (hasText(state))
+                            view?.getSelection?.()?.removeAllRanges();
+                        paint(state);
+                        (0, command_bar_2.focusCommand)(state.figure.querySelector('[data-av-mode-menu]') || state.figure.querySelector('.av-plot-scroll'));
+                    }
+                    else if (action === 'add') {
+                        state.additive = !state.additive;
+                        paint(state);
+                    }
+                    else if (action === 'inspect') {
+                        const mark = state.marks.get(state.selection.keys.includes(state.active || '') ? state.active : state.selection.keys[0]);
+                        if (mark)
+                            hooks.inspect(mark, true, state.trigger);
+                    }
+                    else if (action === 'note' || action === 'bookmark')
+                        hooks.review(state.figure, action, state.trigger);
+                    if (action !== 'add')
+                        state.panel.close(action === 'bookmark');
+                    return true;
+                }
+                if (!target.closest('.av-plot-scroll') || target.closest('a[href],button,input,textarea,select,[contenteditable]'))
+                    return false;
+                const mode = modeOf(state.figure);
+                if (mode === 'pan')
+                    return true; // a tap is not a selection in the hand tool
+                if (mode === 'text')
+                    return false;
+                const mark = target.closest(exports.selectableItems), key = mark && keyOf(mark);
+                if (key && state.marks.get(key) === mark)
+                    choose(state, key, event.ctrlKey || event.metaKey || state.additive, event.shiftKey);
+                else if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !state.additive) {
+                    state.selection = { keys: [], pivot: null };
+                    paint(state);
+                }
+                return true;
+            },
+            keydown(event, target) {
+                const figure = (0, figures_1.figureOf)(target), state = figure && states.get(figure);
+                if (!state || stopped || event.isComposing || event.altKey || modeOf(state.figure) !== 'select' || !target.closest('.av-plot-scroll') || target.closest('a[href],button,input,textarea,select,[contenteditable]'))
+                    return false;
+                if (event.key === 'Escape' && state.selection.keys.length) {
+                    state.selection = { keys: [], pivot: null };
+                    paint(state);
+                    return true;
+                }
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+                    state.selection = { keys: [...state.marks.keys()], pivot: state.active };
+                    paint(state);
+                    return true;
+                }
+                const order = [...state.marks.keys()], current = keyOf(target.closest(exports.selectableItems) || target) || state.active;
+                if (!current || !order.length)
+                    return false;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    choose(state, current, event.ctrlKey || event.metaKey || state.additive, event.shiftKey);
+                    return true;
+                }
+                if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key))
+                    return false;
+                const index = Math.max(0, order.indexOf(current));
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1 : Math.max(0, Math.min(order.length - 1, index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1)));
+                state.active = order[next];
+                if (event.shiftKey) {
+                    if (!state.selection.pivot)
+                        state.selection.pivot = current;
+                    choose(state, order[next], event.ctrlKey || event.metaKey || state.additive, true);
+                }
+                paint(state);
+                state.marks.get(order[next])?.focus({ preventScroll: true });
+                return true;
+            },
+            cleanup() { if (stopped)
+                return; stopped = true; for (const state of states.values())
+                for (const restore of state.restore.values())
+                    restore(); for (const restore of undo.reverse())
+                restore(); states.clear(); }
+        };
+    }
+});
+define("report-search", ["require", "exports", "overlay-layout", "figures", "item-selection"], function (require, exports, overlay_layout_3, figures_2, item_selection_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.searchText = searchText;
+    exports.reportEntries = reportEntries;
+    exports.regexSpec = regexSpec;
+    exports.attachReportSearch = attachReportSearch;
+    const kinds = ['sections', 'figures', 'items', 'text', 'notes', 'bookmarks'];
+    const labels = { sections: 'Sections', figures: 'Figures', items: 'Items & nodes', text: 'Text & sources', notes: 'Notes', bookmarks: 'Bookmarks' };
+    const ignored = '[data-av-controls],[data-av-review-ui],[data-av-notebook],.av-workspace-bar,.av-workspace-nav,script,style,button,select,textarea,input,.av-sr-only,[data-av-view-question],[role="status"]';
+    /** Reading separators belong to search excerpts, never stored fingerprints. */
+    function searchText(node) {
+        const parts = [];
+        const visit = (node) => {
+            if (node.nodeType === 3) {
+                parts.push(node.textContent || '');
+                return;
+            }
+            if (node.nodeType !== 1 || node.matches(ignored))
+                return;
+            const block = node.matches('p,div,section,article,header,footer,summary,li,td,th,dt,dd,pre,blockquote,br,h1,h2,h3,h4,.av-status,.av-id');
+            if (block)
+                parts.push(' ');
+            for (const child of Array.from(node.childNodes))
+                visit(child);
+            if (block)
+                parts.push(' ');
+        };
+        visit(node);
+        return parts.join('').replace(/\s+/g, ' ').trim();
+    }
+    /** Index the current evidence, including hidden sections. Blocks inside an item
+     * are represented once by that item rather than repeated as paragraph hits. */
+    function reportEntries(root) {
+        const entries = [], seen = new Set(), objectKeys = new Map();
+        const context = (node) => { const figure = (0, figures_2.figureOf)(node), owner = figure ? (0, figures_2.figureOrigin)(figure).owner : null; const section = node.closest('[data-av-panel]') || owner?.closest('[data-av-panel]'); return section?.querySelector('h1,h2,h3')?.textContent?.trim() || ''; };
+        const own = (node) => node.closest('.av-workspace') === root && !node.closest(ignored);
+        const add = (kind, node, label, text) => { if (!seen.has(node) && label.trim()) {
+            seen.add(node);
+            entries.push({ kind, target: node, label: label.trim(), text, context: context(node) });
+        } };
+        for (const node of Array.from(root.querySelectorAll('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading'))) {
+            if (!own(node))
+                continue;
+            const heading = Array.from(node.querySelectorAll('h1,h2,h3,h4')).find(h => h.closest('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading') === node);
+            if (heading)
+                add('sections', node, heading.textContent || '', node.querySelector(':scope > .av-frame-content > .av-frame-description')?.textContent || '');
+        }
+        for (const figure of Array.from(root.querySelectorAll('[data-av-figure]'))) {
+            if ((0, figures_2.figureOf)(figure) !== figure || !own(figure))
+                continue;
+            add('figures', figure, (0, figures_2.figureTitle)(figure), figure.querySelector('figcaption > span')?.textContent || '');
+        }
+        for (const node of Array.from(root.querySelectorAll('[data-av-object]'))) {
+            if (!own(node))
+                continue;
+            const owner = node.closest('.av-card');
+            if (owner) {
+                const keys = objectKeys.get(owner) || new Set();
+                keys.add(node.getAttribute('data-av-object'));
+                objectKeys.set(owner, keys);
+            }
+            add('items', node, node.querySelector('summary')?.textContent || 'Item', searchText(node));
+        }
+        for (const node of Array.from(root.querySelectorAll(item_selection_1.selectableItems))) {
+            if (!own(node))
+                continue;
+            const figure = (0, figures_2.figureOf)(node);
+            const key = node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation');
+            const owner = figure && (0, figures_2.figureOrigin)(figure).owner;
+            if (key && owner && objectKeys.get(owner)?.has(key))
+                continue;
+            const title = node.getAttribute('aria-label') || node.querySelector('title')?.textContent || node.textContent || '';
+            add('items', node, title, searchText(node));
+        }
+        // Stop at useful reading blocks; don't index every ancestor's entire subtree.
+        function visit(node) {
+            if (node !== root && (node.matches(ignored) || node.matches('[data-av-object]') || node.matches(item_selection_1.selectableItems) || node.matches('[data-av-panel],.av-card,.av-report-brief,.av-workspace-heading') && node.closest('.av-workspace') !== root))
+                return;
+            if (node.matches('img[alt]')) {
+                const text = node.getAttribute('alt') || '';
+                if (text)
+                    add('text', node, text, text);
+                return;
+            }
+            if (node.matches('p,pre,blockquote,td,th,li,figcaption,text,desc')) {
+                const text = searchText(node).trim();
+                if (text)
+                    add('text', node, text.length > 100 ? text.slice(0, 100) + '…' : text, text);
+                return;
+            }
+            for (const child of Array.from(node.children))
+                visit(child);
+        }
+        visit(root);
+        return entries;
+    }
+    /** Worker body contains no imports, network requests, evaluation or user code.
+     * The browser's regular-expression engine is isolated and can be terminated. */
+    function regexWorker() {
+        self.onmessage = (event) => {
+            try {
+                const re = new RegExp(event.data.pattern, event.data.flags);
+                const hits = event.data.texts.map(text => { const hit = re.exec(text); return hit ? [hit.index, hit[0].length] : null; });
+                self.postMessage({ hits });
+            }
+            catch (error) {
+                self.postMessage({ error: error instanceof Error ? error.message : 'Invalid regular expression.' });
+            }
+        };
+    }
+    function regexSpec(query) {
+        let pattern = query, flags = 'iu';
+        const literal = /^\/([\s\S]*)\/([a-z]*)$/.exec(query);
+        if (literal) {
+            pattern = literal[1];
+            flags = literal[2] || 'u';
+        }
+        if (!/^[imsu]*$/.test(flags) || new Set(flags).size !== flags.length)
+            throw new Error('Use only i, m, s or u regular-expression flags.');
+        if (pattern.length > 2000)
+            throw new Error('This expression is too long. Use a shorter expression or literal text.');
+        return { pattern, flags };
+    }
+    function attachReportSearch(root, input, results, hooks) {
+        const document = root.ownerDocument, view = document.defaultView;
+        const undo = [], limits = new Map();
+        let query = '', lastQuery = null, regex = false;
+        let active = 'all', matches = [];
+        let stopped = false, generation = 0, finish = null;
+        let pending = Promise.resolve(), layer = false, repositioning = false;
+        const initial = ['style', 'popover', 'data-av-search-layer', 'data-av-review-ui'].map(name => [name, results.getAttribute(name)]);
+        const inputInitial = ['aria-controls', 'aria-expanded'].map(name => [name, input.getAttribute(name)]);
+        const originalId = results.id;
+        if (!results.id) {
+            const base = (input.id || root.id || 'report') + '--results';
+            let id = base, n = 1;
+            while (document.getElementById(id))
+                id = base + '-' + (++n);
+            results.id = id;
+        }
+        results.setAttribute('data-av-review-ui', '');
+        input.setAttribute('aria-controls', results.id);
+        input.setAttribute('aria-expanded', 'false');
+        const nativeLayer = typeof results.showPopover === 'function' && typeof results.hidePopover === 'function';
+        if (nativeLayer) {
+            results.setAttribute('popover', 'manual');
+            results.setAttribute('data-av-search-layer', '');
+        }
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'av-search-regex';
+        toggle.textContent = '.*';
+        toggle.title = 'Regular expression';
+        toggle.setAttribute('aria-label', 'Use regular expression');
+        toggle.setAttribute('aria-pressed', 'false');
+        input.parentNode?.appendChild(toggle);
+        function listen(target, type, fn, capture = false) {
+            target.addEventListener(type, fn, capture);
+            undo.push(() => target.removeEventListener(type, fn, capture));
+        }
+        function create(parent, tag, text, cls = '') {
+            const node = document.createElement(tag);
+            node.className = cls;
+            if (text !== undefined)
+                node.textContent = text;
+            parent.appendChild(node);
+            return node;
+        }
+        function button(parent, label, fn, cls = 'av-button av-button-quiet') {
+            const node = create(parent, 'button', label, cls);
+            node.type = 'button';
+            node.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); fn(); });
+            return node;
+        }
+        function place() {
+            if (stopped || results.hidden || !layer || repositioning)
+                return;
+            repositioning = true;
+            try {
+                const bounds = (0, overlay_layout_3.visibleViewport)(view), box = input.parentElement.getBoundingClientRect();
+                const available = Math.max(0, bounds.right - bounds.left);
+                const width = Math.min(680, available);
+                // A fixed top-layer panel remains inside a narrow embed's browser viewport.
+                // Its content scrolls, not the header or result-type controls.
+                const fit = (0, overlay_layout_3.anchoredPanel)(box, bounds, width, 560, 6);
+                results.style.setProperty('left', Math.max(bounds.left, Math.min(box.left, bounds.right - width)) + 'px');
+                results.style.setProperty('top', fit.top + 'px');
+                results.style.setProperty('width', width + 'px');
+                results.style.setProperty('max-height', fit.maxHeight + 'px');
+            }
+            finally {
+                repositioning = false;
+            }
+        }
+        function show() {
+            results.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+            if (nativeLayer && !layer) {
+                try {
+                    results.showPopover();
+                    layer = true;
+                }
+                catch {
+                    results.removeAttribute('popover');
+                    results.removeAttribute('data-av-search-layer');
+                }
+            }
+            place();
+        }
+        function dismiss() {
+            if (layer) {
+                try {
+                    results.hidePopover();
+                }
+                catch { /* Already closed. */ }
+                layer = false;
+            }
+            results.hidden = true;
+            input.setAttribute('aria-expanded', 'false');
+        }
+        function cancel() { const end = finish; finish = null; end?.(); }
+        function close() { hooks.close(); update(''); input.focus({ preventScroll: true }); }
+        function header(message) {
+            results.textContent = '';
+            const chrome = create(results, 'header', undefined, 'av-search-header');
+            const count = create(chrome, 'strong', message);
+            count.setAttribute('role', 'status');
+            button(chrome, 'Close', close).setAttribute('aria-label', 'Close search results');
+        }
+        function paint(focusKind) {
+            const oldTop = results.querySelector('.av-search-body')?.scrollTop || 0;
+            header(matches.length ? `${matches.length} ${matches.length === 1 ? 'result' : 'results'}` : 'No matches. Try another search.');
+            const indexes = new Map(matches.map((match, index) => [match, index]));
+            const grouped = new Map(kinds.map(kind => [kind, matches.filter(match => match.entry.kind === kind)]));
+            const tabs = create(results, 'div', undefined, 'av-search-tabs');
+            tabs.setAttribute('role', 'group');
+            tabs.setAttribute('aria-label', 'Search result types');
+            for (const kind of ['all', ...kinds]) {
+                const count = kind === 'all' ? matches.length : grouped.get(kind).length;
+                if (kind !== 'all' && !count && active !== kind)
+                    continue;
+                const choice = button(tabs, `${kind === 'all' ? 'All' : labels[kind]} (${count})`, () => { active = kind; paint(kind); });
+                choice.setAttribute('data-av-search-kind', kind);
+                choice.setAttribute('aria-pressed', String(kind === active));
+            }
+            const body = create(results, 'div', undefined, 'av-search-body');
+            for (const kind of kinds) {
+                if (active !== 'all' && active !== kind)
+                    continue;
+                const group = grouped.get(kind);
+                if (!group.length)
+                    continue;
+                const section = create(body, 'section', undefined, 'av-search-group');
+                create(section, 'h3', `${labels[kind]} · ${group.length}`);
+                const list = create(section, 'ul'), key = active + ':' + kind;
+                const base = active === 'all' ? 3 : 20, limit = limits.get(key) || base;
+                for (const match of group.slice(0, limit)) {
+                    const item = create(list, 'li');
+                    const choice = button(item, '', () => {
+                        hooks.close();
+                        update('');
+                        if (match.entry.activate)
+                            match.entry.activate(input);
+                        else if (match.entry.target?.isConnected)
+                            hooks.reveal(match.entry.target);
+                    }, 'av-search-result');
+                    choice.setAttribute('data-av-search-result', '');
+                    choice.setAttribute('data-av-search-hit', String(indexes.get(match)));
+                    create(choice, 'span', match.entry.label, 'av-search-result-label');
+                    if (match.entry.context)
+                        create(choice, 'span', match.entry.context, 'av-search-result-context');
+                    const text = match.entry.text;
+                    const at = Math.max(0, Math.min(text.length, match.at - match.entry.label.length - 1));
+                    const from = Math.max(0, at - 50), to = Math.min(text.length, Math.max(at + match.length + 100, 160));
+                    if (text && text !== match.entry.label)
+                        create(choice, 'span', (from ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : ''), 'av-search-result-excerpt');
+                }
+                const controls = create(section, 'div', undefined, 'av-search-group-actions');
+                const redraw = (value) => {
+                    limits.set(key, value);
+                    paint();
+                    // Keep keyboard readers at the same group's controls after replacement.
+                    const groups = Array.from(results.querySelectorAll('.av-search-group'));
+                    const current = groups.find(node => node.getAttribute('data-av-search-group') === kind);
+                    current?.querySelector('.av-search-group-actions button')?.focus({ preventScroll: true });
+                };
+                section.setAttribute('data-av-search-group', kind);
+                if (group.length > limit)
+                    button(controls, `Show ${Math.min(20, group.length - limit)} more…`, () => redraw(limit + 20));
+                if (active === 'all' && group.length > base)
+                    button(controls, `Only ${labels[kind].toLowerCase()}`, () => { active = kind; paint(kind); });
+                if (limit > base)
+                    button(controls, 'Show fewer', () => redraw(base));
+            }
+            body.scrollTop = focusKind ? 0 : oldTop;
+            if (focusKind)
+                Array.from(tabs.querySelectorAll('button')).find(node => node.getAttribute('data-av-search-kind') === focusKind)?.focus({ preventScroll: true });
+            place();
+        }
+        function run(token) {
+            const entries = [...reportEntries(root), ...hooks.notes()];
+            const texts = entries.map(entry => entry.label + '\n' + entry.text + '\n' + entry.context);
+            const accept = (hits) => {
+                if (stopped || token !== generation)
+                    return;
+                matches = [];
+                hits.forEach((hit, index) => { if (hit && entries[index])
+                    matches.push({ entry: entries[index], at: hit[0], length: hit[1] }); });
+                paint();
+            };
+            if (!regex) {
+                const needle = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const re = new RegExp(needle, 'iu');
+                accept(texts.map(text => { const hit = re.exec(text); return hit ? [hit.index, hit[0].length] : null; }));
+                return Promise.resolve();
+            }
+            let worker = null, url = null;
+            try {
+                const spec = regexSpec(query);
+                if (!view?.Worker || !view.URL?.createObjectURL)
+                    throw new Error('Regular-expression search requires a browser worker. Literal text search is still available.');
+                url = view.URL.createObjectURL(new Blob(['(' + regexWorker.toString() + ')()'], { type: 'text/javascript' }));
+                worker = new view.Worker(url);
+                return new Promise(resolve => {
+                    let done = false;
+                    const end = () => {
+                        if (done)
+                            return;
+                        done = true;
+                        clearTimeout(timer);
+                        worker?.terminate();
+                        if (url)
+                            view.URL.revokeObjectURL(url);
+                        if (finish === end)
+                            finish = null;
+                        resolve();
+                    };
+                    const timer = setTimeout(() => {
+                        if (!stopped && token === generation) {
+                            header('This expression took too long. Simplify it or use literal text search.');
+                            place();
+                        }
+                        end();
+                    }, 1000);
+                    finish = end;
+                    worker.onmessage = event => {
+                        if (!done && !stopped && token === generation) {
+                            if (event.data.error) {
+                                header('Invalid expression: ' + event.data.error);
+                                place();
+                            }
+                            else
+                                accept(event.data.hits);
+                        }
+                        end();
+                    };
+                    worker.onerror = () => {
+                        if (!done && !stopped && token === generation) {
+                            header('Regular-expression search could not start. Use literal text search.');
+                            place();
+                        }
+                        end();
+                    };
+                    try {
+                        worker.postMessage({ ...spec, texts });
+                    }
+                    catch {
+                        header('This report could not be searched with that expression. Use literal text search.');
+                        end();
+                    }
+                });
+            }
+            catch (error) {
+                worker?.terminate();
+                if (url)
+                    view?.URL.revokeObjectURL(url);
+                if (!stopped && token === generation) {
+                    header(error instanceof Error ? error.message : 'Search failed.');
+                    place();
+                }
+                return Promise.resolve();
+            }
+        }
+        function update(value) {
+            if (stopped)
+                return;
+            query = value.trim();
+            const key = (regex ? 'regex:' : 'literal:') + query;
+            if (key === lastQuery) {
+                if (query && results.hidden)
+                    show();
+                return;
+            }
+            lastQuery = key;
+            generation++;
+            cancel();
+            if (!query) {
+                dismiss();
+                results.textContent = '';
+                matches = [];
+                pending = Promise.resolve();
+                return;
+            }
+            limits.clear();
+            active = 'all';
+            header('Searching…');
+            show();
+            // Literal queries remain synchronous and bounded in rendered results. Regex
+            // never runs on the main thread, including syntax checking and empty matches.
+            pending = run(generation);
+        }
+        listen(toggle, 'click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            regex = !regex;
+            toggle.setAttribute('aria-pressed', String(regex));
+            lastQuery = null;
+            update(input.value);
+            input.focus({ preventScroll: true });
+        });
+        const onKey = ((event) => {
+            if (results.hidden || event.isComposing)
+                return;
+            const target = event.target;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                close();
+                return;
+            }
+            if (!['ArrowDown', 'ArrowUp'].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey)
+                return;
+            const items = Array.from(results.querySelectorAll('[data-av-search-result]'));
+            const index = items.indexOf(target);
+            if (target !== input && index < 0)
+                return;
+            event.preventDefault();
+            event.stopPropagation();
+            const next = index + (event.key === 'ArrowDown' ? 1 : -1);
+            if (next < 0)
+                input.focus();
+            else
+                items[Math.min(items.length - 1, next)]?.focus();
+        });
+        listen(input, 'keydown', onKey);
+        listen(results, 'keydown', onKey);
+        listen(document, 'pointerdown', event => {
+            if (!results.hidden && !results.contains(event.target) && !input.parentElement?.contains(event.target))
+                dismiss();
+        }, true);
+        listen(input, 'focus', () => { if (input.value.trim() && results.hidden) {
+            lastQuery = null;
+            update(input.value);
+        } });
+        const leave = ((event) => {
+            if (event.relatedTarget && !results.contains(event.relatedTarget) && !input.parentElement?.contains(event.relatedTarget))
+                dismiss();
+        });
+        listen(input.parentElement, 'focusout', leave);
+        listen(results, 'focusout', leave);
+        if (view) {
+            listen(view, 'resize', place);
+            if (view.visualViewport)
+                listen(view.visualViewport, 'resize', place);
+        }
+        listen(document, 'scroll', place, true);
+        return {
+            update, refresh() { if (query && !results.hidden) {
+                lastQuery = null;
+                update(input.value);
+            } },
+            async whenIdle() { for (;;) {
+                const job = pending;
+                await job;
+                if (pending === job)
+                    return;
+            } },
+            cleanup() {
+                if (stopped)
+                    return;
+                stopped = true;
+                generation++;
+                cancel();
+                dismiss();
+                for (const fn of undo.reverse())
+                    fn();
+                toggle.remove();
+                results.textContent = '';
+                for (const [name, value] of initial) {
+                    if (value === null)
+                        results.removeAttribute(name);
+                    else
+                        results.setAttribute(name, value);
+                }
+                for (const [name, value] of inputInitial) {
+                    if (value === null)
+                        input.removeAttribute(name);
+                    else
+                        input.setAttribute(name, value);
+                }
+                if (originalId)
+                    results.id = originalId;
+                else
+                    results.removeAttribute('id');
+            },
+        };
+    }
+});
+define("review-types", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+});
+define("review-presentation", ["require", "exports", "exact-json"], function (require, exports, exact_json_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.anchorLabel = anchorLabel;
+    exports.anchorContext = anchorContext;
+    exports.anchorEvidence = anchorEvidence;
+    exports.readerDate = readerDate;
+    /** Reader wording only. Identities and recorded evidence are never rewritten. */
+    function anchorLabel(anchor) {
+        return anchor.kind === 'item' ? anchor.label : anchor.kind === 'items' ? `${anchor.items.length} items · ${anchor.target.label}` : anchor.kind === 'text' ? 'Selected passage · ' + anchor.target.label : anchor.target.label;
+    }
+    function anchorContext(anchor) { return anchor.target.path.join(' / '); }
+    function anchorEvidence(anchor) {
+        if (anchor.kind === 'text')
+            return anchor.quote;
+        if (anchor.kind === 'item')
+            return `${anchor.label} (${anchor.itemId})\n${anchor.text}${anchor.values ? '\n' + (0, exact_json_2.exactJson)(anchor.values) : ''}`;
+        if (anchor.kind === 'items')
+            return anchor.items.map(item => `${item.label} (${item.itemId})\n${item.text}${item.values ? '\n' + (0, exact_json_2.exactJson)(item.values) : ''}`).join('\n\n');
+        return anchor.target.excerpt;
+    }
+    function readerDate(value, timeOnly = false) {
+        const date = new Date(value);
+        if (!Number.isFinite(date.getTime()))
+            return value;
+        try {
+            return new Intl.DateTimeFormat(undefined, timeOnly ? { hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
+        }
+        catch {
+            return value;
+        }
+    }
+});
+define("notebook-view", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.createNotebookView = createNotebookView;
+    /** Presentation only: all edits, recovery and concurrent versions stay with the
+     * notebook controller. One live panel, four independently scrolled collections. */
+    function createNotebookView(details, content) {
+        const document = content.ownerDocument, undo = [], ids = ['notes', 'bookmarks', 'activity', 'share'];
+        const labels = { notes: 'Notes', bookmarks: 'Bookmarks', activity: 'Activity', share: 'Share' };
+        const areas = {}, buttons = new Map();
+        let active = 'notes';
+        const scroll = new Map();
+        const node = (tag, parent, cls = '', text) => { const child = document.createElement(tag); child.className = cls; if (text !== undefined)
+            child.textContent = text; parent.appendChild(child); return child; };
+        const header = node('header', content, 'av-notebook-header');
+        node('strong', header, '', 'Your notebook');
+        const close = node('button', header, 'av-button av-button-quiet', 'Close');
+        close.type = 'button';
+        close.setAttribute('aria-label', 'Close notebook');
+        const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); details.removeAttribute('open'); details.querySelector('summary')?.focus({ preventScroll: true }); };
+        close.addEventListener('click', closeClick);
+        undo.push(() => close.removeEventListener('click', closeClick));
+        const tabs = node('div', content, 'av-notebook-tabs');
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', 'Your notebook');
+        const tools = node('div', content, 'av-notebook-filterbar');
+        const filter = node('input', tools, '');
+        filter.type = 'search';
+        filter.placeholder = 'Filter notes and bookmarks';
+        filter.setAttribute('aria-label', 'Filter notes and bookmarks');
+        const state = node('select', tools, '');
+        state.setAttribute('aria-label', 'Filter by state');
+        for (const [value, text] of [['all', 'All entries'], ['draft', 'Drafts'], ['attention', 'Needs attention']]) {
+            const option = node('option', state, '', text);
+            option.value = value;
+        }
+        const body = node('div', content, 'av-notebook-body');
+        const empty = node('p', body, 'av-empty', 'No entries match these filters.');
+        empty.hidden = true;
+        for (const id of ids) {
+            const button = node('button', tabs, '', labels[id]);
+            button.type = 'button';
+            button.id = `${details.id}--${id}-tab`;
+            button.setAttribute('role', 'tab');
+            button.setAttribute('data-av-notebook-tab', id);
+            buttons.set(id, button);
+            const area = node('section', body, 'av-notebook-page');
+            area.id = `${details.id}--${id}-page`;
+            area.setAttribute('role', 'tabpanel');
+            area.setAttribute('aria-labelledby', button.id);
+            button.setAttribute('aria-controls', area.id);
+            areas[id] = area;
+            const click = (event) => { event.preventDefault(); event.stopPropagation(); activate(id); };
+            button.addEventListener('click', click);
+            undo.push(() => button.removeEventListener('click', click));
+        }
+        const footer = node('footer', content, 'av-notebook-footer');
+        function refresh() {
+            const query = filter.value.trim().toLocaleLowerCase();
+            let count = 0, matched = 0;
+            for (const id of ['notes', 'bookmarks']) {
+                const entries = Array.from(areas[id].querySelectorAll('[data-av-review-entry],[data-av-review-bookmark],[data-av-legacy-note],[data-av-legacy-bookmark]'));
+                const seen = new Set(entries.map(item => item.getAttribute('data-av-review-entry') || item.getAttribute('data-av-review-bookmark') || 'legacy:' + item.getAttribute('data-av-notebook-target-id')));
+                buttons.get(id).textContent = labels[id] + (entries.length ? ` (${id === 'notes' ? seen.size : entries.length})` : '');
+                for (const item of entries) {
+                    const fits = (!query || (item.textContent || '').toLocaleLowerCase().includes(query)) && (state.value === 'all' || item.getAttribute('data-av-entry-state') === state.value);
+                    item.hidden = !fits;
+                    if (active === id) {
+                        count++;
+                        if (fits)
+                            matched++;
+                    }
+                }
+            }
+            empty.hidden = !(count > 0 && matched === 0);
+            tools.hidden = active !== 'notes' && active !== 'bookmarks';
+        }
+        function activate(tab) {
+            scroll.set(active, body.scrollTop);
+            active = tab;
+            for (const id of ids) {
+                const selected = id === tab;
+                areas[id].hidden = !selected;
+                buttons.get(id).setAttribute('aria-selected', String(selected));
+                buttons.get(id).tabIndex = selected ? 0 : -1;
+            }
+            refresh();
+            body.scrollTop = scroll.get(tab) || 0;
+        }
+        const onKey = (event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+            return; event.preventDefault(); event.stopPropagation(); const current = ids.indexOf(active); const next = event.key === 'Home' ? 0 : event.key === 'End' ? ids.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + ids.length) % ids.length; activate(ids[next]); buttons.get(ids[next]).focus({ preventScroll: true }); };
+        tabs.addEventListener('keydown', onKey);
+        filter.addEventListener('input', refresh);
+        state.addEventListener('change', refresh);
+        undo.push(() => { tabs.removeEventListener('keydown', onKey); filter.removeEventListener('input', refresh); state.removeEventListener('change', refresh); });
+        activate('notes');
+        return { areas, footer, activate, locate(tab) { filter.value = ''; state.value = 'all'; activate(tab); }, refresh, cleanup() { for (const fn of undo.reverse())
+                fn(); } };
     }
 });
 define("notifications", ["require", "exports"], function (require, exports) {
@@ -1643,98 +3290,32 @@ define("identity", ["require", "exports"], function (require, exports) {
         return 'sha256-utf16le:' + state.map(x => x.toString(16).padStart(8, '0')).join('');
     }
 });
-define("figures", ["require", "exports", "core"], function (require, exports, core_3) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.registerVisualAdapter = registerVisualAdapter;
-    exports.visualAdapter = visualAdapter;
-    exports.visualFigure = visualFigure;
-    exports.mermaidDiagram = mermaidDiagram;
-    exports.figureOf = figureOf;
-    exports.figureTitle = figureTitle;
-    exports.figureSource = figureSource;
-    exports.retainFigureOrigin = retainFigureOrigin;
-    exports.figureOrigin = figureOrigin;
-    exports.figureContext = figureContext;
-    const adapters = new Map();
-    function registerVisualAdapter(name, adapter) {
-        (0, core_3.documentId)(name, 'An adapter name');
-        if (adapters.has(name))
-            throw new TypeError(`Visual adapter ${name} is already registered.`);
-        if (typeof adapter.bounds !== 'function')
-            throw new TypeError('A visual adapter needs bounds.');
-        adapters.set(name, adapter);
-        return () => { if (adapters.get(name) === adapter)
-            adapters.delete(name); };
-    }
-    function visualAdapter(element) { return adapters.get(element.getAttribute('data-av-adapter') || ''); }
-    function visualFigure(input) {
-        if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string')
-            throw new TypeError('A figure needs a title and trusted body markup.');
-        if (input.adapter)
-            (0, core_3.documentId)(input.adapter, 'An adapter name');
-        if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
-            throw new TypeError('Figure source needs a language and its original text.');
-        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_3.escapeText)(input.title)}"${input.id ? ` id="${(0, core_3.escapeText)((0, core_3.documentId)(input.id))}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_3.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_3.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_3.escapeText)(input.title)}${input.caption ? `<span>${(0, core_3.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
-    }
-    function mermaidDiagram(input) {
-        if (typeof input.source !== 'string' || !input.source.trim())
-            throw new TypeError('A Mermaid diagram needs its original source.');
-        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${(0, core_3.escapeText)(input.source)}"${input.config ? ` data-av-mermaid-config="${(0, core_3.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_3.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre>${(0, core_3.escapeText)(input.source)}</pre></details></div>`;
-        return visualFigure({ ...input, source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
-    }
-    function figureOf(element) {
-        const nearest = element.closest('[data-av-figure]');
-        return nearest?.parentElement?.closest('.av-visual-figure') || nearest;
-    }
-    function figureTitle(element) {
-        return element.getAttribute('data-av-figure-title') || element.querySelector('figcaption,svg title')?.textContent?.trim() || figureOrigin(element).owner?.querySelector('.av-card-title')?.textContent || 'Visualization';
-    }
-    function figureSource(element) {
-        const supplied = visualAdapter(element)?.source?.(element);
-        if (supplied)
-            return supplied;
-        const raw = element.getAttribute('data-av-source');
-        if (raw) {
-            const value = JSON.parse(raw);
-            if (typeof value.text === 'string' && typeof value.language === 'string')
-                return value;
-        }
-        const recipe = (element.closest('[data-av-layout-input]') || figureOrigin(element).owner)?.getAttribute('data-av-layout-input');
-        return recipe ? { language: 'json', text: recipe, filename: 'figure-data.json' } : undefined;
-    }
-    const origins = new WeakMap();
-    function retainFigureOrigin(figure) { if (!origins.has(figure))
-        origins.set(figure, { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }); }
-    function figureOrigin(figure) { return origins.get(figure) || { owner: figure.closest('.av-card'), explorer: figure.closest('[data-av-explorer]'), scope: figure.closest('[data-av-coordinate-scope]') }; }
-    function figureContext(figure) {
-        const origin = figureOrigin(figure), nodes = [];
-        const caption = figure.querySelector('figcaption')?.querySelector('span');
-        if (caption)
-            nodes.push(caption);
-        if (origin.scope) {
-            const note = Array.from(origin.scope.children).find(element => element.matches('.av-note'));
-            if (note)
-                nodes.push(note);
-        }
-        for (const element of Array.from(origin.owner?.querySelectorAll('.av-frame-description,.av-legend,.av-frame-footer') || []))
-            if (element.closest('.av-card') === origin.owner)
-                nodes.push(element);
-        return nodes;
-    }
-});
-define("review-types", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-});
-define("review-targets", ["require", "exports", "identity", "figures"], function (require, exports, identity_1, figures_1) {
+define("review-targets", ["require", "exports", "exact-json", "identity", "figures"], function (require, exports, exact_json_3, identity_1, figures_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerReviewPlaceholder = registerReviewPlaceholder;
+    exports.registerReviewOrder = registerReviewOrder;
     exports.reviewText = reviewText;
     exports.createTargetRegistry = createTargetRegistry;
     const substitutes = new WeakMap();
     function registerReviewPlaceholder(marker, element) { substitutes.set(marker, element); return () => substitutes.delete(marker); }
+    // Presentation-only rearrangement must not change source order in anchors.
+    // Keep live nodes (not captured strings): missing content and real text edits
+    // remain observable. New authored nodes are included, never silently discarded.
+    const readingOrders = new WeakMap();
+    function registerReviewOrder(parent) {
+        const original = Array.from(parent.childNodes);
+        readingOrders.set(parent, original);
+        return () => { if (readingOrders.get(parent) === original)
+            readingOrders.delete(parent); };
+    }
+    function reviewChildren(parent) {
+        const actual = Array.from(parent.childNodes), original = readingOrders.get(parent);
+        if (!original)
+            return actual;
+        const available = new Set(actual), known = new Set(original);
+        return [...original.filter(node => available.has(node)), ...actual.filter(node => !known.has(node))];
+    }
     const excluded = '.av-frame-tools,.av-view-status,[data-av-controls],[data-av-review-ui],[data-av-notebook],script,style,.av-sr-only,.av-figure-actions';
     function reviewNodes(element) {
         const nodes = [];
@@ -1748,7 +3329,7 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
             nodes.push({ node, start, end: offset });
         }
         else if ((node.nodeType === 1 && !node.matches(excluded + ',.av-focus-dialog')) || node.nodeType === 11)
-            for (const child of Array.from(node.childNodes))
+            for (const child of reviewChildren(node))
                 visit(child); };
         visit(element);
         return nodes;
@@ -1771,7 +3352,7 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
             if (node.nodeType === 3)
                 count += (node.textContent || '').length;
             else if ((node.nodeType === 1 && !node.matches(excluded + ',.av-focus-dialog')) || node.nodeType === 11)
-                for (const child of Array.from(node.childNodes))
+                for (const child of reviewChildren(node))
                     visit(child);
         };
         visit(root);
@@ -1809,7 +3390,7 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
                 return;
             }
             if (current.hasAttribute('data-av-adapter')) {
-                const items = (0, figures_1.visualAdapter)(current)?.items?.(current);
+                const items = (0, figures_3.visualAdapter)(current)?.items?.(current);
                 if (items)
                     parts.push(['items', items]);
             }
@@ -1817,17 +3398,17 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
                 parts.push(['image', current.getAttribute('src'), current.getAttribute('alt')]);
             if (current.tagName.toLowerCase() === 'a')
                 parts.push(['link', current.getAttribute('href')]);
-            for (const child of Array.from(node.childNodes))
+            for (const child of reviewChildren(node))
                 visit(child);
         };
         visit(element);
-        return JSON.stringify(parts);
+        return (0, exact_json_3.exactJson)(parts);
     }
-    function grounds(element) { return (element.closest('[data-av-layout-input]') || (element.hasAttribute('data-av-figure') ? (0, figures_1.figureOrigin)(element).owner : null))?.getAttribute('data-av-layout-input') || contentIdentity(element); }
-    function sources(element) { const roots = [element, ...(element.hasAttribute('data-av-figure') ? (0, figures_1.figureContext)(element) : [])], links = roots.flatMap(root => Array.from(root.querySelectorAll('a[href]'))).filter(node => !node.closest(excluded)).map(node => ({ label: node.textContent || '', href: node.getAttribute('href') || '' })); return [...new Map(links.map(link => [JSON.stringify(link), link])).values()]; }
+    function grounds(element) { return (element.closest('[data-av-layout-input]') || (element.hasAttribute('data-av-figure') ? (0, figures_3.figureOrigin)(element).owner : null))?.getAttribute('data-av-layout-input') || contentIdentity(element); }
+    function sources(element) { const roots = [element, ...(element.hasAttribute('data-av-figure') ? (0, figures_3.figureContext)(element) : [])], links = roots.flatMap(root => Array.from(root.querySelectorAll('a[href]'))).filter(node => !node.closest(excluded)).map(node => ({ label: node.textContent || '', href: node.getAttribute('href') || '' })); return [...new Map(links.map(link => [(0, exact_json_3.exactJson)(link), link])).values()]; }
     function label(element) {
         if (element.hasAttribute('data-av-figure'))
-            return (0, figures_1.figureTitle)(element);
+            return (0, figures_3.figureTitle)(element);
         // A report or view must not borrow the first nested figure's title. Besides
         // confusing the notebook and Resume button, that misstates annotation context.
         const owned = (heading) => {
@@ -1855,14 +3436,14 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
                 throw new Error('Review targets need unique IDs.');
         try {
             for (const element of candidates) {
-                if (element.hasAttribute('data-av-figure') && (0, figures_1.figureOf)(element) !== element)
+                if (element.hasAttribute('data-av-figure') && (0, figures_3.figureOf)(element) !== element)
                     continue;
                 const title = label(element), path = [];
                 for (let parent = element.parentElement; parent && parent !== scope; parent = parent.parentElement)
                     if (parent.matches('.av-card,[data-av-panel],[data-av-object]'))
                         path.unshift(label(parent));
                 const text = reviewText(element), recipe = grounds(element);
-                const signature = (0, identity_1.fingerprint)(JSON.stringify([title, path, recipe]));
+                const signature = (0, identity_1.fingerprint)((0, exact_json_3.exactJson)([title, path, recipe]));
                 if (!element.id) {
                     const base = (scope.id || 'report') + '--target-' + signature.split(':')[1].slice(0, 18);
                     let id = base, index = 1;
@@ -1892,7 +3473,7 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
             if (group.length > 1)
                 for (const entry of group)
                     entry.target.ambiguous = true;
-        const signature = (entry) => (0, identity_1.fingerprint)(JSON.stringify([label(entry.element), entry.target.path, grounds(entry.element)]));
+        const signature = (entry) => (0, identity_1.fingerprint)((0, exact_json_3.exactJson)([label(entry.element), entry.target.path, grounds(entry.element)]));
         const owner = (element) => {
             for (let current = element; current; current = current.parentElement) {
                 const entry = entries.get(current.id);
@@ -1904,6 +3485,158 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
         const fresh = (entry) => ({ ...entry.target, label: label(entry.element), fingerprint: signature(entry), excerpt: reviewText(entry.element), sources: sources(entry.element) });
         const anchor = (element) => { const entry = owner(element); if (!entry)
             throw new Error('This content has no review target.'); return { kind: entry.element.hasAttribute('data-av-figure') ? 'figure' : 'section', target: fresh(entry) }; };
+        const markSelector = '[data-av-inspect],[data-av-observation],[data-av-mermaid-item]';
+        const markKey = (node) => node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation') || node.getAttribute('data-av-mermaid-item');
+        function evidenceIndex(figure) {
+            const marks = new Map(), details = new Map();
+            for (const node of Array.from(figure.querySelectorAll(markSelector))) {
+                const key = markKey(node);
+                if (!key || node.closest('[data-av-review-ui]'))
+                    continue;
+                const group = marks.get(key) || [];
+                group.push(node);
+                marks.set(key, group);
+            }
+            for (const node of Array.from((0, figures_3.figureOrigin)(figure).owner?.querySelectorAll('[data-av-object]') || [])) {
+                const key = node.getAttribute('data-av-object');
+                const group = details.get(key) || [];
+                group.push(node);
+                details.set(key, group);
+            }
+            const adapter = (0, figures_3.visualAdapter)(figure), items = adapter?.items?.(figure);
+            const supplied = new Map();
+            for (const item of items || []) {
+                const group = supplied.get(item.id) || [];
+                supplied.set(item.id, [...group, item]);
+            }
+            return { marks, details, adapter, supplied, custom: !!items };
+        }
+        function captureItems(elements) {
+            if (!elements.length)
+                return null;
+            const figure = (0, figures_3.figureOf)(elements[0]);
+            if (!figure || elements.some(node => (0, figures_3.figureOf)(node) !== figure))
+                return null;
+            const entry = owner(figure);
+            if (!entry)
+                return null;
+            const index = evidenceIndex(figure), items = [], seen = new Set();
+            for (const node of elements) {
+                const customId = index.adapter?.identify?.(node, figure);
+                let item;
+                if (customId) {
+                    const matches = index.supplied.get(customId);
+                    if (matches?.length !== 1)
+                        return null;
+                    const found = matches[0];
+                    item = { itemId: customId, label: found.label, text: found.text || '', ...(found.values ? { values: { ...found.values } } : {}) };
+                }
+                else {
+                    const mark = node.closest(markSelector), key = mark && markKey(mark);
+                    if (!mark || !figure.contains(mark) || !key || index.marks.get(key)?.length !== 1)
+                        return null;
+                    const details = index.details.get(key);
+                    if (details && details.length !== 1)
+                        return null;
+                    const text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
+                    if (!text.trim())
+                        return null;
+                    item = { itemId: key, label: mark.getAttribute('aria-label') || mark.querySelector('title')?.textContent || text.slice(0, 160), text };
+                }
+                if (seen.has(item.itemId))
+                    continue;
+                seen.add(item.itemId);
+                items.push(item);
+            }
+            const target = fresh(entry);
+            return items.length === 1 ? { kind: 'item', target, ...items[0] } : { kind: 'items', target, items };
+        }
+        function resolutionSnapshot() {
+            const ids = new Map();
+            for (const node of Array.from(scope.ownerDocument.querySelectorAll('[id]')))
+                ids.set(node.id, (ids.get(node.id) || 0) + 1);
+            return { ids, signatures: new Map(), items: new Map() };
+        }
+        // Rendering a collection checks current identities once per figure/target.
+        // No cache survives this synchronous batch: edits, removals and duplicate IDs
+        // are revalidated before every later navigation or export.
+        function resolve(value, snapshot = resolutionSnapshot()) {
+            if (value.target.reportId !== scope.id || value.target.revision !== revision)
+                return { status: 'changed', message: 'This annotation belongs to another report revision; its original context is retained.' };
+            if (value.target.ambiguous)
+                return { status: 'ambiguous', message: 'Identical targets lacked authored identities. The original context is retained; supply stable IDs to distinguish them.' };
+            const entry = entries.get(value.target.id);
+            if (!entry)
+                return { status: 'missing', message: 'The original target is unavailable in this report.' };
+            if (entry.target.ambiguous)
+                return { status: 'ambiguous', message: 'Multiple current targets share the original content identity.' };
+            if (!entry.element.isConnected || entry.element.id !== value.target.id)
+                return { status: 'missing', message: 'The original target is no longer present.' };
+            if (snapshot.ids.get(value.target.id) !== 1)
+                return { status: 'ambiguous', message: 'More than one target has this identity.' };
+            if (!snapshot.signatures.has(entry.element))
+                snapshot.signatures.set(entry.element, signature(entry));
+            if (snapshot.signatures.get(entry.element) !== value.target.fingerprint)
+                return { status: 'changed', element: entry.element, message: 'The target content differs from the annotated version.' };
+            let resolvedRange;
+            let resolvedElement = entry.element;
+            if (value.kind === 'text') {
+                const text = reviewText(entry.element), hits = [];
+                let at = -1;
+                while ((at = text.indexOf(value.quote, at + 1)) >= 0) {
+                    if (text.slice(Math.max(0, at - value.prefix.length), at) === value.prefix && text.slice(at + value.quote.length, at + value.quote.length + value.suffix.length) === value.suffix)
+                        hits.push(at);
+                }
+                if (hits.length !== 1)
+                    return { status: hits.length ? 'ambiguous' : 'changed', element: entry.element, message: hits.length ? 'The quoted text has more than one matching location.' : 'The original quotation no longer matches.' };
+                if (scope.ownerDocument.createRange) {
+                    const nodes = reviewNodes(entry.element);
+                    const start = nodes.find(node => node.end > hits[0]), end = nodes.find(node => node.end >= hits[0] + value.quote.length);
+                    if (start && end) {
+                        resolvedRange = scope.ownerDocument.createRange();
+                        resolvedRange.setStart(start.node, hits[0] - start.start);
+                        resolvedRange.setEnd(end.node, hits[0] + value.quote.length - end.start);
+                        resolvedElement = (start.node.parentElement || entry.element);
+                        if (resolvedRange.toString !== Object.prototype.toString && resolvedRange.toString() !== value.quote)
+                            resolvedRange = undefined;
+                    }
+                }
+            }
+            let resolvedElements;
+            if (value.kind === 'item' || value.kind === 'items') {
+                let index = snapshot.items.get(entry.element);
+                if (!index) {
+                    index = evidenceIndex(entry.element);
+                    snapshot.items.set(entry.element, index);
+                }
+                const selected = value.kind === 'items' ? value.items : [value];
+                resolvedElements = [];
+                for (const wanted of selected) {
+                    if (index.custom) {
+                        const matches = index.supplied.get(wanted.itemId);
+                        if (matches?.length !== 1)
+                            return { status: matches?.length ? 'ambiguous' : 'missing', element: entry.element, message: `The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.` };
+                        const actual = matches[0];
+                        const sameValues = (a = {}, b = {}) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.prototype.hasOwnProperty.call(b, key) && Object.is(a[key], b[key]));
+                        if (actual.label !== wanted.label || (actual.text || '') !== wanted.text || !sameValues(actual.values, wanted.values))
+                            return { status: 'changed', element: entry.element, message: `The selected item “${wanted.label}” has different wording or values. The original selection is retained.` };
+                        const marks = index.marks.get(wanted.itemId);
+                        resolvedElements.push(marks?.length === 1 ? marks[0] : entry.element);
+                    }
+                    else {
+                        const marks = index.marks.get(wanted.itemId), details = index.details.get(wanted.itemId);
+                        if (marks?.length !== 1 || details && details.length !== 1)
+                            return { status: marks?.length || details?.length ? 'ambiguous' : 'missing', element: entry.element, message: `The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.` };
+                        const mark = marks[0], text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
+                        if (text !== wanted.text)
+                            return { status: 'changed', element: entry.element, message: `The selected item “${wanted.label}” has different wording or evidence. The original selection is retained.` };
+                        resolvedElements.push(mark);
+                    }
+                }
+                resolvedElement = resolvedElements[0] || entry.element;
+            }
+            return { status: 'resolved', element: resolvedElement, ...(resolvedElements ? { elements: resolvedElements } : {}), ...(resolvedRange ? { range: resolvedRange } : {}), message: 'Attached to the original target.' };
+        }
         return {
             targets: entries, anchor,
             selection(selection) {
@@ -1928,439 +3661,17 @@ define("review-targets", ["require", "exports", "identity", "figures"], function
                     return null;
                 return { kind: 'text', target: fresh(entry), quote, start: actual, end: actual + quote.length, prefix: text.slice(Math.max(0, actual - 80), actual), suffix: text.slice(actual + quote.length, actual + quote.length + 80) };
             },
-            item(element) {
-                const figure = (0, figures_1.figureOf)(element);
-                if (!figure)
-                    return null;
-                const entry = owner(figure);
-                if (!entry)
-                    return null;
-                const adapter = (0, figures_1.visualAdapter)(figure), id = adapter?.identify?.(element, figure);
-                if (id) {
-                    const found = adapter?.items?.(figure).find(item => item.id === id);
-                    if (found)
-                        return { kind: 'item', target: fresh(entry), itemId: id, label: found.label, text: found.text || '', ...(found.values ? { values: found.values } : {}) };
-                }
-                const mark = element.closest('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]');
-                if (!mark || !figure.contains(mark))
-                    return null;
-                const key = mark.getAttribute('data-av-inspect') || mark.getAttribute('data-av-observation') || mark.getAttribute('data-av-mermaid-item');
-                const root = (0, figures_1.figureOrigin)(figure).owner, detail = key ? Array.from(root?.querySelectorAll('[data-av-object]') || []).find(item => item.getAttribute('data-av-object') === key) : null;
-                const text = detail ? reviewText(detail) : mark.getAttribute('aria-label') || mark.textContent || '';
-                if (!key || !text.trim())
-                    return null;
-                if (Array.from(figure.querySelectorAll('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')).filter(node => [node.getAttribute('data-av-inspect'), node.getAttribute('data-av-observation'), node.getAttribute('data-av-mermaid-item')].includes(key)).length !== 1)
-                    return null;
-                return { kind: 'item', target: fresh(entry), itemId: key, label: mark.getAttribute('aria-label') || mark.querySelector('title')?.textContent || text.slice(0, 160), text };
-            },
-            resolve(value) {
-                if (value.target.reportId !== scope.id || value.target.revision !== revision)
-                    return { status: 'changed', message: 'This annotation belongs to another report revision; its original context is retained.' };
-                if (value.target.ambiguous)
-                    return { status: 'ambiguous', message: 'Identical targets lacked authored identities. The original context is retained; supply stable IDs to distinguish them.' };
-                const entry = entries.get(value.target.id);
-                if (!entry)
-                    return { status: 'missing', message: 'The original target is unavailable in this report.' };
-                if (entry.target.ambiguous)
-                    return { status: 'ambiguous', message: 'Multiple current targets share the original content identity.' };
-                if (!entry.element.isConnected || entry.element.id !== value.target.id)
-                    return { status: 'missing', message: 'The original target is no longer present.' };
-                if (Array.from(scope.ownerDocument.querySelectorAll('[id]')).filter(node => node.id === value.target.id).length !== 1)
-                    return { status: 'ambiguous', message: 'More than one target has this identity.' };
-                if (signature(entry) !== value.target.fingerprint)
-                    return { status: 'changed', element: entry.element, message: 'The target content differs from the annotated version.' };
-                let resolvedRange;
-                let resolvedElement = entry.element;
-                if (value.kind === 'text') {
-                    const text = reviewText(entry.element), hits = [];
-                    let at = -1;
-                    while ((at = text.indexOf(value.quote, at + 1)) >= 0) {
-                        if (text.slice(Math.max(0, at - value.prefix.length), at) === value.prefix && text.slice(at + value.quote.length, at + value.quote.length + value.suffix.length) === value.suffix)
-                            hits.push(at);
-                    }
-                    if (hits.length !== 1)
-                        return { status: hits.length ? 'ambiguous' : 'changed', element: entry.element, message: hits.length ? 'The quoted text has more than one matching location.' : 'The original quotation no longer matches.' };
-                    if (scope.ownerDocument.createRange) {
-                        const nodes = reviewNodes(entry.element);
-                        const start = nodes.find(node => node.end > hits[0]), end = nodes.find(node => node.end >= hits[0] + value.quote.length);
-                        if (start && end) {
-                            resolvedRange = scope.ownerDocument.createRange();
-                            resolvedRange.setStart(start.node, hits[0] - start.start);
-                            resolvedRange.setEnd(end.node, hits[0] + value.quote.length - end.start);
-                            resolvedElement = (start.node.parentElement || entry.element);
-                            if (resolvedRange.toString !== Object.prototype.toString && resolvedRange.toString() !== value.quote)
-                                resolvedRange = undefined;
-                        }
-                    }
-                }
-                if (value.kind === 'item') {
-                    const adapter = (0, figures_1.visualAdapter)(entry.element), items = adapter?.items?.(entry.element);
-                    if (items) {
-                        const matches = items.filter(item => item.id === value.itemId);
-                        if (matches.length !== 1)
-                            return { status: matches.length ? 'ambiguous' : 'missing', element: entry.element, message: 'The item identity is missing or ambiguous.' };
-                        const item = matches[0], stable = (values) => JSON.stringify(Object.entries(values || {}).sort(([a], [b]) => a.localeCompare(b)));
-                        if (item.label !== value.label || (item.text || '') !== value.text || stable(item.values) !== stable(value.values))
-                            return { status: 'changed', element: entry.element, message: 'The identified item’s wording or values changed.' };
-                    }
-                    else {
-                        const marks = Array.from(entry.element.querySelectorAll('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')).filter(item => [item.getAttribute('data-av-inspect'), item.getAttribute('data-av-observation'), item.getAttribute('data-av-mermaid-item')].includes(value.itemId));
-                        if (marks.length !== 1)
-                            return { status: marks.length ? 'ambiguous' : 'missing', element: entry.element, message: 'The original diagram item is missing or ambiguous.' };
-                        const mark = marks[0], root = (0, figures_1.figureOrigin)(entry.element).owner, detail = Array.from(root?.querySelectorAll('[data-av-object]') || []).find(item => item.getAttribute('data-av-object') === value.itemId);
-                        const text = detail ? reviewText(detail) : mark.getAttribute('aria-label') || mark.textContent || '';
-                        if (text !== value.text)
-                            return { status: 'changed', element: entry.element, message: 'The identified item’s wording or evidence changed.' };
-                        resolvedElement = mark;
-                    }
-                }
-                return { status: 'resolved', element: resolvedElement, ...(resolvedRange ? { range: resolvedRange } : {}), message: 'Attached to the original target.' };
-            },
+            item: element => captureItems([element]),
+            items: captureItems,
+            resolve,
+            resolveAll(values) { if (!values.length)
+                return []; const snapshot = resolutionSnapshot(); return values.map(value => resolve(value, snapshot)); },
             cleanup() { for (const [element, id] of initialIds) {
                 if (id === null)
                     element.removeAttribute('id');
                 else
                     element.id = id;
             } }
-        };
-    }
-});
-define("overlay-layout", ["require", "exports"], function (require, exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.visibleViewport = visibleViewport;
-    exports.anchoredPanel = anchoredPanel;
-    const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
-    function visibleViewport(view, margin = 12) {
-        const viewport = view?.visualViewport;
-        const x = finite(viewport?.offsetLeft, 0), y = finite(viewport?.offsetTop, 0);
-        const width = Math.max(0, finite(viewport?.width, view?.innerWidth || 1024));
-        const height = Math.max(0, finite(viewport?.height, view?.innerHeight || 720));
-        const dx = Math.min(margin, width / 2), dy = Math.min(margin, height / 2);
-        return { left: x + dx, right: x + width - dx, top: y + dy, bottom: y + height - dy };
-    }
-    function anchoredPanel(anchor, bounds, width, height, gap = 8) {
-        const availableWidth = Math.max(0, bounds.right - bounds.left), availableHeight = Math.max(0, bounds.bottom - bounds.top);
-        const top = Math.max(bounds.top, Math.min(finite(anchor.top, bounds.top), bounds.bottom));
-        const bottom = Math.max(bounds.top, Math.min(finite(anchor.bottom, top), bounds.bottom));
-        const below = Math.max(0, bounds.bottom - bottom - gap), above = Math.max(0, top - bounds.top - gap);
-        const up = below < Math.min(Math.max(0, height), 280) && above > below;
-        const maxHeight = Math.min(availableHeight, up ? above : below);
-        const fittedWidth = Math.min(availableWidth, Math.max(0, finite(width, availableWidth)));
-        const fittedHeight = Math.min(maxHeight, Math.max(0, finite(height, maxHeight)));
-        return {
-            left: Math.max(bounds.left, Math.min(finite(anchor.right, bounds.right) - fittedWidth, bounds.right - fittedWidth)),
-            top: Math.max(bounds.top, Math.min(up ? top - gap - fittedHeight : bottom + gap, bounds.bottom - fittedHeight)),
-            width: fittedWidth, maxHeight, side: up ? 'up' : 'down',
-        };
-    }
-});
-define("command-bar", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_1) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.commandGroups = commandGroups;
-    exports.focusCommand = focusCommand;
-    exports.commandIcon = commandIcon;
-    exports.attachCommandBar = attachCommandBar;
-    function commandGroups(width, entries, reserve = 40, gap = 4) {
-        const groups = new Map();
-        entries.forEach((entry, index) => { const group = groups.get(entry.group); if (group) {
-            group.width += entry.width + gap;
-            group.priority = Math.min(group.priority, entry.priority);
-            group.menuOnly || (group.menuOnly = !!entry.menuOnly);
-        }
-        else
-            groups.set(entry.group, { width: entry.width, priority: entry.priority, index, menuOnly: !!entry.menuOnly }); });
-        const all = [...groups.values()];
-        if (!all.some(group => group.menuOnly) && all.reduce((total, group) => total + group.width, 0) + Math.max(0, all.length - 1) * gap <= width)
-            return new Set(groups.keys());
-        let used = reserve;
-        const selected = new Set();
-        for (const [key, group] of [...groups].sort((a, b) => a[1].priority - b[1].priority || a[1].index - b[1].index))
-            if (!group.menuOnly && used + group.width + gap <= width) {
-                selected.add(key);
-                used += group.width + gap;
-            }
-        return selected;
-    }
-    function focusCommand(control) { if (!control)
-        return; let target = control; for (let owner = control.parentElement; owner; owner = owner.parentElement)
-        if (owner.tagName.toLowerCase() === 'details' && !owner.hasAttribute('open'))
-            target = owner.querySelector('summary') || owner; target.focus(); }
-    function commandIcon(document, path) {
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('aria-hidden', 'true');
-        svg.setAttribute('fill', 'none');
-        svg.setAttribute('stroke', 'currentColor');
-        svg.setAttribute('stroke-width', '1.7');
-        svg.setAttribute('stroke-linecap', 'round');
-        svg.setAttribute('stroke-linejoin', 'round');
-        const shape = document.createElementNS(svg.namespaceURI, 'path');
-        shape.setAttribute('d', path);
-        svg.appendChild(shape);
-        return svg;
-    }
-    function attachCommandBar(host, label) {
-        const document = host.ownerDocument, view = document.defaultView, commands = [], undo = [];
-        let stopped = false, refreshing = false, watching = false;
-        const primary = document.createElement('div');
-        primary.className = 'av-command-primary';
-        const more = document.createElement('details');
-        more.className = 'av-command-overflow';
-        more.setAttribute('data-av-review-ui', '');
-        const summary = document.createElement('summary');
-        summary.textContent = '⋯';
-        summary.setAttribute('aria-label', label);
-        summary.setAttribute('aria-expanded', 'false');
-        more.appendChild(summary);
-        const menu = document.createElement('div');
-        menu.className = 'av-command-menu';
-        menu.setAttribute('role', 'group');
-        menu.setAttribute('aria-label', label);
-        more.appendChild(menu);
-        host.appendChild(primary);
-        host.appendChild(more);
-        const preferredWidth = host.style.getPropertyValue('--av-command-preferred-width');
-        let topLayer = typeof menu.showPopover === 'function' && typeof menu.hidePopover === 'function', popoverOpen = false;
-        if (topLayer) {
-            menu.setAttribute('popover', 'manual');
-            menu.setAttribute('data-av-menu-layer', '');
-        }
-        const previous = host.classList.contains('av-command-bar');
-        host.classList.add('av-command-bar');
-        function listen(node, type, fn, capture = false) { node.addEventListener(type, fn, capture); undo.push(() => node.removeEventListener(type, fn, capture)); }
-        const outside = (event) => { if (more.open && !more.contains(event.target))
-            dismiss(); };
-        const choose = (event) => {
-            const target = event.target;
-            if (more.open && !more.contains(target))
-                dismiss();
-            else if (menu.contains(target)) {
-                const element = target.nodeType === 1 ? target : target.parentElement;
-                const button = element?.closest('button');
-                if (button)
-                    dismiss(button.getAttribute('data-av-review-action') !== 'new-note');
-            }
-        };
-        // Closed figures add no document-level pointer or scroll listeners. This is
-        // consequential in a full report with hundreds of independently owned bars.
-        function watchOpen() {
-            const next = more.open && !stopped;
-            if (watching === next)
-                return;
-            watching = next;
-            for (const [type, handler] of [['pointerdown', outside], ['click', choose], ['scroll', placeMenu]]) {
-                if (watching)
-                    document.addEventListener(type, handler, true);
-                else
-                    document.removeEventListener(type, handler, true);
-            }
-            for (const type of ['resize', 'scroll']) {
-                if (watching)
-                    view?.visualViewport?.addEventListener(type, placeMenu);
-                else
-                    view?.visualViewport?.removeEventListener(type, placeMenu);
-            }
-        }
-        function dismiss(returnFocus = false) {
-            const wasOpen = more.open;
-            more.open = false;
-            watchOpen();
-            if (popoverOpen) {
-                try {
-                    menu.hidePopover();
-                }
-                catch { }
-                popoverOpen = false;
-            }
-            summary.setAttribute('aria-expanded', 'false');
-            if (wasOpen && returnFocus)
-                summary.focus({ preventScroll: true });
-        }
-        function placeMenu() {
-            watchOpen();
-            if (!more.open) {
-                if (popoverOpen) {
-                    try {
-                        menu.hidePopover();
-                    }
-                    catch { }
-                    popoverOpen = false;
-                }
-                return;
-            }
-            if (topLayer && !popoverOpen) {
-                try {
-                    menu.showPopover();
-                    popoverOpen = true;
-                }
-                catch {
-                    topLayer = false;
-                    menu.removeAttribute('popover');
-                    menu.removeAttribute('data-av-menu-layer');
-                }
-            }
-            const anchor = summary.getBoundingClientRect();
-            const bounds = (0, overlay_layout_1.visibleViewport)(view);
-            if (!topLayer)
-                for (let ancestor = host.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
-                    const style = view?.getComputedStyle?.(ancestor), rect = ancestor.getBoundingClientRect();
-                    if (/auto|scroll|hidden|clip/.test(style?.overflowY || '')) {
-                        bounds.top = Math.max(bounds.top, rect.top + 4);
-                        bounds.bottom = Math.min(bounds.bottom, rect.bottom - 4);
-                    }
-                    if (/auto|scroll|hidden|clip/.test(style?.overflowX || '')) {
-                        bounds.left = Math.max(bounds.left, rect.left + 4);
-                        bounds.right = Math.min(bounds.right, rect.right - 4);
-                    }
-                }
-            menu.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
-            menu.style.setProperty('--av-menu-shift', '0px');
-            const box = menu.getBoundingClientRect();
-            const placed = (0, overlay_layout_1.anchoredPanel)(anchor, bounds, box.width || 256, Math.max(box.height || 0, menu.scrollHeight || 280), 4);
-            more.setAttribute('data-av-menu-side', placed.side);
-            menu.style.setProperty('--av-menu-max-height', placed.maxHeight + 'px');
-            if (topLayer) {
-                menu.style.setProperty('left', placed.left + 'px');
-                const height = menu.getBoundingClientRect().height;
-                menu.style.setProperty('top', (0, overlay_layout_1.anchoredPanel)(anchor, bounds, placed.width, height, 4).top + 'px');
-                menu.style.setProperty('bottom', 'auto');
-            }
-            else
-                menu.style.setProperty('--av-menu-shift', (placed.left - (Number.isFinite(box.left) ? box.left : placed.left)) + 'px');
-        }
-        function hitSize() { return Math.max(36, Number.parseFloat(view?.getComputedStyle?.(host).getPropertyValue?.('--av-command-hit-size') || '') || 36); }
-        function refresh() {
-            if (stopped || refreshing)
-                return;
-            const targetSize = hitSize(), commandWidth = (command) => Math.max(command.options.width ?? 36, targetSize);
-            const eligible = commands.filter(command => !command.control.hidden), inline = eligible.filter(command => !command.options.menuOnly);
-            host.style.setProperty('--av-command-preferred-width', (inline.reduce((total, command) => total + commandWidth(command), 0) + Math.max(0, inline.length - 1) * 4 + (eligible.some(command => command.options.menuOnly) ? targetSize + 4 : 0)) + 'px');
-            const width = host.clientWidth;
-            if (!(width > 0))
-                return;
-            refreshing = true;
-            try {
-                const focused = document.activeElement;
-                const selected = commandGroups(width, commands.filter(command => !command.control.hidden).map(command => ({ width: commandWidth(command), priority: command.options.priority ?? 50, group: command.options.group || String(commands.indexOf(command)), menuOnly: command.options.menuOnly })), targetSize + 4);
-                for (const destination of [primary, menu]) {
-                    const wanted = commands.filter((command, index) => selected.has(command.options.group || String(index)) === (destination === primary));
-                    wanted.forEach((command, index) => {
-                        const inline = destination === primary;
-                        const visual = command.control.querySelector('.av-command-visual');
-                        if (visual && !command.options.icon && !visual.querySelector('svg'))
-                            visual.hidden = !inline;
-                        command.control.setAttribute('data-av-command-location', inline ? 'inline' : 'menu');
-                        const current = destination.children[index] || null;
-                        if (current !== command.control) {
-                            const retainsFocus = focused === command.control;
-                            destination.insertBefore(command.control, current);
-                            if (retainsFocus && !inline) {
-                                more.open = true;
-                                summary.setAttribute('aria-expanded', 'true');
-                            }
-                        }
-                    });
-                }
-                const overflow = commands.some(command => command.control.parentNode === menu && !command.control.hidden);
-                more.hidden = !overflow;
-                if (!overflow) {
-                    dismiss();
-                    if (focused === summary)
-                        commands.find(command => !command.control.hidden && !command.control.disabled)?.control.focus();
-                }
-                placeMenu();
-                if (commands.some(command => command.control === focused) && focused?.isConnected && document.activeElement !== focused)
-                    focused.focus({ preventScroll: true });
-            }
-            finally {
-                refreshing = false;
-            }
-        }
-        listen(more, 'toggle', (() => { summary.setAttribute('aria-expanded', String(more.open)); placeMenu(); }));
-        listen(menu, 'toggle', ((event) => { if (event.target === menu && event.newState === 'closed' && popoverOpen && !menu.matches(':popover-open')) {
-            popoverOpen = false;
-            dismiss();
-        } }));
-        // Deliberate menus stay open until an action, outside press, focus exit or Escape.
-        // Pointer transit is not a dismissal request (including magnification and tremor).
-        listen(more, 'focusout', ((event) => { if (!more.contains(event.relatedTarget))
-            dismiss(); }));
-        listen(more, 'keydown', ((event) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                dismiss(true);
-                return;
-            }
-            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key))
-                return;
-            const buttons = commands.filter(command => command.control.parentNode === menu && !command.control.disabled && !command.control.hidden).map(command => command.control);
-            if (!buttons.length)
-                return;
-            event.preventDefault();
-            more.open = true;
-            summary.setAttribute('aria-expanded', 'true');
-            placeMenu();
-            const current = buttons.indexOf(document.activeElement);
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : event.key === 'ArrowDown' ? (current + 1) % buttons.length : (current <= 0 ? buttons.length : current) - 1;
-            buttons[next].focus();
-        }));
-        if (view?.ResizeObserver) {
-            const observer = new view.ResizeObserver(refresh);
-            observer.observe(host);
-            undo.push(() => observer.disconnect());
-        }
-        if (view && !view.ResizeObserver)
-            listen(view, 'resize', refresh);
-        return {
-            add(control, options) {
-                if (commands.some(command => command.control === control))
-                    return;
-                const marker = document.createComment('av-command');
-                control.parentNode?.insertBefore(marker, control);
-                const original = Array.from(control.childNodes), oldClass = control.className, oldWidth = control.style.getPropertyValue('--av-command-width');
-                const attributes = ['data-av-command-location', 'data-av-command', 'title', 'aria-label'].map(name => [name, control.getAttribute(name)]);
-                control.classList.add('av-command');
-                control.setAttribute('data-av-command', '');
-                control.setAttribute('data-av-command-location', 'menu');
-                control.style.setProperty('--av-command-width', (options.width ?? 36) + 'px');
-                control.title = options.label;
-                if (!control.hasAttribute('aria-label'))
-                    control.setAttribute('aria-label', options.label);
-                const visual = document.createElement('span');
-                visual.className = 'av-command-visual';
-                visual.setAttribute('aria-hidden', 'true');
-                if (options.icon)
-                    visual.appendChild(commandIcon(document, options.icon));
-                else
-                    for (const child of original)
-                        visual.appendChild(child);
-                const text = document.createElement('span');
-                text.className = 'av-command-label';
-                text.textContent = options.label;
-                control.replaceChildren(visual, text);
-                commands.push({ control, options, marker, original });
-                menu.appendChild(control);
-                undo.push(() => { if (marker.parentNode)
-                    marker.parentNode.replaceChild(control, marker); control.replaceChildren(...original); control.className = oldClass; if (oldWidth)
-                    control.style.setProperty('--av-command-width', oldWidth);
-                else
-                    control.style.removeProperty('--av-command-width'); for (const [name, value] of attributes) {
-                    if (value === null)
-                        control.removeAttribute(name);
-                    else
-                        control.setAttribute(name, value);
-                } });
-                refresh();
-            }, refresh, dismiss,
-            cleanup() { if (stopped)
-                return; dismiss(); stopped = true; watchOpen(); for (const restore of undo.reverse())
-                restore(); primary.remove(); more.remove(); if (preferredWidth)
-                host.style.setProperty('--av-command-preferred-width', preferredWidth);
-            else
-                host.style.removeProperty('--av-command-preferred-width'); host.classList.toggle('av-command-bar', previous); }
         };
     }
 });
@@ -2385,7 +3696,7 @@ define("reader-values", ["require", "exports"], function (require, exports) {
         return text;
     }
 });
-define("review-state", ["require", "exports", "reader-values"], function (require, exports, reader_values_1) {
+define("review-state", ["require", "exports", "exact-json", "reader-values"], function (require, exports, exact_json_4, reader_values_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.emptyReviewRecords = void 0;
@@ -2409,7 +3720,7 @@ define("review-state", ["require", "exports", "reader-values"], function (requir
     function text(value) { if (typeof value !== 'string')
         throw new Error('Review text must be a string.'); return value; }
     function validateAnchor(value) {
-        const a = object(value, ['kind', 'target', 'quote', 'prefix', 'suffix', 'start', 'end', 'itemId', 'label', 'text', 'values']), t = object(a.target, ['reportId', 'revision', 'id', 'label', 'path', 'fingerprint', 'excerpt', 'ambiguous', 'sources']);
+        const a = object(value, ['kind', 'target', 'quote', 'prefix', 'suffix', 'start', 'end', 'itemId', 'label', 'text', 'values', 'items']), t = object(a.target, ['reportId', 'revision', 'id', 'label', 'path', 'fingerprint', 'excerpt', 'ambiguous', 'sources']);
         if (!array(t.path).every(item => typeof item === 'string'))
             throw new Error('Review context path is invalid.');
         const target = { reportId: text(t.reportId), revision: text(t.revision), id: text(t.id), label: text(t.label), path: array(t.path).map(text), fingerprint: text(t.fingerprint), excerpt: text(t.excerpt), ...(t.ambiguous === true ? { ambiguous: true } : {}) };
@@ -2428,19 +3739,28 @@ define("review-state", ["require", "exports", "reader-values"], function (requir
                 throw new Error('Review text offsets are invalid.');
             return { kind: 'text', target, quote: text(a.quote), prefix: text(a.prefix), suffix: text(a.suffix), start: Number(a.start), end: Number(a.end) };
         }
-        if (a.kind === 'item') {
-            if (!text(a.itemId))
+        const item = (value) => {
+            const data = object(value, ['itemId', 'label', 'text', 'values']);
+            if (!text(data.itemId))
                 throw new Error('An item annotation needs its original item identity.');
-            const result = { kind: 'item', target, itemId: text(a.itemId), label: text(a.label), text: text(a.text) };
-            if (a.values !== undefined) {
-                const data = object(a.values, Object.keys(a.values));
-                if (!Object.values(data).every(item => item === null || typeof item === 'string' || typeof item === 'number' && Number.isFinite(item)))
+            const result = { itemId: text(data.itemId), label: text(data.label), text: text(data.text) };
+            if (data.values !== undefined) {
+                const values = object(data.values, Object.keys(data.values));
+                if (!Object.values(values).every(value => value === null || typeof value === 'string' || typeof value === 'number' && Number.isFinite(value)))
                     throw new Error('Review item values are invalid.');
-                result.values = { ...data };
+                result.values = { ...values };
             }
             return result;
+        };
+        if (a.kind === 'item')
+            return { kind: 'item', target, ...item({ itemId: a.itemId, label: a.label, text: a.text, ...(a.values === undefined ? {} : { values: a.values }) }) };
+        if (a.kind === 'items') {
+            const items = array(a.items).map(item);
+            if (items.length < 2 || new Set(items.map(item => item.itemId)).size !== items.length)
+                throw new Error('A group annotation needs two or more distinct item identities.');
+            return { kind: 'items', target, items };
         }
-        throw new Error('Unknown review anchor. Use section, figure, text or item.');
+        throw new Error('Unknown review anchor. Use section, figure, text, item or items.');
     }
     function validateReview(value) {
         const record = object(value, ['versions', 'bookmarks']);
@@ -2450,21 +3770,21 @@ define("review-state", ["require", "exports", "reader-values"], function (requir
             throw new Error('Review version identity or timestamp is invalid.'); if (v.baseIds !== undefined && !array(v.baseIds).every(id => typeof id === 'string'))
             throw new Error('Annotation draft bases are invalid.'); ids.add(id); return { id, annotationId, anchor: validateAnchor(v.anchor), text: v.text === null ? null : text(v.text), at, draft: v.draft, ...(v.baseIds ? { baseIds: array(v.baseIds).map(text) } : {}) }; });
         const bookmarks = array(record.bookmarks).map(validateAnchor);
-        if (new Set(bookmarks.map(a => JSON.stringify(a))).size !== bookmarks.length)
+        if (new Set(bookmarks.map(a => (0, exact_json_4.exactJson)(a))).size !== bookmarks.length)
             throw new Error('Duplicate review bookmark.');
         return { versions, bookmarks };
     }
     function applyReview(source, change) {
         const prior = validateReview(source);
         if (change.type === 'review-bookmark') {
-            const anchor = validateAnchor(change.anchor), key = JSON.stringify(anchor), bookmarks = prior.bookmarks.filter(item => JSON.stringify(item) !== key);
+            const anchor = validateAnchor(change.anchor), key = (0, exact_json_4.exactJson)(anchor), bookmarks = prior.bookmarks.filter(item => (0, exact_json_4.exactJson)(item) !== key);
             if (change.enabled)
                 bookmarks.push(anchor);
             return { ...prior, bookmarks };
         }
         const version = validateReview({ versions: [change.version], bookmarks: [] }).versions[0], existing = prior.versions.find(item => item.id === version.id);
         if (existing) {
-            if (JSON.stringify(existing) !== JSON.stringify(version))
+            if ((0, exact_json_4.exactJson)(existing) !== (0, exact_json_4.exactJson)(version))
                 throw new Error('Annotation version identity conflicts with saved content.');
             return prior;
         }
@@ -2472,7 +3792,7 @@ define("review-state", ["require", "exports", "reader-values"], function (requir
         return { ...prior, versions: [...prior.versions.filter(item => item.annotationId !== version.annotationId || !observed.has(item.id) || (version.draft && !item.draft)), version] };
     }
 });
-define("reader-state", ["require", "exports", "reader-values", "review-state"], function (require, exports, reader_values_2, review_state_1) {
+define("reader-state", ["require", "exports", "exact-json", "reader-values", "review-state"], function (require, exports, exact_json_5, reader_values_2, review_state_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DEFAULT_READER_ACTIVITY_LIMIT = exports.READER_STATE_VERSION = void 0;
@@ -2651,7 +3971,7 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
     /** Invalid or incompatible imports throw without changing or discarding the source text. */
     function decodeReaderState(text, context) { return decode(text, contextOf(context)); }
     /** Schema validation here needs no browser; reference validation happens with context on load/update. */
-    function encodeReaderState(state) { return JSON.stringify(stateOf(state)); }
+    function encodeReaderState(state) { return (0, exact_json_5.exactJson)(stateOf(state)); }
     function appendActivity(state, entry, limit) {
         if (state.nextSequence === Number.MAX_SAFE_INTEGER)
             invalid("Activity sequence capacity reached; start a new reader notebook.");
@@ -2749,7 +4069,7 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
     }
     function readerNotebookFromState(source, context, originals = []) {
         const state = stateOf(source, contextOf(context));
-        return { kind: "agentic-reader-notebook", version: 3, review: (0, review_state_1.emptyReviewRecords)(), epoch: "initial", state, noteVersions: state.notes.map(note => ({ id: "legacy:" + JSON.stringify([note.targetId, note.text, note.updatedAt]), ...note })), originals: [...originals] };
+        return { kind: "agentic-reader-notebook", version: 3, review: (0, review_state_1.emptyReviewRecords)(), epoch: "initial", state, noteVersions: state.notes.map(note => ({ id: "legacy:" + (0, exact_json_5.exactJson)([note.targetId, note.text, note.updatedAt]), ...note })), originals: [...originals] };
     }
     function emptyReaderNotebook(context) { return readerNotebookFromState(emptyReaderState(context), context); }
     function validateReaderNotebook(source, context) {
@@ -2769,7 +4089,7 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
         if (new Set(noteVersions.map(version => version.id)).size !== noteVersions.length)
             invalid("Note version IDs must be unique.");
         const projected = projectedNotes(noteVersions, state.notes);
-        if (JSON.stringify(projected) !== JSON.stringify(state.notes))
+        if ((0, exact_json_5.exactJson)(projected) !== (0, exact_json_5.exactJson)(state.notes))
             invalid("Notebook notes must match their retained versions.");
         const originals = array(item.originals, "Original saved data").map(value => string(value, "Original saved data"));
         return { kind: "agentic-reader-notebook", version: 3, epoch, state, noteVersions, originals, reviewImports: item.reviewImports === undefined ? [] : array(item.reviewImports, "Imported review identities").map(value => string(value, "Imported review identity")), review: item.review === undefined ? (0, review_state_1.emptyReviewRecords)() : (0, review_state_1.validateReview)(item.review) };
@@ -2796,7 +4116,7 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
         const notebook = validateReaderNotebook(value, context);
         return value?.version === 2 ? { ...notebook, originals: [...new Set([...notebook.originals, raw])] } : notebook;
     }
-    function encodeReaderNotebook(notebook, context) { return JSON.stringify(validateReaderNotebook(notebook, context)); }
+    function encodeReaderNotebook(notebook, context) { return (0, exact_json_5.exactJson)(validateReaderNotebook(notebook, context)); }
     function noteVersionIds(notebook, targetId) { return notebook.noteVersions.filter(version => version.targetId === targetId).map(version => version.id); }
     function applyReaderDelta(source, delta, context, recordActivity = true) {
         const notebook = validateReaderNotebook(source, context);
@@ -2814,7 +4134,7 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
         const version = { id: delta.id, targetId: change.targetId, text: change.text === "" ? null : change.text, updatedAt: change.at };
         const prior = notebook.noteVersions.find(candidate => candidate.id === version.id);
         if (prior) {
-            if (JSON.stringify(prior) !== JSON.stringify(version))
+            if ((0, exact_json_5.exactJson)(prior) !== (0, exact_json_5.exactJson)(version))
                 invalid("An edit identifier conflicts with another note version.");
             return notebook;
         }
@@ -2829,18 +4149,18 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
         const notes = new Map(a.noteVersions.map(version => [version.id, version]));
         for (const version of b.noteVersions) {
             const old = notes.get(version.id);
-            if (old && JSON.stringify(old) !== JSON.stringify(version))
+            if (old && (0, exact_json_5.exactJson)(old) !== (0, exact_json_5.exactJson)(version))
                 throw new Error('A note version conflicts with the imported copy.');
             notes.set(version.id, version);
         }
         const annotations = new Map((a.review?.versions || []).map(version => [version.id, version]));
         for (const version of b.review?.versions || []) {
             const old = annotations.get(version.id);
-            if (old && JSON.stringify(old) !== JSON.stringify(version))
+            if (old && (0, exact_json_5.exactJson)(old) !== (0, exact_json_5.exactJson)(version))
                 throw new Error('An annotation version conflicts with the imported copy.');
             annotations.set(version.id, version);
         }
-        const bookmarks = new Map([...(a.review?.bookmarks || []), ...(b.review?.bookmarks || [])].map(anchor => [JSON.stringify(anchor), anchor]));
+        const bookmarks = new Map([...(a.review?.bookmarks || []), ...(b.review?.bookmarks || [])].map(anchor => [(0, exact_json_5.exactJson)(anchor), anchor]));
         const noteVersions = [...notes.values()];
         return validateReaderNotebook({ ...a, reviewImports: [...new Set([...(a.reviewImports || []), ...(b.reviewImports || [])])], noteVersions, state: { ...a.state, notes: projectedNotes(noteVersions, [...a.state.notes, ...b.state.notes]), bookmarks: [...new Set([...a.state.bookmarks, ...b.state.bookmarks])] }, review: { versions: [...annotations.values()], bookmarks: [...bookmarks.values()] }, originals: [...new Set([...a.originals, ...b.originals])] }, context);
     }
@@ -2875,13 +4195,13 @@ define("reader-state", ["require", "exports", "reader-values", "review-state"], 
                 throw originalError;
             const targets = [...(Array.isArray(candidate.noteVersions) ? candidate.noteVersions.map(version => version.targetId) : []), ...state.notes.map(note => note.targetId), ...state.bookmarks, ...state.activity.flatMap(action => action.targetId ? [action.targetId] : [])];
             const ownContext = { reportId: state.reportId, revision: state.revision, targetIds: [...new Set(targets)], viewIds: [...new Set([...(state.viewId ? [state.viewId] : []), ...state.activity.flatMap(action => action.viewId ? [action.viewId] : [])])], journeyIds: state.journeyId ? [state.journeyId] : [], activityLimit: context.activityLimit };
-            const previous = decodeReaderNotebook(JSON.stringify(wrapped), ownContext), fresh = emptyReaderNotebook(context);
+            const previous = decodeReaderNotebook((0, exact_json_5.exactJson)(wrapped), ownContext), fresh = emptyReaderNotebook(context);
             const anchor = (id) => ({ kind: 'section', target: { reportId: previous.state.reportId, revision: previous.state.revision, id, label: id, path: [], fingerprint: 'unavailable', excerpt: 'This earlier notebook did not include the original target text.' } });
             return { ...fresh, originals: [...previous.originals, raw], review: { versions: [...(previous.review?.versions || []), ...previous.noteVersions.map(version => ({ id: 'import:' + version.id, annotationId: 'legacy:' + version.targetId, anchor: anchor(version.targetId), text: version.text, at: version.updatedAt, draft: false }))], bookmarks: [...(previous.review?.bookmarks || []), ...previous.state.bookmarks.map(anchor)] } };
         }
     }
 });
-define("context-review", ["require", "exports", "overlay-layout", "command-bar", "identity"], function (require, exports, overlay_layout_2, command_bar_1, identity_2) {
+define("context-review", ["require", "exports", "exact-json", "review-presentation", "item-selection", "overlay-layout", "command-bar", "identity"], function (require, exports, exact_json_6, review_presentation_1, item_selection_2, overlay_layout_4, command_bar_3, identity_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.attachContextReview = attachContextReview;
@@ -2890,6 +4210,23 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
         const excluded = new Set(), choices = new WeakMap(), anchorActions = new WeakMap();
         let editor = null, textarea = null, context = null, notice = null, current = null, annotationId = '', observed = [], trigger = null, selected = null, stopped = false, dirty = false;
         let returnControl = null;
+        // Reconcile immutable record versions, not the live reader's disclosures and
+        // focus. Saving status and unrelated activity must not rebuild a collection.
+        const rendered = new WeakMap();
+        function reconcile(list, entries, attribute) {
+            const wanted = new Set(entries), focus = document.activeElement;
+            for (const node of Array.from(list.querySelectorAll('[' + attribute + ']')))
+                if (!wanted.has(node))
+                    node.remove();
+            for (const node of Array.from(list.children))
+                if (node.classList.contains('av-empty'))
+                    node.remove();
+            const preceding = Array.from(list.children).filter(node => !node.hasAttribute(attribute));
+            [...preceding, ...entries].forEach((node, index) => { if (list.children[index] !== node)
+                list.insertBefore(node, list.children[index] || null); });
+            if (focus?.isConnected && document.activeElement !== focus && list.contains(focus))
+                focus.focus({ preventScroll: true });
+        }
         const control = (parent, action, text) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'av-button av-button-quiet'; button.textContent = text; button.setAttribute('data-av-review-action', action); parent.appendChild(button); generatedActions.add(button); return button; };
         for (const { element } of registry.targets.values()) {
             if (element === scope || !element.matches('.av-card,[data-av-figure]'))
@@ -2908,28 +4245,44 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
             else
                 header.appendChild(holder);
             const preserve = (event) => event.preventDefault();
-            note.addEventListener('mousedown', preserve);
-            undo.push(() => { note.removeEventListener('mousedown', preserve); holder.remove(); });
+            for (const button of [note, bookmark])
+                button.addEventListener('mousedown', preserve);
+            undo.push(() => { for (const button of [note, bookmark])
+                button.removeEventListener('mousedown', preserve); holder.remove(); });
         }
         const highlighted = new Map();
-        function reveal(anchor) { const resolved = registry.resolve(anchor); if (resolved.status !== 'resolved' || !resolved.element)
-            return; hooks.reveal(resolved.element); if (resolved.range) {
-            const selection = view?.getSelection?.();
-            selection?.removeAllRanges();
-            selection?.addRange(resolved.range);
+        let highlightTimer = null;
+        function clearHighlight() { if (highlightTimer !== null)
+            clearTimeout(highlightTimer); highlightTimer = null; for (const [element, original] of highlighted)
+            element.classList.toggle('av-review-target', original); highlighted.clear(); }
+        function reveal(anchor) {
+            const resolved = registry.resolve(anchor);
+            if (resolved.status !== 'resolved' || !resolved.element)
+                return;
+            clearHighlight();
+            for (const menu of Array.from(scope.querySelectorAll('[data-av-notebook][open]')))
+                menu.removeAttribute('open');
+            hooks.reveal(resolved.element);
+            if (resolved.range) {
+                const selection = view?.getSelection?.();
+                selection?.removeAllRanges();
+                selection?.addRange(resolved.range);
+            }
+            else {
+                for (const element of resolved.elements || [resolved.element]) {
+                    highlighted.set(element, element.classList.contains('av-review-target'));
+                    element.classList.add('av-review-target');
+                }
+                highlightTimer = setTimeout(clearHighlight, 5000);
+            }
         }
-        else {
-            if (!highlighted.has(resolved.element))
-                highlighted.set(resolved.element, resolved.element.classList.contains('av-review-target'));
-            resolved.element.classList.add('av-review-target');
-        } }
         function selection() { const active = view?.getSelection?.(); const anchor = active && registry.selection(active); if (anchor)
             selected = anchor;
         else if (!editor?.contains(document.activeElement))
             selected = null; }
         document.addEventListener('selectionchange', selection);
         undo.push(() => document.removeEventListener('selectionchange', selection));
-        function returnFocus() { (0, command_bar_1.focusCommand)(trigger?.isConnected ? trigger : returnControl?.isConnected ? returnControl : null); }
+        function returnFocus() { (0, command_bar_3.focusCommand)(trigger?.isConnected ? trigger : returnControl?.isConnected ? returnControl : null); }
         function hideEditor() { if (editor) {
             if (typeof editor.hidePopover === 'function' && editor.hasAttribute('popover')) {
                 try {
@@ -2942,7 +4295,7 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
         function placeEditor() {
             if (!editor || editor.hidden || stopped)
                 return;
-            const bounds = (0, overlay_layout_2.visibleViewport)(view, 12);
+            const bounds = (0, overlay_layout_4.visibleViewport)(view, 12);
             editor.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
             editor.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
             const rect = editor.getBoundingClientRect();
@@ -3058,7 +4411,7 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
             observed = version ? [...(version.draft ? version.baseIds || [] : []), version.id] : [];
             from.closest('[data-av-notebook]')?.removeAttribute('open');
             ensureEditor(from.closest('dialog') || scope);
-            context.textContent = anchor.target.path.concat(anchor.target.label).join(' / ') + (anchor.kind === 'text' ? '\n“' + anchor.quote + '”' : anchor.kind === 'item' ? '\n' + anchor.label + '\n' + anchor.text : '');
+            context.textContent = anchor.target.path.concat(anchor.target.label).join(' / ') + (anchor.kind === 'text' ? '\n“' + anchor.quote + '”' : anchor.kind === 'item' ? '\n' + anchor.label + '\n' + anchor.text : anchor.kind === 'items' ? '\n' + anchor.items.map(item => item.label + '\n' + item.text).join('\n\n') : '');
             textarea.value = version?.text || '';
             notice.textContent = registry.resolve(anchor).message;
             placeEditor();
@@ -3097,7 +4450,9 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
             return true;
         }
         return {
-            open,
+            open, reveal,
+            edit(versionId, trigger) { const version = hooks.notebook().review?.versions.find(value => value.id === versionId); if (version)
+                open(version.anchor, trigger, version); },
             click(target) {
                 const control = target.closest('[data-av-review-action]');
                 if (!control) {
@@ -3108,21 +4463,27 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
                 }
                 const owned = buttons.get(control);
                 if (owned) {
-                    const base = registry.anchor(owned.element);
+                    const base = registry.anchor(owned.element), native = view?.getSelection?.(), text = native && registry.selection(native);
+                    const textOwner = text && registry.targets.get(text.target.id)?.element;
+                    const passage = textOwner && (owned.element.contains(textOwner) || textOwner.contains(owned.element)) ? text : null;
+                    const start = native?.anchorNode?.nodeType === 1 ? native.anchorNode : native?.anchorNode?.parentElement;
+                    const end = native?.focusNode?.nodeType === 1 ? native.focusNode : native?.focusNode?.parentElement;
+                    if (native && !native.isCollapsed && !passage && ((start && owned.element.contains(start)) || (end && owned.element.contains(end)))) {
+                        hooks.notify?.({ text: 'This passage crosses evidence that cannot be attached precisely. Select text inside one record, or clear the selection before annotating the whole figure or section.', tone: 'error', source: owned.element });
+                        return true;
+                    }
+                    const textMode = owned.element.getAttribute('data-av-selection-mode') === 'text';
+                    const items = owned.element.hasAttribute('data-av-figure') && !textMode ? registry.items((0, item_selection_2.selectedFigureItems)(owned.element)) : null;
+                    const retained = selected && (!textMode || selected.kind === 'text') && registry.targets.get(selected.target.id)?.element === owned.element ? selected : null;
+                    const anchor = passage || items || retained || base;
                     if (owned.action === 'bookmark') {
-                        const enabled = !(hooks.notebook().review?.bookmarks || []).some(value => JSON.stringify(value) === JSON.stringify(base));
-                        const applied = hooks.change({ type: 'review-bookmark', anchor: base, enabled });
+                        const enabled = !(hooks.notebook().review?.bookmarks || []).some(value => (0, exact_json_6.exactJson)(value) === (0, exact_json_6.exactJson)(anchor));
+                        const applied = hooks.change({ type: 'review-bookmark', anchor, enabled });
                         if (applied)
                             hooks.notify?.({ text: enabled ? 'Bookmark added.' : 'Bookmark removed.', tone: 'success', source: owned.element });
-                        return applied;
+                        return true;
                     }
-                    const fromSelection = view?.getSelection?.(), text = fromSelection && registry.selection(fromSelection);
-                    const matchingText = text && registry.targets.get(text.target.id)?.element;
-                    const relevantText = matchingText && (owned.element.contains(matchingText) || matchingText.contains(owned.element)) ? text : null;
-                    const picked = relevantText || (selected && registry.targets.get(selected.target.id)?.element === owned.element ? selected : base);
-                    open(picked, control);
-                    if (fromSelection && !fromSelection.isCollapsed && !text)
-                        notice.textContent = 'The selection crosses content that cannot be anchored precisely. This note is attached to the displayed section or figure.';
+                    open(anchor, control);
                     return true;
                 }
                 if (!generatedActions.has(control) && !editor?.contains(control))
@@ -3130,13 +4491,18 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
                 const bookmark = anchorActions.get(control);
                 if (bookmark) {
                     if (control.getAttribute('data-av-review-action') === 'remove-bookmark') {
-                        const returnTo = control.closest('[data-av-notebook]')?.querySelector('summary');
+                        const notebook = control.closest('[data-av-notebook]');
+                        const cards = Array.from(notebook?.querySelectorAll('[data-av-review-bookmark]') || []), card = control.closest('[data-av-review-bookmark]');
+                        const at = card ? cards.indexOf(card) : 0;
                         if (hooks.change({ type: 'review-bookmark', anchor: bookmark, enabled: false })) {
-                            if (returnTo?.isConnected)
-                                returnTo.focus({ preventScroll: true });
+                            const remaining = Array.from(notebook?.querySelectorAll('[data-av-review-bookmark]') || []);
+                            const next = remaining[Math.min(at, remaining.length - 1)];
+                            (next?.querySelector('button:not([disabled])') || notebook?.querySelector('[data-av-notebook-tab="bookmarks"]'))?.focus({ preventScroll: true });
                             hooks.notify?.({ text: 'Bookmark removed.', tone: 'success', source: scope });
                         }
                     }
+                    else if (control.getAttribute('data-av-review-action') === 'note-bookmark')
+                        open(bookmark, control);
                     else if (registry.resolve(bookmark).status === 'resolved')
                         reveal(bookmark);
                     return true;
@@ -3182,14 +4548,39 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
                 excluded.delete(key);
             else
                 excluded.add(key); return true; },
-            exportNotebook(value) { const omitted = (key) => excluded.has(key); const review = value.review || { versions: [], bookmarks: [] }; return { ...value, state: { ...value.state, notes: value.state.notes.filter(note => !omitted('legacy:' + note.targetId)), bookmarks: value.state.bookmarks.filter(id => !omitted('bookmark:' + id)), activity: [], droppedActivityCount: 0, nextSequence: 1 }, noteVersions: value.noteVersions.filter(note => !omitted('legacy:' + note.targetId)), review: { versions: review.versions.filter(note => !omitted('annotation:' + note.annotationId)), bookmarks: review.bookmarks.filter(anchor => !omitted('anchor:' + (0, identity_2.fingerprint)(JSON.stringify(anchor)))) }, originals: excluded.size ? [] : value.originals }; },
+            exportNotebook(value) { const omitted = (key) => excluded.has(key); const review = value.review || { versions: [], bookmarks: [] }; return { ...value, state: { ...value.state, notes: value.state.notes.filter(note => !omitted('legacy:' + note.targetId)), bookmarks: value.state.bookmarks.filter(id => !omitted('bookmark:' + id)), activity: [], droppedActivityCount: 0, nextSequence: 1 }, noteVersions: value.noteVersions.filter(note => !omitted('legacy:' + note.targetId)), review: { versions: review.versions.filter(note => !omitted('annotation:' + note.annotationId)), bookmarks: review.bookmarks.filter(anchor => !omitted('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)))) }, originals: [], reviewImports: [] }; },
             input(target) { if (target !== textarea || !current)
                 return false; dirty = true; save(true); return true; },
-            render(lists, bookmarkLists = []) {
-                const choice = (parent, key) => { const label = document.createElement('label'); label.className = 'av-review-include'; const input = document.createElement('input'); input.type = 'checkbox'; input.checked = !excluded.has(key); label.appendChild(input); label.appendChild(document.createTextNode('Include in review copy')); parent.appendChild(label); choices.set(input, key); };
+            render(lists, bookmarkLists = [], inclusionLists = []) {
+                const make = (parent, tag, text, cls = '') => { const node = document.createElement(tag); node.className = cls; if (text !== undefined)
+                    node.textContent = text; parent.appendChild(node); return node; };
+                const choice = (parent, key, labelText) => { const label = make(parent, 'label', undefined, 'av-review-include'); const input = make(label, 'input'); input.type = 'checkbox'; input.checked = !excluded.has(key); label.appendChild(document.createTextNode(labelText)); choices.set(input, key); return label; };
+                const includeNodes = new Map();
+                for (const list of inclusionLists)
+                    includeNodes.set(list, []);
+                const include = (key, label) => {
+                    for (const list of inclusionLists) {
+                        const cache = rendered.get(list) || new Map();
+                        rendered.set(list, cache);
+                        const signature = (0, exact_json_6.exactJson)([label, !excluded.has(key)]), prior = cache.get(key);
+                        let node;
+                        if (prior?.signature === signature)
+                            node = prior.node;
+                        else {
+                            const holder = document.createElement('div');
+                            node = choice(holder, key, label);
+                            node.setAttribute('data-av-inclusion-key', key);
+                            cache.set(key, { signature, node });
+                        }
+                        includeNodes.get(list).push(node);
+                    }
+                };
                 if (editor && !editor.hidden && notice)
                     notice.textContent = hooks.status?.() || notice.textContent;
                 const notebook = hooks.notebook(), versions = notebook.review?.versions || [], groups = new Map();
+                const anchors = [...versions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
+                const resolvedBatch = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
+                const resolutions = new Map(anchors.map((anchor, index) => [anchor, resolvedBatch[index]]));
                 for (const version of versions) {
                     const group = groups.get(version.annotationId) || [];
                     group.push(version);
@@ -3205,122 +4596,156 @@ define("context-review", ["require", "exports", "overlay-layout", "command-bar",
                         }
                         ids.add(version.annotationId);
                     }
-                const bookmarked = new Map();
-                for (const anchor of notebook.review?.bookmarks || []) {
-                    const group = bookmarked.get(anchor.target.id) || [];
-                    group.push(anchor);
-                    bookmarked.set(anchor.target.id, group);
-                }
                 for (const [button, owned] of buttons) {
-                    const id = owned.element.id, target = registry.targets.get(id)?.target;
+                    const target = registry.targets.get(owned.element.id)?.target;
                     if (!target)
                         continue;
                     if (owned.action === 'bookmark') {
-                        const candidates = bookmarked.get(id);
-                        const active = !!candidates?.some(anchor => registry.resolve(anchor).status === 'resolved');
-                        button.setAttribute('aria-pressed', String(active));
+                        const bookmarks = (notebook.review?.bookmarks || []).filter(value => value.target.id === target.id);
+                        if (!bookmarks.length) {
+                            button.setAttribute('aria-pressed', 'false');
+                            continue;
+                        }
+                        const picked = owned.element.hasAttribute('data-av-figure') && owned.element.getAttribute('data-av-selection-mode') !== 'text' ? registry.items((0, item_selection_2.selectedFigureItems)(owned.element)) : null;
+                        const anchor = picked || registry.anchor(owned.element), key = (0, exact_json_6.exactJson)(anchor);
+                        button.setAttribute('aria-pressed', String(bookmarks.some(value => (0, exact_json_6.exactJson)(value) === key)));
                     }
                     else {
-                        const count = noteCounts.get(id)?.size || 0;
+                        const count = noteCounts.get(target.id)?.size || 0;
                         button.setAttribute('data-av-has-notes', String(count > 0));
                         button.setAttribute('aria-label', count ? `${count} annotations on ${target.label}; add another` : `Add a note on ${target.label}`);
                     }
                 }
+                function original(parent, anchor) {
+                    const details = make(parent, 'details', undefined, 'av-review-original');
+                    make(details, 'summary', 'Original evidence');
+                    make(details, 'pre', (0, review_presentation_1.anchorEvidence)(anchor), 'av-notebook-note');
+                    if (anchor.target.sources?.length)
+                        for (const source of anchor.target.sources)
+                            make(details, 'p', source.label + ' — ' + source.href, 'av-muted');
+                }
+                function heading(parent, anchor) { make(parent, 'h4', (0, review_presentation_1.anchorLabel)(anchor)); const path = (0, review_presentation_1.anchorContext)(anchor); if (path)
+                    make(parent, 'p', path, 'av-review-location'); }
+                for (const note of notebook.state.notes)
+                    include('legacy:' + note.targetId, 'Earlier note · ' + (registry.targets.get(note.targetId)?.target.label || note.targetId));
+                for (const [id, group] of groups) {
+                    const live = group.filter(version => version.text !== null || group.length > 1);
+                    if (live.length)
+                        include('annotation:' + id, `Note · ${(0, review_presentation_1.anchorLabel)(live[0].anchor)}${live.some(v => v.draft) ? ' (includes draft)' : ''}`);
+                }
                 for (const list of lists) {
-                    for (const legacy of Array.from(list.querySelectorAll('li'))) {
-                        const target = legacy.querySelector('[data-av-notebook-action="edit-note"]')?.getAttribute('data-av-notebook-target-id');
-                        if (target && !legacy.querySelector('.av-review-include'))
-                            choice(legacy, 'legacy:' + target);
-                    }
-                    for (const node of Array.from(list.querySelectorAll('[data-av-review-entry]')))
-                        node.remove();
-                    if (!notebook.state.notes.length && groups.size)
-                        list.textContent = '';
+                    const cache = rendered.get(list) || new Map(), wanted = [], keep = new Set();
+                    rendered.set(list, cache);
                     for (const [id, group] of groups)
                         for (const version of group) {
                             if (version.text === null && group.length === 1)
                                 continue;
-                            const item = document.createElement('li');
-                            item.setAttribute('data-av-review-entry', id);
-                            const heading = document.createElement('p');
-                            heading.textContent = version.anchor.target.label + (version.draft ? ' · Draft' : '') + (group.filter(item => item.draft === version.draft).length > 1 ? ' · Competing version' : '');
-                            item.appendChild(heading);
-                            if (version === group[0])
-                                choice(item, 'annotation:' + id);
-                            const state = document.createElement('p');
-                            state.className = 'av-muted';
-                            const resolved = registry.resolve(version.anchor);
-                            state.textContent = resolved.message;
-                            item.appendChild(state);
-                            const body = document.createElement('pre');
-                            body.className = 'av-notebook-note';
-                            body.textContent = version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]';
-                            item.appendChild(body);
-                            if (version.anchor.kind === 'text') {
-                                const quote = document.createElement('blockquote');
-                                quote.textContent = version.anchor.quote;
-                                item.appendChild(quote);
+                            const resolved = resolutions.get(version.anchor), competing = group.filter(item => item.draft === version.draft).length > 1;
+                            const key = version.id, signature = (0, exact_json_6.exactJson)([version, competing, resolved.status, resolved.message]), prior = cache.get(key);
+                            keep.add(key);
+                            if (prior?.signature === signature) {
+                                wanted.push(prior.node);
+                                continue;
                             }
-                            const edit = control(item, 'edit', version.draft ? 'Continue draft' : 'Edit note');
-                            if (!version.draft && group.filter(value => !value.draft).length > 1) {
-                                const keep = control(item, 'resolve', 'Keep this version');
+                            const item = document.createElement('li');
+                            item.className = 'av-review-card';
+                            item.setAttribute('data-av-review-entry', id);
+                            item.setAttribute('data-av-note-version', version.id);
+                            item.setAttribute('data-av-entry-state', resolved.status !== 'resolved' || competing ? 'attention' : version.draft ? 'draft' : 'saved');
+                            heading(item, version.anchor);
+                            const meta = make(item, 'div', undefined, 'av-review-meta');
+                            const time = make(meta, 'time', (0, review_presentation_1.readerDate)(version.at));
+                            time.setAttribute('datetime', version.at);
+                            time.title = version.at;
+                            if (version.draft)
+                                make(meta, 'span', 'Draft', 'av-review-badge');
+                            if (competing)
+                                make(meta, 'span', 'Competing version', 'av-review-badge');
+                            if (resolved.status !== 'resolved')
+                                make(item, 'p', 'Unresolved · ' + resolved.message, 'av-review-warning');
+                            make(item, 'pre', version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]', 'av-notebook-note');
+                            original(item, version.anchor);
+                            const actions = make(item, 'div', undefined, 'av-review-card-actions');
+                            const go = control(actions, 'reveal', 'Go to evidence');
+                            go.setAttribute('data-av-review-version', version.id);
+                            go.disabled = resolved.status !== 'resolved';
+                            const edit = control(actions, 'edit', version.draft ? 'Continue draft' : 'Edit note');
+                            edit.setAttribute('data-av-review-version', version.id);
+                            if (!version.draft && competing) {
+                                const keep = control(actions, 'resolve', 'Keep this version');
                                 keep.setAttribute('data-av-review-version', version.id);
                             }
-                            edit.setAttribute('data-av-review-version', version.id);
-                            if (resolved.status === 'resolved') {
-                                const go = control(item, 'reveal', 'Go to content');
-                                go.setAttribute('data-av-review-version', version.id);
-                            }
-                            list.appendChild(item);
+                            cache.set(key, { signature, node: item });
+                            wanted.push(item);
                         }
-                    if (!list.children.length) {
-                        const empty = document.createElement('li');
-                        empty.className = 'av-muted';
-                        empty.textContent = 'No saved notes yet.';
-                        list.appendChild(empty);
-                    }
+                    for (const key of cache.keys())
+                        if (!keep.has(key))
+                            cache.delete(key);
+                    reconcile(list, wanted, 'data-av-review-entry');
+                    if (!list.children.length)
+                        make(list, 'li', 'No notes yet. Select evidence or use Add a note.', 'av-empty');
                 }
+                for (const id of notebook.state.bookmarks)
+                    include('bookmark:' + id, 'Earlier bookmark · ' + (registry.targets.get(id)?.target.label || id));
+                for (const anchor of notebook.review?.bookmarks || [])
+                    include('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)), 'Bookmark · ' + (0, review_presentation_1.anchorLabel)(anchor));
                 for (const list of bookmarkLists) {
-                    for (const node of Array.from(list.querySelectorAll('[data-av-review-bookmark]')))
-                        node.remove();
-                    for (const legacy of Array.from(list.querySelectorAll('li'))) {
-                        const id = legacy.querySelector('[data-av-notebook-target-id]')?.getAttribute('data-av-notebook-target-id');
-                        if (id && !legacy.querySelector('.av-review-include'))
-                            choice(legacy, 'bookmark:' + id);
-                    }
-                    if (!notebook.state.bookmarks.length && (notebook.review?.bookmarks.length || 0) > 0)
-                        list.textContent = '';
+                    const cache = rendered.get(list) || new Map(), wanted = [], keep = new Set();
+                    rendered.set(list, cache);
                     for (const anchor of notebook.review?.bookmarks || []) {
+                        const key = (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)), resolved = resolutions.get(anchor), signature = (0, exact_json_6.exactJson)([resolved.status, resolved.message]), prior = cache.get(key);
+                        keep.add(key);
+                        if (prior?.signature === signature) {
+                            wanted.push(prior.node);
+                            continue;
+                        }
                         const item = document.createElement('li');
-                        item.setAttribute('data-av-review-bookmark', '');
-                        const resolved = registry.resolve(anchor), go = control(item, 'reveal-bookmark', anchor.target.label);
-                        go.disabled = resolved.status !== 'resolved';
-                        anchorActions.set(go, anchor);
-                        const state = document.createElement('p');
-                        state.className = 'av-muted';
-                        state.textContent = resolved.message;
-                        item.appendChild(state);
-                        choice(item, 'anchor:' + (0, identity_2.fingerprint)(JSON.stringify(anchor)));
-                        const remove = control(item, 'remove-bookmark', 'Remove bookmark');
-                        anchorActions.set(remove, anchor);
-                        list.appendChild(item);
+                        item.className = 'av-review-card';
+                        item.setAttribute('data-av-review-bookmark', key);
+                        heading(item, anchor);
+                        item.setAttribute('data-av-entry-state', resolved.status === 'resolved' ? 'saved' : 'attention');
+                        if (resolved.status !== 'resolved')
+                            make(item, 'p', 'Unresolved · ' + resolved.message, 'av-review-warning');
+                        if (anchor.kind === 'text')
+                            make(item, 'blockquote', anchor.quote, 'av-review-quote');
+                        else if (anchor.kind === 'items')
+                            make(item, 'p', anchor.items.map(item => item.label).join(' · '), 'av-muted');
+                        original(item, anchor);
+                        const actions = make(item, 'div', undefined, 'av-review-card-actions');
+                        for (const [action, label] of [['reveal-bookmark', 'Go to evidence'], ['note-bookmark', 'Add a note'], ['remove-bookmark', 'Remove']]) {
+                            const button = control(actions, action, label);
+                            anchorActions.set(button, anchor);
+                            if (action === 'reveal-bookmark')
+                                button.disabled = resolved.status !== 'resolved';
+                        }
+                        cache.set(key, { signature, node: item });
+                        wanted.push(item);
                     }
-                    if (!list.children.length) {
-                        const empty = document.createElement('li');
-                        empty.className = 'av-muted';
-                        empty.textContent = 'No bookmarks yet.';
-                        list.appendChild(empty);
-                    }
+                    for (const key of cache.keys())
+                        if (!keep.has(key))
+                            cache.delete(key);
+                    reconcile(list, wanted, 'data-av-review-bookmark');
+                    if (!list.children.length)
+                        make(list, 'li', 'No bookmarks yet. Bookmark a section, figure, passage or selection to return to it.', 'av-empty');
+                }
+                for (const [list, nodes] of includeNodes) {
+                    reconcile(list, nodes, 'data-av-inclusion-key');
+                    const cache = rendered.get(list), keys = new Set(nodes.map(node => node.getAttribute('data-av-inclusion-key')));
+                    if (cache)
+                        for (const key of cache.keys())
+                            if (!keys.has(key))
+                                cache.delete(key);
+                    if (!list.children.length)
+                        make(list, 'p', 'No notes or bookmarks to include yet.', 'av-empty');
                 }
             }, cleanup() { if (stopped)
                 return; stopped = true; if (current && dirty)
                 save(true); for (const restore of undo.reverse())
-                restore(); for (const [element, original] of highlighted)
-                element.classList.toggle('av-review-target', original); buttons.clear(); }
+                restore(); clearHighlight(); buttons.clear(); }
         };
     }
 });
-define("review-export", ["require", "exports", "core"], function (require, exports, core_4) {
+define("review-export", ["require", "exports", "exact-json", "core"], function (require, exports, exact_json_7, core_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.retainReportRecipe = retainReportRecipe;
@@ -3328,7 +4753,7 @@ define("review-export", ["require", "exports", "core"], function (require, expor
     exports.annotatedReport = annotatedReport;
     exports.reviewHandoff = reviewHandoff;
     const originals = new WeakMap();
-    const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    const json = (value) => (0, exact_json_7.exactJson)(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
     function retainReportRecipe(document) {
         if (originals.has(document))
             return;
@@ -3336,15 +4761,16 @@ define("review-export", ["require", "exports", "core"], function (require, expor
         if (!element)
             return;
         const recipe = JSON.parse(element.textContent || 'null');
-        if (recipe?.kind !== 'agentic-report-recipe' || recipe.version !== 1 || ![recipe.lang, recipe.title, recipe.csp, recipe.body].every(value => typeof value === 'string') || ![recipe.styles, recipe.data, recipe.scripts].every(values => Array.isArray(values) && values.every(value => typeof value === 'string')))
+        if (recipe?.kind !== 'agentic-report-recipe' || recipe.version !== 1 || ![recipe.lang, recipe.title, recipe.csp, recipe.body].every(value => typeof value === 'string') || ![recipe.styles, recipe.data, recipe.scripts, recipe.headScripts || []].every(values => Array.isArray(values) && values.every(value => typeof value === 'string')))
             throw new Error('The retained report recipe is unavailable or unsupported.');
         const styles = recipe.styles.map(id => { const node = document.getElementById(id), href = node?.getAttribute('href'); if (node?.tagName.toLowerCase() !== 'link' || !href?.startsWith('data:text/css'))
             throw new Error('An original report stylesheet is missing.'); return `<link id="${(0, core_4.escapeText)(id)}" rel="stylesheet" href="${(0, core_4.escapeText)(href)}">`; });
-        const scripts = recipe.scripts.map(id => { const node = document.getElementById(id), src = node?.getAttribute('src'); if (node?.tagName.toLowerCase() !== 'script' || !src?.startsWith('data:text/javascript'))
-            throw new Error('An original report script is missing.'); return `<script id="${(0, core_4.escapeText)(id)}" src="${(0, core_4.escapeText)(src)}"></script>`; });
+        const readScript = (id) => { const node = document.getElementById(id), src = node?.getAttribute('src'); if (node?.tagName.toLowerCase() !== 'script' || !src?.startsWith('data:text/javascript'))
+            throw new Error('An original report script is missing.'); return `<script id="${(0, core_4.escapeText)(id)}" src="${(0, core_4.escapeText)(src)}"></script>`; };
+        const scripts = recipe.scripts.map(readScript), headScripts = (recipe.headScripts || []).map(readScript);
         const data = recipe.data.map(id => { const node = document.getElementById(id); if (node?.getAttribute('type') !== 'application/json')
             throw new Error('Original report data is missing.'); const raw = node.textContent || ''; JSON.parse(raw); return `<script type="application/json" id="${(0, core_4.escapeText)(id)}">${raw.replace(/</g, '\\u003c')}</script>`; });
-        originals.set(document, { recipe, styles, scripts, data });
+        originals.set(document, { recipe, styles, scripts, data, headScripts });
     }
     function readReviewSeed(document) {
         const node = document.getElementById('av-review-seed');
@@ -3360,15 +4786,18 @@ define("review-export", ["require", "exports", "core"], function (require, expor
         const original = originals.get(document);
         if (!original)
             throw new Error('This report has no assembly recipe. Export the notebook and handoff, or reassemble the report with the current packager.');
-        const { recipe, styles, data, scripts } = original, seed = { kind: 'agentic-report-review', version: 1, reports, exportedAt: at };
-        return ['<!doctype html>', `<html lang="${(0, core_4.escapeText)(recipe.lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`, `<meta http-equiv="Content-Security-Policy" content="${(0, core_4.escapeText)(recipe.csp)}"><title>${(0, core_4.escapeText)(recipe.title)}</title>`, ...styles, '</head><body>', recipe.body, ...data, `<script type="application/json" id="av-report-recipe">${json(recipe)}</script>`, `<script type="application/json" id="av-review-seed">${json(seed)}</script>`, ...scripts, '</body></html>', ''].join('\n');
+        const { recipe, styles, data, scripts, headScripts } = original, seed = { kind: 'agentic-report-review', version: 1, reports, exportedAt: at };
+        return ['<!doctype html>', `<html lang="${(0, core_4.escapeText)(recipe.lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`, `<meta http-equiv="Content-Security-Policy" content="${(0, core_4.escapeText)(recipe.csp)}"><title>${(0, core_4.escapeText)(recipe.title)}</title>`, ...headScripts, ...styles, '</head><body>', recipe.body, ...data, `<script type="application/json" id="av-report-recipe">${json(recipe)}</script>`, `<script type="application/json" id="av-review-seed">${json(seed)}</script>`, ...scripts, '</body></html>', ''].join('\n');
     }
     function anchorText(anchor) {
         const lines = [`${anchor.target.path.concat(anchor.target.label).join(' / ')} (#${anchor.target.id})`, `Original report: ${anchor.target.reportId}; original revision: ${anchor.target.revision}`, `Target fingerprint: ${anchor.target.fingerprint}`];
         if (anchor.kind === 'text')
             lines.push('Quoted passage:', anchor.quote, 'Surrounding text:', anchor.prefix + ' [' + anchor.quote + '] ' + anchor.suffix);
         else if (anchor.kind === 'item')
-            lines.push(`Item: ${anchor.label} (${anchor.itemId})`, anchor.text, anchor.values ? JSON.stringify(anchor.values) : '');
+            lines.push(`Item: ${anchor.label} (${anchor.itemId})`, anchor.text, anchor.values ? (0, exact_json_7.exactJson)(anchor.values) : '');
+        else if (anchor.kind === 'items')
+            for (const item of anchor.items)
+                lines.push(`Selected item: ${item.label} (${item.itemId})`, item.text, item.values ? (0, exact_json_7.exactJson)(item.values) : '');
         else
             lines.push(anchor.target.excerpt);
         if (anchor.target.sources?.length)
@@ -3385,7 +4814,7 @@ define("review-export", ["require", "exports", "core"], function (require, expor
     function reviewHandoff(notebook, registry, question, sourceTitle) {
         const lines = ['# Reader feedback', literal(sourceTitle), literal(`Report: ${notebook.state.reportId}\nRevision: ${notebook.state.revision}`),
             '## Original question and context', question ? literal(question) : 'No separate opening question was supplied.',
-            'Reader annotations are feedback, not changes to the findings. Use the original report and requirements to interpret them.'];
+            'Reader annotations are feedback, not changes to the findings. Use the original report and requirements to interpret them. Resolve drafts, competing versions and unresolved attachments explicitly; do not treat them as approved conclusions.'];
         const counts = new Map();
         for (const version of notebook.noteVersions)
             counts.set(version.targetId, (counts.get(version.targetId) || 0) + 1);
@@ -3393,6 +4822,9 @@ define("review-export", ["require", "exports", "core"], function (require, expor
             const target = registry.targets.get(version.targetId)?.target;
             lines.push('## Note' + ((counts.get(version.targetId) || 0) > 1 ? ' — competing version' : ''), literal(target?.label || version.targetId), literal(version.text === null ? '[Removed in this version]' : version.text), literal('Target ID: ' + version.targetId), 'This note did not record its original evidence fingerprint. The current label is an orientation aid, not confirmation of an unchanged attachment.');
         }
+        const anchors = [...(notebook.review?.versions || []).map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
+        const results = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
+        const resolutions = new Map(anchors.map((anchor, index) => [anchor, results[index]]));
         const groups = new Map();
         for (const version of notebook.review?.versions || []) {
             const list = groups.get(version.annotationId) || [];
@@ -3401,11 +4833,14 @@ define("review-export", ["require", "exports", "core"], function (require, expor
         }
         for (const [id, versions] of groups)
             for (const version of versions) {
-                const resolution = registry.resolve(version.anchor);
+                const resolution = resolutions.get(version.anchor);
                 const competing = versions.filter(other => other.draft === version.draft).length > 1;
                 lines.push(`## ${version.draft ? 'Draft' : 'Annotation'}${competing ? ' — competing version' : ''}`, literal(`Annotation: ${id}\nRecorded: ${version.at}\nAttachment: ${resolution.status}. ${resolution.message}`), '### Original evidence', literal(anchorText(version.anchor)), '### Reader note', literal(version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]'));
             }
-        const bookmarks = [...notebook.state.bookmarks.map(id => registry.targets.get(id)?.target).filter(Boolean).map(target => anchorText({ kind: 'section', target: target })), ...(notebook.review?.bookmarks || []).map(anchorText)];
+        const bookmarks = [
+            ...notebook.state.bookmarks.map(id => `Earlier target-only bookmark: ${registry.targets.get(id)?.target.label || id} (#${id})\nNo original evidence fingerprint was captured. Verify this attachment against the report.`),
+            ...(notebook.review?.bookmarks || []).map(anchor => { const result = resolutions.get(anchor); return `Attachment: ${result.status}. ${result.message}\n` + anchorText(anchor); }),
+        ];
         if (bookmarks.length)
             lines.push('## Bookmarks', ...bookmarks.map(literal));
         if (notebook.originals.length)
@@ -3478,7 +4913,7 @@ define("export-safety", ["require", "exports"], function (require, exports) {
         }
     }
 });
-define("figure-export", ["require", "exports", "core", "figures", "text-layout", "export-safety"], function (require, exports, core_5, figures_2, text_layout_2, export_safety_1) {
+define("figure-export", ["require", "exports", "core", "figures", "text-layout", "export-safety"], function (require, exports, core_5, figures_4, text_layout_2, export_safety_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.exportFigureSvg = exportFigureSvg;
@@ -3486,7 +4921,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
     exports.downloadBlob = downloadBlob;
     exports.copyFigureImage = copyFigureImage;
     exports.copyFigureSource = copyFigureSource;
-    const paintProperties = ['color', 'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing', 'white-space', 'paint-order', 'visibility', 'background-color', 'border-color', 'border-width', 'border-style', 'border-radius', 'line-height', 'text-align', 'display', 'padding', 'box-sizing', 'width', 'height', 'stop-color', 'stop-opacity', 'filter', 'clip-path', 'mask', 'marker-start', 'marker-mid', 'marker-end'];
+    const paintProperties = ['color', 'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing', 'white-space', 'paint-order', 'visibility', 'background-color', 'border-color', 'border-width', 'border-style', 'border-radius', 'line-height', 'text-align', 'display', 'padding', 'box-sizing', 'width', 'height', 'stop-color', 'stop-opacity', 'filter', 'clip-path', 'mask', 'marker-start', 'marker-mid', 'marker-end', 'transform', 'transform-origin', 'transform-box', 'overflow', 'overflow-wrap', 'word-break', 'word-spacing', 'font-stretch', 'font-variant', 'text-decoration', 'text-transform', 'vertical-align', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'max-width', 'min-width', 'max-height', 'min-height', 'flex-direction', 'flex-wrap', 'align-items', 'align-content', 'justify-content', 'gap'];
     const SVG_NS = 'http://www.w3.org/2000/svg';
     function serialize(node, namespace) {
         if (node.nodeType === 3)
@@ -3499,37 +4934,93 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         const name = element.localName || element.tagName.toLowerCase();
         return `<${name}${declaration}${attributes}>${Array.from(node.childNodes).map(child => serialize(child, ns)).join('')}</${name}>`;
     }
+    /** Bake the *active* cascade, not the renderer's catalog of unused theme rules.
+     * Mermaid ships optional look rules that reference definitions absent from this
+     * scene. Those rules are not evidence or dependencies of the painted snapshot.
+     * Active paint references and adapter-provided SVG still undergo strict checks.
+     */
     function paintedClone(element, paint = true) {
         const copy = element.cloneNode(true), view = element.ownerDocument.defaultView;
-        const live = [element, ...Array.from(element.querySelectorAll('*'))], clones = [copy, ...Array.from(copy.querySelectorAll('*'))];
-        for (let i = 0; i < live.length; i++) {
-            const node = clones[i], computed = paint ? view?.getComputedStyle?.(live[i]) : null;
-            for (const name of paintProperties) {
-                let value = computed?.getPropertyValue(name).trim();
-                // Computed local paint URLs may be absolute in a file report. Restore their fragment.
-                if (value) {
-                    value = value.replace(/url\(["']?([^"')]+)["']?\)/g, (match, reference) => {
-                        try {
-                            const url = new URL(reference, element.ownerDocument.baseURI);
-                            const base = new URL(element.ownerDocument.baseURI);
-                            return url.hash && url.origin === base.origin && url.pathname === base.pathname && url.search === base.search ? `url("${url.hash}")` : match;
+        const live = [element, ...Array.from(element.querySelectorAll('*'))];
+        const clones = [copy, ...Array.from(copy.querySelectorAll('*'))];
+        const restore = [];
+        const scope = element.closest('[data-av-figure]');
+        if (paint && scope) {
+            const original = scope.getAttribute('data-av-export-reading');
+            scope.setAttribute('data-av-export-reading', '');
+            restore.push(() => { if (original === null)
+                scope.removeAttribute('data-av-export-reading');
+            else
+                scope.setAttribute('data-av-export-reading', original); });
+        }
+        try {
+            // Reader emphasis is transient, never an authored status or category color.
+            // This synchronous read phase completes before the browser can paint again.
+            if (paint)
+                for (const node of live) {
+                    // A running color/filter transition would otherwise bake an intermediate
+                    // selected or previous-theme frame into the permanent evidence image.
+                    const transition = node.style.getPropertyValue('transition'), priority = node.style.getPropertyPriority('transition');
+                    node.style.setProperty('transition', 'none', 'important');
+                    restore.push(() => { if (transition)
+                        node.style.setProperty('transition', transition, priority);
+                    else
+                        node.style.removeProperty('transition'); });
+                    for (const name of ['av-selected', 'av-related', 'av-review-target'])
+                        if (node.classList.contains(name)) {
+                            node.classList.remove(name);
+                            restore.push(() => node.classList.add(name));
                         }
-                        catch {
-                            return match;
+                    for (const name of ['data-av-item-selected', 'data-av-inspected', 'aria-pressed'])
+                        if (node.hasAttribute(name)) {
+                            const value = node.getAttribute(name);
+                            node.removeAttribute(name);
+                            restore.push(() => node.setAttribute(name, value));
                         }
-                    });
-                    (0, export_safety_1.validateExportCss)(value);
-                    node.style.setProperty(name, value);
+                }
+            for (let i = 0; i < live.length; i++) {
+                const node = clones[i], computed = paint ? view?.getComputedStyle?.(live[i]) : null;
+                for (const name of paintProperties) {
+                    let value = computed?.getPropertyValue(name).trim();
+                    if (value) {
+                        value = value.replace(/url\(["']?([^"')]+)["']?\)/g, (match, reference) => {
+                            try {
+                                const url = new URL(reference, element.ownerDocument.baseURI), base = new URL(element.ownerDocument.baseURI);
+                                return url.hash && url.origin === base.origin && url.pathname === base.pathname && url.search === base.search ? `url("${url.hash}")` : match;
+                            }
+                            catch {
+                                return match;
+                            }
+                        });
+                        (0, export_safety_1.validateExportCss)(value);
+                        node.style.setProperty(name, value);
+                    }
+                }
+                for (const name of ['--av-item-base-filter', '--av-item-filter-chain'])
+                    node.style.removeProperty(name);
+                for (const name of ['tabindex', 'aria-pressed', 'data-av-item-selected', 'data-av-inspected'])
+                    node.removeAttribute(name);
+                for (const name of ['av-selected', 'av-related', 'av-review-target'])
+                    node.classList.remove(name);
+                if (node.hasAttribute('data-av-row-center')) {
+                    node.removeAttribute('transform');
+                    node.style.removeProperty('transform');
                 }
             }
-            node.removeAttribute('tabindex');
-            node.removeAttribute('aria-pressed');
-            if (node.hasAttribute('data-av-row-center')) {
-                node.removeAttribute('transform');
-                node.style.removeProperty('transform');
-            }
         }
-        for (const name of ['width', 'height', 'min-width', 'max-width', 'transform'])
+        finally {
+            for (const undo of restore.reverse())
+                undo();
+        }
+        if (paint && view?.getComputedStyle) {
+            // All used declarations (including HTML label layout) are now inline. Keep
+            // font faces separately; never remove unresolved *active* paint references.
+            for (const style of Array.from(copy.querySelectorAll('style')))
+                style.remove();
+        }
+        for (const ui of Array.from(copy.querySelectorAll('[data-av-review-ui]')))
+            ui.remove();
+        for (const name of ['width', 'height', 'min-width', 'max-width', 'min-height', 'max-height', 'transform'])
             copy.style.removeProperty(name);
         copy.removeAttribute('preserveAspectRatio');
         (0, export_safety_1.validateExportTree)(copy);
@@ -3543,7 +5034,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         return { width, height };
     }
     async function rasterScene(figure) {
-        const document = figure.ownerDocument, adapter = (0, figures_2.visualAdapter)(figure), image = figure.querySelector('img[data-av-zoom-target]'), canvas = figure.querySelector('canvas[data-av-zoom-target]');
+        const document = figure.ownerDocument, adapter = (0, figures_4.visualAdapter)(figure), image = figure.querySelector('img[data-av-zoom-target]'), canvas = figure.querySelector('canvas[data-av-zoom-target]');
         let width = 0, height = 0, src = '';
         if (adapter?.png) {
             const bounds = adapter.bounds(figure);
@@ -3595,7 +5086,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         const diagram = figure.querySelector('[data-av-mermaid]');
         if (diagram && diagram.getAttribute('data-av-mermaid-state') !== 'ready')
             throw new Error('The diagram is not ready for image export. Its original source remains available.');
-        const document = figure.ownerDocument, custom = (0, figures_2.visualAdapter)(figure)?.svg;
+        const document = figure.ownerDocument, custom = (0, figures_4.visualAdapter)(figure)?.svg;
         let scene = null;
         if (custom) {
             const template = document.createElement('template');
@@ -3611,8 +5102,8 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
             throw new Error('Image export is unavailable for this visualization. Use its original source.');
         const { width, height } = sceneBounds(scene), row = custom ? null : figure.querySelector('[data-av-axis-layer="rows"]'), axis = custom ? null : figure.querySelector('[data-av-axis-layer="x"]');
         const rowWidth = row ? sceneBounds(row).width : 0, axisHeight = axis ? sceneBounds(axis).height : 0, totalWidth = width + rowWidth, padding = 20;
-        const context = [(0, figures_2.figureTitle)(figure)], legends = [];
-        for (const node of (0, figures_2.figureContext)(figure)) {
+        const context = [(0, figures_4.figureTitle)(figure)], legends = [];
+        for (const node of (0, figures_4.figureContext)(figure)) {
             if (node.matches('.av-legend')) {
                 const items = node.tagName.toLowerCase() === 'ul' ? Array.from(node.children) : [];
                 if (items.length)
@@ -3642,7 +5133,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
             if (text && !context.includes(text))
                 context.push(text);
         }
-        const scope = (0, figures_2.figureOrigin)(figure).scope;
+        const scope = (0, figures_4.figureOrigin)(figure).scope;
         if (scope)
             context.push(scope.getAttribute('data-av-coordinate-scope') === 'complete' ? 'Complete coordinate pairs only' : 'All supplied known coordinates determine the scale');
         const lines = context.flatMap(text => (0, text_layout_2.wrapText)(text, { maxWidth: Math.max(totalWidth, 160), fontSize: 14, lineHeight: 21 }).lines), headingHeight = lines.length * 21 + 16 + legends.reduce((height, item) => height + item.height, 0), exportWidth = Math.max(totalWidth, 160) + padding * 2;
@@ -3724,29 +5215,75 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
             throw new Error('PNG conversion is unavailable. Download SVG or source.');
         const image = new ImageType();
         image.decoding = 'async';
-        await new Promise((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('This browser cannot rasterize the complete figure. Download SVG or source.')); image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
+        await new Promise((resolve, reject) => {
+            let done = false;
+            const finish = (error) => { if (done)
+                return; done = true; clearTimeout(timer); image.onload = null; image.onerror = null; if (error) {
+                image.removeAttribute('src');
+                reject(error);
+            }
+            else
+                resolve(); };
+            const timer = setTimeout(() => finish(new Error('PNG conversion timed out. Download SVG or source for the complete figure.')), 20000);
+            image.onload = () => finish();
+            image.onerror = () => finish(new Error('This browser cannot rasterize the complete figure. Download SVG or source.'));
+            image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        });
+        if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth > 32767 || image.naturalHeight > 32767 || image.naturalWidth * image.naturalHeight > 64000000)
+            throw new Error('The complete figure is too large for a reliable PNG in this browser. Download SVG for the full-resolution drawing.');
         const canvas = document.createElement('canvas');
         canvas.width = image.naturalWidth;
         canvas.height = image.naturalHeight;
-        const context = canvas.getContext('2d');
-        if (!context)
-            throw new Error('PNG conversion is unavailable. Download SVG or source.');
-        context.drawImage(image, 0, 0);
-        return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('The full image exceeds this browser’s export capacity. Download SVG or source.')), 'image/png'));
+        try {
+            const context = canvas.getContext('2d');
+            if (!context)
+                throw new Error('PNG conversion is unavailable. Download SVG or source.');
+            context.drawImage(image, 0, 0);
+            return await new Promise((resolve, reject) => {
+                let done = false;
+                const finish = (blob, error) => { if (done)
+                    return; done = true; clearTimeout(timer); if (blob)
+                    resolve(blob);
+                else
+                    reject(error instanceof Error ? error : new Error('The full image exceeds this browser’s export capacity. Download SVG or source.')); };
+                const timer = setTimeout(() => finish(null, new Error('PNG encoding timed out. Download SVG or source.')), 20000);
+                try {
+                    canvas.toBlob(blob => finish(blob), 'image/png');
+                }
+                catch (error) {
+                    finish(null, error);
+                }
+            });
+        }
+        finally {
+            canvas.width = 0;
+            canvas.height = 0;
+            image.removeAttribute('src');
+        }
     }
     function downloadBlob(document, blob, name) {
         const URLType = document.defaultView?.URL;
         if (!URLType?.createObjectURL)
             throw new Error('Downloads are unavailable in this browser.');
         const url = URLType.createObjectURL(blob), link = document.createElement('a');
-        link.href = url;
-        link.download = name;
-        link.hidden = true;
-        link.setAttribute('data-av-review-ui', '');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        (document.defaultView?.setTimeout || setTimeout)(() => URLType.revokeObjectURL(url), 60000);
+        let dispatched = false;
+        try {
+            link.href = url;
+            link.download = name;
+            link.hidden = true;
+            link.setAttribute('data-av-review-ui', '');
+            link.setAttribute('data-av-internal-download', '');
+            document.body.appendChild(link);
+            link.click();
+            dispatched = true;
+        }
+        finally {
+            link.remove();
+            if (dispatched)
+                (document.defaultView?.setTimeout || setTimeout)(() => URLType.revokeObjectURL(url), 60000);
+            else
+                URLType.revokeObjectURL(url);
+        }
     }
     async function copyFigureImage(figure) {
         const view = figure.ownerDocument.defaultView, Clipboard = view?.ClipboardItem;
@@ -3755,7 +5292,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         await view.navigator.clipboard.write([new Clipboard({ 'image/png': exportFigurePng(figure) })]);
     }
     async function copyFigureSource(figure) {
-        const source = (0, figures_2.figureSource)(figure);
+        const source = (0, figures_4.figureSource)(figure);
         if (!source)
             throw new Error('No original source was supplied for this visualization.');
         const clipboard = figure.ownerDocument.defaultView?.navigator?.clipboard;
@@ -3764,7 +5301,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         await clipboard.writeText(source.text);
     }
 });
-define("notebook", ["require", "exports", "identity", "review-targets", "context-review", "review-export", "figure-export", "core", "reader-state", "reader-storage"], function (require, exports, identity_3, review_targets_1, context_review_1, review_export_1, figure_export_1, core_6, reader_state_1, reader_storage_2) {
+define("notebook", ["require", "exports", "exact-json", "review-presentation", "notebook-view", "review-presentation", "item-selection", "identity", "review-targets", "context-review", "review-export", "figure-export", "core", "reader-state", "reader-storage"], function (require, exports, exact_json_8, review_presentation_2, notebook_view_1, review_presentation_3, item_selection_3, identity_3, review_targets_1, context_review_1, review_export_1, figure_export_1, core_6, reader_state_1, reader_storage_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.researchNotebook = researchNotebook;
@@ -3803,6 +5340,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
         const now = hooks.now || (() => new Date().toISOString());
         const undo = [];
         const sessions = new Map();
+        const initialReads = [];
         const panels = new Map();
         const owners = new WeakMap();
         let cleaned = false;
@@ -3863,7 +5401,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             // Recheck the complete set: authored text can itself match a qualified label.
             for (let repeated = collisions(); repeated.length; repeated = collisions()) {
                 for (const [id, target] of repeated)
-                    target.label += " [" + JSON.stringify(id) + "]";
+                    target.label += " [" + (0, exact_json_8.exactJson)(id) + "]";
             }
         }
         function prepare(element) {
@@ -3963,7 +5501,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                 catch (error) {
                     if (requireCurrent)
                         throw error;
-                    session.notebook = { ...session.notebook, originals: [...new Set([...session.notebook.originals, JSON.stringify(latest.value)])] };
+                    session.notebook = { ...session.notebook, originals: [...new Set([...session.notebook.originals, (0, exact_json_8.exactJson)(latest.value)])] };
                     return;
                 }
                 if (current.epoch === session.notebook.epoch)
@@ -4023,11 +5561,22 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
         function apply(session, change, notice = "", bases) {
             try {
                 const delta = { epoch: session.notebook.epoch, id: editId(), change, ...(change.type === "note" ? { baseNoteIds: bases || session.drafts.get(change.targetId)?.baseNoteIds || (0, reader_state_1.noteVersionIds)(session.notebook, change.targetId).slice(-1) } : {}) };
-                assign(session, (0, reader_state_1.applyReaderDelta)(session.notebook, delta, session.context));
+                const deltas = [delta];
+                const anchor = change.type === 'review-bookmark' ? change.anchor : change.type === 'annotation' && !change.version.draft ? change.version.anchor : null;
+                if (anchor) {
+                    const action = change.type === 'review-bookmark' ? (change.enabled ? 'bookmark-added' : 'bookmark-removed') : change.type === 'annotation' && change.version.text === null ? 'note-removed' : 'note-saved';
+                    deltas.push({ epoch: session.notebook.epoch, id: editId(), change: { type: 'activity', action, at: change.type === 'annotation' ? change.version.at : now(), ...(session.targets.has(anchor.target.id) ? { targetId: anchor.target.id } : {}) } });
+                }
+                // Validate the complete in-session change before queueing it. Persistence
+                // merges both deltas inside the same owned transaction.
+                let next = session.notebook;
+                for (const item of deltas)
+                    next = (0, reader_state_1.applyReaderDelta)(next, item, session.context);
+                assign(session, next);
                 session.changed = true;
                 session.notice = notice;
                 if (session.store && !session.stopped) {
-                    session.writes.push({ delta, epochUnobserved: !session.epochKnown });
+                    session.writes.push(...deltas.map(delta => ({ delta, epochUnobserved: !session.epochKnown })));
                     persist(session);
                 }
                 render(session);
@@ -4080,7 +5629,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                     }
                 }
                 catch {
-                    blocked(session, { status: "blocked", raw: JSON.stringify(value), message: "The saved notebook is incompatible with this report. Its original data remains protected." });
+                    blocked(session, { status: "blocked", raw: (0, exact_json_8.exactJson)(value), message: "The saved notebook is incompatible with this report. Its original data remains protected." });
                 }
             }
             if (result.status === "ready" || result.status === "saved")
@@ -4100,7 +5649,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             if (!cleaned && !session.changed && !explicit && !focusMoved && !session.stopped) {
                 const saved = place(session);
                 if (saved)
-                    hooks.navigate(session.scope, saved);
+                    (hooks.restored || hooks.navigate)(session.scope, saved);
             }
         }
         function place(session) {
@@ -4142,42 +5691,60 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             for (const panel of session.panels) {
                 panel.status.textContent = [session.notice, storageMessage(session)].filter(Boolean).join(" ");
                 panel.target.value = panel.selected;
+                const count = new Set((session.notebook.review?.versions || []).filter(v => v.text !== null).map(v => v.annotationId)).size + session.state.notes.length + session.state.bookmarks.length + (session.notebook.review?.bookmarks.length || 0);
+                panel.count.textContent = String(count);
+                panel.count.hidden = !count;
+                for (const control of Array.from(panel.content.querySelectorAll('[data-av-notebook-action="export"],[data-av-notebook-action="export-report"],[data-av-notebook-action="export-handoff"],[data-av-notebook-action="copy-handoff"]'))) {
+                    control.disabled = !!session.exportBusy;
+                    control.setAttribute('aria-busy', String(!!session.exportBusy));
+                }
                 const text = session.drafts.get(panel.selected)?.text ?? session.state.notes.find(note => note.targetId === panel.selected)?.text ?? "";
                 if (panel.note.value !== text)
                     panel.note.value = text;
                 panel.bookmark.checked = session.state.bookmarks.includes(panel.selected);
-                panel.notes.textContent = "";
-                for (const note of session.state.notes) {
-                    const item = append(panel.notes, "li");
-                    actionItem(item, "edit-note", session.targets.get(note.targetId).label, note.targetId);
-                    append(item, "pre", "av-notebook-note", note.text);
-                    append(item, "p", "av-muted", "This note identifies a report part, but has no original evidence fingerprint. Verify the content before relying on its attachment.");
-                }
-                if (!session.state.notes.length)
-                    append(panel.notes, "li", "av-muted", "No saved notes yet.");
-                panel.conflicts.textContent = "";
-                const versionsByTarget = new Map();
-                for (const version of session.notebook.noteVersions) {
-                    const group = versionsByTarget.get(version.targetId) || [];
-                    group.push(version);
-                    versionsByTarget.set(version.targetId, group);
-                }
-                const competing = new Set([...versionsByTarget].filter(([, versions]) => versions.length > 1).map(([id]) => id));
-                for (const targetId of competing) {
-                    const item = append(panel.conflicts, "li");
-                    append(item, "p", "", "Competing versions of “" + session.targets.get(targetId).label + "”. All versions are included in exports until you choose one.");
-                    for (const [index, version] of versionsByTarget.get(targetId).entries()) {
-                        append(item, "p", "av-muted", "Version " + (index + 1) + " · " + version.updatedAt);
-                        append(item, "pre", "av-notebook-note", version.text === null ? "[Note removed in this version]" : version.text);
-                        const choice = actionItem(item, "resolve-note", "Keep version " + (index + 1), targetId);
-                        choice.setAttribute("data-av-notebook-version-id", version.id);
-                        choice.setAttribute("aria-label", "Keep version " + (index + 1) + " of the note on " + session.targets.get(targetId).label);
+                const recordsKey = (0, exact_json_8.exactJson)([session.state.notes, session.state.bookmarks, session.notebook.noteVersions]);
+                const recordsChanged = panel.recordsKey !== recordsKey;
+                panel.recordsKey = recordsKey;
+                if (recordsChanged) {
+                    for (const child of Array.from(panel.notes.children))
+                        if (!child.hasAttribute('data-av-review-entry'))
+                            child.remove();
+                    for (const note of session.state.notes) {
+                        const item = append(panel.notes, "li", "av-review-card");
+                        item.setAttribute('data-av-legacy-note', note.targetId);
+                        item.setAttribute('data-av-notebook-target-id', note.targetId);
+                        item.setAttribute('data-av-entry-state', 'attention');
+                        append(item, 'h4', '', session.targets.get(note.targetId).label);
+                        append(item, 'p', 'av-review-meta', 'Earlier note · verify attachment');
+                        append(item, "pre", "av-notebook-note", note.text);
+                        const actions = append(item, 'div', 'av-review-card-actions');
+                        actionItem(actions, "edit-note", "Edit earlier note", note.targetId);
+                        append(item, "p", "av-muted", "This note identifies a report part, but has no original evidence fingerprint. Verify the content before relying on its attachment.");
                     }
+                    panel.conflicts.textContent = "";
+                    const versionsByTarget = new Map();
+                    for (const version of session.notebook.noteVersions) {
+                        const group = versionsByTarget.get(version.targetId) || [];
+                        group.push(version);
+                        versionsByTarget.set(version.targetId, group);
+                    }
+                    const competing = new Set([...versionsByTarget].filter(([, versions]) => versions.length > 1).map(([id]) => id));
+                    for (const targetId of competing) {
+                        const item = append(panel.conflicts, "li");
+                        append(item, "p", "", "Competing versions of “" + session.targets.get(targetId).label + "”. All versions are included in exports until you choose one.");
+                        for (const [index, version] of versionsByTarget.get(targetId).entries()) {
+                            append(item, "p", "av-muted", "Version " + (index + 1) + " · " + version.updatedAt);
+                            append(item, "pre", "av-notebook-note", version.text === null ? "[Note removed in this version]" : version.text);
+                            const choice = actionItem(item, "resolve-note", "Keep version " + (index + 1), targetId);
+                            choice.setAttribute("data-av-notebook-version-id", version.id);
+                            choice.setAttribute("aria-label", "Keep version " + (index + 1) + " of the note on " + session.targets.get(targetId).label);
+                        }
+                    }
+                    panel.conflicts.hidden = !competing.size;
+                    const conflictsHeading = panel.conflicts.previousElementSibling;
+                    if (conflictsHeading?.tagName.toLowerCase() === 'h3')
+                        conflictsHeading.hidden = !competing.size;
                 }
-                panel.conflicts.hidden = !competing.size;
-                const conflictsHeading = panel.conflicts.previousElementSibling;
-                if (conflictsHeading?.tagName.toLowerCase() === 'h3')
-                    conflictsHeading.hidden = !competing.size;
                 const legacy = panel.note.closest('.av-notebook-legacy');
                 if (legacy)
                     legacy.hidden = !session.notebook.noteVersions.length && !session.state.bookmarks.length && !session.drafts.size;
@@ -4189,31 +5756,58 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                     bookmarkTarget.setAttribute('aria-pressed', String(active));
                     bookmarkTarget.textContent = active ? 'Remove bookmark' : 'Bookmark this part';
                 }
-                if (!competing.size)
-                    append(panel.conflicts, "li", "av-muted", "No competing note versions.");
-                panel.bookmarks.textContent = "";
-                for (const targetId of session.state.bookmarks)
-                    actionItem(append(panel.bookmarks, "li"), "open-target", session.targets.get(targetId).label, targetId);
-                if (!session.state.bookmarks.length)
-                    append(panel.bookmarks, "li", "av-muted", "No bookmarks yet.");
-                panel.activity.textContent = "";
-                for (const entry of [...session.state.activity].reverse()) {
-                    const item = append(panel.activity, "li");
-                    if (entry.viewId !== undefined) {
-                        const control = button(item, "open-view", activityLabel(entry, session));
-                        control.setAttribute("data-av-notebook-view-id", entry.viewId);
+                if (recordsChanged) {
+                    for (const child of Array.from(panel.bookmarks.children))
+                        if (!child.hasAttribute('data-av-review-bookmark'))
+                            child.remove();
+                    for (const targetId of session.state.bookmarks) {
+                        const item = append(panel.bookmarks, 'li', 'av-review-card');
+                        item.setAttribute('data-av-legacy-bookmark', targetId);
+                        item.setAttribute('data-av-notebook-target-id', targetId);
+                        item.setAttribute('data-av-entry-state', 'attention');
+                        append(item, 'h4', '', session.targets.get(targetId).label);
+                        append(item, 'p', 'av-review-warning', 'Earlier bookmark · no original evidence fingerprint. Verify this report part before relying on the attachment.');
+                        const actions = append(item, 'div', 'av-review-card-actions');
+                        actionItem(actions, 'open-target', 'Go to report part', targetId);
+                        actionItem(actions, 'remove-legacy-bookmark', 'Remove', targetId);
                     }
-                    else if (entry.targetId !== undefined)
-                        actionItem(item, "open-target", activityLabel(entry, session), entry.targetId);
-                    else
-                        append(item, "span", "", activityLabel(entry, session));
-                    const time = append(item, "time", "av-muted", entry.at);
-                    time.setAttribute("datetime", entry.at);
                 }
+                const activityKey = (0, exact_json_8.exactJson)([session.state.activity, panel.activityLimit]);
+                if (panel.activityKey !== activityKey) {
+                    panel.activityKey = activityKey;
+                    panel.activity.textContent = "";
+                    let lastDay = '';
+                    for (const entry of [...session.state.activity].reverse().slice(0, panel.activityLimit)) {
+                        const day = new Date(entry.at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                        if (day !== lastDay) {
+                            append(panel.activity, 'li', 'av-activity-day', day);
+                            lastDay = day;
+                        }
+                        const item = append(panel.activity, "li");
+                        if (entry.viewId !== undefined) {
+                            const control = button(item, "open-view", activityLabel(entry, session));
+                            control.setAttribute("data-av-notebook-view-id", entry.viewId);
+                        }
+                        else if (entry.targetId !== undefined)
+                            actionItem(item, "open-target", activityLabel(entry, session), entry.targetId);
+                        else
+                            append(item, "span", "", activityLabel(entry, session));
+                        const time = append(item, "time", "av-muted", (0, review_presentation_3.readerDate)(entry.at, true));
+                        time.setAttribute("datetime", entry.at);
+                        time.title = entry.at;
+                    }
+                    if (!session.state.activity.length && session.context.activityLimit > 0)
+                        append(panel.activity, 'li', 'av-muted', 'No recent activity.');
+                }
+                const more = panel.content.querySelector('[data-av-notebook-action="activity-more"]'), less = panel.content.querySelector('[data-av-notebook-action="activity-less"]');
+                if (more) {
+                    more.hidden = session.state.activity.length <= panel.activityLimit;
+                    more.textContent = `Show ${Math.min(20, Math.max(0, session.state.activity.length - panel.activityLimit))} more…`;
+                }
+                if (less)
+                    less.hidden = panel.activityLimit <= 20;
                 const limit = session.context.activityLimit;
                 panel.historyStatus.textContent = limit === 0 ? "Activity history is off. Notes, bookmarks and your place still work." : `Recent activity keeps up to ${limit} actions.${session.state.droppedActivityCount ? ` ${session.state.droppedActivityCount} earlier actions were not kept.` : ""}`;
-                if (!session.state.activity.length && limit > 0)
-                    append(panel.activity, "li", "av-muted", "No recent activity.");
                 const savedPlace = place(session);
                 panel.resume.disabled = savedPlace === null;
                 panel.resume.textContent = savedPlace ? "Resume “" + session.views.get(savedPlace.viewId).label + "”" : "Resume reading";
@@ -4229,20 +5823,36 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                 panel.resetCancel.hidden = session.pending?.kind !== "reset";
                 panel.confirmationText.textContent = session.pending?.kind === "reading" ? "Reading the file you selected…" : session.pending?.kind === "reset" ? "Start a new notebook? This removes current notes, bookmarks, drafts and your saved place, and requests replacement of your compatible saved notebook. Foreign or unreadable saved data stays protected. Export anything you want to keep first." : session.pending?.kind === "import" ? `Replace this notebook with “${session.pending.name}”? It contains ${importedSummary(session.pending.state)}. Your current notes and drafts will be replaced.${session.lockedRaw !== null ? " Earlier saved data stays protected; this imported copy will remain in the session if browser saving is blocked." : ""}` : "";
             }
-            session.reviewUI?.render(session.panels.map(panel => panel.notes), session.panels.map(panel => panel.bookmarks));
+            session.reviewUI?.render(session.panels.map(panel => panel.notes), session.panels.map(panel => panel.bookmarks), session.panels.map(panel => panel.inclusions));
+            for (const panel of session.panels)
+                panel.view.refresh();
         }
         function build(element, content, status, session) {
-            const label = append(content, "label", "av-notebook-field", "About");
+            const summary = element.querySelector('summary');
+            const count = append(summary || element, 'span', 'av-notebook-count');
+            count.setAttribute('data-av-review-ui', '');
+            count.setAttribute('aria-label', 'Notes and bookmarks');
+            count.hidden = true;
+            undo.push(() => count.remove());
+            const view = (0, notebook_view_1.createNotebookView)(element, content), { notes: notesPage, bookmarks: bookmarksPage, activity: activityPage, share: sharePage } = view.areas;
+            undo.push(() => view.cleanup());
+            // Status stays reachable regardless of which collection the reader scrolls.
+            const statusHome = document.createComment('av-notebook-status');
+            status.parentNode?.insertBefore(statusHome, status);
+            view.footer.appendChild(status);
+            undo.push(() => statusHome.parentNode?.replaceChild(status, statusHome));
+            const compose = append(notesPage, 'div', 'av-notebook-compose');
+            const label = append(compose, "label", "av-notebook-field", "About");
             const target = append(label, "select");
             target.setAttribute("data-av-notebook-target", "");
             for (const [id, value] of session.targets) {
                 const option = append(target, "option", "", value.label);
                 option.value = id;
             }
-            const actions = append(content, "div", "av-notebook-actions");
+            const actions = append(compose, "div", "av-notebook-actions");
             button(actions, "new-annotation", "Add a note");
             button(actions, "bookmark-target", "Bookmark this part");
-            const legacy = append(content, "details", "av-notebook-legacy");
+            const legacy = append(notesPage, "details", "av-notebook-legacy");
             append(legacy, "summary", "", "Earlier notes by report part");
             append(legacy, "p", "av-muted", "These earlier notes identify a report part without recording its evidence fingerprint. Use Add a note for an exact content attachment.");
             const noteLabel = append(legacy, "label", "av-notebook-field", "Your earlier note");
@@ -4257,44 +5867,59 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             bookmark.setAttribute("type", "checkbox");
             bookmark.setAttribute("data-av-notebook-bookmark", "");
             append(bookmarkLabel, "span", "", "Bookmark this part");
-            append(content, "h3", "", "Notes");
-            const notes = append(content, "ul", "av-notebook-list");
+            append(notesPage, "h3", "av-sr-only", "Notes");
+            const notes = append(notesPage, "ul", "av-notebook-list");
             notes.setAttribute("data-av-notebook-notes", "");
-            append(content, "h3", "", "Competing note versions");
-            const conflicts = append(content, "ul", "av-notebook-list");
+            append(notesPage, "h3", "", "Competing note versions");
+            const conflicts = append(notesPage, "ul", "av-notebook-list");
             conflicts.setAttribute("data-av-notebook-conflicts", "");
-            append(content, "h3", "", "Bookmarks");
-            const bookmarks = append(content, "ul", "av-notebook-list");
+            append(bookmarksPage, "h3", "av-sr-only", "Bookmarks");
+            const bookmarks = append(bookmarksPage, "ul", "av-notebook-list");
             bookmarks.setAttribute("data-av-notebook-bookmarks", "");
-            const resume = button(content, "resume", "Resume reading");
-            const history = append(content, "details", "av-notebook-history");
-            append(history, "summary", "", "Recent activity");
+            const resume = button(activityPage, "resume", "Resume reading");
+            const history = append(activityPage, "div", "av-notebook-history");
+            append(history, "h3", "", "Recent activity");
             const historyStatus = append(history, "p", "av-muted");
-            const activity = append(history, "ol", "av-notebook-list");
+            const activity = append(history, "ol", "av-activity-list");
             activity.setAttribute("data-av-notebook-activity", "");
-            content.appendChild(legacy);
-            const transfers = append(content, "div", "av-notebook-transfer");
-            append(transfers, "h3", "", "Keep or restore a copy");
-            button(transfers, "export-report", "Download annotated report");
-            button(transfers, "export-handoff", "Download review handoff");
-            button(transfers, "copy-handoff", "Copy review handoff");
-            button(transfers, "export", "Prepare notebook export");
-            const download = link(transfers, "download", "Download notebook copy");
+            notesPage.appendChild(legacy);
+            const historyActions = append(history, 'div', 'av-notebook-actions');
+            button(historyActions, 'activity-more', 'Show more');
+            button(historyActions, 'activity-less', 'Show fewer');
+            const transfers = append(sharePage, "div", "av-notebook-transfer");
+            const annotated = append(transfers, 'section', 'av-transfer-card');
+            append(annotated, 'h3', '', 'Annotated report');
+            append(annotated, 'p', '', 'A standalone interactive report with the original evidence and the feedback selected below.');
+            button(annotated, 'export-report', 'Download annotated report');
+            const handoff = append(transfers, 'section', 'av-transfer-card');
+            append(handoff, 'h3', '', 'Review handoff');
+            append(handoff, 'p', '', 'Readable Markdown for a person or agent: your feedback, exact evidence, source references, unresolved attachments and competing versions.');
+            button(handoff, 'export-handoff', 'Download review handoff');
+            button(handoff, 'copy-handoff', 'Copy review handoff');
+            const selection = append(transfers, 'details', 'av-share-selection');
+            append(selection, 'summary', '', 'Choose what to share');
+            append(selection, 'p', 'av-muted', 'Includes all notes, drafts and bookmarks by default. Exclusions affect these two review formats only, not your notebook backup.');
+            const inclusions = append(selection, 'div', 'av-review-inclusions');
+            const backup = append(transfers, 'section', 'av-transfer-card');
+            append(backup, 'h3', '', 'Notebook backup');
+            append(backup, 'p', '', 'All reader records, including drafts, activity, competing versions and retained originals. Restore this JSON to continue reviewing.');
+            button(backup, 'export', 'Prepare notebook export');
+            const download = link(backup, 'download', 'Download notebook copy');
             download.hidden = true;
-            const recover = link(transfers, "recover", "Download original saved data");
-            const importLabel = append(transfers, "label", "av-notebook-field", "Restore an exported notebook");
+            const recover = link(backup, 'recover', 'Download original saved data');
+            const importLabel = append(backup, "label", "av-notebook-field", "Restore an exported notebook");
             const file = append(importLabel, "input");
             file.setAttribute("type", "file");
             file.setAttribute("accept", ".json,application/json");
             file.setAttribute("data-av-notebook-import", "");
-            button(transfers, "start-reset", "Start a new notebook");
-            const confirmation = append(content, "div", "av-notebook-confirmation");
+            button(backup, "start-reset", "Start a new notebook");
+            const confirmation = append(view.footer, "div", "av-notebook-confirmation");
             confirmation.setAttribute("data-av-notebook-confirmation", "");
             const confirmationText = append(confirmation, "p");
             const importConfirm = button(confirmation, "confirm-import", "Replace notebook"), importCancel = button(confirmation, "cancel-import", "Cancel restore");
             const resetConfirm = button(confirmation, "confirm-reset", "Start new notebook"), resetCancel = button(confirmation, "cancel-reset", "Keep current notebook");
             content.hidden = false;
-            return { element, content, status, selected: session.scope.id, target, note, bookmark, notes, bookmarks, activity, historyStatus, resume, recover, download, conflicts, confirmation, confirmationText, importConfirm, importCancel, resetConfirm, resetCancel };
+            return { view, count, inclusions, activityLimit: 20, element, content, status, selected: session.scope.id, target, note, bookmark, notes, bookmarks, activity, historyStatus, resume, recover, download, conflicts, confirmation, confirmationText, importConfirm, importCancel, resetConfirm, resetCancel };
         }
         const definitions = all("[data-av-notebook]").map(element => ({ element, ...prepare(element) }));
         const scopeRoots = new Set();
@@ -4344,7 +5969,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                         throw new Error("The notebook and display preferences need different storage keys. No saved data has been changed.");
                     return { revision, key, limit };
                 });
-                if (metadata.some(value => JSON.stringify(value) !== JSON.stringify(metadata[0])))
+                if (metadata.some(value => (0, exact_json_8.exactJson)(value) !== (0, exact_json_8.exactJson)(metadata[0])))
                     throw new Error("These notebook panels disagree about their report revision or saving settings. No saved notebook has been changed.");
                 const { revision, key, limit } = metadata[0];
                 if (key !== null && conflictingKeys.has(key))
@@ -4388,13 +6013,13 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                     }
                     if (!Array.isArray(steps) || !steps.length || steps.some(step => typeof step !== "string" || !views.has(step)))
                         throw new Error("A reading route refers to an unavailable view. No saved notebook has been changed.");
-                    if (routes.has(id) && JSON.stringify(routes.get(id).steps) !== JSON.stringify(steps))
+                    if (routes.has(id) && (0, exact_json_8.exactJson)(routes.get(id).steps) !== (0, exact_json_8.exactJson)(steps))
                         throw new Error("A reading route has conflicting definitions. No saved notebook has been changed.");
                     routes.set(id, { label: element.getAttribute("data-av-journey-label") || id, steps });
                 }
                 const context = { reportId: scope.id, revision, targetIds: [...targets.keys()], viewIds: [...views.keys()], journeyIds: [...routes.keys()], activityLimit: limit };
                 const initial = (0, reader_state_1.emptyReaderNotebook)(context);
-                const signature = JSON.stringify([revision, key, limit, [...targets.keys()].sort(), [...views.keys()].sort(), [...routes].map(([id, route]) => [id, route.steps])]);
+                const signature = (0, exact_json_8.exactJson)([revision, key, limit, [...targets.keys()].sort(), [...views.keys()].sort(), [...routes].map(([id, route]) => [id, route.steps])]);
                 const cached = retained.get(scope)?.get(signature);
                 let seed, seedError = '';
                 try {
@@ -4407,7 +6032,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                     seedError = 'The embedded review could not be loaded: ' + (error instanceof Error ? error.message : 'invalid review data');
                 }
                 const notebook = cached?.notebook || seed || initial;
-                const session = { registry, seed, seedKey: seed ? (0, identity_3.fingerprint)(JSON.stringify(seed)) : undefined, seedInvalid: !!seedError, epochKnown: cached?.epochKnown || false, scope, context, signature, key, store: null, targets, views, routes, panels: [], state: notebook.state, notebook, drafts: new Map(cached?.drafts), lockedRaw: cached?.lockedRaw ?? null, lockMessage: cached?.lockMessage || "", readBlocked: cached?.readBlocked || false, persistence: cached?.persistence || "Kept in this open report. Export a copy to keep it.", notice: "", pending: null, token: 0, writes: [], work: Promise.resolve(), loading: key !== null, saving: false, changed: false, exportJob: null, initialFocus: document.activeElement, stopped: cached?.stopped || false };
+                const session = { registry, seed, seedKey: seed ? (0, identity_3.fingerprint)((0, exact_json_8.exactJson)(seed)) : undefined, seedInvalid: !!seedError, epochKnown: cached?.epochKnown || false, scope, context, signature, key, store: null, targets, views, routes, panels: [], state: notebook.state, notebook, drafts: new Map(cached?.drafts), lockedRaw: cached?.lockedRaw ?? null, lockMessage: cached?.lockMessage || "", readBlocked: cached?.readBlocked || false, persistence: cached?.persistence || "Kept in this open report. Export a copy to keep it.", notice: "", pending: null, token: 0, writes: [], work: Promise.resolve(), loading: key !== null, saving: false, changed: false, exportJob: null, initialFocus: document.activeElement, stopped: cached?.stopped || false };
                 if (seedError) {
                     session.lockedRaw = document.getElementById('av-review-seed')?.textContent || '';
                     session.lockMessage = seedError;
@@ -4434,6 +6059,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                     session.persistence = "Opening saved notebook… Current edits stay in this report.";
                     render(session);
                     session.work = initialize(session, cached).catch(() => blocked(session, { status: "unavailable", message: "Browser storage could not be read. Your records remain in this report; export a copy to keep them." })).finally(() => { session.loading = false; render(session); persist(session); });
+                    initialReads.push(session.work);
                 }
             }
             catch (error) {
@@ -4475,7 +6101,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             catch {
                 reading = Promise.reject(new Error("The selected file could not be read."));
             }
-            void reading.then(raw => {
+            session.importJob = reading.then(raw => {
                 if (cleaned || session.token !== token)
                     return;
                 try {
@@ -4492,7 +6118,67 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
             }, () => { if (cleaned || session.token !== token)
                 return; session.pending = null; session.notice = "The selected file could not be read. Your notebook has not changed."; render(session); });
         }
+        function openEntry(session, tab, attribute, id) {
+            const panel = session.panels[0];
+            if (!panel || cleaned)
+                return;
+            panel.view.locate(tab);
+            panel.element.setAttribute('open', '');
+            const locate = () => {
+                if (cleaned || !panel.element.hasAttribute('open'))
+                    return;
+                const target = Array.from(panel.content.querySelectorAll('[' + attribute + ']')).find(item => item.getAttribute(attribute) === id);
+                if (target) {
+                    target.tabIndex = -1;
+                    target.focus({ preventScroll: true });
+                    target.scrollIntoView?.({ block: 'nearest' });
+                }
+            };
+            // Native details/popover opening is queued by the browser. Focus only after
+            // that transition, while retaining the same card and originating report.
+            (document.defaultView?.requestAnimationFrame || ((fn) => setTimeout(fn, 0)))(locate);
+        }
         return {
+            async whenReady() { await Promise.all(initialReads); },
+            searchEntries(scope) {
+                const session = sessions.get(scope);
+                if (cleaned || !session)
+                    return [];
+                const entries = [];
+                for (const version of session.notebook.review?.versions || []) {
+                    if (version.text === null)
+                        continue;
+                    entries.push({ kind: 'notes', label: (version.draft ? 'Draft · ' : '') + (0, review_presentation_2.anchorLabel)(version.anchor), text: version.text + '\n' + (0, review_presentation_2.anchorEvidence)(version.anchor), context: (0, review_presentation_2.anchorContext)(version.anchor), activate: () => openEntry(session, 'notes', 'data-av-note-version', version.id) });
+                }
+                for (const anchor of session.notebook.review?.bookmarks || []) {
+                    entries.push({ kind: 'bookmarks', label: (0, review_presentation_2.anchorLabel)(anchor), text: (0, review_presentation_2.anchorEvidence)(anchor), context: (0, review_presentation_2.anchorContext)(anchor), activate: () => openEntry(session, 'bookmarks', 'data-av-review-bookmark', (0, identity_3.fingerprint)((0, exact_json_8.exactJson)(anchor))) });
+                }
+                for (const note of session.state.notes)
+                    entries.push({ kind: 'notes', label: 'Earlier note · ' + (session.targets.get(note.targetId)?.label || note.targetId), text: note.text, context: 'Earlier target-only note', activate: () => openEntry(session, 'notes', 'data-av-notebook-target-id', note.targetId) });
+                for (const id of session.state.bookmarks)
+                    entries.push({ kind: 'bookmarks', label: session.targets.get(id)?.label || id, text: '', context: 'Earlier target-only bookmark', activate: () => openEntry(session, 'bookmarks', 'data-av-notebook-target-id', id) });
+                return entries;
+            },
+            hasReview(figure) { return [...sessions.values()].some(session => session.registry.targets.has(figure.id)); },
+            reviewSelection(figure, action, trigger) {
+                const session = [...sessions.values()].find(session => session.registry.targets.has(figure.id));
+                if (!session)
+                    return;
+                const selected = document.defaultView?.getSelection?.();
+                const anchor = figure.getAttribute('data-av-selection-mode') === 'text'
+                    ? (selected && !selected.isCollapsed ? session.registry.selection(selected) : null) : session.registry.items((0, item_selection_3.selectedFigureItems)(figure));
+                if (!anchor) {
+                    hooks.notify?.({ text: 'This selection has no unique evidence attachment. Select a single passage inside one record, or annotate the whole figure using its Note command.', tone: 'error', source: figure });
+                    return;
+                }
+                if (action === 'note')
+                    session.reviewUI?.open(anchor, trigger);
+                else {
+                    const enabled = !(session.notebook.review?.bookmarks || []).some(saved => (0, exact_json_8.exactJson)(saved) === (0, exact_json_8.exactJson)(anchor));
+                    if (apply(session, { type: 'review-bookmark', anchor, enabled }))
+                        hooks.notify?.({ text: enabled ? 'Selection bookmarked.' : 'Selection bookmark removed.', tone: 'success', source: figure });
+                }
+            },
             click(target) {
                 for (const session of sessions.values())
                     if (session.reviewUI?.click(target))
@@ -4503,8 +6189,19 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                 const { panel, session } = found, action = control.getAttribute("data-av-notebook-action");
                 if (control.disabled)
                     return true;
+                if (action === 'activity-more' || action === 'activity-less') {
+                    panel.activityLimit = action === 'activity-more' ? panel.activityLimit + 20 : 20;
+                    render(session);
+                    return true;
+                }
                 try {
-                    if (action === "new-annotation") {
+                    if (action === 'remove-legacy-bookmark') {
+                        const targetId = control.getAttribute('data-av-notebook-target-id');
+                        if (targetId && session.targets.has(targetId) && apply(session, { type: 'bookmark', targetId, enabled: false, at: now() })) {
+                            panel.content.querySelector('[data-av-notebook-tab="bookmarks"]')?.focus({ preventScroll: true });
+                        }
+                    }
+                    else if (action === "new-annotation") {
                         const selected = session.targets.get(panel.selected);
                         if (selected) {
                             panel.element.removeAttribute('open');
@@ -4515,7 +6212,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                         const selected = session.targets.get(panel.selected);
                         if (selected) {
                             const anchor = session.registry.anchor(selected.element);
-                            const enabled = !(session.notebook.review?.bookmarks || []).some(value => JSON.stringify(value) === JSON.stringify(anchor));
+                            const enabled = !(session.notebook.review?.bookmarks || []).some(value => (0, exact_json_8.exactJson)(value) === (0, exact_json_8.exactJson)(anchor));
                             if (apply(session, { type: 'review-bookmark', anchor, enabled }))
                                 hooks.notify?.({ text: enabled ? 'Bookmark added.' : 'Bookmark removed.', tone: 'success', source: panel.element });
                         }
@@ -4541,6 +6238,9 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                         return true;
                     }
                     else if (action === "export") {
+                        if (session.exportBusy)
+                            return true;
+                        session.exportBusy = true;
                         capture(panel, session);
                         panel.download.hidden = true;
                         session.notice = "Preparing a copy, including drafts and competing note versions…";
@@ -4556,8 +6256,12 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                             hooks.notify?.({ text: "Notebook copy ready.", tone: "success", source: panel.element });
                             render(session);
                         })().catch(() => { const message = "The copy could not be prepared. Your records remain in this open report."; session.notice = hooks.notify ? "" : message; hooks.notify?.({ text: message, tone: "error", source: panel.element }); render(session); });
+                        session.exportJob = session.exportJob.finally(() => { session.exportBusy = false; render(session); });
                     }
                     else if (action === "export-report" || action === "export-handoff" || action === "copy-handoff") {
+                        if (session.exportBusy)
+                            return true;
+                        session.exportBusy = true;
                         capture(panel, session);
                         const operation = (async () => {
                             await Promise.all((action === "export-report" ? [...peers.values()] : [session]).map(other => refreshForExport(other)));
@@ -4585,7 +6289,7 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                             hooks.notify?.({ text: action === 'copy-handoff' ? 'Handoff copied.' : 'Download prepared.', tone: 'success', source: panel.element });
                             render(session);
                         })().catch(error => { const message = error instanceof Error ? error.message : 'The review copy could not be prepared.'; session.notice = hooks.notify ? '' : message; hooks.notify?.({ text: message, tone: 'error', source: panel.element }); render(session); });
-                        session.exportJob = operation;
+                        session.exportJob = operation.finally(() => { session.exportBusy = false; render(session); });
                     }
                     else if (action === "recover") {
                         if (session.lockedRaw !== null) {
@@ -4701,15 +6405,23 @@ define("notebook", ["require", "exports", "identity", "review-targets", "context
                 const session = sessions.get(scope);
                 if (cleaned || !session || next.viewId === null || (session.state.viewId === next.viewId && session.state.mode === next.mode && session.state.journeyId === next.journeyId))
                     return;
+                for (const panel of session.panels)
+                    if (!panel.element.hasAttribute('open') && !session.drafts.has(panel.selected))
+                        panel.selected = session.views.get(next.viewId)?.element.id || scope.id;
                 apply(session, { type: "navigate", viewId: next.viewId, mode: next.mode, journeyId: next.journeyId, at: now() });
             },
             recordInspection(target) {
                 const session = owners.get(target);
-                if (!cleaned && session)
+                if (!cleaned && session) {
+                    for (const panel of session.panels)
+                        if (!panel.element.hasAttribute('open') && !session.drafts.has(panel.selected))
+                            panel.selected = target.id;
                     apply(session, { type: "activity", action: "inspect", targetId: target.id, at: now() });
+                }
             },
             async whenIdle() { for (const session of sessions.values()) {
                 await settled(session);
+                await session.importJob;
                 await session.exportJob;
             } },
             cleanup() {
@@ -4806,7 +6518,677 @@ define("atelier", ["require", "exports", "core", "preferences", "story", "notebo
         return `<${tag}${input.landmark === "region" ? ` role="region" aria-labelledby="${(0, core_7.escapeText)(prefix)}--title"` : ""} id="${(0, core_7.escapeText)(prefix)}" class="av-workspace av-report" data-av-view-total="${input.views.length}" data-av-workspace${input.startView ? ` data-av-start-view="${(0, core_7.escapeText)(input.startView)}"` : ""} ${(0, preferences_1.surfaceAttributes)(input)}><a class="av-skip" href="#${(0, core_7.escapeText)(prefix)}--content">Skip to evidence</a><header class="av-workspace-header"><div class="av-workspace-heading">${input.label ? `<p class="av-brand">${(0, core_7.escapeText)(input.label)}</p>` : ""}<h1 class="av-workspace-title" id="${(0, core_7.escapeText)(prefix)}--title">${(0, core_7.escapeText)(input.title)}</h1>${input.description ? `<p class="av-workspace-intro">${(0, core_7.escapeText)(input.description)}</p>` : ""}</div></header><div class="av-workspace-bar"><div class="av-search" data-av-script-only hidden><span class="av-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg></span><label class="av-sr-only" for="${(0, core_7.escapeText)(prefix)}--query">Find in this report</label><input id="${(0, core_7.escapeText)(prefix)}--query" type="search" data-av-search placeholder="Find in this report" aria-describedby="${(0, core_7.escapeText)(prefix)}--search-status"><button type="button" class="av-search-reset" data-av-search-reset aria-label="Clear search" hidden>×</button></div><div class="av-reading-mode" role="group" aria-label="Reading mode" data-av-script-only hidden><button type="button" class="av-button" data-av-show-single aria-label="Section view"><span class="av-mode-long">Section view</span><span class="av-mode-short" aria-hidden="true" data-av-review-ui>Section</span></button><button type="button" class="av-button" data-av-show-all aria-label="Full report"><span class="av-mode-long">Full report</span><span class="av-mode-short" aria-hidden="true" data-av-review-ui>All</span></button></div><div class="av-workspace-utilities">${input.settings === false ? "" : (0, preferences_1.appearanceSettings)({ id: `${prefix}--display` })}${notebook}</div><span class="av-view-count" data-av-view-count></span><div class="av-search-results" data-av-search-results role="region" aria-label="Search results" hidden></div><output class="av-search-status av-sr-only" id="${(0, core_7.escapeText)(prefix)}--search-status" data-av-search-status aria-live="polite"></output></div>${input.brief ? (0, story_1.reportBrief)(input.brief) : ""}${routes}<div class="av-workspace-layout"><nav class="av-workspace-nav" aria-label="${(0, core_7.escapeText)(input.title)} views">${navigation}</nav><div class="av-workspace-main" id="${(0, core_7.escapeText)(prefix)}--content">${views || '<p class="av-empty">No views supplied.</p>'}${journeyControls}</div></div>${input.footer ? `<footer class="av-workspace-footer">${input.footer}</footer>` : ""}</${tag}>`;
     }
 });
-define("utility-panels", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_3) {
+define("comparison-reader", ["require", "exports", "floating-panel", "command-bar", "review-targets"], function (require, exports, floating_panel_2, command_bar_4, review_targets_2) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.comparisonWindow = comparisonWindow;
+    exports.attachComparisonReader = attachComparisonReader;
+    /** A reading window is independent of the chosen evidence set. No ranking,
+     * correspondence or difference is inferred from position or linked scrolling. */
+    function comparisonWindow(keys, capacity, offset, reference, showReference = false) {
+        const size = Math.max(1, Math.floor(Number.isFinite(capacity) ? capacity : 1));
+        const pin = reference && keys.includes(reference) ? reference : null;
+        const remaining = pin ? keys.filter(key => key !== pin) : [...keys];
+        const step = Math.max(1, size - (pin && size > 1 ? 1 : 0));
+        const at = Math.max(0, Math.min(Math.floor(Number.isFinite(offset) ? offset : 0), Math.max(0, remaining.length - 1)));
+        const selected = pin && size === 1 && showReference ? [pin] : [...(pin && size > 1 ? [pin] : []), ...remaining.slice(at, at + step)];
+        return { keys: selected.length ? selected : pin ? [pin] : [], offset: at, step, remaining };
+    }
+    const pinIcon = 'm8 3 8 0-1 6 4 4H5l4-4-1-6M12 13v8';
+    const gridIcon = 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z';
+    const columnsIcon = 'M3 3h18v18H3zM12 3v18';
+    const linkIcon = 'm9 15 6-6M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0';
+    function attachComparisonReader(explorer, stage, objects) {
+        const document = stage.ownerDocument, view = document.defaultView, undo = [];
+        const keys = objects.map(object => object.getAttribute('data-av-object'));
+        const byKey = new Map(objects.map((object, index) => [keys[index], object]));
+        const labelOf = (object) => (0, review_targets_2.reviewText)(object.querySelector('summary') || object).trim();
+        const labels = new Map(objects.map((object, index) => [keys[index], labelOf(object)]));
+        const own = (selector) => Array.from(explorer.querySelectorAll(selector)).filter(node => node.closest('[data-av-explorer]') === explorer);
+        const checks = own('[data-av-compare]').filter(control => byKey.has(control.getAttribute('data-av-compare') || ''));
+        const controlsByKey = new Map(checks.map(control => [control.getAttribute('data-av-compare'), control]));
+        const selects = own('[data-av-select]');
+        let current = keys.find(key => byKey.get(key).classList.contains('av-selected')) || keys[0] || '';
+        let selected = new Set(checks.filter(input => input.checked).map(input => input.getAttribute('data-av-compare')));
+        let comparing = selected.size > 1, layout = 'window', reference = null, offset = 0, capacity = 1, showReference = false, linked = false, stopped = false;
+        let visibleKeys = [], rendering = false, layoutFrame = null, scrollFrame = null, leader = null;
+        const positions = new Map(), expected = new WeakMap();
+        const bodies = new Map();
+        const originalChildren = Array.from(stage.childNodes);
+        const releaseOrder = (0, review_targets_2.registerReviewOrder)(stage);
+        // Keep authored non-record siblings in place while moving the live records.
+        const slotsByPosition = objects.map(object => { const slot = document.createComment('av-record-slot'); stage.insertBefore(slot, object); return slot; });
+        const originalStageClass = stage.className, originalExplorerComparing = explorer.classList.contains('av-comparing');
+        const oldColumns = stage.style.getPropertyValue('--av-reader-columns');
+        const empty = document.createElement('p');
+        empty.className = 'av-reader-empty';
+        empty.setAttribute('data-av-review-ui', '');
+        empty.textContent = 'Choose records to start a comparison.';
+        stage.classList.add('av-reading-stage');
+        stage.setAttribute('data-av-comparison-layout', 'window');
+        for (const object of objects) {
+            const attributes = ['hidden', 'open'].map(name => [name, object.getAttribute(name)]), oldClass = object.className;
+            const summary = object.querySelector('summary'), body = object.querySelector('.av-object-body');
+            if (body) {
+                bodies.set(body, object.getAttribute('data-av-object'));
+                positions.set(body, { top: body.scrollTop, left: body.scrollLeft });
+            }
+            if (summary) {
+                const disabled = summary.getAttribute('aria-disabled');
+                summary.removeAttribute('aria-disabled');
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'av-record-pin';
+                pin.setAttribute('data-av-controls', '');
+                pin.setAttribute('data-av-review-ui', '');
+                pin.setAttribute('data-av-pin-record', object.getAttribute('data-av-object'));
+                pin.appendChild((0, command_bar_4.commandIcon)(document, pinIcon));
+                summary.appendChild(pin);
+                const clicked = (event) => { event.preventDefault(); event.stopPropagation(); const key = object.getAttribute('data-av-object'); reference = reference === key ? null : key; if (!selected.has(key))
+                    selected.add(key); comparing = true; offset = 0; showReference = false; render(); };
+                pin.addEventListener('click', clicked);
+                undo.push(() => { pin.removeEventListener('click', clicked); pin.remove(); if (disabled === null)
+                    summary.removeAttribute('aria-disabled');
+                else
+                    summary.setAttribute('aria-disabled', disabled); });
+            }
+            undo.push(() => { object.className = oldClass; object.removeAttribute('data-av-reference'); for (const [name, value] of attributes)
+                if (value === null)
+                    object.removeAttribute(name);
+                else
+                    object.setAttribute(name, value); });
+        }
+        // Keep the established native command inputs, but remove their duplicate
+        // presentation. The record picker uses its own controls, never clones evidence.
+        const hiddenControls = new Set();
+        for (const control of [...checks, ...selects]) {
+            const container = control.closest('.av-artifact-controls,.av-explorer-tools');
+            if (container && !hiddenControls.has(container)) {
+                hiddenControls.add(container);
+                const hidden = container.hidden;
+                container.hidden = true;
+                undo.push(() => { container.hidden = hidden; });
+            }
+        }
+        const bar = document.createElement('div');
+        bar.className = 'av-comparison-bar';
+        bar.setAttribute('data-av-controls', '');
+        bar.setAttribute('data-av-review-ui', '');
+        bar.setAttribute('role', 'group');
+        bar.setAttribute('aria-label', 'Read and compare');
+        stage.parentNode.insertBefore(bar, stage);
+        function button(label, attr, parent = bar, icon) { const b = document.createElement('button'); b.type = 'button'; b.className = 'av-button'; b.setAttribute(attr, ''); if (icon)
+            b.appendChild((0, command_bar_4.commandIcon)(document, icon)); const span = document.createElement('span'); span.textContent = label; b.appendChild(span); parent.appendChild(b); return b; }
+        const modes = document.createElement('div');
+        modes.className = 'av-reader-switch';
+        modes.setAttribute('role', 'group');
+        modes.setAttribute('aria-label', 'Reading mode');
+        bar.appendChild(modes);
+        const read = button('Read', 'data-av-read-one', modes), compare = button('Compare', 'data-av-read-compare', modes);
+        const pickerButton = button('Records', 'data-av-record-picker', bar, gridIcon);
+        const picker = (0, floating_panel_2.attachFloatingPanel)(pickerButton, explorer, 'Choose records');
+        picker.element.classList.add('av-record-picker');
+        const searchLabel = document.createElement('label');
+        searchLabel.className = 'av-picker-search';
+        searchLabel.textContent = 'Find a record';
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.placeholder = 'Name or passage';
+        search.setAttribute('data-av-record-search', '');
+        searchLabel.appendChild(search);
+        picker.body.appendChild(searchLabel);
+        const pickerTools = document.createElement('div');
+        pickerTools.className = 'av-picker-tools';
+        picker.body.appendChild(pickerTools);
+        const all = button('Select all', 'data-av-records-all', pickerTools), clear = button('Clear', 'data-av-records-clear', pickerTools);
+        const matchCount = document.createElement('output');
+        matchCount.className = 'av-picker-count';
+        matchCount.setAttribute('role', 'status');
+        picker.body.appendChild(matchCount);
+        const options = document.createElement('div');
+        options.className = 'av-record-options';
+        picker.body.appendChild(options);
+        const more = button('Show more', 'data-av-records-more', picker.body);
+        const pickerFoot = document.createElement('div');
+        pickerFoot.className = 'av-picker-footer';
+        picker.body.appendChild(pickerFoot);
+        const done = button('Done', 'data-av-records-done', pickerFoot);
+        let shown = 60;
+        // Search text is built once from actual evidence, with the controls excluded.
+        const searchable = new Map(keys.map(key => [key, (labels.get(key) + ' ' + (0, review_targets_2.reviewText)(byKey.get(key))).toLocaleLowerCase()]));
+        const optionRows = new Map();
+        for (const key of keys) {
+            const row = document.createElement('div');
+            row.className = 'av-record-option';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.setAttribute('data-av-pick-record', key);
+            checkbox.setAttribute('aria-label', 'Compare ' + labels.get(key));
+            row.appendChild(checkbox);
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'av-record-choice';
+            open.setAttribute('data-av-open-record', key);
+            open.textContent = labels.get(key);
+            row.appendChild(open);
+            // Full labels and original evidence are not truncated in the reading panes.
+            optionRows.set(key, { row, check: checkbox, open });
+            options.appendChild(row);
+        }
+        const settings = document.createElement('div');
+        settings.className = 'av-comparison-options';
+        bar.appendChild(settings);
+        const cards = button('All cards', 'data-av-reader-cards', settings, gridIcon);
+        const sync = button('Scroll together', 'data-av-reader-sync', settings, linkIcon);
+        sync.title = 'Link relative vertical progress. Paragraphs are not assumed to correspond.';
+        const navigation = document.createElement('div');
+        navigation.className = 'av-comparison-navigation';
+        navigation.setAttribute('data-av-controls', '');
+        navigation.setAttribute('data-av-review-ui', '');
+        stage.parentNode.insertBefore(navigation, stage);
+        const previous = button('Previous', 'data-av-reader-previous', navigation), range = document.createElement('output');
+        range.setAttribute('role', 'status');
+        range.setAttribute('aria-live', 'polite');
+        range.setAttribute('data-av-reader-range', '');
+        navigation.appendChild(range);
+        const next = button('Next', 'data-av-reader-next', navigation), referenceToggle = button('Reference', 'data-av-reader-reference', navigation, pinIcon);
+        const existingStatus = own('[data-av-comparison-status]')[0];
+        const status = existingStatus || document.createElement('output');
+        if (!existingStatus) {
+            status.className = 'av-sr-only';
+            status.setAttribute('data-av-comparison-status', '');
+            status.setAttribute('data-av-review-ui', '');
+            bar.appendChild(status);
+        }
+        function matching() { const query = search.value.trim().toLocaleLowerCase(); return keys.filter(key => !query || searchable.get(key).includes(query)); }
+        function paintPicker() {
+            const matches = matching(), visible = new Set(matches.slice(0, shown));
+            for (const [key, entry] of optionRows) {
+                entry.row.hidden = !visible.has(key);
+                entry.check.checked = selected.has(key);
+                entry.check.hidden = !comparing;
+                entry.open.setAttribute('aria-current', key === current ? 'true' : 'false');
+            }
+            all.hidden = clear.hidden = !comparing;
+            all.disabled = !matches.length || matches.every(key => selected.has(key));
+            clear.disabled = !selected.size;
+            all.querySelector('span').textContent = search.value.trim() ? 'Select matches' : 'Select all';
+            matchCount.textContent = `${matches.length} ${matches.length === 1 ? 'record' : 'records'}${comparing ? ' · ' + selected.size + ' selected' : ''}`;
+            more.hidden = matches.length <= shown;
+            more.querySelector('span').textContent = `Show ${Math.min(60, Math.max(0, matches.length - shown))} more`;
+            picker.refresh();
+        }
+        function savePositions() { for (const [body, key] of bodies)
+            if (visibleKeys.includes(key) && body.clientHeight > 0)
+                positions.set(body, { top: body.scrollTop, left: body.scrollLeft }); }
+        function slots() {
+            const width = stage.clientWidth;
+            if (!(width > 0))
+                return capacity;
+            const body = objects[0]?.querySelector('.av-object-body');
+            const text = Number.parseFloat(view?.getComputedStyle?.(body || stage).fontSize || '') || 16;
+            const rem = Number.parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '') || 16;
+            // Match CSS em/rem sizing; a reader increasing text gets fewer, wider panes.
+            const minimum = Math.max(288, 18 * rem, 18 * text), gap = Math.max(12, rem);
+            return Math.max(1, Math.min(4, Math.floor((width + gap) / (minimum + gap))));
+        }
+        function render(key) {
+            if (stopped || rendering)
+                return;
+            rendering = true;
+            try {
+                savePositions();
+                capacity = slots();
+                if (key && byKey.has(key))
+                    current = key;
+                const chosen = keys.filter(key => selected.has(key));
+                if (reference && !selected.has(reference))
+                    reference = null;
+                const window = comparisonWindow(chosen, capacity, offset, reference, showReference);
+                offset = window.offset;
+                visibleKeys = comparing ? (layout === 'cards' ? chosen : window.keys) : current ? [current] : [];
+                const comparingNow = comparing && chosen.length > 0;
+                if (comparing && !chosen.length) {
+                    if (!empty.parentNode)
+                        stage.appendChild(empty);
+                }
+                else
+                    empty.remove();
+                stage.setAttribute('data-av-comparison-layout', comparingNow ? layout : 'read');
+                stage.style.setProperty('--av-reader-columns', String(Math.max(1, Math.min(capacity, visibleKeys.length))));
+                explorer.classList.toggle('av-comparing', comparingNow);
+                const visibleSet = new Set(visibleKeys), ordered = comparingNow ? [...visibleKeys, ...keys.filter(key => !visibleSet.has(key))] : keys;
+                ordered.forEach((key, index) => { const node = byKey.get(key), slot = slotsByPosition[index]; if (slot.nextSibling !== node)
+                    stage.insertBefore(node, slot.nextSibling); });
+                for (const [key, object] of byKey) {
+                    const visible = visibleSet.has(key);
+                    object.hidden = !visible;
+                    if (visible)
+                        object.setAttribute('open', '');
+                    else
+                        object.removeAttribute('open');
+                    object.classList.toggle('av-compared', comparingNow && selected.has(key));
+                    object.classList.toggle('av-selected', key === current);
+                    if (reference === key)
+                        object.setAttribute('data-av-reference', '');
+                    else
+                        object.removeAttribute('data-av-reference');
+                    const pin = object.querySelector('[data-av-pin-record]');
+                    if (pin) {
+                        pin.hidden = !comparing;
+                        pin.setAttribute('aria-pressed', String(reference === key));
+                        pin.setAttribute('aria-label', (reference === key ? 'Unpin ' : 'Pin as reference: ') + labels.get(key));
+                        pin.title = pin.getAttribute('aria-label');
+                    }
+                }
+                for (const input of checks)
+                    input.checked = selected.has(input.getAttribute('data-av-compare'));
+                for (const select of selects)
+                    if (Array.from(select.options).some(option => option.value === current))
+                        select.value = current;
+                read.setAttribute('aria-pressed', String(!comparing));
+                compare.setAttribute('aria-pressed', String(comparing));
+                pickerButton.querySelector('span').textContent = comparing ? `Records · ${chosen.length}` : `Records · ${keys.length}`;
+                cards.hidden = sync.hidden = !comparing;
+                cards.setAttribute('aria-pressed', String(layout === 'cards'));
+                cards.querySelector('span').textContent = layout === 'cards' ? 'Reading panes' : 'All cards';
+                sync.setAttribute('aria-pressed', String(linked));
+                sync.disabled = visibleKeys.length < 2;
+                previous.disabled = comparing ? layout === 'cards' || offset <= 0 : keys.indexOf(current) <= 0;
+                next.disabled = comparing ? layout === 'cards' || offset + window.step >= window.remaining.length : keys.indexOf(current) >= keys.length - 1;
+                referenceToggle.hidden = !(comparing && layout === 'window' && reference && capacity === 1);
+                referenceToggle.setAttribute('aria-pressed', String(showReference));
+                referenceToggle.querySelector('span').textContent = showReference ? 'Back to records' : 'Reference';
+                const message = !comparing ? `${keys.indexOf(current) + 1} of ${keys.length} · ${labels.get(current) || 'No records'}` : !chosen.length ? 'Choose records to compare' : layout === 'cards' ? `${chosen.length} selected · all cards` : `${reference ? 'Reference + ' : ''}${window.remaining.length ? `${offset + 1}–${Math.min(window.remaining.length, offset + window.step)} of ${window.remaining.length}` : 'reference'}${showReference && capacity === 1 ? ' · viewing reference' : ''}`;
+                range.textContent = message;
+                if (status)
+                    status.textContent = !comparing ? 'Single record view.' : `${chosen.length} selected. ${visibleKeys.length} visible. ${linked ? 'Scrolling follows relative progress, not matching passages.' : 'Independent scrolling.'}`;
+                paintPicker();
+                for (const [body, key] of bodies)
+                    if (visibleKeys.includes(key)) {
+                        const position = positions.get(body);
+                        if (position) {
+                            body.scrollTop = position.top;
+                            body.scrollLeft = position.left;
+                            expected.set(body, body.scrollTop);
+                        }
+                    }
+            }
+            finally {
+                rendering = false;
+            }
+        }
+        function schedule() { if (stopped || layoutFrame !== null)
+            return; if (view?.requestAnimationFrame)
+            layoutFrame = view.requestAnimationFrame(() => { layoutFrame = null; render(); });
+        else
+            render(); }
+        function listen(target, type, handler, capture = false) { target.addEventListener(type, handler, capture); undo.push(() => target.removeEventListener(type, handler, capture)); }
+        const activate = (action) => event => { event.preventDefault(); event.stopPropagation(); action(); };
+        listen(read, 'click', activate(() => { comparing = false; render(); }));
+        listen(compare, 'click', activate(() => { comparing = true; if (!selected.size && current)
+            selected.add(current); render(); picker.open(); }));
+        listen(cards, 'click', activate(() => { layout = layout === 'cards' ? 'window' : 'cards'; showReference = false; render(); }));
+        listen(sync, 'click', activate(() => { linked = !linked; render(); }));
+        listen(previous, 'click', activate(() => { if (comparing) {
+            offset = Math.max(0, offset - comparisonWindow(keys.filter(key => selected.has(key)), capacity, offset, reference).step);
+            showReference = false;
+        }
+        else
+            current = keys[Math.max(0, keys.indexOf(current) - 1)]; render(); }));
+        listen(next, 'click', activate(() => { if (comparing) {
+            offset += comparisonWindow(keys.filter(key => selected.has(key)), capacity, offset, reference).step;
+            showReference = false;
+        }
+        else
+            current = keys[Math.min(keys.length - 1, keys.indexOf(current) + 1)]; render(); }));
+        listen(referenceToggle, 'click', activate(() => { showReference = !showReference; render(); }));
+        listen(search, 'input', (() => { shown = 60; paintPicker(); }));
+        listen(all, 'click', activate(() => { for (const key of matching())
+            selected.add(key); render(); }));
+        listen(clear, 'click', activate(() => { selected.clear(); reference = null; offset = 0; render(); }));
+        listen(more, 'click', activate(() => { shown += 60; paintPicker(); }));
+        listen(done, 'click', activate(() => picker.close(true)));
+        listen(options, 'change', ((event) => { const target = event.target, key = target.getAttribute('data-av-pick-record'); if (!key)
+            return; event.stopPropagation(); if (target.checked)
+            selected.add(key);
+        else
+            selected.delete(key); render(); }));
+        listen(options, 'click', ((event) => { const target = event.target.closest('[data-av-open-record]'); if (!target)
+            return; event.preventDefault(); event.stopPropagation(); const key = target.getAttribute('data-av-open-record'); if (comparing) {
+            if (selected.has(key))
+                selected.delete(key);
+            else
+                selected.add(key);
+            render();
+        }
+        else {
+            current = key;
+            render();
+            picker.close(true);
+        } }));
+        listen(stage, 'scroll', ((event) => {
+            const body = event.target, key = bodies.get(body);
+            if (stopped || rendering || !key || !visibleKeys.includes(key) || body.clientHeight <= 0)
+                return;
+            const anticipated = expected.get(body);
+            expected.delete(body);
+            positions.set(body, { top: body.scrollTop, left: body.scrollLeft });
+            if (anticipated !== undefined && Math.abs(anticipated - body.scrollTop) < 1)
+                return;
+            if (!linked || !comparing || body.scrollHeight <= body.clientHeight)
+                return;
+            leader = body;
+            if (scrollFrame !== null)
+                return;
+            const propagate = () => { scrollFrame = null; const source = leader; leader = null; if (stopped || !linked || !source || !visibleKeys.includes(bodies.get(source)))
+                return; const ratio = source.scrollTop / Math.max(1, source.scrollHeight - source.clientHeight); for (const [other, k] of bodies)
+                if (other !== source && visibleKeys.includes(k) && other.clientHeight > 0) {
+                    const top = Math.max(0, other.scrollHeight - other.clientHeight) * Math.max(0, Math.min(1, ratio));
+                    expected.set(other, Math.round(top));
+                    other.scrollTop = top;
+                    positions.set(other, { top: other.scrollTop, left: other.scrollLeft });
+                } };
+            if (view?.requestAnimationFrame)
+                scrollFrame = view.requestAnimationFrame(propagate);
+            else
+                propagate();
+        }), true);
+        const observer = view?.ResizeObserver ? new view.ResizeObserver(schedule) : null;
+        observer?.observe(stage);
+        observer?.observe(bar);
+        if (view)
+            listen(view, 'resize', schedule);
+        // Readability depends on font metrics too. Font loading and preference edits
+        // cause a fresh capacity calculation without changing the selected set.
+        void document.fonts?.ready.then(() => { if (!stopped)
+            schedule(); });
+        render();
+        return { explorer, stage, render,
+            compare() { selected = new Set(checks.filter(input => input.checked).map(input => input.getAttribute('data-av-compare'))); comparing = selected.size > 1; offset = 0; showReference = false; if (selected.size === 1)
+                current = [...selected][0]; render(); },
+            reset() { comparing = false; selected.clear(); reference = null; offset = 0; showReference = false; render(); },
+            reveal(key) { if (!byKey.has(key))
+                return; current = key; if (comparing && selected.has(key)) {
+                if (reference === key && capacity === 1)
+                    showReference = true;
+                else {
+                    showReference = false;
+                    offset = Math.max(0, keys.filter(k => selected.has(k) && k !== reference).indexOf(key));
+                }
+            }
+            else
+                comparing = false; render(); },
+            cleanup() { if (stopped)
+                return; stopped = true; observer?.disconnect(); if (layoutFrame !== null)
+                view?.cancelAnimationFrame(layoutFrame); if (scrollFrame !== null)
+                view?.cancelAnimationFrame(scrollFrame); picker.cleanup(); empty.remove(); for (const restore of undo.reverse())
+                restore(); for (const slot of slotsByPosition)
+                slot.remove(); for (const node of originalChildren)
+                if (node.parentNode === stage)
+                    stage.appendChild(node); releaseOrder(); bar.remove(); navigation.remove(); stage.className = originalStageClass; stage.removeAttribute('data-av-comparison-layout'); if (oldColumns)
+                stage.style.setProperty('--av-reader-columns', oldColumns);
+            else
+                stage.style.removeProperty('--av-reader-columns'); explorer.classList.toggle('av-comparing', originalExplorerComparing); bodies.clear(); positions.clear(); } };
+    }
+});
+define("startup", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.startupPrelude = startupPrelude;
+    exports.notifyReportReady = notifyReportReady;
+    exports.notifyReportInitializing = notifyReportInitializing;
+    /** The assembler places this tiny, generated prelude before reader content.
+     * It never reads or writes reader records. A bounded visibility gate prevents
+     * authored defaults from flashing before the controllers restore owned state.
+     */
+    function startupPrelude() {
+        function begin() {
+            if (typeof document === 'undefined' || typeof window === 'undefined')
+                return;
+            const doc = document, host = doc.documentElement;
+            if (!host || !doc.head)
+                return;
+            if (host.hasAttribute('data-av-starting'))
+                return;
+            const style = doc.createElement('style');
+            style.textContent = '[data-av-starting] .av-workspace:not([data-av-ready]) { visibility: hidden; }';
+            doc.head.appendChild(style);
+            host.setAttribute('data-av-starting', '');
+            let complete = false, claimed = false;
+            let timer;
+            const release = () => {
+                if (complete)
+                    return;
+                complete = true;
+                clearTimeout(timer);
+                host.removeAttribute('data-av-starting');
+                style.remove();
+                doc.removeEventListener('av-report-ready', check);
+                doc.removeEventListener('DOMContentLoaded', loaded);
+                doc.removeEventListener('av-report-initializing', initializing);
+                window.removeEventListener('error', release);
+            };
+            const check = () => {
+                if (doc.readyState !== 'loading' && !doc.querySelector('.av-workspace:not([data-av-ready])'))
+                    release();
+            };
+            // Missing enhancement, blocked storage, or a failed author script must
+            // never leave the evidence invisible. No-JavaScript documents never gate.
+            // The missing-author budget begins after parsing, not before a large
+            // offline bundle has even loaded. An actual controller owns bounded
+            // storage reads (open + transaction watchdogs); allow those to settle
+            // instead of showing a partly restored theme and a different section.
+            const arm = () => { clearTimeout(timer); timer = setTimeout(release, claimed ? 12000 : 2000); };
+            const initializing = () => { if (complete || claimed)
+                return; claimed = true; if (doc.readyState !== 'loading')
+                arm(); };
+            const loaded = () => { check(); if (!complete)
+                arm(); };
+            doc.addEventListener('av-report-ready', check);
+            doc.addEventListener('av-report-initializing', initializing);
+            doc.addEventListener('DOMContentLoaded', loaded);
+            if (doc.readyState !== 'loading')
+                loaded();
+            window.addEventListener('error', release);
+        }
+        return '// Generated from src/startup.ts by build.mjs.\n(' + begin.toString() + ')();\n';
+    }
+    /** Readiness is separate from whenIdle: later edits do not delay first paint. */
+    function notifyReportReady(document) {
+        const Constructor = document.defaultView?.Event;
+        if (Constructor)
+            document.dispatchEvent(new Constructor('av-report-ready'));
+    }
+    /** Claim the bounded initial-restore phase before synchronous enhancement. */
+    function notifyReportInitializing(document) {
+        const Constructor = document.defaultView?.Event;
+        if (Constructor)
+            document.dispatchEvent(new Constructor('av-report-initializing'));
+    }
+});
+define("inspectors", ["require", "exports", "figures", "review-targets", "command-bar", "overlay-layout"], function (require, exports, figures_5, review_targets_3, command_bar_5, overlay_layout_5) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.attachInspectors = attachInspectors;
+    /** One live evidence reader. On small containers it becomes a closable reading
+     * drawer, not a second copy of the evidence below an already long drawing. */
+    function attachInspectors(root) {
+        const document = root.ownerDocument, view = document.defaultView, records = [];
+        let stopped = false, scheduled = null;
+        function close(record, restore = true) {
+            if (record.dialog.open)
+                record.dialog.close();
+            record.opener.setAttribute('aria-expanded', 'false');
+            if (restore && record.trigger?.isConnected)
+                (0, command_bar_5.focusCommand)(record.trigger);
+            record.trigger = null;
+        }
+        function place(record) {
+            const width = record.explorer.clientWidth;
+            if (!width || stopped)
+                return;
+            const rootFont = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
+            const mode = width >= 55 * rootFont ? 'side' : 'drawer';
+            if (mode !== record.mode) {
+                if (mode === 'side') {
+                    close(record);
+                    record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
+                }
+                else
+                    record.dialog.appendChild(record.reader);
+                record.mode = mode;
+                record.syncPosition();
+            }
+            record.explorer.setAttribute('data-av-inspector-layout', mode);
+            record.opener.hidden = mode === 'side';
+            const selected = record.reader.querySelector('[data-av-object].av-selected') || record.reader.querySelector('[data-av-object][open]');
+            const label = selected?.querySelector('summary')?.textContent?.trim();
+            const text = record.opener.querySelector('span');
+            if (text)
+                text.textContent = label ? 'Read evidence: ' + label : 'Read evidence';
+            const bounds = (0, overlay_layout_5.visibleViewport)(view, 12);
+            record.dialog.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
+            if (mode === 'side') {
+                const drawing = record.plot.querySelector('.av-plot-scroll') || record.plot;
+                const plotBox = record.plot.getBoundingClientRect(), box = drawing.getBoundingClientRect();
+                const barHeight = record.explorer.closest('.av-workspace')?.querySelector('.av-workspace-bar')?.getBoundingClientRect().height || 0;
+                const available = Math.max(180, bounds.bottom - bounds.top - barHeight - 32);
+                const height = Math.min(available, Math.max(200, box.height));
+                record.reader.style.setProperty('--av-inspector-height', height + 'px');
+                record.reader.style.setProperty('--av-inspector-offset', Math.max(0, box.top - plotBox.top) + 'px');
+            }
+        }
+        function refresh() { for (const record of records)
+            place(record); }
+        function schedule() {
+            if (stopped || scheduled !== null)
+                return;
+            if (!view?.requestAnimationFrame) {
+                refresh();
+                return;
+            }
+            scheduled = view.requestAnimationFrame(() => { scheduled = null; refresh(); });
+        }
+        for (const reader of Array.from(root.querySelectorAll('.av-inspector'))) {
+            const explorer = reader.parentElement;
+            if (!explorer || !explorer.closest('[data-av-explorer]'))
+                continue;
+            const plot = Array.from(explorer.children).find(node => node.matches('.av-plot-shell,.av-scatter-scenes'));
+            if (!reader || !plot)
+                continue;
+            const dialog = document.createElement('dialog');
+            if (typeof dialog.showModal !== 'function')
+                continue;
+            dialog.className = 'av-focus-dialog av-inspector-dialog';
+            dialog.setAttribute('aria-label', 'Evidence reader');
+            const header = document.createElement('header');
+            header.className = 'av-inspector-header';
+            header.setAttribute('data-av-review-ui', '');
+            const title = document.createElement('strong');
+            title.textContent = 'Evidence';
+            header.appendChild(title);
+            const dismiss = document.createElement('button');
+            dismiss.type = 'button';
+            dismiss.className = 'av-button';
+            dismiss.textContent = 'Close';
+            dismiss.setAttribute('aria-label', 'Close evidence reader');
+            header.appendChild(dismiss);
+            dialog.appendChild(header);
+            const home = document.createComment('av-evidence-reader');
+            reader.parentNode.insertBefore(home, reader);
+            // A docked reader is already in the source tree. Substitute the placeholder
+            // only while it is moved into a transient dialog.
+            let release = () => { };
+            const opener = document.createElement('button');
+            opener.type = 'button';
+            opener.className = 'av-button av-inspector-opener';
+            opener.setAttribute('aria-haspopup', 'dialog');
+            opener.setAttribute('aria-expanded', 'false');
+            opener.hidden = true;
+            opener.setAttribute('data-av-review-ui', '');
+            opener.appendChild((0, command_bar_5.commandIcon)(document, 'M4 3h16v18H4zM8 7h8M8 11h8M8 15h6'));
+            const label = document.createElement('span');
+            label.textContent = 'Read evidence';
+            opener.appendChild(label);
+            const toolbar = Array.from(plot.children).find(child => child.matches('.av-plot-toolbar'));
+            plot.insertBefore(opener, toolbar?.nextSibling || plot.firstChild);
+            explorer.appendChild(dialog);
+            const oldLayout = explorer.getAttribute('data-av-inspector-layout'), oldStyle = reader.getAttribute('style');
+            const record = { explorer, reader, plot, opener, dialog, home, releasePosition: () => release(), syncPosition: () => { }, mode: 'side', trigger: null, undo: [] };
+            const open = () => { record.trigger = opener; reader.setAttribute('open', ''); if (!dialog.open)
+                dialog.showModal(); opener.setAttribute('aria-expanded', 'true'); dismiss.focus({ preventScroll: true }); };
+            const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); close(record); };
+            opener.addEventListener('click', open);
+            dismiss.addEventListener('click', closeClick);
+            dialog.addEventListener('cancel', closeClick);
+            // Keep the placeholder active only while the live reader is in the dialog.
+            const updateIdentity = () => { release(); release = reader.parentNode === dialog ? (0, review_targets_3.registerReviewPlaceholder)(home, reader) : () => { }; };
+            record.syncPosition = updateIdentity;
+            record.undo.push(() => { opener.removeEventListener('click', open); dismiss.removeEventListener('click', closeClick); dialog.removeEventListener('cancel', closeClick); if (oldLayout === null)
+                explorer.removeAttribute('data-av-inspector-layout');
+            else
+                explorer.setAttribute('data-av-inspector-layout', oldLayout); if (oldStyle === null)
+                reader.removeAttribute('style');
+            else
+                reader.setAttribute('style', oldStyle); });
+            if (view?.ResizeObserver) {
+                const observer = new view.ResizeObserver(schedule);
+                observer.observe(explorer);
+                observer.observe(plot);
+                record.undo.push(() => observer.disconnect());
+            }
+            records.push(record);
+        }
+        // Polling is unnecessary: layout invalidation and viewport changes cover moves.
+        root.addEventListener('av-layout-invalidated', schedule, true);
+        view?.addEventListener('resize', schedule);
+        view?.visualViewport?.addEventListener('resize', schedule);
+        refresh();
+        return {
+            refresh,
+            open(target, trigger) {
+                const explorer = target.closest('[data-av-explorer]') || ((0, figures_5.figureOf)(target) ? (0, figures_5.figureOrigin)((0, figures_5.figureOf)(target)).explorer : null);
+                const record = records.find(record => record.explorer === explorer || record.explorer.closest('[data-av-explorer]') === explorer);
+                if (!record)
+                    return false;
+                place(record);
+                record.reader.setAttribute('open', '');
+                if (record.mode === 'side') {
+                    record.reader.querySelector('summary')?.focus({ preventScroll: true });
+                    return true;
+                }
+                record.trigger = trigger || record.opener;
+                if (!record.dialog.open)
+                    record.dialog.showModal();
+                record.opener.setAttribute('aria-expanded', 'true');
+                record.dialog.querySelector('button')?.focus({ preventScroll: true });
+                return true;
+            },
+            cleanup() {
+                if (stopped)
+                    return;
+                stopped = true;
+                if (scheduled !== null)
+                    view?.cancelAnimationFrame(scheduled);
+                root.removeEventListener('av-layout-invalidated', schedule, true);
+                view?.removeEventListener('resize', schedule);
+                view?.visualViewport?.removeEventListener('resize', schedule);
+                for (const record of records) {
+                    close(record, false);
+                    record.releasePosition();
+                    record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
+                    record.home.remove();
+                    record.opener.remove();
+                    record.dialog.remove();
+                    for (const restore of record.undo.reverse())
+                        restore();
+                }
+            }
+        };
+    }
+});
+define("utility-panels", ["require", "exports", "overlay-layout"], function (require, exports, overlay_layout_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.attachUtilityPanels = attachUtilityPanels;
@@ -4861,17 +7243,26 @@ define("utility-panels", ["require", "exports", "overlay-layout"], function (req
                     }
                 }
                 summary.setAttribute('aria-expanded', 'true');
-                const bounds = (0, overlay_layout_3.visibleViewport)(view);
+                const bounds = (0, overlay_layout_6.visibleViewport)(view);
                 const anchor = summary.getBoundingClientRect();
+                if (details.hasAttribute('data-av-notebook')) {
+                    const width = Math.min(620, Math.max(0, bounds.right - bounds.left)), height = Math.max(0, bounds.bottom - bounds.top);
+                    panel.style.setProperty('width', width + 'px');
+                    panel.style.setProperty('height', Math.min(800, height) + 'px');
+                    panel.style.setProperty('max-height', height + 'px');
+                    panel.style.setProperty('left', Math.max(bounds.left, bounds.right - width) + 'px');
+                    panel.style.setProperty('top', bounds.top + 'px');
+                    return;
+                }
                 panel.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
                 const box = panel.getBoundingClientRect();
-                const placed = (0, overlay_layout_3.anchoredPanel)(anchor, bounds, box.width, Math.max(box.height, panel.scrollHeight));
+                const placed = (0, overlay_layout_6.anchoredPanel)(anchor, bounds, box.width, Math.max(box.height, panel.scrollHeight));
                 panel.style.setProperty('max-height', placed.maxHeight + 'px');
                 panel.style.setProperty('left', placed.left + 'px');
                 // Measure after the height constraint: a scrollbar or text reflow can
                 // change a panel's final size, especially immediately after orientation.
                 const actualHeight = panel.getBoundingClientRect().height;
-                panel.style.setProperty('top', (0, overlay_layout_3.anchoredPanel)(anchor, bounds, box.width, actualHeight).top + 'px');
+                panel.style.setProperty('top', (0, overlay_layout_6.anchoredPanel)(anchor, bounds, box.width, actualHeight).top + 'px');
             }
             entries.push({ details, panel, place, close: hide });
             listen(details, 'toggle', ((event) => { if (event.target === details)
@@ -4960,7 +7351,7 @@ define("utility-panels", ["require", "exports", "overlay-layout"], function (req
         };
     }
 });
-define("chart-rendering", ["require", "exports", "categories", "core", "text-layout"], function (require, exports, categories_1, core_8, text_layout_3) {
+define("chart-rendering", ["require", "exports", "exact-json", "categories", "core", "text-layout"], function (require, exports, exact_json_9, categories_1, core_8, text_layout_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.sceneWidth = sceneWidth;
@@ -5021,11 +7412,7 @@ define("chart-rendering", ["require", "exports", "categories", "core", "text-lay
     function layoutRecipe(markup, kind, input) {
         const context = input.context ? { ...input.context, measureText: undefined } : undefined;
         const value = { ...input, context };
-        const ordinary = JSON.stringify(value);
-        let marker = "\u0000av-negative-zero";
-        while (ordinary.includes(JSON.stringify(marker).slice(1, -1)))
-            marker += "-";
-        const json = JSON.stringify(value, (_key, item) => Object.is(item, -0) ? marker : item).split(JSON.stringify(marker)).join("-0");
+        const json = (0, exact_json_9.exactJson)(value);
         return markup.replace('data-av-frame="', `data-av-layout-kind="${kind}" data-av-layout-input="${(0, core_8.escapeText)(json)}" data-av-frame="`);
     }
     function statusWord(value) { return value === undefined ? "" : value.replace(/-/g, " "); }
@@ -5865,32 +8252,36 @@ define("layout-refinement", ["require", "exports", "quantitative", "landscape", 
         };
     }
 });
-define("figure-tools", ["require", "exports", "figures", "figure-export", "command-bar"], function (require, exports, figures_3, figure_export_2, command_bar_2) {
+define("figure-tools", ["require", "exports", "floating-panel", "figures", "figure-export", "command-bar"], function (require, exports, floating_panel_3, figures_6, figure_export_2, command_bar_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.attachFigureTools = attachFigureTools;
     const icons = { expand: 'M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5', png: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5', copy: 'M8 8h13v13H8zM16 8V3H3v13h5', 'copy-source': 'm8 5-6 7 6 7m8-14 6 7-6 7m-3-16-2 18', pan: 'M8 12V5a2 2 0 0 1 4 0v6-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v9c0 4-2 6-6 6h-2c-2 0-3-1-4-3l-4-5c-1-2 1-4 3-2l1 1', 'select-items': 'M5 3v17l5-5 4 7 3-2-4-7h7L5 3', 'select-text': 'M8 3h8M12 3v18M8 21h8M4 8v8M20 8v8', note: 'M4 3h16v14l-5 4H4zM8 8h8M8 12h6', bookmark: 'M6 3h12v18l-6-4-6 4z' };
+    icons.svg = icons.png;
+    icons['download-source'] = icons.png;
+    icons.source = 'M3 4h18v16H3zM7 8h10M7 12h10M7 16h6';
     function attachFigureTools(root, expand, notify = () => { }, contextChanged = () => { }) {
         const document = root.ownerDocument, undo = [], owners = new Map(), bars = new Map(), commands = new Map(), jobs = new Set();
         let stopped = false;
         const candidates = [...(root.matches('[data-av-figure]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-figure]'))];
-        const figures = candidates.filter(figure => (0, figures_3.figureOf)(figure) === figure);
+        const figures = candidates.filter(figure => (0, figures_6.figureOf)(figure) === figure);
         const expansions = new Map(), modesByFigure = new Map();
+        const modePanels = new Map(), modeTriggers = new Map();
         const initialBounds = new Map();
         // Preflight every adapter before moving any of the author's live content.
         // A bad adapter must not strand half-created toolbars or native plot wrappers.
         for (const figure of figures) {
-            const adapter = (0, figures_3.visualAdapter)(figure);
+            const adapter = (0, figures_6.visualAdapter)(figure);
             if (adapter) {
                 const bounds = adapter.bounds(figure);
                 if (!Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 0 || bounds.height <= 0)
                     throw new Error('Figure adapter returned invalid bounds.');
                 initialBounds.set(figure, bounds);
             }
-            (0, figures_3.figureSource)(figure);
+            (0, figures_6.figureSource)(figure);
         }
         for (const figure of figures) {
-            (0, figures_3.retainFigureOrigin)(figure);
+            (0, figures_6.retainFigureOrigin)(figure);
             const selectionMode = figure.getAttribute('data-av-selection-mode');
             if (!selectionMode)
                 figure.setAttribute('data-av-selection-mode', 'pan');
@@ -5907,7 +8298,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 undo.push(() => toolbar.remove());
             }
             bars.set(figure, toolbar);
-            const adapter = (0, figures_3.visualAdapter)(figure);
+            const adapter = (0, figures_6.visualAdapter)(figure);
             let native = Array.from(figure.querySelectorAll('svg,canvas,img')).find(node => !node.hasAttribute('aria-hidden') && !node.closest('[data-av-controls]'));
             if (!native && adapter) {
                 const body = figure.querySelector('[data-av-figure-body]');
@@ -5932,7 +8323,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 scroll.className = 'av-plot-scroll';
                 scroll.tabIndex = 0;
                 scroll.setAttribute('role', 'region');
-                scroll.setAttribute('aria-label', (0, figures_3.figureTitle)(figure));
+                scroll.setAttribute('aria-label', (0, figures_6.figureTitle)(figure));
                 plot.appendChild(scroll);
                 parent.insertBefore(plot, media);
                 scroll.appendChild(media);
@@ -5969,17 +8360,60 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                         media.setAttribute(name, value);
                 } });
             }
-            const bar = (0, command_bar_2.attachCommandBar)(toolbar, 'Visualization actions');
+            const bar = (0, command_bar_6.attachCommandBar)(toolbar, 'Visualization actions');
             commands.set(figure, bar);
             const make = (action, label, priority, menuOnly = false, group) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'av-button'; button.setAttribute('data-av-figure-action', action); button.textContent = label; toolbar.appendChild(button); owners.set(button, figure); bar.add(button, { label, priority, menuOnly, group, icon: icons[action] }); undo.push(() => button.remove()); return button; };
-            const modes = [['pan', 'Pan canvas'], ['select-items', 'Select items'], ...(figure.querySelector('svg text,[data-av-mermaid],[data-av-custom-media]') ? [['select-text', 'Select text']] : [])];
+            const modeTrigger = document.createElement('button');
+            modeTrigger.type = 'button';
+            modeTrigger.className = 'av-button';
+            modeTrigger.setAttribute('data-av-mode-menu', '');
+            toolbar.appendChild(modeTrigger);
+            modeTriggers.set(figure, modeTrigger);
+            const modePanel = (0, floating_panel_3.attachFloatingPanel)(modeTrigger, figure, 'Drawing tools');
+            modePanel.element.classList.add('av-drawing-tools');
+            modePanels.set(figure, modePanel);
             const modeButtons = [];
             modesByFigure.set(figure, modeButtons);
-            for (const [action, label] of modes) {
-                const button = make(action, label, 30, false, 'tools');
+            const modeChoices = document.createElement('div');
+            modeChoices.className = 'av-mode-choices';
+            modeChoices.setAttribute('role', 'group');
+            modeChoices.setAttribute('aria-label', 'Drawing interaction');
+            modePanel.body.appendChild(modeChoices);
+            const modes = [['pan', 'Pan', 'Move around the drawing'], ['select-items', 'Select', 'Inspect and annotate items'], ...(figure.querySelector('svg text,[data-av-mermaid],[data-av-custom-media]') ? [['select-text', 'Text', 'Select an exact passage']] : [])];
+            for (const [action, label, description] of modes) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'av-mode-choice';
+                button.setAttribute('data-av-figure-action', action);
+                button.setAttribute('aria-label', action === 'pan' ? 'Pan canvas' : action === 'select-items' ? 'Select items' : 'Select text');
+                button.appendChild((0, command_bar_6.commandIcon)(document, icons[action]));
+                const words = document.createElement('span'), name = document.createElement('strong'), hint = document.createElement('small');
+                name.textContent = label;
+                hint.textContent = description;
+                words.append(name, hint);
+                button.appendChild(words);
+                modeChoices.appendChild(button);
+                owners.set(button, figure);
                 modeButtons.push(button);
                 button.setAttribute('aria-pressed', String(figure.getAttribute('data-av-selection-mode') === (action === 'select-text' ? 'text' : action === 'select-items' ? 'select' : 'pan')));
             }
+            const help = document.createElement('details');
+            help.className = 'av-tool-help';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Keyboard & touch';
+            help.appendChild(summary);
+            const shortcuts = document.createElement('dl');
+            for (const [key, description] of [['Click / tap', 'Choose one item.'], ['Ctrl / ⌘ + click', 'Add or remove an item.'], ['Shift + click', 'Select a range in source order. Add Ctrl / ⌘ to keep the previous selection.'], ['Arrow keys', 'Move between items. Shift extends the selection.'], ['Escape', 'Clear items, or close this panel.'], ['Touch', 'Choose an item, then turn on Add to selection in its selection menu.'], ['Text', 'Drag across a passage, then open Passage to annotate or bookmark it.']]) {
+                const term = document.createElement('dt'), definition = document.createElement('dd');
+                term.textContent = key;
+                definition.textContent = description;
+                shortcuts.append(term, definition);
+            }
+            help.appendChild(shortcuts);
+            modePanel.body.appendChild(help);
+            const initialMode = figure.getAttribute('data-av-selection-mode'), initialAction = initialMode === 'text' ? 'select-text' : initialMode === 'select' ? 'select-items' : 'pan';
+            bar.add(modeTrigger, { label: initialMode === 'text' ? 'Text' : initialMode === 'select' ? 'Select' : 'Pan', labelled: true, icon: icons[initialAction], priority: 0, group: 'mode' });
+            undo.push(() => modeTrigger.remove());
             for (const control of Array.from(toolbar.querySelectorAll('[data-av-zoom-out],[data-av-zoom-reset],[data-av-zoom-in]'))) {
                 const label = control.hasAttribute('data-av-zoom-reset') ? 'Reset view' : control.hasAttribute('data-av-zoom-out') ? 'Zoom out' : 'Zoom in';
                 bar.add(control, { label, priority: 10, group: 'zoom', width: control.hasAttribute('data-av-zoom-reset') ? 52 : 36 });
@@ -5988,7 +8422,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
             make('copy', 'Copy image', 40, true);
             make('png', 'Download PNG', 40, true);
             make('svg', 'Download SVG', 80, true);
-            if ((0, figures_3.figureSource)(figure)) {
+            if ((0, figures_6.figureSource)(figure)) {
                 make('copy-source', 'Copy source', 50, true);
                 make('source', 'View source', 90, true);
                 make('download-source', 'Download source', 90, true);
@@ -5999,7 +8433,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
             const existing = sourceReaders.get(figure);
             if (existing)
                 return existing;
-            const source = (0, figures_3.figureSource)(figure);
+            const source = (0, figures_6.figureSource)(figure);
             if (!source)
                 return null;
             const candidate = document.createElement('dialog');
@@ -6008,7 +8442,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
             panel.className = 'av-source-panel';
             panel.setAttribute('data-av-source-panel', '');
             panel.setAttribute('data-av-review-ui', '');
-            panel.setAttribute('aria-label', `Original source: ${(0, figures_3.figureTitle)(figure)}`);
+            panel.setAttribute('aria-label', `Original source: ${(0, figures_6.figureTitle)(figure)}`);
             const header = document.createElement(modal ? 'header' : 'summary');
             header.className = 'av-source-header';
             const title = document.createElement('strong');
@@ -6059,7 +8493,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 else
                     panel.removeAttribute('open');
                 if (restore && trigger?.isConnected)
-                    (0, command_bar_2.focusCommand)(trigger);
+                    (0, command_bar_6.focusCommand)(trigger);
                 if (restore)
                     contextChanged();
             }
@@ -6073,7 +8507,11 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 open(from) {
                     trigger = from;
                     // Reopening uses the current source, never an edited textarea value.
-                    text.value = (0, figures_3.figureSource)(figure)?.text ?? source.text;
+                    const current = (0, figures_6.figureSource)(figure);
+                    if (!current)
+                        throw new Error('Original source is no longer available.');
+                    text.value = current.text;
+                    title.textContent = `Original ${current.language === 'json' ? 'JSON' : current.language} source`;
                     if (modal && !candidate.open)
                         candidate.showModal();
                     else
@@ -6088,7 +8526,7 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
         function registerReview(figure) { const toolbar = bars.get(figure), bar = commands.get(figure); if (!toolbar || !bar)
             return; for (const control of Array.from(toolbar.querySelectorAll('[data-av-review-action]'))) {
             const bookmark = control.getAttribute('data-av-review-action') === 'bookmark';
-            bar.add(control, { label: bookmark ? 'Bookmark' : 'Note', priority: 60, icon: bookmark ? icons.bookmark : icons.note });
+            bar.add(control, { label: bookmark ? 'Bookmark figure' : 'Note on figure', priority: 60, menuOnly: true, icon: bookmark ? icons.bookmark : icons.note });
         } }
         return {
             figures,
@@ -6116,6 +8554,8 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 commands.get(figure)?.refresh();
             } },
             toolbar: figure => bars.get(figure) || null,
+            command(figure, control, options) { commands.get(figure)?.add(control, options); },
+            updateCommand(figure, control, options) { commands.get(figure)?.update(control, options); },
             click(target) {
                 const control = target.closest('[data-av-figure-action]'), figure = control && owners.get(control);
                 if (!control || !figure || stopped)
@@ -6126,6 +8566,10 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                     figure.setAttribute('data-av-selection-mode', mode);
                     for (const button of modesByFigure.get(figure) || [])
                         button.setAttribute('aria-pressed', String(button === control));
+                    const trigger = modeTriggers.get(figure);
+                    if (trigger)
+                        commands.get(figure)?.update(trigger, { label: mode === 'text' ? 'Text' : mode === 'select' ? 'Select' : 'Pan', icon: icons[action] });
+                    modePanels.get(figure)?.close(true);
                     const EventType = document.defaultView?.CustomEvent;
                     if (EventType)
                         for (const plot of [figure, ...Array.from(figure.querySelectorAll('[data-av-plot]'))])
@@ -6138,7 +8582,15 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                     return true;
                 }
                 if (action === 'source') {
-                    sourceReader(figure)?.open(control);
+                    try {
+                        const reader = sourceReader(figure);
+                        if (!reader)
+                            throw new Error('Original source is unavailable.');
+                        reader.open(control);
+                    }
+                    catch (error) {
+                        notify({ text: error instanceof Error ? error.message : 'The source reader could not open.', tone: 'error', source: figure });
+                    }
                     return true;
                 }
                 if (control.disabled)
@@ -6146,13 +8598,13 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 control.disabled = true;
                 control.setAttribute('aria-busy', 'true');
                 const operation = (async () => {
-                    const name = ((0, figures_3.figureTitle)(figure).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 80) || 'visualization');
+                    const name = ((0, figures_6.figureTitle)(figure).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 80) || 'visualization');
                     if (action === 'copy')
                         await (0, figure_export_2.copyFigureImage)(figure);
                     else if (action === 'copy-source')
                         await (0, figure_export_2.copyFigureSource)(figure);
                     else if (action === 'download-source') {
-                        const source = (0, figures_3.figureSource)(figure);
+                        const source = (0, figures_6.figureSource)(figure);
                         if (!source)
                             throw new Error('Original source is unavailable.');
                         (0, figure_export_2.downloadBlob)(document, new Blob([source.text], { type: 'text/plain;charset=utf-8' }), source.filename || name + '.txt');
@@ -6176,17 +8628,19 @@ define("figure-tools", ["require", "exports", "figures", "figure-export", "comma
                 return true;
             },
             async whenIdle() { while (jobs.size)
-                await Promise.all([...jobs]); }, cleanup() { stopped = true; for (const reader of sourceReaders.values())
+                await Promise.all([...jobs]); }, cleanup() { stopped = true; for (const panel of modePanels.values())
+                panel.cleanup(); modePanels.clear(); modeTriggers.clear(); for (const reader of sourceReaders.values())
                 reader.cleanup(); sourceReaders.clear(); for (const bar of commands.values())
                 bar.cleanup(); for (const restore of undo.reverse())
                 restore(); owners.clear(); bars.clear(); commands.clear(); expansions.clear(); modesByFigure.clear(); }
         };
     }
 });
-define("mermaid", ["require", "exports", "figures", "identity"], function (require, exports, figures_4, identity_4) {
+define("mermaid", ["require", "exports", "figures", "identity"], function (require, exports, figures_7, identity_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.scopeDiagram = scopeDiagram;
+    exports.diagramBounds = diagramBounds;
     exports.attachMermaid = attachMermaid;
     let renderQueue = Promise.resolve();
     let sequence = 0;
@@ -6247,12 +8701,25 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 }) + '{' + paint(declarations) + '}');
         }
         const groups = new Map();
-        for (const node of nodes) {
-            if (node.tagName.toLowerCase() !== 'g' || !node.id)
-                continue;
-            const text = node.textContent?.trim();
-            if (!text || node.querySelector('g[id]'))
-                continue;
+        const candidates = nodes.filter(node => {
+            if (node.closest('defs,marker,clipPath,mask,pattern,symbol'))
+                return false;
+            if (!node.textContent?.trim())
+                return false;
+            if (node.tagName.toLowerCase() === 'text')
+                return true;
+            if (node.tagName.toLowerCase() !== 'g')
+                return false;
+            return node.hasAttribute('data-id') || node.classList.contains('node') || !!assigned.get(node) && !node.querySelector('g[id],g.node,g[data-id]');
+        });
+        // Prefer a complete node to an individually selectable label within it. Other
+        // families can expose text items without a diagram-family-specific adapter.
+        const candidateSet = new Set(candidates);
+        const outer = candidates.filter(node => { for (let parent = node.parentElement; parent; parent = parent.parentElement)
+            if (candidateSet.has(parent))
+                return false; return true; });
+        for (const node of outer) {
+            const text = node.textContent.trim();
             const key = node.getAttribute('data-id') ? 'id:' + node.getAttribute('data-id') : 'text:' + (0, identity_4.fingerprint)(text);
             const matches = groups.get(key) || [];
             matches.push(node);
@@ -6260,50 +8727,161 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
         }
         for (const [key, matches] of groups)
             if (matches.length === 1) {
-                matches[0].setAttribute('data-av-mermaid-item', key);
-                matches[0].setAttribute('tabindex', '0');
-                matches[0].setAttribute('role', 'button');
-                matches[0].setAttribute('aria-label', matches[0].textContent?.trim() || key);
+                const node = matches[0];
+                node.setAttribute('data-av-mermaid-item', key);
+                node.setAttribute('tabindex', '0');
+                node.setAttribute('role', 'button');
+                node.setAttribute('aria-label', node.textContent?.trim() || key);
             }
+    }
+    /** Measure in diagram coordinates at intrinsic size. A valid vendor viewBox is
+     * retained, but cannot clip actual glyphs, strokes or overflowing HTML labels.
+     * Browser text metrics refine geometry; no source wording or value is changed.
+     */
+    function diagramBounds(svg, document) {
+        let bounds = (svg.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
+        const pixels = (value) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? parseFloat(value) : 0;
+        if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) {
+            const width = pixels(svg.getAttribute('width')) || pixels(svg.style.getPropertyValue('max-width'));
+            const height = pixels(svg.getAttribute('height'));
+            bounds = [0, 0, width, height];
+        }
+        const staging = document.createElement('div');
+        staging.setAttribute('data-av-mermaid-staging', '');
+        staging.setAttribute('aria-hidden', 'true');
+        staging.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
+        document.body.appendChild(staging);
+        staging.appendChild(svg);
+        const originalStyle = svg.getAttribute('style');
+        try {
+            if (bounds[2] > 0 && bounds[3] > 0) {
+                svg.style.setProperty('width', bounds[2] + 'px');
+                svg.style.setProperty('height', bounds[3] + 'px');
+                svg.style.setProperty('max-width', 'none');
+                svg.style.setProperty('display', 'block');
+            }
+            const graphics = svg;
+            const union = (x, y, width, height, padding = 8) => {
+                if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0)
+                    return;
+                const left = Math.min(bounds[0], x - padding), top = Math.min(bounds[1], y - padding);
+                bounds = [left, top, Math.max(bounds[0] + bounds[2], x + width + padding) - left, Math.max(bounds[1] + bounds[3], y + height + padding) - top];
+            };
+            if (typeof graphics.getBBox === 'function') {
+                // Options are ignored by older engines, where the padded geometric box
+                // remains the fallback. Never shrink a valid vendor-provided viewBox.
+                const box = graphics.getBBox({ fill: true, stroke: true, markers: true, clipped: false });
+                if (box.width > 0 && box.height > 0)
+                    union(box.x, box.y, box.width, box.height);
+            }
+            // SVG getBBox does not include overflowing HTML glyphs inside foreignObject.
+            // Read their native text ranges at intrinsic size, then transform viewport
+            // rectangles back to this SVG's coordinates (not the reader's zoom/pan).
+            const matrix = graphics.getScreenCTM?.();
+            if (matrix && document.createRange) {
+                const inverse = matrix.inverse();
+                const transform = (x, y) => ({ x: inverse.a * x + inverse.c * y + inverse.e, y: inverse.b * x + inverse.d * y + inverse.f });
+                const include = (rect) => {
+                    if (!rect.width && !rect.height)
+                        return;
+                    const corners = [transform(rect.left, rect.top), transform(rect.right, rect.top), transform(rect.left, rect.bottom), transform(rect.right, rect.bottom)];
+                    const xs = corners.map(p => p.x), ys = corners.map(p => p.y), x = Math.min(...xs), y = Math.min(...ys);
+                    union(x, y, Math.max(...xs) - x, Math.max(...ys) - y);
+                };
+                for (const object of Array.from(svg.querySelectorAll('foreignObject'))) {
+                    const visit = (node) => {
+                        if (node.nodeType === 3 && node.textContent?.trim()) {
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            for (const rect of Array.from(range.getClientRects()))
+                                include(rect);
+                        }
+                        else if (node.nodeType === 1) {
+                            if (['script', 'style'].includes(node.tagName.toLowerCase()))
+                                return;
+                            for (const child of Array.from(node.childNodes))
+                                visit(child);
+                        }
+                    };
+                    visit(object);
+                }
+            }
+        }
+        finally {
+            if (originalStyle === null)
+                svg.removeAttribute('style');
+            else
+                svg.setAttribute('style', originalStyle);
+            svg.remove();
+            staging.remove();
+        }
+        if (!bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0)
+            throw new Error('The diagram has no measurable bounds. Its source remains available.');
+        svg.setAttribute('viewBox', bounds.join(' '));
+        return bounds;
     }
     function attachMermaid(root, ready) {
         const document = root.ownerDocument, view = document.defaultView;
         const diagrams = [...(root.matches('[data-av-mermaid]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-mermaid]'))];
         const namespaces = new WeakMap(), keys = new WeakMap(), generations = new WeakMap();
-        const original = diagrams.map(element => ({ element, output: element.querySelector('[data-av-mermaid-output]'), children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector('[data-av-mermaid-status]'), text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector('[data-av-zoom-target]'), attributes: Array.from(element.querySelector('[data-av-zoom-target]')?.attributes || []).map(attribute => [attribute.name, attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
-        let stopped = false, pending = Promise.resolve();
+        const original = diagrams.map(element => ({ element, output: element.querySelector('[data-av-mermaid-output]'), children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector('[data-av-mermaid-status]'), text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), busy: element.getAttribute('aria-busy'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector('[data-av-zoom-target]'), attributes: Array.from(element.querySelector('[data-av-zoom-target]')?.attributes || []).map(attribute => [attribute.name, attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
+        let stopped = false;
+        const jobsInFlight = new Set(), requested = new Map(), semanticKeys = new Map();
         async function refresh() {
             const jobs = diagrams.map(element => {
-                const figure = (0, figures_4.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), status = element.querySelector('[data-av-mermaid-status]');
+                const figure = (0, figures_7.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), status = element.querySelector('[data-av-mermaid-status]');
                 if (!figure || !output || !status || stopped)
                     return Promise.resolve();
                 const runtime = view?.mermaid || globalThis.mermaid;
                 if (!runtime) {
+                    element.setAttribute('data-av-mermaid-state', 'error');
+                    element.removeAttribute('aria-busy');
                     status.textContent = 'Mermaid is not embedded. Reassemble with --feature mermaid. The original source remains available.';
                     return Promise.resolve();
                 }
                 const source = element.getAttribute('data-av-mermaid-source') || '';
                 const css = view?.getComputedStyle?.(figure);
-                const color = (name, fallback) => {
-                    const probe = document.createElement('span');
-                    probe.style.setProperty('color', `var(${name})`);
-                    probe.setAttribute('aria-hidden', 'true');
-                    probe.style.setProperty('display', 'none');
-                    figure.appendChild(probe);
-                    const resolved = view?.getComputedStyle?.(probe).color;
-                    probe.remove();
-                    return resolved && !resolved.includes('var(') ? resolved : fallback;
-                };
-                const palette = { background: color('--av-plot', '#ffffff'), primaryColor: color('--av-sheet', '#f4f5fa'), primaryTextColor: color('--av-ink', '#172032'), primaryBorderColor: color('--av-line-strong', '#66758a'), lineColor: color('--av-axis', '#66758a'), secondaryColor: color('--av-subtle', '#ecf1f5'), tertiaryColor: color('--av-inspector-surface', '#f4edf6'), fontFamily: css?.fontFamily || 'sans-serif' };
+                const roles = { background: ['--av-plot', '#ffffff'], primaryColor: ['--av-sheet', '#f4f5fa'], primaryTextColor: ['--av-ink', '#172032'], primaryBorderColor: ['--av-line-strong', '#66758a'], lineColor: ['--av-axis', '#66758a'], secondaryColor: ['--av-subtle', '#ecf1f5'], tertiaryColor: ['--av-inspector-surface', '#f4edf6'] };
+                const probes = document.createElement('span');
+                probes.setAttribute('data-av-review-ui', '');
+                probes.hidden = true;
+                const colorNodes = Object.entries(roles).map(([name, [token, fallback]]) => { const node = document.createElement('span'); node.style.setProperty('color', `var(${token})`); probes.appendChild(node); return { name, node, fallback }; });
+                figure.appendChild(probes);
+                const palette = { fontFamily: css?.fontFamily || 'sans-serif' };
+                try {
+                    for (const { name, node, fallback } of colorNodes) {
+                        const resolved = view?.getComputedStyle?.(node).color;
+                        palette[name] = resolved && !resolved.includes('var(') ? resolved : fallback;
+                    }
+                }
+                finally {
+                    probes.remove();
+                }
                 const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config')]);
-                if (keys.get(element) === key)
+                if (requested.get(element)?.key === key)
+                    return requested.get(element).job;
+                if (keys.get(element) === key) {
+                    generations.set(element, (generations.get(element) || 0) + 1);
+                    requested.delete(element);
+                    element.setAttribute('data-av-mermaid-state', 'ready');
+                    element.removeAttribute('aria-busy');
+                    output.hidden = false;
+                    status.textContent = '';
                     return Promise.resolve();
+                }
+                const semanticKey = JSON.stringify([source, element.getAttribute('data-av-mermaid-config')]);
                 const generation = (generations.get(element) || 0) + 1;
                 generations.set(element, generation);
                 element.setAttribute('data-av-mermaid-state', 'pending');
-                output.hidden = true;
-                status.textContent = 'Rendering diagram…';
+                element.setAttribute('aria-busy', 'true');
+                const retainScene = semanticKeys.get(element) === semanticKey;
+                output.hidden = !retainScene;
+                status.textContent = retainScene ? '' : 'Preparing diagram…';
                 const job = renderQueue.then(async () => {
+                    if (stopped || generations.get(element) !== generation)
+                        return;
+                    if (document.fonts?.ready)
+                        await document.fonts.ready;
                     if (stopped || generations.get(element) !== generation)
                         return;
                     const supplied = JSON.parse(element.getAttribute('data-av-mermaid-config') || '{}');
@@ -6341,44 +8919,13 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                         namespaces.set(element, namespace);
                     }
                     scopeDiagram(incoming, namespace);
+                    incoming.setAttribute('data-av-mermaid-scene', '');
                     const plot = output.querySelector('[data-av-plot]'), live = plot?.querySelector('[data-av-zoom-target]');
                     if (!plot || !live)
                         throw new Error('The diagram viewport is unavailable.');
-                    let bounds = (incoming.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
-                    if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) {
-                        const pixels = (value) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? Number.parseFloat(value) : 0;
-                        const width = pixels(incoming.getAttribute('width')) || pixels(incoming.style.getPropertyValue('max-width')) || pixels(incoming.style.getPropertyValue('width'));
-                        let height = pixels(incoming.getAttribute('height')) || pixels(incoming.style.getPropertyValue('height'));
-                        let measured = null;
-                        if (!(width > 0 && height > 0) && typeof incoming.getBBox === 'function') {
-                            const measuring = document.createElement('div');
-                            measuring.setAttribute('data-av-mermaid-staging', '');
-                            measuring.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
-                            document.body.appendChild(measuring);
-                            measuring.appendChild(incoming);
-                            try {
-                                const box = incoming.getBBox();
-                                if ([box.x, box.y, box.width, box.height].every(Number.isFinite) && box.width > 0 && box.height > 0)
-                                    measured = box;
-                            }
-                            finally {
-                                incoming.remove();
-                                measuring.remove();
-                            }
-                        }
-                        if (measured) {
-                            const x = Math.min(0, measured.x - 8), y = Math.min(0, measured.y - 8);
-                            bounds = [x, y, Math.max(width, measured.x + measured.width + 8) - x, Math.max(height, measured.y + measured.height + 8) - y];
-                        }
-                        else {
-                            if (!(width > 0 && height > 0))
-                                throw new Error('The diagram has no measurable bounds. Its source remains available.');
-                            bounds = [0, 0, width, height];
-                        }
-                        incoming.setAttribute('viewBox', bounds.join(' '));
-                    }
+                    const bounds = diagramBounds(incoming, document);
                     // Preserve the viewport node and its handlers when a theme rerenders the diagram.
-                    for (const name of ['id', 'class', 'viewBox', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby']) {
+                    for (const name of ['id', 'class', 'viewBox', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) {
                         const value = incoming.getAttribute(name);
                         if (value !== null)
                             live.setAttribute(name, value);
@@ -6392,33 +8939,48 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                         else
                             live.style.removeProperty(name);
                     }
-                    const selectedItem = live.querySelector('[data-av-mermaid-item][aria-pressed="true"]')?.getAttribute('data-av-mermaid-item');
+                    const selectedItems = new Set(Array.from(live.querySelectorAll('[data-av-mermaid-item][data-av-item-selected],[data-av-mermaid-item][aria-pressed="true"]')).map(node => node.getAttribute('data-av-mermaid-item')));
+                    const focusedItem = document.activeElement?.getAttribute('data-av-mermaid-item');
                     live.setAttribute('width', String(bounds[2]));
                     live.setAttribute('height', String(bounds[3]));
                     live.replaceChildren(...Array.from(incoming.childNodes));
-                    if (selectedItem)
-                        for (const node of Array.from(live.querySelectorAll('[data-av-mermaid-item]')))
-                            if (node.getAttribute('data-av-mermaid-item') === selectedItem) {
-                                node.setAttribute('aria-pressed', 'true');
-                                node.classList.add('av-selected');
-                            }
+                    for (const node of Array.from(live.querySelectorAll('[data-av-mermaid-item]'))) {
+                        if (selectedItems.has(node.getAttribute('data-av-mermaid-item'))) {
+                            node.setAttribute('data-av-item-selected', '');
+                            node.setAttribute('aria-pressed', 'true');
+                        }
+                        if (focusedItem && node.getAttribute('data-av-mermaid-item') === focusedItem)
+                            node.focus({ preventScroll: true });
+                    }
                     keys.set(element, key);
+                    semanticKeys.set(element, semanticKey);
+                    element.removeAttribute('aria-busy');
                     element.setAttribute('data-av-mermaid-state', 'ready');
                     output.hidden = false;
                     status.textContent = '';
                     ready(figure);
                 }).catch(error => { if (!stopped && generations.get(element) === generation) {
+                    element.removeAttribute('aria-busy');
                     element.setAttribute('data-av-mermaid-state', 'error');
                     status.textContent = 'Diagram could not render: ' + (error instanceof Error ? error.message : String(error)) + ' Original source remains available below.';
                 } });
                 renderQueue = job;
+                requested.set(element, { key, job });
+                jobsInFlight.add(job);
+                void job.then(() => { jobsInFlight.delete(job); if (requested.get(element)?.job === job)
+                    requested.delete(element); });
                 return job;
             });
             await Promise.all(jobs);
         }
-        return { refresh() { pending = refresh(); return pending; }, whenIdle: () => pending, cleanup() { stopped = true; for (const state of original) {
+        return { refresh, async whenIdle() { while (jobsInFlight.size)
+                await Promise.all([...jobsInFlight]); }, cleanup() { stopped = true; requested.clear(); semanticKeys.clear(); for (const state of original) {
                 state.output.replaceChildren(...state.children);
                 state.status.textContent = state.text;
+                if (state.busy === null)
+                    state.element.removeAttribute('aria-busy');
+                else
+                    state.element.setAttribute('aria-busy', state.busy);
                 if (state.state === null)
                     state.element.removeAttribute('data-av-mermaid-state');
                 else
@@ -6673,7 +9235,11 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
                 return { width: viewportWidth };
             const rowWidth = dimensions(row).width;
             const measured = viewportWidth + Math.max(0, finite(row.parentElement.clientWidth));
-            const availableWidth = declaredWidth > 0 ? declaredWidth : Math.min(measured, Math.max(0, finite(layout.clientWidth, measured)));
+            // Measure the owning grid, not the sum of its already fitted tracks.
+            // Independent clientWidth rounding can alternate that sum by one pixel,
+            // feeding a permanent fit/ResizeObserver loop back into both tracks.
+            const layoutWidth = Math.max(0, finite(layout.clientWidth));
+            const availableWidth = declaredWidth > 0 ? declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
             return { width: availableWidth * box.width / (box.width + rowWidth), availableWidth };
         }
         function requestLayout(plot, width, availableWidth) {
@@ -6930,7 +9496,7 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         };
     }
 });
-define("interaction", ["require", "exports", "utility-panels", "notifications", "command-bar", "review-targets", "text-layout", "layout-refinement", "figure-tools", "mermaid", "figures", "plot-navigation", "preferences", "notebook"], function (require, exports, utility_panels_1, notifications_1, command_bar_3, review_targets_2, text_layout_6, layout_refinement_1, figure_tools_1, mermaid_1, figures_5, plot_navigation_1, preferences_2, notebook_2) {
+define("interaction", ["require", "exports", "comparison-reader", "startup", "report-search", "inspectors", "item-selection", "utility-panels", "notifications", "command-bar", "review-targets", "text-layout", "layout-refinement", "figure-tools", "mermaid", "figures", "plot-navigation", "preferences", "notebook"], function (require, exports, comparison_reader_1, startup_1, report_search_1, inspectors_1, item_selection_4, utility_panels_1, notifications_1, command_bar_7, review_targets_4, text_layout_6, layout_refinement_1, figure_tools_1, mermaid_1, figures_8, plot_navigation_1, preferences_2, notebook_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.enhanceVisuals = enhanceVisuals;
@@ -6956,10 +9522,15 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (enhancedRoots.has(descendant))
                 throw new TypeError("This root contains an independently enhanced report. Enhance sibling reports separately, or clean them up first.");
         }
+        if (shells.length)
+            (0, startup_1.notifyReportInitializing)(root.ownerDocument);
         const refinementCleanup = (0, layout_refinement_1.attachLayoutRefinement)(root);
         let diagrams = null;
+        let appearanceReady = false;
+        let itemSelection = null, inspectors = null;
         let notifications = null;
-        const preferences = (0, preferences_2.attachPreferences)(root, () => { void diagrams?.refresh(); notifications?.refresh(); });
+        const preferences = (0, preferences_2.attachPreferences)(root, () => { if (appearanceReady)
+            void diagrams?.refresh(); notifications?.refresh(); });
         const document = root.ownerDocument;
         notifications = (0, notifications_1.attachNotifications)(root, (target, source) => preferences.snapshot(target, source));
         const sectionBars = [];
@@ -6984,7 +9555,8 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         }
         const plots = (0, plot_navigation_1.attachPlots)(root);
         figures.dock();
-        diagrams = (0, mermaid_1.attachMermaid)(root, figure => { plots.refresh(figure); });
+        diagrams = (0, mermaid_1.attachMermaid)(root, figure => { plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
+        const readers = new Map();
         const collections = new Map();
         const collectionOwners = new WeakMap();
         const comparisonSlots = new Map();
@@ -7159,87 +9731,8 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             const heading = element.matches(".av-card") ? element.querySelector(".av-card-title,h1,h2,h3,h4") : null;
             return (heading?.textContent || element.querySelector("summary,h1,h2,h3,h4")?.textContent || element.getAttribute("aria-label") || "Evidence").trim();
         }
-        // One traversal per content region, with offsets for inspectable subregions.
-        // Do not repeatedly walk each nested candidate or compare every candidate pair.
-        // Read live content on each query: no stale index after evidence changes.
-        function searchMatches(panel, query) {
-            const parts = [], ranges = [];
-            let length = 0;
-            const append = (text) => { parts.push(text + ' '); length += text.length + 1; };
-            function visit(node) {
-                if (node.nodeType === 3) {
-                    append(node.textContent || '');
-                    return;
-                }
-                if (node.nodeType !== 1)
-                    return;
-                const current = node;
-                if (current.matches('button,input,select,textarea,script,style,[data-av-controls],[data-av-script-only],[data-av-notebook],[data-av-review-ui],[data-av-view-question],[role="status"]'))
-                    return;
-                const range = current !== panel && current.matches('details,.av-card,[data-av-content-view="visual"]') ? { target: current, start: length, end: length } : null;
-                if (range)
-                    ranges.push(range);
-                const alt = current.getAttribute('alt');
-                if (alt)
-                    append(alt);
-                for (const child of Array.from(current.childNodes))
-                    visit(child);
-                if (range)
-                    range.end = length;
-            }
-            visit(panel);
-            const raw = parts.join(''), normalize = (text) => text.replace(/\s+/g, ' ').trim();
-            if (!queryText(raw).includes(query))
-                return [];
-            const matching = ranges.map(range => ({ target: range.target, text: normalize(raw.slice(range.start, range.end)) })).filter(item => queryText(item.text).includes(query));
-            const parents = new Set();
-            for (const item of matching)
-                for (let parent = item.target.parentElement; parent && parent !== panel; parent = parent.parentElement)
-                    parents.add(parent);
-            return matching.length ? matching.filter(item => !parents.has(item.target)) : [{ target: panel, text: normalize(raw) }];
-        }
-        function queryText(value) { return value.replace(/\s+/g, " ").trim().toLocaleLowerCase(); }
         function panelName(panel) { return (panel.querySelector("h1,h2,h3")?.textContent || panel.getAttribute("data-av-panel") || "View").trim(); }
-        function renderSearch(state) {
-            const query = queryText(state.query);
-            state.results.textContent = "";
-            state.hits.clear();
-            hidden(state.results, !query);
-            if (!query)
-                return;
-            const matches = [];
-            const context = inScope(state.element, ".av-workspace-heading,.av-report-brief,.av-workspace-footer,[data-av-workspace-footer]", ".av-workspace").filter(element => !element.closest("[data-av-panel]"));
-            for (const panel of [...state.panels, ...context]) {
-                for (const result of searchMatches(panel, query))
-                    matches.push({ ...result, panel });
-            }
-            const heading = document.createElement("p");
-            heading.className = "av-search-result-count";
-            heading.textContent = matches.length ? `${matches.length} matching ${matches.length === 1 ? "item" : "items"}` : "No matches. Try another word.";
-            state.results.appendChild(heading);
-            const list = document.createElement("ul");
-            for (const { target, panel, text } of matches) {
-                const label = target.hasAttribute("data-av-content-view") ? titleOf(target.closest(".av-card") || target) : titleOf(target);
-                const item = document.createElement("li"), choice = button(label);
-                choice.setAttribute("data-av-search-hit", String(state.hits.size));
-                choice.className = "av-search-result";
-                const context = document.createElement("span");
-                context.className = "av-search-result-context";
-                context.textContent = panelName(panel);
-                if (panelName(panel) !== titleOf(target))
-                    choice.appendChild(context);
-                const excerpt = document.createElement('span');
-                excerpt.className = 'av-search-result-excerpt';
-                const at = queryText(text).indexOf(query), from = Math.max(0, at - 48), to = Math.min(text.length, at + query.length + 100);
-                excerpt.textContent = (from ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
-                choice.appendChild(excerpt);
-                item.appendChild(choice);
-                list.appendChild(item);
-                state.hits.set(choice, target);
-            }
-            state.results.appendChild(list);
-            message(state.status, `${matches.length} matching items. Choose a result to read it; your current section remains open.`);
-        }
+        function renderSearch(state) { state.finder?.update(state.query); }
         function placeOf(state) { return { viewId: state.selected, mode: state.mode, journeyId: state.journey }; }
         function recordPlace(state) { notebooks?.recordPlace(state.element, placeOf(state)); }
         function renderWorkspace(state, animate = false) {
@@ -7321,6 +9814,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             state.query = "";
             if (state.search)
                 state.search.value = "";
+            state.finder?.update("");
         }
         function workspaceFor(element) {
             const frame = element.closest(".av-card");
@@ -7348,9 +9842,13 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 renderWorkspace(state);
             const collectionObject = target.closest("[data-av-object]");
             if (collectionObject && collectionOwners.has(collectionObject)) {
-                const explorer = collectionObject.closest("[data-av-explorer]");
-                if (explorer) {
-                    endComparison(explorer);
+                const reader = readers.get(collectionOwners.get(collectionObject));
+                if (reader)
+                    reader.reveal(collectionObject.getAttribute('data-av-object'));
+                else {
+                    const explorer = collectionObject.closest('[data-av-explorer]');
+                    if (explorer)
+                        endComparison(explorer);
                 }
             }
             openDisclosures(target);
@@ -7435,7 +9933,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 }
                 focused.suspension = [];
                 if (dialogTitle) {
-                    dialogTitle.textContent = focused.kind === 'figure' ? (0, figures_5.figureTitle)(focused.card) : titleOf(focused.card);
+                    dialogTitle.textContent = focused.kind === 'figure' ? (0, figures_8.figureTitle)(focused.card) : titleOf(focused.card);
                     dialog?.setAttribute('aria-label', `Expanded view: ${dialogTitle.textContent}`);
                 }
                 if (dialogClose) {
@@ -7481,7 +9979,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             dialogContext.parentElement.hidden = state?.kind !== 'figure';
             if (state?.kind !== 'figure')
                 return;
-            for (const source of (0, figures_5.figureContext)(state.card)) {
+            for (const source of (0, figures_8.figureContext)(state.card)) {
                 const copy = source.cloneNode(true);
                 copy.removeAttribute('id');
                 for (const node of Array.from(copy.querySelectorAll('[id]')))
@@ -7586,7 +10084,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             card.parentNode.insertBefore(marker, card);
             const expansionControls = ownCardParts(card, "[data-av-focus]").map(element => ({ element, hidden: element.getAttribute("hidden") }));
             const savedPlotSnapshot = plots.snapshot(card);
-            const releaseReviewPosition = (0, review_targets_2.registerReviewPlaceholder)(marker, card);
+            const releaseReviewPosition = (0, review_targets_4.registerReviewPlaceholder)(marker, card);
             if (nested && focused) {
                 focused.suspension = [{ element: focused.card, hidden: focused.card.getAttribute('hidden') }, ...focused.toolMoves.map(move => ({ element: move.element, hidden: move.element.getAttribute('hidden') }))];
                 for (const state of focused.suspension)
@@ -7612,7 +10110,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (kind === 'figure')
                 card.setAttribute('data-av-expanded-figure', '');
             dialog.setAttribute('data-av-viewer-kind', kind);
-            const title = kind === 'figure' ? (0, figures_5.figureTitle)(card) : titleOf(card);
+            const title = kind === 'figure' ? (0, figures_8.figureTitle)(card) : titleOf(card);
             dialogTitle.textContent = title;
             if (dialogClose) {
                 dialogClose.textContent = focusStack.length ? "Back" : "Close";
@@ -7644,6 +10142,9 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             motion(card);
         }
         function endComparison(explorer) {
+            for (const reader of readers.values())
+                if (reader.explorer === explorer)
+                    reader.reset();
             for (const checkbox of inScope(explorer, '[data-av-compare]', '[data-av-explorer]'))
                 checkbox.checked = false;
             stateClass(explorer, 'av-comparing', false);
@@ -7661,6 +10162,11 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             for (const [parent, objects] of collections) {
                 if (parent.closest('[data-av-explorer]') !== explorer)
                     continue;
+                const reader = readers.get(parent);
+                if (reader) {
+                    reader.render(key);
+                    continue;
+                }
                 const current = objects.find(object => object.getAttribute('data-av-object') === key) || (compared.size === 1 ? objects.find(object => compared.has(object.getAttribute('data-av-object'))) : undefined) || objects.find(object => object.classList.contains('av-selected')) || objects.find(object => object.hasAttribute('open')) || objects[0];
                 const selected = compared.size > 1 ? objects.filter(object => compared.has(object.getAttribute('data-av-object'))) : current ? [current] : [];
                 parent.style.setProperty('--av-reader-columns', String(Math.max(1, selected.length)));
@@ -7688,8 +10194,10 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 stateClass(item, "av-selected", item.getAttribute("data-av-object") === selected);
             for (const item of inScope(explorer, "[data-av-inspect]", "[data-av-explorer]")) {
                 const active = item.getAttribute("data-av-inspect") === selected;
-                attribute(item, "aria-pressed", String(active));
-                stateClass(item, "av-selected", active);
+                attribute(item, "data-av-inspected", active ? "" : null);
+                // Older custom explorers without the plot tools keep their original single-selection semantics.
+                if (!item.closest(".av-plot-scroll"))
+                    attribute(item, "aria-pressed", String(active));
             }
             for (const edge of inScope(explorer, "[data-av-from],[data-av-to]", "[data-av-explorer]"))
                 stateClass(edge, "av-related", !!selected && (edge.getAttribute("data-av-from") === selected || edge.getAttribute("data-av-to") === selected));
@@ -7700,7 +10208,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             renderCollections(explorer, selected);
         }
         function inspectObject(control, requestedKey, takeFocus = true, selectView = false) {
-            const explorer = control.closest("[data-av-explorer]") || ((0, figures_5.figureOf)(control) ? (0, figures_5.figureOrigin)((0, figures_5.figureOf)(control)).explorer : null);
+            const explorer = control.closest("[data-av-explorer]") || ((0, figures_8.figureOf)(control) ? (0, figures_8.figureOrigin)((0, figures_8.figureOf)(control)).explorer : null);
             const key = requestedKey || control.getAttribute("data-av-inspect") || control.value;
             if (!explorer || !key)
                 return;
@@ -7716,11 +10224,8 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                     attribute(item, "open", null);
             synchronizeObject(explorer, key);
             if (focused?.kind === 'figure' && focused.card.contains(control)) {
-                for (const mark of elements(focused.card, '[data-av-inspect]')) {
-                    const selected = mark.getAttribute('data-av-inspect') === key;
-                    attribute(mark, 'aria-pressed', String(selected));
-                    stateClass(mark, 'av-selected', selected);
-                }
+                for (const mark of elements(focused.card, '[data-av-inspect]'))
+                    attribute(mark, 'data-av-inspected', mark.getAttribute('data-av-inspect') === key ? '' : null);
                 if (dialogContext) {
                     let detail = dialogContext.querySelector('[data-av-selected-context]');
                     if (!detail) {
@@ -7776,6 +10281,12 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 inspectObject(control, next.getAttribute("data-av-object") || undefined);
         }
         function compareArtifacts(explorer) {
+            const managed = [...readers.values()].filter(reader => reader.explorer === explorer);
+            if (managed.length) {
+                for (const reader of managed)
+                    reader.compare();
+                return;
+            }
             const selected = new Set(inScope(explorer, "[data-av-compare]", "[data-av-explorer]").filter(control => control.checked).map(control => control.getAttribute("data-av-compare")));
             for (const object of inScope(explorer, "[data-av-object]", "[data-av-explorer]")) {
                 const compared = selected.has(object.getAttribute("data-av-object"));
@@ -7845,7 +10356,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (!contains(target))
                 return;
             const collectionSummary = target.closest('summary');
-            if (collectionSummary && collectionOwners.has(collectionSummary.parentElement)) {
+            if (collectionSummary && collectionOwners.has(collectionSummary.parentElement) && !target.closest('button,input,a,select,textarea')) {
                 event.preventDefault();
                 return;
             }
@@ -7853,10 +10364,12 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 event.preventDefault();
                 return;
             }
-            if (target.closest('.av-plot-scroll') && (0, figures_5.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
+            if (itemSelection?.click(event, target)) {
+                event.preventDefault();
                 return;
-            if (target.closest('[data-av-mermaid-item]'))
-                selectDiagramItem(target);
+            }
+            if (target.closest('.av-plot-scroll') && (0, figures_8.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
+                return;
             if (notebooks?.click(target)) {
                 if (!target.closest('a[download]'))
                     event.preventDefault();
@@ -7926,16 +10439,6 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                     }
                     return;
                 }
-                const hit = target.closest("[data-av-search-hit]");
-                const destination = hit ? state.hits.get(hit) : null;
-                if (destination) {
-                    clearSearch(state);
-                    if (destination.hasAttribute("data-av-object"))
-                        inspectObject(destination, destination.getAttribute("data-av-object") || undefined, true, true);
-                    else
-                        reveal(destination, true);
-                    return;
-                }
                 if (target.closest("[data-av-show-all]")) {
                     changeReadingMode(state, "all");
                     return;
@@ -7963,51 +10466,82 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 }
             }
         }
-        function selectDiagramItem(target) {
-            const item = target.closest('[data-av-mermaid-item]'), figure = item && (0, figures_5.figureOf)(item);
-            if (!item || !figure)
+        const itemReaders = new Map();
+        function selectDiagramItem(target, open = false, trigger) {
+            const item = target.closest('[data-av-mermaid-item],[data-av-observation]'), figure = item && (0, figures_8.figureOf)(item);
+            if (!item || !figure || !open && !itemReaders.get(figure)?.dialog.open)
                 return;
-            for (const mark of elements(figure, '[data-av-mermaid-item]')) {
-                attribute(mark, 'aria-pressed', String(mark === item));
-                stateClass(mark, 'av-selected', mark === item);
+            let reader = itemReaders.get(figure);
+            if (!reader) {
+                const panel = document.createElement('dialog');
+                panel.className = 'av-source-panel av-selected-items-dialog';
+                panel.setAttribute('data-av-review-ui', '');
+                panel.setAttribute('aria-label', 'Selected diagram items');
+                if (typeof panel.showModal !== 'function')
+                    return;
+                const header = document.createElement('header');
+                header.className = 'av-source-header';
+                panel.appendChild(header);
+                const heading = document.createElement('strong');
+                heading.textContent = 'Selected evidence';
+                header.appendChild(heading);
+                const close = button('Close');
+                close.setAttribute('aria-label', 'Close selected evidence');
+                header.appendChild(close);
+                const body = document.createElement('div');
+                body.className = 'av-selected-items-body';
+                panel.appendChild(body);
+                const actions = document.createElement('div');
+                actions.className = 'av-button-group';
+                panel.appendChild(actions);
+                const source = figure.querySelector('[data-av-figure-action="source"]');
+                if (source) {
+                    const go = button('View original source');
+                    actions.appendChild(go);
+                    go.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); source.click(); });
+                }
+                reader = { dialog: panel, body, trigger: null };
+                itemReaders.set(figure, reader);
+                figure.appendChild(panel);
+                const current = reader;
+                const dismiss = (event) => { event.preventDefault(); event.stopPropagation(); panel.close(); if (current.trigger?.isConnected)
+                    current.trigger.focus({ preventScroll: true }); };
+                close.addEventListener('click', dismiss);
+                panel.addEventListener('cancel', dismiss);
+                undo.push(() => { if (panel.open)
+                    panel.close(); panel.remove(); itemReaders.delete(figure); });
             }
-            notebooks?.click(item);
+            reader.body.replaceChildren();
+            const selected = (0, item_selection_4.selectedFigureItems)(figure);
+            for (const mark of selected.length ? selected : [item]) {
+                const section = document.createElement('section'), heading = document.createElement('h3');
+                heading.textContent = mark.getAttribute('aria-label') || 'Selected item';
+                section.appendChild(heading);
+                const text = document.createElement('pre');
+                text.textContent = mark.textContent || mark.getAttribute('aria-label') || '';
+                section.appendChild(text);
+                reader.body.appendChild(section);
+            }
+            if (open) {
+                reader.trigger = trigger || item;
+                if (!reader.dialog.open)
+                    reader.dialog.showModal();
+                reader.dialog.querySelector('button')?.focus({ preventScroll: true });
+            }
         }
         function keydown(event) {
             if (event.isComposing)
                 return;
-            const origin = targetOf(event), summary = origin?.closest('summary');
-            if (summary && collectionOwners.has(summary.parentElement) && ['Enter', ' '].includes(event.key)) {
+            const origin = targetOf(event);
+            if (origin && itemSelection?.keydown(event, origin)) {
                 event.preventDefault();
+                event.stopPropagation();
                 return;
             }
-            const workspace = origin ? workspaceFor(origin) : undefined;
-            if (workspace && !event.altKey && !event.ctrlKey && !event.metaKey) {
-                if (event.key === "Escape" && workspace.query && (origin === workspace.search || !!origin && workspace.results.contains(origin))) {
-                    event.preventDefault();
-                    clearSearch(workspace);
-                    renderWorkspace(workspace);
-                    workspace.search?.focus();
-                    return;
-                }
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                    const hits = [...workspace.hits.keys()];
-                    const hit = origin?.closest("[data-av-search-hit]");
-                    if (origin === workspace.search && event.key === "ArrowDown" && hits.length) {
-                        event.preventDefault();
-                        focus(hits[0]);
-                        return;
-                    }
-                    if (hit && hits.includes(hit)) {
-                        event.preventDefault();
-                        const next = hits.indexOf(hit) + (event.key === "ArrowDown" ? 1 : -1);
-                        if (next < 0)
-                            workspace.search?.focus();
-                        else if (next < hits.length)
-                            focus(hits[next]);
-                        return;
-                    }
-                }
+            const summary = origin?.closest('summary');
+            if (summary && collectionOwners.has(summary.parentElement) && !origin?.closest('button,input,a,select,textarea') && ['Enter', ' '].includes(event.key)) {
+                event.preventDefault();
+                return;
             }
             if (event.key === "Escape") {
                 const notebook = origin?.closest("[data-av-notebook]");
@@ -8025,13 +10559,10 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || (event.key !== "Enter" && event.key !== " "))
                 return;
             const target = targetOf(event);
-            if (target?.closest('.av-plot-scroll') && (0, figures_5.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
+            if (target?.closest('.av-plot-scroll') && (0, figures_8.figureOf)(target)?.getAttribute('data-av-selection-mode') === 'text')
                 return;
-            if (target?.closest('[data-av-mermaid-item]')) {
-                event.preventDefault();
-                selectDiagramItem(target);
+            if (target?.closest('.av-plot-scroll'))
                 return;
-            }
             const inspect = target?.closest("[data-av-inspect]");
             if (!inspect || !contains(inspect) || target?.closest("input,textarea,select,button,a[href],[contenteditable]"))
                 return;
@@ -8045,13 +10576,15 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (notebooks?.change(target))
                 return;
             if (preferences.change(target)) {
-                void diagrams?.refresh();
                 for (const explorer of inclusive("[data-av-explorer]"))
                     synchronizeObject(explorer);
                 return;
             }
-            if (target.matches("[data-av-select]"))
+            if (target.matches("[data-av-select]")) {
                 inspectObject(target, undefined, false);
+                inspectors?.refresh();
+                inspectors?.open(target, target);
+            }
             else if (target.matches("[data-av-compare]")) {
                 const explorer = target.closest("[data-av-explorer]");
                 if (explorer)
@@ -8065,6 +10598,14 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         }
         function disclosureToggle(event) {
             const target = targetOf(event);
+            // Reading panes are owned by their workbench. Reopening or hiding n records
+            // must not fan out into n whole-explorer synchronization passes or move the
+            // current record to whichever native toggle event happened to arrive last.
+            if (target?.matches('[data-av-object]') && readers.has(collectionOwners.get(target))) {
+                if (!target.hasAttribute('hidden') && !target.hasAttribute('open'))
+                    attribute(target, 'open', '');
+                return;
+            }
             if (target && contains(target)) {
                 preferences.toggle(target);
                 if (target.matches("details[open]"))
@@ -8105,7 +10646,8 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         attribute(root, "data-av-enhanced", "true");
         stateClass(root, "av-enhanced", true);
         for (const controls of inclusive("[data-av-controls],[data-av-script-only]"))
-            hidden(controls, false);
+            if (!controls.matches(".av-floating-panel"))
+                hidden(controls, false);
         for (const card of inclusive(".av-card")) {
             for (const control of ownCardParts(card, "[data-av-focus]")) {
                 attribute(control, "aria-haspopup", "dialog");
@@ -8169,7 +10711,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                     const summary = object.querySelector('summary');
                     if (summary) {
                         attribute(summary, 'tabindex', '-1');
-                        attribute(summary, 'aria-disabled', 'true');
+                        attribute(summary, 'aria-disabled', null);
                     }
                 }
                 if (parent.matches('.av-scenario-grid') && objects.length > 1 && !inScope(explorer, '[data-av-compare]', '[data-av-explorer]').length) {
@@ -8222,6 +10764,11 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (visibleScope)
                 coordinateScope(explorer, visibleScope.getAttribute("data-av-coordinate-scope"));
         }
+        for (const [parent, objects] of collections)
+            if (parent.matches('.av-deck-grid,.av-scenario-grid') && objects.length) {
+                const explorer = parent.closest('[data-av-explorer]');
+                readers.set(parent, (0, comparison_reader_1.attachComparisonReader)(explorer, parent, objects));
+            }
         for (const workspace of inclusive(".av-workspace")) {
             const panels = inScope(workspace, "[data-av-panel]", ".av-workspace");
             if (!panels.length)
@@ -8274,7 +10821,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 catch { /* Authored malformed route hooks do not hide the underlying views. */ }
             }
             const selected = workspace.getAttribute("data-av-start-view") || navigation.find(link => link.getAttribute("aria-current") === "page")?.getAttribute("data-av-view");
-            const state = { element: workspace, panels, navigation, search, status, reset, showAll, showSingle, mode: "single", selected: panels.some(panel => panel.getAttribute("data-av-panel") === selected) ? selected : panels[0].getAttribute("data-av-panel"), query: search?.value || "", results, hits: new Map(), journey: null, journeys };
+            const state = { element: workspace, panels, navigation, search, status, reset, showAll, showSingle, mode: "single", selected: panels.some(panel => panel.getAttribute("data-av-panel") === selected) ? selected : panels[0].getAttribute("data-av-panel"), query: search?.value || "", results, journey: null, journeys };
             workspaces.push(state);
             for (const card of elements(workspace, ".av-card")) {
                 const panel = card.closest("[data-av-panel]");
@@ -8288,6 +10835,15 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         }
         notebooks = (0, notebook_2.attachNotebooks)(root, { notify: message => notifications?.show(message), controls: element => element.hasAttribute('data-av-figure') ? figures.toolbar(element) : ownCardParts(element, '.av-frame-tools')[0] || null,
             reveal: target => reveal(target, true),
+            restored: (scope, place) => {
+                const state = workspaces.find(state => state.element === scope);
+                if (!state || !state.panels.some(panel => panel.getAttribute('data-av-panel') === place.viewId))
+                    return;
+                state.selected = place.viewId;
+                state.mode = place.mode;
+                state.journey = place.journeyId;
+                renderWorkspace(state); // Hydration is not a navigation action or a focus request.
+            },
             navigate: (scope, place) => {
                 const state = workspaces.find(state => state.element === scope);
                 if (!state || !state.panels.some(panel => panel.getAttribute("data-av-panel") === place.viewId))
@@ -8306,6 +10862,34 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 }
             },
         });
+        for (const state of workspaces)
+            if (state.search) {
+                state.finder = (0, report_search_1.attachReportSearch)(state.element, state.search, state.results, {
+                    notes: () => notebooks?.searchEntries(state.element) || [],
+                    close: () => { clearSearch(state); if (state.reset)
+                        hidden(state.reset, true); },
+                    reveal: target => {
+                        if (target.hasAttribute('data-av-object')) {
+                            inspectObject(target, target.getAttribute('data-av-object') || undefined, false, false);
+                            inspectors?.refresh();
+                            inspectors?.open(target, state.search);
+                        }
+                        else if (target.matches('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')) {
+                            reveal(target, false, false);
+                            if (target.hasAttribute('data-av-inspect')) {
+                                inspectObject(target, undefined, false, false);
+                                inspectors?.refresh();
+                                inspectors?.open(target, state.search);
+                            }
+                            else
+                                selectDiagramItem(target, true);
+                        }
+                        else
+                            reveal(target, true, false);
+                    },
+                });
+                renderSearch(state);
+            }
         const explicitTarget = fragment(window?.location.hash || "");
         figures.dock();
         for (const card of inclusive('.av-card')) {
@@ -8313,7 +10897,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             if (!toolbar)
                 continue;
             const controls = Array.from(toolbar.querySelectorAll('button'));
-            const bar = (0, command_bar_3.attachCommandBar)(toolbar, 'Section actions');
+            const bar = (0, command_bar_7.attachCommandBar)(toolbar, 'Section actions');
             sectionBars.push(bar);
             sectionBarHosts.set(bar, toolbar);
             for (const button of controls) {
@@ -8332,6 +10916,23 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
                 renderWorkspace(state);
             }
         }
+        inspectors = (0, inspectors_1.attachInspectors)(root);
+        itemSelection = (0, item_selection_4.attachItemSelection)(root, figures.figures, {
+            inspect: (item, open, trigger) => {
+                if (item.hasAttribute('data-av-inspect')) {
+                    inspectObject(item, undefined, false);
+                    inspectors?.refresh();
+                    if (open && focused?.kind !== 'figure')
+                        inspectors?.open(item, trigger || item);
+                }
+                else
+                    selectDiagramItem(item, open, trigger);
+            },
+            command: (figure, control, options) => figures.command(figure, control, options),
+            updateCommand: (figure, control, options) => figures.updateCommand(figure, control, options),
+            canReview: figure => !!notebooks?.hasReview(figure),
+            review: (figure, action, trigger) => notebooks?.reviewSelection(figure, action, trigger),
+        });
         const utilityCleanup = (0, utility_panels_1.attachUtilityPanels)(root);
         // Reserve the real sticky bar height, including wrapped controls and reader zoom.
         for (const state of workspaces) {
@@ -8362,6 +10963,9 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         listen(document, "click", ((event) => {
             if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
                 return;
+            // A generated download is not a reader click outside the active panel.
+            if (targetOf(event)?.closest('[data-av-internal-download]'))
+                return;
             preferences.dismiss(targetOf(event));
             for (const notebook of inclusive("[data-av-notebook]"))
                 if (notebook.hasAttribute("open") && !notebook.contains(targetOf(event)))
@@ -8381,7 +10985,19 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
         if (window)
             listen(window, "hashchange", hashChanged);
         hashChanged();
-        void diagrams?.refresh();
+        const initialAppearance = preferences.whenReady().then(() => {
+            if (cleaned)
+                return;
+            appearanceReady = true;
+            return diagrams?.refresh();
+        });
+        const ready = Promise.all([preferences.whenReady(), notebooks.whenReady()]).then(() => {
+            if (cleaned)
+                return;
+            for (const state of workspaces)
+                attribute(state.element, 'data-av-ready', '');
+            (0, startup_1.notifyReportReady)(document);
+        });
         if (window)
             listen(window, 'resize', (() => { updateFigureBounds(); if (focused?.kind === 'figure')
                 plots.refresh(focused.card); }));
@@ -8411,8 +11027,15 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             cleaned = true;
             closeAllFocus();
             cancelMotion();
+            for (const state of workspaces)
+                state.finder?.cleanup();
             for (const bar of sectionBars)
                 bar.cleanup();
+            itemSelection?.cleanup();
+            inspectors?.cleanup();
+            for (const reader of readers.values())
+                reader.cleanup();
+            readers.clear();
             for (const restore of undo.reverse())
                 restore();
             utilityCleanup();
@@ -8424,7 +11047,7 @@ define("interaction", ["require", "exports", "utility-panels", "notifications", 
             figures.cleanup();
             refinementCleanup();
             enhancedRoots.delete(root);
-        }, { whenIdle: async () => { await Promise.all([preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle()]); } });
+        }, { whenReady: () => ready, whenIdle: async () => { await Promise.all([ready, initialAppearance, preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
         enhancedRoots.set(root, cleanup);
         return cleanup;
     }
@@ -8459,7 +11082,7 @@ define("explorers", ["require", "exports", "core", "structured", "landscape"], f
         return (0, core_13.card)(input, `<div class="av-observatory" data-av-explorer>${(0, core_13.explorerControls)("Question", choices)}<div class="av-object-list">${issues || '<p class="av-empty">No unanswered questions supplied.</p>'}</div></div><details class="av-data" data-av-content-view="data"><summary>Complete unknowns map</summary>${complete}</details>`, "uncertainty");
     }
 });
-define("index", ["require", "exports", "model", "atelier", "preferences", "interaction", "explorers", "core", "structured", "quantitative", "qualitative", "landscape", "story", "notebook", "categories", "text-layout", "figures"], function (require, exports, model_1, atelier_1, preferences_3, interaction_1, explorers_1, core_14, structured_4, quantitative_3, qualitative_3, landscape_3, story_2, notebook_3, categories_4, text_layout_7, figures_6) {
+define("index", ["require", "exports", "model", "atelier", "preferences", "interaction", "explorers", "core", "structured", "quantitative", "qualitative", "landscape", "story", "notebook", "categories", "text-layout", "figures"], function (require, exports, model_1, atelier_1, preferences_3, interaction_1, explorers_1, core_14, structured_4, quantitative_3, qualitative_3, landscape_3, story_2, notebook_3, categories_4, text_layout_7, figures_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerVisualAdapter = exports.mermaidDiagram = exports.visualFigure = exports.browserTextMeasure = exports.createChartContext = exports.researchNotebook = exports.readingGuide = exports.comparisonLanes = exports.storyPanel = exports.reportBrief = exports.inlineText = exports.argumentMap = exports.decisionHistory = exports.constraintMap = exports.reliabilityProfile = exports.confidenceProvenance = exports.unknownsMap = exports.evidenceFreshness = exports.renderExtension = exports.effortTable = exports.nativeArtifactViewer = exports.scenarioExplorer = exports.failureTaxonomy = exports.evidenceLineage = exports.uncertaintyPanel = exports.disagreementMap = exports.evidenceExcerpts = exports.scatterPlot = exports.trajectory = exports.distribution = exports.intervalPlot = exports.pairedComparison = exports.heatmap = exports.conditionalRecommendations = exports.constraintSatisfaction = exports.coverageMatrix = exports.comparisonMatrix = exports.annotatedTable = exports.escapeText = exports.uncertaintyObservatory = exports.comparisonJourney = exports.enhanceVisuals = exports.sectionGroup = exports.reportSection = exports.reportSurface = exports.appearanceSettings = void 0;
@@ -8508,9 +11131,9 @@ define("index", ["require", "exports", "model", "atelier", "preferences", "inter
     Object.defineProperty(exports, "researchNotebook", { enumerable: true, get: function () { return notebook_3.researchNotebook; } });
     Object.defineProperty(exports, "createChartContext", { enumerable: true, get: function () { return categories_4.createChartContext; } });
     Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_7.browserTextMeasure; } });
-    Object.defineProperty(exports, "visualFigure", { enumerable: true, get: function () { return figures_6.visualFigure; } });
-    Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_6.mermaidDiagram; } });
-    Object.defineProperty(exports, "registerVisualAdapter", { enumerable: true, get: function () { return figures_6.registerVisualAdapter; } });
+    Object.defineProperty(exports, "visualFigure", { enumerable: true, get: function () { return figures_9.visualFigure; } });
+    Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_9.mermaidDiagram; } });
+    Object.defineProperty(exports, "registerVisualAdapter", { enumerable: true, get: function () { return figures_9.registerVisualAdapter; } });
 });
 
 Object.defineProperty(root, "AgenticVisuals", { value: load("index"), configurable: true, enumerable: true, writable: true });

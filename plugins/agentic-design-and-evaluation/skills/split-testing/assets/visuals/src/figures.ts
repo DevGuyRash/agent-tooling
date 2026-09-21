@@ -46,9 +46,15 @@ export function figureTitle(element: HTMLElement): string {
 }
 export function figureSource(element: HTMLElement): FigureSource | undefined {
   const supplied = visualAdapter(element)?.source?.(element);
-  if (supplied) return supplied;
+  const checked=(value:unknown):FigureSource=>{
+    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Figure source must contain its original text and language.');
+    const source=value as FigureSource;
+    if(typeof source.text!=='string'||typeof source.language!=='string'||source.filename!==undefined&&typeof source.filename!=='string')throw new Error('Figure source must contain its original text and language.');
+    return source;
+  };
+  if (supplied !== undefined && supplied !== null) return checked(supplied);
   const raw = element.getAttribute('data-av-source');
-  if (raw) { const value = JSON.parse(raw); if (typeof value.text === 'string' && typeof value.language === 'string') return value; }
+  if (raw) return checked(JSON.parse(raw));
   const recipe = (element.closest('[data-av-layout-input]') || figureOrigin(element).owner)?.getAttribute('data-av-layout-input');
   return recipe ? { language: 'json', text: recipe, filename: 'figure-data.json' } : undefined;
 }

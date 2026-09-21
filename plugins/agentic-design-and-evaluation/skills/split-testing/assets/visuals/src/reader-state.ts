@@ -1,3 +1,4 @@
+import { exactJson } from './exact-json';
 import { readerTimestamp } from "./reader-values";
 import { ReviewRecords, ReviewChange, emptyReviewRecords, validateReview, applyReview } from "./review-state";
 /** Optional reader records. These describe reader actions, never analytical findings. */
@@ -205,7 +206,7 @@ function decode(text: string, context: Context): ReaderState {
 export function decodeReaderState(text: string, context: ReaderContext): ReaderState { return decode(text, contextOf(context)); }
 
 /** Schema validation here needs no browser; reference validation happens with context on load/update. */
-export function encodeReaderState(state: ReaderState): string { return JSON.stringify(stateOf(state)); }
+export function encodeReaderState(state: ReaderState): string { return exactJson(stateOf(state)); }
 
 function appendActivity(state: ReaderState, entry: Omit<ReaderActivity, "sequence">, limit: number): ReaderState {
   if (state.nextSequence === Number.MAX_SAFE_INTEGER) invalid("Activity sequence capacity reached; start a new reader notebook.");
@@ -312,7 +313,7 @@ function projectedNotes(versions: readonly ReaderNoteVersion[], order: readonly 
 }
 export function readerNotebookFromState(source: ReaderState, context: ReaderContext, originals: readonly string[] = []): ReaderNotebook {
   const state = stateOf(source, contextOf(context));
-  return { kind: "agentic-reader-notebook", version: 3, review: emptyReviewRecords(), epoch: "initial", state, noteVersions: state.notes.map(note => ({ id: "legacy:" + JSON.stringify([note.targetId, note.text, note.updatedAt]), ...note })), originals: [...originals] };
+  return { kind: "agentic-reader-notebook", version: 3, review: emptyReviewRecords(), epoch: "initial", state, noteVersions: state.notes.map(note => ({ id: "legacy:" + exactJson([note.targetId, note.text, note.updatedAt]), ...note })), originals: [...originals] };
 }
 export function emptyReaderNotebook(context: ReaderContext): ReaderNotebook { return readerNotebookFromState(emptyReaderState(context), context); }
 export function validateReaderNotebook(source: unknown, context: ReaderContext): ReaderNotebook {
@@ -328,7 +329,7 @@ export function validateReaderNotebook(source: unknown, context: ReaderContext):
   });
   if (new Set(noteVersions.map(version => version.id)).size !== noteVersions.length) invalid("Note version IDs must be unique.");
   const projected = projectedNotes(noteVersions, state.notes);
-  if (JSON.stringify(projected) !== JSON.stringify(state.notes)) invalid("Notebook notes must match their retained versions.");
+  if (exactJson(projected) !== exactJson(state.notes)) invalid("Notebook notes must match their retained versions.");
   const originals = array(item.originals, "Original saved data").map(value => string(value, "Original saved data"));
   return { kind: "agentic-reader-notebook", version: 3, epoch, state, noteVersions, originals, reviewImports: item.reviewImports === undefined ? [] : array(item.reviewImports, "Imported review identities").map(value => string(value, "Imported review identity")), review: item.review === undefined ? emptyReviewRecords() : validateReview(item.review) };
 }
@@ -347,7 +348,7 @@ export function decodeReaderNotebook(raw: string, context: ReaderContext): Reade
   const notebook = validateReaderNotebook(value, context);
   return (value as {version?:number})?.version === 2 ? { ...notebook, originals: [...new Set([...notebook.originals, raw])] } : notebook;
 }
-export function encodeReaderNotebook(notebook: ReaderNotebook, context: ReaderContext): string { return JSON.stringify(validateReaderNotebook(notebook, context)); }
+export function encodeReaderNotebook(notebook: ReaderNotebook, context: ReaderContext): string { return exactJson(validateReaderNotebook(notebook, context)); }
 export function noteVersionIds(notebook: ReaderNotebook, targetId: string): string[] { return notebook.noteVersions.filter(version => version.targetId === targetId).map(version => version.id); }
 export function applyReaderDelta(source: ReaderNotebook, delta: ReaderDelta, context: ReaderContext, recordActivity = true): ReaderNotebook {
   const notebook = validateReaderNotebook(source, context);
@@ -362,7 +363,7 @@ export function applyReaderDelta(source: ReaderNotebook, delta: ReaderDelta, con
   const version: ReaderNoteVersion = { id: delta.id, targetId: change.targetId, text: change.text === "" ? null : change.text, updatedAt: change.at };
   const prior = notebook.noteVersions.find(candidate => candidate.id === version.id);
   if (prior) {
-    if (JSON.stringify(prior) !== JSON.stringify(version)) invalid("An edit identifier conflicts with another note version.");
+    if (exactJson(prior) !== exactJson(version)) invalid("An edit identifier conflicts with another note version.");
     return notebook;
   }
   const noteVersions = [...notebook.noteVersions.filter(candidate => candidate.targetId !== change.targetId || !base.has(candidate.id)), version];
@@ -374,10 +375,10 @@ export function mergeReaderNotebooks(left: ReaderNotebook, right: ReaderNotebook
   const a=validateReaderNotebook(left,context),b=validateReaderNotebook(right,context);
   if(a.epoch!==b.epoch)throw new Error('The review copy and browser notebook have different replacement epochs. Export both before replacing either.');
   const notes=new Map(a.noteVersions.map(version=>[version.id,version]));
-  for(const version of b.noteVersions){const old=notes.get(version.id);if(old&&JSON.stringify(old)!==JSON.stringify(version))throw new Error('A note version conflicts with the imported copy.');notes.set(version.id,version);}
+  for(const version of b.noteVersions){const old=notes.get(version.id);if(old&&exactJson(old)!==exactJson(version))throw new Error('A note version conflicts with the imported copy.');notes.set(version.id,version);}
   const annotations=new Map((a.review?.versions||[]).map(version=>[version.id,version]));
-  for(const version of b.review?.versions||[]){const old=annotations.get(version.id);if(old&&JSON.stringify(old)!==JSON.stringify(version))throw new Error('An annotation version conflicts with the imported copy.');annotations.set(version.id,version);}
-  const bookmarks=new Map([...(a.review?.bookmarks||[]),...(b.review?.bookmarks||[])].map(anchor=>[JSON.stringify(anchor),anchor]));
+  for(const version of b.review?.versions||[]){const old=annotations.get(version.id);if(old&&exactJson(old)!==exactJson(version))throw new Error('An annotation version conflicts with the imported copy.');annotations.set(version.id,version);}
+  const bookmarks=new Map([...(a.review?.bookmarks||[]),...(b.review?.bookmarks||[])].map(anchor=>[exactJson(anchor),anchor]));
   const noteVersions=[...notes.values()];
   return validateReaderNotebook({...a,reviewImports:[...new Set([...(a.reviewImports||[]),...(b.reviewImports||[])])],noteVersions,state:{...a.state,notes:projectedNotes(noteVersions,[...a.state.notes,...b.state.notes]),bookmarks:[...new Set([...a.state.bookmarks,...b.state.bookmarks])]},review:{versions:[...annotations.values()],bookmarks:[...bookmarks.values()]},originals:[...new Set([...a.originals,...b.originals])]},context);
 }
@@ -400,7 +401,7 @@ export function importReaderReview(raw: string, context: ReaderContext): ReaderN
     if(!state||state.reportId!==context.reportId||!Array.isArray(state.notes)||!Array.isArray(state.bookmarks)||!Array.isArray(state.activity))throw originalError;
     const targets=[...(Array.isArray(candidate.noteVersions)?candidate.noteVersions.map(version=>version.targetId):[]),...state.notes.map(note=>note.targetId),...state.bookmarks,...state.activity.flatMap(action=>action.targetId?[action.targetId]:[])];
     const ownContext:ReaderContext={reportId:state.reportId,revision:state.revision,targetIds:[...new Set(targets)],viewIds:[...new Set([...(state.viewId?[state.viewId]:[]),...state.activity.flatMap(action=>action.viewId?[action.viewId]:[])])],journeyIds:state.journeyId?[state.journeyId]:[],activityLimit:context.activityLimit};
-    const previous=decodeReaderNotebook(JSON.stringify(wrapped),ownContext),fresh=emptyReaderNotebook(context);
+    const previous=decodeReaderNotebook(exactJson(wrapped),ownContext),fresh=emptyReaderNotebook(context);
     const anchor=(id:string)=>({kind:'section' as const,target:{reportId:previous.state.reportId,revision:previous.state.revision,id,label:id,path:[],fingerprint:'unavailable',excerpt:'This earlier notebook did not include the original target text.'}});
     return {...fresh,originals:[...previous.originals,raw],review:{versions:[...(previous.review?.versions||[]),...previous.noteVersions.map(version=>({id:'import:'+version.id,annotationId:'legacy:'+version.targetId,anchor:anchor(version.targetId),text:version.text,at:version.updatedAt,draft:false}))],bookmarks:[...(previous.review?.bookmarks||[]),...previous.state.bookmarks.map(anchor)]}};
   }

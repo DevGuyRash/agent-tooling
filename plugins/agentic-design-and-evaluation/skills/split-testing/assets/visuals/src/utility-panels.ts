@@ -36,6 +36,12 @@ export function attachUtilityPanels(root: HTMLElement): () => void {
       summary!.setAttribute('aria-expanded', 'true');
       const bounds = visibleViewport(view);
       const anchor = summary!.getBoundingClientRect();
+      if(details.hasAttribute('data-av-notebook')) {
+        const width=Math.min(620,Math.max(0,bounds.right-bounds.left)),height=Math.max(0,bounds.bottom-bounds.top);
+        panel!.style.setProperty('width',width+'px');panel!.style.setProperty('height',Math.min(800,height)+'px');panel!.style.setProperty('max-height',height+'px');
+        panel!.style.setProperty('left',Math.max(bounds.left,bounds.right-width)+'px');panel!.style.setProperty('top',bounds.top+'px');return;
+      }
+
       panel!.style.setProperty('max-width', Math.max(0, bounds.right - bounds.left) + 'px');
       const box = panel!.getBoundingClientRect();
       const placed = anchoredPanel(anchor, bounds, box.width, Math.max(box.height, panel!.scrollHeight));

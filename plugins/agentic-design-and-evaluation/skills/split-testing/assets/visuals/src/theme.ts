@@ -143,14 +143,21 @@ export function resolveTheme(colors: ThemeColors, mode: Mode): Record<string, st
   return result;
 }
 
+// Bounded by color choices rather than report size. Return copies so callers
+// cannot corrupt the next surface's theme through a mutated result object.
+const propertyCache = new Map<string, Record<string, string>>();
 /** Trusted CSS properties derived exclusively from validated hex brand colors. */
 export function themeColorProperties(colors: ThemeColors): Record<string, string> {
   if (!colorKeys.every(key => /^#[0-9a-f]{6}$/i.test(colors[key])) || !backgroundColorKeys.every(key => colors[key] === undefined || /^#[0-9a-f]{6}$/i.test(colors[key]!))) throw new TypeError("Theme colors must be six-digit hex colors.");
+  const key = JSON.stringify(customColorKeys.map(name => colors[name]?.toLowerCase() || ''));
+  const cached = propertyCache.get(key); if (cached) return { ...cached };
   const light = resolveTheme(colors, "light"), dark = resolveTheme(colors, "dark");
-  return Object.fromEntries([
+  const properties = Object.fromEntries([
     ...colorKeys.map(key => ["--av-brand-" + key, colors[key].toLowerCase()]),
     ...themeRoles.map(role => ["--av-tone-" + role, `light-dark(${light[role]}, ${dark[role]})`]),
   ]);
+  if (propertyCache.size >= 32) propertyCache.delete(propertyCache.keys().next().value!);
+  propertyCache.set(key, properties); return { ...properties };
 }
 export const themeColorPropertyNames = [...colorKeys.map(key => "--av-brand-" + key), ...themeRoles.map(role => "--av-tone-" + role)];
 

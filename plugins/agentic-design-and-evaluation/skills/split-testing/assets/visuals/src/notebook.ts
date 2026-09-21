@@ -1,3 +1,9 @@
+import { exactJson } from './exact-json';
+import type { SearchEntry } from './report-search';
+import { anchorLabel, anchorContext, anchorEvidence } from './review-presentation';
+import { createNotebookView, NotebookView } from './notebook-view';
+import { readerDate } from './review-presentation';
+import { selectedFigureItems } from './item-selection';
 import { NotificationMessage } from './notifications';
 import { fingerprint } from './identity';
 import { createTargetRegistry, TargetRegistry } from './review-targets';
@@ -18,10 +24,15 @@ export interface NotebookHooks {
   notify?(message:NotificationMessage):void;
   reveal(target: HTMLElement): void;
   navigate(scope: HTMLElement, place: ReaderPlace): void;
+  restored?(scope: HTMLElement, place: ReaderPlace): void;
   now?: () => string;
   controls?(element: HTMLElement): HTMLElement | null;
 }
 export interface NotebookController {
+  searchEntries(scope: HTMLElement): SearchEntry[];
+  whenReady(): Promise<void>;
+  hasReview(figure: HTMLElement): boolean;
+  reviewSelection(figure: HTMLElement, action: 'note' | 'bookmark', trigger: HTMLElement): void;
   click(target: Element): boolean;
   change(target: Element): boolean;
   input(target: Element): boolean;
@@ -53,6 +64,12 @@ const retained = new WeakMap<HTMLElement, Map<string, Memory>>();
 interface Target { element: HTMLElement; label: string }
 interface Route { label: string; steps: string[] }
 interface Panel {
+  view: NotebookView;
+  recordsKey?: string;
+  activityKey?: string;
+  count: HTMLElement;
+  inclusions: HTMLElement;
+  activityLimit: number;
   element: HTMLElement;
   content: HTMLElement;
   status: HTMLElement;
@@ -92,6 +109,8 @@ interface Session extends Memory {
   saving: boolean;
   changed: boolean;
   exportJob: Promise<void> | null;
+  importJob?: Promise<void>;
+  exportBusy?: boolean;
   initialFocus: Element | null;
   targets: Map<string, Target>;
   views: Map<string, Target>;
@@ -117,6 +136,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
   const now = hooks.now || (() => new Date().toISOString());
   const undo: (() => void)[] = [];
   const sessions = new Map<HTMLElement, Session>();
+  const initialReads: Promise<void>[] = [];
   const panels = new Map<HTMLElement, { panel: Panel; session: Session }>();
   const owners = new WeakMap<HTMLElement, Session>();
   let cleaned = false;
@@ -162,7 +182,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     }
     // Recheck the complete set: authored text can itself match a qualified label.
     for (let repeated = collisions(); repeated.length; repeated = collisions()) {
-      for (const [id, target] of repeated) target.label += " [" + JSON.stringify(id) + "]";
+      for (const [id, target] of repeated) target.label += " [" + exactJson(id) + "]";
     }
   }
   function prepare(element: HTMLElement): { content: HTMLElement; status: HTMLElement } {
@@ -223,7 +243,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     if(latest.status==='ready'&&!session.loading&&!session.saving&&!session.writes.length){
       let current:ReaderNotebook;
       try{current=includeSeed(session,latest.value===null?null:validateReaderNotebook(latest.value,session.context));}
-      catch(error){if(requireCurrent)throw error;session.notebook={...session.notebook,originals:[...new Set([...session.notebook.originals,JSON.stringify(latest.value)])]};return;}
+      catch(error){if(requireCurrent)throw error;session.notebook={...session.notebook,originals:[...new Set([...session.notebook.originals,exactJson(latest.value)])]};return;}
       if(current.epoch===session.notebook.epoch)assign(session,current);
       else if(!requireCurrent)session.notebook={...session.notebook,originals:[...new Set([...session.notebook.originals,encodeReaderNotebook(current,session.context)])]};
       else throw new Error('Another copy replaced this notebook. Export the current notebook data for recovery before preparing a reviewed report.');
@@ -263,9 +283,18 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
   function apply(session: Session, change: ReaderChange | ReviewChange, notice = "", bases?: string[]): boolean {
     try {
       const delta: ReaderDelta = { epoch: session.notebook.epoch, id: editId(), change, ...(change.type === "note" ? { baseNoteIds: bases || session.drafts.get(change.targetId)?.baseNoteIds || noteVersionIds(session.notebook, change.targetId).slice(-1) } : {}) };
-      assign(session, applyReaderDelta(session.notebook, delta, session.context));
+      const deltas=[delta];
+      const anchor=change.type==='review-bookmark'?change.anchor:change.type==='annotation'&&!change.version.draft?change.version.anchor:null;
+      if(anchor){
+        const action=change.type==='review-bookmark'?(change.enabled?'bookmark-added':'bookmark-removed'):change.type==='annotation'&&change.version.text===null?'note-removed':'note-saved';
+        deltas.push({epoch:session.notebook.epoch,id:editId(),change:{type:'activity',action,at:change.type==='annotation'?change.version.at:now(),...(session.targets.has(anchor.target.id)?{targetId:anchor.target.id}:{})}});
+      }
+      // Validate the complete in-session change before queueing it. Persistence
+      // merges both deltas inside the same owned transaction.
+      let next=session.notebook;for(const item of deltas)next=applyReaderDelta(next,item,session.context);
+      assign(session,next);
       session.changed = true; session.notice = notice;
-      if (session.store && !session.stopped) { session.writes.push({ delta, epochUnobserved: !session.epochKnown }); persist(session); }
+      if (session.store && !session.stopped) { session.writes.push(...deltas.map(delta=>({ delta, epochUnobserved: !session.epochKnown }))); persist(session); }
       render(session); return true;
     } catch (error) { session.notice = error instanceof Error ? error.message : "This notebook change could not be saved."; render(session); return false; }
   }
@@ -294,7 +323,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
           session.writes = writes; assign(session, notebook);
         }
       } catch {
-        blocked(session, { status: "blocked", raw: JSON.stringify(value), message: "The saved notebook is incompatible with this report. Its original data remains protected." });
+        blocked(session, { status: "blocked", raw: exactJson(value), message: "The saved notebook is incompatible with this report. Its original data remains protected." });
       }
     }
     if (result.status === "ready" || result.status === "saved") session.epochKnown = true;
@@ -307,7 +336,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
       explicit = target !== null && session.scope.contains(target);
     } catch { /* A malformed fragment does not cancel another report's saved place. */ }
     const focusMoved = document.activeElement !== session.initialFocus && session.scope.contains(document.activeElement);
-    if (!cleaned && !session.changed && !explicit && !focusMoved && !session.stopped) { const saved = place(session); if (saved) hooks.navigate(session.scope, saved); }
+    if (!cleaned && !session.changed && !explicit && !focusMoved && !session.stopped) { const saved = place(session); if (saved) (hooks.restored || hooks.navigate)(session.scope, saved); }
   }
   function place(session: Session): ReaderPlace | null {
     return session.state.viewId === null ? null : { viewId: session.state.viewId, mode: session.state.mode, journeyId: session.state.journeyId };
@@ -342,17 +371,25 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     for (const panel of session.panels) {
       panel.status.textContent = [session.notice, storageMessage(session)].filter(Boolean).join(" ");
       panel.target.value = panel.selected;
+      const count=new Set((session.notebook.review?.versions||[]).filter(v=>v.text!==null).map(v=>v.annotationId)).size+session.state.notes.length+session.state.bookmarks.length+(session.notebook.review?.bookmarks.length||0);
+      panel.count.textContent=String(count);panel.count.hidden=!count;
+      for(const control of Array.from(panel.content.querySelectorAll<HTMLButtonElement>('[data-av-notebook-action="export"],[data-av-notebook-action="export-report"],[data-av-notebook-action="export-handoff"],[data-av-notebook-action="copy-handoff"]'))){control.disabled=!!session.exportBusy;control.setAttribute('aria-busy',String(!!session.exportBusy));}
       const text = session.drafts.get(panel.selected)?.text ?? session.state.notes.find(note => note.targetId === panel.selected)?.text ?? "";
       if (panel.note.value !== text) panel.note.value = text;
       panel.bookmark.checked = session.state.bookmarks.includes(panel.selected);
-      panel.notes.textContent = "";
+      const recordsKey=exactJson([session.state.notes,session.state.bookmarks,session.notebook.noteVersions]);
+      const recordsChanged=panel.recordsKey!==recordsKey;panel.recordsKey=recordsKey;
+      if(recordsChanged){
+      for(const child of Array.from(panel.notes.children))if(!child.hasAttribute('data-av-review-entry'))child.remove();
       for (const note of session.state.notes) {
-        const item = append(panel.notes, "li");
-        actionItem(item, "edit-note", session.targets.get(note.targetId)!.label, note.targetId);
+        const item = append(panel.notes, "li", "av-review-card");item.setAttribute('data-av-legacy-note',note.targetId);item.setAttribute('data-av-notebook-target-id',note.targetId);item.setAttribute('data-av-entry-state','attention');
+        append(item,'h4','',session.targets.get(note.targetId)!.label);
+        append(item,'p','av-review-meta','Earlier note · verify attachment');
         append(item, "pre", "av-notebook-note", note.text);
+        const actions=append(item,'div','av-review-card-actions');actionItem(actions, "edit-note", "Edit earlier note", note.targetId);
         append(item, "p", "av-muted", "This note identifies a report part, but has no original evidence fingerprint. Verify the content before relying on its attachment.");
       }
-      if (!session.state.notes.length) append(panel.notes, "li", "av-muted", "No saved notes yet.");
+
       panel.conflicts.textContent = "";
       const versionsByTarget = new Map<string, Array<(typeof session.notebook.noteVersions)[number]>>();
         for (const version of session.notebook.noteVersions) { const group = versionsByTarget.get(version.targetId) || []; group.push(version); versionsByTarget.set(version.targetId, group); }
@@ -369,6 +406,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
       panel.conflicts.hidden = !competing.size;
       const conflictsHeading = panel.conflicts.previousElementSibling as HTMLElement | null;
       if (conflictsHeading?.tagName.toLowerCase() === 'h3') conflictsHeading.hidden = !competing.size;
+      }
       const legacy = panel.note.closest<HTMLElement>('.av-notebook-legacy');
       if (legacy) legacy.hidden = !session.notebook.noteVersions.length && !session.state.bookmarks.length && !session.drafts.size;
       const bookmarkTarget = panel.content.querySelector<HTMLButtonElement>('[data-av-notebook-action="bookmark-target"]');
@@ -379,22 +417,37 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
         bookmarkTarget.setAttribute('aria-pressed', String(active));
         bookmarkTarget.textContent = active ? 'Remove bookmark' : 'Bookmark this part';
       }
-      if (!competing.size) append(panel.conflicts, "li", "av-muted", "No competing note versions.");
-      panel.bookmarks.textContent = "";
-      for (const targetId of session.state.bookmarks) actionItem(append(panel.bookmarks, "li"), "open-target", session.targets.get(targetId)!.label, targetId);
-      if (!session.state.bookmarks.length) append(panel.bookmarks, "li", "av-muted", "No bookmarks yet.");
+
+      if(recordsChanged){
+      for(const child of Array.from(panel.bookmarks.children))if(!child.hasAttribute('data-av-review-bookmark'))child.remove();
+      for (const targetId of session.state.bookmarks) {
+        const item=append(panel.bookmarks,'li','av-review-card');item.setAttribute('data-av-legacy-bookmark',targetId);item.setAttribute('data-av-notebook-target-id',targetId);item.setAttribute('data-av-entry-state','attention');
+        append(item,'h4','',session.targets.get(targetId)!.label);append(item,'p','av-review-warning','Earlier bookmark · no original evidence fingerprint. Verify this report part before relying on the attachment.');
+        const actions=append(item,'div','av-review-card-actions');actionItem(actions,'open-target','Go to report part',targetId);actionItem(actions,'remove-legacy-bookmark','Remove',targetId);
+      }
+
+      }
+      const activityKey=exactJson([session.state.activity,panel.activityLimit]);
+      if(panel.activityKey!==activityKey){panel.activityKey=activityKey;
       panel.activity.textContent = "";
-      for (const entry of [...session.state.activity].reverse()) {
+      let lastDay = '';
+      for (const entry of [...session.state.activity].reverse().slice(0,panel.activityLimit)) {
+        const day = new Date(entry.at).toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'});if(day!==lastDay){append(panel.activity,'li','av-activity-day',day);lastDay=day;}
         const item = append(panel.activity, "li");
         if (entry.viewId !== undefined) {
           const control = button(item, "open-view", activityLabel(entry, session)); control.setAttribute("data-av-notebook-view-id", entry.viewId);
         } else if (entry.targetId !== undefined) actionItem(item, "open-target", activityLabel(entry, session), entry.targetId);
         else append(item, "span", "", activityLabel(entry, session));
-        const time = append(item, "time", "av-muted", entry.at); time.setAttribute("datetime", entry.at);
+        const time = append(item, "time", "av-muted", readerDate(entry.at,true)); time.setAttribute("datetime", entry.at);time.title=entry.at;
       }
+      if (!session.state.activity.length && session.context.activityLimit! > 0) append(panel.activity, 'li', 'av-muted', 'No recent activity.');
+      }
+      const more=panel.content.querySelector<HTMLElement>('[data-av-notebook-action="activity-more"]'),less=panel.content.querySelector<HTMLElement>('[data-av-notebook-action="activity-less"]');
+      if(more){more.hidden=session.state.activity.length<=panel.activityLimit;more.textContent=`Show ${Math.min(20,Math.max(0,session.state.activity.length-panel.activityLimit))} more…`;}
+      if(less)less.hidden=panel.activityLimit<=20;
       const limit = session.context.activityLimit!;
       panel.historyStatus.textContent = limit === 0 ? "Activity history is off. Notes, bookmarks and your place still work." : `Recent activity keeps up to ${limit} actions.${session.state.droppedActivityCount ? ` ${session.state.droppedActivityCount} earlier actions were not kept.` : ""}`;
-      if (!session.state.activity.length && limit > 0) append(panel.activity, "li", "av-muted", "No recent activity.");
+
       const savedPlace = place(session);
       panel.resume.disabled = savedPlace === null;
       panel.resume.textContent = savedPlace ? "Resume “" + session.views.get(savedPlace.viewId!)!.label + "”" : "Resume reading";
@@ -407,16 +460,24 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
       panel.resetCancel.hidden = session.pending?.kind !== "reset";
       panel.confirmationText.textContent = session.pending?.kind === "reading" ? "Reading the file you selected…" : session.pending?.kind === "reset" ? "Start a new notebook? This removes current notes, bookmarks, drafts and your saved place, and requests replacement of your compatible saved notebook. Foreign or unreadable saved data stays protected. Export anything you want to keep first." : session.pending?.kind === "import" ? `Replace this notebook with “${session.pending.name}”? It contains ${importedSummary(session.pending.state)}. Your current notes and drafts will be replaced.${session.lockedRaw !== null ? " Earlier saved data stays protected; this imported copy will remain in the session if browser saving is blocked." : ""}` : "";
     }
-    session.reviewUI?.render(session.panels.map(panel => panel.notes), session.panels.map(panel => panel.bookmarks));
+    session.reviewUI?.render(session.panels.map(panel => panel.notes), session.panels.map(panel => panel.bookmarks),session.panels.map(panel=>panel.inclusions));
+    for(const panel of session.panels)panel.view.refresh();
   }
   function build(element: HTMLElement, content: HTMLElement, status: HTMLElement, session: Session): Panel {
-    const label = append(content, "label", "av-notebook-field", "About");
+    const summary=element.querySelector<HTMLElement>('summary');
+    const count=append(summary||element,'span','av-notebook-count');count.setAttribute('data-av-review-ui','');count.setAttribute('aria-label','Notes and bookmarks');count.hidden=true;undo.push(()=>count.remove());
+    const view = createNotebookView(element, content), { notes: notesPage, bookmarks: bookmarksPage, activity: activityPage, share: sharePage } = view.areas;
+    undo.push(() => view.cleanup());
+    // Status stays reachable regardless of which collection the reader scrolls.
+    const statusHome = document.createComment('av-notebook-status');status.parentNode?.insertBefore(statusHome,status);view.footer.appendChild(status);
+    undo.push(()=>statusHome.parentNode?.replaceChild(status,statusHome));
+    const compose = append(notesPage,'div','av-notebook-compose');
+    const label = append(compose, "label", "av-notebook-field", "About");
     const target = append(label, "select"); target.setAttribute("data-av-notebook-target", "");
     for (const [id, value] of session.targets) { const option = append(target, "option", "", value.label); option.value = id; }
-    const actions = append(content, "div", "av-notebook-actions");
-    button(actions, "new-annotation", "Add a note");
-    button(actions, "bookmark-target", "Bookmark this part");
-    const legacy = append(content, "details", "av-notebook-legacy");
+    const actions = append(compose, "div", "av-notebook-actions");
+    button(actions, "new-annotation", "Add a note");button(actions, "bookmark-target", "Bookmark this part");
+    const legacy = append(notesPage, "details", "av-notebook-legacy");
     append(legacy, "summary", "", "Earlier notes by report part");
     append(legacy, "p", "av-muted", "These earlier notes identify a report part without recording its evidence fingerprint. Use Add a note for an exact content attachment.");
     const noteLabel = append(legacy, "label", "av-notebook-field", "Your earlier note");
@@ -424,25 +485,28 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     const editing = append(legacy, "div", "av-notebook-actions"); button(editing, "save-note", "Save note"); button(editing, "remove-note", "Remove note");
     const bookmarkLabel = append(legacy, "label", "av-notebook-bookmark");
     const bookmark = append(bookmarkLabel, "input"); bookmark.setAttribute("type", "checkbox"); bookmark.setAttribute("data-av-notebook-bookmark", ""); append(bookmarkLabel, "span", "", "Bookmark this part");
-    append(content, "h3", "", "Notes"); const notes = append(content, "ul", "av-notebook-list"); notes.setAttribute("data-av-notebook-notes", "");
-    append(content, "h3", "", "Competing note versions"); const conflicts = append(content, "ul", "av-notebook-list"); conflicts.setAttribute("data-av-notebook-conflicts", "");
-    append(content, "h3", "", "Bookmarks"); const bookmarks = append(content, "ul", "av-notebook-list"); bookmarks.setAttribute("data-av-notebook-bookmarks", "");
-    const resume = button(content, "resume", "Resume reading");
-    const history = append(content, "details", "av-notebook-history"); append(history, "summary", "", "Recent activity");
-    const historyStatus = append(history, "p", "av-muted"); const activity = append(history, "ol", "av-notebook-list"); activity.setAttribute("data-av-notebook-activity", "");
-    content.appendChild(legacy);
-    const transfers = append(content, "div", "av-notebook-transfer"); append(transfers, "h3", "", "Keep or restore a copy");
-    button(transfers, "export-report", "Download annotated report"); button(transfers, "export-handoff", "Download review handoff"); button(transfers, "copy-handoff", "Copy review handoff");
-    button(transfers, "export", "Prepare notebook export"); const download = link(transfers, "download", "Download notebook copy"); download.hidden = true; const recover = link(transfers, "recover", "Download original saved data");
-    const importLabel = append(transfers, "label", "av-notebook-field", "Restore an exported notebook");
+    append(notesPage, "h3", "av-sr-only", "Notes"); const notes = append(notesPage, "ul", "av-notebook-list"); notes.setAttribute("data-av-notebook-notes", "");
+    append(notesPage, "h3", "", "Competing note versions"); const conflicts = append(notesPage, "ul", "av-notebook-list"); conflicts.setAttribute("data-av-notebook-conflicts", "");
+    append(bookmarksPage, "h3", "av-sr-only", "Bookmarks"); const bookmarks = append(bookmarksPage, "ul", "av-notebook-list"); bookmarks.setAttribute("data-av-notebook-bookmarks", "");
+    const resume = button(activityPage, "resume", "Resume reading");
+    const history = append(activityPage, "div", "av-notebook-history"); append(history, "h3", "", "Recent activity");
+    const historyStatus = append(history, "p", "av-muted"); const activity = append(history, "ol", "av-activity-list"); activity.setAttribute("data-av-notebook-activity", "");
+    notesPage.appendChild(legacy);
+    const historyActions=append(history,'div','av-notebook-actions');button(historyActions,'activity-more','Show more');button(historyActions,'activity-less','Show fewer');
+    const transfers = append(sharePage, "div", "av-notebook-transfer");
+    const annotated=append(transfers,'section','av-transfer-card');append(annotated,'h3','','Annotated report');append(annotated,'p','','A standalone interactive report with the original evidence and the feedback selected below.');button(annotated,'export-report','Download annotated report');
+    const handoff=append(transfers,'section','av-transfer-card');append(handoff,'h3','','Review handoff');append(handoff,'p','','Readable Markdown for a person or agent: your feedback, exact evidence, source references, unresolved attachments and competing versions.');button(handoff,'export-handoff','Download review handoff');button(handoff,'copy-handoff','Copy review handoff');
+    const selection=append(transfers,'details','av-share-selection');append(selection,'summary','','Choose what to share');append(selection,'p','av-muted','Includes all notes, drafts and bookmarks by default. Exclusions affect these two review formats only, not your notebook backup.');const inclusions=append(selection,'div','av-review-inclusions');
+    const backup=append(transfers,'section','av-transfer-card');append(backup,'h3','','Notebook backup');append(backup,'p','','All reader records, including drafts, activity, competing versions and retained originals. Restore this JSON to continue reviewing.');button(backup,'export','Prepare notebook export');const download=link(backup,'download','Download notebook copy');download.hidden=true;const recover=link(backup,'recover','Download original saved data');
+    const importLabel = append(backup, "label", "av-notebook-field", "Restore an exported notebook");
     const file = append(importLabel, "input"); file.setAttribute("type", "file"); file.setAttribute("accept", ".json,application/json"); file.setAttribute("data-av-notebook-import", "");
-    button(transfers, "start-reset", "Start a new notebook");
-    const confirmation = append(content, "div", "av-notebook-confirmation"); confirmation.setAttribute("data-av-notebook-confirmation", "");
+    button(backup, "start-reset", "Start a new notebook");
+    const confirmation = append(view.footer, "div", "av-notebook-confirmation"); confirmation.setAttribute("data-av-notebook-confirmation", "");
     const confirmationText = append(confirmation, "p");
     const importConfirm = button(confirmation, "confirm-import", "Replace notebook"), importCancel = button(confirmation, "cancel-import", "Cancel restore");
     const resetConfirm = button(confirmation, "confirm-reset", "Start new notebook"), resetCancel = button(confirmation, "cancel-reset", "Keep current notebook");
     content.hidden = false;
-    return { element, content, status, selected: session.scope.id, target, note, bookmark, notes, bookmarks, activity, historyStatus, resume, recover, download, conflicts, confirmation, confirmationText, importConfirm, importCancel, resetConfirm, resetCancel };
+    return { view, count, inclusions, activityLimit: 20, element, content, status, selected: session.scope.id, target, note, bookmark, notes, bookmarks, activity, historyStatus, resume, recover, download, conflicts, confirmation, confirmationText, importConfirm, importCancel, resetConfirm, resetCancel };
   }
 
   const definitions = all<HTMLElement>("[data-av-notebook]").map(element => ({ element, ...prepare(element) }));
@@ -477,7 +541,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
         if (key && Array.from(document.querySelectorAll("[data-av-storage-key]")).some(surface => surface.getAttribute("data-av-storage-key") === key)) throw new Error("The notebook and display preferences need different storage keys. No saved data has been changed.");
         return { revision, key, limit };
       });
-      if (metadata.some(value => JSON.stringify(value) !== JSON.stringify(metadata[0]))) throw new Error("These notebook panels disagree about their report revision or saving settings. No saved notebook has been changed.");
+      if (metadata.some(value => exactJson(value) !== exactJson(metadata[0]))) throw new Error("These notebook panels disagree about their report revision or saving settings. No saved notebook has been changed.");
       const { revision, key, limit } = metadata[0];
       if (key !== null && conflictingKeys.has(key)) throw new Error("Different reports share this notebook’s saving key. Give each report its own key before saving reader records.");
       const owns = (element: HTMLElement): boolean => {
@@ -508,18 +572,18 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
         let steps: unknown;
         try { steps = JSON.parse(element.getAttribute("data-av-journey-steps") || "null"); } catch { throw new Error("A reading route has invalid steps. No saved notebook has been changed."); }
         if (!Array.isArray(steps) || !steps.length || steps.some(step => typeof step !== "string" || !views.has(step))) throw new Error("A reading route refers to an unavailable view. No saved notebook has been changed.");
-        if (routes.has(id) && JSON.stringify(routes.get(id)!.steps) !== JSON.stringify(steps)) throw new Error("A reading route has conflicting definitions. No saved notebook has been changed.");
+        if (routes.has(id) && exactJson(routes.get(id)!.steps) !== exactJson(steps)) throw new Error("A reading route has conflicting definitions. No saved notebook has been changed.");
         routes.set(id, { label: element.getAttribute("data-av-journey-label") || id, steps });
       }
       const context: ReaderContext = { reportId: scope.id, revision, targetIds: [...targets.keys()], viewIds: [...views.keys()], journeyIds: [...routes.keys()], activityLimit: limit };
       const initial = emptyReaderNotebook(context);
-      const signature = JSON.stringify([revision, key, limit, [...targets.keys()].sort(), [...views.keys()].sort(), [...routes].map(([id, route]) => [id, route.steps])]);
+      const signature = exactJson([revision, key, limit, [...targets.keys()].sort(), [...views.keys()].sort(), [...routes].map(([id, route]) => [id, route.steps])]);
       const cached = retained.get(scope)?.get(signature);
       let seed: ReaderNotebook | undefined, seedError = '';
       try { const reports = readReviewSeed(document)?.reports; const embedded = reports && Object.prototype.hasOwnProperty.call(reports,scope.id) ? reports[scope.id] : undefined; if (embedded) seed = validateReaderNotebook(embedded, context); }
       catch(error) { seedError = 'The embedded review could not be loaded: ' + (error instanceof Error ? error.message : 'invalid review data'); }
       const notebook = cached?.notebook || seed || initial;
-      const session: Session = { registry, seed, seedKey: seed ? fingerprint(JSON.stringify(seed)) : undefined, seedInvalid: !!seedError, epochKnown: cached?.epochKnown || false, scope, context, signature, key, store: null, targets, views, routes, panels: [], state: notebook.state, notebook, drafts: new Map(cached?.drafts), lockedRaw: cached?.lockedRaw ?? null, lockMessage: cached?.lockMessage || "", readBlocked: cached?.readBlocked || false, persistence: cached?.persistence || "Kept in this open report. Export a copy to keep it.", notice: "", pending: null, token: 0, writes: [], work: Promise.resolve(), loading: key !== null, saving: false, changed: false, exportJob: null, initialFocus: document.activeElement, stopped: cached?.stopped || false };
+      const session: Session = { registry, seed, seedKey: seed ? fingerprint(exactJson(seed)) : undefined, seedInvalid: !!seedError, epochKnown: cached?.epochKnown || false, scope, context, signature, key, store: null, targets, views, routes, panels: [], state: notebook.state, notebook, drafts: new Map(cached?.drafts), lockedRaw: cached?.lockedRaw ?? null, lockMessage: cached?.lockMessage || "", readBlocked: cached?.readBlocked || false, persistence: cached?.persistence || "Kept in this open report. Export a copy to keep it.", notice: "", pending: null, token: 0, writes: [], work: Promise.resolve(), loading: key !== null, saving: false, changed: false, exportJob: null, initialFocus: document.activeElement, stopped: cached?.stopped || false };
       if(seedError){session.lockedRaw=document.getElementById('av-review-seed')?.textContent||'';session.lockMessage=seedError;session.stopped=true;session.readBlocked=true;}
       if (key !== null) session.store = createOwnedStore(document.defaultView, key, { kind: "notebook", reportId: scope.id, revision }, raw => decodeReaderNotebook(raw, context));
       if(peers.has(scope))throw new Error('This report already has an independently owned notebook controller. Enhance each report once.');
@@ -531,6 +595,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
       if (session.store) {
         session.persistence = "Opening saved notebook… Current edits stay in this report."; render(session);
         session.work = initialize(session, cached).catch(() => blocked(session, { status: "unavailable", message: "Browser storage could not be read. Your records remain in this report; export a copy to keep them." })).finally(() => { session.loading = false; render(session); persist(session); });
+        initialReads.push(session.work);
       }
     } catch (error) {
       preparingRegistry?.cleanup();
@@ -551,29 +616,77 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     session.pending = { kind: "reading" }; session.notice = ""; render(session); input.value = "";
     let reading: Promise<string>;
     try { reading = file.text(); } catch { reading = Promise.reject(new Error("The selected file could not be read.")); }
-    void reading.then(raw => {
+    session.importJob = reading.then(raw => {
       if (cleaned || session.token !== token) return;
       try { const state = importReaderReview(raw, session.context); contextual(state.state, session); session.pending = { kind: "import", state, name: file.name || "selected notebook" }; session.notice = "The file is ready. Choose Replace notebook to use it, or cancel."; }
       catch (error) { session.pending = null; session.notice = "The selected notebook was not restored. " + (error instanceof Error ? error.message : "Its records could not be validated."); }
       render(session);
     }, () => { if (cleaned || session.token !== token) return; session.pending = null; session.notice = "The selected file could not be read. Your notebook has not changed."; render(session); });
   }
+  function openEntry(session: Session, tab: 'notes' | 'bookmarks', attribute: string, id: string): void {
+    const panel = session.panels[0]; if (!panel || cleaned) return;
+    panel.view.locate(tab); panel.element.setAttribute('open', '');
+    const locate = () => {
+      if (cleaned || !panel.element.hasAttribute('open')) return;
+      const target = Array.from(panel.content.querySelectorAll<HTMLElement>('[' + attribute + ']')).find(item => item.getAttribute(attribute) === id);
+      if (target) { target.tabIndex = -1; target.focus({ preventScroll: true }); target.scrollIntoView?.({ block: 'nearest' }); }
+    };
+    // Native details/popover opening is queued by the browser. Focus only after
+    // that transition, while retaining the same card and originating report.
+    (document.defaultView?.requestAnimationFrame || ((fn: () => void) => setTimeout(fn, 0)))(locate);
+  }
   return {
+    async whenReady() { await Promise.all(initialReads); },
+    searchEntries(scope) {
+      const session = sessions.get(scope); if (cleaned || !session) return [];
+      const entries: SearchEntry[] = [];
+      for (const version of session.notebook.review?.versions || []) {
+        if (version.text === null) continue;
+        entries.push({ kind: 'notes', label: (version.draft ? 'Draft · ' : '') + anchorLabel(version.anchor), text: version.text + '\n' + anchorEvidence(version.anchor), context: anchorContext(version.anchor), activate: () => openEntry(session, 'notes', 'data-av-note-version', version.id) });
+      }
+      for (const anchor of session.notebook.review?.bookmarks || []) {
+        entries.push({ kind: 'bookmarks', label: anchorLabel(anchor), text: anchorEvidence(anchor), context: anchorContext(anchor), activate: () => openEntry(session, 'bookmarks', 'data-av-review-bookmark', fingerprint(exactJson(anchor))) });
+      }
+      for (const note of session.state.notes) entries.push({ kind: 'notes', label: 'Earlier note · ' + (session.targets.get(note.targetId)?.label || note.targetId), text: note.text, context: 'Earlier target-only note', activate: () => openEntry(session, 'notes', 'data-av-notebook-target-id', note.targetId) });
+      for (const id of session.state.bookmarks) entries.push({ kind: 'bookmarks', label: session.targets.get(id)?.label || id, text: '', context: 'Earlier target-only bookmark', activate: () => openEntry(session, 'bookmarks', 'data-av-notebook-target-id', id) });
+      return entries;
+    },
+    hasReview(figure) { return [...sessions.values()].some(session => session.registry.targets.has(figure.id)); },
+    reviewSelection(figure, action, trigger) {
+      const session = [...sessions.values()].find(session => session.registry.targets.has(figure.id));
+      if (!session) return;
+      const selected = document.defaultView?.getSelection?.();
+      const anchor = figure.getAttribute('data-av-selection-mode') === 'text'
+        ? (selected && !selected.isCollapsed ? session.registry.selection(selected) : null) : session.registry.items(selectedFigureItems(figure));
+      if (!anchor) { hooks.notify?.({text:'This selection has no unique evidence attachment. Select a single passage inside one record, or annotate the whole figure using its Note command.',tone:'error',source:figure}); return; }
+      if (action === 'note') session.reviewUI?.open(anchor,trigger);
+      else {
+        const enabled = !(session.notebook.review?.bookmarks || []).some(saved => exactJson(saved) === exactJson(anchor));
+        if (apply(session,{type:'review-bookmark',anchor,enabled})) hooks.notify?.({text:enabled?'Selection bookmarked.':'Selection bookmark removed.',tone:'success',source:figure});
+      }
+    },
     click(target) {
       for (const session of sessions.values()) if (session.reviewUI?.click(target)) return true;
       const found = locate(target), control = target.closest<HTMLElement>("[data-av-notebook-action]");
       if (!found || !control || !found.panel.element.contains(control)) return false;
       const { panel, session } = found, action = control.getAttribute("data-av-notebook-action");
       if ((control as HTMLButtonElement).disabled) return true;
+      if(action==='activity-more'||action==='activity-less'){panel.activityLimit=action==='activity-more'?panel.activityLimit+20:20;render(session);return true;}
+
       try {
-        if (action === "new-annotation") {
+        if(action==='remove-legacy-bookmark'){
+          const targetId=control.getAttribute('data-av-notebook-target-id');
+          if(targetId&&session.targets.has(targetId)&&apply(session,{type:'bookmark',targetId,enabled:false,at:now()})){
+            panel.content.querySelector<HTMLElement>('[data-av-notebook-tab="bookmarks"]')?.focus({preventScroll:true});
+          }
+        } else if (action === "new-annotation") {
           const selected = session.targets.get(panel.selected);
           if (selected) { panel.element.removeAttribute('open'); session.reviewUI?.open(session.registry.anchor(selected.element), control); }
         } else if (action === "bookmark-target") {
           const selected = session.targets.get(panel.selected);
           if (selected) {
             const anchor = session.registry.anchor(selected.element);
-            const enabled = !(session.notebook.review?.bookmarks || []).some(value => JSON.stringify(value) === JSON.stringify(anchor));
+            const enabled = !(session.notebook.review?.bookmarks || []).some(value => exactJson(value) === exactJson(anchor));
             if (apply(session, { type: 'review-bookmark', anchor, enabled })) hooks.notify?.({ text: enabled ? 'Bookmark added.' : 'Bookmark removed.', tone: 'success', source: panel.element });
           }
         } else if (action === "save-note" || action === "remove-note") {
@@ -586,6 +699,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
           if (version) { if (apply(session, { type: "note", targetId, text: version.text || "", at: now() }, "Your chosen note version is retained.", noteVersionIds(session.notebook, targetId))) session.drafts.delete(targetId); }
         } else if (action === "download") {hooks.notify?.({text:"Download prepared.",tone:"success",source:panel.element});return true;}
         else if (action === "export") {
+          if(session.exportBusy)return true;session.exportBusy=true;
           capture(panel, session); panel.download.hidden = true; session.notice = "Preparing a copy, including drafts and competing note versions…";
           session.exportJob = (async () => {
             await refreshForExport(session,false);
@@ -594,7 +708,9 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
             panel.download.setAttribute("href", "data:application/json;charset=utf-8," + encodeURIComponent(raw)); panel.download.setAttribute("download", session.scope.id + "-notebook.json"); panel.download.hidden = false;
             session.notice = hooks.notify ? "" : "Your copy is ready. Download notebook copy includes current drafts and every unresolved note version.";hooks.notify?.({text:"Notebook copy ready.",tone:"success",source:panel.element});render(session);
           })().catch(() => { const message="The copy could not be prepared. Your records remain in this open report.";session.notice=hooks.notify?"":message;hooks.notify?.({text:message,tone:"error",source:panel.element});render(session); });
+          session.exportJob=session.exportJob.finally(()=>{session.exportBusy=false;render(session);});
         } else if (action === "export-report" || action === "export-handoff" || action === "copy-handoff") {
+          if(session.exportBusy)return true;session.exportBusy=true;
           capture(panel, session);
           const operation = (async () => {
             await Promise.all((action === "export-report" ? [...peers.values()] : [session]).map(other=>refreshForExport(other)));
@@ -612,7 +728,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
             }
             session.notice = hooks.notify?'':'Your review copy is ready.';hooks.notify?.({text:action==='copy-handoff'?'Handoff copied.':'Download prepared.',tone:'success',source:panel.element});render(session);
           })().catch(error => { const message=error instanceof Error?error.message:'The review copy could not be prepared.';session.notice=hooks.notify?'':message;hooks.notify?.({text:message,tone:'error',source:panel.element});render(session); });
-          session.exportJob = operation;
+          session.exportJob = operation.finally(()=>{session.exportBusy=false;render(session);});
         } else if (action === "recover") {
           if (session.lockedRaw !== null) { control.setAttribute("href", "data:application/json;charset=utf-8," + encodeURIComponent(session.lockedRaw)); control.setAttribute("download", session.scope.id + "-original-saved-data.json"); session.notice = "The original saved data is ready to download."; }
         } else if (action === "start-reset") { session.token++; session.pending = { kind: "reset" }; }
@@ -655,13 +771,17 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
     recordPlace(scope, next) {
       const session = sessions.get(scope);
       if (cleaned || !session || next.viewId === null || (session.state.viewId === next.viewId && session.state.mode === next.mode && session.state.journeyId === next.journeyId)) return;
+      for(const panel of session.panels)if(!panel.element.hasAttribute('open')&&!session.drafts.has(panel.selected))panel.selected=session.views.get(next.viewId)?.element.id||scope.id;
       apply(session, { type: "navigate", viewId: next.viewId, mode: next.mode, journeyId: next.journeyId, at: now() });
     },
     recordInspection(target) {
       const session = owners.get(target);
-      if (!cleaned && session) apply(session, { type: "activity", action: "inspect", targetId: target.id, at: now() });
+      if (!cleaned && session) {
+        for(const panel of session.panels)if(!panel.element.hasAttribute('open')&&!session.drafts.has(panel.selected))panel.selected=target.id;
+        apply(session, { type: "activity", action: "inspect", targetId: target.id, at: now() });
+      }
     },
-    async whenIdle() { for (const session of sessions.values()) { await settled(session); await session.exportJob; } },
+    async whenIdle() { for (const session of sessions.values()) { await settled(session); await session.importJob; await session.exportJob; } },
     cleanup() {
       if (cleaned) return;
       for (const session of sessions.values()) session.reviewUI?.cleanup();

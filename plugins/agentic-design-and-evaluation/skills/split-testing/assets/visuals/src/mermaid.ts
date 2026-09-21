@@ -51,38 +51,131 @@ export function scopeDiagram(svg: SVGElement, prefix: string): void {
       return !group ? match : group.length === 1 ? '#' + assigned.get(group[0]) : ':is(' + group.map(node => '#' + assigned.get(node)).join(',') + ')';
     }) + '{' + paint(declarations) + '}');
   }
-  const groups=new Map<string,Element[]>();
-  for(const node of nodes){
-    if(node.tagName.toLowerCase()!=='g'||!node.id)continue;
-    const text=node.textContent?.trim();if(!text||node.querySelector('g[id]'))continue;
-    const key=node.getAttribute('data-id')?'id:'+node.getAttribute('data-id'):'text:'+fingerprint(text);
-    const matches=groups.get(key)||[];matches.push(node);groups.set(key,matches);
+  const groups = new Map<string, Element[]>();
+  const candidates = nodes.filter(node => {
+    if (node.closest('defs,marker,clipPath,mask,pattern,symbol')) return false;
+    if (!node.textContent?.trim()) return false;
+    if (node.tagName.toLowerCase() === 'text') return true;
+    if (node.tagName.toLowerCase() !== 'g') return false;
+    return node.hasAttribute('data-id') || node.classList.contains('node') || !!assigned.get(node) && !node.querySelector('g[id],g.node,g[data-id]');
+  });
+  // Prefer a complete node to an individually selectable label within it. Other
+  // families can expose text items without a diagram-family-specific adapter.
+  const candidateSet = new Set(candidates);
+  const outer = candidates.filter(node => { for (let parent = node.parentElement; parent; parent = parent.parentElement) if (candidateSet.has(parent)) return false; return true; });
+  for (const node of outer) {
+    const text = node.textContent!.trim();
+    const key = node.getAttribute('data-id') ? 'id:' + node.getAttribute('data-id') : 'text:' + fingerprint(text);
+    const matches = groups.get(key) || []; matches.push(node); groups.set(key, matches);
   }
-  for(const[key,matches]of groups)if(matches.length===1){matches[0].setAttribute('data-av-mermaid-item',key);matches[0].setAttribute('tabindex','0');matches[0].setAttribute('role','button');matches[0].setAttribute('aria-label',matches[0].textContent?.trim()||key);}
+  for (const [key, matches] of groups) if (matches.length === 1) {
+    const node = matches[0]; node.setAttribute('data-av-mermaid-item', key);
+    node.setAttribute('tabindex', '0'); node.setAttribute('role', 'button');
+    node.setAttribute('aria-label', node.textContent?.trim() || key);
+  }
 }
+/** Measure in diagram coordinates at intrinsic size. A valid vendor viewBox is
+ * retained, but cannot clip actual glyphs, strokes or overflowing HTML labels.
+ * Browser text metrics refine geometry; no source wording or value is changed.
+ */
+export function diagramBounds(svg: SVGElement, document: Document): number[] {
+  let bounds = (svg.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
+  const pixels = (value: string | null) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? parseFloat(value) : 0;
+  if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) {
+    const width = pixels(svg.getAttribute('width')) || pixels(svg.style.getPropertyValue('max-width'));
+    const height = pixels(svg.getAttribute('height'));
+    bounds = [0, 0, width, height];
+  }
+  const staging = document.createElement('div'); staging.setAttribute('data-av-mermaid-staging', '');
+  staging.setAttribute('aria-hidden', 'true');
+  staging.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(staging); staging.appendChild(svg);
+  const originalStyle = svg.getAttribute('style');
+  try {
+    if (bounds[2] > 0 && bounds[3] > 0) {
+      svg.style.setProperty('width', bounds[2] + 'px'); svg.style.setProperty('height', bounds[3] + 'px');
+      svg.style.setProperty('max-width', 'none'); svg.style.setProperty('display', 'block');
+    }
+    const graphics = svg as SVGGraphicsElement;
+    const union=(x:number,y:number,width:number,height:number,padding=8):void=>{
+      if(![x,y,width,height].every(Number.isFinite)||width<0||height<0)return;
+      const left=Math.min(bounds[0],x-padding),top=Math.min(bounds[1],y-padding);
+      bounds=[left,top,Math.max(bounds[0]+bounds[2],x+width+padding)-left,Math.max(bounds[1]+bounds[3],y+height+padding)-top];
+    };
+    if (typeof graphics.getBBox === 'function') {
+      // Options are ignored by older engines, where the padded geometric box
+      // remains the fallback. Never shrink a valid vendor-provided viewBox.
+      const box=(graphics.getBBox as (options?:unknown)=>DOMRect)({fill:true,stroke:true,markers:true,clipped:false});
+      if(box.width>0&&box.height>0)union(box.x,box.y,box.width,box.height);
+    }
+    // SVG getBBox does not include overflowing HTML glyphs inside foreignObject.
+    // Read their native text ranges at intrinsic size, then transform viewport
+    // rectangles back to this SVG's coordinates (not the reader's zoom/pan).
+    const matrix=graphics.getScreenCTM?.();
+    if(matrix&&document.createRange){
+      const inverse=matrix.inverse();
+      const transform=(x:number,y:number)=>({x:inverse.a*x+inverse.c*y+inverse.e,y:inverse.b*x+inverse.d*y+inverse.f});
+      const include=(rect:DOMRect):void=>{
+        if(!rect.width&&!rect.height)return;
+        const corners=[transform(rect.left,rect.top),transform(rect.right,rect.top),transform(rect.left,rect.bottom),transform(rect.right,rect.bottom)];
+        const xs=corners.map(p=>p.x),ys=corners.map(p=>p.y),x=Math.min(...xs),y=Math.min(...ys);union(x,y,Math.max(...xs)-x,Math.max(...ys)-y);
+      };
+      for(const object of Array.from(svg.querySelectorAll('foreignObject'))){
+        const visit=(node:Node):void=>{
+          if(node.nodeType===3&&node.textContent?.trim()){
+            const range=document.createRange();range.selectNodeContents(node);
+            for(const rect of Array.from(range.getClientRects()))include(rect);
+          }else if(node.nodeType===1){
+            if(['script','style'].includes((node as Element).tagName.toLowerCase()))return;
+            for(const child of Array.from(node.childNodes))visit(child);
+          }
+        };visit(object);
+      }
+    }
+  } finally {
+    if (originalStyle === null) svg.removeAttribute('style'); else svg.setAttribute('style', originalStyle);
+    svg.remove(); staging.remove();
+  }
+  if (!bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) throw new Error('The diagram has no measurable bounds. Its source remains available.');
+  svg.setAttribute('viewBox', bounds.join(' ')); return bounds;
+}
+
 export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) => void): DiagramController {
   const document = root.ownerDocument, view = document.defaultView;
   const diagrams = [...(root.matches('[data-av-mermaid]') ? [root] : []), ...Array.from(root.querySelectorAll<HTMLElement>('[data-av-mermaid]'))];
   const namespaces = new WeakMap<HTMLElement, string>(), keys = new WeakMap<HTMLElement, string>(), generations = new WeakMap<HTMLElement, number>();
-  const original = diagrams.map(element => ({ element, output: element.querySelector<HTMLElement>('[data-av-mermaid-output]')!, children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector<HTMLElement>('[data-av-mermaid-status]')!, text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector<SVGElement>('[data-av-zoom-target]'), attributes: Array.from(element.querySelector<SVGElement>('[data-av-zoom-target]')?.attributes || []).map(attribute=>[attribute.name,attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
-  let stopped = false, pending = Promise.resolve();
+  const original = diagrams.map(element => ({ element, output: element.querySelector<HTMLElement>('[data-av-mermaid-output]')!, children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector<HTMLElement>('[data-av-mermaid-status]')!, text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), busy: element.getAttribute('aria-busy'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector<SVGElement>('[data-av-zoom-target]'), attributes: Array.from(element.querySelector<SVGElement>('[data-av-zoom-target]')?.attributes || []).map(attribute=>[attribute.name,attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
+  let stopped = false;
+  const jobsInFlight = new Set<Promise<void>>(), requested = new Map<HTMLElement, {key: string; job: Promise<void>}>(), semanticKeys = new Map<HTMLElement, string>();
   async function refresh(): Promise<void> {
     const jobs = diagrams.map(element => {
       const figure = figureOf(element), output = element.querySelector<HTMLElement>('[data-av-mermaid-output]'), status = element.querySelector<HTMLElement>('[data-av-mermaid-status]');
       if (!figure || !output || !status || stopped) return Promise.resolve();
       const runtime = (view as unknown as { mermaid?: MermaidRuntime })?.mermaid || (globalThis as unknown as { mermaid?: MermaidRuntime }).mermaid;
-      if (!runtime) { status.textContent = 'Mermaid is not embedded. Reassemble with --feature mermaid. The original source remains available.'; return Promise.resolve(); }
+      if (!runtime) { element.setAttribute('data-av-mermaid-state','error'); element.removeAttribute('aria-busy'); status.textContent = 'Mermaid is not embedded. Reassemble with --feature mermaid. The original source remains available.'; return Promise.resolve(); }
       const source = element.getAttribute('data-av-mermaid-source') || '';
       const css = view?.getComputedStyle?.(figure);
-      const color = (name: string, fallback: string) => {
-        const probe = document.createElement('span'); probe.style.setProperty('color', `var(${name})`); probe.setAttribute('aria-hidden', 'true'); probe.style.setProperty('display', 'none'); figure.appendChild(probe);
-        const resolved = view?.getComputedStyle?.(probe).color; probe.remove(); return resolved && !resolved.includes('var(') ? resolved : fallback;
-      };
-      const palette = { background: color('--av-plot', '#ffffff'), primaryColor: color('--av-sheet', '#f4f5fa'), primaryTextColor: color('--av-ink', '#172032'), primaryBorderColor: color('--av-line-strong', '#66758a'), lineColor: color('--av-axis', '#66758a'), secondaryColor: color('--av-subtle', '#ecf1f5'), tertiaryColor: color('--av-inspector-surface', '#f4edf6'), fontFamily: css?.fontFamily || 'sans-serif' };
+      const roles={background:['--av-plot','#ffffff'],primaryColor:['--av-sheet','#f4f5fa'],primaryTextColor:['--av-ink','#172032'],primaryBorderColor:['--av-line-strong','#66758a'],lineColor:['--av-axis','#66758a'],secondaryColor:['--av-subtle','#ecf1f5'],tertiaryColor:['--av-inspector-surface','#f4edf6']};
+      const probes=document.createElement('span');probes.setAttribute('data-av-review-ui','');probes.hidden=true;
+      const colorNodes=Object.entries(roles).map(([name,[token,fallback]])=>{const node=document.createElement('span');node.style.setProperty('color',`var(${token})`);probes.appendChild(node);return {name,node,fallback};});
+      figure.appendChild(probes);
+      const palette:Record<string,string>={fontFamily:css?.fontFamily||'sans-serif'};
+      try{for(const {name,node,fallback}of colorNodes){const resolved=view?.getComputedStyle?.(node).color;palette[name]=resolved&&!resolved.includes('var(')?resolved:fallback;}}finally{probes.remove();}
       const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config')]);
-      if (keys.get(element) === key) return Promise.resolve();
-      const generation = (generations.get(element) || 0) + 1; generations.set(element, generation); element.setAttribute('data-av-mermaid-state','pending'); output.hidden=true; status.textContent = 'Rendering diagram…';
+      if (requested.get(element)?.key === key) return requested.get(element)!.job;
+      if (keys.get(element) === key) {
+        generations.set(element, (generations.get(element) || 0) + 1);
+        requested.delete(element); element.setAttribute('data-av-mermaid-state', 'ready');
+        element.removeAttribute('aria-busy'); output.hidden = false; status.textContent = ''; return Promise.resolve();
+      }
+      const semanticKey = JSON.stringify([source, element.getAttribute('data-av-mermaid-config')]);
+      const generation = (generations.get(element) || 0) + 1; generations.set(element, generation);
+      element.setAttribute('data-av-mermaid-state','pending'); element.setAttribute('aria-busy','true');
+      const retainScene = semanticKeys.get(element) === semanticKey;
+      output.hidden = !retainScene; status.textContent = retainScene ? '' : 'Preparing diagram…';
       const job = renderQueue.then(async () => {
+        if (stopped || generations.get(element) !== generation) return;
+        if (document.fonts?.ready) await document.fonts.ready;
         if (stopped || generations.get(element) !== generation) return;
         const supplied = JSON.parse(element.getAttribute('data-av-mermaid-config') || '{}');
         if (!supplied || Array.isArray(supplied) || typeof supplied !== 'object') throw new Error('Mermaid configuration must be an object.');
@@ -96,34 +189,24 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
         const incoming = template.content.querySelector<SVGElement>('svg');
         if (!incoming || incoming.querySelector('script')) throw new Error('Mermaid did not return a safe SVG scene.');
         let namespace=namespaces.get(element);if(!namespace){do{namespace='av-diagram-'+(++sequence);}while(document.getElementById(namespace+'-0'));namespaces.set(element,namespace);}
-        scopeDiagram(incoming,namespace);
+        scopeDiagram(incoming,namespace); incoming.setAttribute('data-av-mermaid-scene', '');
         const plot = output.querySelector<HTMLElement>('[data-av-plot]'), live = plot?.querySelector<SVGElement>('[data-av-zoom-target]');
         if (!plot || !live) throw new Error('The diagram viewport is unavailable.');
-        let bounds = (incoming.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
-        if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) {
-          const pixels=(value:string|null)=>value&&/^\d+(?:\.\d+)?(?:px)?$/.test(value.trim())?Number.parseFloat(value):0;
-          const width=pixels(incoming.getAttribute('width'))||pixels(incoming.style.getPropertyValue('max-width'))||pixels(incoming.style.getPropertyValue('width'));
-          let height=pixels(incoming.getAttribute('height'))||pixels(incoming.style.getPropertyValue('height'));
-          let measured:{x:number;y:number;width:number;height:number}|null=null;
-          if(!(width>0&&height>0)&&typeof (incoming as SVGGraphicsElement).getBBox==='function'){
-            const measuring=document.createElement('div');measuring.setAttribute('data-av-mermaid-staging','');measuring.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';document.body.appendChild(measuring);measuring.appendChild(incoming);
-            try{const box=(incoming as SVGGraphicsElement).getBBox();if([box.x,box.y,box.width,box.height].every(Number.isFinite)&&box.width>0&&box.height>0)measured=box;}finally{incoming.remove();measuring.remove();}
-          }
-          if(measured){const x=Math.min(0,measured.x-8),y=Math.min(0,measured.y-8);bounds=[x,y,Math.max(width,measured.x+measured.width+8)-x,Math.max(height,measured.y+measured.height+8)-y];}
-          else {if(!(width>0&&height>0))throw new Error('The diagram has no measurable bounds. Its source remains available.');bounds=[0,0,width,height];}
-          incoming.setAttribute('viewBox',bounds.join(' '));
-        }
+        const bounds = diagramBounds(incoming, document);
         // Preserve the viewport node and its handlers when a theme rerenders the diagram.
-        for (const name of ['id', 'class', 'viewBox', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby']) { const value = incoming.getAttribute(name); if (value !== null) live.setAttribute(name, value); else live.removeAttribute(name); }
+        for (const name of ['id', 'class', 'viewBox', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) { const value = incoming.getAttribute(name); if (value !== null) live.setAttribute(name, value); else live.removeAttribute(name); }
         for(const name of ['background','color','font-family','font-size']){const value=incoming.style.getPropertyValue(name);if(value)live.style.setProperty(name,value);else live.style.removeProperty(name);}
-        const selectedItem=live.querySelector('[data-av-mermaid-item][aria-pressed="true"]')?.getAttribute('data-av-mermaid-item');
+        const selectedItems = new Set(Array.from(live.querySelectorAll('[data-av-mermaid-item][data-av-item-selected],[data-av-mermaid-item][aria-pressed="true"]')).map(node => node.getAttribute('data-av-mermaid-item')));
+        const focusedItem = document.activeElement?.getAttribute('data-av-mermaid-item');
         live.setAttribute('width', String(bounds[2])); live.setAttribute('height', String(bounds[3])); live.replaceChildren(...Array.from(incoming.childNodes));
-        if(selectedItem)for(const node of Array.from(live.querySelectorAll('[data-av-mermaid-item]')))if(node.getAttribute('data-av-mermaid-item')===selectedItem){node.setAttribute('aria-pressed','true');node.classList.add('av-selected');}
-        keys.set(element, key); element.setAttribute('data-av-mermaid-state','ready'); output.hidden=false; status.textContent = ''; ready(figure);
-      }).catch(error => { if (!stopped && generations.get(element) === generation) { element.setAttribute('data-av-mermaid-state','error'); status.textContent = 'Diagram could not render: ' + (error instanceof Error ? error.message : String(error)) + ' Original source remains available below.'; } });
-      renderQueue = job; return job;
+        for (const node of Array.from(live.querySelectorAll<SVGElement>('[data-av-mermaid-item]'))) { if(selectedItems.has(node.getAttribute('data-av-mermaid-item'))){node.setAttribute('data-av-item-selected','');node.setAttribute('aria-pressed','true');} if (focusedItem && node.getAttribute('data-av-mermaid-item') === focusedItem) node.focus({preventScroll:true}); }
+        keys.set(element, key); semanticKeys.set(element, semanticKey); element.removeAttribute('aria-busy'); element.setAttribute('data-av-mermaid-state','ready'); output.hidden=false; status.textContent = ''; ready(figure);
+      }).catch(error => { if (!stopped && generations.get(element) === generation) { element.removeAttribute('aria-busy'); element.setAttribute('data-av-mermaid-state','error'); status.textContent = 'Diagram could not render: ' + (error instanceof Error ? error.message : String(error)) + ' Original source remains available below.'; } });
+      renderQueue = job; requested.set(element, {key, job}); jobsInFlight.add(job);
+      void job.then(() => { jobsInFlight.delete(job); if (requested.get(element)?.job === job) requested.delete(element); });
+      return job;
     });
     await Promise.all(jobs);
   }
-  return { refresh() { pending = refresh(); return pending; }, whenIdle: () => pending, cleanup() { stopped = true; for (const state of original) { state.output.replaceChildren(...state.children); state.status.textContent = state.text; if(state.state===null)state.element.removeAttribute('data-av-mermaid-state');else state.element.setAttribute('data-av-mermaid-state',state.state);if(state.hidden===null||state.hidden===undefined)state.output.removeAttribute('hidden');else state.output.setAttribute('hidden',state.hidden);if(state.svg){for(const attribute of Array.from(state.svg.attributes))state.svg.removeAttribute(attribute.name);for(const[name,value]of state.attributes)state.svg.setAttribute(name,value);state.svg.replaceChildren(...state.svgChildren);} } } };
+  return { refresh, async whenIdle() { while (jobsInFlight.size) await Promise.all([...jobsInFlight]); }, cleanup() { stopped = true; requested.clear(); semanticKeys.clear(); for (const state of original) { state.output.replaceChildren(...state.children); state.status.textContent = state.text; if(state.busy===null)state.element.removeAttribute('aria-busy');else state.element.setAttribute('aria-busy',state.busy); if(state.state===null)state.element.removeAttribute('data-av-mermaid-state');else state.element.setAttribute('data-av-mermaid-state',state.state);if(state.hidden===null||state.hidden===undefined)state.output.removeAttribute('hidden');else state.output.setAttribute('hidden',state.hidden);if(state.svg){for(const attribute of Array.from(state.svg.attributes))state.svg.removeAttribute(attribute.name);for(const[name,value]of state.attributes)state.svg.setAttribute(name,value);state.svg.replaceChildren(...state.svgChildren);} } } };
 }

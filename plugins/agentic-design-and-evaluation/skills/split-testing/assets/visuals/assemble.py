@@ -37,6 +37,7 @@ CSP = "; ".join(
     (
         "default-src 'none'",
         "script-src data:",
+        "worker-src blob:",
         "style-src 'unsafe-inline' data:",
         "img-src data:",
         "font-src data:",
@@ -353,6 +354,12 @@ def assemble(args: argparse.Namespace) -> str:
     for index, filename in enumerate(script_paths):
         text = expand(read_text(filename), str(filename))
         scripts.append(f'<script id="av-script-{index}" src="{data_url(text.encode("utf-8"), "text/javascript;charset=utf-8")}"></script>')
+    head_scripts = []
+    if args.script:
+        startup = Path(__file__).resolve().parent / 'dist/agentic-startup.js'
+        if not startup.is_file():
+            raise PackagingError('The startup asset is missing; restore the complete visual library or rebuild its generated assets')
+        head_scripts.append(f'<script id="av-startup" src="{data_url(read_text(startup).encode("utf-8"), "text/javascript;charset=utf-8")}"></script>')
     data = []
     for name, filename in data_paths.items():
         if name in validator.ids:
@@ -370,10 +377,10 @@ def assemble(args: argparse.Namespace) -> str:
     if unused:
         raise PackagingError(f"unused assets: {', '.join(sorted(unused))}; reference each with an asset token or remove its --asset option")
     title = args.title if args.title is not None else args.output.stem
-    recipe = {"kind": "agentic-report-recipe", "version": 1, "lang": args.lang, "title": title, "csp": CSP, "body": body, "styles": [f"av-style-{i}" for i in range(len(styles))], "data": [*data_paths, *extra_data_ids], "scripts": [f"av-script-{i}" for i in range(len(scripts))]}
+    recipe = {"kind": "agentic-report-recipe", "version": 1, "lang": args.lang, "title": title, "csp": CSP, "body": body, "styles": [f"av-style-{i}" for i in range(len(styles))], "data": [*data_paths, *extra_data_ids], "scripts": [f"av-script-{i}" for i in range(len(scripts))], "headScripts": ["av-startup"] if head_scripts else []}
     recipe_json = json_content(json.dumps(recipe, ensure_ascii=True, separators=(",", ":")), "report recipe")
     blueprint = '<script type="application/json" id="av-report-recipe">' + recipe_json + '</script>'
-    reserved = {"av-report-recipe", "av-review-seed", *extra_data_ids, *recipe["styles"], *recipe["scripts"]}
+    reserved = {"av-report-recipe", "av-review-seed", "av-startup", *extra_data_ids, *recipe["styles"], *recipe["scripts"]}
     if reserved.intersection(validator.ids) or reserved.intersection(data_paths):
         raise PackagingError('av-report-recipe, av-review-seed and generated av-style-/av-script- IDs are reserved for portable export')
     return "\n".join(
@@ -385,6 +392,7 @@ def assemble(args: argparse.Namespace) -> str:
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             f'<meta http-equiv="Content-Security-Policy" content="{html.escape(CSP, quote=True)}">',
             f"<title>{html.escape(title)}</title>",
+            *head_scripts,
             *styles,
             "</head>",
             "<body>",

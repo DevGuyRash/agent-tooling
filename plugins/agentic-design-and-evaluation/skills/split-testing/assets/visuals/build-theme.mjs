@@ -39,3 +39,19 @@ export function generateThemeStyles(ts, visualsDirectory) {
   validateCssBlocks(css, "Generated theme"); validateCssBlocks(components, "Component styles");
   return css + "\n/* Maintained component styles from styles/components.css. */\n" + components;
 }
+
+/** Compile the maintained pure prelude factory without executing browser APIs. */
+export function generateStartupScript(ts, visualsDirectory) {
+  const source = path.join(visualsDirectory, "src/startup.ts");
+  const text = fs.readFileSync(source, "utf8");
+  const parsed = ts.createSourceFile(source, text, ts.ScriptTarget.ES2020, true);
+  for (const statement of parsed.statements) {
+    if (ts.isImportDeclaration(statement) || ts.isImportEqualsDeclaration(statement) || (ts.isExportDeclaration(statement) && statement.moduleSpecifier)) throw new Error("startup.ts must remain self-contained");
+  }
+  const output = ts.transpileModule(text, { fileName: source, compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, newLine: ts.NewLineKind.LineFeed } });
+  const context = vm.createContext({ exports: Object.create(null) }, { codeGeneration: { strings: false, wasm: false } });
+  vm.runInContext(output.outputText, context, { timeout: 3000, filename: "trusted-startup.js" });
+  const script = vm.runInContext("exports.startupPrelude()", context, { timeout: 3000 });
+  if (typeof script !== "string" || !script.trim()) throw new Error("startupPrelude() must return a nonempty script");
+  return script;
+}

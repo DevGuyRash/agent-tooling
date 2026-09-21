@@ -1,10 +1,10 @@
 # Building and Packaging Visuals
 
-The library ships browser-ready JavaScript in `dist/agentic-visuals.js` and CSS in `styles/agentic-visuals.css`. A report reader needs only a modern browser. Light, dark and system appearance require CSS `color-scheme`, `light-dark()` and `color-mix()` support. Saving reader records uses browser-native IndexedDB when available; unavailable storage remains an explicit session/export mode. Report authors can use Python 3.10 or newer to assemble a single offline HTML file; they need neither Node.js nor TypeScript unless they change the library source. These tools package the caller's data and composition without choosing report sections or interpreting evidence.
+The library ships browser-ready JavaScript in `dist/agentic-visuals.js`, a small early startup script in `dist/agentic-startup.js`, and CSS in `styles/agentic-visuals.css`. A report reader needs only a modern browser. Light, dark and system appearance require CSS `color-scheme`, `light-dark()` and `color-mix()` support. Saving reader records uses browser-native IndexedDB when available; unavailable storage remains an explicit session/export mode. Report authors can use Python 3.10 or newer to assemble a single offline HTML file; they need neither Node.js nor TypeScript unless they change the library source. These tools package the caller's data and composition without choosing report sections or interpreting evidence.
 
 ## Rebuild the library during development
 
-`src/index.ts` and its local TypeScript imports are the runtime source. `src/theme.ts` is the pure theme owner; default builds generate `styles/agentic-visuals.css` from its exported definitions plus `styles/components.css`. Edit those sources rather than the generated stylesheet. `build.mjs` uses the TypeScript compiler's AMD `outFile` transform, checks every emitted dependency, and wraps the result in a private loader. Only the selected browser global is exposed; the default is `AgenticVisuals`. There is no separately maintained JavaScript implementation.
+`src/index.ts` and its local TypeScript imports are the runtime source. `src/theme.ts` is the pure theme owner; default builds generate `styles/agentic-visuals.css` from its exported definitions plus `styles/components.css`. `src/startup.ts` owns the early startup prelude. Edit those sources rather than generated files. `build.mjs` uses the TypeScript compiler's AMD `outFile` transform, checks every emitted dependency, and wraps the result in a private loader. Only the selected browser global is exposed; the default is `AgenticVisuals`. There is no separately maintained JavaScript implementation.
 
 Development requires Node.js 18 or newer and the exact TypeScript version pinned in `package.json` (and the matching lockfile when one is supplied). The builder uses a local `typescript` package when available, otherwise the compiler package associated with an existing `tsc` on `PATH`. A differing compiler version is an error unless an exact qualification compiler is explicitly selected as described below. It does not install dependencies or read project `tsconfig.json` files.
 
@@ -22,7 +22,7 @@ node build.mjs --check
 python3 -m unittest discover -s tests -v
 ```
 
-The first command explicitly authorizes replacing the generated bundle and stylesheet. `--check` recompiles in memory and compares bytes with both existing outputs; it never writes an output. The tests use temporary source fixtures and exercise the real CLIs, module exports, dependency refusal, safe embedding, and output preservation. Missing development dependencies cause failures rather than skipped build checks. Tests do not establish browser rendering or visual quality.
+The first command explicitly authorizes replacing all three default generated assets: the library bundle, startup prelude and stylesheet. `--check` recompiles in memory and compares all three outputs; it never writes an output. Preflight detects conflicting outputs before replacing any of them. A custom entry build still produces only its requested JavaScript bundle. The tests use temporary source fixtures and exercise the real CLIs, module exports, dependency refusal, safe embedding, and output preservation. Missing development dependencies cause failures rather than skipped build checks. Tests do not establish browser rendering or visual quality.
 
 ### Explicit compiler qualification
 
@@ -34,7 +34,7 @@ node build.mjs --check --compiler-version 5.8.3
 AV_TEST_COMPILER_VERSION=5.8.3 python3 -m unittest discover -s tests -v
 ```
 
-`AV_TEST_COMPILER_VERSION` is an explicit packaging-test option, not a browser setting. Other source tests use the installed `tsc` on `PATH`; ensure it is the compiler being qualified.
+`AV_TEST_COMPILER_VERSION` is an explicit packaging-test option, not a browser setting. Other source tests use the installed `tsc` on `PATH`; ensure it is the compiler being qualified. Keep point-in-time qualification reports, screenshots, logs, and generated test outputs outside the shipped plugin.
 
 The source contract is static `import`/`export` declarations between local `.ts` modules under one root. Local directory indexes and `.js` import specifiers resolving to `.ts` source are supported. Runtime packages, dynamic `import()`, `require()`, CommonJS import/export forms, and imports outside the root are rejected. Standard browser APIs and TypeScript's ES2020/DOM libraries are available. The generated runtime uses a classic script and `globalThis`; it has no server, module-loader service, CDN, or browser package dependency.
 
@@ -67,7 +67,7 @@ For optional interaction, call `AgenticVisuals.enhanceVisuals(document.getElemen
 
 For a static-first report, render the chosen components to the body file during authoring and embed the library plus a small enhancement script. The complete document is then present even when JavaScript is unavailable. The synthetic showcase follows this route: `examples/demo.ts` supplies its markup through `renderDemo()`, while the final report embeds the ordinary library bundle and calls `enhanceVisuals` on its workspace.
 
-The composition script reads that data with `JSON.parse(document.getElementById("report-data").textContent)`. JSON blocks appear after the body and before every executable script. IDs must be unique and must not collide with body element IDs. JSON validation rejects duplicate object keys and non-JSON numbers. Numeric literal text is retained without Python rounding or reserialization; JavaScript's own numeric precision still applies when the composition calls `JSON.parse`.
+The composition script reads that data with `JSON.parse(document.getElementById("report-data").textContent)`. JSON blocks appear after the body and before the library and caller scripts. The trusted startup prelude executes in the head, before those blocks; it neither consumes evidence data nor accesses storage. IDs must be unique and must not collide with body element IDs. JSON validation rejects duplicate object keys and non-JSON numbers. Numeric literal text is retained without Python rounding or reserialization; JavaScript's own numeric precision still applies when the composition calls `JSON.parse`.
 
 | Input option | Embedded form |
 | --- | --- |
@@ -92,17 +92,25 @@ The same dependency checks apply to inline SVG presentation attributes: `fill`, 
 
 Inline SVG accessibility `<title>` elements are allowed and retained, including those generated by the library's charts. They do not set the HTML document title. HTML `<title>` remains forbidden in a body fragment, including inside SVG's HTML integration points such as `foreignObject`; use `--title` for the document title.
 
-The generated Content Security Policy allows embedded scripts, styles, images, fonts, media, and inline style attributes; it blocks network connections, external resource loads, frames, objects, base URLs, and form submissions. Ordinary HTTP(S), mail, and telephone citation links remain navigational links and are not fetched during report loading. An external citation still needs its destination service when the reader elects to open it.
+The generated Content Security Policy allows embedded scripts, styles, images, fonts, media, inline style attributes and same-file Blob workers for bounded regex matching; it blocks network connections, external resource loads, frames, objects, base URLs, and form submissions. Ordinary HTTP(S), mail, and telephone citation links remain navigational links and are not fetched during report loading. An external citation still needs its destination service when the reader elects to open it.
 
 The body and composition scripts are trusted author inputs, not arbitrary untrusted HTML to sanitize. Evidence labels should enter through data and the renderer's escaping or DOM text APIs. Static packaging checks cannot prove that arbitrary composition code runs successfully, never attempts a blocked request, renders data faithfully, or remains usable with a keyboard. After assembly, open the final file directly in the intended browser with network access unavailable and check the actual composition, interactions, data values, and layout. The final deliverable is that HTML file; the authoring directory is not a runtime dependency.
+
+## Initial restoration and search workers
+
+When one or more `--script` inputs are present, assembly embeds `dist/agentic-startup.js` automatically as `av-startup` in the head. That ID is reserved. Python-only authors do not need to build it; use the shipped generated asset. Without executable inputs the static report does not receive a visibility gate. The small prelude waits for workspace readiness; it never becomes the reader-record owner. Its missing-enhancement timeout starts two seconds after parsing, so a large offline bundle does not consume the restoration budget before it executes. An initializing controller claims a bounded twelve-second restoration window, covering the storage-open and transaction watchdogs before the original evidence is revealed. Errors still fail open. Late restoration can change the display after this bounded deadline; readiness is not a storage-success claim.
+
+`enhanceVisuals(root).whenReady()` separates initial preference/notebook restoration from subsequent work. `whenIdle()` includes queued reader operations, search, diagrams and exports/imports. The return value remains callable cleanup. Neither readiness nor idleness means that browser saving succeeded; inspect the explicit storage state.
+
+Regex search runs only in an isolated Blob worker constructed from maintained static code, with no `eval`, dynamic import or remote resource. Expressions use a one-second deadline and a 2,000-character input guard; errors, cancellation and timeouts terminate the worker and release its object URL. Literal search remains available when worker creation is refused. `worker-src blob:` does not permit network connections; the rest of the report CSP remains restrictive. Test the intended browser's worker and clipboard permissions rather than assuming they match another origin.
 
 ## Mermaid and reviewed copies
 
 Markup produced by `mermaidDiagram` declares `data-av-requires="mermaid"`. Assembly embeds `vendor/mermaid/mermaid.min.js` once, before the caller scripts, together with its required notices. For diagrams created only at runtime, pass `--feature mermaid`. The full 12.0.0 distribution, integrity metadata and license material live under `vendor/mermaid/`; report readers install nothing. Diagram families and bundled layout engines come from that distribution. External icon packs, fonts and images still require embedded local resources supplied by the author. The report CSP prevents a diagram from obtaining undeclared network resources.
 
-Assembly also retains an inert recipe identifying the original body, data and embedded assets. The notebook uses it to create annotated HTML copies from those originals, then hydrates a fresh reader interface on opening. Expanded dialogs, generated toolbars and temporary selection state are not serialized into the body. The annotated file retains selected reader feedback as versioned JSON and preserves its report/revision ownership. Keep the recipe and generated asset IDs intact; older files without a recipe can still export their notebook data and readable handoff.
+Assembly also retains an inert recipe identifying the original body, data and embedded assets. The notebook uses it to create annotated HTML copies from those originals, then hydrates a fresh reader interface on opening. Expanded dialogs, generated toolbars and temporary selection state are not serialized into the body. The annotated file retains selected reader feedback as versioned JSON and preserves its report/revision ownership. The optional `headScripts` recipe field identifies the startup prelude, which is retained ahead of the regenerated content; older recipes without that field remain supported. Keep the recipe and generated asset IDs intact; older files without a recipe can still export their notebook data and readable handoff.
 
-The Markdown handoff complements the annotated report. It retains comments, original target context and sources, unresolved attachments, drafts and conflicts; it does not replace the original report or confer analytical authority on feedback. Version-1 and version-2 notebook imports remain supported with recovery bytes preserved. Embedded review adoption is recorded at the transactional storage boundary so reopening a portable copy does not recreate feedback that the reader subsequently edited or removed.
+Share offers an annotated standalone report and a readable Markdown handoff. Selected-feedback exports exclude recovery-only payloads and respect the inclusion controls. Full notebook JSON is a distinct lossless backup, containing drafts, competing versions and protected earlier data even when omitted from sharing. It should not be mistaken for the filtered handoff. The Markdown handoff complements the annotated report. It retains comments, original target context and sources, unresolved attachments, drafts and conflicts; it does not replace the original report or confer analytical authority on feedback. Version-1 and version-2 notebook imports remain supported with recovery bytes preserved. Embedded review adoption is recorded at the transactional storage boundary so reopening a portable copy does not recreate feedback that the reader subsequently edited or removed.
 
 ## Representative reports and native qualification
 
@@ -118,7 +126,7 @@ Use `--compiler-version EXACT` on the preview helper only when deliberately qual
 
 File mode opens the **assembled file** with networking disabled. `--mode content` is an explicit fallback that loads the same assembled HTML and its embedded resources into a native page when administrative policy blocks file navigation. It exercises native layout, focus, pointer/keyboard behavior, download generation and a fresh-page reviewed-copy reopen; it does **not** qualify operating-system file opening, file-origin permissions or native IndexedDB persistence. A content-mode pass is not a file-mode pass.
 
-Outputs include assertions, input hashes, viewport screenshots, figure exports, a reviewed HTML copy and Markdown handoff. `--mermaid` records the outcome of every supplied family/layout/error fixture separately; inspect those outcomes, not only the core pass count. Family fixtures are a compatibility suite, not a whitelist. Invalid-source fixtures should fail visibly while retaining the source. Inspect final screenshots after animations settle, and repeat independent ordinary/adversarial review of the final artifact before publishing.
+Outputs include assertions, input hashes, viewport screenshots, figure exports, a reviewed HTML copy and Markdown handoff. `--mermaid` records the outcome of every supplied family/layout/error fixture and probes the actual SVG export command for every ready result, retaining byte hashes and diagnostics; inspect those outcomes, not only the core pass count. Family fixtures are a compatibility suite, not a whitelist. Invalid-source fixtures should fail visibly while retaining the source. Inspect final screenshots after animations settle, and repeat independent ordinary/adversarial review of the final artifact before publishing.
 
 ### Layout and interaction regression pass
 
@@ -132,3 +140,21 @@ python3 tests/native_polish.py --previews /absolute/review-previews \
 Its explicit `--mode content` fallback has the same file-origin and persistence limitations described above. Inspect the screenshots as well as the assertions: an element can pass a center-point hit test while its surrounding reading space is poor. Physical touch, screen readers, alternate engines and operating-system zoom/keyboard behavior require separate qualification.
 
 The stylesheet generator now rejects unbalanced CSS delimiters, quoted strings and comments before writing generated assets. This is an early corruption guard, not a CSS grammar validator or a substitute for native rendering. Internal overlay placement uses one shared geometry primitive; zero-width controls remain in closed overflow until their container can be measured. Adapter bounds are validated before figure toolbars or wrappers are attached.
+
+### Reader journeys and restoration regression pass
+
+```sh
+python3 tests/native_reader_experience.py --previews /absolute/review-previews \
+  --output /absolute/reader-results --browser /absolute/chromium --mode file
+```
+
+This runner exercises grouped and regex search (including cancellation of pathological expressions), item and passage selection, side/drawer inspection, keyed notebook updates, direct bookmark actions, readable history, filtered sharing, full backup, fresh reviewed-copy reopening, Mermaid sizing and downloads, authored filters and native editable controls. Its last phase deliberately supplies the explicit IndexedDB **double** to the native page to delay restoration and sample first-visible frames and rapid preference changes. That phase qualifies native rendering with modeled storage, not native IndexedDB persistence, transaction durability or cross-tab behavior. All phases report input hashes, browser version, errors and requests. `--mode content` retains the same navigation limitations as the other runners.
+
+### Drawing tools and large-comparison qualification
+
+```sh
+python3 tests/native_comparison.py --previews /absolute/review-previews \
+  --output /absolute/comparison-results --browser /absolute/chromium --mode file
+```
+
+This complementary suite exercises floating tool/help/selection panels, modifier and additive selection, focus return, the searchable collection picker, chosen-set/window separation, pinned references, all-card rows, bidirectional optional linked scrolling, per-record reading positions, narrow and enlarged-text layouts, and an exact-text handoff after record reordering. It includes a distinct 120-record consumer with repeated labels and markup-like source text, native-popover fallback, cleanup and re-enhancement, and fractional-width plot-fit stability. The file/content distinction and native-storage limitations are the same as above. Existing public renderer and command APIs remain available; these changes require no new reader resources or installation.

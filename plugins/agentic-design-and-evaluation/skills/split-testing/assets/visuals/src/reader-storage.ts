@@ -1,3 +1,4 @@
+import { exactJson } from './exact-json';
 /** Shared browser storage ownership. Callbacks run synchronously in one IDB transaction. */
 export interface StorageOwner { kind: "notebook" | "preferences"; reportId: string; revision: string }
 export type OwnedStoreResult<T> =
@@ -13,7 +14,7 @@ const storeName = "records";
 const databases = new WeakMap<IDBFactory, Promise<IDBDatabase>>();
 interface Envelope<T> { version: 1; owner: StorageOwner; value: T }
 function unavailable<T>(): OwnedStoreResult<T> { return { status: "unavailable", message: "Browser saving is unavailable. Keep this report open and export a copy of your records." }; }
-function rawValue(value: unknown): string | undefined { try { return JSON.stringify(value); } catch { return undefined; } }
+function rawValue(value: unknown): string | undefined { try { return exactJson(value); } catch { return undefined; } }
 function open(factory: IDBFactory): Promise<IDBDatabase> {
   const prior = databases.get(factory);
   if (prior) return prior;

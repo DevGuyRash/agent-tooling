@@ -1,22 +1,29 @@
+import { attachFloatingPanel, FloatingPanel } from './floating-panel';
 import { figureOf, figureSource, figureTitle, visualAdapter, retainFigureOrigin } from './figures';
 import { exportFigureSvg, exportFigurePng, downloadBlob, copyFigureImage, copyFigureSource } from './figure-export';
-import { attachCommandBar, CommandBar, focusCommand } from './command-bar';
+import { attachCommandBar, CommandBar, CommandOptions, commandIcon, focusCommand } from './command-bar';
 import { NotificationMessage } from './notifications';
 export interface FigureTools {
   figures: readonly HTMLElement[];
   dock(): void;
   refresh(within?: Element): void;
   toolbar(figure: HTMLElement): HTMLElement | null;
+  command(figure: HTMLElement, control: HTMLButtonElement, options: CommandOptions): void;
+  updateCommand(figure: HTMLElement, control: HTMLButtonElement, options: Partial<CommandOptions>): void;
   click(target: Element): boolean;
   whenIdle(): Promise<void>;
   cleanup(): void;
 }
 const icons:Record<string,string>={expand:'M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5',png:'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',copy:'M8 8h13v13H8zM16 8V3H3v13h5','copy-source':'m8 5-6 7 6 7m8-14 6 7-6 7m-3-16-2 18',pan:'M8 12V5a2 2 0 0 1 4 0v6-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v9c0 4-2 6-6 6h-2c-2 0-3-1-4-3l-4-5c-1-2 1-4 3-2l1 1','select-items':'M5 3v17l5-5 4 7 3-2-4-7h7L5 3','select-text':'M8 3h8M12 3v18M8 21h8M4 8v8M20 8v8',note:'M4 3h16v14l-5 4H4zM8 8h8M8 12h6',bookmark:'M6 3h12v18l-6-4-6 4z'};
+icons.svg = icons.png;
+icons['download-source'] = icons.png;
+icons.source = 'M3 4h18v16H3zM7 8h10M7 12h10M7 16h6';
 export function attachFigureTools(root: HTMLElement, expand: (figure: HTMLElement, trigger: HTMLElement) => void, notify: (message:NotificationMessage)=>void = ()=>{}, contextChanged: ()=>void = ()=>{}): FigureTools {
   const document=root.ownerDocument,undo:(()=>void)[]=[],owners=new Map<Element,HTMLElement>(),bars=new Map<HTMLElement,HTMLElement>(),commands=new Map<HTMLElement,CommandBar>(),jobs=new Set<Promise<void>>();let stopped=false;
   const candidates=[...(root.matches('[data-av-figure]')?[root]:[]),...Array.from(root.querySelectorAll<HTMLElement>('[data-av-figure]'))];
   const figures=candidates.filter(figure=>figureOf(figure)===figure);
   const expansions = new Map<HTMLElement, HTMLButtonElement>(), modesByFigure = new Map<HTMLElement, HTMLButtonElement[]>();
+  const modePanels = new Map<HTMLElement,FloatingPanel>(), modeTriggers = new Map<HTMLElement,HTMLButtonElement>();
   const initialBounds = new Map<HTMLElement, {width: number; height: number}>();
   // Preflight every adapter before moving any of the author's live content.
   // A bad adapter must not strand half-created toolbars or native plot wrappers.
@@ -48,9 +55,28 @@ export function attachFigureTools(root: HTMLElement, expand: (figure: HTMLElemen
     }
     const bar=attachCommandBar(toolbar,'Visualization actions');commands.set(figure,bar);
     const make=(action:string,label:string,priority:number,menuOnly=false,group?:string)=>{const button=document.createElement('button');button.type='button';button.className='av-button';button.setAttribute('data-av-figure-action',action);button.textContent=label;toolbar!.appendChild(button);owners.set(button,figure);bar.add(button,{label,priority,menuOnly,group,icon:icons[action]});undo.push(()=>button.remove());return button;};
-    const modes=[['pan','Pan canvas'],['select-items','Select items'],...(figure.querySelector('svg text,[data-av-mermaid],[data-av-custom-media]')?[['select-text','Select text']]:[])];
-    const modeButtons:HTMLButtonElement[]=[];modesByFigure.set(figure,modeButtons);
-    for(const[action,label]of modes){const button=make(action,label,30,false,'tools');modeButtons.push(button);button.setAttribute('aria-pressed',String(figure.getAttribute('data-av-selection-mode')===(action==='select-text'?'text':action==='select-items'?'select':'pan')));}
+    const modeTrigger = document.createElement('button'); modeTrigger.type = 'button'; modeTrigger.className = 'av-button';
+    modeTrigger.setAttribute('data-av-mode-menu',''); toolbar.appendChild(modeTrigger); modeTriggers.set(figure,modeTrigger);
+    const modePanel = attachFloatingPanel(modeTrigger,figure,'Drawing tools'); modePanel.element.classList.add('av-drawing-tools'); modePanels.set(figure,modePanel);
+    const modeButtons: HTMLButtonElement[]=[]; modesByFigure.set(figure,modeButtons);
+    const modeChoices = document.createElement('div'); modeChoices.className = 'av-mode-choices'; modeChoices.setAttribute('role','group'); modeChoices.setAttribute('aria-label','Drawing interaction'); modePanel.body.appendChild(modeChoices);
+    const modes=[['pan','Pan','Move around the drawing'],['select-items','Select','Inspect and annotate items'],...(figure.querySelector('svg text,[data-av-mermaid],[data-av-custom-media]')?[['select-text','Text','Select an exact passage']]:[])];
+    for (const [action,label,description] of modes) {
+      const button=document.createElement('button'); button.type='button'; button.className='av-mode-choice'; button.setAttribute('data-av-figure-action',action);
+      button.setAttribute('aria-label',action==='pan'?'Pan canvas':action==='select-items'?'Select items':'Select text');
+      button.appendChild(commandIcon(document,icons[action]));
+      const words=document.createElement('span'),name=document.createElement('strong'),hint=document.createElement('small'); name.textContent=label;hint.textContent=description;words.append(name,hint);button.appendChild(words);
+      modeChoices.appendChild(button);owners.set(button,figure);modeButtons.push(button);
+      button.setAttribute('aria-pressed',String(figure.getAttribute('data-av-selection-mode')===(action==='select-text'?'text':action==='select-items'?'select':'pan')));
+    }
+    const help = document.createElement('details'); help.className='av-tool-help';
+    const summary=document.createElement('summary');summary.textContent='Keyboard & touch';help.appendChild(summary);
+    const shortcuts=document.createElement('dl');
+    for(const[key,description]of [['Click / tap','Choose one item.'],['Ctrl / ⌘ + click','Add or remove an item.'],['Shift + click','Select a range in source order. Add Ctrl / ⌘ to keep the previous selection.'],['Arrow keys','Move between items. Shift extends the selection.'],['Escape','Clear items, or close this panel.'],['Touch','Choose an item, then turn on Add to selection in its selection menu.'],['Text','Drag across a passage, then open Passage to annotate or bookmark it.']]){const term=document.createElement('dt'),definition=document.createElement('dd');term.textContent=key;definition.textContent=description;shortcuts.append(term,definition);}
+    help.appendChild(shortcuts);modePanel.body.appendChild(help);
+    const initialMode=figure.getAttribute('data-av-selection-mode'),initialAction=initialMode==='text'?'select-text':initialMode==='select'?'select-items':'pan';
+    bar.add(modeTrigger,{label:initialMode==='text'?'Text':initialMode==='select'?'Select':'Pan',labelled:true,icon:icons[initialAction],priority:0,group:'mode'});
+    undo.push(()=>modeTrigger.remove());
     for(const control of Array.from(toolbar.querySelectorAll<HTMLButtonElement>('[data-av-zoom-out],[data-av-zoom-reset],[data-av-zoom-in]'))){const label=control.hasAttribute('data-av-zoom-reset')?'Reset view':control.hasAttribute('data-av-zoom-out')?'Zoom out':'Zoom in';bar.add(control,{label,priority:10,group:'zoom',width:control.hasAttribute('data-av-zoom-reset')?52:36});}
     expansions.set(figure,make('expand','Expand visualization',20));make('copy','Copy image',40,true);make('png','Download PNG',40,true);make('svg','Download SVG',80,true);
     if(figureSource(figure)){make('copy-source','Copy source',50,true);make('source','View source',90,true);make('download-source','Download source',90,true);}
@@ -106,7 +132,8 @@ export function attachFigureTools(root: HTMLElement, expand: (figure: HTMLElemen
       open(from: HTMLElement) {
         trigger = from;
         // Reopening uses the current source, never an edited textarea value.
-        text.value = figureSource(figure)?.text ?? source.text;
+        const current=figureSource(figure);if(!current)throw new Error('Original source is no longer available.');
+        text.value = current.text;title.textContent=`Original ${current.language==='json'?'JSON':current.language} source`;
         if (modal && !candidate.open) candidate.showModal(); else panel.setAttribute('open', '');
         text.focus({ preventScroll: true });
       },
@@ -114,22 +141,30 @@ export function attachFigureTools(root: HTMLElement, expand: (figure: HTMLElemen
     };
     sourceReaders.set(figure, reader); return reader;
   }
-  function registerReview(figure:HTMLElement):void{const toolbar=bars.get(figure),bar=commands.get(figure);if(!toolbar||!bar)return;for(const control of Array.from(toolbar.querySelectorAll<HTMLButtonElement>('[data-av-review-action]'))){const bookmark=control.getAttribute('data-av-review-action')==='bookmark';bar.add(control,{label:bookmark?'Bookmark':'Note',priority:60,icon:bookmark?icons.bookmark:icons.note});}}
+  function registerReview(figure:HTMLElement):void{const toolbar=bars.get(figure),bar=commands.get(figure);if(!toolbar||!bar)return;for(const control of Array.from(toolbar.querySelectorAll<HTMLButtonElement>('[data-av-review-action]'))){const bookmark=control.getAttribute('data-av-review-action')==='bookmark';bar.add(control,{label:bookmark?'Bookmark figure':'Note on figure',priority:60,menuOnly:true,icon:bookmark?icons.bookmark:icons.note});}}
   return {
     figures,
     dock(){for(const figure of figures){const toolbar=bars.get(figure);if(!toolbar)continue;const plot=figure.hasAttribute('data-av-plot')?figure:figure.querySelector<HTMLElement>('[data-av-plot]');if(plot&&toolbar.parentElement!==plot){const marker=document.createComment('av-canvas-toolbar');toolbar.parentNode?.insertBefore(marker,toolbar);plot.insertBefore(toolbar,plot.firstChild);undo.push(()=>marker.parentNode?.replaceChild(toolbar,marker));}registerReview(figure);commands.get(figure)?.refresh();}},
     refresh(within){for(const figure of figures){if(within&&!within.contains(figure)&&within!==figure)continue;registerReview(figure);const expand=expansions.get(figure);if(expand)expand.hidden=figure.hasAttribute('data-av-expanded-figure');commands.get(figure)?.refresh();}},
     toolbar:figure=>bars.get(figure)||null,
+    command(figure,control,options){commands.get(figure)?.add(control,options);},
+    updateCommand(figure,control,options){commands.get(figure)?.update(control,options);},
     click(target){
       const control=target.closest<HTMLButtonElement>('[data-av-figure-action]'),figure=control&&owners.get(control);if(!control||!figure||stopped)return false;
       const action=control.getAttribute('data-av-figure-action');
       if(['pan','select-items','select-text'].includes(action||'')){
         const mode=action==='select-text'?'text':action==='select-items'?'select':'pan';figure.setAttribute('data-av-selection-mode',mode);
         for(const button of modesByFigure.get(figure)||[])button.setAttribute('aria-pressed',String(button===control));
+        const trigger=modeTriggers.get(figure);if(trigger)commands.get(figure)?.update(trigger,{label:mode==='text'?'Text':mode==='select'?'Select':'Pan',icon:icons[action!]});
+        modePanels.get(figure)?.close(true);
         const EventType=document.defaultView?.CustomEvent;if(EventType)for(const plot of [figure,...Array.from(figure.querySelectorAll<HTMLElement>('[data-av-plot]'))])if(plot.hasAttribute('data-av-plot'))plot.dispatchEvent(new EventType('av-layout-invalidated'));return true;
       }
       if(action==='expand'){expand(figure,control);return true;}
-      if(action==='source'){sourceReader(figure)?.open(control);return true;}
+      if(action==='source'){
+        try{const reader=sourceReader(figure);if(!reader)throw new Error('Original source is unavailable.');reader.open(control);}
+        catch(error){notify({text:error instanceof Error?error.message:'The source reader could not open.',tone:'error',source:figure});}
+        return true;
+      }
       if(control.disabled)return true;control.disabled=true;control.setAttribute('aria-busy','true');
       const operation=(async()=>{
         const name=(figureTitle(figure).replace(/[^a-z0-9_-]+/gi,'-').slice(0,80)||'visualization');
@@ -142,6 +177,6 @@ export function attachFigureTools(root: HTMLElement, expand: (figure: HTMLElemen
       })().catch(error=>{if(!stopped)notify({text:(error instanceof Error?error.message:'Export could not complete.')+(action?.startsWith('copy')?' Use a download or view the source.':''),tone:'error',source:sourceReaders.get(figure)?.panel.hasAttribute('open')?sourceReaders.get(figure)!.panel:figure});}).finally(()=>{control.disabled=false;control.removeAttribute('aria-busy');});
       jobs.add(operation);void operation.then(()=>jobs.delete(operation));return true;
     },
-    async whenIdle(){while(jobs.size)await Promise.all([...jobs]);},cleanup(){stopped=true;for(const reader of sourceReaders.values())reader.cleanup();sourceReaders.clear();for(const bar of commands.values())bar.cleanup();for(const restore of undo.reverse())restore();owners.clear();bars.clear();commands.clear();expansions.clear();modesByFigure.clear();}
+    async whenIdle(){while(jobs.size)await Promise.all([...jobs]);},cleanup(){stopped=true;for(const panel of modePanels.values())panel.cleanup();modePanels.clear();modeTriggers.clear();for(const reader of sourceReaders.values())reader.cleanup();sourceReaders.clear();for(const bar of commands.values())bar.cleanup();for(const restore of undo.reverse())restore();owners.clear();bars.clear();commands.clear();expansions.clear();modesByFigure.clear();}
   };
 }

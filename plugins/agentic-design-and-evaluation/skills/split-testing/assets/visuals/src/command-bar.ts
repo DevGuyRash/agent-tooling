@@ -1,8 +1,8 @@
 import { anchoredPanel, visibleViewport } from "./overlay-layout";
 /** Move the original command nodes between a persistent strip and its overflow. */
-export interface CommandOptions { label: string; priority?: number; group?: string; menuOnly?: boolean; width?: number; icon?: string }
+export interface CommandOptions { label: string; priority?: number; group?: string; menuOnly?: boolean; width?: number; icon?: string; labelled?: boolean }
 interface Command { control: HTMLButtonElement; options: CommandOptions; marker: Comment; original: Node[] }
-export interface CommandBar { add(control: HTMLButtonElement, options: CommandOptions): void; refresh(): void; dismiss(returnFocus?: boolean): void; cleanup(): void }
+export interface CommandBar { add(control: HTMLButtonElement, options: CommandOptions): void; update(control: HTMLButtonElement, options: Partial<CommandOptions>): void; refresh(): void; dismiss(returnFocus?: boolean): void; cleanup(): void }
 export function commandGroups(width: number, entries: readonly {width:number;priority:number;group:string;menuOnly?:boolean}[], reserve=40, gap=4): Set<string> {
   const groups=new Map<string,{width:number;priority:number;index:number;menuOnly:boolean}>();
   entries.forEach((entry,index)=>{const group=groups.get(entry.group);if(group){group.width+=entry.width+gap;group.priority=Math.min(group.priority,entry.priority);group.menuOnly ||= !!entry.menuOnly;}else groups.set(entry.group,{width:entry.width,priority:entry.priority,index,menuOnly:!!entry.menuOnly});});
@@ -11,7 +11,7 @@ export function commandGroups(width: number, entries: readonly {width:number;pri
   for(const[key,group]of [...groups].sort((a,b)=>a[1].priority-b[1].priority||a[1].index-b[1].index))if(!group.menuOnly&&used+group.width+gap<=width){selected.add(key);used+=group.width+gap;}
   return selected;
 }
-export function focusCommand(control:HTMLElement|null):void {if(!control)return;let target=control;for(let owner=control.parentElement;owner;owner=owner.parentElement)if(owner.tagName.toLowerCase()==='details'&&!owner.hasAttribute('open'))target=owner.querySelector<HTMLElement>('summary')||owner;target.focus();}
+export function focusCommand(control:HTMLElement|null):void {if(!control)return;let target=control;for(let owner=control.parentElement;owner;owner=owner.parentElement)if(owner.tagName.toLowerCase()==='details'&&!owner.hasAttribute('open'))target=owner.querySelector<HTMLElement>('summary')||owner;target.focus({preventScroll:true});}
 export function commandIcon(document:Document,path:string):SVGElement {
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');const shape=document.createElementNS(svg.namespaceURI,'path');shape.setAttribute('d',path);svg.appendChild(shape);return svg;
 }
@@ -81,11 +81,28 @@ export function attachCommandBar(host: HTMLElement, label: string): CommandBar {
   }
   function hitSize(): number { return Math.max(36, Number.parseFloat(view?.getComputedStyle?.(host).getPropertyValue?.('--av-command-hit-size') || '') || 36); }
 
+  // Intrinsic label measurement respects text enlargement without inserting
+  // measurement elements into evidence or depending on a menu's stretched width.
+  const measuring = document.createElement('canvas');
+  let measure: CanvasRenderingContext2D | null = null;
+  try { measure = measuring.getContext?.('2d') || null; } catch { /* Bounded DOM hosts. */ }
+  function commandWidth(command: Command, targetSize: number): number {
+    const style = view?.getComputedStyle?.(command.control);
+    const fontSize = Number.parseFloat(style?.fontSize || '') || 13;
+    let width = Math.max((command.options.width ?? 36) * Math.max(1, fontSize / 13), targetSize);
+    if (command.options.labelled) {
+      if (measure) measure.font = style?.font || `${fontSize}px sans-serif`;
+      const text = measure?.measureText(command.options.label).width ?? command.options.label.length * fontSize * .62;
+      width = Math.max(width, Math.ceil(text + (command.options.icon ? 22 : 0) + fontSize * 1.4));
+    }
+    command.control.style.setProperty('--av-command-width', width + 'px');
+    return width;
+  }
   function refresh():void{
-    if(stopped||refreshing)return;const targetSize=hitSize(),commandWidth=(command:Command)=>Math.max(command.options.width??36,targetSize);const eligible=commands.filter(command=>!command.control.hidden),inline=eligible.filter(command=>!command.options.menuOnly);host.style.setProperty('--av-command-preferred-width',(inline.reduce((total,command)=>total+commandWidth(command),0)+Math.max(0,inline.length-1)*4+(eligible.some(command=>command.options.menuOnly)?targetSize+4:0))+'px');const width=host.clientWidth;if(!(width>0))return;refreshing=true;
+    if(stopped||refreshing)return;const targetSize=hitSize(),widthOf=(command:Command)=>commandWidth(command,targetSize);const eligible=commands.filter(command=>!command.control.hidden),inline=eligible.filter(command=>!command.options.menuOnly);host.style.setProperty('--av-command-preferred-width',(inline.reduce((total,command)=>total+widthOf(command),0)+Math.max(0,inline.length-1)*4+(eligible.some(command=>command.options.menuOnly)?targetSize+4:0))+'px');const width=host.clientWidth;if(!(width>0))return;refreshing=true;
     try{
       const focused=document.activeElement;
-      const selected=commandGroups(width,commands.filter(command=>!command.control.hidden).map(command=>({width:commandWidth(command),priority:command.options.priority??50,group:command.options.group||String(commands.indexOf(command)),menuOnly:command.options.menuOnly})),targetSize+4);
+      const selected=commandGroups(width,commands.filter(command=>!command.control.hidden).map(command=>({width:widthOf(command),priority:command.options.priority??50,group:command.options.group||String(commands.indexOf(command)),menuOnly:command.options.menuOnly})),targetSize+4);
       for(const destination of [primary,menu]){
         const wanted=commands.filter((command,index)=>selected.has(command.options.group||String(index))===(destination===primary));
         wanted.forEach((command,index)=>{
@@ -114,11 +131,23 @@ export function attachCommandBar(host: HTMLElement, label: string): CommandBar {
   if(view?.ResizeObserver){const observer=new view.ResizeObserver(refresh);observer.observe(host);undo.push(()=>observer.disconnect());}
   if(view&&!view.ResizeObserver)listen(view,'resize',refresh as EventListener);
   return{
-    add(control,options){if(commands.some(command=>command.control===control))return;const marker=document.createComment('av-command');control.parentNode?.insertBefore(marker,control);const original=Array.from(control.childNodes),oldClass=control.className,oldWidth=control.style.getPropertyValue('--av-command-width');const attributes=['data-av-command-location','data-av-command','title','aria-label'].map(name=>[name,control.getAttribute(name)] as const);
-      control.classList.add('av-command');control.setAttribute('data-av-command','');control.setAttribute('data-av-command-location','menu');control.style.setProperty('--av-command-width',(options.width??36)+'px');control.title=options.label;if(!control.hasAttribute('aria-label'))control.setAttribute('aria-label',options.label);
+    add(control,options){if(commands.some(command=>command.control===control))return;const marker=document.createComment('av-command');control.parentNode?.insertBefore(marker,control);const original=Array.from(control.childNodes),oldClass=control.className,oldWidth=control.style.getPropertyValue('--av-command-width');const attributes=['data-av-command-location','data-av-command','data-av-command-labelled','title','aria-label'].map(name=>[name,control.getAttribute(name)] as const);
+      control.classList.add('av-command');control.setAttribute('data-av-command','');if(options.labelled)control.setAttribute('data-av-command-labelled','');control.setAttribute('data-av-command-location','menu');control.style.setProperty('--av-command-width',(options.width??36)+'px');control.title=options.label;if(!control.hasAttribute('aria-label'))control.setAttribute('aria-label',options.label);
       const visual=document.createElement('span');visual.className='av-command-visual';visual.setAttribute('aria-hidden','true');if(options.icon)visual.appendChild(commandIcon(document,options.icon));else for(const child of original)visual.appendChild(child);
       const text=document.createElement('span');text.className='av-command-label';text.textContent=options.label;control.replaceChildren(visual,text);commands.push({control,options,marker,original});menu.appendChild(control);
       undo.push(()=>{if(marker.parentNode)marker.parentNode.replaceChild(control,marker);control.replaceChildren(...original);control.className=oldClass;if(oldWidth)control.style.setProperty('--av-command-width',oldWidth);else control.style.removeProperty('--av-command-width');for(const[name,value]of attributes){if(value===null)control.removeAttribute(name);else control.setAttribute(name,value);}});refresh();
+    },
+    update(control, options) {
+      const command = commands.find(item => item.control === control);
+      if (!command || stopped) return;
+      command.options = {...command.options, ...options};
+      control.title = command.options.label;
+      control.setAttribute('aria-label', command.options.label);
+      const text = control.querySelector<HTMLElement>('.av-command-label');
+      if (text) text.textContent = command.options.label;
+      if (options.icon !== undefined) control.querySelector('.av-command-visual')?.replaceChildren(commandIcon(document, options.icon));
+      if (command.options.labelled) control.setAttribute('data-av-command-labelled',''); else control.removeAttribute('data-av-command-labelled');
+      refresh();
     },refresh,dismiss,
     cleanup(){if(stopped)return;dismiss();stopped=true;watchOpen();for(const restore of undo.reverse())restore();primary.remove();more.remove();if(preferredWidth)host.style.setProperty('--av-command-preferred-width',preferredWidth);else host.style.removeProperty('--av-command-preferred-width');host.classList.toggle('av-command-bar',previous);}
   };

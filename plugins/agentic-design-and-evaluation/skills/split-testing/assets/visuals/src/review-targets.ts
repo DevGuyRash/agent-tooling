@@ -1,22 +1,41 @@
+import { exactJson } from './exact-json';
 import { fingerprint } from './identity';
 import { figureOf, figureTitle, visualAdapter, figureOrigin, figureContext } from './figures';
-import { ReviewAnchor, ReviewTarget } from "./review-types";
-export type { ReviewAnchor, ReviewTarget } from "./review-types";
-export interface ResolvedAnchor { status: 'resolved' | 'missing' | 'changed' | 'ambiguous'; element?: HTMLElement; range?: Range; message: string }
+import { ReviewAnchor, ReviewTarget, ReviewItem } from "./review-types";
+export type { ReviewAnchor, ReviewTarget, ReviewItem } from "./review-types";
+export interface ResolvedAnchor { status: 'resolved' | 'missing' | 'changed' | 'ambiguous'; element?: HTMLElement; elements?: HTMLElement[]; range?: Range; message: string }
 export interface TargetRegistry {
   targets: ReadonlyMap<string, { element: HTMLElement; target: ReviewTarget }>;
   anchor(element: HTMLElement): ReviewAnchor;
   selection(selection: Selection): ReviewAnchor | null;
   item(element: Element): ReviewAnchor | null;
+  items(elements: readonly Element[]): ReviewAnchor | null;
   resolve(anchor: ReviewAnchor): ResolvedAnchor;
+  /** A synchronous fresh snapshot; never reused across reader actions. */
+  resolveAll?(anchors: readonly ReviewAnchor[]): ResolvedAnchor[];
   cleanup(): void;
 }
 const substitutes=new WeakMap<Node,Element>();
 export function registerReviewPlaceholder(marker:Node,element:Element):()=>void{substitutes.set(marker,element);return()=>substitutes.delete(marker);}
+// Presentation-only rearrangement must not change source order in anchors.
+// Keep live nodes (not captured strings): missing content and real text edits
+// remain observable. New authored nodes are included, never silently discarded.
+const readingOrders = new WeakMap<Node, readonly Node[]>();
+export function registerReviewOrder(parent: Element): () => void {
+  const original = Array.from(parent.childNodes);
+  readingOrders.set(parent, original);
+  return () => { if (readingOrders.get(parent) === original) readingOrders.delete(parent); };
+}
+function reviewChildren(parent: Node): Node[] {
+  const actual = Array.from(parent.childNodes), original = readingOrders.get(parent);
+  if (!original) return actual;
+  const available = new Set<Node>(actual), known = new Set(original);
+  return [...original.filter(node => available.has(node)), ...actual.filter(node => !known.has(node))];
+}
 const excluded = '.av-frame-tools,.av-view-status,[data-av-controls],[data-av-review-ui],[data-av-notebook],script,style,.av-sr-only,.av-figure-actions';
 function reviewNodes(element: Node): {node:Node;start:number;end:number}[] {
   const nodes:{node:Node;start:number;end:number}[]=[];let offset=0;
-  const visit=(node:Node):void=>{const original=substitutes.get(node);if(original){visit(original);return;}if(node.nodeType===3){const start=offset;offset+=(node.textContent||'').length;nodes.push({node,start,end:offset});}else if((node.nodeType===1&&!(node as Element).matches(excluded+',.av-focus-dialog'))||node.nodeType===11)for(const child of Array.from(node.childNodes))visit(child);};
+  const visit=(node:Node):void=>{const original=substitutes.get(node);if(original){visit(original);return;}if(node.nodeType===3){const start=offset;offset+=(node.textContent||'').length;nodes.push({node,start,end:offset});}else if((node.nodeType===1&&!(node as Element).matches(excluded+',.av-focus-dialog'))||node.nodeType===11)for(const child of reviewChildren(node))visit(child);};
   visit(element);return nodes;
 }
 export function reviewText(element: Element): string {return reviewNodes(element).map(item=>item.node.textContent||'').join('');}
@@ -26,7 +45,7 @@ function reviewOffset(root:Element,boundary:Node,at:number):number|null {
     if(result!==null)return;const original=substitutes.get(node);if(original){visit(original);return;}
     if(node===boundary){result=count+(node.nodeType===3?at:Array.from(node.childNodes).slice(0,at).reduce((sum,child)=>sum+reviewNodes(child).reduce((n,part)=>n+part.end-part.start,0),0));return;}
     if(node.nodeType===3)count+=(node.textContent||'').length;
-    else if((node.nodeType===1&&!(node as Element).matches(excluded+',.av-focus-dialog'))||node.nodeType===11)for(const child of Array.from(node.childNodes))visit(child);
+    else if((node.nodeType===1&&!(node as Element).matches(excluded+',.av-focus-dialog'))||node.nodeType===11)for(const child of reviewChildren(node))visit(child);
   };visit(root);return result;
 }
 function contentIdentity(element:Element):string {
@@ -41,11 +60,11 @@ function contentIdentity(element:Element):string {
     if(current.hasAttribute('data-av-adapter')){const items=visualAdapter(current as HTMLElement)?.items?.(current as HTMLElement);if(items)parts.push(['items',items]);}
     if(current.tagName.toLowerCase()==='img')parts.push(['image',current.getAttribute('src'),current.getAttribute('alt')]);
     if(current.tagName.toLowerCase()==='a')parts.push(['link',current.getAttribute('href')]);
-    for(const child of Array.from(node.childNodes))visit(child);
-  };visit(element);return JSON.stringify(parts);
+    for(const child of reviewChildren(node))visit(child);
+  };visit(element);return exactJson(parts);
 }
 function grounds(element:HTMLElement):string{return (element.closest('[data-av-layout-input]')||(element.hasAttribute('data-av-figure')?figureOrigin(element).owner:null))?.getAttribute('data-av-layout-input')||contentIdentity(element);}
-function sources(element:Element):{label:string;href:string}[]{const roots=[element,...(element.hasAttribute('data-av-figure')?figureContext(element as HTMLElement):[])],links=roots.flatMap(root=>Array.from(root.querySelectorAll('a[href]'))).filter(node=>!node.closest(excluded)).map(node=>({label:node.textContent||'',href:node.getAttribute('href')||''}));return [...new Map(links.map(link=>[JSON.stringify(link),link])).values()];}
+function sources(element:Element):{label:string;href:string}[]{const roots=[element,...(element.hasAttribute('data-av-figure')?figureContext(element as HTMLElement):[])],links=roots.flatMap(root=>Array.from(root.querySelectorAll('a[href]'))).filter(node=>!node.closest(excluded)).map(node=>({label:node.textContent||'',href:node.getAttribute('href')||''}));return [...new Map(links.map(link=>[exactJson(link),link])).values()];}
 function label(element: HTMLElement): string {
   if (element.hasAttribute('data-av-figure')) return figureTitle(element);
   // A report or view must not borrow the first nested figure's title. Besides
@@ -74,7 +93,7 @@ export function createTargetRegistry(scope: HTMLElement, revision: string, exclu
     const title=label(element),path:string[]=[];
     for(let parent=element.parentElement;parent&&parent!==scope;parent=parent.parentElement)if(parent.matches('.av-card,[data-av-panel],[data-av-object]'))path.unshift(label(parent));
     const text=reviewText(element),recipe=grounds(element);
-    const signature=fingerprint(JSON.stringify([title,path,recipe]));
+    const signature=fingerprint(exactJson([title,path,recipe]));
     if(!element.id){const base=(scope.id||'report')+'--target-'+signature.split(':')[1].slice(0,18);let id=base,index=1;while(entries.has(id)||scope.ownerDocument.getElementById(id))id=base+'-'+(++index);initialIds.set(element,null);element.id=id;}
     if(entries.has(element.id))throw new Error('Review targets need unique IDs.');
     entries.set(element.id,{element,target:{reportId:scope.id,revision,id:element.id,label:title,path,fingerprint:signature,excerpt:text,sources:sources(element)}});
@@ -83,12 +102,105 @@ export function createTargetRegistry(scope: HTMLElement, revision: string, exclu
   const signatures=new Map<string,{element:HTMLElement;target:ReviewTarget}[]>();
   for(const entry of entries.values())if(initialIds.has(entry.element)){const group=signatures.get(entry.target.fingerprint)||[];group.push(entry);signatures.set(entry.target.fingerprint,group);}
   for(const group of signatures.values())if(group.length>1)for(const entry of group)entry.target.ambiguous=true;
-  const signature=(entry:{element:HTMLElement;target:ReviewTarget}):string=>fingerprint(JSON.stringify([label(entry.element),entry.target.path,grounds(entry.element)]));
+  const signature=(entry:{element:HTMLElement;target:ReviewTarget}):string=>fingerprint(exactJson([label(entry.element),entry.target.path,grounds(entry.element)]));
   const owner=(element:Element):{element:HTMLElement;target:ReviewTarget}|undefined=>{
     for(let current:Element|null=element;current;current=current.parentElement){const entry=entries.get(current.id);if(entry?.element===current)return entry;}return undefined;
   };
   const fresh=(entry:{element:HTMLElement;target:ReviewTarget}):ReviewTarget=>({...entry.target,label:label(entry.element),fingerprint:signature(entry),excerpt:reviewText(entry.element),sources:sources(entry.element)});
   const anchor=(element:HTMLElement):ReviewAnchor=>{const entry=owner(element);if(!entry)throw new Error('This content has no review target.');return{kind:entry.element.hasAttribute('data-av-figure')?'figure':'section',target:fresh(entry)};};
+  const markSelector = '[data-av-inspect],[data-av-observation],[data-av-mermaid-item]';
+  const markKey = (node: Element): string | null => node.getAttribute('data-av-inspect') || node.getAttribute('data-av-observation') || node.getAttribute('data-av-mermaid-item');
+  function evidenceIndex(figure: HTMLElement) {
+    const marks = new Map<string, HTMLElement[]>(), details = new Map<string, HTMLElement[]>();
+    for (const node of Array.from(figure.querySelectorAll<HTMLElement>(markSelector))) {
+      const key = markKey(node); if (!key || node.closest('[data-av-review-ui]')) continue;
+      const group = marks.get(key) || []; group.push(node); marks.set(key, group);
+    }
+    for (const node of Array.from(figureOrigin(figure).owner?.querySelectorAll<HTMLElement>('[data-av-object]') || [])) {
+      const key = node.getAttribute('data-av-object')!; const group = details.get(key) || []; group.push(node); details.set(key, group);
+    }
+    const adapter = visualAdapter(figure), items = adapter?.items?.(figure);
+    const supplied = new Map<string, typeof items>();
+    for (const item of items || []) { const group = supplied.get(item.id) || []; supplied.set(item.id, [...group, item]); }
+    return {marks, details, adapter, supplied, custom: !!items};
+  }
+  function captureItems(elements: readonly Element[]): ReviewAnchor | null {
+    if (!elements.length) return null;
+    const figure = figureOf(elements[0]); if (!figure || elements.some(node => figureOf(node) !== figure)) return null;
+    const entry = owner(figure); if (!entry) return null;
+    const index = evidenceIndex(figure), items: ReviewItem[] = [], seen = new Set<string>();
+    for (const node of elements) {
+      const customId = index.adapter?.identify?.(node, figure);
+      let item: ReviewItem;
+      if (customId) {
+        const matches = index.supplied.get(customId);
+        if (matches?.length !== 1) return null;
+        const found = matches[0]; item = {itemId:customId,label:found.label,text:found.text || '',...(found.values ? {values:{...found.values}} : {})};
+      } else {
+        const mark = node.closest<HTMLElement>(markSelector), key = mark && markKey(mark);
+        if (!mark || !figure.contains(mark) || !key || index.marks.get(key)?.length !== 1) return null;
+        const details = index.details.get(key); if (details && details.length !== 1) return null;
+        const text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
+        if (!text.trim()) return null;
+        item = {itemId:key,label:mark.getAttribute('aria-label') || mark.querySelector('title')?.textContent || text.slice(0,160),text};
+      }
+      if (seen.has(item.itemId)) continue;
+      seen.add(item.itemId); items.push(item);
+    }
+    const target = fresh(entry);
+    return items.length === 1 ? {kind:'item',target,...items[0]} : {kind:'items',target,items};
+  }
+  function resolutionSnapshot() {
+    const ids=new Map<string,number>();
+    for(const node of Array.from(scope.ownerDocument.querySelectorAll('[id]')))ids.set(node.id,(ids.get(node.id)||0)+1);
+    return {ids,signatures:new Map<HTMLElement,string>(),items:new Map<HTMLElement,ReturnType<typeof evidenceIndex>>()};
+  }
+  // Rendering a collection checks current identities once per figure/target.
+  // No cache survives this synchronous batch: edits, removals and duplicate IDs
+  // are revalidated before every later navigation or export.
+  function resolve(value:ReviewAnchor,snapshot=resolutionSnapshot()):ResolvedAnchor {
+      if(value.target.reportId!==scope.id||value.target.revision!==revision)return{status:'changed',message:'This annotation belongs to another report revision; its original context is retained.'};
+      if(value.target.ambiguous)return{status:'ambiguous',message:'Identical targets lacked authored identities. The original context is retained; supply stable IDs to distinguish them.'};
+      const entry=entries.get(value.target.id);if(!entry)return{status:'missing',message:'The original target is unavailable in this report.'};
+      if(entry.target.ambiguous)return{status:'ambiguous',message:'Multiple current targets share the original content identity.'};
+      if(!entry.element.isConnected||entry.element.id!==value.target.id)return{status:'missing',message:'The original target is no longer present.'};
+      if(snapshot.ids.get(value.target.id)!==1)return{status:'ambiguous',message:'More than one target has this identity.'};
+      if(!snapshot.signatures.has(entry.element))snapshot.signatures.set(entry.element,signature(entry));
+      if(snapshot.signatures.get(entry.element)!==value.target.fingerprint)return{status:'changed',element:entry.element,message:'The target content differs from the annotated version.'};
+      let resolvedRange:Range|undefined;let resolvedElement=entry.element;
+      if(value.kind==='text'){
+        const text=reviewText(entry.element),hits:number[]=[];let at=-1;while((at=text.indexOf(value.quote,at+1))>=0){if(text.slice(Math.max(0,at-value.prefix.length),at)===value.prefix&&text.slice(at+value.quote.length,at+value.quote.length+value.suffix.length)===value.suffix)hits.push(at);}
+        if(hits.length!==1)return{status:hits.length?'ambiguous':'changed',element:entry.element,message:hits.length?'The quoted text has more than one matching location.':'The original quotation no longer matches.'};
+        if(scope.ownerDocument.createRange){
+          const nodes=reviewNodes(entry.element);
+          const start=nodes.find(node=>node.end>hits[0]),end=nodes.find(node=>node.end>=hits[0]+value.quote.length);
+          if(start&&end){resolvedRange=scope.ownerDocument.createRange();resolvedRange.setStart(start.node,hits[0]-start.start);resolvedRange.setEnd(end.node,hits[0]+value.quote.length-end.start);resolvedElement=(start.node.parentElement||entry.element) as HTMLElement;if(resolvedRange.toString!==Object.prototype.toString&&resolvedRange.toString()!==value.quote)resolvedRange=undefined;}
+        }
+      }
+      let resolvedElements: HTMLElement[] | undefined;
+      if (value.kind === 'item' || value.kind === 'items') {
+        let index = snapshot.items.get(entry.element); if(!index){index=evidenceIndex(entry.element);snapshot.items.set(entry.element,index);} const selected = value.kind === 'items' ? value.items : [value];
+        resolvedElements = [];
+        for (const wanted of selected) {
+          if (index.custom) {
+            const matches = index.supplied.get(wanted.itemId);
+            if (matches?.length !== 1) return {status:matches?.length ? 'ambiguous' : 'missing', element:entry.element, message:`The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.`};
+            const actual = matches[0];
+            const sameValues = (a: Record<string,string|number|null> = {}, b: Record<string,string|number|null> = {}) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.prototype.hasOwnProperty.call(b,key) && Object.is(a[key], b[key]));
+            if (actual.label !== wanted.label || (actual.text || '') !== wanted.text || !sameValues(actual.values,wanted.values)) return {status:'changed',element:entry.element,message:`The selected item “${wanted.label}” has different wording or values. The original selection is retained.`};
+            const marks = index.marks.get(wanted.itemId); resolvedElements.push(marks?.length === 1 ? marks[0] : entry.element);
+          } else {
+            const marks = index.marks.get(wanted.itemId), details = index.details.get(wanted.itemId);
+            if (marks?.length !== 1 || details && details.length !== 1) return {status:marks?.length || details?.length ? 'ambiguous' : 'missing', element:entry.element, message:`The selected item “${wanted.label}” is missing or ambiguous. The complete original selection is retained.`};
+            const mark = marks[0], text = details?.length ? reviewText(details[0]) : mark.getAttribute('aria-label') || mark.textContent || '';
+            if (text !== wanted.text) return {status:'changed',element:entry.element,message:`The selected item “${wanted.label}” has different wording or evidence. The original selection is retained.`};
+            resolvedElements.push(mark);
+          }
+        }
+        resolvedElement = resolvedElements[0] || entry.element;
+      }
+      return{status:'resolved',element:resolvedElement,...(resolvedElements?{elements:resolvedElements}:{}),...(resolvedRange?{range:resolvedRange}:{}),message:'Attached to the original target.'};
+  }
   return {
     targets:entries,anchor,
     selection(selection){
@@ -101,52 +213,10 @@ export function createTargetRegistry(scope: HTMLElement, revision: string, exclu
       if(text.slice(actual,actual+quote.length)!==quote)return null;
       return{kind:'text',target:fresh(entry),quote,start:actual,end:actual+quote.length,prefix:text.slice(Math.max(0,actual-80),actual),suffix:text.slice(actual+quote.length,actual+quote.length+80)};
     },
-    item(element){
-      const figure=figureOf(element);if(!figure)return null;const entry=owner(figure);if(!entry)return null;const adapter=visualAdapter(figure),id=adapter?.identify?.(element,figure);
-      if(id){const found=adapter?.items?.(figure).find(item=>item.id===id);if(found)return{kind:'item',target:fresh(entry),itemId:id,label:found.label,text:found.text||'',...(found.values?{values:found.values}:{})};}
-      const mark=element.closest<HTMLElement>('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]');if(!mark||!figure.contains(mark))return null;
-      const key=mark.getAttribute('data-av-inspect')||mark.getAttribute('data-av-observation')||mark.getAttribute('data-av-mermaid-item');
-      const root=figureOrigin(figure).owner,detail=key?Array.from(root?.querySelectorAll<HTMLElement>('[data-av-object]')||[]).find(item=>item.getAttribute('data-av-object')===key):null;
-      const text=detail?reviewText(detail):mark.getAttribute('aria-label')||mark.textContent||'';
-      if(!key||!text.trim())return null;
-      if(Array.from(figure.querySelectorAll('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')).filter(node=>[node.getAttribute('data-av-inspect'),node.getAttribute('data-av-observation'),node.getAttribute('data-av-mermaid-item')].includes(key)).length!==1)return null;return{kind:'item',target:fresh(entry),itemId:key,label:mark.getAttribute('aria-label')||mark.querySelector('title')?.textContent||text.slice(0,160),text};
-    },
-    resolve(value){
-      if(value.target.reportId!==scope.id||value.target.revision!==revision)return{status:'changed',message:'This annotation belongs to another report revision; its original context is retained.'};
-      if(value.target.ambiguous)return{status:'ambiguous',message:'Identical targets lacked authored identities. The original context is retained; supply stable IDs to distinguish them.'};
-      const entry=entries.get(value.target.id);if(!entry)return{status:'missing',message:'The original target is unavailable in this report.'};
-      if(entry.target.ambiguous)return{status:'ambiguous',message:'Multiple current targets share the original content identity.'};
-      if(!entry.element.isConnected||entry.element.id!==value.target.id)return{status:'missing',message:'The original target is no longer present.'};
-      if(Array.from(scope.ownerDocument.querySelectorAll('[id]')).filter(node=>node.id===value.target.id).length!==1)return{status:'ambiguous',message:'More than one target has this identity.'};
-      if(signature(entry)!==value.target.fingerprint)return{status:'changed',element:entry.element,message:'The target content differs from the annotated version.'};
-      let resolvedRange:Range|undefined;let resolvedElement=entry.element;
-      if(value.kind==='text'){
-        const text=reviewText(entry.element),hits:number[]=[];let at=-1;while((at=text.indexOf(value.quote,at+1))>=0){if(text.slice(Math.max(0,at-value.prefix.length),at)===value.prefix&&text.slice(at+value.quote.length,at+value.quote.length+value.suffix.length)===value.suffix)hits.push(at);}
-        if(hits.length!==1)return{status:hits.length?'ambiguous':'changed',element:entry.element,message:hits.length?'The quoted text has more than one matching location.':'The original quotation no longer matches.'};
-        if(scope.ownerDocument.createRange){
-          const nodes=reviewNodes(entry.element);
-          const start=nodes.find(node=>node.end>hits[0]),end=nodes.find(node=>node.end>=hits[0]+value.quote.length);
-          if(start&&end){resolvedRange=scope.ownerDocument.createRange();resolvedRange.setStart(start.node,hits[0]-start.start);resolvedRange.setEnd(end.node,hits[0]+value.quote.length-end.start);resolvedElement=(start.node.parentElement||entry.element) as HTMLElement;if(resolvedRange.toString!==Object.prototype.toString&&resolvedRange.toString()!==value.quote)resolvedRange=undefined;}
-        }
-      }
-      if(value.kind==='item'){
-        const adapter=visualAdapter(entry.element),items=adapter?.items?.(entry.element);
-        if(items){
-          const matches=items.filter(item=>item.id===value.itemId);
-          if(matches.length!==1)return{status:matches.length?'ambiguous':'missing',element:entry.element,message:'The item identity is missing or ambiguous.'};
-          const item=matches[0],stable=(values:Record<string,string|number|null>|undefined)=>JSON.stringify(Object.entries(values||{}).sort(([a],[b])=>a.localeCompare(b)));
-          if(item.label!==value.label||(item.text||'')!==value.text||stable(item.values)!==stable(value.values))return{status:'changed',element:entry.element,message:'The identified item’s wording or values changed.'};
-        }else{
-          const marks=Array.from(entry.element.querySelectorAll<HTMLElement>('[data-av-inspect],[data-av-observation],[data-av-mermaid-item]')).filter(item=>[item.getAttribute('data-av-inspect'),item.getAttribute('data-av-observation'),item.getAttribute('data-av-mermaid-item')].includes(value.itemId));
-          if(marks.length!==1)return{status:marks.length?'ambiguous':'missing',element:entry.element,message:'The original diagram item is missing or ambiguous.'};
-          const mark=marks[0],root=figureOrigin(entry.element).owner,detail=Array.from(root?.querySelectorAll<HTMLElement>('[data-av-object]')||[]).find(item=>item.getAttribute('data-av-object')===value.itemId);
-          const text=detail?reviewText(detail):mark.getAttribute('aria-label')||mark.textContent||'';
-          if(text!==value.text)return{status:'changed',element:entry.element,message:'The identified item’s wording or evidence changed.'};
-          resolvedElement=mark;
-        }
-      }
-      return{status:'resolved',element:resolvedElement,...(resolvedRange?{range:resolvedRange}:{}),message:'Attached to the original target.'};
-    },
+    item: element => captureItems([element]),
+    items: captureItems,
+    resolve,
+    resolveAll(values){if(!values.length)return[];const snapshot=resolutionSnapshot();return values.map(value=>resolve(value,snapshot));},
     cleanup(){for(const[element,id]of initialIds){if(id===null)element.removeAttribute('id');else element.id=id;}}
   };
 }

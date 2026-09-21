@@ -6,7 +6,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { generateThemeStyles } from "./build-theme.mjs";
+import { generateThemeStyles, generateStartupScript } from "./build-theme.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const usage = `Usage: node build.mjs [--entry FILE] [--root DIR] [--output FILE]
@@ -211,11 +211,15 @@ try {
     const ts = compiler();
     const javascript = bundle(ts, entry, root, globalName, args["compiler-version"]);
     const stylesheet = entry === path.join(here, "src/index.ts") && output === path.join(here, "dist/agentic-visuals.js") ? generateThemeStyles(ts, here) : null;
-    // Validate all source outputs and destinations before writing either.
+    const startup = stylesheet === null ? null : generateStartupScript(ts, here);
+    const startupPath = path.join(here, "dist/agentic-startup.js");
+    // Validate all source outputs and destinations before writing any of them.
     preflightOutput(output, javascript, args.replace, args.check);
     if (stylesheet !== null) preflightOutput(path.join(here, "styles/agentic-visuals.css"), stylesheet, args.replace, args.check);
+    if (startup !== null) preflightOutput(startupPath, startup, args.replace, args.check);
     writeOutput(output, javascript, args.replace, args.check);
     if (stylesheet !== null) writeOutput(path.join(here, "styles/agentic-visuals.css"), stylesheet, args.replace, args.check);
+    if (startup !== null) writeOutput(startupPath, startup, args.replace, args.check);
   }
 } catch (error) {
   process.stderr.write(`error: ${error.message}\n${error.hint ? `hint: ${error.hint}\n` : ""}`);

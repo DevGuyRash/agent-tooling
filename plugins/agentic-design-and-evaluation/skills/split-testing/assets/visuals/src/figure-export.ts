@@ -2,7 +2,7 @@ import { escapeText as e } from './core';
 import { figureSource, figureTitle, visualAdapter, figureOrigin, figureContext } from './figures';
 import { wrapText } from './text-layout';
 import { validateExportCss, validateExportTree } from './export-safety';
-const paintProperties = ['color','fill','fill-opacity','stroke','stroke-width','stroke-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity','font-family','font-size','font-weight','font-style','text-anchor','dominant-baseline','letter-spacing','white-space','paint-order','visibility','background-color','border-color','border-width','border-style','border-radius','line-height','text-align','display','padding','box-sizing','width','height','stop-color','stop-opacity','filter','clip-path','mask','marker-start','marker-mid','marker-end'];
+const paintProperties = ['color','fill','fill-opacity','stroke','stroke-width','stroke-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity','font-family','font-size','font-weight','font-style','text-anchor','dominant-baseline','letter-spacing','white-space','paint-order','visibility','background-color','border-color','border-width','border-style','border-radius','line-height','text-align','display','padding','box-sizing','width','height','stop-color','stop-opacity','filter','clip-path','mask','marker-start','marker-mid','marker-end','transform','transform-origin','transform-box','overflow','overflow-wrap','word-break','word-spacing','font-stretch','font-variant','text-decoration','text-transform','vertical-align','margin-top','margin-right','margin-bottom','margin-left','padding-top','padding-right','padding-bottom','padding-left','max-width','min-width','max-height','min-height','flex-direction','flex-wrap','align-items','align-content','justify-content','gap'];
 const SVG_NS = 'http://www.w3.org/2000/svg';
 function serialize(node: Node, namespace?: string): string {
   if (node.nodeType === 3) return e(node.textContent || '');
@@ -13,25 +13,62 @@ function serialize(node: Node, namespace?: string): string {
   const name = element.localName || element.tagName.toLowerCase();
   return `<${name}${declaration}${attributes}>${Array.from(node.childNodes).map(child => serialize(child,ns)).join('')}</${name}>`;
 }
+/** Bake the *active* cascade, not the renderer's catalog of unused theme rules.
+ * Mermaid ships optional look rules that reference definitions absent from this
+ * scene. Those rules are not evidence or dependencies of the painted snapshot.
+ * Active paint references and adapter-provided SVG still undergo strict checks.
+ */
 function paintedClone(element: SVGElement, paint = true): SVGElement {
   const copy = element.cloneNode(true) as SVGElement, view = element.ownerDocument.defaultView;
-  const live = [element,...Array.from(element.querySelectorAll<SVGElement>('*'))], clones = [copy,...Array.from(copy.querySelectorAll<SVGElement>('*'))];
-  for (let i = 0; i < live.length; i++) {
-    const node = clones[i], computed = paint ? view?.getComputedStyle?.(live[i]) : null;
-    for (const name of paintProperties) {
-      let value = computed?.getPropertyValue(name).trim();
-      // Computed local paint URLs may be absolute in a file report. Restore their fragment.
-      if (value) {
-        value=value.replace(/url\(["']?([^"')]+)["']?\)/g,(match,reference:string)=> {
-          try { const url=new URL(reference,element.ownerDocument.baseURI); const base=new URL(element.ownerDocument.baseURI); return url.hash && url.origin===base.origin && url.pathname===base.pathname && url.search===base.search ? `url("${url.hash}")` : match; } catch { return match; }
-        });
-        validateExportCss(value); node.style.setProperty(name,value);
+  const live = [element, ...Array.from(element.querySelectorAll<SVGElement>('*'))];
+  const clones = [copy, ...Array.from(copy.querySelectorAll<SVGElement>('*'))];
+  const restore: (() => void)[] = [];
+  const scope=element.closest<HTMLElement>('[data-av-figure]');
+  if(paint&&scope){const original=scope.getAttribute('data-av-export-reading');scope.setAttribute('data-av-export-reading','');restore.push(()=>{if(original===null)scope.removeAttribute('data-av-export-reading');else scope.setAttribute('data-av-export-reading',original);});}
+  try {
+    // Reader emphasis is transient, never an authored status or category color.
+    // This synchronous read phase completes before the browser can paint again.
+    if (paint) for (const node of live) {
+      // A running color/filter transition would otherwise bake an intermediate
+      // selected or previous-theme frame into the permanent evidence image.
+      const transition=node.style.getPropertyValue('transition'),priority=node.style.getPropertyPriority('transition');
+      node.style.setProperty('transition','none','important');
+      restore.push(()=>{if(transition)node.style.setProperty('transition',transition,priority);else node.style.removeProperty('transition');});
+      for (const name of ['av-selected', 'av-related', 'av-review-target']) if (node.classList.contains(name)) {
+        node.classList.remove(name); restore.push(() => node.classList.add(name));
+      }
+      for (const name of ['data-av-item-selected', 'data-av-inspected', 'aria-pressed']) if (node.hasAttribute(name)) {
+        const value = node.getAttribute(name)!; node.removeAttribute(name);
+        restore.push(() => node.setAttribute(name, value));
       }
     }
-    node.removeAttribute('tabindex'); node.removeAttribute('aria-pressed');
-    if (node.hasAttribute('data-av-row-center')) { node.removeAttribute('transform'); node.style.removeProperty('transform'); }
+    for (let i = 0; i < live.length; i++) {
+      const node = clones[i], computed = paint ? view?.getComputedStyle?.(live[i]) : null;
+      for (const name of paintProperties) {
+        let value = computed?.getPropertyValue(name).trim();
+        if (value) {
+          value = value.replace(/url\(["']?([^"')]+)["']?\)/g, (match, reference: string) => {
+            try {
+              const url = new URL(reference, element.ownerDocument.baseURI), base = new URL(element.ownerDocument.baseURI);
+              return url.hash && url.origin === base.origin && url.pathname === base.pathname && url.search === base.search ? `url("${url.hash}")` : match;
+            } catch { return match; }
+          });
+          validateExportCss(value); node.style.setProperty(name, value);
+        }
+      }
+      for(const name of ['--av-item-base-filter','--av-item-filter-chain'])node.style.removeProperty(name);
+      for (const name of ['tabindex', 'aria-pressed', 'data-av-item-selected', 'data-av-inspected']) node.removeAttribute(name);
+      for (const name of ['av-selected', 'av-related', 'av-review-target']) node.classList.remove(name);
+      if (node.hasAttribute('data-av-row-center')) { node.removeAttribute('transform'); node.style.removeProperty('transform'); }
+    }
+  } finally { for (const undo of restore.reverse()) undo(); }
+  if (paint && view?.getComputedStyle) {
+    // All used declarations (including HTML label layout) are now inline. Keep
+    // font faces separately; never remove unresolved *active* paint references.
+    for (const style of Array.from(copy.querySelectorAll('style'))) style.remove();
   }
-  for (const name of ['width','height','min-width','max-width','transform']) copy.style.removeProperty(name);
+  for (const ui of Array.from(copy.querySelectorAll('[data-av-review-ui]'))) ui.remove();
+  for (const name of ['width','height','min-width','max-width','min-height','max-height','transform']) copy.style.removeProperty(name);
   copy.removeAttribute('preserveAspectRatio'); validateExportTree(copy); return copy;
 }
 function sceneBounds(scene: SVGElement): {width:number;height:number} {
@@ -98,15 +135,31 @@ export async function exportFigurePng(figure: HTMLElement): Promise<Blob> {
   const svg=await exportFigureSvg(figure),document=figure.ownerDocument,ImageType=document.defaultView?.Image;
   if(!ImageType)throw new Error('PNG conversion is unavailable. Download SVG or source.');
   const image=new ImageType();image.decoding='async';
-  await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(new Error('This browser cannot rasterize the complete figure. Download SVG or source.'));image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});
+  await new Promise<void>((resolve,reject)=>{
+    let done=false;
+    const finish=(error?:Error)=>{if(done)return;done=true;clearTimeout(timer);image.onload=null;image.onerror=null;if(error){image.removeAttribute('src');reject(error);}else resolve();};
+    const timer=setTimeout(()=>finish(new Error('PNG conversion timed out. Download SVG or source for the complete figure.')),20000);
+    image.onload=()=>finish();image.onerror=()=>finish(new Error('This browser cannot rasterize the complete figure. Download SVG or source.'));
+    image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+  });
+  if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth > 32767 || image.naturalHeight > 32767 || image.naturalWidth * image.naturalHeight > 64000000) throw new Error('The complete figure is too large for a reliable PNG in this browser. Download SVG for the full-resolution drawing.');
   const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
-  const context=canvas.getContext('2d');if(!context)throw new Error('PNG conversion is unavailable. Download SVG or source.');
-  context.drawImage(image,0,0);return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('The full image exceeds this browser’s export capacity. Download SVG or source.')),'image/png'));
+  try{
+    const context=canvas.getContext('2d');if(!context)throw new Error('PNG conversion is unavailable. Download SVG or source.');
+    context.drawImage(image,0,0);
+    return await new Promise<Blob>((resolve,reject)=>{
+      let done=false;const finish=(blob:Blob|null,error?:unknown)=>{if(done)return;done=true;clearTimeout(timer);if(blob)resolve(blob);else reject(error instanceof Error?error:new Error('The full image exceeds this browser’s export capacity. Download SVG or source.'));};
+      const timer=setTimeout(()=>finish(null,new Error('PNG encoding timed out. Download SVG or source.')),20000);
+      try{canvas.toBlob(blob=>finish(blob),'image/png');}catch(error){finish(null,error);}
+    });
+  }finally{canvas.width=0;canvas.height=0;image.removeAttribute('src');}
+
 }
 export function downloadBlob(document: Document, blob: Blob, name: string): void {
   const URLType=document.defaultView?.URL;if(!URLType?.createObjectURL)throw new Error('Downloads are unavailable in this browser.');
-  const url=URLType.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;link.hidden=true;link.setAttribute('data-av-review-ui','');document.body.appendChild(link);link.click();link.remove();
-  (document.defaultView?.setTimeout||setTimeout)(()=>URLType.revokeObjectURL(url),60000);
+  const url=URLType.createObjectURL(blob),link=document.createElement('a');let dispatched=false;
+  try{link.href=url;link.download=name;link.hidden=true;link.setAttribute('data-av-review-ui','');link.setAttribute('data-av-internal-download','');document.body.appendChild(link);link.click();dispatched=true;}
+  finally{link.remove();if(dispatched)(document.defaultView?.setTimeout||setTimeout)(()=>URLType.revokeObjectURL(url),60000);else URLType.revokeObjectURL(url);}
 }
 export async function copyFigureImage(figure: HTMLElement): Promise<void> {
   const view=figure.ownerDocument.defaultView,Clipboard=(view as unknown as {ClipboardItem?:typeof ClipboardItem})?.ClipboardItem;

@@ -75,6 +75,7 @@ interface StoredPreferences extends Preferences { customColors?: ThemeColors }
 interface Scope { element: HTMLElement; source: HTMLElement; explicit: boolean; changed: boolean; version: number; value: Preferences; initial: Preferences; key: string | null; colors: ThemeColors | null; initialColors: ThemeColors | null; store: OwnedStore<StoredPreferences> | null; persistence: string }
 interface Section { element: HTMLElement; scope: Scope; group: Element }
 export interface PreferenceController {
+  whenReady(): Promise<void>;
   /** Drain reads and writes already queued by this controller. */
   whenIdle(): Promise<void>;
   change(target: Element): boolean;
@@ -94,6 +95,7 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
   const undo: (() => void)[] = [], saved = new WeakMap<Element, Set<string>>();
   let disposed = false;
   const pending = new Set<Promise<unknown>>();
+  const initialReads: Promise<unknown>[] = [];
   function track(operation: Promise<unknown>): void {
     pending.add(operation);
     void operation.then(() => pending.delete(operation), () => pending.delete(operation));
@@ -260,9 +262,23 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
     if(source){const origin=themeOrigins.get(source),local=Object.fromEntries(Object.entries(origin?.local||{}).map(([name,value])=>[name,(source as HTMLElement).style?.getPropertyValue(name).trim()||window?.getComputedStyle?.(source).getPropertyValue(name).trim()||value]));
       const overrides={...primitives(origin?.parent||scope.source),...local};for(const name of supportedThemePrimitives){if(overrides[name])element.style.setProperty(name,overrides[name]);else element.style.removeProperty(name);}}
   }
+  const paintKeys = new WeakMap<Scope, string>();
+  const colorFrames = new Map<HTMLElement, number>();
+  function pauseColorTransitions(element: HTMLElement): void {
+    if (!window?.requestAnimationFrame) return;
+    const previous = colorFrames.get(element); if (previous !== undefined) window.cancelAnimationFrame(previous);
+    write(element, 'data-av-theme-changing', '');
+    colorFrames.set(element, window.requestAnimationFrame(() => {
+      if (disposed) return;
+      colorFrames.set(element, window.requestAnimationFrame(() => { colorFrames.delete(element); if (!disposed) element.removeAttribute('data-av-theme-changing'); }));
+    }));
+  }
   function apply(scope: Scope, announce = false, anchor?: Element): void {
+    const paintKey = JSON.stringify([scope.value, scope.colors]);
+    const changedPaint = paintKeys.get(scope) !== paintKey;
+    paintKeys.set(scope, paintKey);
     const destinations = [...(scope.explicit || scope.changed ? [scope.element] : []), ...[...mirrors].filter(([, mirror]) => mirror.scope === scope).map(([element]) => element)];
-    for(const element of destinations)paintDestination(element,scope,mirrors.get(element)?.source);
+    for (const element of destinations) { if (changedPaint) pauseColorTransitions(element); paintDestination(element, scope, mirrors.get(element)?.source); }
     for (const [control, owner] of controls) if (owner === scope) control.checked = control.value === scope.value[control.getAttribute("data-av-setting") as keyof Preferences];
     const chosen = { ...displayedColors(scope), ...scope.colors };
     if (scope === pageScope && pageStyle) {
@@ -284,7 +300,7 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
     for (const [editor, owner] of intensityEditors) if (owner === scope) write(editor, "hidden", scope.value.canvas === "plain" ? "" : null);
     normalize(scope, anchor);
     showPersistence(scope);
-    changed?.();
+    if (changedPaint) changed?.();
     if (announce) {
       for (const [status, owner] of statuses) if (owner === scope) status.textContent = scope.value.palette + " palette, " + scope.value.theme + " appearance, " + scope.value.canvas + " canvas" + (scope.value.canvas === "textured" ? " with " + scope.value.texture : "") + ", " + scope.value.spacing + " spacing, " + (scope.value.sections === "solo" ? "one section at a time." : "multiple sections may stay open.");
     }
@@ -313,7 +329,7 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
   }
   for (const scope of scopes) {
     apply(scope);
-    if (scope.store) track(scope.store.read().then(result => {
+    if (scope.store) { const reading = scope.store.read().then(result => {
       if (disposed || scope.version !== 0) return;
       if (result.value) {
         try { const stored = decodeStored(result.value, scope.initial); scope.value = accept(stored, scope.initial); scope.colors = stored.customColors || scope.initialColors; }
@@ -322,9 +338,10 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
       if (result.status === "blocked") scope.persistence = "Display choices remain in this session. Existing saved records are protected because this key has a different owner or format.";
       if (result.status === "unavailable") scope.persistence = "Display choices remain in this session; browser saving is unavailable.";
       apply(scope);
-    }));
+    }); initialReads.push(reading); track(reading); }
   }
   return {
+    async whenReady() { await Promise.all(initialReads); },
     async whenIdle() { while (pending.size) await Promise.all([...pending]); },
     change(target) {
       const colorOwner = colorControls.get(target as HTMLInputElement);
@@ -372,6 +389,6 @@ export function attachPreferences(root: HTMLElement, changed?: () => void): Pref
       }
       return closed;
     },
-    cleanup() { disposed = true; for (const scope of scopes) scope.store?.close(); for (const restore of undo.reverse()) restore(); mirrors.clear(); },
+    cleanup() { disposed = true; for (const frame of colorFrames.values()) window?.cancelAnimationFrame(frame); colorFrames.clear(); for (const scope of scopes) scope.store?.close(); for (const restore of undo.reverse()) restore(); mirrors.clear(); },
   };
 }
