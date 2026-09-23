@@ -1,0 +1,18 @@
+ishikawa-beta
+  Intermittent checkout delays during peak traffic
+  Process
+    Retry policy amplifies transient dependency failures
+    Cache warm-up starts only after deployment completes
+  People
+    On-call handoff leaves ownership of slow requests unclear
+    Support escalation omits the originating request identifier
+  Platform
+    Database
+      Order-history query scans too many rows
+      Connection pool saturates during synchronized retries
+    Network
+      Cross-region requests add variable round-trip latency
+      DNS cache expiry creates short bursts of lookups
+  Environment
+    Promotion traffic arrives in synchronized bursts
+    Third-party sandbox throttles callback delivery

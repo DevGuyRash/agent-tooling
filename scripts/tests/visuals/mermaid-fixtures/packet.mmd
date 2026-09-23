@@ -1,0 +1,11 @@
+packet
+title Deterministic telemetry frame
++4: "Protocol version"
++4: "Flags"
+8-23: "Payload length (bytes)"
++8: "Message type"
++8: "Retry count"
++32: "Sequence number"
+72-103: "Trace identifier prefix"
+104-119: "Header checksum"
+120-159: "Payload preview"

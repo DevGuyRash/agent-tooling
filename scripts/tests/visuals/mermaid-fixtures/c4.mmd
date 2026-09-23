@@ -1,0 +1,39 @@
+---
+config:
+  themeCSS: |
+    text[aria-label="Review Platform"],
+    text[aria-label="[SYSTEM]"] {
+      fill: var(--av-ink) !important;
+    }
+  c4:
+    width: 140
+    c4ShapeMargin: 35
+    diagramMarginX: 20
+    diagramMarginY: 50
+---
+C4Context
+  title Evidence Review Service
+
+  Person(analyst, "Analyst", "Submits evidence and reviews findings")
+  System_Ext(source, "Source Repository", "Stores the submitted source material")
+  SystemDb_Ext(archive, "Compliance Archive", "Retains signed review results")
+  Person(auditor, "Auditor", "Checks retained review records")
+
+  System_Boundary(platform, "Review Platform") {
+    System(portal, "Review Portal", "Collects evidence packages and shows review status")
+    System(engine, "Verification Engine", "Runs deterministic checks and records findings")
+  }
+
+  Rel(analyst, portal, "Submits evidence", "HTTPS")
+  Rel(portal, engine, "Requests verification", "JSON/HTTPS")
+  Rel(engine, source, "Reads source material", "HTTPS")
+  Rel(engine, archive, "Stores signed result", "JDBC")
+  Rel(auditor, archive, "Reviews retained result", "SQL")
+
+  UpdateLayoutConfig($c4ShapeInRow="4", $c4BoundaryInRow="1")
+  UpdateElementStyle(platform, $borderColor="var(--av-line-strong)")
+  UpdateRelStyle(analyst, portal, $textColor="var(--av-ink)")
+  UpdateRelStyle(portal, engine, $textColor="var(--av-ink)", $offsetX="38", $offsetY="-92")
+  UpdateRelStyle(engine, source, $textColor="var(--av-ink)", $offsetY="-25")
+  UpdateRelStyle(engine, archive, $textColor="var(--av-ink)")
+  UpdateRelStyle(auditor, archive, $textColor="var(--av-ink)", $offsetY="-120")

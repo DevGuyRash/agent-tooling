@@ -1,0 +1,18 @@
+gitGraph
+  commit id: "baseline" tag: "v1.0"
+
+  branch review
+  commit id: "capture"
+  commit id: "verify" type: HIGHLIGHT
+
+  branch audit
+  commit id: "audit-note"
+
+  checkout review
+  merge audit id: "audit-merged"
+  commit id: "resolve"
+
+  checkout main
+  commit id: "docs"
+  merge review id: "review-ready" tag: "v1.1-rc1"
+  commit id: "release" tag: "v1.1" type: HIGHLIGHT

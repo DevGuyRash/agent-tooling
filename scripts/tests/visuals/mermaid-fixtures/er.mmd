@@ -1,0 +1,35 @@
+erDiagram
+  direction LR
+
+  REVIEWER ||--o{ REVIEW : performs
+  REVIEW ||--|{ EVIDENCE : examines
+  REVIEW ||--o{ FINDING : records
+  EVIDENCE ||--o{ FINDING : "supports ✓"
+
+  REVIEWER {
+    string reviewer_id PK
+    string email UK "Normalized address"
+    string display_name
+  }
+
+  REVIEW {
+    string review_id PK
+    string reviewer_id FK
+    string status
+    string created_at
+  }
+
+  EVIDENCE {
+    string evidence_id PK
+    string review_id FK
+    string uri
+    string sha256 UK
+  }
+
+  FINDING {
+    string finding_id PK
+    string review_id FK
+    string evidence_id FK
+    string severity
+    string summary
+  }

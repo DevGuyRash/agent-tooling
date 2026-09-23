@@ -47,15 +47,15 @@ export function createOwnedStore<T>(window: Window | null, key: string, owner: S
   if (typeof key !== "string" || !key.trim() || !owner.reportId?.trim() || !owner.revision?.trim() || !["notebook", "preferences"].includes(owner.kind)) throw new TypeError("Saved records need a key, kind, stable report ID and revision.");
   const identity = { kind: owner.kind, reportId: owner.reportId, revision: owner.revision };
   let closed = false;
-  function legacy(): OwnedStoreResult<T> {
+  function legacy(): { result: OwnedStoreResult<T>; raw?: string } {
     let raw: string | null;
-    try { if (!window?.localStorage) return { status: "ready", value: null, source: "empty" }; raw = window.localStorage.getItem(key); }
-    catch { return { status: "unavailable", message: "Earlier saved records could not be read. They remain protected; use session records and export." }; }
-    if (raw === null) return { status: "ready", value: null, source: "empty" };
+    try { if (!window?.localStorage) return { result: { status: "ready", value: null, source: "empty" } }; raw = window.localStorage.getItem(key); }
+    catch { return { result: { status: "unavailable", message: "Earlier saved records could not be read. They remain protected; use session records and export." } }; }
+    if (raw === null) return { result: { status: "ready", value: null, source: "empty" } };
     try {
       if (!decodeLegacy) throw new Error("No legacy decoder");
-      return { status: "ready", value: decodeLegacy(raw), source: "legacy" };
-    } catch { return { status: "blocked", raw, message: "Earlier saved data belongs to another record type, report or revision, or cannot be read safely. The original remains protected." }; }
+      return { result: { status: "ready", value: decodeLegacy(raw), source: "legacy" }, raw };
+    } catch { return { result: { status: "blocked", raw, message: "Earlier saved data belongs to another record type, report or revision, or cannot be read safely. The original remains protected." }, raw }; }
   }
   function owned(value: unknown): OwnedStoreResult<T> {
     const item = value as Partial<Envelope<T>> | null;
@@ -68,7 +68,7 @@ export function createOwnedStore<T>(window: Window | null, key: string, owner: S
     try { factory = window?.indexedDB; if (!factory) throw new Error("Unavailable"); database = await open(factory); }
     catch {
       if (change || closed) return unavailable();
-      const prior = legacy();
+      const prior = legacy().result;
       return prior.status === "ready" ? { ...unavailable<T>(), value: prior.value } : prior;
     }
     if (closed) return unavailable();
@@ -97,7 +97,8 @@ export function createOwnedStore<T>(window: Window | null, key: string, owner: S
         request.onerror = () => { result = unavailable(); };
         request.onsuccess = () => {
           if (finished) return;
-          const current = request.result === undefined ? legacy() : owned(request.result);
+          const fallback = request.result === undefined ? legacy() : { result: owned(request.result) };
+          const current = fallback.result;
           if (current.status !== "ready" && current.status !== "saved") { result = current; return; }
           if (!change) { result = current; return; }
           try {
@@ -106,7 +107,7 @@ export function createOwnedStore<T>(window: Window | null, key: string, owner: S
             put.onerror = () => { result = unavailable(); };
             result = { status: "saved", value: next, source: "database" };
           } catch {
-            result = { status: "blocked", raw: rawValue(current.value), message: "Saved records changed or could not be combined safely. Both your session records and the earlier saved copy remain available for export." };
+            result = { status: "blocked", raw: fallback.raw ?? rawValue(current.value), message: "Saved records changed or could not be combined safely. Both your session records and the earlier saved copy remain available for export." };
             transaction.abort();
           }
         };

@@ -1,0 +1,21 @@
+gantt
+  title Evidence Review Release
+  dateFormat YYYY-MM-DD
+  axisFormat %b %d
+  tickInterval 1day
+  excludes weekends
+  todayMarker off
+
+  section Intake
+    Fixture set frozen      :milestone, freeze, 2026-01-05, 0d
+    Collect evidence        :done, collect, 2026-01-05, 3d
+    Normalize sources       :done, normalize, after collect, 2d
+
+  section Review
+    Primary review          :active, review, 2026-01-07, 5d
+    Independent checks      :checks, 2026-01-08, 4d
+    Resolve findings        :crit, resolve, after review checks, 3d
+
+  section Delivery
+    Draft retained report   :draft, after resolve, 2d
+    Sign-off complete       :milestone, signoff, after draft, 0d

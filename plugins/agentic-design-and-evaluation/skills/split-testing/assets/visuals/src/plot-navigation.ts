@@ -1,10 +1,16 @@
 /** Viewport mechanics only. Source-owned coordinates, evidence and selection are retained. */
 export interface PlotSnapshot { entries: { element: HTMLElement; mode: Mode; zoom: number; left: number; top: number }[] }
+export interface PlotOcclusion { left?: number; right?: number; top?: number; bottom?: number }
+export interface PlotReserve { right?: number }
 export interface PlotController {
   snapshot(target: Element): PlotSnapshot;
   fit(target: Element): void;
   restore(snapshot: PlotSnapshot): void;
   click(target: Element): boolean;
+  /** Keep one native mark visible without changing zoom or interaction mode. */
+  reveal(item: Element, occlusion?: PlotOcclusion): boolean;
+  /** Add removable horizontal pan space for a figure-local floating overlay. */
+  reserve(target: Element, reserve?: PlotReserve): void;
   /** Call after moving a frame or refining its source-owned plot geometry. */
   refresh(target?: Element): void;
   cleanup(): void;
@@ -23,12 +29,13 @@ interface Plot {
   element: HTMLElement; viewport: HTMLElement; svg: PlotMedia; controls: HTMLElement[]; output: HTMLElement;
   mode: Mode; zoom: number; fitScale: number; metrics: Metrics | null;
   left: number; top: number; refreshing: boolean; layers: Map<SVGElement, "x" | "rows">;
+  reserveRight: number; reserveSpacer: HTMLElement; ownsTitle: boolean;
 }
 interface Drag { plot: Plot; pointer: number; x: number; y: number; left: number; top: number; moved: boolean }
 const PLOT = "[data-av-plot],.av-plot-shell";
 const CONTROL = "[data-av-fit-width],[data-av-actual-size],[data-av-zoom-in],[data-av-zoom-out],[data-av-zoom-reset]";
 const MIN_ZOOM = 1, MAX_ZOOM = 4, ZOOM_STEP = .25;
-const finite = (value: number, fallback = 0): number => Number.isFinite(value) ? value : fallback;
+const finite = (value: number | null | undefined, fallback = 0): number => Number.isFinite(value) ? value as number : fallback;
 const positive = (value: number, fallback: number): number => Number.isFinite(value) && value > 0 ? value : fallback;
 function length(value: string | null): number {
   return value !== null && /^\s*(?:\d+(?:\.\d*)?|\.\d+)(?:px)?\s*$/.test(value) ? Number.parseFloat(value) : 0;
@@ -49,7 +56,7 @@ export function attachPlots(root: HTMLElement): PlotController {
   const undo: (() => void)[] = [], plots = new Map<Element, Plot>(), controlOwners = new Map<Element, Plot>();
   const saved = new WeakMap<Element, Set<string>>(), savedStyles = new WeakMap<Element, Set<string>>();
   const suppressed = new WeakSet<Element>();
-  let drag: Drag | null = null, cleaned = false;
+  let drag: Drag | null = null, spacePan: Plot | null = null, cleaned = false;
   const all = <T extends Element = HTMLElement>(selector: string): T[] => [...(root.matches(selector) ? [root as unknown as T] : []), ...Array.from(root.querySelectorAll<T>(selector))];
   function listen(target: EventTarget, type: string, listener: EventListener, capture = false): void {
     target.addEventListener(type, listener, capture); undo.push(() => target.removeEventListener(type, listener, capture));
@@ -85,6 +92,13 @@ export function attachPlots(root: HTMLElement): PlotController {
     return [Math.max(0, finite(plot.viewport.scrollWidth) - finite(plot.viewport.clientWidth)), Math.max(0, finite(plot.viewport.scrollHeight) - finite(plot.viewport.clientHeight))];
   }
   function overflow(plot: Plot): boolean { return limits(plot).some(value => value > 1); }
+  function frameHeight(plot: Plot): number {
+    const computed=window?.getComputedStyle?.(plot.viewport);
+    const border=(Number.parseFloat(computed?.borderTopWidth||'')||0)+(Number.parseFloat(computed?.borderBottomWidth||'')||0);
+    if(border>0)return border;
+    const box = plot.viewport.getBoundingClientRect();
+    return Math.max(0, finite(box.height) - Math.max(0, finite(plot.viewport.clientHeight)));
+  }
   function measure(plot: Plot, box = dimensions(plot.svg)): Metrics {
     const rectangle = plot.svg.getBoundingClientRect(), width = positive(rectangle.width, box.naturalWidth);
     const height = positive(rectangle.height, width * box.naturalHeight / box.naturalWidth);
@@ -136,7 +150,8 @@ export function attachPlots(root: HTMLElement): PlotController {
   }
   function update(plot: Plot, announce = false): void {
     const mode=plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode')||'pan';
-    attribute(plot.viewport, "data-av-pan", overflow(plot)&&mode==='pan' ? "ready" : null);
+    const pannable=overflow(plot);attribute(plot.viewport, "data-av-pan", pannable&&mode==='pan' ? "ready" : null);
+    if(plot.ownsTitle) attribute(plot.viewport,'title',mode==='text'?'Select text. Hold Space while dragging to pan.':mode==='select'?'Select items. Hold Space while dragging to pan.':pannable?'Drag, wheel, or use arrow keys to pan.':'Drawing fits. Zoom in to pan.');
     attribute(plot.element, "data-av-zoom", String(plot.zoom)); attribute(plot.element, "data-av-viewport-mode", plot.mode);
     for (const control of plot.controls) {
       const disabled = control.hasAttribute("data-av-zoom-in") ? plot.zoom >= MAX_ZOOM
@@ -149,9 +164,13 @@ export function attachPlots(root: HTMLElement): PlotController {
     layers(plot);
     if (announce) {
       const percent = Math.round(plot.zoom * 1000) / 10;
-      const text = `${percent}% zoom.${plot.element.closest('[data-av-selection-mode="text"]') ? " Text selection mode." : mode==='select' ? ' Select an item to inspect it.' : overflow(plot) ? " Drag to pan, or focus the plot and use the arrow keys." : " The chart fits the available width."}`;
+      const text = `${percent}% zoom.${plot.element.closest('[data-av-selection-mode="text"]') ? " Text selection mode. Focus the drawing and hold Space while dragging to pan." : mode==='select' ? ' Select an item to inspect it. Focus the drawing and hold Space while dragging to pan.' : overflow(plot) ? " Drag to pan, use the mouse wheel, or focus the plot and use the arrow keys." : " The drawing fits without panning. Zoom in to pan."}`;
       if (plot.output.textContent !== text) plot.output.textContent = text;
     }
+  }
+  function releaseSpacePan(): void {
+    const previous = spacePan; spacePan = null;
+    if (previous) attribute(previous.viewport,'data-av-space-pan',null);
   }
   function finish(): void {
     const previous = drag; drag = null;
@@ -200,10 +219,17 @@ export function attachPlots(root: HTMLElement): PlotController {
       position(plot, left, top);
     } catch { /* Exact evidence remains available when a mark has no native box. */ }
   }
+  function syncReserve(plot: Plot): void {
+    const right = Math.max(0, finite(plot.reserveRight));
+    if (!right) { plot.reserveSpacer.hidden = true; plot.reserveSpacer.style.removeProperty('width'); return; }
+    const width = Math.max(plot.metrics?.width || 0, finite(plot.viewport.clientWidth)) + right;
+    plot.reserveSpacer.hidden = false; plot.reserveSpacer.style.setProperty('width', Math.ceil(width) + 'px');
+  }
   function fitSize(plot: Plot, box: Dimensions): { width: number; availableWidth?: number } {
     const expanded = plot.element.closest<HTMLElement>('[data-av-expanded-figure]');
     const declaredWidth = Number(expanded?.getAttribute('data-av-fit-width'));
-    const viewportWidth = declaredWidth > 0 ? declaredWidth : Math.max(0, finite(plot.viewport.clientWidth));
+    const measuredViewport = Math.max(0, finite(plot.viewport.clientWidth));
+    const viewportWidth = declaredWidth > 0 ? measuredViewport > 0 ? Math.min(declaredWidth, measuredViewport) : declaredWidth : measuredViewport;
     if (!plot.element.classList.contains("av-row-plot")) return { width: viewportWidth };
     const row = [...plot.layers].find(([element, kind]) => kind === "rows" && plot.element.contains(element))?.[0];
     const layout = row?.closest<HTMLElement>(".av-row-plot-layout");
@@ -214,7 +240,7 @@ export function attachPlots(root: HTMLElement): PlotController {
     // Independent clientWidth rounding can alternate that sum by one pixel,
     // feeding a permanent fit/ResizeObserver loop back into both tracks.
     const layoutWidth = Math.max(0, finite(layout.clientWidth));
-    const availableWidth = declaredWidth > 0 ? declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
+    const availableWidth = declaredWidth > 0 ? layoutWidth > 0 ? Math.min(declaredWidth, layoutWidth) : declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
     return { width: availableWidth * box.width / (box.width + rowWidth), availableWidth };
   }
   function requestLayout(plot: Plot, width: number, availableWidth?: number): void {
@@ -242,10 +268,12 @@ export function attachPlots(root: HTMLElement): PlotController {
       if (requested || resized || forceLayout) requestLayout(plot, positive(desired, box.naturalWidth), initialFit.availableWidth);
       const refined = dimensions(plot.svg);
       let fittedWidth = positive(fitSize(plot, refined).width, refined.naturalWidth);
+      if (plot.element.closest('[data-av-fit-policy]')?.getAttribute('data-av-fit-policy') === 'natural') fittedWidth = Math.min(fittedWidth, refined.naturalWidth);
       const expanded = plot.element.closest<HTMLElement>('[data-av-expanded-figure]'), availableHeight = Number(expanded?.getAttribute('data-av-fit-height'));
       if (availableHeight > 0) {
         const axisHeight = Math.max(0, ...[...plot.layers].filter(([, kind]) => kind === 'x').map(([layer]) => dimensions(layer).naturalHeight));
-        fittedWidth = Math.min(fittedWidth, refined.naturalWidth * availableHeight / (refined.naturalHeight + axisHeight));
+        const contentHeight=Math.max(0,availableHeight-frameHeight(plot));
+        fittedWidth = Math.min(fittedWidth, refined.naturalWidth * contentHeight / (refined.naturalHeight + axisHeight));
       }
       plot.fitScale = fittedWidth / refined.naturalWidth;
       if (plot.mode === "fit") plot.zoom = 1;
@@ -256,10 +284,13 @@ export function attachPlots(root: HTMLElement): PlotController {
       style(plot.svg, "min-width", "0"); style(plot.svg, "max-width", "none");
       // Default/reset shows the complete scene. Zoom adds pan space without
       // growing the entire report or giving the row identities another scrollbar.
-      style(plot.element, "--av-plot-fit-height", `${Math.ceil(refined.naturalHeight * plot.fitScale)}px`);
+      // The viewport uses border-box sizing. Include its own frame so an exact
+      // fitted SVG is not clipped by the border and falsely advertised as pannable.
+      style(plot.element, "--av-plot-fit-height", `${Math.ceil(refined.naturalHeight * plot.fitScale + frameHeight(plot))}px`);
       plot.metrics = measure(plot, refined);
       layers(plot); // The synchronized row track can change the available body width.
       plot.metrics = measure(plot, refined);
+      syncReserve(plot);
       if (requested?.reset) position(plot, 0, 0);
       else if (previous) {
         const x = (anchorX - refined.x) * plot.metrics.width / refined.width - plot.metrics.viewportWidth / 2;
@@ -284,7 +315,8 @@ export function attachPlots(root: HTMLElement): PlotController {
     const content = Array.from(output.childNodes), originalLeft = viewport.scrollLeft, originalTop = viewport.scrollTop;
     undo.push(() => { output!.textContent = ""; for (const node of content) output!.appendChild(node); viewport.scrollLeft = originalLeft; viewport.scrollTop = originalTop; });
     attribute(output, "role", "status"); attribute(output, "aria-live", "polite"); attribute(output, "aria-atomic", "true");
-    const plot: Plot = { element, viewport, svg, output, controls: [], mode: "fit", zoom: 1, fitScale: 1, metrics: null, left: finite(originalLeft), top: finite(originalTop), refreshing: false, layers: new Map() };
+    const reserveSpacer=document.createElement('span');reserveSpacer.hidden=true;reserveSpacer.setAttribute('aria-hidden','true');reserveSpacer.setAttribute('data-av-review-ui','');reserveSpacer.setAttribute('data-av-pan-reserve','');reserveSpacer.style.cssText='display:block;height:0;min-height:0;margin:0;padding:0;border:0;overflow:hidden;pointer-events:none;opacity:0;';viewport.appendChild(reserveSpacer);undo.push(()=>reserveSpacer.remove());
+    const plot: Plot = { element, viewport, svg, output, controls: [], mode: "fit", zoom: 1, fitScale: 1, metrics: null, left: finite(originalLeft), top: finite(originalTop), refreshing: false, layers: new Map(), reserveRight: 0, reserveSpacer, ownsTitle: !viewport.hasAttribute('title') };
     plots.set(element, plot);
     listen(element, "av-layout-invalidated", (() => {if(plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode')!=='pan'){finish();suppressed.delete(plot.viewport);}refreshPlot(plot, undefined, true);}) as EventListener);
     if (!viewport.hasAttribute("tabindex")) attribute(viewport, "tabindex", "0");
@@ -296,8 +328,24 @@ export function attachPlots(root: HTMLElement): PlotController {
       if (old && (old.viewportWidth !== now.viewportWidth || old.viewportHeight !== now.viewportHeight || Math.abs(old.width - now.width) > .01 || Math.abs(old.height - now.height) > .01)) refreshPlot(plot);
       else { plot.left = finite(viewport.scrollLeft); plot.top = finite(viewport.scrollTop); update(plot); }
     }) as EventListener);
+    listen(viewport, "keydown", ((event: KeyboardEvent) => {
+      const mode=plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode')||'pan';
+      const target=event.target as Element|null;if(target?.closest('input,textarea,select,button,a[href],[contenteditable]'))return;
+      if(event.key===' '&&mode!=='pan'&&event.target===viewport&&!event.altKey&&!event.ctrlKey&&!event.metaKey){
+        if(spacePan&&spacePan!==plot)releaseSpacePan();spacePan=plot;attribute(viewport,'data-av-space-pan','');event.preventDefault();return;
+      }
+      if(mode!=='pan'||event.altKey||event.ctrlKey||event.metaKey||!overflow(plot))return;
+      const horizontal=Math.max(32,Math.min(96,plot.viewport.clientWidth*.08)),vertical=Math.max(32,Math.min(96,plot.viewport.clientHeight*.1));
+      let left=plot.viewport.scrollLeft,top=plot.viewport.scrollTop,handled=true;
+      if(event.key==='ArrowLeft')left-=horizontal;else if(event.key==='ArrowRight')left+=horizontal;
+      else if(event.key==='ArrowUp')top-=vertical;else if(event.key==='ArrowDown')top+=vertical;
+      else if(event.key==='PageUp')top-=Math.max(vertical,plot.viewport.clientHeight*.8);else if(event.key==='PageDown')top+=Math.max(vertical,plot.viewport.clientHeight*.8);
+      else handled=false;
+      if(!handled)return;event.preventDefault();position(plot,left,top);update(plot,true);
+    }) as EventListener);
     listen(viewport, "pointerdown", ((event: PointerEvent) => {
-      if (event.button !== 0 || event.isPrimary === false || (plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode')||'pan')!=='pan') return;
+      const mode=plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode')||'pan';
+      if (event.button !== 0 || event.isPrimary === false || mode!=='pan'&&spacePan!==plot) return;
       suppressed.delete(viewport);
       if (event.pointerType === "touch") return;
       refreshPlot(plot);
@@ -339,7 +387,7 @@ export function attachPlots(root: HTMLElement): PlotController {
   }
   if (window) {
     listen(window, "resize", (() => { for (const plot of plots.values()) refreshPlot(plot); }) as EventListener);
-    listen(window, "blur", finish as EventListener);
+    listen(window, "blur", (()=>{finish();releaseSpacePan();}) as EventListener);
   }
   listen(document, "pointermove", ((event: PointerEvent) => {
     if (!drag || drag.pointer !== event.pointerId) return;
@@ -351,6 +399,7 @@ export function attachPlots(root: HTMLElement): PlotController {
     position(drag.plot, drag.left - dx, drag.top - dy); update(drag.plot);
   }) as EventListener);
   for (const type of ["pointerup", "pointercancel"]) listen(document, type, ((event: PointerEvent) => { if (drag?.pointer === event.pointerId) finish(); }) as EventListener);
+  listen(document,'keyup',((event:KeyboardEvent)=>{if(event.key===' '&&spacePan){finish();releaseSpacePan();}}) as EventListener);
 
   return {
     snapshot(target) { return { entries: [...plots.values()].filter(plot => target === plot.element || target.contains(plot.element)).map(plot => ({ element: plot.element, mode: plot.mode, zoom: plot.zoom, left: plot.viewport.scrollLeft, top: plot.viewport.scrollTop })) }; },
@@ -366,7 +415,22 @@ export function attachPlots(root: HTMLElement): PlotController {
       else refreshPlot(plot, { mode: "custom", zoom: control.hasAttribute("data-av-zoom-in") ? Math.min(MAX_ZOOM, plot.zoom + ZOOM_STEP) : Math.max(MIN_ZOOM, plot.zoom - ZOOM_STEP) });
       return true;
     },
+    reveal(item,occlusion={}) {
+      const plot=[...plots.values()].find(candidate=>candidate.element.contains(item));if(!plot||cleaned)return false;
+      refreshPlot(plot);const viewport=plot.viewport.getBoundingClientRect(),box=(item as HTMLElement).getBoundingClientRect();
+      if(!(box.width>0||box.height>0)||!(viewport.width>0&&viewport.height>0))return false;
+      const margin=8,leftInset=Math.max(0,finite(occlusion.left))+margin,rightInset=Math.max(0,finite(occlusion.right))+margin,topInset=Math.max(0,finite(occlusion.top))+margin,bottomInset=Math.max(0,finite(occlusion.bottom))+margin;
+      const visibleLeft=viewport.left+leftInset,visibleRight=viewport.right-rightInset,visibleTop=viewport.top+topInset,visibleBottom=viewport.bottom-bottomInset;
+      let left=plot.viewport.scrollLeft,top=plot.viewport.scrollTop;
+      if(box.left<visibleLeft)left+=box.left-visibleLeft;else if(box.right>visibleRight)left+=box.right-visibleRight;
+      if(box.top<visibleTop)top+=box.top-visibleTop;else if(box.bottom>visibleBottom)top+=box.bottom-visibleBottom;
+      position(plot,left,top);update(plot);return true;
+    },
+    reserve(target,reserve={}) {
+      if(cleaned)return;const right=Math.max(0,finite(reserve.right));
+      for(const plot of plots.values())if(target===plot.element||target.contains(plot.element)||plot.element.contains(target)){refreshPlot(plot);plot.reserveRight=right;syncReserve(plot);position(plot,plot.viewport.scrollLeft,plot.viewport.scrollTop);update(plot,true);}
+    },
     refresh(target) { if (!cleaned) for (const plot of plots.values()) if (!target || target === plot.element || target.contains(plot.element) || plot.element.contains(target)) refreshPlot(plot); },
-    cleanup() { if (cleaned) return; finish(); cleaned = true; for (const restore of undo.reverse()) restore(); controlOwners.clear(); plots.clear(); },
+    cleanup() { if (cleaned) return; finish(); releaseSpacePan(); cleaned = true; for (const restore of undo.reverse()) restore(); controlOwners.clear(); plots.clear(); },
   };
 }

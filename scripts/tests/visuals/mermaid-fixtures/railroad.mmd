@@ -1,0 +1,19 @@
+railroad-beta
+title HTTP Report Request Grammar
+
+request = sequence(
+  terminal("GET"),
+  terminal("/reports"),
+  optional(sequence(terminal("?"), nonterminal("query")))
+) ;
+query = sequence(
+  nonterminal("parameter"),
+  zeroOrMore(sequence(terminal("&"), nonterminal("parameter")))
+) ;
+parameter = sequence(nonterminal("name"), terminal("="), nonterminal("value")) ;
+name = choice(terminal("region"), terminal("format"), terminal("limit")) ;
+value = choice(nonterminal("identifier"), oneOrMore(special("digit"))) ;
+identifier = sequence(
+  special("letter"),
+  zeroOrMore(choice(special("letter"), special("digit"), terminal("_"), terminal("-")))
+) ;

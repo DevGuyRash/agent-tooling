@@ -1,0 +1,37 @@
+classDiagram
+  class Reviewer["Reviewer / 审核员"] {
+    +String displayName
+    +review(Review) bool
+  }
+
+  class Review {
+    +String id
+    +String status
+    +approve() bool
+  }
+
+  class Evidence {
+    +String uri
+    +String sha256
+    +verifyChecksum() bool
+  }
+
+  class Finding {
+    +String severity
+    +String summary
+  }
+
+  class Exporter {
+    <<interface>>
+    +export(Review) String
+  }
+
+  class JsonExporter {
+    +export(Review) String
+  }
+
+  Reviewer "1" --> "*" Review : performs
+  Review "1" *-- "1..*" Evidence : examines
+  Review "1" *-- "*" Finding : records
+  JsonExporter ..|> Exporter : implements
+  Review --> Exporter : rendered by

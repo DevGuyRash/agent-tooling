@@ -138,10 +138,15 @@ async def run(args):
             await page.locator('.av-focus-dialog [data-av-mode-menu]').click()
             await page.locator('.av-focus-dialog [data-av-figure-action="select-items"]').click()
             await page.locator('.av-focus-dialog [data-av-inspect]').first.click();await page.wait_for_timeout(120)
-            check('Selecting an expanded item opens its evidence',await page.locator('.av-dialog-context').get_attribute('open') is not None)
-            check('Selected evidence retains readable fields instead of flattened text',await page.locator('[data-av-selected-context] :is(dl,table)').count()>0)
-            check('Selected numeric fields are visible without immediately scrolling the inspector',await page.locator('[data-av-selected-context]').evaluate('e=>{const viewport=e.closest(".av-dialog-context-body").getBoundingClientRect();return [...e.querySelectorAll("dd")].every(n=>{const r=n.getBoundingClientRect();return r.top>=viewport.top&&r.bottom<=viewport.bottom})}'))
+            evidence_button=page.locator('.av-focus-dialog .av-inspector-opener').first
+            if not await evidence_button.is_visible():await page.locator('.av-focus-dialog .av-command-overflow>summary').first.click()
+            await evidence_button.click();await page.wait_for_timeout(120)
+            evidence_reader=page.locator('.av-inspector-dialog[open] .av-inspector')
+            check('Expanded Evidence opens the original selected record in its own reader',await evidence_reader.count()==1)
+            check('Selected evidence retains readable fields instead of flattened text',await evidence_reader.locator('.av-selected :is(dl,table)').count()>0)
+            check('Selected numeric fields are visible without immediately scrolling the inspector',await evidence_reader.locator('.av-selected .av-object-body').evaluate('e=>{const viewport=e.getBoundingClientRect();return [...e.querySelectorAll("dd")].every(n=>{const r=n.getBoundingClientRect();return r.top>=viewport.top&&r.bottom<=viewport.bottom})}'))
             await shot('expanded-selected-record')
+            await page.keyboard.press('Escape');await page.wait_for_timeout(80)
             await page.locator('[data-av-close-focus]').click()
             for toast in await page.locator('.av-toast-close').all():
                 if await toast.is_visible():await toast.click()

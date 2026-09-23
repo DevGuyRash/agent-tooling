@@ -1,0 +1,458 @@
+[
+  {
+    "family": "agentflow",
+    "file": "agentflow.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/agentflow.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "architecture",
+    "file": "architecture.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/architecture.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "block",
+    "file": "block.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/block.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "c4",
+    "file": "c4.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/c4.md",
+    "kind": "diagram",
+    "expectedState": "ready",
+    "expectedRenderedLabels": [
+      "Evidence Review Service",
+      "Analyst",
+      "Auditor",
+      "Review Platform",
+      "Review Portal",
+      "Verification Engine",
+      "Source Repository",
+      "Compliance Archive",
+      "Submits evidence",
+      "Requests verification",
+      "Reads source material",
+      "Stores signed result",
+      "Reviews retained result",
+      "JSON/HTTPS",
+      "JDBC",
+      "SQL"
+    ]
+  },
+  {
+    "family": "classDiagram",
+    "file": "classDiagram.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/classDiagram.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "cynefin",
+    "file": "cynefin.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/cynefin.md",
+    "kind": "diagram",
+    "expectedState": "ready",
+    "expectedRenderedLabels": [
+      "Evidence Review Decisions",
+      "Explore a novel failure mode",
+      "Probe ambiguous provenance",
+      "Compare cryptographic evidence",
+      "Interpret a specialist standard",
+      "Expert task",
+      "Run the documented checksum",
+      "Apply the retention checklist",
+      "Contain active data corruption",
+      "Freeze unsafe publication",
+      "Unclassified supplier incident",
+      "Unknown source trust level",
+      "Pattern understood",
+      "Procedure codified",
+      "Control breaks down",
+      "Situation stabilized"
+    ]
+  },
+  {
+    "family": "er",
+    "file": "er.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/entityRelationshipDiagram.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "eventmodeling",
+    "file": "eventmodeling.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/eventmodeling.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-elk",
+    "file": "flowchart-elk.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/flowchart.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "flowchart-v2.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/flowchart.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "gantt",
+    "file": "gantt.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/gantt.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "gitGraph",
+    "file": "gitGraph.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/gitgraph.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "info",
+    "file": "info.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/diagram-api/diagram-orchestration.ts",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "ishikawa",
+    "file": "ishikawa.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/ishikawa.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "journey",
+    "file": "journey.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/userJourney.md",
+    "kind": "diagram",
+    "expectedState": "ready",
+    "expectedRenderedLabels": [
+      "Checkout incident investigation",
+      "Open the customer timeline and correlate request identifiers",
+      "Re-run checkout with a saved non-sensitive payload",
+      "Compare browser and service timestamps across regions",
+      "Inspect retry behavior under throttled dependency responses",
+      "Exercise successful and declined payment paths",
+      "Confirm accessibility notes and support handoff details",
+      "Analyst",
+      "SRE",
+      "Tester",
+      "Support"
+    ]
+  },
+  {
+    "family": "kanban",
+    "file": "kanban.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/kanban.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "mindmap",
+    "file": "mindmap.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/mindmap.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "packet",
+    "file": "packet.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/packet.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "pie",
+    "file": "pie.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/pie.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "quadrantChart",
+    "file": "quadrantChart.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/quadrantChart.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "radar",
+    "file": "radar.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/radar.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "railroad",
+    "file": "railroad.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/railroad.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "railroadEbnf",
+    "file": "railroadEbnf.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/railroad.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "railroadAbnf",
+    "file": "railroadAbnf.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/railroad.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "railroadPeg",
+    "file": "railroadPeg.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/railroad.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "requirement",
+    "file": "requirement.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/requirementDiagram.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "sankey",
+    "file": "sankey.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/sankey.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "sequence",
+    "file": "sequence.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/sequenceDiagram.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "stateDiagram",
+    "file": "stateDiagram.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/stateDiagram.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "swimlane",
+    "file": "swimlane.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/swimlanes.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "timeline",
+    "file": "timeline.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/timeline.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "treeView",
+    "file": "treeView.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/treeView.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "treemap",
+    "file": "treemap.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/treemap.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "usecase",
+    "file": "usecase.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/usecase.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "venn",
+    "file": "venn.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/venn.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "wardley",
+    "file": "wardley.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/wardley.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "xychart",
+    "file": "xychart.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/xyChart.md",
+    "kind": "diagram",
+    "expectedState": "ready"
+  },
+  {
+    "family": "block",
+    "file": "block-diamond-routing.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/block.md",
+    "kind": "renderer regression",
+    "expectedState": "error",
+    "failureKind": "vendor-renderer-regression",
+    "expectedDiagnostic": "this.calcIntersect is not a function"
+  },
+  {
+    "family": "error",
+    "file": "error.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/diagram-api/diagram-orchestration.ts",
+    "kind": "error/sentinel",
+    "expectedState": "ready"
+  },
+  {
+    "family": "---",
+    "file": "frontmatter-error.mmd",
+    "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/diagram-api/diagram-orchestration.ts",
+    "kind": "error/sentinel",
+    "expectedState": "error",
+    "failureKind": "malformed-source",
+    "expectedDiagnostic": "Diagrams beginning with --- are not valid"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-dagre.mmd",
+    "layout": "dagre",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-swimlane.mmd",
+    "layout": "swimlane",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-cose-bilkent.mmd",
+    "layout": "cose-bilkent",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "error",
+    "failureKind": "unsupported-family-layout",
+    "expectedDiagnostic": "Root node is required",
+    "note": "Retained flowchart/layout mismatch. The paired mindmap fixture demonstrates the intended CoSE-Bilkent layout."
+  },
+  {
+    "family": "mindmap",
+    "file": "layout-cose-bilkent-mindmap.mmd",
+    "layout": "cose-bilkent",
+    "reference": "https://mermaid.js.org/config/layouts.html",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "note": "CoSE-Bilkent is the documented default layout for mindmaps; this fixture supplies its required root."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.mmd",
+    "layout": "elk",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.stress.mmd",
+    "layout": "elk.stress",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "visualLimitation": "The bundled stress-layout adapter overlaps many node boxes and edge labels in this cyclic topology. Authored node/rank spacing does not reach this algorithm, so it remains a renderer-ready visual failure. The exact source and layered ELK or Dagre comparisons preserve readable relationship context."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.force.mmd",
+    "layout": "elk.force",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.mrtree.mmd",
+    "layout": "elk.mrtree",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "visualLimitation": "This retained cyclic topology renders, but the multi-root tree layout leaves branch and feedback labels detached from their edges. Use the exact source to inspect those qualifiers; the layered ELK and Dagre fixtures provide routed comparison views."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.sporeOverlap.mmd",
+    "layout": "elk.sporeOverlap",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "visualLimitation": "This overlap-removal layout separates node boxes but does not provide a readable route for every relationship in this topology. Edges cross other boxes and branch labels can overlap. Rendering completion is not a visual qualification."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.box.mmd",
+    "layout": "elk.box",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "visualLimitation": "This packing layout places the nodes in boxes without preserving readable paths for all relationships. Several connections run behind other nodes and branch labels can overlap. The full source and the layered ELK comparison retain the relationship context."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "layout-elk.rectpacking.mmd",
+    "layout": "elk.rectpacking",
+    "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
+    "kind": "layout candidate",
+    "expectedState": "ready",
+    "visualLimitation": "This rectangle-packing candidate renders with overlapping decision geometry and incomplete or obscured relationship paths in this topology. It is retained as a visual limitation, with exact source available and a layered ELK comparison."
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "long-unicode-repeat.mmd",
+    "kind": "edge/error candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "author-theme.mmd",
+    "kind": "edge/error candidate",
+    "expectedState": "ready"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "invalid-source.mmd",
+    "kind": "edge/error candidate",
+    "expectedState": "error",
+    "failureKind": "malformed-source",
+    "expectedDiagnostic": "Parse error"
+  },
+  {
+    "family": "flowchart-v2",
+    "file": "untrusted-label.mmd",
+    "kind": "edge/error candidate",
+    "expectedState": "ready"
+  }
+]

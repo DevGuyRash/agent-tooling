@@ -1,0 +1,30 @@
+sequenceDiagram
+  autonumber
+  participant Alice as Requester
+  participant Bob as Reviewer
+  participant Store as Evidence store
+
+  Alice->>Bob: Original request
+  Bob-->>Alice: Retained response
+  Note over Bob: Verify the received records before relying on them
+  Note over Alice,Bob: Both participants retain the complete original request and response before either copy is used as evidence
+
+  activate Bob
+  par Retain exact evidence
+    Bob->>Store: Save original request and retained response
+    Store-->>Bob: Stable evidence reference
+  and Reproduce the finding
+    Bob->>Bob: Re-run the deterministic validation
+  end
+
+  alt Evidence agrees with the retained response
+    Bob->>Store: Record verified outcome
+    Bob-->>Alice: Review can proceed with cited evidence
+  else Evidence differs
+    loop Until the discrepancy is explained
+      Bob->>Store: Compare source, parser result, and rendered output
+      Store-->>Bob: Return the same retained originals
+    end
+    Bob-->>Alice: Report the mismatch with the original evidence attached
+  end
+  deactivate Bob

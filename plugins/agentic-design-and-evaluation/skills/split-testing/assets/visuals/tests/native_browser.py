@@ -11,11 +11,13 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+import os
 import time
 import xml.etree.ElementTree as ET
 from playwright.async_api import async_playwright
 
 VISUALS = Path(__file__).resolve().parents[1]
+FIXTURES = Path(os.environ.get('AGENTIC_VISUAL_MERMAID_FIXTURES', Path(__file__).resolve().parents[7] / 'scripts/tests/visuals/mermaid-fixtures'))
 
 async def qualify(args) -> None:
     args.output.mkdir(parents=True, exist_ok=True)
@@ -227,15 +229,17 @@ async def qualify(args) -> None:
             check('Reduced-motion animation is disabled', await page.locator('.av-workspace').evaluate("e=>getComputedStyle(e).animationDuration==='0s'"))
             if args.mermaid:
                 await load('stress')
-                fixtures=json.loads((VISUALS/'tests/mermaid-fixtures/index.json').read_text())
+                fixtures=json.loads((FIXTURES/'index.json').read_text())
                 for fixture in fixtures:
-                    source=(VISUALS/'tests/mermaid-fixtures'/fixture['file']).read_text()
+                    source=(FIXTURES/fixture['file']).read_text()
                     outcome=await page.evaluate("""async ({source,index})=>{
                       const host=document.createElement('div');host.innerHTML=AgenticVisuals.reportSurface({id:'fixture-'+index,body:AgenticVisuals.mermaidDiagram({id:'diagram-'+index,title:'Renderer fixture '+index,source})});document.body.appendChild(host);
                       const scope=host.firstElementChild,cleanup=AgenticVisuals.enhanceVisuals(scope);await cleanup.whenIdle();
                       const diagram=scope.querySelector('[data-av-mermaid]');const result={state:diagram.getAttribute('data-av-mermaid-state'),message:diagram.querySelector('[data-av-mermaid-status]').textContent,svgCount:scope.querySelectorAll('[data-av-mermaid-output] svg').length};window.__fixtureCleanup=()=>{cleanup();host.remove();};window.__fixtureIdle=()=>cleanup.whenIdle();return result;
                     }""", {'source':source,'index':len(result['mermaid'])})
                     if outcome['state']=='ready':
+                        sizing=await page.evaluate("id=>{const svg=document.getElementById(id).querySelector('svg[data-av-zoom-target]');return{rendered:svg.getBoundingClientRect().width,natural:Number(svg.getAttribute('width'))}}",'diagram-'+str(len(result['mermaid'])))
+                        check('Mermaid natural fit avoids enlarging intrinsic typography: '+fixture['file'],sizing['rendered']<=sizing['natural']+1,sizing)
                         try:
                             # Probe the actual command/export path in addition to
                             # the representative pointer-driven export journeys.

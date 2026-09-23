@@ -11,10 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ThemeTests(unittest.TestCase):
     def test_surface_clipping_survives_background_shorthand(self):
-        source = (ROOT / "styles/components.css").read_text()
-        checked = []
+        source = re.sub(r"/\*.*?\*/", "", (ROOT / "styles/components.css").read_text(), flags=re.S)
+        targets = {
+            '.av-card > .av-card-header', '.av-data', '.av-scenario', '.av-object-detail',
+            '.av-data > summary', '.av-scenario > summary', '.av-object-detail > summary',
+            '.av-data[open] > summary', '.av-scenario[open] > summary', '.av-object-detail[open] > summary',
+            '.av-plot-scroll', '.av-button', '.av-inspector[data-av-inspector-view]',
+        }
+        checked = set()
         for selector, body in re.findall(r"([^{}]+)\{([^{}]+)\}", source):
-            if not any(target in selector for target in ['.av-card > .av-card-header', '.av-data > summary', '.av-data[open] > summary', '.av-plot-scroll ', '.av-button', '.av-object-detail']):
+            matched = targets.intersection(part.strip() for part in selector.split(','))
+            if not matched:
                 continue
             declarations = [tuple(part.strip() for part in declaration.split(':', 1)) for declaration in body.split(';') if ':' in declaration]
             if not any(name == 'background' for name, value in declarations):
@@ -27,8 +34,8 @@ class ThemeTests(unittest.TestCase):
                 elif name == 'background-clip':
                     clip = value
             self.assertEqual(clip, 'padding-box', selector.strip())
-            checked.append(selector)
-        self.assertTrue(checked)
+            checked.update(matched)
+        self.assertEqual(checked, targets)
 
     def test_row_axes_preserve_the_data_viewport_and_source_print_scale(self):
         components = (ROOT / "styles/components.css").read_text()

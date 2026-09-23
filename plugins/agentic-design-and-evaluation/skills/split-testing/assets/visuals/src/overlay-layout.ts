@@ -4,6 +4,13 @@
 export interface OverlayBounds { left: number; top: number; right: number; bottom: number }
 export interface OverlayAnchor { left: number; right: number; top: number; bottom: number }
 const finite = (value: number | undefined, fallback: number): number => Number.isFinite(value) ? value! : fallback;
+/** Position an already measured border box inside the visible rectangle. */
+export function clampOverlayPosition(bounds: OverlayBounds, width: number, height: number, left: number, top: number): { left: number; top: number } {
+  return {
+    left: Math.max(bounds.left, Math.min(finite(left, bounds.left), bounds.right - Math.max(0, finite(width, 0)))),
+    top: Math.max(bounds.top, Math.min(finite(top, bounds.top), bounds.bottom - Math.max(0, finite(height, 0)))),
+  };
+}
 export function visibleViewport(view: Window | null, margin = 12): OverlayBounds {
   const viewport = view?.visualViewport;
   const x = finite(viewport?.offsetLeft, 0), y = finite(viewport?.offsetTop, 0);
@@ -21,9 +28,9 @@ export function anchoredPanel(anchor: OverlayAnchor, bounds: OverlayBounds, widt
   const maxHeight = Math.min(availableHeight, up ? above : below);
   const fittedWidth = Math.min(availableWidth, Math.max(0, finite(width, availableWidth)));
   const fittedHeight = Math.min(maxHeight, Math.max(0, finite(height, maxHeight)));
+  const position = clampOverlayPosition(bounds, fittedWidth, fittedHeight, finite(anchor.right, bounds.right) - fittedWidth, up ? top - gap - fittedHeight : bottom + gap);
   return {
-    left: Math.max(bounds.left, Math.min(finite(anchor.right, bounds.right) - fittedWidth, bounds.right - fittedWidth)),
-    top: Math.max(bounds.top, Math.min(up ? top - gap - fittedHeight : bottom + gap, bounds.bottom - fittedHeight)),
+    ...position,
     width: fittedWidth, maxHeight, side: up ? 'up' : 'down',
   };
 }

@@ -1,0 +1,6 @@
+flowchart LR
+  source["Intentional invalid fixture begins with a valid family detector"] --> parse["Parser reaches a malformed node later"]
+  parse --> retained["Original source must remain recoverable after failure"]
+  retained --> status["Failure status must be visible to the reader"]
+  status --> repeat["Repeated label for deterministic failure coverage"]
+  repeat --> broken["This bracket is intentionally never closed

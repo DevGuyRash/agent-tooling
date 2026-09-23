@@ -1,0 +1,54 @@
+requirementDiagram
+  direction LR
+
+  requirement original {
+    id: 1
+    text: Retain the complete original evidence before review.
+    risk: high
+    verifymethod: inspection
+  }
+
+  functionalRequirement fidelity {
+    id: 1.1
+    text: Preserve exact wording including Unicode and repeated identities.
+    risk: medium
+    verifymethod: test
+  }
+
+  performanceRequirement reviewability {
+    id: 1.2
+    text: Keep source and findings readable together in the final report.
+    risk: medium
+    verifymethod: demonstration
+  }
+
+  designConstraint offline {
+    id: 1.3
+    text: Validation must use the pinned offline renderer.
+    risk: low
+    verifymethod: analysis
+  }
+
+  element source_archive {
+    type: evidence archive
+    docRef: fixtures/source_archive
+  }
+
+  element renderer_suite {
+    type: regression suite
+    docRef: scripts/tests/visuals
+  }
+
+  element report {
+    type: review document
+    docRef: reports/visual_review
+  }
+
+  original - contains -> fidelity
+  original - traces -> reviewability
+  fidelity - refines -> offline
+  source_archive - satisfies -> original
+  renderer_suite - verifies -> fidelity
+  renderer_suite - verifies -> offline
+  report - satisfies -> reviewability
+  report <- copies - source_archive

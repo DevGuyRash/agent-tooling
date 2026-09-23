@@ -1,0 +1,12 @@
+radar-beta
+  title Service readiness by dimension
+  axis reliability["Reliability under load"], operability["Operational visibility"], accessibility["Accessibility"]
+  axis recovery["Recovery speed"], security["Security controls"], runbook["Runbook completeness"]
+  curve baseline["Current baseline"]{72, 58, 81, 46, 76, 63}
+  curve target["Release target"]{90, 85, 90, 80, 88, 85}
+  curve canary["Canary observation"]{security: 86, recovery: 74, reliability: 84, runbook: 80, accessibility: 88, operability: 79}
+  showLegend true
+  graticule polygon
+  ticks 5
+  max 100
+  min 0

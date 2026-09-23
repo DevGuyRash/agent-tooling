@@ -22,7 +22,7 @@ export interface ContextReviewController { reveal(anchor: ReviewAnchor): void; e
 export function attachContextReview(scope: HTMLElement, registry: TargetRegistry, hooks: ContextReviewHooks): ContextReviewController {
   const document=scope.ownerDocument,view=document.defaultView,buttons=new Map<Element,{element:HTMLElement;action:string}>(),undo:(()=>void)[]=[],generatedActions=new WeakSet<Element>();
   const excluded=new Set<string>(), choices=new WeakMap<Element,string>(), anchorActions=new WeakMap<Element,ReviewAnchor>();
-  let editor:HTMLElement|null=null,textarea:HTMLTextAreaElement|null=null,context:HTMLElement|null=null,notice:HTMLElement|null=null,current:ReviewAnchor|null=null,annotationId='',observed:string[]=[],trigger:HTMLElement|null=null,selected:ReviewAnchor|null=null,stopped=false,dirty=false;
+  let editor:HTMLElement|null=null,textarea:HTMLTextAreaElement|null=null,context:HTMLElement|null=null,notice:HTMLElement|null=null,current:ReviewAnchor|null=null,annotationId='',observed:string[]=[],openedSavedBases=new Map<string,AnnotationVersion>(),trigger:HTMLElement|null=null,selected:ReviewAnchor|null=null,stopped=false,dirty=false;
   let returnControl: HTMLElement | null = null;
   // Reconcile immutable record versions, not the live reader's disclosures and
   // focus. Saving status and unrelated activity must not rebuild a collection.
@@ -72,7 +72,7 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
     if (dirty) save(true);
     if (dirty) { if (notice) notice.textContent = 'This draft could not be kept. Keep the editor open and copy your text before leaving.'; return; }
     hideEditor();
-    current = null; selected = null; if (restoreFocus) returnFocus();
+    current = null; selected = null; openedSavedBases.clear(); if (restoreFocus) returnFocus();
   }
   function ensureEditor(parent: HTMLElement): void {
     if (!editor) {
@@ -108,15 +108,19 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
   function open(anchor:ReviewAnchor,from:HTMLElement,version?:AnnotationVersion):void{
     if(current&&dirty){save(true);if(dirty)return;}
     current=anchor;dirty=false;trigger=from;returnControl=from.closest<HTMLElement>('[data-av-notebook]')?.querySelector<HTMLElement>('summary')||registry.targets.get(anchor.target.id)?.element.querySelector<HTMLElement>('summary')||null;annotationId=version?.annotationId||hooks.id();observed=version?[...(version.draft?version.baseIds||[]:[]),version.id]:[];
+    openedSavedBases.clear();if(version){const review=hooks.notebook().review,known=[...(review?.versions||[]),...(review?.supportingVersions||[])],byId=new Map(known.map(item=>[item.id,item]));for(const id of observed){const item=byId.get(id);if(item&&!item.draft&&item.annotationId===annotationId)openedSavedBases.set(id,item);}}
     from.closest<HTMLElement>('[data-av-notebook]')?.removeAttribute('open');
     ensureEditor(from.closest<HTMLElement>('dialog')||scope);context!.textContent=anchor.target.path.concat(anchor.target.label).join(' / ')+(anchor.kind==='text'?'\n“'+anchor.quote+'”':anchor.kind==='item'?'\n'+anchor.label+'\n'+anchor.text:anchor.kind==='items'?'\n'+anchor.items.map(item=>item.label+'\n'+item.text).join('\n\n'):'');textarea!.value=version?.text||'';notice!.textContent=registry.resolve(anchor).message;placeEditor();textarea!.focus({preventScroll:true});
   }
   function save(draft:boolean,deleted=false,announce=false):boolean{
     if(!current||!textarea)return false;
     if(draft&&!dirty){if(announce&&!observed.length){notice!.textContent='Write a note to keep a draft.';return true;}if(announce)hooks.notify?.({text:'Draft kept.',tone:'success',source:editor||scope});return true;}
-    const version:AnnotationVersion={id:hooks.id(),annotationId,anchor:current,text:deleted?null:textarea.value,at:hooks.now(),draft,...(draft?{baseIds:observed.filter(id=>hooks.notebook().review?.versions.some(item=>item.id===id&&!item.draft))}:{})};
+    const review=hooks.notebook().review,known=[...(review?.versions||[]),...(review?.supportingVersions||[])],knownById=new Map(known.map(item=>[item.id,item]));
+    const baseIds=observed.filter(id=>{const item=openedSavedBases.get(id)||knownById.get(id);return !!item&&!item.draft&&item.annotationId===annotationId;});
+    const supportingVersions=[...new Set(baseIds)].flatMap(id=>{const item=openedSavedBases.get(id)||knownById.get(id);return item&&!item.draft&&item.annotationId===annotationId?[item]:[];});
+    const version:AnnotationVersion={id:hooks.id(),annotationId,anchor:current,text:deleted?null:textarea.value,at:hooks.now(),draft,...(draft&&baseIds.length?{baseIds}:{})};
     if(!deleted&&!draft&&!version.text?.trim()){notice!.textContent='Enter a note before saving.';return true;}
-    if(hooks.change({type:'annotation',version,observedIds:observed})){if(announce)hooks.notify?.({text:deleted?'Note removed.':draft?'Draft kept.':'Note added to this report.',tone:'success',source:registry.resolve(current).element||scope});dirty=false;observed=[...(draft?version.baseIds||[]:[]),version.id];notice!.textContent=hooks.status?.()||(draft?'Draft retained.':'Note retained.');if(!draft){hideEditor();current=null;textarea.value='';returnFocus();}}return true;
+    if(hooks.change({type:'annotation',version,observedIds:observed,...(supportingVersions.length?{supportingVersions}:{})})){if(announce)hooks.notify?.({text:deleted?'Note removed.':draft?'Draft kept.':'Note added to this report.',tone:'success',source:registry.resolve(current).element||scope});dirty=false;observed=[...(draft?version.baseIds||[]:[]),version.id];notice!.textContent=hooks.status?.()||(draft?'Draft retained.':'Note retained.');if(!draft){hideEditor();current=null;openedSavedBases.clear();textarea.value='';returnFocus();}}return true;
   }
   return{
     open, reveal,
@@ -174,7 +178,7 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
       if(action==='cancel'){closeEditor();return true;}return false;
     },
     change(target){const key=choices.get(target);if(!key)return false;if((target as HTMLInputElement).checked)excluded.delete(key);else excluded.add(key);return true;},
-    exportNotebook(value){const omitted=(key:string)=>excluded.has(key);const review=value.review||{versions:[],bookmarks:[]};return{...value,state:{...value.state,notes:value.state.notes.filter(note=>!omitted('legacy:'+note.targetId)),bookmarks:value.state.bookmarks.filter(id=>!omitted('bookmark:'+id)),activity:[],droppedActivityCount:0,nextSequence:1},noteVersions:value.noteVersions.filter(note=>!omitted('legacy:'+note.targetId)),review:{versions:review.versions.filter(note=>!omitted('annotation:'+note.annotationId)),bookmarks:review.bookmarks.filter(anchor=>!omitted('anchor:'+fingerprint(exactJson(anchor))))},originals:[],reviewImports:[]};},
+    exportNotebook(value){const omitted=(key:string)=>excluded.has(key);const review=value.review||{versions:[],bookmarks:[]},supportingVersions=(review.supportingVersions||[]).filter(note=>!omitted('annotation:'+note.annotationId));return{...value,state:{...value.state,notes:value.state.notes.filter(note=>!omitted('legacy:'+note.targetId)),bookmarks:value.state.bookmarks.filter(id=>!omitted('bookmark:'+id)),activity:[],droppedActivityCount:0,nextSequence:1},noteVersions:value.noteVersions.filter(note=>!omitted('legacy:'+note.targetId)),review:{versions:review.versions.filter(note=>!omitted('annotation:'+note.annotationId)),bookmarks:review.bookmarks.filter(anchor=>!omitted('anchor:'+fingerprint(exactJson(anchor)))),...(supportingVersions.length?{supportingVersions}:{})},originals:[],reviewImports:[]};},
     input(target){if(target!==textarea||!current)return false;dirty=true;save(true);return true;},
     render(lists,bookmarkLists=[],inclusionLists=[]){
       const make = <K extends keyof HTMLElementTagNameMap>(parent:HTMLElement,tag:K,text?:string,cls=''):HTMLElementTagNameMap[K]=>{const node=document.createElement(tag);node.className=cls;if(text!==undefined)node.textContent=text;parent.appendChild(node);return node;};
@@ -187,8 +191,8 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
         includeNodes.get(list)!.push(node);
       }};
       if(editor&&!editor.hidden&&notice)notice.textContent=hooks.status?.()||notice.textContent;
-      const notebook=hooks.notebook(),versions=notebook.review?.versions||[],groups=new Map<string,AnnotationVersion[]>();
-      const anchors=[...versions.map(version=>version.anchor),...(notebook.review?.bookmarks||[])];
+      const notebook=hooks.notebook(),versions=notebook.review?.versions||[],supportingVersions=notebook.review?.supportingVersions||[],supportingById=new Map(supportingVersions.map(version=>[version.id,version])),groups=new Map<string,AnnotationVersion[]>();
+      const anchors=[...versions.map(version=>version.anchor),...supportingVersions.map(version=>version.anchor),...(notebook.review?.bookmarks||[])];
       const resolvedBatch=registry.resolveAll?.(anchors)||anchors.map(anchor=>registry.resolve(anchor));
       const resolutions=new Map(anchors.map((anchor,index)=>[anchor,resolvedBatch[index]]));
       for(const version of versions){const group=groups.get(version.annotationId)||[];group.push(version);groups.set(version.annotationId,group);}
@@ -206,6 +210,7 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
         if(anchor.target.sources?.length)for(const source of anchor.target.sources)make(details,'p',source.label+' — '+source.href,'av-muted');
       }
       function heading(parent:HTMLElement,anchor:ReviewAnchor):void{make(parent,'h4',anchorLabel(anchor));const path=anchorContext(anchor);if(path)make(parent,'p',path,'av-review-location');}
+      function draftBases(parent:HTMLElement,version:AnnotationVersion):void{if(!version.draft)return;let index=0;for(const id of version.baseIds||[]){const base=supportingById.get(id);if(!base||base.annotationId!==version.annotationId)continue;const details=make(parent,'details',undefined,'av-review-original');make(details,'summary',++index===1?'Earlier saved note':'Earlier saved note '+index);const meta=make(details,'p','Recorded '+readerDate(base.at),'av-review-meta');meta.setAttribute('data-av-supporting-version',base.id);const baseResolution=resolutions.get(base.anchor);if(baseResolution&&baseResolution.status!=='resolved')make(details,'p','Unresolved earlier note · '+baseResolution.message,'av-review-warning');make(details,'pre',base.text===null?'[Removed in this version]':base.text,'av-notebook-note');make(details,'p','Original evidence','av-muted');make(details,'pre',anchorEvidence(base.anchor),'av-notebook-note');}}
       for(const note of notebook.state.notes)include('legacy:'+note.targetId,'Earlier note · '+(registry.targets.get(note.targetId)?.target.label||note.targetId));
       for(const[id,group]of groups){const live=group.filter(version=>version.text!==null||group.length>1);if(live.length)include('annotation:'+id,`Note · ${anchorLabel(live[0].anchor)}${live.some(v=>v.draft)?' (includes draft)':''}`);}
       for(const list of lists){
@@ -213,13 +218,13 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
         for(const[id,group]of groups)for(const version of group){
           if(version.text===null&&group.length===1)continue;
           const resolved=resolutions.get(version.anchor)!,competing=group.filter(item=>item.draft===version.draft).length>1;
-          const key=version.id,signature=exactJson([version,competing,resolved.status,resolved.message]),prior=cache.get(key);keep.add(key);
+          const supportSignature=version.draft?(version.baseIds||[]).map(id=>{const base=supportingById.get(id),baseResolution=base&&resolutions.get(base.anchor);return base?[base,baseResolution?.status,baseResolution?.message]:[id];}):[],key=version.id,signature=exactJson([version,competing,resolved.status,resolved.message,supportSignature]),prior=cache.get(key);keep.add(key);
           if(prior?.signature===signature){wanted.push(prior.node);continue;}
           const item=document.createElement('li');item.className='av-review-card';item.setAttribute('data-av-review-entry',id);item.setAttribute('data-av-note-version',version.id);item.setAttribute('data-av-entry-state',resolved.status!=='resolved'||competing?'attention':version.draft?'draft':'saved');heading(item,version.anchor);
           const meta=make(item,'div',undefined,'av-review-meta');const time=make(meta,'time',readerDate(version.at));time.setAttribute('datetime',version.at);time.title=version.at;
           if(version.draft)make(meta,'span','Draft','av-review-badge');if(competing)make(meta,'span','Competing version','av-review-badge');
           if(resolved.status!=='resolved')make(item,'p','Unresolved · '+resolved.message,'av-review-warning');
-          make(item,'pre',version.text===null?'[Removed in this version]':version.text||'[Empty draft]','av-notebook-note');original(item,version.anchor);
+          make(item,'pre',version.text===null?'[Removed in this version]':version.text||'[Empty draft]','av-notebook-note');draftBases(item,version);original(item,version.anchor);
           const actions=make(item,'div',undefined,'av-review-card-actions');const go=control(actions,'reveal','Go to evidence');go.setAttribute('data-av-review-version',version.id);go.disabled=resolved.status!=='resolved';
           const edit=control(actions,'edit',version.draft?'Continue draft':'Edit note');edit.setAttribute('data-av-review-version',version.id);
           if(!version.draft&&competing){const keep=control(actions,'resolve','Keep this version');keep.setAttribute('data-av-review-version',version.id);}
@@ -252,6 +257,6 @@ export function attachContextReview(scope: HTMLElement, registry: TargetRegistry
         reconcile(list,nodes,'data-av-inclusion-key');const cache=rendered.get(list),keys=new Set(nodes.map(node=>node.getAttribute('data-av-inclusion-key')));if(cache)for(const key of cache.keys())if(!keys.has(key))cache.delete(key);
         if(!list.children.length)make(list,'p','No notes or bookmarks to include yet.','av-empty');
       }
-    },cleanup(){if(stopped)return;stopped=true;if(current&&dirty)save(true);for(const restore of undo.reverse())restore();clearHighlight();buttons.clear();}
+    },cleanup(){if(stopped)return;stopped=true;if(current&&dirty)save(true);openedSavedBases.clear();for(const restore of undo.reverse())restore();clearHighlight();buttons.clear();}
   };
 }

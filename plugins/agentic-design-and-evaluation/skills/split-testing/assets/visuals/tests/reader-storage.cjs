@@ -114,6 +114,9 @@ async function run(compiled) {
   const legacyWindow = storageWindow(indexedDBDouble(), [['legacy', raw]]);
   const migrated = createOwnedStore(legacyWindow, 'legacy', owner, text => decodeReaderNotebook(text, context));
   assert.equal((await migrated.read()).source, 'legacy'); assert.equal(legacyWindow.indexedDB.records.size, 0, 'Reading never creates a database record');
+  const failedMigration = createOwnedStore(storageWindow(indexedDBDouble(), [['legacy', raw]]), 'legacy', owner, text => decodeReaderNotebook(text, context));
+  const failedMigrationResult = await failedMigration.update(() => { throw new Error('modeled merge failure'); });
+  assert.equal(failedMigrationResult.status, 'blocked'); assert.equal(failedMigrationResult.raw, raw, 'Recovery keeps exact legacy source bytes when migration cannot be combined');
   await migrated.update(current => applyReaderDelta(current, change(current, 'm1', 'Later note', 'b'), context));
   assert.equal(legacyWindow.legacy.get('legacy'), raw); assert.equal(legacyWindow.writes.length, 0);
   const retained = (await migrated.read()).value; assert.deepEqual(retained.originals, [raw]);

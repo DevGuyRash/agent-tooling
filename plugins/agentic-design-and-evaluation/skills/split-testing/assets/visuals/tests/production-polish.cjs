@@ -3,7 +3,7 @@ const assert = require('node:assert/strict'), path = require('node:path');
 const mod = name => require(path.join(process.argv[2], name + '.js'));
 const { fixture, V, append, send } = require('./parsed-dom-fixture.cjs');
 const { DocumentDouble } = require('./dom-double.cjs');
-const { visibleViewport, anchoredPanel } = mod('overlay-layout');
+const { visibleViewport, anchoredPanel, clampOverlayPosition } = mod('overlay-layout');
 const { attachCommandBar } = mod('command-bar');
 const { attachFigureTools } = mod('figure-tools');
 const { createTargetRegistry } = mod('review-targets');
@@ -19,15 +19,22 @@ const S = mod('reader-state');
 }
 
 // Fit geometry on an expanded figure is not a command. Pointer inspection
-// must reach the owning explorer instead of being swallowed by Fit routing.
+// stays on the source-owned nodes; explicit Evidence opens that same reader.
 {
   const {d,parse}=fixture(),root=parse(V.reportSurface({id:'expanded-test',body:V.scatterPlot({title:'Exact observations',xAxis:'Input',yAxis:'Result',points:[{id:'a',label:'A',x:1,y:2},{id:'b',label:'B',x:2,y:1}]})})).firstChild;d.body.appendChild(root);
-  const cleanup=V.enhanceVisuals(root),figure=root.querySelector('[data-av-figure]');
+  const reader=root.querySelector('.av-inspector'),sourceOwner=root.querySelector('[data-av-layout-input]'),source=sourceOwner?.getAttribute('data-av-layout-input');
+  assert(reader);assert(source&&source.includes('Exact observations'));
+  const objects=reader.querySelectorAll('[data-av-object]'),cleanup=V.enhanceVisuals(root),figure=root.querySelector('[data-av-figure]');
   send(figure.querySelector('[data-av-figure-action="expand"]'),'click');
   const dialog=root.querySelector('.av-focus-dialog[open]');assert(dialog.open);assert(figure.hasAttribute('data-av-fit-width'));
   send(dialog.querySelector('[data-av-figure-action="select-items"]'),'click');
-  send(figure.querySelector('[data-av-inspect]'),'click',{detail:1});
-  assert(dialog.querySelector('.av-dialog-context').open);assert(dialog.querySelector('[data-av-selected-context]').querySelector('.av-object-body'));
+  const mark=figure.querySelectorAll('[data-av-inspect]')[1],key=mark.getAttribute('data-av-inspect'),object=objects.find(item=>item.getAttribute('data-av-object')===key);assert(object);
+  send(mark,'click',{detail:1});assert.equal(reader.querySelector('[data-av-object].av-selected'),object,'Expanded selection uses the original evidence object');
+  const opener=dialog.querySelector('[data-av-inspector-open]');assert(opener,'Expanded figure retains an explicit Evidence command');send(opener,'click');
+  const evidenceDialog=root.querySelector('.av-inspector-dialog[open]');assert(evidenceDialog?.open);assert.equal(evidenceDialog.querySelector('.av-inspector'),reader,'Expanded Evidence moves the original live reader into its modal');
+  assert.equal(reader.getAttribute('data-av-inspector-view'),'drawer');assert.equal(reader.querySelector('[data-av-object].av-selected'),object);assert.equal(sourceOwner.getAttribute('data-av-layout-input'),source);
+  send(reader.querySelector('.av-panel-close'),'click');assert(!evidenceDialog.open);assert(figure.hasAttribute('data-av-expanded-figure'),'Closing Evidence returns to the expanded figure');assert.equal(root.querySelector('.av-inspector'),reader);
+  send(dialog.querySelector('[data-av-close-focus]'),'click');assert(!dialog.open);assert(!figure.hasAttribute('data-av-expanded-figure'));assert.equal(root.querySelector('.av-inspector'),reader);assert.equal(reader.querySelectorAll('[data-av-object]')[1],objects[1]);assert.equal(sourceOwner.getAttribute('data-av-layout-input'),source);
   cleanup();assert.equal(d.listenerCount,0);
 }
 
@@ -42,6 +49,16 @@ for(const width of [0,1,100,280,1024])for(const height of [0,1,200,800])for(cons
   assert(result.maxHeight>=0&&result.maxHeight<=bounds.bottom-bounds.top);
 }
 assert.equal(anchoredPanel({left:100,right:140,top:300,bottom:336},{left:12,right:350,top:12,bottom:400},300,260).side,'up');
+// The final measured inspector width can exceed the preliminary request.
+// Its close edge must remain in the visible rectangle at intermediate sizes.
+for (const viewport of [800,900,1000,1100]) {
+  const bounds=visibleViewport({innerWidth:viewport,innerHeight:700});
+  const requested=354, measured=432, intendedLeft=bounds.right-requested;
+  const position=clampOverlayPosition(bounds,measured,400,intendedLeft,120);
+  assert(position.left+measured<=bounds.right);
+  assert(position.left>=bounds.left);
+}
+assert.deepEqual(clampOverlayPosition({left:92,right:428,top:162,bottom:418},300,200,300,350),{left:128,top:218});
 {
   const d=new DocumentDouble(),host=append(d.body,'div');let width=0;
   Object.defineProperty(host,'clientWidth',{get:()=>width});

@@ -23,6 +23,43 @@ check('initial and reset fit the entire chart; zoom is relative to that fit', ()
   }
 });
 
+check('fit height includes the viewport frame instead of creating phantom pan', () => {
+  const {document}=documentFixture(),root=append(document.body,'main'),a=fixture(document,root,{width:400,height:200,viewportWidth:400,viewportHeight:198});
+  let fallback=198;Object.defineProperty(a.viewport,'clientHeight',{configurable:true,get:()=>{const fitted=Number.parseFloat(a.plot.style.getPropertyValue('--av-plot-fit-height'));return fitted>0?Math.max(0,fitted-2):fallback;},set:value=>{fallback=value;}});
+  a.viewport.getBoundingClientRect=()=>({x:0,y:0,left:0,top:0,right:400,bottom:a.viewport.clientHeight+2,width:400,height:a.viewport.clientHeight+2});
+  const api=attachPlots(root);assert.equal(a.plot.style.getPropertyValue('--av-plot-fit-height'),'202px');near(a.viewport.clientHeight,200);near(a.viewport.scrollHeight,200);assert.equal(a.viewport.getAttribute('data-av-pan'),null);assert.equal(a.viewport.getAttribute('title'),'Drawing fits. Zoom in to pan.');
+  api.click(a.plus);assert(a.viewport.scrollHeight>a.viewport.clientHeight);assert.equal(a.viewport.getAttribute('data-av-pan'),'ready');assert.equal(a.viewport.getAttribute('title'),'Drag, wheel, or use arrow keys to pan.');api.click(a.reset);assert.equal(a.viewport.getAttribute('data-av-pan'),null);api.cleanup();
+});
+
+check('expanded fit reserves the viewport frame inside the declared height', () => {
+  const {document}=documentFixture(),root=append(document.body,'main'),figure=append(root,'figure',{'data-av-expanded-figure':'','data-av-fit-height':'200','data-av-fit-policy':'natural'}),a=fixture(document,figure,{width:400,height:200,viewportWidth:500,viewportHeight:198});
+  let fallback=198;Object.defineProperty(a.viewport,'clientHeight',{configurable:true,get:()=>{const fitted=Number.parseFloat(a.plot.style.getPropertyValue('--av-plot-fit-height'));return fitted>0?Math.max(0,fitted-2):fallback;},set:value=>{fallback=value;}});a.viewport.getBoundingClientRect=()=>({x:0,y:0,left:0,top:0,right:500,bottom:a.viewport.clientHeight+2,width:500,height:a.viewport.clientHeight+2});
+  const api=attachPlots(root);near(a.rect().width,396);near(a.rect().height,198);near(a.viewport.clientHeight,198);near(a.viewport.scrollHeight,198);assert.equal(a.viewport.getAttribute('data-av-pan'),null);api.cleanup();
+});
+
+check('natural fit preserves intrinsic readability while shrinking, zooming and resetting', () => {
+  const {document,observers}=documentFixture({observer:true}),root=append(document.body,'main'),figure=append(root,'figure',{'data-av-fit-policy':'natural'});
+  const a=fixture(document,figure,{width:300,height:200,viewportWidth:1000,autoHeight:true}),api=attachPlots(root);
+  near(a.rect().width,300);assert.equal(a.viewport.getAttribute('data-av-pan'),null);
+  api.click(a.plus);near(a.rect().width,375);
+  api.click(a.reset);near(a.rect().width,300);
+  a.viewport.clientWidth=200;observers[0].trigger();near(a.rect().width,200);
+  api.click(a.plus);near(a.rect().width,250);assert.equal(a.viewport.getAttribute('data-av-pan'),'ready');
+  api.click(a.reset);near(a.rect().width,200);assert.equal(a.viewport.scrollLeft,0);
+  figure.setAttribute('data-av-fit-policy','width');a.viewport.clientWidth=1000;observers[0].trigger();near(a.rect().width,1000);
+  api.cleanup();assert.equal(figure.getAttribute('data-av-fit-policy'),'width');
+});
+
+check('floating reserve adds removable pan range and reveal avoids overlay occlusion', () => {
+  const {document}=documentFixture(),root=append(document.body,'main'),figure=append(root,'figure',{'data-av-fit-policy':'natural'}),a=fixture(document,figure,{width:300,height:180,viewportWidth:1000,autoHeight:true});
+  a.viewport.getBoundingClientRect=()=>({x:0,y:0,left:0,top:0,right:1000,bottom:180,width:1000,height:180});
+  a.mark.getBoundingClientRect=()=>({x:760-a.viewport.scrollLeft,y:60,left:760-a.viewport.scrollLeft,top:60,right:800-a.viewport.scrollLeft,bottom:90,width:40,height:30});
+  const api=attachPlots(root);assert.equal(a.viewport.getAttribute('data-av-pan'),null);api.reserve(figure,{right:320});
+  assert.equal(a.viewport.scrollWidth,1320);assert.equal(a.viewport.getAttribute('data-av-pan'),'ready');assert.equal(a.plot.getAttribute('data-av-zoom'),'1');
+  assert.equal(api.reveal(a.mark,{right:320}),true);near(a.viewport.scrollLeft,128);assert.equal(a.plot.getAttribute('data-av-zoom'),'1','Reveal never changes zoom');
+  figure.setAttribute('data-av-selection-mode','text');api.reserve(figure);assert.equal(a.viewport.scrollWidth,1000);assert.equal(a.viewport.scrollLeft,0);assert.equal(figure.getAttribute('data-av-selection-mode'),'text','Reserve never changes interaction mode');assert.equal(a.viewport.getAttribute('data-av-pan'),null);api.cleanup();
+});
+
 check('zoomed drag is bounded and distinguishes clicks, pen, touch and keyboard', () => {
   const {document}=documentFixture(), root=append(document.body,'main');
   const a=fixture(document,root,{autoHeight:true}), b=fixture(document,root,{autoHeight:true}), api=attachPlots(root);
@@ -41,8 +78,12 @@ check('zoomed drag is bounded and distinguishes clicks, pen, touch and keyboard'
   pointer(a.mark,'pointerdown',{pointerType:'pen'}); pointer(document,'pointermove',{clientX:50,pointerType:'pen'}); pointer(document,'pointerup',{pointerType:'pen'}); assert.equal(click(a.mark,{detail:0,pointerType:'pen'}).defaultPrevented,true);
   const left=a.viewport.scrollLeft;
   for(const extra of [{pointerType:'touch'},{button:2},{isPrimary:false}]){pointer(a.mark,'pointerdown',extra);pointer(document,'pointermove',{clientX:-999,...extra});pointer(document,'pointerup',extra);assert.equal(a.viewport.scrollLeft,left);}
-  const editor=append(a.viewport,'input');pointer(editor,'pointerdown');pointer(document,'pointermove',{clientX:-999});pointer(document,'pointerup');assert.equal(a.viewport.scrollLeft,left);
-  assert.equal(send(a.viewport,'keydown',{key:'ArrowRight'}).defaultPrevented,false,'Native keyboard panning remains available');
+  const editor=append(a.viewport,'input');pointer(editor,'pointerdown');pointer(document,'pointermove',{clientX:-999});pointer(document,'pointerup');assert.equal(a.viewport.scrollLeft,left);a.viewport.scrollLeft=0;send(a.viewport,'scroll');editor.focus();const editorArrow=send(editor,'keydown',{key:'ArrowRight'});assert.equal(editorArrow.defaultPrevented,false);assert.equal(a.viewport.scrollLeft,0,'Pan keyboard handling never consumes arrows inside an editor');
+  a.viewport.scrollLeft=0;a.viewport.scrollTop=0;send(a.viewport,'scroll');const arrow=send(a.viewport,'keydown',{key:'ArrowRight'});const down=send(a.viewport,'keydown',{key:'ArrowDown'});assert.equal(arrow.defaultPrevented,true);assert.equal(down.defaultPrevented,true);assert(a.viewport.scrollLeft>0);assert(a.viewport.scrollTop>0,'Focused Pan mode has deterministic keyboard panning');
+  for(const mode of ['select','text']){root.setAttribute('data-av-selection-mode',mode);a.viewport.scrollLeft=0;a.viewport.scrollTop=0;send(a.viewport,'scroll');a.viewport.focus();const space=send(a.viewport,'keydown',{key:' '});assert.equal(space.defaultPrevented,true);assert(a.viewport.hasAttribute('data-av-space-pan'));
+    pointer(a.mark,'pointerdown');pointer(document,'pointermove',{clientX:50,clientY:70});pointer(document,'pointerup');assert(a.viewport.scrollLeft>0||a.viewport.scrollTop>0,`Space temporarily pans without leaving ${mode} mode`);send(document,'keyup',{key:' '});assert(!a.viewport.hasAttribute('data-av-space-pan'));assert.equal(root.getAttribute('data-av-selection-mode'),mode);}
+  root.setAttribute('data-av-selection-mode','select');
+  const selectedLeft=a.viewport.scrollLeft;pointer(a.mark,'pointerdown');pointer(document,'pointermove',{clientX:-999});pointer(document,'pointerup');assert.equal(a.viewport.scrollLeft,selectedLeft,'Select mode does not drag-pan after Space is released');root.setAttribute('data-av-selection-mode','pan');
   pointer(a.mark,'pointerdown');pointer(document,'pointermove',{clientX:50});send(document.defaultView,'blur');assert(!a.viewport.hasAttribute('data-av-dragging'));
   api.click(a.reset);assert.equal(a.viewport.scrollLeft,0);assert.equal(a.viewport.scrollTop,0);assert.equal(a.viewport.getAttribute('data-av-pan'),null);
   root.removeEventListener('click',inspect);api.cleanup();assert.equal(document.listenerCount,0);assert.equal(document.defaultView.listenerCount,0);assert.equal(a.viewport.listenerCount,0);

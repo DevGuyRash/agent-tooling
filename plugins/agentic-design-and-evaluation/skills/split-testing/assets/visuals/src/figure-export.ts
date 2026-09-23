@@ -1,9 +1,22 @@
 import { escapeText as e } from './core';
 import { figureSource, figureTitle, visualAdapter, figureOrigin, figureContext } from './figures';
-import { wrapText } from './text-layout';
+import { wrapText, browserTextMeasure } from './text-layout';
 import { validateExportCss, validateExportTree } from './export-safety';
 const paintProperties = ['color','fill','fill-opacity','stroke','stroke-width','stroke-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity','font-family','font-size','font-weight','font-style','text-anchor','dominant-baseline','letter-spacing','white-space','paint-order','visibility','background-color','border-color','border-width','border-style','border-radius','line-height','text-align','display','padding','box-sizing','width','height','stop-color','stop-opacity','filter','clip-path','mask','marker-start','marker-mid','marker-end','transform','transform-origin','transform-box','overflow','overflow-wrap','word-break','word-spacing','font-stretch','font-variant','text-decoration','text-transform','vertical-align','margin-top','margin-right','margin-bottom','margin-left','padding-top','padding-right','padding-bottom','padding-left','max-width','min-width','max-height','min-height','flex-direction','flex-wrap','align-items','align-content','justify-content','gap'];
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Preserve paragraph and field boundaries when context is painted as SVG text. */
+function contextText(element: Element): string {
+  const blocks = new Set(['p','div','section','aside','ul','ol','li','dl','dt','dd','h1','h2','h3','h4','h5','h6','blockquote','pre']);
+  const read = (node: Node): string => {
+    if (node.nodeType === 3) return node.textContent || '';
+    if (node.nodeType !== 1) return '';
+    const tag = (node as Element).tagName.toLowerCase();
+    if (tag === 'br') return '\n';
+    const text = Array.from(node.childNodes).map(read).join('');
+    return blocks.has(tag) ? '\n' + text + '\n' : text;
+  };
+  return read(element).replace(/\n{2,}/g,'\n').trim();
+}
 function serialize(node: Node, namespace?: string): string {
   if (node.nodeType === 3) return e(node.textContent || '');
   if (node.nodeType !== 1) return '';
@@ -68,8 +81,15 @@ function paintedClone(element: SVGElement, paint = true): SVGElement {
     for (const style of Array.from(copy.querySelectorAll('style'))) style.remove();
   }
   for (const ui of Array.from(copy.querySelectorAll('[data-av-review-ui]'))) ui.remove();
-  for (const name of ['width','height','min-width','max-width','min-height','max-height','transform']) copy.style.removeProperty(name);
-  copy.removeAttribute('preserveAspectRatio'); validateExportTree(copy); return copy;
+  // The export positions the complete scene in its own canvas. Viewport scaling
+  // also changes computed root margins and transform origins; retaining those
+  // makes the SVG depend on the reader's zoom despite unchanged drawing bounds.
+  // Keep descendant margins/origins: they can be part of authored label layout.
+  for (const name of ['width','height','min-width','max-width','min-height','max-height','transform','transform-origin','margin','margin-top','margin-right','margin-bottom','margin-left']) copy.style.removeProperty(name);
+  // Renderer alignment is part of the drawing. A custom viewport may have a
+  // different aspect ratio from its viewBox; resetting this attribute would
+  // silently center, letterbox or stretch the exported evidence differently.
+  validateExportTree(copy); return copy;
 }
 function sceneBounds(scene: SVGElement): {width:number;height:number} {
   const box=(scene.getAttribute('viewBox')||'').split(/[ ,]+/).map(Number);
@@ -95,6 +115,7 @@ export async function exportFigureSvg(figure: HTMLElement): Promise<string> {
   if(!scene)throw new Error('Image export is unavailable for this visualization. Use its original source.');
   const {width,height}=sceneBounds(scene),row=custom?null:figure.querySelector<SVGElement>('[data-av-axis-layer="rows"]'),axis=custom?null:figure.querySelector<SVGElement>('[data-av-axis-layer="x"]');
   const rowWidth=row?sceneBounds(row).width:0,axisHeight=axis?sceneBounds(axis).height:0,totalWidth=width+rowWidth,padding=20;
+  const measure=browserTextMeasure(document,'14px sans-serif') || undefined;
   const context:string[]=[figureTitle(figure)],legends:{key:SVGElement|null;glyph:HTMLElement|null;label:string;lines:string[];height:number}[]=[];
   for(const node of figureContext(figure)){
     if(node.matches('.av-legend')){
@@ -103,11 +124,11 @@ export async function exportFigureSvg(figure: HTMLElement): Promise<string> {
       else{let glyph:HTMLElement|null=null,text='';const push=()=>{if(!glyph&&!text.trim())return;const lines=wrapText(text.trim(),{maxWidth:Math.max(totalWidth,160)-32,fontSize:14,lineHeight:21}).lines;legends.push({key:null,glyph,label:text.trim(),lines,height:Math.max(20,lines.length*21)+8});};for(const child of Array.from(node.childNodes)){if(child.nodeType===1){push();glyph=child as HTMLElement;text='';}else text+=child.textContent||'';}push();}
       continue;
     }
-    const text=node.textContent?.trim();if(text&&!context.includes(text))context.push(text);
+    const text=contextText(node);if(text&&!context.includes(text))context.push(text);
   }
   const scope=figureOrigin(figure).scope;
   if(scope)context.push(scope.getAttribute('data-av-coordinate-scope')==='complete'?'Complete coordinate pairs only':'All supplied known coordinates determine the scale');
-  const lines=context.flatMap(text=>wrapText(text,{maxWidth:Math.max(totalWidth,160),fontSize:14,lineHeight:21}).lines),headingHeight=lines.length*21+16+legends.reduce((height,item)=>height+item.height,0),exportWidth=Math.max(totalWidth,160)+padding*2;
+  const lines=context.flatMap(text=>wrapText(text,{maxWidth:Math.max(totalWidth,160),fontSize:14,lineHeight:21,measure}).lines),headingHeight=lines.length*21+16+legends.reduce((height,item)=>height+item.height,0),exportWidth=Math.max(totalWidth,160)+padding*2;
   const root=document.createElementNS(SVG_NS,'svg');root.setAttribute('xmlns',SVG_NS);root.setAttribute('xmlns:xlink','http://www.w3.org/1999/xlink');root.setAttribute('width',String(exportWidth));root.setAttribute('height',String(height+axisHeight+headingHeight+padding*2));root.setAttribute('viewBox',`0 0 ${exportWidth} ${height+axisHeight+headingHeight+padding*2}`);
   const probe=document.createElement('span');probe.setAttribute('data-av-review-ui','');figure.appendChild(probe);const color=(token:string,fallback:string)=>{probe.style.setProperty('color',`var(${token})`);const value=document.defaultView?.getComputedStyle?.(probe).color;return value&&!value.includes('var(')?value:fallback;};const ink=color('--av-ink','#172032'),paper=color('--av-plot','#ffffff');probe.remove();
   const rect=document.createElementNS(SVG_NS,'rect');rect.setAttribute('width','100%');rect.setAttribute('height','100%');rect.setAttribute('fill',paper);root.appendChild(rect);

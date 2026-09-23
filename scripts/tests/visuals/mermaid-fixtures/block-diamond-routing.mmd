@@ -1,0 +1,20 @@
+block
+  columns 4
+  input["Evidence bundle"]
+  block:review:2
+    columns 2
+    inspect["Inspect"] verify["Verify"]
+    compare["Compare"] decide{"Ready?"}
+  end
+  output["Retained report"]
+
+  notes["Analyst notes"]:2 space audit["Audit log"]
+
+  input --> inspect
+  inspect -- "normalized" --> verify
+  verify --> compare
+  compare --> decide
+  decide -- "ready" --> output
+  decide -- "needs work" --> notes
+  notes --> inspect
+  output --> audit

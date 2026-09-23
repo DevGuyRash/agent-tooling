@@ -1,0 +1,18 @@
+---
+config:
+  journey:
+    width: 240
+    height: 70
+    taskMargin: 55
+---
+journey
+  title Checkout incident investigation
+  section Reproduce the report
+    Open the customer timeline and correlate request identifiers: 4: Analyst
+    Re-run checkout with a saved non-sensitive payload: 3: Analyst, Tester
+  section Isolate the cause
+    Compare browser and service timestamps across regions: 2: Analyst, SRE
+    Inspect retry behavior under throttled dependency responses: 1: SRE, Tester
+  section Verify the correction
+    Exercise successful and declined payment paths: 4: Tester, Analyst
+    Confirm accessibility notes and support handoff details: 5: Tester, Support

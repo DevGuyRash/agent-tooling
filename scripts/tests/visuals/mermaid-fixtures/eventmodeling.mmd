@@ -1,0 +1,25 @@
+eventmodeling
+
+tf 01 ui Review.SubmissionUI
+tf 02 cmd Review.SubmitEvidence [[SubmitEvidence]]
+tf 03 evt Review.EvidenceSubmitted [[EvidenceSubmitted]]
+tf 04 pcr Review.ChecksumVerifier
+tf 05 cmd Review.VerifyEvidence
+tf 06 evt Review.EvidenceVerified
+tf 07 rmo Review.ReviewQueue ->> 03 ->> 06
+tf 08 ui Review.Dashboard
+
+rf 09 evt External.PolicyUpdated
+tf 10 pcr Review.PolicySync
+tf 11 cmd Review.RefreshPolicy
+tf 12 evt Review.PolicyRefreshed
+
+data SubmitEvidence {
+  reviewId: 'R-1042'
+  evidenceUri: 'offline://evidence/42'
+}
+
+data EvidenceSubmitted {
+  reviewId: string
+  evidenceUri: string
+}

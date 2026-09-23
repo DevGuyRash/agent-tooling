@@ -70,6 +70,19 @@ check('group review, backup and handoff preserve exact values and literal feedba
   const raw=S.encodeReaderNotebook(book,context),read=S.decodeReaderNotebook(raw,context);assert(Object.is(read.review.versions[0].anchor.items[0].values.value,-0));
   const handoff=reviewHandoff(read,registry,'Original question','Actual report');assert(handoff.includes('"value":-0'));assert(handoff.includes('Selected item:'));assert(handoff.includes('````text'));assert(handoff.includes('<script>literal</script>'));registry.cleanup();
 });
+check('live draft supporting context is reader-visible without becoming a competing leaf or leaking through exclusions',()=>{
+  const {root,registry,figure}=study(),anchor=registry.anchor(figure),context={reportId:'experience',revision:'r1',targetIds:[...registry.targets.keys()],viewIds:[],journeyIds:[]};let book=S.emptyReaderNotebook(context),n=0;
+  const apply=(id,text,draft,observedIds,baseIds)=>{book=S.applyReaderDelta(book,{epoch:book.epoch,id:'delta-support-'+(++n),change:{type:'annotation',version:{id,annotationId:'support-note',anchor,text,at:'2026-09-20T12:00:00Z',draft,...(baseIds?{baseIds}:{})},observedIds}},context);};
+  apply('support-a','Saved base A',false,[]);apply('support-d','Live draft D',true,['support-a'],['support-a']);apply('support-b','Completed sibling B',false,['support-a']);
+  assert.deepEqual(book.review.versions.map(version=>version.id),['support-d','support-b']);assert.deepEqual(book.review.supportingVersions?.map(version=>version.id),['support-a']);
+  const ui=attachContextReview(root,registry,{notebook:()=>book,change:()=>false,reveal:()=>{},now:()=> '2026-09-20T12:00:00Z',id:()=> 'unused'}),notes=append(root,'ul'),inclusions=append(root,'div');ui.render([notes],[],[inclusions]);
+  const cards=notes.querySelectorAll('[data-av-note-version]');assert.equal(cards.length,2);assert(!notes.textContent.includes('Competing version'));
+  let draftCard=Array.from(cards).find(card=>card.textContent.includes('Live draft D'));assert(draftCard);assert(draftCard.textContent.includes('Earlier saved note'));assert(draftCard.textContent.includes('Saved base A'));assert(draftCard.querySelector('[data-av-supporting-version="support-a"]'));
+  const handoff=reviewHandoff(book,registry,'Original question','Actual report');assert.equal((handoff.match(/^## Annotation$/gm)||[]).length,1);assert.equal((handoff.match(/^## Draft$/gm)||[]).length,1);assert(handoff.includes('### Earlier saved note'));assert(handoff.includes('Saved base A'));
+  const base=book.review.supportingVersions[0];book={...book,review:{...book.review,supportingVersions:[{...base,anchor:{...base.anchor,target:{...base.anchor.target,id:'missing-support'}}}]}};ui.render([notes],[],[inclusions]);draftCard=Array.from(notes.querySelectorAll('[data-av-note-version]')).find(card=>card.textContent.includes('Live draft D'));assert(draftCard.textContent.includes('Unresolved earlier note'));assert(draftCard.textContent.includes('The original target is unavailable'));
+  const input=inclusions.querySelector('input');assert(input);input.checked=false;ui.change(input);const shared=ui.exportNotebook(book);assert.equal(shared.review.versions.length,0);assert.equal(shared.review.supportingVersions,undefined,'Excluding an annotation also excludes its saved draft base');
+  ui.cleanup();registry.cleanup();
+});
 check('record reconciliation retains disclosures and selection while share excludes recovery bytes',()=>{
   const {d,root,registry,figure}=study(),context={reportId:'experience',revision:'r1',targetIds:[...registry.targets.keys()],viewIds:[],journeyIds:[]};let book=S.emptyReaderNotebook(context),n=0;
   const ui=attachContextReview(root,registry,{notebook:()=>book,change:change=>{book=S.applyReaderDelta(book,{epoch:book.epoch,id:'d'+(++n),change},context);return true;},reveal:()=>{},now:()=> '2026-09-20T12:00:00Z',id:()=> 'v'+(++n)});

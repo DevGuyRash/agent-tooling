@@ -1,0 +1,20 @@
+---
+config:
+  venn:
+    width: 1200
+    height: 720
+  themeCSS: ".venn-area text, .venn-title { fill: var(--av-ink) !important; } .venn-set-0 path { fill: var(--av-series-1) !important; stroke: var(--av-series-1) !important; } .venn-set-1 path { fill: var(--av-series-2) !important; stroke: var(--av-series-2) !important; } .venn-set-2 path { fill: var(--av-series-3) !important; stroke: var(--av-series-3) !important; }"
+---
+venn-beta
+  title Evidence worth reusing
+  set Supported["Supported syntax"]:24
+    text SupportedNote["Accepted by the pinned renderer"]
+  set Relevant["Relevant evidence"]:18
+    text RelevantNote["Explains the observed behavior"]
+  set Reproducible["Reproducible result"]:15
+    text ReproNote["Stable across repeated validation"]
+  union Supported,Relevant["Useful"]:12
+  union Supported,Reproducible["Stable"]:10
+  union Relevant,Reproducible["Actionable"]:8
+  union Supported,Relevant,Reproducible["Release evidence"]:6
+    text ReleaseNote["日本語 / é / 👩🏽‍🚀 retained"]

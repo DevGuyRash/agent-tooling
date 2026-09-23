@@ -48,7 +48,10 @@ function fixture(document, parent, options = {}) {
     return { x: 0, y: 0, left: 0, top: 0, width: rendered, height: rendered * intrinsicHeight / intrinsicWidth };
   };
   svg.getBoundingClientRect = rect;
-  Object.defineProperty(viewport, 'scrollWidth', { get: () => Math.max(viewport.clientWidth, rect().width) });
+  Object.defineProperty(viewport, 'scrollWidth', { get: () => {
+    const reserve=viewport.querySelector('[data-av-pan-reserve]'),reserved=reserve&&!reserve.hidden?Number.parseFloat(reserve.style.getPropertyValue('width'))||0:0;
+    return Math.max(viewport.clientWidth, rect().width, reserved);
+  } });
   Object.defineProperty(viewport, 'scrollHeight', { get: () => Math.max(viewport.clientHeight, rect().height) });
   const captured = [], released = [];
   viewport.setPointerCapture = id => captured.push(id); viewport.releasePointerCapture = id => released.push(id);

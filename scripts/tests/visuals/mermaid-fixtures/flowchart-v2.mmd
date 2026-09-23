@@ -1,0 +1,16 @@
+flowchart TB
+  request["Review request"] --> normalize["Normalize evidence"]
+
+  subgraph Evaluation["Evaluation lane"]
+    direction LR
+    hash["Verify checksum"] --> inspect{"Claims supported?"}
+    inspect -- yes --> record["Record finding"]
+    inspect -- no --> gap["Flag evidence gap"]
+  end
+
+  normalize --> hash
+  record --> decision{"Publishable?"}
+  gap --> decision
+  decision -- yes --> report(["Retained report ✓"])
+  decision -- no --> revise["Request revision"]
+  revise -. updated package .-> normalize

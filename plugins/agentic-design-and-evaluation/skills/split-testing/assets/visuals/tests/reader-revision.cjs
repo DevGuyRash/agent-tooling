@@ -59,6 +59,9 @@ async function main() {
   const migrated = R.importReaderReview(raw,context);
   assert(migrated.originals.includes(raw)); assert.equal(migrated.review.versions[0].anchor.target.revision,'r1');
   assert.equal(migrated.review.versions[0].text,'Original older note');
+  const olderAnchor={kind:'section',target:{reportId:'report',revision:'r1',id:'target',label:'Older target',path:[],fingerprint:'sha256:older',excerpt:'Older evidence'}};
+  const olderWithSupport={...previous,review:{versions:[{id:'older-draft',annotationId:'older-annotation',anchor:olderAnchor,text:'Older draft',at:'2026-09-19T12:00:00Z',draft:true,baseIds:['older-base']},{id:'older-completed',annotationId:'older-annotation',anchor:olderAnchor,text:'Older completed sibling',at:'2026-09-19T12:01:00Z',draft:false,baseIds:['older-base']}],bookmarks:[],supportingVersions:[{id:'older-base',annotationId:'older-annotation',anchor:olderAnchor,text:'Exact older saved base',at:'2026-09-19T11:59:00Z',draft:false}]}};
+  const migratedSupport=R.importReaderReview(R.encodeReaderNotebook(olderWithSupport,older),context);assert.equal(migratedSupport.review.supportingVersions[0].text,'Exact older saved base');assert.equal(migratedSupport.review.supportingVersions[0].anchor.target.revision,'r1');
   assert.throws(()=>R.importReaderReview(JSON.stringify({version:999,owner:{kind:'notebook',reportId:'report',revision:'r1'},value:note}),context));
   {
     const {d} = fixture(),scope=append(d.body,'section',{id:'report'});
@@ -107,6 +110,21 @@ async function main() {
     const ui=attachContextReview(scope,registry,{notebook:()=>notebook,change:change=>{if(!accept)return false;notebook={...notebook,review:applyReview(notebook.review,change)};return true;},reveal(){},now:()=> '2026-09-19T12:00:00Z',id:()=>String(++n)});
     const trigger=append(scope,'button');ui.open(registry.anchor(a),trigger);const editor=scope.querySelector('.av-context-review'),textarea=editor.querySelector('textarea');textarea.value='Do not lose me';ui.input(textarea);send(textarea,'keydown',{key:'Escape'});assert(!editor.hidden);
     ui.open(registry.anchor(b),trigger);assert.equal(textarea.value,'Do not lose me');accept=true;send(textarea,'keydown',{key:'Escape'});assert(editor.hidden);assert.equal(notebook.review.versions[0].anchor.target.id,'target');ui.cleanup();registry.cleanup();
+  }
+  // Opening a saved note captures its exact base before a background refresh can
+  // replace the local notebook. The first later input must carry that base into
+  // the stale draft delta instead of silently losing its original saved context.
+  {
+    const {d}=fixture(),scope=append(d.body,'section',{id:'report'}),target=append(scope,'section',{id:'target',class:'av-card'});append(target,'h2',{},'Target');
+    const registry=createTargetRegistry(scope,'r2'),anchor=registry.anchor(target),at='2026-09-19T12:00:00Z';let notebook=R.emptyReaderNotebook(context),lastChange,n=0;
+    notebook={...notebook,review:applyReview(notebook.review,{type:'annotation',version:{id:'saved-a',annotationId:'shared',anchor,text:'Saved A',at,draft:false},observedIds:[]})};
+    const ui=attachContextReview(scope,registry,{notebook:()=>notebook,change:change=>{lastChange=change;notebook={...notebook,review:applyReview(notebook.review,change)};return true;},reveal(){},now:()=>at,id:()=>'draft-'+(++n)});
+    const trigger=append(scope,'button');ui.edit('saved-a',trigger);const editor=scope.querySelector('.av-context-review'),textarea=editor.querySelector('textarea');assert.equal(textarea.value,'Saved A');
+    notebook={...notebook,review:applyReview(notebook.review,{type:'annotation',version:{id:'completed-b',annotationId:'shared',anchor,text:'Completed B',at,draft:false},observedIds:['saved-a']})};
+    textarea.value='Draft D after refresh';ui.input(textarea);
+    assert.deepEqual(lastChange.supportingVersions.map(version=>version.id),['saved-a']);assert.equal(lastChange.supportingVersions[0].text,'Saved A');
+    assert.deepEqual(notebook.review.versions.map(version=>version.text),['Completed B','Draft D after refresh']);assert.deepEqual(notebook.review.supportingVersions.map(version=>version.text),['Saved A']);
+    ui.cleanup();registry.cleanup();
   }
   {
     const {d}=fixture(),scope=append(d.body,'section',{id:'report'}),target=append(scope,'section',{id:'target',class:'av-card'});append(target,'h2',{},'Untrusted <img src=x>');append(target,'p',{},'Original source');

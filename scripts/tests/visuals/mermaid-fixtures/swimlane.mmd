@@ -1,0 +1,27 @@
+swimlane-beta LR
+  subgraph intake [Evidence intake]
+    request([Receive source])
+    retain[Retain exact original evidence]
+  end
+
+  subgraph review [Independent review]
+    inspect[Inspect complete record]
+    compare{Does rendered output match the source?}
+    correct[Correct the recoverable mismatch]
+  end
+
+  subgraph report [Report and archive]
+    publish[Publish findings with evidence references]
+    archive[Archive verified source and rendered result]
+    done((Review complete))
+  end
+
+  request --> retain
+  retain -->|Stable evidence reference| inspect
+  inspect --> compare
+  compare -->|Yes| publish
+  compare -->|No| correct
+  correct -->|Re-run deterministic validation| inspect
+  publish --> archive
+  publish -.->|Notify reader| done
+  archive --> done

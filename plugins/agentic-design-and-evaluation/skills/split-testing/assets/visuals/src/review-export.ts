@@ -56,7 +56,8 @@ export function reviewHandoff(notebook: ReaderNotebook, registry: TargetRegistry
       literal(target?.label || version.targetId), literal(version.text === null ? '[Removed in this version]' : version.text),
       literal('Target ID: ' + version.targetId), 'This note did not record its original evidence fingerprint. The current label is an orientation aid, not confirmation of an unchanged attachment.');
   }
-  const anchors=[...(notebook.review?.versions||[]).map(version=>version.anchor),...(notebook.review?.bookmarks||[])];
+  const supportingVersions=notebook.review?.supportingVersions||[],supportingById=new Map(supportingVersions.map(version=>[version.id,version]));
+  const anchors=[...(notebook.review?.versions||[]).map(version=>version.anchor),...supportingVersions.map(version=>version.anchor),...(notebook.review?.bookmarks||[])];
   const results=registry.resolveAll?.(anchors)||anchors.map(anchor=>registry.resolve(anchor));
   const resolutions=new Map(anchors.map((anchor,index)=>[anchor,results[index]]));
   const groups = new Map<string, AnnotationVersion[]>();
@@ -68,6 +69,7 @@ export function reviewHandoff(notebook: ReaderNotebook, registry: TargetRegistry
       literal(`Annotation: ${id}\nRecorded: ${version.at}\nAttachment: ${resolution.status}. ${resolution.message}`),
       '### Original evidence', literal(anchorText(version.anchor)), '### Reader note',
       literal(version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]'));
+    if(version.draft){let baseIndex=0;for(const baseId of version.baseIds||[]){const base=supportingById.get(baseId);if(!base||base.annotationId!==version.annotationId)continue;const baseResolution=resolutions.get(base.anchor)!;lines.push('### '+(++baseIndex===1?'Earlier saved note':'Earlier saved note '+baseIndex),literal('Version: '+base.id+'\nRecorded: '+base.at+'\nAttachment: '+baseResolution.status+'. '+baseResolution.message),'#### Original evidence',literal(anchorText(base.anchor)),'#### Saved note',literal(base.text===null?'[Removed in this version]':base.text));}}
   }
   const bookmarks = [
     ...notebook.state.bookmarks.map(id => `Earlier target-only bookmark: ${registry.targets.get(id)?.target.label || id} (#${id})\nNo original evidence fingerprint was captured. Verify this attachment against the report.`),

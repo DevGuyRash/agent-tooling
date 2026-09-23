@@ -1,6 +1,6 @@
 import { exactJson } from './exact-json';
 import { readerTimestamp } from "./reader-values";
-import { ReviewRecords, ReviewChange, emptyReviewRecords, validateReview, applyReview } from "./review-state";
+import { AnnotationVersion, ReviewRecords, ReviewChange, emptyReviewRecords, validateReview, applyReview } from "./review-state";
 /** Optional reader records. These describe reader actions, never analytical findings. */
 export const READER_STATE_VERSION = 1;
 export const DEFAULT_READER_ACTIVITY_LIMIT = 128;
@@ -376,11 +376,36 @@ export function mergeReaderNotebooks(left: ReaderNotebook, right: ReaderNotebook
   if(a.epoch!==b.epoch)throw new Error('The review copy and browser notebook have different replacement epochs. Export both before replacing either.');
   const notes=new Map(a.noteVersions.map(version=>[version.id,version]));
   for(const version of b.noteVersions){const old=notes.get(version.id);if(old&&exactJson(old)!==exactJson(version))throw new Error('A note version conflicts with the imported copy.');notes.set(version.id,version);}
-  const annotations=new Map((a.review?.versions||[]).map(version=>[version.id,version]));
-  for(const version of b.review?.versions||[]){const old=annotations.get(version.id);if(old&&exactJson(old)!==exactJson(version))throw new Error('An annotation version conflicts with the imported copy.');annotations.set(version.id,version);}
+  const activeIds=new Set([...(a.review?.versions||[]),...(b.review?.versions||[])].map(version=>version.id)),allA=[...(a.review?.versions||[]),...(a.review?.supportingVersions||[])],allB=[...(b.review?.versions||[]),...(b.review?.supportingVersions||[])],annotations=new Map(allA.map(version=>[version.id,version]));
+  const annotationContent=(version:AnnotationVersion)=>{const{baseIds,...content}=version;return content;};
+  for(const version of allB){
+    const old=annotations.get(version.id);
+    if(old&&exactJson(annotationContent(old))!==exactJson(annotationContent(version)))throw new Error('An annotation version conflicts with the imported copy.');
+    if(old){const baseIds=[...new Set([...(old.baseIds||[]),...(version.baseIds||[])])];annotations.set(version.id,{...old,...(baseIds.length?{baseIds}:{})});}
+    else annotations.set(version.id,version);
+  }
+  const superseded=new Set<string>();
+  const groups=new Map<string,AnnotationVersion[]>();
+  for(const version of annotations.values()){const group=groups.get(version.annotationId)||[];group.push(version);groups.set(version.annotationId,group);}
+  const cyclicAnnotations=new Set<string>();
+  for(const[annotationId,group]of groups){
+    const ids=new Set(group.map(version=>version.id)),incoming=new Map(group.map(version=>[version.id,0])),next=new Map<string,string[]>();
+    for(const version of group)for(const id of new Set(version.baseIds||[]))if(ids.has(id)){const edges=next.get(version.id)||[];edges.push(id);next.set(version.id,edges);incoming.set(id,(incoming.get(id)||0)+1);}
+    const ready=[...incoming].filter(([,count])=>count===0).map(([id])=>id);let visited=0;
+    while(ready.length){const id=ready.pop()!;visited++;for(const baseId of next.get(id)||[]){const count=(incoming.get(baseId)||0)-1;incoming.set(baseId,count);if(count===0)ready.push(baseId);}}
+    if(visited!==group.length)cyclicAnnotations.add(annotationId);
+  }
+  for(const version of annotations.values())if(activeIds.has(version.id)&&!version.draft)for(const id of version.baseIds||[]){
+    const base=annotations.get(id);
+    if(!cyclicAnnotations.has(version.annotationId)&&id!==version.id&&base?.annotationId===version.annotationId)superseded.add(id);
+  }
+  const survivingDraftBases=new Set<string>();
+  for(const version of annotations.values())if(activeIds.has(version.id)&&version.draft&&!superseded.has(version.id))for(const id of version.baseIds||[]){const base=annotations.get(id);if(base&&!base.draft&&base.annotationId===version.annotationId)survivingDraftBases.add(id);}
+  const annotationVersions=[...annotations.values()].filter(version=>activeIds.has(version.id)&&!superseded.has(version.id)),finalActiveIds=new Set(annotationVersions.map(version=>version.id)),supportingVersions:AnnotationVersion[]=[];
+  for(const id of survivingDraftBases){if(finalActiveIds.has(id))continue;const base=annotations.get(id);if(base&&!base.draft)supportingVersions.push(base);}
   const bookmarks=new Map([...(a.review?.bookmarks||[]),...(b.review?.bookmarks||[])].map(anchor=>[exactJson(anchor),anchor]));
   const noteVersions=[...notes.values()];
-  return validateReaderNotebook({...a,reviewImports:[...new Set([...(a.reviewImports||[]),...(b.reviewImports||[])])],noteVersions,state:{...a.state,notes:projectedNotes(noteVersions,[...a.state.notes,...b.state.notes]),bookmarks:[...new Set([...a.state.bookmarks,...b.state.bookmarks])]},review:{versions:[...annotations.values()],bookmarks:[...bookmarks.values()]},originals:[...new Set([...a.originals,...b.originals])]},context);
+  return validateReaderNotebook({...a,reviewImports:[...new Set([...(a.reviewImports||[]),...(b.reviewImports||[])])],noteVersions,state:{...a.state,notes:projectedNotes(noteVersions,[...a.state.notes,...b.state.notes]),bookmarks:[...new Set([...a.state.bookmarks,...b.state.bookmarks])]},review:{versions:annotationVersions,bookmarks:[...bookmarks.values()],...(supportingVersions.length?{supportingVersions}:{})},originals:[...new Set([...a.originals,...b.originals])]},context);
 }
 /** Explicit imports can retain feedback from an older revision as unresolved context. */
 export function importReaderReview(raw: string, context: ReaderContext): ReaderNotebook {
@@ -403,6 +428,7 @@ export function importReaderReview(raw: string, context: ReaderContext): ReaderN
     const ownContext:ReaderContext={reportId:state.reportId,revision:state.revision,targetIds:[...new Set(targets)],viewIds:[...new Set([...(state.viewId?[state.viewId]:[]),...state.activity.flatMap(action=>action.viewId?[action.viewId]:[])])],journeyIds:state.journeyId?[state.journeyId]:[],activityLimit:context.activityLimit};
     const previous=decodeReaderNotebook(exactJson(wrapped),ownContext),fresh=emptyReaderNotebook(context);
     const anchor=(id:string)=>({kind:'section' as const,target:{reportId:previous.state.reportId,revision:previous.state.revision,id,label:id,path:[],fingerprint:'unavailable',excerpt:'This earlier notebook did not include the original target text.'}});
-    return {...fresh,originals:[...previous.originals,raw],review:{versions:[...(previous.review?.versions||[]),...previous.noteVersions.map(version=>({id:'import:'+version.id,annotationId:'legacy:'+version.targetId,anchor:anchor(version.targetId),text:version.text,at:version.updatedAt,draft:false}))],bookmarks:[...(previous.review?.bookmarks||[]),...previous.state.bookmarks.map(anchor)]}};
+    const supportingVersions=previous.review?.supportingVersions||[];
+    return {...fresh,originals:[...previous.originals,raw],review:{versions:[...(previous.review?.versions||[]),...previous.noteVersions.map(version=>({id:'import:'+version.id,annotationId:'legacy:'+version.targetId,anchor:anchor(version.targetId),text:version.text,at:version.updatedAt,draft:false}))],bookmarks:[...(previous.review?.bookmarks||[]),...previous.state.bookmarks.map(anchor)],...(supportingVersions.length?{supportingVersions}:{})}};
   }
 }

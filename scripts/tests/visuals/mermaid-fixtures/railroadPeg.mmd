@@ -1,0 +1,17 @@
+railroad-peg-beta
+title "Command Grammar with Predicates"
+
+Command <- ( Deploy / Inspect ) End ;
+Deploy <- "deploy" Space Target ( Space Option )* ;
+Inspect <- "inspect" Space Target ;
+Target <- !Keyword Identifier ;
+Option <- "--" Identifier ( "=" Value )? ;
+Identifier <- Letter ( Letter / Digit / "-" / "_" )* ;
+Value <- Quoted / Bare ;
+Quoted <- "\"" ( !"\"" . )* "\"" ;
+Bare <- ( !Space . )+ ;
+Keyword <- "deploy" / "inspect" ;
+Letter <- "a" / "b" / "c" / "x" / "y" / "z" ;
+Digit <- "0" / "1" / "2" / "3" / "4" / "5" / "6" / "7" / "8" / "9" ;
+Space <- " "+ ;
+End <- !. ;

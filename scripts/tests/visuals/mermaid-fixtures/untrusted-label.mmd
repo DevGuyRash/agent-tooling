@@ -1,0 +1,9 @@
+flowchart LR
+  literal["<script>alert(1)</script>"] --> escaped["Retain the literal source; never run it"]
+  html["&lt;img src=x onerror=alert(2)&gt; literal evidence"] --> escaped
+  unicode["日本語 👩🏽‍🚀 é remains exact"] --> escaped
+  repeatedA["Repeated label <b>not markup</b>"] --> compare["Compare literal labels"]
+  repeatedB["Repeated label <b>not markup</b>"] --> compare
+  escaped --> compare
+  compare --> safe["No label becomes executable code"]
+  safe -.-> literal

@@ -1,0 +1,16 @@
+---
+config:
+  layout: dagre
+---
+flowchart LR
+  intake["Input evidence package with repeated labels"] --> validate{"Complete enough to inspect?"}
+  validate -->|yes| parse["Parse exact source and references"]
+  validate -->|no| missing["Retain missing fields and qualification"]
+  parse --> render["Render deterministic diagram"]
+  missing --> render
+  render --> review["Review repeated label: condition α / condition α"]
+  parse --> audit["Audit stable item identity"]
+  review --> export["Export SVG and PNG evidence"]
+  audit --> export
+  export --> handoff["Handoff exact source and status"]
+  handoff -.->|feedback loop| validate

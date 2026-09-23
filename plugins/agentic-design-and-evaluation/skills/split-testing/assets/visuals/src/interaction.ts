@@ -43,6 +43,7 @@ interface FocusState {
   kind: "section" | "figure";
   owner: HTMLElement;
   plotSnapshot: PlotSnapshot;
+  resumeInspector?: () => boolean;
   suspension: { element: HTMLElement; hidden: string | null }[];
   card: HTMLElement;
   marker: HTMLElement;
@@ -100,7 +101,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   catch (error) { notifications.cleanup(); preferences.cleanup(); refinementCleanup(); throw error; }
   const plots = attachPlots(root);
   figures.dock();
-  diagrams = attachMermaid(root, figure => { plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
+  diagrams = attachMermaid(root, figure => { updateFigureBounds(); plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
   const readers=new Map<HTMLElement,ComparisonReader>();
   const collections=new Map<HTMLElement,HTMLElement[]>();
   const collectionOwners=new WeakMap<HTMLElement,HTMLElement>();
@@ -192,6 +193,32 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     element.focus({ preventScroll: true });
   }
   function scroll(element: Element): void { element.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "auto" }); }
+  const initialTakeoverEvents = ['pointerdown','wheel','touchstart','keydown','click','input','change'] as const;
+  let initialFragmentSettle: { target: Element; hash: string; takeover: EventListener } | null = null;
+  function cancelInitialFragmentSettle(): void {
+    const current = initialFragmentSettle; if (!current) return;
+    initialFragmentSettle = null;
+    for (const type of initialTakeoverEvents) document.removeEventListener(type,current.takeover,true);
+  }
+  function beginInitialFragmentSettle(target: Element): void {
+    if (!window) return;
+    cancelInitialFragmentSettle();
+    const takeover = (() => cancelInitialFragmentSettle()) as EventListener;
+    initialFragmentSettle = { target, hash: window.location.hash, takeover };
+    // Only the initial unresolved entry fragment owns this temporary correction.
+    // Any reader input/navigation takes ownership immediately and removes these
+    // capture listeners, so a late async layout cannot pull them back afterward.
+    for (const type of initialTakeoverEvents) document.addEventListener(type,takeover,true);
+  }
+  function finishInitialFragmentSettle(): void {
+    const current = initialFragmentSettle; if (!current) return;
+    if (!cleaned && current.target.isConnected && contains(current.target) && window?.location.hash === current.hash) scroll(current.target);
+    cancelInitialFragmentSettle();
+  }
+  async function afterLayoutFrames(): Promise<void> {
+    if (!window?.requestAnimationFrame) return;
+    await new Promise<void>(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+  }
   function motion(element: Element): void {
     if (!reducedMotion || reducedMotion.matches || typeof element.animate !== "function") return;
     currentAnimation.get(element)?.cancel();
@@ -272,13 +299,13 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for (const single of state.showSingle) attribute(single, "aria-pressed", String(state.mode === "single"));
     if (state.reset) hidden(state.reset, !state.query);
     const total = state.panels.length;
-    if (state.mode === "all") message(state.status, `Full report. All ${total} sections are available.`);
+    if (state.mode === "all") message(state.status, total === 1 ? 'Full report. The section is available.' : `Full report. All ${total} sections are available.`);
     else {
       const selected = state.panels.find(panel => panel.getAttribute("data-av-panel") === state.selected);
-      message(state.status, `Reading “${selected ? panelName(selected) : "Section"}”. ${total} sections are available in this report.`);
+      message(state.status, `Reading “${selected ? panelName(selected) : "Section"}”. ${total} ${total === 1 ? 'section is' : 'sections are'} available in this report.`);
     }
     const count = inScope(state.element, "[data-av-view-count]", ".av-workspace")[0];
-    if (count) message(count, state.mode === "all" ? `${total} sections` : `${Math.max(1, state.panels.findIndex(panel => panel.getAttribute("data-av-panel") === state.selected) + 1)} / ${total}`);
+    if (count) message(count, state.mode === "all" ? `${total} ${total === 1 ? 'section' : 'sections'}` : `${Math.max(1, state.panels.findIndex(panel => panel.getAttribute("data-av-panel") === state.selected) + 1)} / ${total}`);
     for (const [id, route] of state.journeys) {
       hidden(route.element, state.journey !== id || state.mode === "all");
       const index = route.steps.indexOf(state.selected || "");
@@ -328,6 +355,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     return (frame ? frameLocations.get(frame)?.state : undefined) || workspaces.find(state => state.element === element.closest(".av-workspace"));
   }
   function reveal(target: Element, takeFocus: boolean, selectView = true): void {
+    if (takeFocus) inspectors?.dismissOutside(target);
     // A fragment outside the active dialog must first restore its live frame.
     if (focused && !focused.card.contains(target)) closeAllFocus(false);
     const state = workspaceFor(target);
@@ -369,6 +397,10 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     const previous = focused;
     focused = null;
     if (!previous) return;
+    // The inline report is inert while the outer modal is open. Release the
+    // modal before restoring its live content, measurements and keyboard focus.
+    // Nested returns keep the modal open and restore the previous view inside it.
+    if (!focusStack.length && dialog?.open) dialog.close();
     if (previous.kind === "figure") { previous.card.removeAttribute('data-av-expanded-figure'); previous.card.removeAttribute('data-av-fit-width'); previous.card.removeAttribute('data-av-fit-height'); }
     for (const move of previous.toolMoves) if (move.marker.parentNode) move.marker.parentNode.replaceChild(move.element, move.marker);
     if (previous.initiallyClosed) {
@@ -379,14 +411,13 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (previous.marker.parentNode) previous.marker.parentNode.replaceChild(previous.card, previous.marker);
     else if (!root.contains(previous.card) && root !== previous.card) root.appendChild(previous.card);
     previous.releaseReviewPosition();
-    plots.refresh(previous.card); plots.restore(previous.plotSnapshot);
     previous.card.classList.toggle("av-focused", previous.previouslyFocused);
     if (previous.previousAttribute === null) previous.card.removeAttribute("data-av-focused");
     else previous.card.setAttribute("data-av-focused", previous.previousAttribute);
     for (const control of previous.expansionControls) {
       if (control.hidden === null) control.element.removeAttribute("hidden"); else control.element.setAttribute("hidden", control.hidden);
     }
-    preferences.refresh(previous.card);figures.refresh();for(const bar of sectionBars)bar.refresh();
+    preferences.refresh(previous.card);
     attribute(previous.trigger, "aria-expanded", "false");
     focused = focusStack.pop() || null;
     if (focused) {
@@ -396,6 +427,11 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       showFigureContext(focused);
       dialog?.setAttribute('data-av-viewer-kind',focused.kind); preferences.mirror(dialog!,focused.owner); updateFigureBounds(); plots.refresh(focused.card);
     } else dialog?.removeAttribute('data-av-viewer-kind');
+    // A nested parent must be visible before its controls and plot dimensions
+    // are restored; measuring while suspended would leave focus on overflow.
+    inspectors?.refresh();
+    plots.refresh(previous.card); plots.restore(previous.plotSnapshot);
+    figures.refresh();for(const bar of sectionBars)bar.refresh();
     if (restoreKeyboardFocus && previous.trigger.isConnected) {
       let destination = previous.trigger;
       for (let ancestor = previous.trigger.parentElement; ancestor; ancestor = ancestor.parentElement) {
@@ -404,10 +440,11 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       focus(destination);
       for (const saved of previous.scroll) if (saved.element.isConnected) { saved.element.scrollTop = saved.top; saved.element.scrollLeft = saved.left; }
       window?.scrollTo?.(previous.viewport.x, previous.viewport.y);
+      if (!cleaned && previous.resumeInspector?.()) { plots.refresh(previous.card); plots.restore(previous.plotSnapshot); }
     }
   }
   function closeFocus(restoreKeyboardFocus = true): void {
-    // Restore synchronously; the native close event can be delivered later.
+    // State is cleared before closing, including hosts with synchronous events.
     restoreFocus(restoreKeyboardFocus);
     if (!focused && dialog?.open) dialog.close();
     notifications?.refresh();
@@ -419,9 +456,17 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   }
   function updateFigureBounds(): void {
     if(focused?.kind!=='figure'||!dialogBody)return;
-    const width=dialogBody.clientWidth,height=dialogBody.clientHeight;
-    if(width>0)focused.card.setAttribute('data-av-fit-width',String(width));
-    if(height>0)focused.card.setAttribute('data-av-fit-height',String(height));
+    const css=window?.getComputedStyle?.(dialogBody),pixels=(value:string|undefined)=>Number.parseFloat(value||'')||0;
+    const width=dialogBody.clientWidth-pixels(css?.paddingLeft)-pixels(css?.paddingRight);
+    const height=dialogBody.clientHeight-pixels(css?.paddingTop)-pixels(css?.paddingBottom);
+    const drawing=focused.card.querySelector<HTMLElement>('.av-row-plot-layout,.av-plot-scroll');
+    // The body's client box includes its padding. Captions/source disclosures
+    // inside a composed figure also need their own space around the drawing.
+    // Measuring only the body made a supposedly fitted scene overflow the modal.
+    const outside=drawing?Math.max(0,focused.card.scrollHeight-drawing.getBoundingClientRect().height):0;
+    const assign=(name:string,value:number)=>{const text=String(value);if(focused!.card.getAttribute(name)!==text)focused!.card.setAttribute(name,text);};
+    if(width>0)assign('data-av-fit-width',width);
+    if(height>0)assign('data-av-fit-height',Math.max(120,height-outside));
   }
   function inspectFrame(card: HTMLElement, trigger: HTMLElement, kind: "section" | "figure" = "section"): void {
     if (focused?.card === card) { closeFocus(); return; }
@@ -483,13 +528,14 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     card.parentNode.insertBefore(marker, card);
     const expansionControls = ownCardParts(card, "[data-av-focus]").map(element => ({ element, hidden: element.getAttribute("hidden") }));
     const savedPlotSnapshot = plots.snapshot(card);
+    const resumeInspector = kind === 'figure' ? inspectors?.suspend(card) : undefined;
     const releaseReviewPosition=registerReviewPlaceholder(marker,card);
     if(nested && focused){
       focused.suspension=[{element:focused.card,hidden:focused.card.getAttribute('hidden')},...focused.toolMoves.map(move=>({element:move.element,hidden:move.element.getAttribute('hidden')}))];
       for(const state of focused.suspension)state.element.hidden=true;
       focusStack.push(focused);
     }
-    focused = { kind, owner, releaseReviewPosition, plotSnapshot: savedPlotSnapshot, suspension: [], card, marker, scroll: scrollState, viewport, trigger, previouslyFocused: card.classList.contains("av-focused"), previousAttribute: card.getAttribute("data-av-focused"), expansionControls, toolMoves: [], initiallyClosed: card.matches("details") && !card.hasAttribute("open"), previousTemporaryAttribute: card.getAttribute("data-av-inspection-open") };
+    focused = { kind, owner, releaseReviewPosition, plotSnapshot: savedPlotSnapshot, resumeInspector, suspension: [], card, marker, scroll: scrollState, viewport, trigger, previouslyFocused: card.classList.contains("av-focused"), previousAttribute: card.getAttribute("data-av-focused"), expansionControls, toolMoves: [], initiallyClosed: card.matches("details") && !card.hasAttribute("open"), previousTemporaryAttribute: card.getAttribute("data-av-inspection-open") };
     for (const tools of kind === 'figure' ? [figures.toolbar(card)].filter((element): element is HTMLElement => !!element) : ownCardParts(card, ".av-frame-tools")) {
       const place = document.createComment("av-frame-tools"); tools.parentNode?.insertBefore(place, tools);
       focused.toolMoves.push({ element: tools, marker: place }); dialogTools.appendChild(tools);
@@ -574,19 +620,10 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     synchronizeObject(explorer, key);
     if(focused?.kind==='figure'&&focused.card.contains(control)){
       for(const mark of elements<HTMLElement>(focused.card,'[data-av-inspect]'))attribute(mark,'data-av-inspected',mark.getAttribute('data-av-inspect')===key?'':null);
-      if(dialogContext){
-        let detail=dialogContext.querySelector<HTMLElement>('[data-av-selected-context]');
-        if(!detail){detail=document.createElement('section');detail.setAttribute('data-av-selected-context','');dialogContext.insertBefore(detail,dialogContext.firstChild);}
-        detail.replaceChildren();
-        const title=document.createElement('h3');title.textContent=titleOf(object);detail.appendChild(title);
-        const content=object.querySelector('.av-object-body');
-        if(content){const copy=content.cloneNode(true) as HTMLElement;copy.removeAttribute('id');for(const node of Array.from(copy.querySelectorAll('[id]')))node.removeAttribute('id');for(const node of Array.from(copy.querySelectorAll('[data-av-controls],[data-av-review-ui]')))node.remove();detail.appendChild(copy);}
-        else {const text=document.createElement('p');text.textContent=object.textContent;detail.appendChild(text);}
-        dialogContext.parentElement?.setAttribute('open','');dialogContext.scrollTop=0;
-      }
       notebooks?.recordInspection(object);return;
     }
-    reveal(object, takeFocus, selectView);
+    reveal(object, false, selectView);
+    if (takeFocus && !inspectors?.open(control, control as HTMLElement)) reveal(object, true, selectView);
     let status = inScope(explorer, "[data-av-inspector-status]", "[data-av-explorer]")[0];
     if (!status) { status = output(explorer, "av-inspection-status av-sr-only"); status.setAttribute("data-av-inspector-status", ""); }
     message(status, `Inspecting “${titleOf(object)}”. Other objects and their evidence remain available.`);
@@ -686,7 +723,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     const scopeChoice = target.closest("[data-av-scope-choice]");
     if (scopeChoice) { const explorer = scopeChoice.closest<HTMLElement>("[data-av-explorer]"); if (explorer) coordinateScope(explorer, scopeChoice.getAttribute("data-av-scope-choice")!); return; }
     const inspect = target.closest("[data-av-inspect]");
-    if (inspect) { inspectObject(inspect, undefined, (event.detail || 0) === 0); return; }
+    if (inspect) { inspectObject(inspect, undefined, (event.detail || 0) === 0 || !!inspect.closest('.av-inspector')); return; }
     const step = target.closest("[data-av-step]");
     if (step) { stepObject(step); return; }
     const state = workspaceFor(target);
@@ -776,7 +813,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       for (const explorer of inclusive("[data-av-explorer]")) synchronizeObject(explorer);
       return;
     }
-    if (target.matches("[data-av-select]")) { inspectObject(target, undefined, false); inspectors?.refresh(); inspectors?.open(target,target as HTMLElement); }
+    if (target.matches("[data-av-select]")) { inspectObject(target, undefined, false); inspectors?.refresh(); inspectors?.open(target,target as HTMLElement,false); }
     else if (target.matches("[data-av-compare]")) {
       const explorer = target.closest<HTMLElement>("[data-av-explorer]");
       if (explorer) compareArtifacts(explorer);
@@ -845,7 +882,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for(const object of inScope<HTMLElement>(explorer,'[data-av-object]','[data-av-explorer]')){const parent=object.parentElement;if(!parent||!(parent.matches('.av-deck-grid,.av-scenario-grid')||parent.matches('.av-object-list')&&parent.closest('.av-inspector')))continue;const values=groups.get(parent)||[];values.push(object);groups.set(parent,values);}
     for(const[parent,objects]of groups){
       collections.set(parent,objects);stateClass(parent,'av-collection-stage',true);const oldColumns=parent.style.getPropertyValue('--av-reader-columns');undo.push(()=>{if(oldColumns)parent.style.setProperty('--av-reader-columns',oldColumns);else parent.style.removeProperty('--av-reader-columns');});
-      for(const object of objects){collectionOwners.set(object,parent);const summary=object.querySelector('summary');if(summary){attribute(summary,'tabindex','-1');attribute(summary,'aria-disabled',null);}}
+      for(const object of objects){collectionOwners.set(object,parent);const summary=object.querySelector('summary');if(summary){attribute(summary,'tabindex','-1');attribute(summary,'aria-disabled',null);if(parent.closest('.av-inspector')){attribute(summary,'role','heading');attribute(summary,'aria-level','3');}}}
       if(parent.matches('.av-scenario-grid')&&objects.length>1&&!inScope(explorer,'[data-av-compare]','[data-av-explorer]').length){const choices=document.createElement('fieldset');choices.className='av-artifact-controls';choices.setAttribute('data-av-controls','');const legend=document.createElement('legend');legend.textContent='Compare scenarios';choices.appendChild(legend);for(const object of objects){const label=document.createElement('label');label.className='av-compare-choice';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.setAttribute('data-av-compare',object.getAttribute('data-av-object')!);label.appendChild(checkbox);label.appendChild(document.createTextNode(titleOf(object)));choices.appendChild(label);}parent.parentNode!.insertBefore(choices,parent);undo.push(()=>choices.remove());}
     }
   }
@@ -948,6 +985,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     renderSearch(state);
   }
   const explicitTarget = fragment(window?.location.hash || "");
+  if (explicitTarget) beginInitialFragmentSettle(explicitTarget);
   figures.dock();
   for(const card of inclusive<HTMLElement>('.av-card')){
     const toolbar=ownCardParts(card,'.av-frame-tools')[0];if(!toolbar)continue;
@@ -963,12 +1001,28 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
       state.selected = saved.viewId; state.mode = saved.mode; state.journey = saved.journeyId; renderWorkspace(state);
     }
   }
-  inspectors = attachInspectors(root);
+  const inspectorReserves = new Set<HTMLElement>();
+  inspectors = attachInspectors(root, {
+    command: (figure,control,options) => figures.command(figure,control,options),
+    layout: figure => plots.refresh(figure),
+    contextChanged: () => notifications?.refresh(),
+    reveal: (item, occlusion) => {
+      const figure = figureOf(item);
+      for (const previous of inspectorReserves) if (!occlusion || previous !== figure) { plots.reserve(previous); inspectorReserves.delete(previous); }
+      if (!figure || !occlusion) return;
+      const viewport = figure.querySelector<HTMLElement>('.av-plot-scroll')?.getBoundingClientRect();
+      if (!viewport) return;
+      const right = Math.max(0, viewport.right - occlusion.left + 12);
+      plots.reserve(figure, {right}); inspectorReserves.add(figure);
+      plots.reveal(item, {right});
+    },
+  });
   itemSelection = attachItemSelection(root, figures.figures, {
     inspect: (item, open, trigger) => {
       if (item.hasAttribute('data-av-inspect')) {
         inspectObject(item,undefined,false); inspectors?.refresh();
-        if (open && focused?.kind !== 'figure') inspectors?.open(item,trigger||item);
+        if (open) inspectors?.open(item,trigger||item);
+        else inspectors?.preview(item);
       } else selectDiagramItem(item,open,trigger);
     },
     command: (figure,control,options) => figures.command(figure,control,options),
@@ -1007,7 +1061,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     if (!contains(anchor) && contains(destination)) reveal(destination, true);
   }) as EventListener);
   listen(root, "toggle", disclosureToggle as EventListener, true);
-  if (window) listen(window, "hashchange", hashChanged as EventListener);
+  if (window) listen(window, "hashchange", (() => { cancelInitialFragmentSettle(); hashChanged(); }) as EventListener);
   hashChanged();
   const initialAppearance = preferences.whenReady().then(() => {
     if (cleaned) return; appearanceReady = true; return diagrams?.refresh();
@@ -1017,6 +1071,18 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     for (const state of workspaces) attribute(state.element, 'data-av-ready', '');
     notifyReportReady(document);
   });
+  const initialFragmentSettled = explicitTarget ? Promise.all([initialAppearance,ready]).then(async () => {
+    if (cleaned || !initialFragmentSettle) return;
+    await Promise.all([preferences.whenIdle(),notebooks?.whenIdle(),diagrams?.whenIdle(),figures.whenIdle()]);
+    if (cleaned || !initialFragmentSettle) return;
+    // ResizeObserver/layout work triggered by the final renderer mutation lands
+    // at the next rendering opportunity. Let it drain, then wait once more for
+    // any renderer refresh it scheduled before correcting the original fragment.
+    await afterLayoutFrames();
+    if (cleaned || !initialFragmentSettle) return;
+    await diagrams?.whenIdle();
+    finishInitialFragmentSettle();
+  }).finally(cancelInitialFragmentSettle) : Promise.resolve();
   if(window)listen(window,'resize',(()=>{updateFigureBounds();if(focused?.kind==='figure')plots.refresh(focused.card);}) as EventListener);
   for(const select of inclusive<HTMLSelectElement>('select')){
     if(select.parentElement?.classList.contains('av-select-wrap'))continue;
@@ -1029,6 +1095,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
   const cleanup = Object.assign((): void => {
     if (cleaned) return;
     cleaned = true;
+    cancelInitialFragmentSettle();
     closeAllFocus();
     cancelMotion();
     for (const state of workspaces) state.finder?.cleanup();
@@ -1044,7 +1111,7 @@ export function enhanceVisuals(root: HTMLElement): EnhancementCleanup {
     plots.cleanup(); figures.cleanup();
     refinementCleanup();
     enhancedRoots.delete(root);
-  }, { whenReady: () => ready, whenIdle: async (): Promise<void> => { await Promise.all([ready, initialAppearance,preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
+  }, { whenReady: () => ready, whenIdle: async (): Promise<void> => { await Promise.all([ready, initialAppearance,initialFragmentSettled,preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
   enhancedRoots.set(root, cleanup);
   return cleanup;
 }

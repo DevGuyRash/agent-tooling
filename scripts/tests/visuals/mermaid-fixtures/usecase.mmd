@@ -1,0 +1,28 @@
+usecase-beta
+direction LR
+
+actor Reader("Report reader")
+actor Reviewer("Independent reviewer")@{ type: hollow }
+
+systemBoundary evidence["Evidence workflow"]@{ type: package }
+  Capture("Capture exact source")
+  Inspect("Inspect complete retained record")
+  Reconcile("Reconcile a rendering mismatch")
+end
+
+systemBoundary reporting["Reporting workflow"]
+  Publish("Publish evidence-backed findings")
+  Archive[Archive verified evidence]
+end
+
+note for Inspect "`The same retained source is used for parse and render checks`"
+
+Reader --> Capture
+Reader --> Inspect
+Reviewer --> Inspect
+Inspect ..> : include Capture
+Reconcile ..> : extend Inspect
+Reviewer -- "approves evidence" --> Publish
+Inspect --> Publish
+Reconcile --> Capture
+Publish --> Archive

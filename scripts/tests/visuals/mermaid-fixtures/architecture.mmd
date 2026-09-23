@@ -1,0 +1,16 @@
+architecture-beta
+  group platform(cloud)[Review platform]
+  group storage(database)[Evidence storage] in platform
+
+  service analyst(internet)[Analyst browser]
+  service api(server)[Review API] in platform
+  service worker(server)[Verifier] in platform
+  service primary(database)[Primary evidence] in storage
+  service archive(disk)[Immutable archive] in storage
+  junction fanout in platform
+
+  analyst:R --> L:api
+  api:B --> T:worker
+  worker:B --> T:fanout
+  fanout:L --> R:primary
+  fanout:R --> L:archive

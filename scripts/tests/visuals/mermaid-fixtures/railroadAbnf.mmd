@@ -1,0 +1,10 @@
+railroad-abnf-beta
+title "Telemetry Header Grammar"
+
+message = version SP request-id SP tags ;
+version = "v" 1*2DIGIT ;
+request-id = 8HEXDIG "-" 4HEXDIG "-" 4HEXDIG ;
+tags = tag *( "," tag ) ;
+tag = 1*( ALPHA / DIGIT / "-" / "_" ) ;
+SP = %x20 ;
+HEXDIG = DIGIT / %x41-46 / %x61-66 ;

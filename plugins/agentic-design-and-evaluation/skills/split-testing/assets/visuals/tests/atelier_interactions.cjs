@@ -233,6 +233,44 @@ for (const unavailable of ["noDialog", "rejectDialog"]) {
   cleanup();
 }
 
+// Initial deep links settle again after delayed diagram layout, without moving
+// focus. A reader navigation while that render is pending cancels the correction,
+// so the old entry fragment cannot pull the reader back later. This is a DOM /
+// controllable-runtime contract; native browser scroll geometry is tested separately.
+for (const readerTakesOver of [false, true]) {
+  const document = new DocumentDouble(), nativeCreate = document.createElement.bind(document);
+  document.defaultView.getComputedStyle = node => ({ fontFamily: "Fixture Sans", font: "14px Fixture Sans", color: "rgb(20, 30, 40)", transform: "none", overflowX: "visible", overflowY: "visible", getPropertyValue: name => node.style?.getPropertyValue?.(name) || "" });
+  document.createElement = tag => {
+    if (tag !== "template") return nativeCreate(tag);
+    const template = nativeCreate("template"), content = nativeCreate("fragment"); template.content = content;
+    Object.defineProperty(template, "innerHTML", { set() { content.replaceChildren(); const svg = nativeCreate("svg"); svg.setAttribute("width", "200"); svg.setAttribute("height", "100"); append(svg, "text", {}, "Rendered late diagram"); content.appendChild(svg); } });
+    return template;
+  };
+  let releaseRender = null, phase = "entry";
+  document.defaultView.mermaid = {
+    initialize() {}, async parse() { return { config: {} }; },
+    async render() { await new Promise(resolve => { releaseRender = resolve; }); return { svg: "<svg width=\"200\" height=\"100\"><text>Rendered late diagram</text></svg>" }; },
+    getRegisteredDiagramsMetadata() { return []; },
+  };
+  const root = append(document.body, "main", { id: readerTakesOver ? "takeover-root" : "settle-root" });
+  const destination = append(root, "p", { id: readerTakesOver ? "reader-choice" : "settled-choice" }, "Reader-owned destination");
+  const link = append(root, "a", { href: "#" + destination.id }, "Choose another passage");
+  const figure = append(root, "figure", { id: readerTakesOver ? "late-takeover" : "late-settle", "data-av-figure": "", "data-av-figure-title": "Late diagram" });
+  append(figure, "figcaption", {}, "Late diagram"); const body = append(figure, "div", { "data-av-figure-body": "" });
+  const diagram = append(body, "div", { "data-av-mermaid": "", "data-av-mermaid-source": "flowchart LR\n A --> B" }); append(diagram, "p", { "data-av-mermaid-status": "" }, "Diagram source available");
+  const output = append(diagram, "div", { "data-av-mermaid-output": "" }), placeholder = append(output, "svg", { width: "200", height: "100" }); append(placeholder, "text", {}, "Placeholder");
+  const entryScrolls = [], destinationScrolls = []; figure.scrollIntoView = options => entryScrolls.push({ phase, options }); destination.scrollIntoView = options => destinationScrolls.push({ phase, options });
+  document.defaultView.location.hash = "#" + figure.id; const cleanup = enhanceVisuals(root);
+  assert.equal(entryScrolls.length, 1, "Entry fragment is revealed immediately"); assert.equal(document.activeElement, figure);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(typeof releaseRender, "function", "Delayed Mermaid render is in flight");
+  if (readerTakesOver) { phase = "reader"; click(link); assert.equal(document.activeElement, destination); assert.equal(destinationScrolls.length, 1); assert.equal((document.listeners.get("wheel")||[]).length,0,"Reader takeover removes temporary settle listeners immediately"); }
+  phase = "settled"; releaseRender(); await cleanup.whenIdle();
+  if (readerTakesOver) { assert.equal(entryScrolls.length, 1, "Reader navigation cancels late entry-fragment settling"); assert.equal(document.activeElement, destination); }
+  else { assert.equal(entryScrolls.length, 2, "Entry fragment is corrected once after delayed layout settles"); assert.equal(entryScrolls.at(-1).phase, "settled"); assert.equal(document.activeElement, figure, "Settling scroll does not replace fragment focus"); }
+  assert.equal((document.listeners.get("wheel")||[]).length,0); assert.equal((document.listeners.get("touchstart")||[]).length,0,"Initial fragment listeners do not persist after settlement");
+  cleanup(); assert.equal(document.listenerCount, 0, "Initial fragment takeover listeners are temporary");
+}
+
 // Explorer selection is scoped and exact, keyboard activation has native-like
 // semantics, journey steps are bounded, and comparison does not hide evidence.
 {

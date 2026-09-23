@@ -1,0 +1,53 @@
+{
+  "upstreamSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
+  "artifactSha256": "5d0da1e481c6c29902b4dcb4dad8e6e641decf3486a4609e904a404b0154170a",
+  "patches": [
+    {
+      "id": "c4-container-width",
+      "description": "Use the SVG rendering container width for C4 layout instead of the physical screen width, retaining the original fallback when no container width is measurable.",
+      "replacements": [
+        {
+          "before": "g.data.widthLimit=screen.availWidth,Cae=",
+          "after": "g.data.widthLimit=d.node()?.parentElement?.clientWidth||screen.availWidth,Cae="
+        }
+      ]
+    },
+    {
+      "id": "ishikawa-measured-label-spacing",
+      "description": "Allocate branch positions using measured wrapped-label heights and leave measured clearance between adjacent category groups. Preserve the original tree, arrow direction, cause order and text.",
+      "replacements": [
+        {
+          "name": "wrapped-descendant-allocation",
+          "before": "p_i=i((t,r,a,s,l,h,f,d)=>{let g=r.children??[],b=h*(g.length?1:.2),v=-Ntn*b,T=Otn*b*l,C=a+v,E=s+T;if(JW(t,a,s,C,E,\"ishikawa-branch\",d),d&&W0t(t,a,s,a-C,s-E,d),d_i(t,r.text,C,E,l,f,d),!g.length)return;let{entries:S,yOrder:R}=f_i(g,l),L=S.length,D=new Array(L);for(let[P,G]of R.entries())D[G]=s+T*((P+1)/(L+1));let M=new Map;M.set(-1,{x0:a,y0:s,x1:C,y1:E,childCount:g.length,childrenDrawn:0});let N=-Ntn,F=Otn*l,O=l<0?\"ishikawa-label up\":\"ishikawa-label down\";for(let[P,G]of S.entries()){let q=D[P],X=M.get(G.parentIndex),Z=t.append(\"g\").attr(\"class\",\"ishikawa-sub-group\"),J=0,W=0,V=0;if(G.depth%2===0){let Q=X.y1-X.y0;J=Ftn(X.x0,X.x1,Q?(q-X.y0)/Q:.5),W=q,V=J-(G.childCount>0?l_i+G.childCount*c_i:o_i),JW(Z,J,q,V,q,\"ishikawa-sub-branch\",d),d&&W0t(Z,J,q,1,0,d),V6e(Z,G.text,V,q,\"ishikawa-label align\",\"end\",f)}else{let Q=X.childrenDrawn++;J=Ftn(X.x0,X.x1,(X.childCount-Q)/(X.childCount+1)),W=X.y0,V=J+N*((q-W)/F),JW(Z,J,W,V,q,\"ishikawa-sub-branch\",d),d&&W0t(Z,J,W,J-V,W-q,d),V6e(Z,G.text,V,q,O,\"end\",f)}G.childCount>0&&M.set(P,{x0:J,y0:W,x1:V,y1:q,childCount:G.childCount,childrenDrawn:0})}},\"drawBranch\")",
+          "after": "p_i=i((t,r,a,s,l,h,f,d)=>{const g=r.children??[];let S=[],R=[],D=[],L=[],U=0,K=0;const H=Math.max(4,f*.35);if(g.length){({entries:S,yOrder:R}=f_i(g,l));D=new Array(S.length);const re=t.append(\"g\").attr(\"visibility\",\"hidden\"),z=l<0?\"ishikawa-label up\":\"ishikawa-label down\";L=S.map(ie=>{const ue=ie.depth%2===0?\"ishikawa-label align\":z,Se=V6e(re,ie.text,0,0,ue,\"end\",f).node().getBBox(),Me=l<0?-(Se.y+Se.height):Se.y,Ne=l<0?-Se.y:Se.y+Se.height;return U+=Se.height,{height:Se.height,near:Me,far:Ne}});re.remove();K=U+H*(S.length+1)}let b=h*(g.length?1:.2);g.length&&(b=Math.max(b,K/Otn));const v=-Ntn*b,T=Otn*b*l,C=a+v,E=s+T;if(JW(t,a,s,C,E,\"ishikawa-branch\",d),d&&W0t(t,a,s,a-C,s-E,d),d_i(t,r.text,C,E,l,f,d),!g.length)return;const M=Math.max(H,(Math.abs(T)-U)/(S.length+1));let N=l*s+M;for(const re of R){const z=L[re],ie=N-z.near;D[re]=l*ie,N=ie+z.far+M}let F=new Map;F.set(-1,{x0:a,y0:s,x1:C,y1:E,childCount:g.length,childrenDrawn:0});let O=-Ntn,P=Otn*l,G=l<0?\"ishikawa-label up\":\"ishikawa-label down\";for(let[q,X]of S.entries()){let Z=D[q],J=F.get(X.parentIndex),W=t.append(\"g\").attr(\"class\",\"ishikawa-sub-group\"),V=0,Q=0,Y=0;if(X.depth%2===0){let ee=J.y1-J.y0;V=Ftn(J.x0,J.x1,ee?(Z-J.y0)/ee:.5),Q=Z,Y=V-(X.childCount>0?l_i+X.childCount*c_i:o_i),JW(W,V,Z,Y,Z,\"ishikawa-sub-branch\",d),d&&W0t(W,V,Z,1,0,d),V6e(W,X.text,Y,Z,\"ishikawa-label align\",\"end\",f)}else{let ee=J.childrenDrawn++;V=Ftn(J.x0,J.x1,(J.childCount-ee)/(J.childCount+1)),Q=J.y0,Y=V+O*((Z-Q)/P),JW(W,V,Q,Y,Z,\"ishikawa-sub-branch\",d),d&&W0t(W,V,Q,V-Y,Q-Z,d),V6e(W,X.text,Y,Z,G,\"end\",f)}X.childCount>0&&F.set(q,{x0:V,y0:Q,x1:Y,y1:Z,childCount:X.childCount,childrenDrawn:0})}},\"drawBranch\")"
+        },
+        {
+          "name": "top-level-pair-clearance",
+          "before": "F=re.selectAll(\"text\").nodes().reduce((z,ie)=>Math.min(z,ie.getBBox().x),1/0)",
+          "after": "{const z=re.node().getBBox();let ie=0;if(Y+1<K){const ue=L.append(\"g\").attr(\"visibility\",\"hidden\");for(const[Se,Me,Ne]of[[C[(Y+1)*2],-1,W],[C[(Y+1)*2+1],1,V]])if(Se){const He=ue.append(\"g\");d_i(He,Se.text,0,0,Me,v);const Ke=He.node().getBBox(),Re=Ne*((Se.children??[]).length?1:.2);ie=Math.max(ie,Ke.x+Ke.width-Ntn*Re)}ue.remove()}F=z.x-Math.max(0,ie)-Math.max(4,v*.35)}"
+        }
+      ]
+    },
+    {
+      "id": "venn-measured-name-note-regions",
+      "description": "Measure connected styled name and note rows, then place them within their semantic regions using bounded interval search. Preserve source, note identities, set values and circle geometry; expose an actionable diagnostic when placement fails.",
+      "replacements": [
+        {
+          "name": "measured-name-and-note-regions",
+          "before": "function eDi(t,r,a,s,l,h){let f=t?.useDebugLayout??!1,g=a.select(\"svg\").append(\"g\").attr(\"class\",\"venn-text-nodes\"),b=new Map;for(let v of s){let T=k$(v.sets),C=b.get(T);C?C.push(v):b.set(T,[v])}for(let[v,T]of b.entries()){let C=r.get(v);if(!C?.text)continue;let E=C.text.x,S=C.text.y,R=Math.min(...C.circles.map(Q=>Q.radius)),L=Math.min(...C.circles.map(Q=>Q.radius-Math.hypot(E-Q.x,S-Q.y))),D=Number.isFinite(L)?Math.max(0,L):0;D===0&&Number.isFinite(R)&&(D=R*.6);let M=g.append(\"g\").attr(\"class\",\"venn-text-area\").attr(\"font-size\",`${40*l}px`);f&&M.append(\"circle\").attr(\"class\",\"venn-text-debug-circle\").attr(\"cx\",E).attr(\"cy\",S).attr(\"r\",D).attr(\"fill\",\"none\").attr(\"stroke\",\"purple\").attr(\"stroke-width\",1.5*l).attr(\"stroke-dasharray\",`${6*l} ${4*l}`);let N=Math.max(80*l,D*2*.95),F=Math.max(60*l,D*2*.95),G=(C.data.label&&C.data.label.length>0?Math.min(32*l,D*.25):0)+(T.length<=2?30*l:0),q=E-N/2,X=S-F/2+G,Z=Math.max(1,Math.ceil(Math.sqrt(T.length))),J=Math.max(1,Math.ceil(T.length/Z)),W=N/Z,V=F/J;for(let[Q,K]of T.entries()){let Y=Q%Z,re=Math.floor(Q/Z),z=q+W*(Y+.5),ie=X+V*(re+.5);f&&M.append(\"rect\").attr(\"class\",\"venn-text-debug-cell\").attr(\"x\",q+W*Y).attr(\"y\",X+V*re).attr(\"width\",W).attr(\"height\",V).attr(\"fill\",\"none\").attr(\"stroke\",\"teal\").attr(\"stroke-width\",1*l).attr(\"stroke-dasharray\",`${4*l} ${3*l}`);let ue=W*.9,ce=V*.9,oe=M.append(\"foreignObject\").attr(\"class\",\"venn-text-node-fo\").attr(\"width\",ue).attr(\"height\",ce).attr(\"x\",z-ue/2).attr(\"y\",ie-ce/2).attr(\"overflow\",\"visible\"),de=h.get(K.id)?.color,ve=oe.append(\"xhtml:span\").attr(\"class\",\"venn-text-node\").style(\"display\",\"flex\").style(\"width\",\"100%\").style(\"height\",\"100%\").style(\"white-space\",\"normal\").style(\"align-items\",\"center\").style(\"justify-content\",\"center\").style(\"text-align\",\"center\").style(\"overflow-wrap\",\"normal\").style(\"word-break\",\"normal\").text(K.label??K.id);de&&ve.style(\"color\",de)}}}",
+          "afterFile": "mermaid-patches/venn-labels.js"
+        },
+        {
+          "name": "defer-text-layout-until-connected",
+          "before": "E.length>0&&eDi(h,J,G,E,N,S);",
+          "after": "/* Venn labels are laid out after styled insertion. */"
+        },
+        {
+          "name": "layout-text-after-style-and-reparent",
+          "before": "Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")",
+          "after": "E.length>0&&eDi(h,J,{select:()=>V},E,N,S);Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")"
+        }
+      ]
+    }
+  ]
+}

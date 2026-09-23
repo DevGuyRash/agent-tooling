@@ -1,0 +1,31 @@
+wardley-beta
+title Evidence Review Value Chain
+size [1000, 700]
+
+anchor Reader [0.95, 0.90]
+anchor Reviewer [0.90, 0.66]
+
+component "Review report" [0.80, 0.78] (build)
+component "Evidence index" [0.66, 0.61] (build)
+component "Source archive" [0.50, 0.44] (buy) (inertia)
+component "Storage utility" [0.26, 0.90] (market)
+
+Reader -> "Review report"
+Reviewer -> "Review report"
+"Review report" +> "Evidence index"
+"Evidence index" -> "Source archive"
+"Source archive" +'backup'> "Storage utility"
+
+evolve "Evidence index" 0.80
+evolve "Source archive" 0.72
+
+pipeline "Source archive" {
+  component "Loose files" [0.28]
+  component "Content-addressed objects" [0.72]
+}
+
+annotations [0.08, 0.18]
+annotation 1,[0.80, 0.73] "Reader-facing findings"
+annotation 2,[0.50, 0.39] "Repeated source identity"
+
+note "Keep exact evidence recoverable through every review stage" [0.64, 0.52]

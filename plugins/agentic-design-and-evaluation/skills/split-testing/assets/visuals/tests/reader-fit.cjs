@@ -34,8 +34,13 @@ for(const available of [160,180,185,200,280,420,900,1280]) for(const render of e
     assert(Math.abs(viewport.scrollWidth-viewport.clientWidth)<1e-7,'Default fit has no horizontal overflow');assert.equal(viewport.scrollHeight,viewport.clientHeight,'Default fit retains every row without a nested vertical scrollbar');
     if(rows)assert(Number.parseFloat(rows.style.getPropertyValue('width'))<=rows.parentElement.clientWidth+.01,'Row identity column fits without sideways scrolling');
     const geometry=svg.getAttribute('viewBox'),reset=controls.find(c=>c.hasAttribute('data-av-zoom-reset')),plus=controls.find(c=>c.hasAttribute('data-av-zoom-in'));
+    const natural=Number(svg.getAttribute('width')),policy=plot.closest('[data-av-fit-policy]')?.getAttribute('data-av-fit-policy'),fitted=policy==='natural'?Math.min(viewport.clientWidth,natural):viewport.clientWidth;
+    assert(Math.abs(Number.parseFloat(svg.style.getPropertyValue('width'))-fitted)<.01,'Default width is the native fit for this plot policy');
     const event=click(plus);assert.equal(event.defaultPrevented,true,'Sizing buttons in the summary do not toggle the section');assert.equal(frame.open,true);assert.equal(plot.getAttribute('data-av-zoom'),'1.25');
-    assert(viewport.scrollWidth>viewport.clientWidth);assert.equal(viewport.getAttribute('data-av-pan'),'ready');
+    const zoomed=fitted*1.25,horizontal=zoomed>viewport.clientWidth+1,overflow=viewport.scrollWidth>viewport.clientWidth+1||viewport.scrollHeight>viewport.clientHeight+1;
+    assert(Math.abs(Number.parseFloat(svg.style.getPropertyValue('width'))-zoomed)<.01,'Zoom is applied to the correctly fitted native width');
+    assert.equal(viewport.scrollWidth>viewport.clientWidth+1,horizontal,'Horizontal overflow follows fitted geometry instead of the zoom label alone');
+    assert.equal(viewport.getAttribute('data-av-pan')==='ready',overflow,'Pan readiness follows actual horizontal or vertical overflow');
     pointer(svg,'pointerdown');pointer(d,'pointermove',{clientX:-10000,clientY:-10000});pointer(d,'pointerup');assert(viewport.scrollLeft<=viewport.scrollWidth-viewport.clientWidth);
     click(reset);assert.equal(svg.getAttribute('viewBox'),geometry);assert.equal(viewport.scrollLeft,0);assert.equal(viewport.scrollTop,0);assert(Math.abs(viewport.scrollWidth-viewport.clientWidth)<1e-7);
   }

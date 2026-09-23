@@ -474,8 +474,8 @@ define("core", ["require", "exports", "text-layout"], function (require, exports
     function yAxis(s, x, label, measure, right = 850) {
         return `${s.ticks.map((v, i) => `<g><line class="av-grid" x1="${x}" x2="${right}" y1="${s.map(v)}" y2="${s.map(v)}"/><text x="${x - 9}" y="${s.map(v) + 4}" text-anchor="end"><title>Value: ${escapeText(v)}</title>${escapeText(s.tickLabels[i])}</text></g>`).join("")}${axisText(label, x, 4, Math.max(100, right - x), measure, "start")}${s.offset === null ? "" : axisText(`Add ${s.offset} to tick labels`, x, 27 + (0, text_layout_1.wrapText)(label, { maxWidth: Math.max(100, right - x), measure }).height, Math.max(100, right - x), measure, "start")}`;
     }
-    function svg(title, height, content, width = 900) {
-        return `<div class="av-plot-shell" data-av-plot data-av-figure data-av-figure-title="${escapeText(title)}" data-av-content-view="visual"><div class="av-plot-toolbar av-enhance-only" data-av-controls hidden><span class="av-sr-only">Plot size</span><div class="av-button-group"><button type="button" class="av-button" data-av-zoom-out aria-label="Zoom out ${escapeText(title)}">−</button><button type="button" class="av-button" data-av-zoom-reset title="Reset zoom and fit chart">Reset</button><button type="button" class="av-button" data-av-zoom-in aria-label="Zoom in ${escapeText(title)}">+</button></div></div><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)} plot"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="${content.includes("data-av-inspect=") ? "group" : "img"}" data-av-zoom-target aria-label="${escapeText(title)}; exact values and annotations in the following data table"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
+    function svg(title, height, content, width = 900, fit = 'width') {
+        return `<div class="av-plot-shell" data-av-plot data-av-figure${fit === 'natural' ? ' data-av-fit-policy="natural"' : ''} data-av-figure-title="${escapeText(title)}" data-av-content-view="visual"><div class="av-plot-toolbar av-enhance-only" data-av-controls hidden><span class="av-sr-only">Plot size</span><div class="av-button-group"><button type="button" class="av-button" data-av-zoom-out aria-label="Zoom out ${escapeText(title)}">−</button><button type="button" class="av-button" data-av-zoom-reset title="Reset zoom and fit chart">Reset</button><button type="button" class="av-button" data-av-zoom-in aria-label="Zoom in ${escapeText(title)}">+</button></div></div><div class="av-plot-scroll" tabindex="0" role="region" aria-label="${escapeText(title)} plot"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="${content.includes("data-av-inspect=") ? "group" : "img"}" data-av-zoom-target aria-label="${escapeText(title)}; exact values and annotations in the following data table"><title>${escapeText(title)}</title>${content}</svg></div></div>`;
     }
     function noPlot() { return '<p class="av-empty">No complete numeric observations to plot. Supplied entries and missing values are retained in the data table.</p>'; }
 });
@@ -564,21 +564,21 @@ define("reader-storage", ["require", "exports", "exact-json"], function (require
             let raw;
             try {
                 if (!window?.localStorage)
-                    return { status: "ready", value: null, source: "empty" };
+                    return { result: { status: "ready", value: null, source: "empty" } };
                 raw = window.localStorage.getItem(key);
             }
             catch {
-                return { status: "unavailable", message: "Earlier saved records could not be read. They remain protected; use session records and export." };
+                return { result: { status: "unavailable", message: "Earlier saved records could not be read. They remain protected; use session records and export." } };
             }
             if (raw === null)
-                return { status: "ready", value: null, source: "empty" };
+                return { result: { status: "ready", value: null, source: "empty" } };
             try {
                 if (!decodeLegacy)
                     throw new Error("No legacy decoder");
-                return { status: "ready", value: decodeLegacy(raw), source: "legacy" };
+                return { result: { status: "ready", value: decodeLegacy(raw), source: "legacy" }, raw };
             }
             catch {
-                return { status: "blocked", raw, message: "Earlier saved data belongs to another record type, report or revision, or cannot be read safely. The original remains protected." };
+                return { result: { status: "blocked", raw, message: "Earlier saved data belongs to another record type, report or revision, or cannot be read safely. The original remains protected." }, raw };
             }
         }
         function owned(value) {
@@ -600,7 +600,7 @@ define("reader-storage", ["require", "exports", "exact-json"], function (require
             catch {
                 if (change || closed)
                     return unavailable();
-                const prior = legacy();
+                const prior = legacy().result;
                 return prior.status === "ready" ? { ...unavailable(), value: prior.value } : prior;
             }
             if (closed)
@@ -643,7 +643,8 @@ define("reader-storage", ["require", "exports", "exact-json"], function (require
                     request.onsuccess = () => {
                         if (finished)
                             return;
-                        const current = request.result === undefined ? legacy() : owned(request.result);
+                        const fallback = request.result === undefined ? legacy() : { result: owned(request.result) };
+                        const current = fallback.result;
                         if (current.status !== "ready" && current.status !== "saved") {
                             result = current;
                             return;
@@ -659,7 +660,7 @@ define("reader-storage", ["require", "exports", "exact-json"], function (require
                             result = { status: "saved", value: next, source: "database" };
                         }
                         catch {
-                            result = { status: "blocked", raw: rawValue(current.value), message: "Saved records changed or could not be combined safely. Both your session records and the earlier saved copy remain available for export." };
+                            result = { status: "blocked", raw: fallback.raw ?? rawValue(current.value), message: "Saved records changed or could not be combined safely. Both your session records and the earlier saved copy remain available for export." };
                             transaction.abort();
                         }
                     };
@@ -1536,9 +1537,17 @@ define("story", ["require", "exports", "core"], function (require, exports, core
 define("overlay-layout", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.clampOverlayPosition = clampOverlayPosition;
     exports.visibleViewport = visibleViewport;
     exports.anchoredPanel = anchoredPanel;
     const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
+    /** Position an already measured border box inside the visible rectangle. */
+    function clampOverlayPosition(bounds, width, height, left, top) {
+        return {
+            left: Math.max(bounds.left, Math.min(finite(left, bounds.left), bounds.right - Math.max(0, finite(width, 0)))),
+            top: Math.max(bounds.top, Math.min(finite(top, bounds.top), bounds.bottom - Math.max(0, finite(height, 0)))),
+        };
+    }
     function visibleViewport(view, margin = 12) {
         const viewport = view?.visualViewport;
         const x = finite(viewport?.offsetLeft, 0), y = finite(viewport?.offsetTop, 0);
@@ -1556,9 +1565,9 @@ define("overlay-layout", ["require", "exports"], function (require, exports) {
         const maxHeight = Math.min(availableHeight, up ? above : below);
         const fittedWidth = Math.min(availableWidth, Math.max(0, finite(width, availableWidth)));
         const fittedHeight = Math.min(maxHeight, Math.max(0, finite(height, maxHeight)));
+        const position = clampOverlayPosition(bounds, fittedWidth, fittedHeight, finite(anchor.right, bounds.right) - fittedWidth, up ? top - gap - fittedHeight : bottom + gap);
         return {
-            left: Math.max(bounds.left, Math.min(finite(anchor.right, bounds.right) - fittedWidth, bounds.right - fittedWidth)),
-            top: Math.max(bounds.top, Math.min(up ? top - gap - fittedHeight : bottom + gap, bounds.bottom - fittedHeight)),
+            ...position,
             width: fittedWidth, maxHeight, side: up ? 'up' : 'down',
         };
     }
@@ -1593,15 +1602,20 @@ define("figures", ["require", "exports", "core"], function (require, exports, co
             throw new TypeError('A figure needs a title and trusted body markup.');
         if (input.adapter)
             (0, core_3.documentId)(input.adapter, 'An adapter name');
+        if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
+            throw new TypeError('Figure fit must be natural or width.');
         if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string'))
             throw new TypeError('Figure source needs a language and its original text.');
-        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_3.escapeText)(input.title)}"${input.id ? ` id="${(0, core_3.escapeText)((0, core_3.documentId)(input.id))}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_3.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_3.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_3.escapeText)(input.title)}${input.caption ? `<span>${(0, core_3.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
+        return `<figure class="av-visual-figure" data-av-figure data-av-figure-title="${(0, core_3.escapeText)(input.title)}"${input.id ? ` id="${(0, core_3.escapeText)((0, core_3.documentId)(input.id))}"` : ''}${input.fit ? ` data-av-fit-policy="${input.fit}"` : ''}${input.adapter ? ` data-av-adapter="${(0, core_3.escapeText)(input.adapter)}"` : ''}${input.source ? ` data-av-source="${(0, core_3.escapeText)(JSON.stringify(input.source))}"` : ''}><figcaption class="av-figure-caption">${(0, core_3.escapeText)(input.title)}${input.caption ? `<span>${(0, core_3.escapeText)(input.caption)}</span>` : ''}</figcaption><div class="av-figure-body" data-av-figure-body>${input.body}</div></figure>`;
     }
     function mermaidDiagram(input) {
         if (typeof input.source !== 'string' || !input.source.trim())
             throw new TypeError('A Mermaid diagram needs its original source.');
-        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${(0, core_3.escapeText)(input.source)}"${input.config ? ` data-av-mermaid-config="${(0, core_3.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_3.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre>${(0, core_3.escapeText)(input.source)}</pre></details></div>`;
-        return visualFigure({ ...input, source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
+        // HTML normalizes literal carriage returns and discards a leading newline in
+        // <pre>. Character references and the code child keep the supplied source intact.
+        const sourceMarkup = (0, core_3.escapeText)(input.source).replace(/\r/g, '&#13;');
+        const body = `<div class="av-mermaid" data-av-mermaid data-av-requires="mermaid" data-av-mermaid-source="${sourceMarkup}"${input.config ? ` data-av-mermaid-config="${(0, core_3.escapeText)(JSON.stringify(input.config))}"` : ''}><p class="av-note" data-av-mermaid-status role="status">Diagram source is available below.</p><div data-av-mermaid-output>${(0, core_3.svg)(input.title, 400, '', 900)}</div><details class="av-diagram-source"><summary>Diagram source</summary><pre tabindex="0" role="region" aria-label="${(0, core_3.escapeText)(`Original Mermaid source: ${input.title}`)}"><code>${sourceMarkup}</code></pre></details></div>`;
+        return visualFigure({ ...input, fit: input.fit ?? 'natural', source: { language: 'mermaid', text: input.source, filename: 'diagram.mmd' }, body });
     }
     function figureOf(element) {
         const nearest = element.closest('[data-av-figure]');
@@ -3763,16 +3777,30 @@ define("review-state", ["require", "exports", "exact-json", "reader-values"], fu
         throw new Error('Unknown review anchor. Use section, figure, text, item or items.');
     }
     function validateReview(value) {
-        const record = object(value, ['versions', 'bookmarks']);
+        const record = object(value, ['versions', 'bookmarks', 'supportingVersions']);
         if (!Array.isArray(record.versions) || !Array.isArray(record.bookmarks))
             throw new Error('Review records are invalid.');
-        const ids = new Set(), versions = array(record.versions).map(item => { const v = object(item, ['id', 'annotationId', 'anchor', 'text', 'at', 'draft', 'baseIds']); const id = text(v.id), annotationId = text(v.annotationId), at = (0, reader_values_1.readerTimestamp)(v.at, 'Annotation timestamp'); if (!id || !annotationId || ids.has(id) || typeof v.draft !== 'boolean')
+        const ids = new Set(), version = (item) => { const v = object(item, ['id', 'annotationId', 'anchor', 'text', 'at', 'draft', 'baseIds']); const id = text(v.id), annotationId = text(v.annotationId), at = (0, reader_values_1.readerTimestamp)(v.at, 'Annotation timestamp'); if (!id || !annotationId || ids.has(id) || typeof v.draft !== 'boolean')
             throw new Error('Review version identity or timestamp is invalid.'); if (v.baseIds !== undefined && !array(v.baseIds).every(id => typeof id === 'string'))
-            throw new Error('Annotation draft bases are invalid.'); ids.add(id); return { id, annotationId, anchor: validateAnchor(v.anchor), text: v.text === null ? null : text(v.text), at, draft: v.draft, ...(v.baseIds ? { baseIds: array(v.baseIds).map(text) } : {}) }; });
+            throw new Error('Annotation draft bases are invalid.'); ids.add(id); return { id, annotationId, anchor: validateAnchor(v.anchor), text: v.text === null ? null : text(v.text), at, draft: v.draft, ...(v.baseIds ? { baseIds: array(v.baseIds).map(text) } : {}) }; };
+        const versions = array(record.versions).map(version), supportingVersions = record.supportingVersions === undefined ? [] : array(record.supportingVersions).map(version);
+        if (supportingVersions.some(item => item.draft))
+            throw new Error('Supporting annotation context must be a saved version.');
+        const retainedDraftBases = new Map();
+        for (const item of versions)
+            if (item.draft) {
+                const bases = retainedDraftBases.get(item.annotationId) || new Set();
+                for (const id of item.baseIds || [])
+                    bases.add(id);
+                retainedDraftBases.set(item.annotationId, bases);
+            }
+        for (const supporting of supportingVersions)
+            if (!retainedDraftBases.get(supporting.annotationId)?.has(supporting.id))
+                throw new Error('Supporting annotation context must belong to a retained draft base.');
         const bookmarks = array(record.bookmarks).map(validateAnchor);
         if (new Set(bookmarks.map(a => (0, exact_json_4.exactJson)(a))).size !== bookmarks.length)
             throw new Error('Duplicate review bookmark.');
-        return { versions, bookmarks };
+        return { versions, bookmarks, ...(supportingVersions.length ? { supportingVersions } : {}) };
     }
     function applyReview(source, change) {
         const prior = validateReview(source);
@@ -3782,14 +3810,53 @@ define("review-state", ["require", "exports", "exact-json", "reader-values"], fu
                 bookmarks.push(anchor);
             return { ...prior, bookmarks };
         }
-        const version = validateReview({ versions: [change.version], bookmarks: [] }).versions[0], existing = prior.versions.find(item => item.id === version.id);
+        const input = validateReview({ versions: [change.version], bookmarks: [] }).versions[0], observed = new Set(array(change.observedIds).map(text)), priorVersions = [...prior.versions, ...(prior.supportingVersions || [])], priorById = new Map(priorVersions.map(item => [item.id, item]));
+        const withoutBases = (item) => { const { baseIds, ...content } = item; return content; };
+        const supplied = change.supportingVersions === undefined ? [] : array(change.supportingVersions).map(item => validateReview({ versions: [item], bookmarks: [] }).versions[0]);
+        for (const base of supplied) {
+            if (base.draft || base.annotationId !== input.annotationId || !observed.has(base.id))
+                throw new Error('Supporting annotation context must be a referenced saved version of this annotation.');
+            const existingBase = priorById.get(base.id);
+            if (existingBase && (0, exact_json_4.exactJson)(withoutBases(existingBase)) !== (0, exact_json_4.exactJson)(withoutBases(base)))
+                throw new Error('Supporting annotation identity conflicts with saved content.');
+            if (!existingBase)
+                priorById.set(base.id, base);
+        }
+        const bases = new Set(input.baseIds || []);
+        if (!input.draft)
+            for (const id of observed) {
+                if (id === input.id)
+                    continue;
+                const base = priorById.get(id);
+                if (base && base.annotationId !== input.annotationId)
+                    continue;
+                bases.add(id);
+                if (base)
+                    for (const ancestor of base.baseIds || [])
+                        bases.add(ancestor);
+            }
+        bases.delete(input.id);
+        const version = { ...input, ...(bases.size ? { baseIds: [...bases] } : {}) };
+        const existing = priorById.get(version.id);
         if (existing) {
-            if ((0, exact_json_4.exactJson)(existing) !== (0, exact_json_4.exactJson)(version))
+            if ((0, exact_json_4.exactJson)(withoutBases(existing)) !== (0, exact_json_4.exactJson)(withoutBases(version)))
                 throw new Error('Annotation version identity conflicts with saved content.');
             return prior;
         }
-        const observed = new Set(array(change.observedIds).map(text));
-        return { ...prior, versions: [...prior.versions.filter(item => item.annotationId !== version.annotationId || !observed.has(item.id) || (version.draft && !item.draft)), version] };
+        const versions = [...prior.versions.filter(item => item.annotationId !== version.annotationId || !observed.has(item.id) || (version.draft && !item.draft)), version], activeIds = new Set(versions.map(item => item.id)), supporting = [], supportingIds = new Set();
+        for (const draft of versions)
+            if (draft.draft)
+                for (const id of draft.baseIds || []) {
+                    if (activeIds.has(id) || supportingIds.has(id))
+                        continue;
+                    const base = priorById.get(id);
+                    if (base && !base.draft && base.annotationId === draft.annotationId) {
+                        supporting.push(base);
+                        supportingIds.add(id);
+                    }
+                }
+        const { supportingVersions: _priorSupporting, ...record } = prior;
+        return { ...record, versions, ...(supporting.length ? { supportingVersions: supporting } : {}) };
     }
 });
 define("reader-state", ["require", "exports", "exact-json", "reader-values", "review-state"], function (require, exports, exact_json_5, reader_values_2, review_state_1) {
@@ -4153,16 +4220,78 @@ define("reader-state", ["require", "exports", "exact-json", "reader-values", "re
                 throw new Error('A note version conflicts with the imported copy.');
             notes.set(version.id, version);
         }
-        const annotations = new Map((a.review?.versions || []).map(version => [version.id, version]));
-        for (const version of b.review?.versions || []) {
+        const activeIds = new Set([...(a.review?.versions || []), ...(b.review?.versions || [])].map(version => version.id)), allA = [...(a.review?.versions || []), ...(a.review?.supportingVersions || [])], allB = [...(b.review?.versions || []), ...(b.review?.supportingVersions || [])], annotations = new Map(allA.map(version => [version.id, version]));
+        const annotationContent = (version) => { const { baseIds, ...content } = version; return content; };
+        for (const version of allB) {
             const old = annotations.get(version.id);
-            if (old && (0, exact_json_5.exactJson)(old) !== (0, exact_json_5.exactJson)(version))
+            if (old && (0, exact_json_5.exactJson)(annotationContent(old)) !== (0, exact_json_5.exactJson)(annotationContent(version)))
                 throw new Error('An annotation version conflicts with the imported copy.');
-            annotations.set(version.id, version);
+            if (old) {
+                const baseIds = [...new Set([...(old.baseIds || []), ...(version.baseIds || [])])];
+                annotations.set(version.id, { ...old, ...(baseIds.length ? { baseIds } : {}) });
+            }
+            else
+                annotations.set(version.id, version);
+        }
+        const superseded = new Set();
+        const groups = new Map();
+        for (const version of annotations.values()) {
+            const group = groups.get(version.annotationId) || [];
+            group.push(version);
+            groups.set(version.annotationId, group);
+        }
+        const cyclicAnnotations = new Set();
+        for (const [annotationId, group] of groups) {
+            const ids = new Set(group.map(version => version.id)), incoming = new Map(group.map(version => [version.id, 0])), next = new Map();
+            for (const version of group)
+                for (const id of new Set(version.baseIds || []))
+                    if (ids.has(id)) {
+                        const edges = next.get(version.id) || [];
+                        edges.push(id);
+                        next.set(version.id, edges);
+                        incoming.set(id, (incoming.get(id) || 0) + 1);
+                    }
+            const ready = [...incoming].filter(([, count]) => count === 0).map(([id]) => id);
+            let visited = 0;
+            while (ready.length) {
+                const id = ready.pop();
+                visited++;
+                for (const baseId of next.get(id) || []) {
+                    const count = (incoming.get(baseId) || 0) - 1;
+                    incoming.set(baseId, count);
+                    if (count === 0)
+                        ready.push(baseId);
+                }
+            }
+            if (visited !== group.length)
+                cyclicAnnotations.add(annotationId);
+        }
+        for (const version of annotations.values())
+            if (activeIds.has(version.id) && !version.draft)
+                for (const id of version.baseIds || []) {
+                    const base = annotations.get(id);
+                    if (!cyclicAnnotations.has(version.annotationId) && id !== version.id && base?.annotationId === version.annotationId)
+                        superseded.add(id);
+                }
+        const survivingDraftBases = new Set();
+        for (const version of annotations.values())
+            if (activeIds.has(version.id) && version.draft && !superseded.has(version.id))
+                for (const id of version.baseIds || []) {
+                    const base = annotations.get(id);
+                    if (base && !base.draft && base.annotationId === version.annotationId)
+                        survivingDraftBases.add(id);
+                }
+        const annotationVersions = [...annotations.values()].filter(version => activeIds.has(version.id) && !superseded.has(version.id)), finalActiveIds = new Set(annotationVersions.map(version => version.id)), supportingVersions = [];
+        for (const id of survivingDraftBases) {
+            if (finalActiveIds.has(id))
+                continue;
+            const base = annotations.get(id);
+            if (base && !base.draft)
+                supportingVersions.push(base);
         }
         const bookmarks = new Map([...(a.review?.bookmarks || []), ...(b.review?.bookmarks || [])].map(anchor => [(0, exact_json_5.exactJson)(anchor), anchor]));
         const noteVersions = [...notes.values()];
-        return validateReaderNotebook({ ...a, reviewImports: [...new Set([...(a.reviewImports || []), ...(b.reviewImports || [])])], noteVersions, state: { ...a.state, notes: projectedNotes(noteVersions, [...a.state.notes, ...b.state.notes]), bookmarks: [...new Set([...a.state.bookmarks, ...b.state.bookmarks])] }, review: { versions: [...annotations.values()], bookmarks: [...bookmarks.values()] }, originals: [...new Set([...a.originals, ...b.originals])] }, context);
+        return validateReaderNotebook({ ...a, reviewImports: [...new Set([...(a.reviewImports || []), ...(b.reviewImports || [])])], noteVersions, state: { ...a.state, notes: projectedNotes(noteVersions, [...a.state.notes, ...b.state.notes]), bookmarks: [...new Set([...a.state.bookmarks, ...b.state.bookmarks])] }, review: { versions: annotationVersions, bookmarks: [...bookmarks.values()], ...(supportingVersions.length ? { supportingVersions } : {}) }, originals: [...new Set([...a.originals, ...b.originals])] }, context);
     }
     /** Explicit imports can retain feedback from an older revision as unresolved context. */
     function importReaderReview(raw, context) {
@@ -4197,7 +4326,8 @@ define("reader-state", ["require", "exports", "exact-json", "reader-values", "re
             const ownContext = { reportId: state.reportId, revision: state.revision, targetIds: [...new Set(targets)], viewIds: [...new Set([...(state.viewId ? [state.viewId] : []), ...state.activity.flatMap(action => action.viewId ? [action.viewId] : [])])], journeyIds: state.journeyId ? [state.journeyId] : [], activityLimit: context.activityLimit };
             const previous = decodeReaderNotebook((0, exact_json_5.exactJson)(wrapped), ownContext), fresh = emptyReaderNotebook(context);
             const anchor = (id) => ({ kind: 'section', target: { reportId: previous.state.reportId, revision: previous.state.revision, id, label: id, path: [], fingerprint: 'unavailable', excerpt: 'This earlier notebook did not include the original target text.' } });
-            return { ...fresh, originals: [...previous.originals, raw], review: { versions: [...(previous.review?.versions || []), ...previous.noteVersions.map(version => ({ id: 'import:' + version.id, annotationId: 'legacy:' + version.targetId, anchor: anchor(version.targetId), text: version.text, at: version.updatedAt, draft: false }))], bookmarks: [...(previous.review?.bookmarks || []), ...previous.state.bookmarks.map(anchor)] } };
+            const supportingVersions = previous.review?.supportingVersions || [];
+            return { ...fresh, originals: [...previous.originals, raw], review: { versions: [...(previous.review?.versions || []), ...previous.noteVersions.map(version => ({ id: 'import:' + version.id, annotationId: 'legacy:' + version.targetId, anchor: anchor(version.targetId), text: version.text, at: version.updatedAt, draft: false }))], bookmarks: [...(previous.review?.bookmarks || []), ...previous.state.bookmarks.map(anchor)], ...(supportingVersions.length ? { supportingVersions } : {}) } };
         }
     }
 });
@@ -4208,7 +4338,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
     function attachContextReview(scope, registry, hooks) {
         const document = scope.ownerDocument, view = document.defaultView, buttons = new Map(), undo = [], generatedActions = new WeakSet();
         const excluded = new Set(), choices = new WeakMap(), anchorActions = new WeakMap();
-        let editor = null, textarea = null, context = null, notice = null, current = null, annotationId = '', observed = [], trigger = null, selected = null, stopped = false, dirty = false;
+        let editor = null, textarea = null, context = null, notice = null, current = null, annotationId = '', observed = [], openedSavedBases = new Map(), trigger = null, selected = null, stopped = false, dirty = false;
         let returnControl = null;
         // Reconcile immutable record versions, not the live reader's disclosures and
         // focus. Saving status and unrelated activity must not rebuild a collection.
@@ -4315,6 +4445,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
             hideEditor();
             current = null;
             selected = null;
+            openedSavedBases.clear();
             if (restoreFocus)
                 returnFocus();
         }
@@ -4409,6 +4540,15 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
             returnControl = from.closest('[data-av-notebook]')?.querySelector('summary') || registry.targets.get(anchor.target.id)?.element.querySelector('summary') || null;
             annotationId = version?.annotationId || hooks.id();
             observed = version ? [...(version.draft ? version.baseIds || [] : []), version.id] : [];
+            openedSavedBases.clear();
+            if (version) {
+                const review = hooks.notebook().review, known = [...(review?.versions || []), ...(review?.supportingVersions || [])], byId = new Map(known.map(item => [item.id, item]));
+                for (const id of observed) {
+                    const item = byId.get(id);
+                    if (item && !item.draft && item.annotationId === annotationId)
+                        openedSavedBases.set(id, item);
+                }
+            }
             from.closest('[data-av-notebook]')?.removeAttribute('open');
             ensureEditor(from.closest('dialog') || scope);
             context.textContent = anchor.target.path.concat(anchor.target.label).join(' / ') + (anchor.kind === 'text' ? '\n“' + anchor.quote + '”' : anchor.kind === 'item' ? '\n' + anchor.label + '\n' + anchor.text : anchor.kind === 'items' ? '\n' + anchor.items.map(item => item.label + '\n' + item.text).join('\n\n') : '');
@@ -4429,12 +4569,15 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                     hooks.notify?.({ text: 'Draft kept.', tone: 'success', source: editor || scope });
                 return true;
             }
-            const version = { id: hooks.id(), annotationId, anchor: current, text: deleted ? null : textarea.value, at: hooks.now(), draft, ...(draft ? { baseIds: observed.filter(id => hooks.notebook().review?.versions.some(item => item.id === id && !item.draft)) } : {}) };
+            const review = hooks.notebook().review, known = [...(review?.versions || []), ...(review?.supportingVersions || [])], knownById = new Map(known.map(item => [item.id, item]));
+            const baseIds = observed.filter(id => { const item = openedSavedBases.get(id) || knownById.get(id); return !!item && !item.draft && item.annotationId === annotationId; });
+            const supportingVersions = [...new Set(baseIds)].flatMap(id => { const item = openedSavedBases.get(id) || knownById.get(id); return item && !item.draft && item.annotationId === annotationId ? [item] : []; });
+            const version = { id: hooks.id(), annotationId, anchor: current, text: deleted ? null : textarea.value, at: hooks.now(), draft, ...(draft && baseIds.length ? { baseIds } : {}) };
             if (!deleted && !draft && !version.text?.trim()) {
                 notice.textContent = 'Enter a note before saving.';
                 return true;
             }
-            if (hooks.change({ type: 'annotation', version, observedIds: observed })) {
+            if (hooks.change({ type: 'annotation', version, observedIds: observed, ...(supportingVersions.length ? { supportingVersions } : {}) })) {
                 if (announce)
                     hooks.notify?.({ text: deleted ? 'Note removed.' : draft ? 'Draft kept.' : 'Note added to this report.', tone: 'success', source: registry.resolve(current).element || scope });
                 dirty = false;
@@ -4443,6 +4586,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                 if (!draft) {
                     hideEditor();
                     current = null;
+                    openedSavedBases.clear();
                     textarea.value = '';
                     returnFocus();
                 }
@@ -4548,7 +4692,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                 excluded.delete(key);
             else
                 excluded.add(key); return true; },
-            exportNotebook(value) { const omitted = (key) => excluded.has(key); const review = value.review || { versions: [], bookmarks: [] }; return { ...value, state: { ...value.state, notes: value.state.notes.filter(note => !omitted('legacy:' + note.targetId)), bookmarks: value.state.bookmarks.filter(id => !omitted('bookmark:' + id)), activity: [], droppedActivityCount: 0, nextSequence: 1 }, noteVersions: value.noteVersions.filter(note => !omitted('legacy:' + note.targetId)), review: { versions: review.versions.filter(note => !omitted('annotation:' + note.annotationId)), bookmarks: review.bookmarks.filter(anchor => !omitted('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)))) }, originals: [], reviewImports: [] }; },
+            exportNotebook(value) { const omitted = (key) => excluded.has(key); const review = value.review || { versions: [], bookmarks: [] }, supportingVersions = (review.supportingVersions || []).filter(note => !omitted('annotation:' + note.annotationId)); return { ...value, state: { ...value.state, notes: value.state.notes.filter(note => !omitted('legacy:' + note.targetId)), bookmarks: value.state.bookmarks.filter(id => !omitted('bookmark:' + id)), activity: [], droppedActivityCount: 0, nextSequence: 1 }, noteVersions: value.noteVersions.filter(note => !omitted('legacy:' + note.targetId)), review: { versions: review.versions.filter(note => !omitted('annotation:' + note.annotationId)), bookmarks: review.bookmarks.filter(anchor => !omitted('anchor:' + (0, identity_2.fingerprint)((0, exact_json_6.exactJson)(anchor)))), ...(supportingVersions.length ? { supportingVersions } : {}) }, originals: [], reviewImports: [] }; },
             input(target) { if (target !== textarea || !current)
                 return false; dirty = true; save(true); return true; },
             render(lists, bookmarkLists = [], inclusionLists = []) {
@@ -4577,8 +4721,8 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                 };
                 if (editor && !editor.hidden && notice)
                     notice.textContent = hooks.status?.() || notice.textContent;
-                const notebook = hooks.notebook(), versions = notebook.review?.versions || [], groups = new Map();
-                const anchors = [...versions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
+                const notebook = hooks.notebook(), versions = notebook.review?.versions || [], supportingVersions = notebook.review?.supportingVersions || [], supportingById = new Map(supportingVersions.map(version => [version.id, version])), groups = new Map();
+                const anchors = [...versions.map(version => version.anchor), ...supportingVersions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
                 const resolvedBatch = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
                 const resolutions = new Map(anchors.map((anchor, index) => [anchor, resolvedBatch[index]]));
                 for (const version of versions) {
@@ -4626,6 +4770,22 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                 }
                 function heading(parent, anchor) { make(parent, 'h4', (0, review_presentation_1.anchorLabel)(anchor)); const path = (0, review_presentation_1.anchorContext)(anchor); if (path)
                     make(parent, 'p', path, 'av-review-location'); }
+                function draftBases(parent, version) { if (!version.draft)
+                    return; let index = 0; for (const id of version.baseIds || []) {
+                    const base = supportingById.get(id);
+                    if (!base || base.annotationId !== version.annotationId)
+                        continue;
+                    const details = make(parent, 'details', undefined, 'av-review-original');
+                    make(details, 'summary', ++index === 1 ? 'Earlier saved note' : 'Earlier saved note ' + index);
+                    const meta = make(details, 'p', 'Recorded ' + (0, review_presentation_1.readerDate)(base.at), 'av-review-meta');
+                    meta.setAttribute('data-av-supporting-version', base.id);
+                    const baseResolution = resolutions.get(base.anchor);
+                    if (baseResolution && baseResolution.status !== 'resolved')
+                        make(details, 'p', 'Unresolved earlier note · ' + baseResolution.message, 'av-review-warning');
+                    make(details, 'pre', base.text === null ? '[Removed in this version]' : base.text, 'av-notebook-note');
+                    make(details, 'p', 'Original evidence', 'av-muted');
+                    make(details, 'pre', (0, review_presentation_1.anchorEvidence)(base.anchor), 'av-notebook-note');
+                } }
                 for (const note of notebook.state.notes)
                     include('legacy:' + note.targetId, 'Earlier note · ' + (registry.targets.get(note.targetId)?.target.label || note.targetId));
                 for (const [id, group] of groups) {
@@ -4641,7 +4801,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                             if (version.text === null && group.length === 1)
                                 continue;
                             const resolved = resolutions.get(version.anchor), competing = group.filter(item => item.draft === version.draft).length > 1;
-                            const key = version.id, signature = (0, exact_json_6.exactJson)([version, competing, resolved.status, resolved.message]), prior = cache.get(key);
+                            const supportSignature = version.draft ? (version.baseIds || []).map(id => { const base = supportingById.get(id), baseResolution = base && resolutions.get(base.anchor); return base ? [base, baseResolution?.status, baseResolution?.message] : [id]; }) : [], key = version.id, signature = (0, exact_json_6.exactJson)([version, competing, resolved.status, resolved.message, supportSignature]), prior = cache.get(key);
                             keep.add(key);
                             if (prior?.signature === signature) {
                                 wanted.push(prior.node);
@@ -4664,6 +4824,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                             if (resolved.status !== 'resolved')
                                 make(item, 'p', 'Unresolved · ' + resolved.message, 'av-review-warning');
                             make(item, 'pre', version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]', 'av-notebook-note');
+                            draftBases(item, version);
                             original(item, version.anchor);
                             const actions = make(item, 'div', undefined, 'av-review-card-actions');
                             const go = control(actions, 'reveal', 'Go to evidence');
@@ -4740,7 +4901,7 @@ define("context-review", ["require", "exports", "exact-json", "review-presentati
                 }
             }, cleanup() { if (stopped)
                 return; stopped = true; if (current && dirty)
-                save(true); for (const restore of undo.reverse())
+                save(true); openedSavedBases.clear(); for (const restore of undo.reverse())
                 restore(); clearHighlight(); buttons.clear(); }
         };
     }
@@ -4822,7 +4983,8 @@ define("review-export", ["require", "exports", "exact-json", "core"], function (
             const target = registry.targets.get(version.targetId)?.target;
             lines.push('## Note' + ((counts.get(version.targetId) || 0) > 1 ? ' — competing version' : ''), literal(target?.label || version.targetId), literal(version.text === null ? '[Removed in this version]' : version.text), literal('Target ID: ' + version.targetId), 'This note did not record its original evidence fingerprint. The current label is an orientation aid, not confirmation of an unchanged attachment.');
         }
-        const anchors = [...(notebook.review?.versions || []).map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
+        const supportingVersions = notebook.review?.supportingVersions || [], supportingById = new Map(supportingVersions.map(version => [version.id, version]));
+        const anchors = [...(notebook.review?.versions || []).map(version => version.anchor), ...supportingVersions.map(version => version.anchor), ...(notebook.review?.bookmarks || [])];
         const results = registry.resolveAll?.(anchors) || anchors.map(anchor => registry.resolve(anchor));
         const resolutions = new Map(anchors.map((anchor, index) => [anchor, results[index]]));
         const groups = new Map();
@@ -4836,6 +4998,16 @@ define("review-export", ["require", "exports", "exact-json", "core"], function (
                 const resolution = resolutions.get(version.anchor);
                 const competing = versions.filter(other => other.draft === version.draft).length > 1;
                 lines.push(`## ${version.draft ? 'Draft' : 'Annotation'}${competing ? ' — competing version' : ''}`, literal(`Annotation: ${id}\nRecorded: ${version.at}\nAttachment: ${resolution.status}. ${resolution.message}`), '### Original evidence', literal(anchorText(version.anchor)), '### Reader note', literal(version.text === null ? '[Removed in this version]' : version.text || '[Empty draft]'));
+                if (version.draft) {
+                    let baseIndex = 0;
+                    for (const baseId of version.baseIds || []) {
+                        const base = supportingById.get(baseId);
+                        if (!base || base.annotationId !== version.annotationId)
+                            continue;
+                        const baseResolution = resolutions.get(base.anchor);
+                        lines.push('### ' + (++baseIndex === 1 ? 'Earlier saved note' : 'Earlier saved note ' + baseIndex), literal('Version: ' + base.id + '\nRecorded: ' + base.at + '\nAttachment: ' + baseResolution.status + '. ' + baseResolution.message), '#### Original evidence', literal(anchorText(base.anchor)), '#### Saved note', literal(base.text === null ? '[Removed in this version]' : base.text));
+                    }
+                }
             }
         const bookmarks = [
             ...notebook.state.bookmarks.map(id => `Earlier target-only bookmark: ${registry.targets.get(id)?.target.label || id} (#${id})\nNo original evidence fingerprint was captured. Verify this attachment against the report.`),
@@ -4923,6 +5095,22 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
     exports.copyFigureSource = copyFigureSource;
     const paintProperties = ['color', 'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing', 'white-space', 'paint-order', 'visibility', 'background-color', 'border-color', 'border-width', 'border-style', 'border-radius', 'line-height', 'text-align', 'display', 'padding', 'box-sizing', 'width', 'height', 'stop-color', 'stop-opacity', 'filter', 'clip-path', 'mask', 'marker-start', 'marker-mid', 'marker-end', 'transform', 'transform-origin', 'transform-box', 'overflow', 'overflow-wrap', 'word-break', 'word-spacing', 'font-stretch', 'font-variant', 'text-decoration', 'text-transform', 'vertical-align', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'max-width', 'min-width', 'max-height', 'min-height', 'flex-direction', 'flex-wrap', 'align-items', 'align-content', 'justify-content', 'gap'];
     const SVG_NS = 'http://www.w3.org/2000/svg';
+    /** Preserve paragraph and field boundaries when context is painted as SVG text. */
+    function contextText(element) {
+        const blocks = new Set(['p', 'div', 'section', 'aside', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre']);
+        const read = (node) => {
+            if (node.nodeType === 3)
+                return node.textContent || '';
+            if (node.nodeType !== 1)
+                return '';
+            const tag = node.tagName.toLowerCase();
+            if (tag === 'br')
+                return '\n';
+            const text = Array.from(node.childNodes).map(read).join('');
+            return blocks.has(tag) ? '\n' + text + '\n' : text;
+        };
+        return read(element).replace(/\n{2,}/g, '\n').trim();
+    }
     function serialize(node, namespace) {
         if (node.nodeType === 3)
             return (0, core_5.escapeText)(node.textContent || '');
@@ -5020,9 +5208,15 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
         }
         for (const ui of Array.from(copy.querySelectorAll('[data-av-review-ui]')))
             ui.remove();
-        for (const name of ['width', 'height', 'min-width', 'max-width', 'min-height', 'max-height', 'transform'])
+        // The export positions the complete scene in its own canvas. Viewport scaling
+        // also changes computed root margins and transform origins; retaining those
+        // makes the SVG depend on the reader's zoom despite unchanged drawing bounds.
+        // Keep descendant margins/origins: they can be part of authored label layout.
+        for (const name of ['width', 'height', 'min-width', 'max-width', 'min-height', 'max-height', 'transform', 'transform-origin', 'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'])
             copy.style.removeProperty(name);
-        copy.removeAttribute('preserveAspectRatio');
+        // Renderer alignment is part of the drawing. A custom viewport may have a
+        // different aspect ratio from its viewBox; resetting this attribute would
+        // silently center, letterbox or stretch the exported evidence differently.
         (0, export_safety_1.validateExportTree)(copy);
         return copy;
     }
@@ -5102,6 +5296,7 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
             throw new Error('Image export is unavailable for this visualization. Use its original source.');
         const { width, height } = sceneBounds(scene), row = custom ? null : figure.querySelector('[data-av-axis-layer="rows"]'), axis = custom ? null : figure.querySelector('[data-av-axis-layer="x"]');
         const rowWidth = row ? sceneBounds(row).width : 0, axisHeight = axis ? sceneBounds(axis).height : 0, totalWidth = width + rowWidth, padding = 20;
+        const measure = (0, text_layout_2.browserTextMeasure)(document, '14px sans-serif') || undefined;
         const context = [(0, figures_4.figureTitle)(figure)], legends = [];
         for (const node of (0, figures_4.figureContext)(figure)) {
             if (node.matches('.av-legend')) {
@@ -5129,14 +5324,14 @@ define("figure-export", ["require", "exports", "core", "figures", "text-layout",
                 }
                 continue;
             }
-            const text = node.textContent?.trim();
+            const text = contextText(node);
             if (text && !context.includes(text))
                 context.push(text);
         }
         const scope = (0, figures_4.figureOrigin)(figure).scope;
         if (scope)
             context.push(scope.getAttribute('data-av-coordinate-scope') === 'complete' ? 'Complete coordinate pairs only' : 'All supplied known coordinates determine the scale');
-        const lines = context.flatMap(text => (0, text_layout_2.wrapText)(text, { maxWidth: Math.max(totalWidth, 160), fontSize: 14, lineHeight: 21 }).lines), headingHeight = lines.length * 21 + 16 + legends.reduce((height, item) => height + item.height, 0), exportWidth = Math.max(totalWidth, 160) + padding * 2;
+        const lines = context.flatMap(text => (0, text_layout_2.wrapText)(text, { maxWidth: Math.max(totalWidth, 160), fontSize: 14, lineHeight: 21, measure }).lines), headingHeight = lines.length * 21 + 16 + legends.reduce((height, item) => height + item.height, 0), exportWidth = Math.max(totalWidth, 160) + padding * 2;
         const root = document.createElementNS(SVG_NS, 'svg');
         root.setAttribute('xmlns', SVG_NS);
         root.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
@@ -7011,56 +7206,249 @@ define("inspectors", ["require", "exports", "figures", "review-targets", "comman
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.attachInspectors = attachInspectors;
-    /** One live evidence reader. On small containers it becomes a closable reading
-     * drawer, not a second copy of the evidence below an already long drawing. */
-    function attachInspectors(root) {
+    let nextInspector = 0;
+    /** One live evidence reader per explorer. The drawing starts at full width;
+     * readers can open a non-modal peek, explicitly pin it, or use the narrow drawer.
+     * The evidence itself always stays under its original report/explorer owner. */
+    function attachInspectors(root, hooks = {}) {
         const document = root.ownerDocument, view = document.defaultView, records = [];
-        let stopped = false, scheduled = null;
+        let stopped = false, scheduled = null, placing = false, watching = false;
+        const icon = 'M4 3h16v18H4zM8 7h8M8 11h8M8 15h6';
+        const property = (element, name, value) => {
+            if (value === null)
+                element.style.removeProperty(name);
+            else if (element.style.getPropertyValue(name) !== value)
+                element.style.setProperty(name, value);
+        };
+        function visible(element) {
+            return !element.closest('[hidden]') && element.getBoundingClientRect().width > 0;
+        }
+        function viewport(record) {
+            const active = record.activeFigure;
+            if (active && visible(active))
+                return active.querySelector('.av-plot-scroll');
+            return Array.from(record.plot.querySelectorAll('.av-plot-scroll')).find(visible) || null;
+        }
+        function selected(record) {
+            return record.reader.querySelector('[data-av-object].av-selected')
+                || record.reader.querySelector('[data-av-object][open]');
+        }
+        function selectedMark(record) {
+            const key = selected(record)?.getAttribute('data-av-object');
+            const candidates = record.activeFigure ? [record.activeFigure, ...record.figures] : record.figures;
+            for (const figure of candidates) {
+                if (!visible(figure))
+                    continue;
+                const mark = Array.from(figure.querySelectorAll('[data-av-inspect]')).find(item => item.getAttribute('data-av-inspect') === key);
+                if (mark)
+                    return mark;
+            }
+            return null;
+        }
+        function lower(record) {
+            if (record.raised) {
+                record.raised = false;
+                try {
+                    record.reader.hidePopover();
+                }
+                catch { /* The browser can close an ancestor first. */ }
+            }
+            record.reader.removeAttribute('popover');
+        }
+        function home(record) {
+            if (record.reader.parentNode !== record.home.parentNode)
+                record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
+            record.releasePosition();
+            record.releasePosition = () => { };
+        }
+        function reserve(record, canvas) {
+            if (record.canvas === canvas)
+                return;
+            const previous = record.canvas;
+            record.canvas?.removeAttribute('data-av-inspector-canvas');
+            record.canvas = canvas;
+            canvas?.setAttribute('data-av-inspector-canvas', '');
+            const figure = canvas && (0, figures_5.figureOf)(canvas) || previous && (0, figures_5.figureOf)(previous);
+            if (figure)
+                hooks.layout?.(figure);
+        }
+        function opener(record) {
+            return record.activeFigure && record.openers.get(record.activeFigure) || record.openers.values().next().value || null;
+        }
+        function watch() {
+            const needed = records.some(record => record.open);
+            if (watching === needed)
+                return;
+            watching = needed;
+            const method = needed ? 'addEventListener' : 'removeEventListener';
+            document[method]('scroll', schedule, true);
+            document[method]('keydown', escape, true);
+            document[method]('pointerdown', outside, true);
+        }
         function close(record, restore = true) {
+            if (!record.open && record.layout === 'closed')
+                return;
+            const trigger = record.trigger;
+            record.open = false;
+            lower(record);
             if (record.dialog.open)
                 record.dialog.close();
-            record.opener.setAttribute('aria-expanded', 'false');
-            if (restore && record.trigger?.isConnected)
-                (0, command_bar_5.focusCommand)(record.trigger);
+            home(record);
+            reserve(record, null);
+            record.layout = 'closed';
+            record.reader.hidden = true;
+            record.reader.setAttribute('data-av-inspector-view', 'closed');
+            record.explorer.setAttribute('data-av-inspector-layout', 'closed');
+            for (const control of record.openers.values())
+                control.setAttribute('aria-expanded', 'false');
+            hooks.reveal?.(selectedMark(record) || record.plot, null);
+            if (restore)
+                (0, command_bar_5.focusCommand)(trigger?.isConnected && visible(trigger) ? trigger : opener(record));
             record.trigger = null;
+            watch();
+            hooks.contextChanged?.();
         }
-        function place(record) {
-            const width = record.explorer.clientWidth;
-            if (!width || stopped)
+        function place(record, explicit = false, allowDrawer = true) {
+            const drawing = viewport(record), canvas = drawing?.closest('.av-row-plot-layout') || drawing;
+            if (!record.open) {
+                reserve(record, null);
                 return;
-            const rootFont = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
-            const mode = width >= 55 * rootFont ? 'side' : 'drawer';
-            if (mode !== record.mode) {
-                if (mode === 'side') {
-                    close(record);
-                    record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
-                }
-                else
-                    record.dialog.appendChild(record.reader);
-                record.mode = mode;
-                record.syncPosition();
             }
-            record.explorer.setAttribute('data-av-inspector-layout', mode);
-            record.opener.hidden = mode === 'side';
-            const selected = record.reader.querySelector('[data-av-object].av-selected') || record.reader.querySelector('[data-av-object][open]');
-            const label = selected?.querySelector('summary')?.textContent?.trim();
-            const text = record.opener.querySelector('span');
-            if (text)
-                text.textContent = label ? 'Read evidence: ' + label : 'Read evidence';
-            const bounds = (0, overlay_layout_5.visibleViewport)(view, 12);
-            record.dialog.style.setProperty('max-height', Math.max(0, bounds.bottom - bounds.top) + 'px');
-            if (mode === 'side') {
-                const drawing = record.plot.querySelector('.av-plot-scroll') || record.plot;
-                const plotBox = record.plot.getBoundingClientRect(), box = drawing.getBoundingClientRect();
-                const barHeight = record.explorer.closest('.av-workspace')?.querySelector('.av-workspace-bar')?.getBoundingClientRect().height || 0;
-                const available = Math.max(180, bounds.bottom - bounds.top - barHeight - 32);
-                const height = Math.min(available, Math.max(200, box.height));
-                record.reader.style.setProperty('--av-inspector-height', height + 'px');
-                record.reader.style.setProperty('--av-inspector-offset', Math.max(0, box.top - plotBox.top) + 'px');
+            if (!drawing || !canvas) {
+                close(record, false);
+                return;
+            }
+            const drawnFigure = (0, figures_5.figureOf)(drawing);
+            if (drawnFigure && record.figures.includes(drawnFigure))
+                record.activeFigure = drawnFigure;
+            const expandedFigure = !!drawing.closest('[data-av-expanded-figure]');
+            if (expandedFigure && !explicit && record.layout !== 'drawer') {
+                close(record, false);
+                return;
+            }
+            const available = (0, overlay_layout_5.visibleViewport)(view, 12);
+            const viewportSize = `${available.right - available.left}:${available.bottom - available.top}`;
+            const keepReading = record.viewportSize !== null && record.viewportSize !== viewportSize && record.reader.contains(document.activeElement);
+            record.viewportSize = viewportSize;
+            let box = canvas.getBoundingClientRect();
+            const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
+            const bar = record.owner.closest('.av-workspace')?.querySelector('.av-workspace-bar')?.getBoundingClientRect();
+            const topLimit = Math.max(available.top, bar && bar.bottom > 0 && bar.top < available.bottom ? bar.bottom + 12 : available.top);
+            const floatingTop = Math.max(topLimit, box.top + 12), floatingRoom = available.bottom - floatingTop;
+            // Resizing can push a later figure below the viewport as preceding text wraps.
+            // Keep a focused reader for the drawer transition; incidental scrolling still
+            // closes an out-of-room peek instead of opening a modal.
+            if (!explicit && !keepReading && record.layout === 'floating' && (box.bottom <= topLimit || floatingRoom < 220)) {
+                close(record, record.reader.contains(document.activeElement));
+                return;
+            }
+            const fullWidth = record.canvas === canvas ? record.explorer.clientWidth : box.width;
+            const canFloat = !expandedFigure && fullWidth >= 46 * font && available.right - available.left >= 48 * font
+                && floatingRoom >= 220 && box.bottom > topLimit;
+            const canPin = !expandedFigure && record.explorer.clientWidth >= 58 * font;
+            const layout = record.pinned && canPin ? 'side' : canFloat ? 'floating' : 'drawer';
+            const previousLayout = record.layout, focus = record.reader.contains(document.activeElement) ? document.activeElement : null;
+            if (layout === 'drawer' && (!allowDrawer || !explicit && previousLayout !== 'drawer' && !focus)) {
+                close(record, false);
+                return;
+            }
+            record.pin.disabled = !canPin && !record.pinned;
+            record.pin.hidden = record.pin.disabled;
+            record.pin.setAttribute('aria-pressed', String(record.pinned));
+            record.pin.title = record.pinned ? 'Unpin evidence' : 'Keep evidence beside the drawing';
+            record.pin.querySelector('span').textContent = record.pinned ? 'Pinned' : 'Pin';
+            if (layout !== previousLayout) {
+                lower(record);
+                if (record.dialog.open)
+                    record.dialog.close();
+                home(record);
+                record.layout = layout;
+                record.explorer.setAttribute('data-av-inspector-layout', layout);
+                record.reader.setAttribute('data-av-inspector-view', layout);
+                record.reader.hidden = false;
+                if (layout === 'drawer') {
+                    record.dialog.appendChild(record.reader);
+                    record.releasePosition = (0, review_targets_3.registerReviewPlaceholder)(record.home, record.reader);
+                    record.dialog.showModal();
+                }
+                else if (layout === 'floating' && typeof record.reader.showPopover === 'function') {
+                    record.reader.setAttribute('popover', 'manual');
+                    try {
+                        record.reader.showPopover();
+                        record.raised = true;
+                    }
+                    catch {
+                        record.reader.removeAttribute('popover');
+                    }
+                }
+            }
+            if (layout === 'floating' && record.reader.hasAttribute('popover') && !record.reader.matches(':popover-open')) {
+                try {
+                    record.reader.showPopover();
+                    record.raised = true;
+                }
+                catch {
+                    lower(record);
+                }
+            }
+            reserve(record, layout === 'side' ? canvas : null);
+            // Pinning changes the drawing's width synchronously. Positioning from the
+            // pre-pin box would briefly cover the wrong region and over-pan the mark.
+            box = canvas.getBoundingClientRect();
+            const height = Math.max(120, Math.min(36 * font, available.bottom - topLimit, Math.max(280, box.height)));
+            if (layout === 'side') {
+                const readerHeight = Math.min(height, Math.max(240, box.height));
+                const top = Math.max(box.top, Math.min(topLimit, box.bottom - readerHeight));
+                property(record.reader, '--av-inspector-offset', Math.max(0, top - record.explorer.getBoundingClientRect().top) + 'px');
+                property(record.reader, '--av-inspector-height', readerHeight + 'px');
+                for (const key of ['left', 'top', 'width', 'height', 'max-height', 'max-width'])
+                    property(record.reader, key, null);
+            }
+            else if (layout === 'floating') {
+                const width = Math.min(27 * font, box.width * .44, available.right - available.left);
+                const top = Math.max(topLimit, box.top + 12), floatingHeight = Math.min(height, available.bottom - top);
+                const left = Math.max(available.left, Math.min(box.right - width - 12, available.right - width));
+                property(record.reader, 'left', left + 'px');
+                property(record.reader, 'top', top + 'px');
+                property(record.reader, 'width', width + 'px');
+                property(record.reader, 'height', floatingHeight + 'px');
+                property(record.reader, 'max-width', (available.right - available.left) + 'px');
+                property(record.reader, 'max-height', Math.max(120, available.bottom - top) + 'px');
+                const measured = record.reader.getBoundingClientRect();
+                const position = (0, overlay_layout_5.clampOverlayPosition)(available, measured.width, measured.height, left, top);
+                property(record.reader, 'left', position.left + 'px');
+                property(record.reader, 'top', position.top + 'px');
+            }
+            else {
+                for (const key of ['left', 'top', 'width', 'height', 'max-height', 'max-width'])
+                    property(record.reader, key, null);
+                property(record.dialog, 'max-height', Math.max(120, available.bottom - available.top) + 'px');
+            }
+            for (const control of record.openers.values())
+                control.setAttribute('aria-expanded', 'true');
+            const occlusion = layout === 'floating' ? Math.ceil(record.reader.getBoundingClientRect().width) : 0;
+            if (occlusion !== record.occlusion || record.activeFigure !== record.occlusionFigure) {
+                record.occlusion = occlusion;
+                record.occlusionFigure = record.activeFigure;
+                hooks.reveal?.(selectedMark(record) || record.plot, occlusion ? record.reader.getBoundingClientRect() : null);
+            }
+            // Movement between native top layers can discard focus. Retain the same
+            // evidence node; do not refocus on ordinary scrolling or item updates.
+            if (layout !== previousLayout && focus?.isConnected)
+                (0, command_bar_5.focusCommand)(focus);
+        }
+        function refresh() {
+            if (stopped || placing)
+                return;
+            placing = true;
+            try {
+                for (const record of records)
+                    place(record);
+            }
+            finally {
+                placing = false;
             }
         }
-        function refresh() { for (const record of records)
-            place(record); }
         function schedule() {
             if (stopped || scheduled !== null)
                 return;
@@ -7070,104 +7458,236 @@ define("inspectors", ["require", "exports", "figures", "review-targets", "comman
             }
             scheduled = view.requestAnimationFrame(() => { scheduled = null; refresh(); });
         }
+        function escape(event) {
+            if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing)
+                return;
+            const target = event.target;
+            // A source dialog or menu above this reader owns Escape first.
+            const record = [...records].reverse().find(item => item.open && (item.reader.contains(target) || item.layout === 'floating' && item.owner.contains(target)));
+            if (!record || record.layout === 'drawer')
+                return;
+            if (target?.closest('.av-floating-panel,.av-command-menu,.av-source-dialog,.av-context-review'))
+                return;
+            event.preventDefault();
+            event.stopPropagation();
+            close(record);
+        }
+        function outside(event) {
+            const target = event.target;
+            for (const record of records)
+                if (record.open && record.layout === 'floating' && target && !record.reader.contains(target)
+                    && !record.owner.contains(target) && !record.activeFigure?.contains(target))
+                    close(record, false);
+        }
+        function recordFor(target) {
+            const figure = (0, figures_5.figureOf)(target), owner = target.closest('[data-av-explorer]') || (figure ? (0, figures_5.figureOrigin)(figure).explorer : null);
+            return records.find(record => record.owner === owner || record.reader.contains(target) || figure && record.figures.includes(figure));
+        }
+        function open(target, trigger, takeFocus = true) {
+            const record = recordFor(target);
+            if (!record || stopped)
+                return false;
+            const figure = (0, figures_5.figureOf)(target);
+            if (figure && record.figures.includes(figure))
+                record.activeFigure = figure;
+            else {
+                const mark = selectedMark(record);
+                record.activeFigure = mark && (0, figures_5.figureOf)(mark) || record.figures.find(visible) || null;
+            }
+            for (const other of records)
+                if (other !== record && other.open && !other.pinned)
+                    close(other, false);
+            record.trigger = trigger || opener(record);
+            record.open = true;
+            const allowDrawer = takeFocus || record.layout === 'drawer' || record.reader.contains(document.activeElement);
+            record.reader.setAttribute('open', '');
+            place(record, true, allowDrawer);
+            watch();
+            hooks.contextChanged?.();
+            if (record.open && (takeFocus || record.layout === 'drawer'))
+                (0, command_bar_5.focusCommand)(selected(record)?.querySelector('summary') || record.reader);
+            const mark = selectedMark(record);
+            if (mark)
+                hooks.reveal?.(mark, record.layout === 'floating' ? record.reader.getBoundingClientRect() : null);
+            return true;
+        }
         for (const reader of Array.from(root.querySelectorAll('.av-inspector'))) {
-            const explorer = reader.parentElement;
-            if (!explorer || !explorer.closest('[data-av-explorer]'))
-                continue;
-            const plot = Array.from(explorer.children).find(node => node.matches('.av-plot-shell,.av-scatter-scenes'));
-            if (!reader || !plot)
+            const explorer = reader.parentElement, owner = explorer?.closest('[data-av-explorer]');
+            const plot = explorer && Array.from(explorer.children).find(node => node.matches('.av-plot-shell,.av-scatter-scenes'));
+            const summary = reader.querySelector('summary');
+            if (!explorer || !owner || !plot || !summary)
                 continue;
             const dialog = document.createElement('dialog');
             if (typeof dialog.showModal !== 'function')
                 continue;
             dialog.className = 'av-focus-dialog av-inspector-dialog';
             dialog.setAttribute('aria-label', 'Evidence reader');
+            const homeMarker = document.createComment('av-evidence-reader');
+            explorer.insertBefore(homeMarker, reader);
+            const attributes = ['id', 'tabindex', 'hidden', 'open', 'style', 'role', 'aria-label', 'popover', 'data-av-inspector-view'].map(name => [name, reader.getAttribute(name)]);
+            const oldLayout = explorer.getAttribute('data-av-inspector-layout');
             const header = document.createElement('header');
             header.className = 'av-inspector-header';
             header.setAttribute('data-av-review-ui', '');
-            const title = document.createElement('strong');
-            title.textContent = 'Evidence';
-            header.appendChild(title);
+            const heading = document.createElement('strong');
+            heading.textContent = 'Evidence';
+            header.appendChild(heading);
+            const summaryHidden = summary.getAttribute('hidden');
+            summary.hidden = true;
+            reader.insertBefore(header, summary.nextSibling);
+            if (!reader.id) {
+                let id;
+                do {
+                    id = 'av-evidence-reader-' + (++nextInspector);
+                } while (document.getElementById(id));
+                reader.id = id;
+            }
+            reader.setAttribute('tabindex', '-1');
+            const controls = document.createElement('span');
+            controls.className = 'av-inspector-actions';
+            controls.setAttribute('data-av-review-ui', '');
+            const pin = document.createElement('button');
+            pin.type = 'button';
+            pin.className = 'av-button av-button-quiet';
+            pin.setAttribute('data-av-inspector-pin', '');
+            pin.setAttribute('aria-label', 'Pin evidence beside drawing');
+            pin.appendChild((0, command_bar_5.commandIcon)(document, 'm8 3 8 0-1 6 4 4v2H5v-2l4-4zM12 15v6'));
+            const caption = document.createElement('span');
+            caption.textContent = 'Pin';
+            pin.appendChild(caption);
             const dismiss = document.createElement('button');
             dismiss.type = 'button';
-            dismiss.className = 'av-button';
-            dismiss.textContent = 'Close';
+            dismiss.className = 'av-button av-panel-close';
             dismiss.setAttribute('aria-label', 'Close evidence reader');
-            header.appendChild(dismiss);
-            dialog.appendChild(header);
-            const home = document.createComment('av-evidence-reader');
-            reader.parentNode.insertBefore(home, reader);
-            // A docked reader is already in the source tree. Substitute the placeholder
-            // only while it is moved into a transient dialog.
-            let release = () => { };
-            const opener = document.createElement('button');
-            opener.type = 'button';
-            opener.className = 'av-button av-inspector-opener';
-            opener.setAttribute('aria-haspopup', 'dialog');
-            opener.setAttribute('aria-expanded', 'false');
-            opener.hidden = true;
-            opener.setAttribute('data-av-review-ui', '');
-            opener.appendChild((0, command_bar_5.commandIcon)(document, 'M4 3h16v18H4zM8 7h8M8 11h8M8 15h6'));
-            const label = document.createElement('span');
-            label.textContent = 'Read evidence';
-            opener.appendChild(label);
-            const toolbar = Array.from(plot.children).find(child => child.matches('.av-plot-toolbar'));
-            plot.insertBefore(opener, toolbar?.nextSibling || plot.firstChild);
+            dismiss.textContent = '×';
+            controls.append(pin, dismiss);
+            header.appendChild(controls);
+            const figures = [...(plot.hasAttribute('data-av-figure') ? [plot] : []), ...Array.from(plot.querySelectorAll('[data-av-figure]'))].filter(figure => (0, figures_5.figureOf)(figure) === figure);
+            const record = { owner, explorer, reader, plot, summary, pin, closeButton: dismiss, dialog, home: homeMarker, figures,
+                openers: new Map(), activeFigure: null, trigger: null, canvas: null, open: false, pinned: false, raised: false, layout: 'closed', occlusion: 0, occlusionFigure: null, viewportSize: null, releasePosition: () => { }, undo: [] };
+            reader.hidden = true;
+            reader.setAttribute('open', '');
+            reader.setAttribute('role', 'region');
+            reader.setAttribute('aria-label', 'Evidence reader');
+            reader.setAttribute('data-av-inspector-view', 'closed');
+            explorer.setAttribute('data-av-inspector-layout', 'closed');
             explorer.appendChild(dialog);
-            const oldLayout = explorer.getAttribute('data-av-inspector-layout'), oldStyle = reader.getAttribute('style');
-            const record = { explorer, reader, plot, opener, dialog, home, releasePosition: () => release(), syncPosition: () => { }, mode: 'side', trigger: null, undo: [] };
-            const open = () => { record.trigger = opener; reader.setAttribute('open', ''); if (!dialog.open)
-                dialog.showModal(); opener.setAttribute('aria-expanded', 'true'); dismiss.focus({ preventScroll: true }); };
-            const closeClick = (event) => { event.preventDefault(); event.stopPropagation(); close(record); };
-            opener.addEventListener('click', open);
-            dismiss.addEventListener('click', closeClick);
-            dialog.addEventListener('cancel', closeClick);
-            // Keep the placeholder active only while the live reader is in the dialog.
-            const updateIdentity = () => { release(); release = reader.parentNode === dialog ? (0, review_targets_3.registerReviewPlaceholder)(home, reader) : () => { }; };
-            record.syncPosition = updateIdentity;
-            record.undo.push(() => { opener.removeEventListener('click', open); dismiss.removeEventListener('click', closeClick); dialog.removeEventListener('cancel', closeClick); if (oldLayout === null)
-                explorer.removeAttribute('data-av-inspector-layout');
-            else
-                explorer.setAttribute('data-av-inspector-layout', oldLayout); if (oldStyle === null)
-                reader.removeAttribute('style');
-            else
-                reader.setAttribute('style', oldStyle); });
+            for (const figure of figures) {
+                const control = document.createElement('button');
+                control.type = 'button';
+                control.className = 'av-button av-inspector-opener';
+                control.setAttribute('data-av-inspector-open', '');
+                control.setAttribute('data-av-review-ui', '');
+                control.setAttribute('aria-expanded', 'false');
+                control.setAttribute('aria-label', 'Read evidence');
+                control.appendChild((0, command_bar_5.commandIcon)(document, icon));
+                control.setAttribute('aria-controls', reader.id);
+                control.setAttribute('aria-haspopup', 'dialog');
+                const label = document.createElement('span');
+                label.textContent = 'Evidence';
+                control.appendChild(label);
+                const host = figure.querySelector('.av-plot-toolbar') || figure;
+                // The command bar restores a moved control to this marker's parent on
+                // cleanup. Keep that parent disposable so a later bar cleanup cannot
+                // resurrect the inspector's already-removed generated control.
+                const holder = document.createElement('span');
+                holder.setAttribute('data-av-review-ui', '');
+                holder.style.display = 'contents';
+                host.appendChild(holder);
+                holder.appendChild(control);
+                const toggle = (event) => { event.preventDefault(); event.stopPropagation(); if (record.open && record.activeFigure === figure)
+                    close(record);
+                else
+                    open(figure, control); };
+                control.addEventListener('click', toggle);
+                hooks.command?.(figure, control, { label: 'Evidence', labelled: true, priority: 12, group: 'inspection', icon });
+                record.openers.set(figure, control);
+                record.undo.push(() => { control.removeEventListener('click', toggle); control.remove(); holder.remove(); });
+            }
+            const pinClick = (event) => { event.preventDefault(); event.stopPropagation(); record.pinned = !record.pinned; place(record); (0, command_bar_5.focusCommand)(pin.hidden ? dismiss : pin); };
+            const dismissClick = (event) => { event.preventDefault(); event.stopPropagation(); close(record); };
+            const summaryClick = (event) => { if (!event.target?.closest('button,a,input'))
+                event.preventDefault(); };
+            pin.addEventListener('click', pinClick);
+            dismiss.addEventListener('click', dismissClick);
+            summary.addEventListener('click', summaryClick);
+            dialog.addEventListener('cancel', dismissClick);
+            record.undo.push(() => {
+                pin.removeEventListener('click', pinClick);
+                dismiss.removeEventListener('click', dismissClick);
+                summary.removeEventListener('click', summaryClick);
+                dialog.removeEventListener('cancel', dismissClick);
+                header.remove();
+                if (summaryHidden === null)
+                    summary.removeAttribute('hidden');
+                else
+                    summary.setAttribute('hidden', summaryHidden);
+                for (const [name, value] of attributes)
+                    if (value === null)
+                        reader.removeAttribute(name);
+                    else
+                        reader.setAttribute(name, value);
+                if (oldLayout === null)
+                    explorer.removeAttribute('data-av-inspector-layout');
+                else
+                    explorer.setAttribute('data-av-inspector-layout', oldLayout);
+            });
             if (view?.ResizeObserver) {
                 const observer = new view.ResizeObserver(schedule);
                 observer.observe(explorer);
                 observer.observe(plot);
+                for (const canvas of Array.from(plot.querySelectorAll('.av-plot-scroll,.av-row-plot-layout')))
+                    observer.observe(canvas);
                 record.undo.push(() => observer.disconnect());
             }
             records.push(record);
         }
-        // Polling is unnecessary: layout invalidation and viewport changes cover moves.
         root.addEventListener('av-layout-invalidated', schedule, true);
         view?.addEventListener('resize', schedule);
         view?.visualViewport?.addEventListener('resize', schedule);
-        refresh();
         return {
-            refresh,
-            open(target, trigger) {
-                const explorer = target.closest('[data-av-explorer]') || ((0, figures_5.figureOf)(target) ? (0, figures_5.figureOrigin)((0, figures_5.figureOf)(target)).explorer : null);
-                const record = records.find(record => record.explorer === explorer || record.explorer.closest('[data-av-explorer]') === explorer);
-                if (!record)
-                    return false;
-                place(record);
-                record.reader.setAttribute('open', '');
-                if (record.mode === 'side') {
-                    record.reader.querySelector('summary')?.focus({ preventScroll: true });
-                    return true;
-                }
-                record.trigger = trigger || record.opener;
-                if (!record.dialog.open)
-                    record.dialog.showModal();
-                record.opener.setAttribute('aria-expanded', 'true');
-                record.dialog.querySelector('button')?.focus({ preventScroll: true });
-                return true;
+            refresh, open,
+            dismissOutside(target, keepContained = false) { for (const record of records)
+                if (record.open && !record.reader.contains(target) && !(keepContained && target.contains(record.reader)))
+                    close(record, false); },
+            suspend(target) {
+                const saved = records.filter(record => record.figures.some(figure => target === figure || target.contains(figure)))
+                    .map(record => ({ record, wasOpen: record.open, figure: record.activeFigure, trigger: record.trigger }));
+                for (const entry of saved)
+                    close(entry.record, false);
+                return () => {
+                    if (stopped)
+                        return false;
+                    let restored = false;
+                    for (const entry of saved) {
+                        close(entry.record, false);
+                        if (!entry.wasOpen || !entry.figure?.isConnected || !visible(entry.figure))
+                            continue;
+                        const width = entry.figure.querySelector('.av-plot-scroll')?.clientWidth || 0;
+                        const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
+                        // Returning to a now-narrow report keeps the opener available rather
+                        // than starting a new modal above the view's restored keyboard focus.
+                        if (width < 46 * font)
+                            continue;
+                        restored = open(entry.figure, entry.trigger || undefined, false) || restored;
+                    }
+                    return restored;
+                };
+            },
+            preview(target) {
+                const record = recordFor(target);
+                if (!record || stopped)
+                    return;
+                const figure = (0, figures_5.figureOf)(target), drawing = figure?.querySelector('.av-plot-scroll');
+                const font = parseFloat(view?.getComputedStyle?.(document.documentElement).fontSize || '16') || 16;
+                if (record.open || drawing && !figure?.hasAttribute('data-av-expanded-figure') && drawing.clientWidth >= 46 * font)
+                    open(target, target, false);
             },
             cleanup() {
                 if (stopped)
                     return;
+                for (const record of records)
+                    close(record, false);
                 stopped = true;
                 if (scheduled !== null)
                     view?.cancelAnimationFrame(scheduled);
@@ -7175,16 +7695,14 @@ define("inspectors", ["require", "exports", "figures", "review-targets", "comman
                 view?.removeEventListener('resize', schedule);
                 view?.visualViewport?.removeEventListener('resize', schedule);
                 for (const record of records) {
-                    close(record, false);
-                    record.releasePosition();
-                    record.home.parentNode?.insertBefore(record.reader, record.home.nextSibling);
+                    lower(record);
+                    home(record);
                     record.home.remove();
-                    record.opener.remove();
                     record.dialog.remove();
                     for (const restore of record.undo.reverse())
                         restore();
                 }
-            }
+            },
         };
     }
 });
@@ -7583,7 +8101,7 @@ define("quantitative", ["require", "exports", "core", "categories", "chart-rende
         }
         const selected = input.coordinateScope || "known";
         const scopeControls = partial.length ? '<div class="av-coordinate-controls av-button-group" data-av-controls hidden role="group" aria-label="Coordinate scope"><button type="button" class="av-button" data-av-scope-choice="known">All known coordinates</button><button type="button" class="av-button" data-av-scope-choice="complete">Complete pairs only</button></div>' : "";
-        const clouds = `<div data-av-coordinate-scope="known"${selected === "known" ? "" : " hidden"}><p class="av-note">Scale includes every supplied known coordinate. This plot shows ${complete.length} complete pairs.${partial.length ? ` ${partial.length} partial observations appear in the separate missing-coordinate bands.` : ""}${absent ? ` ${absent} observations have neither coordinate and remain in the complete data.` : ""}</p>${cloud("known")}</div>` + (partial.length || selected === "complete" ? `<div data-av-coordinate-scope="complete"${selected === "complete" ? "" : " hidden"}><p class="av-note">Complete-pairs scope: ${complete.length} paired observations.${partial.length ? ` ${partial.length} partial observations remain below and in the complete data.` : ""}</p>${cloud("complete")}</div>` : "");
+        const clouds = `<div data-av-coordinate-scope="known"${selected === "known" ? "" : " hidden"}><p class="av-note">Scale includes every supplied known coordinate. This plot shows ${complete.length} complete ${complete.length === 1 ? 'pair' : 'pairs'}.${partial.length ? ` ${partial.length} partial ${partial.length === 1 ? 'observation appears' : 'observations appear'} in the separate missing-coordinate bands.` : ""}${absent ? ` ${absent} ${absent === 1 ? 'observation has' : 'observations have'} neither coordinate and ${absent === 1 ? 'remains' : 'remain'} in the complete data.` : ""}</p>${cloud("known")}</div>` + (partial.length || selected === "complete" ? `<div data-av-coordinate-scope="complete"${selected === "complete" ? "" : " hidden"}><p class="av-note">Complete-pairs scope: ${complete.length} paired ${complete.length === 1 ? 'observation' : 'observations'}.${partial.length ? ` ${partial.length} partial ${partial.length === 1 ? 'observation remains' : 'observations remain'} below and in the complete data.` : ""}</p>${cloud("complete")}</div>` : "");
         const bands = ["x", "y"].map(axis => {
             const entries = input.points.map((point, index) => ({ point, index })).filter(({ point }) => point[axis] != null && point[axis === "x" ? "y" : "x"] == null);
             if (!entries.length)
@@ -7942,6 +8460,8 @@ define("qualitative", ["require", "exports", "core", "structured", "quantitative
         return (0, core_11.card)(input, `<div class="av-observatory av-explorer" data-av-explorer>${(0, core_11.explorerControls)("Inspect an uncertainty", input.items.map((item, i) => ({ key: `uncertainty-${i}`, label: item.label })))}<div class="av-object-list">${input.items.map((item, i) => (0, core_11.objectDetail)(`uncertainty-${i}`, item.label, `${(0, core_11.status)(item.status)}<p>${(0, core_11.escapeText)(item.reason)}</p>${(0, core_11.annotation)(item)}`, true, "av-unknown-object")).join("")}</div></div>${(0, core_11.dataTable)(input.title, ["Issue", "Reason / consequence", "Status and context"], input.items.map(item => [(0, core_11.escapeText)(item.label), (0, core_11.escapeText)(item.reason), (0, core_11.status)(item.status) + (0, core_11.annotation)(item)]))}`, "uncertainty");
     }
     function evidenceLineage(input) {
+        if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width')
+            throw new TypeError('Graph fit must be natural or width.');
         const nodes = (0, core_11.named)(input.nodes, "Lineage nodes"), edgeIds = (0, categories_3.occurrenceIds)(input.edges, "Relation");
         for (const edge of input.edges)
             if (!nodes.has(edge.from) || !nodes.has(edge.to))
@@ -7954,9 +8474,28 @@ define("qualitative", ["require", "exports", "core", "structured", "quantitative
             return `<g class="av-graph-edge" data-av-inspect="edge-${edge.index}" data-av-edge-id="${(0, core_11.escapeText)(edge.id)}" data-av-from="node-${edge.source}" data-av-to="node-${edge.target}" aria-label="Inspect relationship ${(0, core_11.escapeText)(edge.id)}: ${(0, core_11.escapeText)(supplied.from)} to ${(0, core_11.escapeText)(supplied.to)} — ${(0, core_11.escapeText)(supplied.relation)}"><path class="av-edge-hit" d="${path}" style="fill:none;stroke:transparent;stroke-width:18" pointer-events="stroke"/><path class="av-edge-route" d="${path}" fill="none" stroke="var(--av-axis, #738d8c)" stroke-width="1.5"/><polygon points="${arrow}" fill="var(--av-axis, #738d8c)"/><rect class="av-graph-relation-box" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="8" fill="var(--av-sheet, #ffffff)" stroke="var(--av-line-strong, #8fa8a4)"/>${(0, chart_rendering_2.textMarkup)(edge.label, box.x + 12, box.y + 12, "start", "av-graph-relation-text")}${(0, chart_rendering_2.textMarkup)(edge.identity, box.x + 12, box.y + 16 + edge.label.height, "start", "av-muted av-graph-identity")}<title>${(0, core_11.escapeText)(edge.id)}: ${(0, core_11.escapeText)(supplied.from)} (${(0, core_11.escapeText)(nodes.get(supplied.from).label)}) → ${(0, core_11.escapeText)(supplied.to)} (${(0, core_11.escapeText)(nodes.get(supplied.to).label)}): ${(0, core_11.escapeText)(supplied.relation)}</title></g>`;
         }).join("");
         const boxes = layout.nodes.map(node => `<g class="av-graph-node" data-av-inspect="node-${node.index}" data-av-node-id="${(0, core_11.escapeText)(node.id)}" aria-label="Inspect ${(0, core_11.escapeText)(node.id)}: ${(0, core_11.escapeText)(input.nodes[node.index].label)}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="10" fill="var(--av-subtle, #f1f7f5)" stroke="var(--av-line-strong, #8fa8a4)"/>${(0, chart_rendering_2.textMarkup)(node.label, node.x + 16, node.y + 16, "start", "av-graph-node-label")}${(0, chart_rendering_2.textMarkup)(node.identity, node.x + 16, node.y + 24 + node.label.height, "start", "av-muted av-graph-identity")}${(0, chart_rendering_2.textMarkup)(node.kind, node.x + 16, node.y + 24 + node.label.height + node.identity.height, "start", "av-muted av-graph-kind")}<title>${(0, core_11.escapeText)(node.id)}: ${(0, core_11.escapeText)(input.nodes[node.index].label)} (${(0, core_11.escapeText)(input.nodes[node.index].kind)})</title></g>`).join("");
-        const plot = input.nodes.length ? (0, core_11.svg)(input.title, layout.height, relationships + boxes, layout.width) : '<p class="av-empty">No evidence nodes supplied.</p>';
+        const plot = input.nodes.length ? (0, core_11.svg)(input.title, layout.height, relationships + boxes, layout.width, input.fit ?? 'natural') : '<p class="av-empty">No evidence nodes supplied.</p>';
         const edgeIdentity = (i) => (0, core_11.identifier)(edgeIds[i]) + (input.edges[i].id === undefined ? ' <span class="av-muted">(occurrence)</span>' : "");
-        const inspector = `<details class="av-inspector" open><summary>Inspect evidence</summary><div class="av-object-list">${input.nodes.map((node, i) => (0, core_11.objectDetail)(`node-${i}`, `Node: ${node.label} · ${node.id}`, `<dl class="av-facts"><div><dt>Stable identity</dt><dd>${(0, core_11.identifier)(node.id)}</dd></div><div><dt>Supplied kind</dt><dd>${(0, core_11.escapeText)(node.kind)}</dd></div></dl>${node.detail === undefined ? "" : `<p>${(0, core_11.escapeText)(node.detail)}</p>`}${(0, core_11.annotation)(node)}${(0, core_11.table)("Supplied relationships for this object", ["Relationship ID / occurrence", "From ID", "Relation", "To ID", "Context"], input.edges.flatMap((edge, j) => edge.from === node.id || edge.to === node.id ? [[edgeIdentity(j), (0, core_11.identifier)(edge.from), (0, core_11.escapeText)(edge.relation), (0, core_11.identifier)(edge.to), (0, core_11.annotation)(edge)]] : []))}`, i === 0)).join("")}${input.edges.map((edge, i) => (0, core_11.objectDetail)(`edge-${i}`, `Relationship: ${edge.relation} · ${edgeIds[i]}`, `<dl class="av-facts"><div><dt>Relationship ID / occurrence</dt><dd>${edgeIdentity(i)}</dd></div><div><dt>From</dt><dd>${(0, core_11.identifier)(edge.from)} — ${(0, core_11.escapeText)(nodes.get(edge.from).label)}</dd></div><div><dt>To</dt><dd>${(0, core_11.identifier)(edge.to)} — ${(0, core_11.escapeText)(nodes.get(edge.to).label)}</dd></div></dl><p class="av-relation-wording">${(0, core_11.escapeText)(edge.relation)}</p>${(0, core_11.annotation)(edge)}`)).join("")}</div></details>`;
+        const incident = new Map();
+        const nodePositions = new Map(input.nodes.map((node, i) => [node.id, i]));
+        const endpointActions = (from, to) => `<div class="av-button-group av-relation-actions" data-av-controls data-av-review-ui hidden><button type="button" class="av-button av-button-quiet" data-av-inspect="node-${nodePositions.get(from)}">Read origin</button>${from === to ? '' : `<button type="button" class="av-button av-button-quiet" data-av-inspect="node-${nodePositions.get(to)}">Read destination</button>`}</div>`;
+        input.edges.forEach((edge, i) => {
+            for (const id of new Set([edge.from, edge.to])) {
+                const indices = incident.get(id) || [];
+                indices.push(i);
+                incident.set(id, indices);
+            }
+        });
+        const related = (id) => {
+            const indices = incident.get(id) || [];
+            if (!indices.length)
+                return '<p class="av-note">No relationships were supplied for this item.</p>';
+            return `<section class="av-related-evidence"><h4>Relationships</h4><ul>${indices.map(i => {
+                const edge = input.edges[i];
+                return `<li class="av-relation-record"><p class="av-relation-id">${edgeIdentity(i)}</p><div class="av-relation-ends"><span>${(0, core_11.escapeText)(nodes.get(edge.from).label)}${(0, core_11.identifier)(edge.from)}</span><span aria-label="to">→</span><span>${(0, core_11.escapeText)(nodes.get(edge.to).label)}${(0, core_11.identifier)(edge.to)}</span></div><p class="av-relation-wording">${(0, core_11.escapeText)(edge.relation)}</p>${(0, core_11.annotation)(edge)}<span data-av-controls data-av-review-ui hidden><button type="button" class="av-button av-button-quiet" data-av-inspect="edge-${i}">Read relationship</button></span></li>`;
+            }).join('')}</ul></section>`;
+        };
+        const inspector = `<details class="av-inspector" open><summary>Inspect evidence</summary><div class="av-object-list">${input.nodes.map((node, i) => (0, core_11.objectDetail)(`node-${i}`, `Node: ${node.label} · ${node.id}`, `<dl class="av-facts"><div><dt>Item ID</dt><dd>${(0, core_11.identifier)(node.id)}</dd></div><div><dt>Type</dt><dd>${(0, core_11.escapeText)(node.kind)}</dd></div></dl>${node.detail === undefined ? "" : `<p>${(0, core_11.escapeText)(node.detail)}</p>`}${(0, core_11.annotation)(node)}${related(node.id)}`, i === 0)).join("")}${input.edges.map((edge, i) => (0, core_11.objectDetail)(`edge-${i}`, `Relationship: ${edge.relation} · ${edgeIds[i]}`, `<dl class="av-facts"><div><dt>Relationship ID / occurrence</dt><dd>${edgeIdentity(i)}</dd></div><div><dt>From</dt><dd>${(0, core_11.identifier)(edge.from)} — ${(0, core_11.escapeText)(nodes.get(edge.from).label)}</dd></div><div><dt>To</dt><dd>${(0, core_11.identifier)(edge.to)} — ${(0, core_11.escapeText)(nodes.get(edge.to).label)}</dd></div></dl><p class="av-relation-wording">${(0, core_11.escapeText)(edge.relation)}</p>${(0, core_11.annotation)(edge)}${endpointActions(edge.from, edge.to)}`)).join("")}</div></details>`;
         const choices = [...input.nodes.map((node, i) => ({ key: `node-${i}`, label: `Node: ${node.label} · ${node.id}` })), ...input.edges.map((edge, i) => ({ key: `edge-${i}`, label: `Relationship: ${edge.relation} · ${edgeIds[i]}` }))];
         return (0, chart_rendering_2.layoutRecipe)((0, core_11.card)(input, `<div class="av-constellation" data-av-explorer>${(0, core_11.explorerControls)("Inspect a node or relationship", choices)}<div class="av-explorer">${plot}${inspector}</div></div>` + '<p class="av-muted">Nodes follow supplied order, and boxes fit their text. Select a node or relationship to inspect its full wording and evidence.</p>' + (0, core_11.dataTable)("Evidence and version nodes", ["Node ID", "Label", "Kind", "Detail", "Evidence and context"], input.nodes.map(node => [(0, core_11.identifier)(node.id), (0, core_11.escapeText)(node.label), (0, core_11.escapeText)(node.kind), (0, core_11.escapeText)(node.detail ?? "Not supplied"), (0, core_11.annotation)(node)])) + (0, core_11.dataTable)("Evidence and version relationships", ["Relationship ID / occurrence", "From ID", "From label", "Relation", "To ID", "To label", "Evidence and context"], input.edges.map((edge, i) => [edgeIdentity(i), (0, core_11.identifier)(edge.from), (0, core_11.escapeText)(nodes.get(edge.from).label), (0, core_11.escapeText)(edge.relation), (0, core_11.identifier)(edge.to), (0, core_11.escapeText)(nodes.get(edge.to).label), (0, core_11.annotation)(edge)])), "provenance"), "lineage", input);
     }
@@ -8403,7 +8942,7 @@ define("figure-tools", ["require", "exports", "floating-panel", "figures", "figu
             summary.textContent = 'Keyboard & touch';
             help.appendChild(summary);
             const shortcuts = document.createElement('dl');
-            for (const [key, description] of [['Click / tap', 'Choose one item.'], ['Ctrl / ⌘ + click', 'Add or remove an item.'], ['Shift + click', 'Select a range in source order. Add Ctrl / ⌘ to keep the previous selection.'], ['Arrow keys', 'Move between items. Shift extends the selection.'], ['Escape', 'Clear items, or close this panel.'], ['Touch', 'Choose an item, then turn on Add to selection in its selection menu.'], ['Text', 'Drag across a passage, then open Passage to annotate or bookmark it.']]) {
+            for (const [key, description] of [['Click / tap', 'Choose one item.'], ['Ctrl / ⌘ + click', 'Add or remove an item.'], ['Shift + click', 'Select a range in source order. Add Ctrl / ⌘ to keep the previous selection.'], ['Arrow keys', 'Pan in Pan mode, or move between items in Select mode. Shift extends item selection.'], ['Space + drag', 'Focus the drawing, then hold Space while dragging to pan without leaving Select or Text mode.'], ['Escape', 'Clear items, or close this panel.'], ['Touch', 'Choose an item, then turn on Add to selection in its selection menu.'], ['Text', 'Drag across a passage, then open Passage to annotate or bookmark it.']]) {
                 const term = document.createElement('dt'), definition = document.createElement('dd');
                 term.textContent = key;
                 definition.textContent = description;
@@ -8644,6 +9183,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
     exports.attachMermaid = attachMermaid;
     let renderQueue = Promise.resolve();
     let sequence = 0;
+    const MIN_LAYOUT_WIDTH = 900;
     /** Scope renderer-owned IDs without changing exact source or relying on a family whitelist. */
     function scopeDiagram(svg, prefix) {
         const nodes = [svg, ...Array.from(svg.querySelectorAll('*'))];
@@ -8734,14 +9274,231 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 node.setAttribute('aria-label', node.textContent?.trim() || key);
             }
     }
+    /** Some renderer notes span actor centers even when their text is wider. Grow
+     * only that note's own horizontal background; never reflow its text, move its
+     * participants/connections, or change source and selection identity.
+     */
+    function fitNoteBackgrounds(svg, document) {
+        const changed = [];
+        for (const group of Array.from(svg.querySelectorAll('g[data-et="note"]'))) {
+            const children = Array.from(group.children), backgrounds = children.filter(child => child.matches('rect.note'));
+            const labels = children.filter(child => child.matches('text.noteText'));
+            if (backgrounds.length !== 1 || !labels.length || children.some(child => !child.matches('rect.note,text.noteText,title,desc')))
+                continue;
+            const background = backgrounds[0];
+            // Boxes share their parent's coordinates only without individual transforms.
+            // Unknown/custom geometry keeps the renderer's result rather than being guessed.
+            const nodes = [background, ...labels];
+            if (nodes.some(node => node.hasAttribute('transform') || (document.defaultView?.getComputedStyle(node).transform || 'none') !== 'none'))
+                continue;
+            if (['x', 'width'].some(name => background.style.getPropertyValue(name)))
+                continue;
+            try {
+                const box = background.getBBox(), text = labels.map(label => label.getBBox());
+                if ([box, ...text].some(value => ![value.x, value.y, value.width, value.height].every(Number.isFinite) || value.width <= 0 || value.height <= 0))
+                    continue;
+                const left = Math.min(...text.map(value => value.x)), right = Math.max(...text.map(value => value.x + value.width));
+                if (left >= box.x - 0.5 && right <= box.x + box.width + 0.5)
+                    continue;
+                const height = Math.max(...text.map(value => value.y + value.height)) - Math.min(...text.map(value => value.y));
+                // Reuse the note's measured vertical breathing room, bounded so unusually
+                // tall authored notes do not acquire a correspondingly enormous side margin.
+                const padding = Math.max(4, Math.min(12, (box.height - height) / 2));
+                const x = Math.min(box.x, left - padding), end = Math.max(box.x + box.width, right + padding);
+                background.setAttribute('x', String(x));
+                background.setAttribute('width', String(end - x));
+                changed.push(background);
+            }
+            catch { /* A renderer without native box measurement keeps its own geometry. */ }
+        }
+        return changed;
+    }
+    /** Measure actually painted leaf geometry in root SVG coordinates. Renderer
+     * viewBoxes are useful as a locality hint, but several Mermaid families either
+     * leave large empty margins or place a visible primitive just beyond an edge.
+     * Far generated helpers (for example Gantt's off-range "today" line) are not
+     * part of the visible scene and must not make the canvas hundreds of times wider.
+     */
+    function paintedBounds(svg, document, viewport) {
+        const matrix = svg.getScreenCTM?.(), view = document.defaultView;
+        if (!matrix)
+            return { box: null, complete: false };
+        let inverse;
+        try {
+            inverse = matrix.inverse();
+        }
+        catch {
+            return { box: null, complete: false };
+        }
+        const [vx, vy, vw, vh] = viewport, near = { left: vx - vw, top: vy - vh, right: vx + vw * 2, bottom: vy + vh * 2 };
+        const intersect = (a, b) => {
+            const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y), right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
+            return right >= x && bottom >= y ? { x, y, width: right - x, height: bottom - y } : null;
+        };
+        const viewportBox = { x: vx, y: vy, width: vw, height: vh };
+        const boxes = [];
+        let complete = true;
+        const styleValue = (style, property) => style?.getPropertyValue?.(property)?.trim() || '';
+        const opacityVisible = (value) => { const parsed = Number.parseFloat(value); return !Number.isFinite(parsed) || parsed > 0; };
+        const active = (value) => !!value && value.trim() !== '' && value.trim() !== 'none';
+        const maxScale = (value) => {
+            const aa = value.a * value.a + value.b * value.b, bb = value.c * value.c + value.d * value.d, cross = value.a * value.c + value.b * value.d;
+            return Math.sqrt(Math.max(0, (aa + bb + Math.sqrt(Math.max(0, (aa - bb) * (aa - bb) + 4 * cross * cross))) / 2));
+        };
+        const mapRect = (rect, padding = 0) => {
+            const points = [[rect.left - padding, rect.top - padding], [rect.right + padding, rect.top - padding], [rect.left - padding, rect.bottom + padding], [rect.right + padding, rect.bottom + padding]].map(([x, y]) => ({ x: inverse.a * x + inverse.c * y + inverse.e, y: inverse.b * x + inverse.d * y + inverse.f }));
+            const xs = points.map(point => point.x), ys = points.map(point => point.y);
+            return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+        };
+        const markerId = (value) => value.match(/#([^"')]+)["']?\)/)?.[1] || null;
+        const markerPadding = (element, style, strokeWidth) => {
+            const references = [styleValue(style, 'marker-start') || element.getAttribute('marker-start') || '', styleValue(style, 'marker-mid') || element.getAttribute('marker-mid') || '', styleValue(style, 'marker-end') || element.getAttribute('marker-end') || ''].filter(active);
+            if (!references.length)
+                return 0;
+            const screen = element.getScreenCTM?.();
+            if (!screen)
+                return null;
+            const scale = maxScale(screen);
+            if (!Number.isFinite(scale) || scale <= 0)
+                return null;
+            let radius = 0;
+            for (const reference of references) {
+                const id = markerId(reference);
+                if (!id)
+                    return null;
+                const marker = Array.from(svg.querySelectorAll('marker')).find(node => node.id === id);
+                if (!marker)
+                    return null;
+                const markerStyle = view?.getComputedStyle?.(marker);
+                if ((styleValue(markerStyle, 'overflow') || marker.getAttribute('overflow') || 'hidden') !== 'hidden')
+                    return null;
+                // A marker viewBox can scale or translate its reference point independently
+                // of the viewport. Keep the renderer viewport instead of guessing that math.
+                if (marker.hasAttribute('viewBox'))
+                    return null;
+                const read = (name, fallback) => Number.parseFloat(marker.getAttribute(name) || fallback);
+                const width = read('markerWidth', '3'), height = read('markerHeight', '3'), refX = read('refX', '0'), refY = read('refY', '0');
+                if (![width, height, refX, refY].every(Number.isFinite) || width <= 0 || height <= 0)
+                    return null;
+                const units = (marker.getAttribute('markerUnits') || 'strokeWidth').trim();
+                if (units !== 'userSpaceOnUse' && units !== 'strokeWidth')
+                    return null;
+                const unitScale = units === 'strokeWidth' ? strokeWidth : 1;
+                if (!Number.isFinite(unitScale) || unitScale < 0)
+                    return null;
+                const dx = Math.max(Math.abs(refX), Math.abs(width - refX)), dy = Math.max(Math.abs(refY), Math.abs(height - refY));
+                radius = Math.max(radius, Math.hypot(dx, dy) * unitScale * scale);
+            }
+            return radius;
+        };
+        const selector = 'path,rect,circle,ellipse,line,polyline,polygon,text,foreignObject,use,image';
+        for (const element of Array.from(svg.querySelectorAll(selector))) {
+            if (element.closest('defs,clipPath,mask,marker,pattern,symbol'))
+                continue;
+            let visible = true, clipped = false;
+            for (let node = element; node; node = node.parentElement) {
+                const style = view?.getComputedStyle?.(node);
+                const display = styleValue(style, 'display') || node.getAttribute('display') || '', visibility = styleValue(style, 'visibility') || node.getAttribute('visibility') || '';
+                const opacity = styleValue(style, 'opacity') || node.getAttribute('opacity') || '';
+                if (display === 'none' || visibility === 'hidden' || visibility === 'collapse' || !opacityVisible(opacity)) {
+                    visible = false;
+                    break;
+                }
+                const clip = styleValue(style, 'clip-path') || node.getAttribute('clip-path');
+                const mask = styleValue(style, 'mask') || styleValue(style, 'mask-image') || node.getAttribute('mask');
+                if (active(clip) || active(mask)) {
+                    clipped = true;
+                    complete = false;
+                }
+                const effect = styleValue(style, 'filter') || node.getAttribute('filter');
+                if (active(effect))
+                    complete = false;
+                if (node === svg)
+                    break;
+            }
+            if (!visible)
+                continue;
+            const style = view?.getComputedStyle?.(element), tag = element.tagName.toLowerCase();
+            const fillValue = styleValue(style, 'fill') || element.getAttribute('fill') || 'black', fillOpacity = styleValue(style, 'fill-opacity') || element.getAttribute('fill-opacity') || '1';
+            const strokeValue = styleValue(style, 'stroke') || element.getAttribute('stroke') || 'none', strokeOpacity = styleValue(style, 'stroke-opacity') || element.getAttribute('stroke-opacity') || '1';
+            const fill = fillValue !== 'none' && opacityVisible(fillOpacity), strokeWidth = Number.parseFloat(styleValue(style, 'stroke-width') || element.getAttribute('stroke-width') || '1');
+            const stroke = strokeValue !== 'none' && opacityVisible(strokeOpacity) && Number.isFinite(strokeWidth) && strokeWidth > 0;
+            const marker = [styleValue(style, 'marker-start') || element.getAttribute('marker-start'), styleValue(style, 'marker-mid') || element.getAttribute('marker-mid'), styleValue(style, 'marker-end') || element.getAttribute('marker-end')].some(active);
+            if (!['text', 'foreignobject', 'image', 'use'].includes(tag) && !fill && !stroke && !marker)
+                continue;
+            if (tag === 'foreignobject' || tag === 'use' || active(styleValue(style, 'text-shadow')) || active(styleValue(style, 'box-shadow')))
+                complete = false;
+            let rect;
+            try {
+                rect = element.getBoundingClientRect();
+            }
+            catch {
+                complete = false;
+                continue;
+            }
+            if (![rect.left, rect.top, rect.right, rect.bottom].every(Number.isFinite)) {
+                complete = false;
+                continue;
+            }
+            if (!rect.width && !rect.height && !marker)
+                continue;
+            let padding = 0;
+            if (stroke) {
+                const screen = element.getScreenCTM?.();
+                if (!screen)
+                    complete = false;
+                else {
+                    const vector = styleValue(style, 'vector-effect') || element.getAttribute('vector-effect') || '', scale = vector === 'non-scaling-stroke' ? 1 : maxScale(screen);
+                    const join = (styleValue(style, 'stroke-linejoin') || element.getAttribute('stroke-linejoin') || 'miter').toLowerCase();
+                    const miter = join === 'miter' ? Number.parseFloat(styleValue(style, 'stroke-miterlimit') || element.getAttribute('stroke-miterlimit') || '4') : 1;
+                    if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(miter) || miter <= 0)
+                        complete = false;
+                    else
+                        padding = Math.max(padding, strokeWidth * scale * Math.max(1, miter) / 2);
+                }
+            }
+            if (marker) {
+                const markerExtent = markerPadding(element, style, stroke ? strokeWidth : 1);
+                if (markerExtent === null)
+                    complete = false;
+                else
+                    padding = Math.max(padding, markerExtent);
+            }
+            let box = mapRect(rect, padding);
+            // A clipped leaf cannot legitimately enlarge the root canvas. Its exact
+            // inner clip may be smaller, but clamping to the authored root viewport is
+            // conservative and leaves the renderer viewport intact because complete=false.
+            if (clipped) {
+                const bounded = intersect(box, viewportBox);
+                if (!bounded)
+                    continue;
+                box = bounded;
+            }
+            const far = box.x + box.width < near.left || box.x > near.right || box.y + box.height < near.top || box.y > near.bottom;
+            // Mermaid Gantt emits a vertical current-date guide even when today's date
+            // is hundreds of chart widths outside an authored historical range. This
+            // generated guide is not part of that historical scene. Do not generalize
+            // this to arbitrary far geometry: authored off-viewport evidence must remain.
+            const generatedDateGuide = far && tag === 'line' && !element.id && element.classList.contains('today')
+                && element.hasAttribute('x1') && element.hasAttribute('x2') && element.getAttribute('x1') === element.getAttribute('x2');
+            if (generatedDateGuide)
+                continue;
+            boxes.push(box);
+        }
+        if (!boxes.length)
+            return { box: null, complete };
+        const left = Math.min(...boxes.map(box => box.x)), top = Math.min(...boxes.map(box => box.y)), right = Math.max(...boxes.map(box => box.x + box.width)), bottom = Math.max(...boxes.map(box => box.y + box.height));
+        return { box: { x: left, y: top, width: right - left, height: bottom - top }, complete };
+    }
     /** Measure in diagram coordinates at intrinsic size. A valid vendor viewBox is
      * retained, but cannot clip actual glyphs, strokes or overflowing HTML labels.
      * Browser text metrics refine geometry; no source wording or value is changed.
      */
     function diagramBounds(svg, document) {
         let bounds = (svg.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
+        const vendorViewport = bounds.length === 4 && bounds.every(Number.isFinite) && bounds[2] > 0 && bounds[3] > 0;
         const pixels = (value) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? parseFloat(value) : 0;
-        if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2] <= 0 || bounds[3] <= 0) {
+        if (!vendorViewport) {
             const width = pixels(svg.getAttribute('width')) || pixels(svg.style.getPropertyValue('max-width'));
             const height = pixels(svg.getAttribute('height'));
             bounds = [0, 0, width, height];
@@ -8749,7 +9506,9 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
         const staging = document.createElement('div');
         staging.setAttribute('data-av-mermaid-staging', '');
         staging.setAttribute('aria-hidden', 'true');
-        staging.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
+        // opacity suppresses paint without changing inherited visibility, which native
+        // geometry and authored visibility rules both depend on during measurement.
+        staging.style.cssText = 'position:absolute;left:-100000px;top:0;opacity:0;pointer-events:none;';
         document.body.appendChild(staging);
         staging.appendChild(svg);
         const originalStyle = svg.getAttribute('style');
@@ -8760,6 +9519,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 svg.style.setProperty('max-width', 'none');
                 svg.style.setProperty('display', 'block');
             }
+            fitNoteBackgrounds(svg, document);
             const graphics = svg;
             const union = (x, y, width, height, padding = 8) => {
                 if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0)
@@ -8767,43 +9527,87 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 const left = Math.min(bounds[0], x - padding), top = Math.min(bounds[1], y - padding);
                 bounds = [left, top, Math.max(bounds[0] + bounds[2], x + width + padding) - left, Math.max(bounds[1] + bounds[3], y + height + padding) - top];
             };
-            if (typeof graphics.getBBox === 'function') {
-                // Options are ignored by older engines, where the padded geometric box
-                // remains the fallback. Never shrink a valid vendor-provided viewBox.
+            const painted = paintedBounds(svg, document, [...bounds]);
+            if (painted.box && painted.complete) {
+                const box = painted.box;
+                bounds = [box.x - 8, box.y - 8, box.width + 16, box.height + 16];
+            }
+            else if (painted.box) {
+                const box = painted.box;
+                union(box.x, box.y, box.width, box.height);
+            }
+            if (!vendorViewport && !painted.box && typeof graphics.getBBox === 'function') {
+                // A renderer without a usable viewport still needs a geometric fallback.
+                // For a valid Mermaid viewBox, trust the renderer for non-text geometry:
+                // getBBox is intentionally unaware of authored clipping in common engines
+                // and can otherwise turn clipped/off-canvas shapes into blank page width.
                 const box = graphics.getBBox({ fill: true, stroke: true, markers: true, clipped: false });
                 if (box.width > 0 && box.height > 0)
                     union(box.x, box.y, box.width, box.height);
             }
-            // SVG getBBox does not include overflowing HTML glyphs inside foreignObject.
-            // Read their native text ranges at intrinsic size, then transform viewport
-            // rectangles back to this SVG's coordinates (not the reader's zoom/pan).
+            // paintedBounds already measures SVG text with the same visibility, clipping,
+            // transform, stroke and marker rules as the rest of the scene. The remaining
+            // text-specific gap is HTML inside foreignObject: its glyphs can legitimately
+            // paint beyond the element's own box when overflow is visible. Measure only
+            // those visible, unclipped ranges so text protection cannot resurrect geometry
+            // that a renderer intentionally clipped, masked or made transparent.
             const matrix = graphics.getScreenCTM?.();
-            if (matrix && document.createRange) {
-                const inverse = matrix.inverse();
-                const transform = (x, y) => ({ x: inverse.a * x + inverse.c * y + inverse.e, y: inverse.b * x + inverse.d * y + inverse.f });
-                const include = (rect) => {
-                    if (!rect.width && !rect.height)
-                        return;
-                    const corners = [transform(rect.left, rect.top), transform(rect.right, rect.top), transform(rect.left, rect.bottom), transform(rect.right, rect.bottom)];
-                    const xs = corners.map(p => p.x), ys = corners.map(p => p.y), x = Math.min(...xs), y = Math.min(...ys);
-                    union(x, y, Math.max(...xs) - x, Math.max(...ys) - y);
-                };
-                for (const object of Array.from(svg.querySelectorAll('foreignObject'))) {
-                    const visit = (node) => {
-                        if (node.nodeType === 3 && node.textContent?.trim()) {
-                            const range = document.createRange();
-                            range.selectNodeContents(node);
-                            for (const rect of Array.from(range.getClientRects()))
-                                include(rect);
-                        }
-                        else if (node.nodeType === 1) {
-                            if (['script', 'style'].includes(node.tagName.toLowerCase()))
-                                return;
-                            for (const child of Array.from(node.childNodes))
-                                visit(child);
-                        }
+            if (matrix) {
+                let inverse = null;
+                try {
+                    inverse = matrix.inverse();
+                }
+                catch { /* Keep the renderer viewport when the staging transform is not invertible. */ }
+                if (inverse) {
+                    const transform = (x, y) => ({ x: inverse.a * x + inverse.c * y + inverse.e, y: inverse.b * x + inverse.d * y + inverse.f });
+                    const include = (rect) => {
+                        if (!rect.width && !rect.height)
+                            return;
+                        const corners = [transform(rect.left, rect.top), transform(rect.right, rect.top), transform(rect.left, rect.bottom), transform(rect.right, rect.bottom)];
+                        const xs = corners.map(p => p.x), ys = corners.map(p => p.y), x = Math.min(...xs), y = Math.min(...ys);
+                        union(x, y, Math.max(...xs) - x, Math.max(...ys) - y);
                     };
-                    visit(object);
+                    const rangeMayExpand = (node) => {
+                        for (let current = node.parentElement; current; current = current.parentElement) {
+                            const style = document.defaultView?.getComputedStyle?.(current);
+                            const value = (property, attribute = property) => style?.getPropertyValue?.(property)?.trim() || current.getAttribute(attribute)?.trim() || '';
+                            const display = value('display'), visibility = value('visibility'), opacity = Number.parseFloat(value('opacity'));
+                            if (display === 'none' || visibility === 'hidden' || visibility === 'collapse' || (Number.isFinite(opacity) && opacity <= 0))
+                                return false;
+                            const clip = value('clip-path'), mask = value('mask') || value('mask-image');
+                            if ((clip && clip !== 'none') || (mask && mask !== 'none'))
+                                return false;
+                            const clippedOverflow = (property) => ['hidden', 'clip', 'scroll', 'auto'].includes(value(property) || value('overflow'));
+                            // Inner HTML/foreignObject/nested-SVG overflow is an authored clip.
+                            // The scene SVG's own overflow is the viewport boundary this routine
+                            // is refining, so it must not suppress legitimate visible overhang.
+                            if (current !== svg && (clippedOverflow('overflow-x') || clippedOverflow('overflow-y')))
+                                return false;
+                            if (current === svg)
+                                break;
+                        }
+                        return true;
+                    };
+                    for (const object of Array.from(svg.querySelectorAll('foreignObject'))) {
+                        const visit = (node) => {
+                            if (node.nodeType === 3 && node.textContent?.trim() && rangeMayExpand(node)) {
+                                try {
+                                    const range = document.createRange();
+                                    range.selectNodeContents(node);
+                                    for (const rect of Array.from(range.getClientRects()))
+                                        include(rect);
+                                }
+                                catch { /* Keep the renderer viewport when this browser cannot range-measure SVG HTML. */ }
+                            }
+                            else if (node.nodeType === 1) {
+                                if (['script', 'style'].includes(node.tagName.toLowerCase()))
+                                    return;
+                                for (const child of Array.from(node.childNodes))
+                                    visit(child);
+                            }
+                        };
+                        visit(object);
+                    }
                 }
             }
         }
@@ -8820,14 +9624,55 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
         svg.setAttribute('viewBox', bounds.join(' '));
         return bounds;
     }
+    /** An explicit diagram-specific font must not be replaced by our global default. */
+    function hasDiagramFont(config) {
+        const pending = Object.entries(config).filter(([key]) => key !== 'themeVariables').map(([, value]) => value);
+        const seen = new Set();
+        while (pending.length) {
+            const value = pending.pop();
+            if (!value || typeof value !== 'object' || seen.has(value))
+                continue;
+            seen.add(value);
+            for (const [key, child] of Object.entries(value)) {
+                if ((key === 'fontFamily' || key.endsWith('FontFamily')) && typeof child === 'string' && child.trim())
+                    return true;
+                if (child && typeof child === 'object')
+                    pending.push(child);
+            }
+        }
+        return false;
+    }
     function attachMermaid(root, ready) {
         const document = root.ownerDocument, view = document.defaultView;
         const diagrams = [...(root.matches('[data-av-mermaid]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-mermaid]'))];
         const namespaces = new WeakMap(), keys = new WeakMap(), generations = new WeakMap();
+        const sourceFonts = new WeakMap();
         const original = diagrams.map(element => ({ element, output: element.querySelector('[data-av-mermaid-output]'), children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector('[data-av-mermaid-status]'), text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), busy: element.getAttribute('aria-busy'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector('[data-av-zoom-target]'), attributes: Array.from(element.querySelector('[data-av-zoom-target]')?.attributes || []).map(attribute => [attribute.name, attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
         let stopped = false;
-        const jobsInFlight = new Set(), requested = new Map(), semanticKeys = new Map();
+        let refreshStarted = false, resizeDirty = false, resizeJob = null;
+        const jobsInFlight = new Set(), requested = new Map(), semanticKeys = new Map(), observedWidths = new WeakMap();
+        const renderWidth = (element, figure, output) => {
+            const viewport = output.querySelector('.av-plot-scroll');
+            const body = figure.querySelector('[data-av-figure-body]');
+            for (const width of [body?.clientWidth, viewport?.clientWidth, figure.clientWidth])
+                if (width && Number.isFinite(width) && width > 0)
+                    return Math.max(MIN_LAYOUT_WIDTH, Math.round(width));
+            return observedWidths.get(element) || MIN_LAYOUT_WIDTH;
+        };
+        const scheduleResize = () => {
+            if (stopped)
+                return;
+            resizeDirty = true;
+            if (resizeJob)
+                return;
+            resizeJob = Promise.resolve().then(async () => { while (resizeDirty && !stopped) {
+                resizeDirty = false;
+                await refresh();
+            } }).finally(() => { resizeJob = null; if (resizeDirty && !stopped)
+                scheduleResize(); });
+        };
         async function refresh() {
+            refreshStarted = true;
             const jobs = diagrams.map(element => {
                 const figure = (0, figures_7.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), status = element.querySelector('[data-av-mermaid-status]');
                 if (!figure || !output || !status || stopped)
@@ -8841,7 +9686,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 }
                 const source = element.getAttribute('data-av-mermaid-source') || '';
                 const css = view?.getComputedStyle?.(figure);
-                const roles = { background: ['--av-plot', '#ffffff'], primaryColor: ['--av-sheet', '#f4f5fa'], primaryTextColor: ['--av-ink', '#172032'], primaryBorderColor: ['--av-line-strong', '#66758a'], lineColor: ['--av-axis', '#66758a'], secondaryColor: ['--av-subtle', '#ecf1f5'], tertiaryColor: ['--av-inspector-surface', '#f4edf6'] };
+                const roles = { background: ['--av-plot', '#ffffff'], primaryColor: ['--av-sheet', '#f4f5fa'], primaryTextColor: ['--av-ink', '#172032'], primaryBorderColor: ['--av-line-strong', '#66758a'], lineColor: ['--av-axis', '#66758a'], secondaryColor: ['--av-subtle', '#ecf1f5'], tertiaryColor: ['--av-inspector-surface', '#f4edf6'], noteBkgColor: ['--av-inspector-surface', '#f4edf6'], noteTextColor: ['--av-ink', '#172032'], noteBorderColor: ['--av-line-strong', '#66758a'] };
                 const probes = document.createElement('span');
                 probes.setAttribute('data-av-review-ui', '');
                 probes.hidden = true;
@@ -8857,7 +9702,9 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 finally {
                     probes.remove();
                 }
-                const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config')]);
+                const width = renderWidth(element, figure, output);
+                observedWidths.set(element, width);
+                const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config'), width]);
                 if (requested.get(element)?.key === key)
                     return requested.get(element).job;
                 if (keys.get(element) === key) {
@@ -8887,14 +9734,34 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                     const supplied = JSON.parse(element.getAttribute('data-av-mermaid-config') || '{}');
                     if (!supplied || Array.isArray(supplied) || typeof supplied !== 'object')
                         throw new Error('Mermaid configuration must be an object.');
-                    runtime.initialize({ ...supplied, theme: supplied.theme || 'base', themeVariables: { ...palette, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_4.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
+                    let sourceFont = sourceFonts.get(element);
+                    if (sourceFont?.source !== source) {
+                        // Let the bundled parser interpret frontmatter and directives. Keep
+                        // only their font defaults, once per source; width/theme changes do
+                        // not parse again. Rendering still receives the exact original text.
+                        const parsed = runtime.parse ? await runtime.parse(source) : false;
+                        const config = parsed && parsed.config || {};
+                        sourceFont = { source, nested: hasDiagramFont(config), family: typeof config.fontFamily === 'string' ? config.fontFamily : undefined, theme: typeof config.themeVariables?.fontFamily === 'string' ? config.themeVariables.fontFamily : undefined };
+                        sourceFonts.set(element, sourceFont);
+                    }
+                    if (stopped || generations.get(element) !== generation)
+                        return;
+                    // Mermaid uses its top-level font for geometry and themeVariables for
+                    // painted labels. Supplying only the latter can make text wider than
+                    // its node or note background. Keep both defaults aligned while leaving
+                    // explicitly authored configuration and source directives authoritative.
+                    const themeFont = sourceFont.theme ?? (sourceFont.family || supplied.themeVariables?.fontFamily || supplied.fontFamily || palette.fontFamily);
+                    // Empty (not null) disables Mermaid's global override of an explicit
+                    // per-diagram font; null would restore the vendor's global default.
+                    const fontFamily = sourceFont.family ?? supplied.fontFamily ?? (sourceFont.nested || hasDiagramFont(supplied) ? '' : themeFont);
+                    runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...palette, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_4.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
                     let id = 'av-mermaid-' + (++sequence);
                     while (document.getElementById(id) || document.getElementById('d' + id))
                         id = 'av-mermaid-' + (++sequence);
                     const staging = document.createElement('div');
                     staging.setAttribute('data-av-mermaid-staging', '');
                     staging.setAttribute('aria-hidden', 'true');
-                    staging.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;';
+                    staging.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;max-width:none;opacity:0;pointer-events:none;`;
                     document.body.appendChild(staging);
                     let result;
                     try {
@@ -8925,13 +9792,18 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                         throw new Error('The diagram viewport is unavailable.');
                     const bounds = diagramBounds(incoming, document);
                     // Preserve the viewport node and its handlers when a theme rerenders the diagram.
-                    for (const name of ['id', 'class', 'viewBox', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) {
+                    for (const name of ['id', 'class', 'viewBox', 'preserveAspectRatio', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) {
                         const value = incoming.getAttribute(name);
                         if (value !== null)
                             live.setAttribute(name, value);
                         else
                             live.removeAttribute(name);
                     }
+                    // Authored accTitle/accDescr references survive scoping. An unlabeled
+                    // vendor scene still needs a useful name instead of all its SVG text.
+                    const nativeTitle = Array.from(incoming.children).some(child => child.localName === 'title' && child.textContent?.trim());
+                    if (!live.getAttribute('aria-label')?.trim() && !live.getAttribute('aria-labelledby')?.trim() && !nativeTitle)
+                        live.setAttribute('aria-label', (0, figures_7.figureTitle)(figure));
                     for (const name of ['background', 'color', 'font-family', 'font-size']) {
                         const value = incoming.style.getPropertyValue(name);
                         if (value)
@@ -8973,8 +9845,31 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
             });
             await Promise.all(jobs);
         }
-        return { refresh, async whenIdle() { while (jobsInFlight.size)
-                await Promise.all([...jobsInFlight]); }, cleanup() { stopped = true; requested.clear(); semanticKeys.clear(); for (const state of original) {
+        let resizeObserver = null;
+        if (view?.ResizeObserver) {
+            const owners = new Map();
+            resizeObserver = new view.ResizeObserver(entries => { let changed = false; for (const entry of entries) {
+                const element = owners.get(entry.target), figure = element && (0, figures_7.figureOf)(element), output = element?.querySelector('[data-av-mermaid-output]');
+                if (!element || !figure || !output)
+                    continue;
+                const width = renderWidth(element, figure, output), previous = observedWidths.get(element);
+                if (width > 0 && width !== previous) {
+                    observedWidths.set(element, width);
+                    changed = true;
+                }
+            } if (changed && refreshStarted)
+                scheduleResize(); });
+            for (const element of diagrams) {
+                const figure = (0, figures_7.figureOf)(element), output = element.querySelector('[data-av-mermaid-output]'), viewport = output?.querySelector('.av-plot-scroll'), body = figure?.querySelector('[data-av-figure-body]');
+                for (const target of [viewport, body])
+                    if (target && !owners.has(target)) {
+                        owners.set(target, element);
+                        resizeObserver.observe(target);
+                    }
+            }
+        }
+        return { refresh, async whenIdle() { while (resizeJob || jobsInFlight.size)
+                await Promise.all([...jobsInFlight, ...(resizeJob ? [resizeJob] : [])]); }, cleanup() { stopped = true; resizeObserver?.disconnect(); resizeDirty = false; resizeJob = null; requested.clear(); semanticKeys.clear(); for (const state of original) {
                 state.output.replaceChildren(...state.children);
                 state.status.textContent = state.text;
                 if (state.busy === null)
@@ -9026,7 +9921,7 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         const undo = [], plots = new Map(), controlOwners = new Map();
         const saved = new WeakMap(), savedStyles = new WeakMap();
         const suppressed = new WeakSet();
-        let drag = null, cleaned = false;
+        let drag = null, spacePan = null, cleaned = false;
         const all = (selector) => [...(root.matches(selector) ? [root] : []), ...Array.from(root.querySelectorAll(selector))];
         function listen(target, type, listener, capture = false) {
             target.addEventListener(type, listener, capture);
@@ -9079,6 +9974,14 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
             return [Math.max(0, finite(plot.viewport.scrollWidth) - finite(plot.viewport.clientWidth)), Math.max(0, finite(plot.viewport.scrollHeight) - finite(plot.viewport.clientHeight))];
         }
         function overflow(plot) { return limits(plot).some(value => value > 1); }
+        function frameHeight(plot) {
+            const computed = window?.getComputedStyle?.(plot.viewport);
+            const border = (Number.parseFloat(computed?.borderTopWidth || '') || 0) + (Number.parseFloat(computed?.borderBottomWidth || '') || 0);
+            if (border > 0)
+                return border;
+            const box = plot.viewport.getBoundingClientRect();
+            return Math.max(0, finite(box.height) - Math.max(0, finite(plot.viewport.clientHeight)));
+        }
         function measure(plot, box = dimensions(plot.svg)) {
             const rectangle = plot.svg.getBoundingClientRect(), width = positive(rectangle.width, box.naturalWidth);
             const height = positive(rectangle.height, width * box.naturalHeight / box.naturalWidth);
@@ -9143,7 +10046,10 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         }
         function update(plot, announce = false) {
             const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
-            attribute(plot.viewport, "data-av-pan", overflow(plot) && mode === 'pan' ? "ready" : null);
+            const pannable = overflow(plot);
+            attribute(plot.viewport, "data-av-pan", pannable && mode === 'pan' ? "ready" : null);
+            if (plot.ownsTitle)
+                attribute(plot.viewport, 'title', mode === 'text' ? 'Select text. Hold Space while dragging to pan.' : mode === 'select' ? 'Select items. Hold Space while dragging to pan.' : pannable ? 'Drag, wheel, or use arrow keys to pan.' : 'Drawing fits. Zoom in to pan.');
             attribute(plot.element, "data-av-zoom", String(plot.zoom));
             attribute(plot.element, "data-av-viewport-mode", plot.mode);
             for (const control of plot.controls) {
@@ -9159,10 +10065,16 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
             layers(plot);
             if (announce) {
                 const percent = Math.round(plot.zoom * 1000) / 10;
-                const text = `${percent}% zoom.${plot.element.closest('[data-av-selection-mode="text"]') ? " Text selection mode." : mode === 'select' ? ' Select an item to inspect it.' : overflow(plot) ? " Drag to pan, or focus the plot and use the arrow keys." : " The chart fits the available width."}`;
+                const text = `${percent}% zoom.${plot.element.closest('[data-av-selection-mode="text"]') ? " Text selection mode. Focus the drawing and hold Space while dragging to pan." : mode === 'select' ? ' Select an item to inspect it. Focus the drawing and hold Space while dragging to pan.' : overflow(plot) ? " Drag to pan, use the mouse wheel, or focus the plot and use the arrow keys." : " The drawing fits without panning. Zoom in to pan."}`;
                 if (plot.output.textContent !== text)
                     plot.output.textContent = text;
             }
+        }
+        function releaseSpacePan() {
+            const previous = spacePan;
+            spacePan = null;
+            if (previous)
+                attribute(previous.viewport, 'data-av-space-pan', null);
         }
         function finish() {
             const previous = drag;
@@ -9223,10 +10135,22 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
             }
             catch { /* Exact evidence remains available when a mark has no native box. */ }
         }
+        function syncReserve(plot) {
+            const right = Math.max(0, finite(plot.reserveRight));
+            if (!right) {
+                plot.reserveSpacer.hidden = true;
+                plot.reserveSpacer.style.removeProperty('width');
+                return;
+            }
+            const width = Math.max(plot.metrics?.width || 0, finite(plot.viewport.clientWidth)) + right;
+            plot.reserveSpacer.hidden = false;
+            plot.reserveSpacer.style.setProperty('width', Math.ceil(width) + 'px');
+        }
         function fitSize(plot, box) {
             const expanded = plot.element.closest('[data-av-expanded-figure]');
             const declaredWidth = Number(expanded?.getAttribute('data-av-fit-width'));
-            const viewportWidth = declaredWidth > 0 ? declaredWidth : Math.max(0, finite(plot.viewport.clientWidth));
+            const measuredViewport = Math.max(0, finite(plot.viewport.clientWidth));
+            const viewportWidth = declaredWidth > 0 ? measuredViewport > 0 ? Math.min(declaredWidth, measuredViewport) : declaredWidth : measuredViewport;
             if (!plot.element.classList.contains("av-row-plot"))
                 return { width: viewportWidth };
             const row = [...plot.layers].find(([element, kind]) => kind === "rows" && plot.element.contains(element))?.[0];
@@ -9239,7 +10163,7 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
             // Independent clientWidth rounding can alternate that sum by one pixel,
             // feeding a permanent fit/ResizeObserver loop back into both tracks.
             const layoutWidth = Math.max(0, finite(layout.clientWidth));
-            const availableWidth = declaredWidth > 0 ? declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
+            const availableWidth = declaredWidth > 0 ? layoutWidth > 0 ? Math.min(declaredWidth, layoutWidth) : declaredWidth : layoutWidth > 0 ? layoutWidth : measured;
             return { width: availableWidth * box.width / (box.width + rowWidth), availableWidth };
         }
         function requestLayout(plot, width, availableWidth) {
@@ -9279,10 +10203,13 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
                     requestLayout(plot, positive(desired, box.naturalWidth), initialFit.availableWidth);
                 const refined = dimensions(plot.svg);
                 let fittedWidth = positive(fitSize(plot, refined).width, refined.naturalWidth);
+                if (plot.element.closest('[data-av-fit-policy]')?.getAttribute('data-av-fit-policy') === 'natural')
+                    fittedWidth = Math.min(fittedWidth, refined.naturalWidth);
                 const expanded = plot.element.closest('[data-av-expanded-figure]'), availableHeight = Number(expanded?.getAttribute('data-av-fit-height'));
                 if (availableHeight > 0) {
                     const axisHeight = Math.max(0, ...[...plot.layers].filter(([, kind]) => kind === 'x').map(([layer]) => dimensions(layer).naturalHeight));
-                    fittedWidth = Math.min(fittedWidth, refined.naturalWidth * availableHeight / (refined.naturalHeight + axisHeight));
+                    const contentHeight = Math.max(0, availableHeight - frameHeight(plot));
+                    fittedWidth = Math.min(fittedWidth, refined.naturalWidth * contentHeight / (refined.naturalHeight + axisHeight));
                 }
                 plot.fitScale = fittedWidth / refined.naturalWidth;
                 if (plot.mode === "fit")
@@ -9301,10 +10228,13 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
                 style(plot.svg, "max-width", "none");
                 // Default/reset shows the complete scene. Zoom adds pan space without
                 // growing the entire report or giving the row identities another scrollbar.
-                style(plot.element, "--av-plot-fit-height", `${Math.ceil(refined.naturalHeight * plot.fitScale)}px`);
+                // The viewport uses border-box sizing. Include its own frame so an exact
+                // fitted SVG is not clipped by the border and falsely advertised as pannable.
+                style(plot.element, "--av-plot-fit-height", `${Math.ceil(refined.naturalHeight * plot.fitScale + frameHeight(plot))}px`);
                 plot.metrics = measure(plot, refined);
                 layers(plot); // The synchronized row track can change the available body width.
                 plot.metrics = measure(plot, refined);
+                syncReserve(plot);
                 if (requested?.reset)
                     position(plot, 0, 0);
                 else if (previous) {
@@ -9344,7 +10274,15 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
             attribute(output, "role", "status");
             attribute(output, "aria-live", "polite");
             attribute(output, "aria-atomic", "true");
-            const plot = { element, viewport, svg, output, controls: [], mode: "fit", zoom: 1, fitScale: 1, metrics: null, left: finite(originalLeft), top: finite(originalTop), refreshing: false, layers: new Map() };
+            const reserveSpacer = document.createElement('span');
+            reserveSpacer.hidden = true;
+            reserveSpacer.setAttribute('aria-hidden', 'true');
+            reserveSpacer.setAttribute('data-av-review-ui', '');
+            reserveSpacer.setAttribute('data-av-pan-reserve', '');
+            reserveSpacer.style.cssText = 'display:block;height:0;min-height:0;margin:0;padding:0;border:0;overflow:hidden;pointer-events:none;opacity:0;';
+            viewport.appendChild(reserveSpacer);
+            undo.push(() => reserveSpacer.remove());
+            const plot = { element, viewport, svg, output, controls: [], mode: "fit", zoom: 1, fitScale: 1, metrics: null, left: finite(originalLeft), top: finite(originalTop), refreshing: false, layers: new Map(), reserveRight: 0, reserveSpacer, ownsTitle: !viewport.hasAttribute('title') };
             plots.set(element, plot);
             listen(element, "av-layout-invalidated", (() => { if (plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') !== 'pan') {
                 finish();
@@ -9368,8 +10306,46 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
                     update(plot);
                 }
             }));
+            listen(viewport, "keydown", ((event) => {
+                const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
+                const target = event.target;
+                if (target?.closest('input,textarea,select,button,a[href],[contenteditable]'))
+                    return;
+                if (event.key === ' ' && mode !== 'pan' && event.target === viewport && !event.altKey && !event.ctrlKey && !event.metaKey) {
+                    if (spacePan && spacePan !== plot)
+                        releaseSpacePan();
+                    spacePan = plot;
+                    attribute(viewport, 'data-av-space-pan', '');
+                    event.preventDefault();
+                    return;
+                }
+                if (mode !== 'pan' || event.altKey || event.ctrlKey || event.metaKey || !overflow(plot))
+                    return;
+                const horizontal = Math.max(32, Math.min(96, plot.viewport.clientWidth * .08)), vertical = Math.max(32, Math.min(96, plot.viewport.clientHeight * .1));
+                let left = plot.viewport.scrollLeft, top = plot.viewport.scrollTop, handled = true;
+                if (event.key === 'ArrowLeft')
+                    left -= horizontal;
+                else if (event.key === 'ArrowRight')
+                    left += horizontal;
+                else if (event.key === 'ArrowUp')
+                    top -= vertical;
+                else if (event.key === 'ArrowDown')
+                    top += vertical;
+                else if (event.key === 'PageUp')
+                    top -= Math.max(vertical, plot.viewport.clientHeight * .8);
+                else if (event.key === 'PageDown')
+                    top += Math.max(vertical, plot.viewport.clientHeight * .8);
+                else
+                    handled = false;
+                if (!handled)
+                    return;
+                event.preventDefault();
+                position(plot, left, top);
+                update(plot, true);
+            }));
             listen(viewport, "pointerdown", ((event) => {
-                if (event.button !== 0 || event.isPrimary === false || (plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan') !== 'pan')
+                const mode = plot.element.closest('[data-av-selection-mode]')?.getAttribute('data-av-selection-mode') || 'pan';
+                if (event.button !== 0 || event.isPrimary === false || mode !== 'pan' && spacePan !== plot)
                     return;
                 suppressed.delete(viewport);
                 if (event.pointerType === "touch")
@@ -9427,7 +10403,7 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         if (window) {
             listen(window, "resize", (() => { for (const plot of plots.values())
                 refreshPlot(plot); }));
-            listen(window, "blur", finish);
+            listen(window, "blur", (() => { finish(); releaseSpacePan(); }));
         }
         listen(document, "pointermove", ((event) => {
             if (!drag || drag.pointer !== event.pointerId)
@@ -9454,6 +10430,10 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         for (const type of ["pointerup", "pointercancel"])
             listen(document, type, ((event) => { if (drag?.pointer === event.pointerId)
                 finish(); }));
+        listen(document, 'keyup', ((event) => { if (event.key === ' ' && spacePan) {
+            finish();
+            releaseSpacePan();
+        } }));
         return {
             snapshot(target) { return { entries: [...plots.values()].filter(plot => target === plot.element || target.contains(plot.element)).map(plot => ({ element: plot.element, mode: plot.mode, zoom: plot.zoom, left: plot.viewport.scrollLeft, top: plot.viewport.scrollTop })) }; },
             fit(target) { for (const plot of plots.values())
@@ -9486,12 +10466,48 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
                     refreshPlot(plot, { mode: "custom", zoom: control.hasAttribute("data-av-zoom-in") ? Math.min(MAX_ZOOM, plot.zoom + ZOOM_STEP) : Math.max(MIN_ZOOM, plot.zoom - ZOOM_STEP) });
                 return true;
             },
+            reveal(item, occlusion = {}) {
+                const plot = [...plots.values()].find(candidate => candidate.element.contains(item));
+                if (!plot || cleaned)
+                    return false;
+                refreshPlot(plot);
+                const viewport = plot.viewport.getBoundingClientRect(), box = item.getBoundingClientRect();
+                if (!(box.width > 0 || box.height > 0) || !(viewport.width > 0 && viewport.height > 0))
+                    return false;
+                const margin = 8, leftInset = Math.max(0, finite(occlusion.left)) + margin, rightInset = Math.max(0, finite(occlusion.right)) + margin, topInset = Math.max(0, finite(occlusion.top)) + margin, bottomInset = Math.max(0, finite(occlusion.bottom)) + margin;
+                const visibleLeft = viewport.left + leftInset, visibleRight = viewport.right - rightInset, visibleTop = viewport.top + topInset, visibleBottom = viewport.bottom - bottomInset;
+                let left = plot.viewport.scrollLeft, top = plot.viewport.scrollTop;
+                if (box.left < visibleLeft)
+                    left += box.left - visibleLeft;
+                else if (box.right > visibleRight)
+                    left += box.right - visibleRight;
+                if (box.top < visibleTop)
+                    top += box.top - visibleTop;
+                else if (box.bottom > visibleBottom)
+                    top += box.bottom - visibleBottom;
+                position(plot, left, top);
+                update(plot);
+                return true;
+            },
+            reserve(target, reserve = {}) {
+                if (cleaned)
+                    return;
+                const right = Math.max(0, finite(reserve.right));
+                for (const plot of plots.values())
+                    if (target === plot.element || target.contains(plot.element) || plot.element.contains(target)) {
+                        refreshPlot(plot);
+                        plot.reserveRight = right;
+                        syncReserve(plot);
+                        position(plot, plot.viewport.scrollLeft, plot.viewport.scrollTop);
+                        update(plot, true);
+                    }
+            },
             refresh(target) { if (!cleaned)
                 for (const plot of plots.values())
                     if (!target || target === plot.element || target.contains(plot.element) || plot.element.contains(target))
                         refreshPlot(plot); },
             cleanup() { if (cleaned)
-                return; finish(); cleaned = true; for (const restore of undo.reverse())
+                return; finish(); releaseSpacePan(); cleaned = true; for (const restore of undo.reverse())
                 restore(); controlOwners.clear(); plots.clear(); },
         };
     }
@@ -9555,7 +10571,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
         }
         const plots = (0, plot_navigation_1.attachPlots)(root);
         figures.dock();
-        diagrams = (0, mermaid_1.attachMermaid)(root, figure => { plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
+        diagrams = (0, mermaid_1.attachMermaid)(root, figure => { updateFigureBounds(); plots.refresh(figure); itemSelection?.refresh(figure); inspectors?.refresh(); });
         const readers = new Map();
         const collections = new Map();
         const collectionOwners = new WeakMap();
@@ -9654,6 +10670,41 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             element.focus({ preventScroll: true });
         }
         function scroll(element) { element.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "auto" }); }
+        const initialTakeoverEvents = ['pointerdown', 'wheel', 'touchstart', 'keydown', 'click', 'input', 'change'];
+        let initialFragmentSettle = null;
+        function cancelInitialFragmentSettle() {
+            const current = initialFragmentSettle;
+            if (!current)
+                return;
+            initialFragmentSettle = null;
+            for (const type of initialTakeoverEvents)
+                document.removeEventListener(type, current.takeover, true);
+        }
+        function beginInitialFragmentSettle(target) {
+            if (!window)
+                return;
+            cancelInitialFragmentSettle();
+            const takeover = (() => cancelInitialFragmentSettle());
+            initialFragmentSettle = { target, hash: window.location.hash, takeover };
+            // Only the initial unresolved entry fragment owns this temporary correction.
+            // Any reader input/navigation takes ownership immediately and removes these
+            // capture listeners, so a late async layout cannot pull them back afterward.
+            for (const type of initialTakeoverEvents)
+                document.addEventListener(type, takeover, true);
+        }
+        function finishInitialFragmentSettle() {
+            const current = initialFragmentSettle;
+            if (!current)
+                return;
+            if (!cleaned && current.target.isConnected && contains(current.target) && window?.location.hash === current.hash)
+                scroll(current.target);
+            cancelInitialFragmentSettle();
+        }
+        async function afterLayoutFrames() {
+            if (!window?.requestAnimationFrame)
+                return;
+            await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+        }
         function motion(element) {
             if (!reducedMotion || reducedMotion.matches || typeof element.animate !== "function")
                 return;
@@ -9758,14 +10809,14 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                 hidden(state.reset, !state.query);
             const total = state.panels.length;
             if (state.mode === "all")
-                message(state.status, `Full report. All ${total} sections are available.`);
+                message(state.status, total === 1 ? 'Full report. The section is available.' : `Full report. All ${total} sections are available.`);
             else {
                 const selected = state.panels.find(panel => panel.getAttribute("data-av-panel") === state.selected);
-                message(state.status, `Reading “${selected ? panelName(selected) : "Section"}”. ${total} sections are available in this report.`);
+                message(state.status, `Reading “${selected ? panelName(selected) : "Section"}”. ${total} ${total === 1 ? 'section is' : 'sections are'} available in this report.`);
             }
             const count = inScope(state.element, "[data-av-view-count]", ".av-workspace")[0];
             if (count)
-                message(count, state.mode === "all" ? `${total} sections` : `${Math.max(1, state.panels.findIndex(panel => panel.getAttribute("data-av-panel") === state.selected) + 1)} / ${total}`);
+                message(count, state.mode === "all" ? `${total} ${total === 1 ? 'section' : 'sections'}` : `${Math.max(1, state.panels.findIndex(panel => panel.getAttribute("data-av-panel") === state.selected) + 1)} / ${total}`);
             for (const [id, route] of state.journeys) {
                 hidden(route.element, state.journey !== id || state.mode === "all");
                 const index = route.steps.indexOf(state.selected || "");
@@ -9821,6 +10872,8 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             return (frame ? frameLocations.get(frame)?.state : undefined) || workspaces.find(state => state.element === element.closest(".av-workspace"));
         }
         function reveal(target, takeFocus, selectView = true) {
+            if (takeFocus)
+                inspectors?.dismissOutside(target);
             // A fragment outside the active dialog must first restore its live frame.
             if (focused && !focused.card.contains(target))
                 closeAllFocus(false);
@@ -9885,6 +10938,11 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             focused = null;
             if (!previous)
                 return;
+            // The inline report is inert while the outer modal is open. Release the
+            // modal before restoring its live content, measurements and keyboard focus.
+            // Nested returns keep the modal open and restore the previous view inside it.
+            if (!focusStack.length && dialog?.open)
+                dialog.close();
             if (previous.kind === "figure") {
                 previous.card.removeAttribute('data-av-expanded-figure');
                 previous.card.removeAttribute('data-av-fit-width');
@@ -9905,8 +10963,6 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             else if (!root.contains(previous.card) && root !== previous.card)
                 root.appendChild(previous.card);
             previous.releaseReviewPosition();
-            plots.refresh(previous.card);
-            plots.restore(previous.plotSnapshot);
             previous.card.classList.toggle("av-focused", previous.previouslyFocused);
             if (previous.previousAttribute === null)
                 previous.card.removeAttribute("data-av-focused");
@@ -9919,9 +10975,6 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                     control.element.setAttribute("hidden", control.hidden);
             }
             preferences.refresh(previous.card);
-            figures.refresh();
-            for (const bar of sectionBars)
-                bar.refresh();
             attribute(previous.trigger, "aria-expanded", "false");
             focused = focusStack.pop() || null;
             if (focused) {
@@ -9948,6 +11001,14 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             }
             else
                 dialog?.removeAttribute('data-av-viewer-kind');
+            // A nested parent must be visible before its controls and plot dimensions
+            // are restored; measuring while suspended would leave focus on overflow.
+            inspectors?.refresh();
+            plots.refresh(previous.card);
+            plots.restore(previous.plotSnapshot);
+            figures.refresh();
+            for (const bar of sectionBars)
+                bar.refresh();
             if (restoreKeyboardFocus && previous.trigger.isConnected) {
                 let destination = previous.trigger;
                 for (let ancestor = previous.trigger.parentElement; ancestor; ancestor = ancestor.parentElement) {
@@ -9961,10 +11022,14 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                         saved.element.scrollLeft = saved.left;
                     }
                 window?.scrollTo?.(previous.viewport.x, previous.viewport.y);
+                if (!cleaned && previous.resumeInspector?.()) {
+                    plots.refresh(previous.card);
+                    plots.restore(previous.plotSnapshot);
+                }
             }
         }
         function closeFocus(restoreKeyboardFocus = true) {
-            // Restore synchronously; the native close event can be delivered later.
+            // State is cleared before closing, including hosts with synchronous events.
             restoreFocus(restoreKeyboardFocus);
             if (!focused && dialog?.open)
                 dialog.close();
@@ -9990,11 +11055,20 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
         function updateFigureBounds() {
             if (focused?.kind !== 'figure' || !dialogBody)
                 return;
-            const width = dialogBody.clientWidth, height = dialogBody.clientHeight;
+            const css = window?.getComputedStyle?.(dialogBody), pixels = (value) => Number.parseFloat(value || '') || 0;
+            const width = dialogBody.clientWidth - pixels(css?.paddingLeft) - pixels(css?.paddingRight);
+            const height = dialogBody.clientHeight - pixels(css?.paddingTop) - pixels(css?.paddingBottom);
+            const drawing = focused.card.querySelector('.av-row-plot-layout,.av-plot-scroll');
+            // The body's client box includes its padding. Captions/source disclosures
+            // inside a composed figure also need their own space around the drawing.
+            // Measuring only the body made a supposedly fitted scene overflow the modal.
+            const outside = drawing ? Math.max(0, focused.card.scrollHeight - drawing.getBoundingClientRect().height) : 0;
+            const assign = (name, value) => { const text = String(value); if (focused.card.getAttribute(name) !== text)
+                focused.card.setAttribute(name, text); };
             if (width > 0)
-                focused.card.setAttribute('data-av-fit-width', String(width));
+                assign('data-av-fit-width', width);
             if (height > 0)
-                focused.card.setAttribute('data-av-fit-height', String(height));
+                assign('data-av-fit-height', Math.max(120, height - outside));
         }
         function inspectFrame(card, trigger, kind = "section") {
             if (focused?.card === card) {
@@ -10084,6 +11158,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             card.parentNode.insertBefore(marker, card);
             const expansionControls = ownCardParts(card, "[data-av-focus]").map(element => ({ element, hidden: element.getAttribute("hidden") }));
             const savedPlotSnapshot = plots.snapshot(card);
+            const resumeInspector = kind === 'figure' ? inspectors?.suspend(card) : undefined;
             const releaseReviewPosition = (0, review_targets_4.registerReviewPlaceholder)(marker, card);
             if (nested && focused) {
                 focused.suspension = [{ element: focused.card, hidden: focused.card.getAttribute('hidden') }, ...focused.toolMoves.map(move => ({ element: move.element, hidden: move.element.getAttribute('hidden') }))];
@@ -10091,7 +11166,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                     state.element.hidden = true;
                 focusStack.push(focused);
             }
-            focused = { kind, owner, releaseReviewPosition, plotSnapshot: savedPlotSnapshot, suspension: [], card, marker, scroll: scrollState, viewport, trigger, previouslyFocused: card.classList.contains("av-focused"), previousAttribute: card.getAttribute("data-av-focused"), expansionControls, toolMoves: [], initiallyClosed: card.matches("details") && !card.hasAttribute("open"), previousTemporaryAttribute: card.getAttribute("data-av-inspection-open") };
+            focused = { kind, owner, releaseReviewPosition, plotSnapshot: savedPlotSnapshot, resumeInspector, suspension: [], card, marker, scroll: scrollState, viewport, trigger, previouslyFocused: card.classList.contains("av-focused"), previousAttribute: card.getAttribute("data-av-focused"), expansionControls, toolMoves: [], initiallyClosed: card.matches("details") && !card.hasAttribute("open"), previousTemporaryAttribute: card.getAttribute("data-av-inspection-open") };
             for (const tools of kind === 'figure' ? [figures.toolbar(card)].filter((element) => !!element) : ownCardParts(card, ".av-frame-tools")) {
                 const place = document.createComment("av-frame-tools");
                 tools.parentNode?.insertBefore(place, tools);
@@ -10226,39 +11301,12 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             if (focused?.kind === 'figure' && focused.card.contains(control)) {
                 for (const mark of elements(focused.card, '[data-av-inspect]'))
                     attribute(mark, 'data-av-inspected', mark.getAttribute('data-av-inspect') === key ? '' : null);
-                if (dialogContext) {
-                    let detail = dialogContext.querySelector('[data-av-selected-context]');
-                    if (!detail) {
-                        detail = document.createElement('section');
-                        detail.setAttribute('data-av-selected-context', '');
-                        dialogContext.insertBefore(detail, dialogContext.firstChild);
-                    }
-                    detail.replaceChildren();
-                    const title = document.createElement('h3');
-                    title.textContent = titleOf(object);
-                    detail.appendChild(title);
-                    const content = object.querySelector('.av-object-body');
-                    if (content) {
-                        const copy = content.cloneNode(true);
-                        copy.removeAttribute('id');
-                        for (const node of Array.from(copy.querySelectorAll('[id]')))
-                            node.removeAttribute('id');
-                        for (const node of Array.from(copy.querySelectorAll('[data-av-controls],[data-av-review-ui]')))
-                            node.remove();
-                        detail.appendChild(copy);
-                    }
-                    else {
-                        const text = document.createElement('p');
-                        text.textContent = object.textContent;
-                        detail.appendChild(text);
-                    }
-                    dialogContext.parentElement?.setAttribute('open', '');
-                    dialogContext.scrollTop = 0;
-                }
                 notebooks?.recordInspection(object);
                 return;
             }
-            reveal(object, takeFocus, selectView);
+            reveal(object, false, selectView);
+            if (takeFocus && !inspectors?.open(control, control))
+                reveal(object, true, selectView);
             let status = inScope(explorer, "[data-av-inspector-status]", "[data-av-explorer]")[0];
             if (!status) {
                 status = output(explorer, "av-inspection-status av-sr-only");
@@ -10408,7 +11456,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             }
             const inspect = target.closest("[data-av-inspect]");
             if (inspect) {
-                inspectObject(inspect, undefined, (event.detail || 0) === 0);
+                inspectObject(inspect, undefined, (event.detail || 0) === 0 || !!inspect.closest('.av-inspector'));
                 return;
             }
             const step = target.closest("[data-av-step]");
@@ -10583,7 +11631,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             if (target.matches("[data-av-select]")) {
                 inspectObject(target, undefined, false);
                 inspectors?.refresh();
-                inspectors?.open(target, target);
+                inspectors?.open(target, target, false);
             }
             else if (target.matches("[data-av-compare]")) {
                 const explorer = target.closest("[data-av-explorer]");
@@ -10712,6 +11760,10 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                     if (summary) {
                         attribute(summary, 'tabindex', '-1');
                         attribute(summary, 'aria-disabled', null);
+                        if (parent.closest('.av-inspector')) {
+                            attribute(summary, 'role', 'heading');
+                            attribute(summary, 'aria-level', '3');
+                        }
                     }
                 }
                 if (parent.matches('.av-scenario-grid') && objects.length > 1 && !inScope(explorer, '[data-av-compare]', '[data-av-explorer]').length) {
@@ -10891,6 +11943,8 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                 renderSearch(state);
             }
         const explicitTarget = fragment(window?.location.hash || "");
+        if (explicitTarget)
+            beginInitialFragmentSettle(explicitTarget);
         figures.dock();
         for (const card of inclusive('.av-card')) {
             const toolbar = ownCardParts(card, '.av-frame-tools')[0];
@@ -10916,14 +11970,38 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                 renderWorkspace(state);
             }
         }
-        inspectors = (0, inspectors_1.attachInspectors)(root);
+        const inspectorReserves = new Set();
+        inspectors = (0, inspectors_1.attachInspectors)(root, {
+            command: (figure, control, options) => figures.command(figure, control, options),
+            layout: figure => plots.refresh(figure),
+            contextChanged: () => notifications?.refresh(),
+            reveal: (item, occlusion) => {
+                const figure = (0, figures_8.figureOf)(item);
+                for (const previous of inspectorReserves)
+                    if (!occlusion || previous !== figure) {
+                        plots.reserve(previous);
+                        inspectorReserves.delete(previous);
+                    }
+                if (!figure || !occlusion)
+                    return;
+                const viewport = figure.querySelector('.av-plot-scroll')?.getBoundingClientRect();
+                if (!viewport)
+                    return;
+                const right = Math.max(0, viewport.right - occlusion.left + 12);
+                plots.reserve(figure, { right });
+                inspectorReserves.add(figure);
+                plots.reveal(item, { right });
+            },
+        });
         itemSelection = (0, item_selection_4.attachItemSelection)(root, figures.figures, {
             inspect: (item, open, trigger) => {
                 if (item.hasAttribute('data-av-inspect')) {
                     inspectObject(item, undefined, false);
                     inspectors?.refresh();
-                    if (open && focused?.kind !== 'figure')
+                    if (open)
                         inspectors?.open(item, trigger || item);
+                    else
+                        inspectors?.preview(item);
                 }
                 else
                     selectDiagramItem(item, open, trigger);
@@ -10983,7 +12061,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
         }));
         listen(root, "toggle", disclosureToggle, true);
         if (window)
-            listen(window, "hashchange", hashChanged);
+            listen(window, "hashchange", (() => { cancelInitialFragmentSettle(); hashChanged(); }));
         hashChanged();
         const initialAppearance = preferences.whenReady().then(() => {
             if (cleaned)
@@ -10998,6 +12076,21 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
                 attribute(state.element, 'data-av-ready', '');
             (0, startup_1.notifyReportReady)(document);
         });
+        const initialFragmentSettled = explicitTarget ? Promise.all([initialAppearance, ready]).then(async () => {
+            if (cleaned || !initialFragmentSettle)
+                return;
+            await Promise.all([preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle()]);
+            if (cleaned || !initialFragmentSettle)
+                return;
+            // ResizeObserver/layout work triggered by the final renderer mutation lands
+            // at the next rendering opportunity. Let it drain, then wait once more for
+            // any renderer refresh it scheduled before correcting the original fragment.
+            await afterLayoutFrames();
+            if (cleaned || !initialFragmentSettle)
+                return;
+            await diagrams?.whenIdle();
+            finishInitialFragmentSettle();
+        }).finally(cancelInitialFragmentSettle) : Promise.resolve();
         if (window)
             listen(window, 'resize', (() => { updateFigureBounds(); if (focused?.kind === 'figure')
                 plots.refresh(focused.card); }));
@@ -11025,6 +12118,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             if (cleaned)
                 return;
             cleaned = true;
+            cancelInitialFragmentSettle();
             closeAllFocus();
             cancelMotion();
             for (const state of workspaces)
@@ -11047,7 +12141,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             figures.cleanup();
             refinementCleanup();
             enhancedRoots.delete(root);
-        }, { whenReady: () => ready, whenIdle: async () => { await Promise.all([ready, initialAppearance, preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
+        }, { whenReady: () => ready, whenIdle: async () => { await Promise.all([ready, initialAppearance, initialFragmentSettled, preferences.whenIdle(), notebooks?.whenIdle(), diagrams?.whenIdle(), figures.whenIdle(), ...workspaces.map(state => state.finder?.whenIdle())]); } });
         enhancedRoots.set(root, cleanup);
         return cleanup;
     }

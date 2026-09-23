@@ -1,0 +1,28 @@
+flowchart-elk LR
+  source@{ shape: docs, label: "Evidence λ" }
+
+  subgraph Intake
+    direction TB
+    parse["Parse package"]
+    valid{"Schema valid?"}
+    parse --> valid
+  end
+
+  subgraph Review
+    direction TB
+    inspect["Inspect claims"]
+    compare[["Cross-check"]]
+    ready{"Enough evidence?"}
+    inspect --> compare --> ready
+  end
+
+  policy[("Policy cache")]
+  reject["Return for correction"]
+  publish(["Retain result ✓"])
+
+  source --> parse
+  valid -- yes --> inspect
+  valid -- no --> reject
+  compare -. consult .-> policy
+  ready -- yes --> publish
+  ready -- no --> reject

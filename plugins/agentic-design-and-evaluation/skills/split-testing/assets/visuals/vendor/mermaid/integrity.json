@@ -4,6 +4,24 @@
   "license": "MIT",
   "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.0.0.tgz",
   "packageIntegrity": "sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==",
-  "artifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
+  "artifactSha256": "5d0da1e481c6c29902b4dcb4dad8e6e641decf3486a4609e904a404b0154170a",
+  "upstreamArtifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
+  "localPatches": [
+    {
+      "id": "c4-container-width",
+      "description": "Use the SVG rendering container width for C4 layout instead of the physical screen width, retaining the original fallback when no container width is measurable.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "ishikawa-measured-label-spacing",
+      "description": "Allocate branch positions using measured wrapped-label heights and leave measured clearance between adjacent category groups. Preserve the original tree, arrow direction, cause order and text.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "venn-measured-name-note-regions",
+      "description": "Measure connected styled name and note rows, then place them within their semantic regions using bounded interval search. Preserve source, note identities, set values and circle geometry; expose an actionable diagnostic when placement fails.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    }
+  ],
   "upstreamNoticeFiles": []
 }

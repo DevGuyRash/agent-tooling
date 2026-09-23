@@ -1,0 +1,33 @@
+agentflow-beta TB
+  global
+    policy["Review policy"]@{ shape: refdoc }
+  end
+
+  request["Change request λ"]@{ shape: input }
+
+  flow triage["Triage Agent"]
+    inspect["Inspect evidence"]@{ shape: task }
+    fetch["fetch_diff"]@{ shape: tool, params: "changeId :: String", returns: "Diff" }
+    enough["Enough evidence?"]@{ shape: decision }
+
+    request --> inspect --> fetch --> enough
+    inspect -.- policy
+  end
+
+  flow reviewer["Review Agent"]
+    assess["Assess risk"]@{ shape: task }
+    verify["run_checks"]@{ shape: tool, returns: "CheckResult" }
+    approved["Approve?"]@{ shape: decision }
+
+    assess --> verify --> approved
+    assess -.- policy
+  end
+
+  revise["Request changes"]@{ shape: action }
+  publish["Publish review ✓"]@{ shape: action }
+
+  enough -- yes --> reviewer
+  enough -- no --> revise
+  approved -- yes --> publish
+  approved -- no --> revise
+  verify --x revise

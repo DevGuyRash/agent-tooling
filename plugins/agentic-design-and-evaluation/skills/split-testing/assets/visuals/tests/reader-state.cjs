@@ -4,7 +4,7 @@ const path = require("node:path");
 const {
   READER_STATE_VERSION, DEFAULT_READER_ACTIVITY_LIMIT,
   emptyReaderState, decodeReaderState, encodeReaderState, updateReaderState,
-  loadReaderState,
+  loadReaderState, emptyReaderNotebook, applyReaderDelta, mergeReaderNotebooks, encodeReaderNotebook, decodeReaderNotebook,
 } = require(path.join(process.argv[2], "reader-state.js"));
 
 const context = {
@@ -368,6 +368,73 @@ check("earlier snapshots and caller inputs remain immutable", () => {
   assert.equal(encodeReaderState(first), before);
   assert.deepEqual(change, { type: "note", targetId: "alpha", text: "Second note", at: earlier });
   assert.deepEqual(scope, context);
+});
+
+check("review merges do not resurrect superseded annotation versions", () => {
+  const scope = { ...context, targetIds: ["alpha"] };
+  const anchor = { kind: "section", target: { reportId: scope.reportId, revision: scope.revision, id: "alpha", label: "Alpha", path: [], fingerprint: "sha256:test", excerpt: "Original evidence" } };
+  const annotation = (book, id, text, observedIds = [], draft = false, baseIds, supportingVersions) => applyReaderDelta(book, {
+    epoch: book.epoch, id: "delta-" + id,
+    change: { type: "annotation", version: { id, annotationId: "annotation-1", anchor, text, at, draft, ...(baseIds ? { baseIds } : {}) }, observedIds, ...(supportingVersions ? { supportingVersions } : {}) },
+  }, scope);
+  const original = annotation(emptyReaderNotebook(scope), "v1", "Original note");
+  const revised = annotation(original, "v2", "Revised note", ["v1"]);
+  assert.deepEqual(revised.review.versions.map(version => version.id), ["v2"]);
+  assert.deepEqual(revised.review.versions[0].baseIds, ["v1"], "A completed edit retains the version it explicitly replaced");
+  assert.deepEqual(mergeReaderNotebooks(original, revised, scope).review.versions.map(version => version.id), ["v2"], "Merging an older snapshot cannot manufacture a conflict");
+
+  const competing = annotation(original, "v3", "Concurrent note", ["v1"]);
+  assert.deepEqual(mergeReaderNotebooks(revised, competing, scope).review.versions.map(version => version.id), ["v2", "v3"], "Independent descendants remain competing versions");
+
+  const draft = annotation(original, "draft-1", "Work in progress", ["v1"], true, ["v1"]);
+  assert.deepEqual(mergeReaderNotebooks(original, draft, scope).review.versions.map(version => version.id), ["v1", "draft-1"], "A draft keeps its saved base available beside it");
+
+  const directDraft = annotation(original, "direct-draft", "Direct draft", ["v1"], true, ["v1"]);
+  const directCompleted = annotation(directDraft, "direct-b", "Direct completed sibling", ["v1"]);
+  assert.deepEqual(directCompleted.review.versions.map(version => version.id), ["direct-draft", "direct-b"]);
+  assert.deepEqual(directCompleted.review.supportingVersions?.map(version => version.id), ["v1"], "Direct completed edits retain a live draft's exact saved base as supporting context");
+  assert.deepEqual(directCompleted.review.supportingVersions?.[0], original.review.versions[0], "Supporting context preserves the exact saved annotation version");
+
+  const mixed = mergeReaderNotebooks(revised, annotation(original, "draft-2", "Concurrent draft", ["v1"], true, ["v1"]), scope);
+  assert.deepEqual(mixed.review.versions.map(version => version.id), ["v2", "draft-2"], "A completed sibling and live draft remain active without resurrecting their common base");
+  assert.deepEqual(mixed.review.supportingVersions?.map(version => version.id), ["v1"], "The common saved base is retained once as supporting draft context");
+  const mixedRoundTrip = decodeReaderNotebook(encodeReaderNotebook(mixed, scope), scope);
+  assert.deepEqual(mixedRoundTrip.review.supportingVersions, mixed.review.supportingVersions, "Lossless backup preserves supporting draft context");
+  const originalVersion=original.review.versions[0];
+  const staleDraft=annotation(revised,"stale-draft","Draft saved after B",["v1"],true,["v1"],[originalVersion]);
+  assert.deepEqual(staleDraft.review.versions.map(version=>version.id),["v2","stale-draft"],"A stale draft delta arriving after B keeps unseen B active");
+  assert.deepEqual(staleDraft.review.supportingVersions?.map(version=>version.id),["v1"],"A stale draft delta carries the exact lost saved base into supporting context");
+  assert.deepEqual(staleDraft.review.supportingVersions?.[0],originalVersion);
+  const repeatedDraft=annotation(staleDraft,"stale-draft-2","Draft saved again",["v1","stale-draft"],true,["v1"],[originalVersion]);
+  assert.deepEqual(repeatedDraft.review.versions.map(version=>version.id),["v2","stale-draft-2"]);
+  assert.deepEqual(repeatedDraft.review.supportingVersions?.map(version=>version.id),["v1"],"Repeated draft saves retain one supporting copy of A");
+  const finishedStale=annotation(repeatedDraft,"v5","Finished stale draft",["v1","stale-draft-2"],false,undefined,[originalVersion]);
+  assert.deepEqual(finishedStale.review.versions.map(version=>version.id),["v2","v5"],"Finishing a stale draft keeps unseen B as a true competitor");
+  assert.equal(finishedStale.review.supportingVersions,undefined);
+  assert.throws(()=>annotation(staleDraft,"bad-support","Bad support",["v1","stale-draft"],true,["v1"],[{...originalVersion,text:"Conflicting A"}]),/Supporting annotation identity conflicts/);
+  assert.throws(()=>annotation(revised,"unrelated-support","Unrelated support",["v1","other"],true,["v1"],[{...originalVersion,id:"other",annotationId:"other-annotation"}]),/referenced saved version of this annotation/);
+  const validDraftBranch=annotation(original,"draft-valid","Valid same-annotation draft",["v1"],true,["v1"]);
+  const crossGroupDraft={id:"draft-cross",annotationId:"other-annotation",anchor,text:"Malformed cross-group draft",at,draft:true,baseIds:["v1"]};
+  const adversarial=mergeReaderNotebooks(revised,{...validDraftBranch,review:{...validDraftBranch.review,versions:[...validDraftBranch.review.versions,crossGroupDraft]}},scope);
+  assert.deepEqual(adversarial.review.supportingVersions?.map(version=>version.id),["v1"],"A malformed cross-annotation reference cannot overwrite a valid draft's supporting base");
+  const continued = annotation(mixed, "draft-3", "Continued concurrent draft", ["v1", "draft-2"], true, ["v1"]);
+  assert.deepEqual(continued.review.supportingVersions?.map(version => version.id), ["v1"], "Successive draft saves reuse one retained supporting version");
+  const finished = annotation(mixed, "v4", "Finished concurrent draft", ["v1", "draft-2"]);
+  assert.deepEqual(finished.review.versions.map(version => version.id), ["v2", "v4"], "Finishing a draft retains an unseen completed sibling as a true conflict");
+  assert.equal(finished.review.supportingVersions, undefined, "Draft-only support is removed once no live draft needs it");
+
+  const blank = emptyReaderNotebook(scope);
+  const cyclicVersion = (id, baseId, text) => ({ id, annotationId: "cyclic", anchor, text, at, draft: false, baseIds: [baseId] });
+  const cycleLeft = { ...blank, review: { versions: [cyclicVersion("cycle-a", "cycle-b", "A"), cyclicVersion("cycle-old", "missing", "Older retained context")], bookmarks: [] } };
+  const cycleRight = { ...blank, review: { versions: [cyclicVersion("cycle-b", "cycle-a", "B")], bookmarks: [] } };
+  assert.deepEqual(mergeReaderNotebooks(cycleLeft, cycleRight, scope).review.versions.map(version => version.id), ["cycle-a", "cycle-old", "cycle-b"], "Malformed cyclic ancestry conservatively retains that annotation's competing records");
+
+  const deep = Array.from({length:2000},(_,index)=>({
+    id:"deep-"+index,annotationId:"deep",anchor,text:"Version "+index,at,draft:false,
+    ...(index ? {baseIds:["deep-"+(index-1)]} : {}),
+  }));
+  const deepHistory = { ...blank, review: { versions: deep, bookmarks: [] } };
+  assert.deepEqual(mergeReaderNotebooks(deepHistory, blank, scope).review.versions.map(version => version.id), ["deep-1999"], "Long acyclic ancestry is reduced iteratively without retaining superseded history");
 });
 
 console.log(`reader-state contracts passed: ${passed.length} behavior groups`);

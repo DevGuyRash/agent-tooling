@@ -1,0 +1,52 @@
+---
+config:
+  themeCSS: ".cynefinDomain, .cynefinConfusion { fill-opacity: 1; } .cynefinTitle { fill: var(--av-ink); }"
+  cynefin:
+    seed: 41
+    width: 1000
+    height: 800
+    padding: 50
+  themeVariables:
+    background: "#fdfdff"
+    primaryTextColor: "#1f2648"
+    lineColor: "#3f6b7d"
+    cynefin:
+      boundaryColor: "#3f6b7d"
+      arrowColor: "#3f6b7d"
+      cliffColor: "#8b0000"
+      complexBg: "#e8f5e9"
+      complicatedBg: "#e3f2fd"
+      chaoticBg: "#fbe9e7"
+      clearBg: "#fff8e1"
+      confusionBg: "#f3e5f5"
+      textColor: "#1f2648"
+      labelColor: "#1f2648"
+---
+cynefin-beta
+  title Evidence Review Decisions
+
+  complex
+    "Explore a novel failure mode"
+    "Probe ambiguous provenance"
+
+  complicated
+    "Compare cryptographic evidence"
+    "Interpret a specialist standard"
+    "Expert task"
+
+  clear
+    "Run the documented checksum"
+    "Apply the retention checklist"
+
+  chaotic
+    "Contain active data corruption"
+    "Freeze unsafe publication"
+
+  confusion
+    "Unclassified supplier incident"
+    "Unknown source trust level"
+
+  complex --> complicated : "Pattern understood"
+  complicated --> clear : "Procedure codified"
+  clear --> chaotic : "Control breaks down"
+  chaotic --> complex : "Situation stabilized"

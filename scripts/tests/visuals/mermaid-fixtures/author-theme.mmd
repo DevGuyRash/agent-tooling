@@ -1,0 +1,18 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#123456"
+    primaryTextColor: "#ffffff"
+    primaryBorderColor: "#90b7d8"
+    lineColor: "#345678"
+---
+flowchart LR
+  source["Original source with authored theme"] --> check{"Check exact conditions?"}
+  check -->|complete| retained["Retained observation"]
+  check -->|missing| missing["Missing observation stays explicit"]
+  retained --> compare["Compare repeated condition α"]
+  missing -.-> compare
+  compare --> qualified["Qualified result with long explanatory label"]
+  qualified --> export["Export keeps authored source"]
+  export -.-> source

@@ -46,6 +46,8 @@ export interface DisagreementInput extends Meta {
   topics: (Annotation & { topic: string; positions: (Annotation & { contributor: string; position: string; status?: Status })[]; disposition?: string })[];
 }
 export interface LineageInput extends Meta {
+  /** Natural fit keeps graph typography from growing when a layout becomes narrower. */
+  fit?: 'natural' | 'width';
   nodes: (Named & { kind: string; detail?: string })[];
   edges: (Annotation & { id?: string; from: string; to: string; relation: string })[];
 }

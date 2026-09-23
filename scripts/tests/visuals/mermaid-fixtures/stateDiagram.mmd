@@ -1,0 +1,28 @@
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Submitted : submit exact source
+  Submitted --> Validating
+
+  state Validating {
+    [*] --> Parse
+    Parse --> Compare : renderer accepts source
+    Compare --> Parse : correct recoverable mismatch
+    Compare --> [*] : source and result agree
+  }
+
+  Validating --> fork_review
+  state fork_review <<fork>>
+  fork_review --> EvidenceReview
+  fork_review --> PresentationReview
+
+  EvidenceReview --> join_review : evidence retained
+  PresentationReview --> join_review : output readable
+  state join_review <<join>>
+  join_review --> Decision
+
+  state release_choice <<choice>>
+  Decision --> release_choice
+  release_choice --> Published : approve
+  release_choice --> Draft : revise
+  Published --> Archived : retain report and source
+  Archived --> [*]
