@@ -262,7 +262,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packaging_changed: ${{ steps.detect.outputs.packaging_changed }}
-      friction_smoke_changed: ${{ steps.detect.outputs.friction_smoke_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -290,7 +289,6 @@ jobs:
             echo "No usable base SHA for $event_name; defaulting packaging checks to true."
             {
               echo "packaging_changed=true"
-              echo "friction_smoke_changed=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -299,51 +297,10 @@ jobs:
           git diff --name-only "$base_sha" "$head_sha" > "$changed_files_file"
 
           packaging_changed="$(python3 scripts/package_skills.py matches-changed-files --changed-files-file "$changed_files_file")"
-          friction_smoke_changed="$(python3 scripts/package_skills.py matches-changed-files --skill friction_render_table --include-tests --changed-files-file "$changed_files_file")"
-
-          # The packaged-skill watch set only covers the render-table launcher,
-          # dist payloads, and tests; core capture/mend scripts live outside it.
-          if grep -q '^plugins/friction-diagnostics/' "$changed_files_file"; then
-            friction_smoke_changed="true"
-          fi
 
           {
             echo "packaging_changed=$packaging_changed"
-            echo "friction_smoke_changed=$friction_smoke_changed"
           } >> "$GITHUB_OUTPUT"
-
-  friction-diagnostics-smoke:
-    name: Friction diagnostics smoke
-    needs: detect-packaging-changes
-    if: needs.detect-packaging-changes.outputs.friction_smoke_changed == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.x'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Stage host packaged binaries
-        shell: bash
-        run: python scripts/package_skills.py stage-host --skill friction_render_table
-
-      - name: Verify vendored skill copies
-        shell: bash
-        run: python scripts/package_skills.py vendor
-
-      - name: Run friction diagnostics smoke test (POSIX)
-        shell: bash
-        run: bash plugins/friction-diagnostics/skills/friction-diagnostics/tests/smoke-posix.sh
 
   plugin-audit:
     name: Plugin audit (changed plugins)
@@ -377,10 +334,13 @@ jobs:
           npm --prefix .local/visual-compiler ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
           echo "$GITHUB_WORKSPACE/.local/visual-compiler/node_modules/.bin" >> "$GITHUB_PATH"
 
+      - name: Verify committed task receipts and outputs
+        run: python3 -B scripts/artifacts.py check --source commit:HEAD
+
       - name: Test instruction package integration and reporters
         shell: bash
         run: |
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests scripts.tests.test_install_all scripts.tests.test_install_all_scope
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_artifacts scripts.tests.test_artifact_bootstrap scripts.tests.test_mermaid_catalog scripts.tests.test_package_skills scripts.tests.test_agentic_plugin scripts.tests.test_audit_plugins scripts.tests.test_plugin_port_live.ProfileSelectionTests scripts.tests.test_install_all scripts.tests.test_install_all_scope
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/tests -p 'test_*.py'
 
@@ -633,14 +593,6 @@ jobs:
             --all-targets \
             ${{ steps.cfg.outputs.features_flag }} \
             ${{ steps.cfg.outputs.locked_flag }}
-
-      - name: Stage host packaged binaries
-        if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'
-        run: python3 scripts/package_skills.py stage-host
-
-      - name: Verify packaged binaries
-        if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'
-        run: python3 scripts/package_skills.py verify-host
 
       - name: Smoke packaged launchers
         if: matrix.dir == '.' && needs.detect-packaging-changes.outputs.packaging_changed == 'true'

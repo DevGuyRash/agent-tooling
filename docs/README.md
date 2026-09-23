@@ -1,5 +1,7 @@
 # Documentation
 
+[Artifact synchronization](artifacts.md) describes task definitions, generated resources, Git hooks and recovery.
+
 [Repository architecture decisions](adr/README.md) cover choices shared across the repository. Documentation about one plugin lives under `docs/<plugin-name>/`.
 
 | Plugin | Documentation |

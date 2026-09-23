@@ -60,3 +60,10 @@ node_modules/
 .coverage.*
 coverage.xml
 htmlcov/
+
+# Retain concise active state while keeping local context evidence ignored.
+!/.local/
+/.local/*
+!/.local/context/
+/.local/context/*
+!/.local/context/state.md

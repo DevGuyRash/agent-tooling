@@ -2,6 +2,8 @@
 
 This repository contains portable agent tooling: host-aware plugin packages, host-agnostic skill payloads, Rust-backed launchers, and repo harness scripts.
 
+After cloning for contributor work, run `just bootstrap` to enable the Git hooks and check artifact readiness. See [contributor setup](#contributor-setup) for prerequisites and task selection.
+
 ## Repository layout
 
 Top-level `plugins/` contains plugin packages that may bundle skills, hooks, MCP servers, apps, and host manifests. Top-level `skills/` is kept with `.gitkeep` for future standalone, host-agnostic skill packages that are not distributed as plugins.
@@ -25,11 +27,11 @@ Current local plugins:
 - `plugins/docker-architect/`
 - `plugins/espanso-dynamic-forms/`
 - `plugins/excel-foundry/`
-- `plugins/friction-diagnostics/`
+- `plugins/visualization/`
 - `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and bundles the agnostic `$authoring-goals` skill payload.
 - `plugins/playwright-testing/`
 - `plugins/project-harness/`
-- [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Friction Diagnostics remains a separate plugin.
+- [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, Self-Healing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Self-Healing uses the assignment’s existing tools and retained evidence.
 
 Agentic Design & Evaluation is distributed as a complete plugin. Its task skills depend on the public shared resources listed in its package guide; a copied task-skill directory is not a supported standalone installation. This package boundary is distinct from a launcher or standalone skill that promises to carry all of its dependencies inside one skill directory.
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
@@ -110,18 +112,18 @@ The repo-local command surface lives in `justfile`.
 
 Common commands:
 
-- `just bootstrap` — install packaging prerequisites used by the repo scripts
+- `just bootstrap` — enable contributor hooks, verify artifacts and report missing build tools
 - `just verify` — run the fast local verification surface (`fmt-check`, `lint`, `test`)
-- `just ci` — run bootstrap, repository verification, and launcher checks without rewriting tracked distribution payloads
+- `just ci` — fetch Rust dependencies and run repository, artifact and launcher checks without changing hook configuration or tracked distribution payloads
 - `scripts/install-all` / `just install-all` — reconcile selected catalog entries by version and source digest without touching already-current plugins
 - `just dist-host` — build and stage host-platform packaged binaries into plugin-local skill `dist/` trees
-- `just verify-packaging` — verify host refresh plus the committed dist completeness contract
+- `just verify-packaging` — check task receipts and delivered outputs without mutation
 - `just verify-skill-launchers` — smoke-test plugin-local skill launchers against the staged binaries
 - `just audit-plugins [name ...]` — report what the skill-auditor's scripts observe about every plugin, or the named ones (`--errors-only` omits the observations)
-- `just hooks-install` — point this clone at the committed repo-owned `githooks/` directory for the local pre-push check
+- `just hooks-install` — activate staged-input generation and outgoing-revision checks in this clone
 - `just harness-doctor` — inspect the current repo shape and local tool availability from the installed harness
 
-`just hooks-install` only opts the current clone into the tracked pre-push guard. `just verify-packaging` checks packaged-artifact completeness without refreshing artifacts, while release payloads change only through the explicit local refresh workflow.
+`just artifacts-sync` synchronizes changed task outputs; `just artifacts-check` verifies accepted content without running producers. `just mermaid-refresh` explicitly captures upstream documentation and regenerates the two Mermaid references. [Artifact synchronization](docs/artifacts.md) explains task definitions, receipts, hooks, recovery and prerequisites.
 
 `just audit-plugins` prints what the auditor's scripts can observe and fails only on what is broken for every target. Facts whose significance depends on the target — lengths, naming, house idiom — are printed with the reference that owns the rule, and never fail; a script cannot see a target's age or profile, so judging those is the reader's. Run `scripts/audit-plugins.sh --help` for the current contract — that text is canonical, so this paragraph does not restate it. CI audits only the plugins a change touches, so one plugin's backlog blocks nobody else's work.
 
@@ -193,64 +195,30 @@ claude plugin remove gitops-workflow@agent-tooling
 claude plugin install software-development@agent-tooling
 ```
 
-### Contributor hook setup
+### Contributor setup
 
-Repo-owned hooks are committed under `githooks/`, but Git does not execute them automatically from a tracked directory. Each clone that wants the local push guard must opt into that path once:
+After cloning, run `just bootstrap` from the repository root. Git and Python 3.11+ are required. Without `just`, use `python3 scripts/artifacts.py bootstrap`. This enables the maintained pre-commit and pre-push hooks, checks artifact receipts and outputs, and reports missing build tools by task. Rerunning it is safe. A current checkout needs no compiler to complete this setup; no producer, upstream refresh or dependency installer runs.
 
-- `just hooks-install`
-- or `git config --local core.hooksPath githooks`
+Pre-commit generates automatic tasks from staged inputs and stages their outputs and receipts, preserving unrelated work. Pre-push verifies outgoing revisions. Build tools become necessary when their tasks need regeneration. Use `just bootstrap --task visual_library --require-tools` to require executable availability for a selected contribution area; task producers enforce pinned versions when building. `just rust-fetch` explicitly fetches the Rust workspace’s locked dependencies.
 
-That updates the clone-local `core.hooksPath` setting so Git runs the committed `githooks/pre-push` script for this repository.
+Existing custom hook configuration is preserved. `just bootstrap --replace-hooks` explicitly selects the repository hooks while retaining the old hook files. `just hooks-install` uses the same installer when only hook activation is wanted. Git does not activate repository hook files merely by cloning. Publication, plugin installation and upstream refresh remain explicit operations.
 
-## Packaged binary policy
+## Artifact delivery
 
-Each packaged skill declares its exact committed target matrix in `packaging/skills.toml`. A platform is supported only when that skill's declared matrix and smoke contract cover it. Split Testing is instruction-only and has no packaged executable.
+[packaging/artifacts.toml](packaging/artifacts.toml) declares every maintained artifact task. Each declaration names source inputs, a command when needed, outputs, destinations, dependencies and runtime requirements. Rust builds, generated browser assets, Mermaid references and resource copies use the same synchronization engine. Installed packages receive their own required resources.
 
-That means:
+- `just artifacts-sync` prepares changed automatic tasks and synchronizes verified outputs.
+- `just artifacts-sync --task <id>` selects a task and its declared dependencies.
+- `just artifacts-check` verifies content fingerprints and output identities without rebuilding.
+- `just mermaid-refresh` captures current official Mermaid documentation, then generates references for the bundled renderer and broader documentation.
+- `just visual-previews` assembles standalone local report examples.
 
-- `just ci` verifies the repository without rewriting tracked `dist/` trees
-- `just dist-host` is the explicit host-platform refresh route for packaged skills
-- consumers use only the platform payloads declared for the specific skill
+See [Artifact synchronization](docs/artifacts.md) for the maintained contract and examples. Task receipts travel with committed outputs; optional logs and preview receipts stay local. A fresh checkout can verify committed delivery without fetching upstream or rebuilding Rust.
 
-This keeps ordinary verification non-mutating while making every executable capability and platform claim skill-specific.
+## Rust launchers
 
-## Friction summary output
+Docker Architect’s Compose and image launchers execute the matching binary under their skill’s `dist/<platform>/` directory. `scripts/rust-shim-template.sh` provides the reusable launcher form. The task’s `parameters.rust` selects the pinned release recipe; `scripts/build_rust_artifacts.py` prepares two independent builds and compares their bytes before delivery. The current Docker Architect deliveries target Linux x86-64.
 
-The friction summary wrappers support multiple output modes:
+`scripts/package_skills.py` retains the existing packaging command names as adapters over the task engine. `stage-host` and `dist-refresh` synchronize selected Rust tasks; verification commands check their receipts without rebuilding. `sync-artifacts` imports prepared outputs only with matching task receipts and source identities. `vendor` operates on direct-copy tasks. The manifest, receipt format and publication logic have one maintained owner.
 
-- `--output-format auto|table|markdown|list`
-- `FRICTION_SUMMARY_FORMAT=table|markdown|list`
-
-Use `markdown` or `list` when Unicode box drawing is undesirable, terminal-width detection is unreliable, or the output needs to paste cleanly into plain-text and Markdown surfaces.
-
-## Rust shim pattern
-
-- `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-compose`, `plugins/docker-architect/skills/docker-architect/scripts/docker-architect-image`, and `plugins/friction-diagnostics/skills/friction-diagnostics/scripts/render-table.sh` are plugin-local skill launchers that execute packaged binaries from the same skill directory.
-- `scripts/rust-shim-template.sh` is the copy template for future packaged-binary launchers.
-- Build and staging are centralized at the repo root through `just` and `scripts/package_skills.py`.
-- `packaging/skills.toml` is the single registry for packaged plugin-local skill binaries, their launcher paths, and which platforms are required in git versus built in CI.
-- Portability contract: a plugin-local skill should not require runtime paths outside its own folder.
-- The committed Linux `dist/` payloads are verified in CI only when packaging-relevant files changed.
-- Packaged launchers in this repo support Linux hosts only.
-
-To add or update a packaged binary, append or edit one `[skills.<id>]` entry in `packaging/skills.toml` and keep these fields aligned:
-
-- `package` — Cargo package name to build
-- `binary` — emitted executable name
-- `skill_dir` — encapsulated plugin-local skill directory that owns `dist/<platform-id>/`
-- `launcher` — plugin-local skill wrapper script that executes the packaged binary
-- `smoke_args` — lightweight launcher verification arguments
-- `required_platforms` — committed payloads that must already exist in git
-- `ci_platforms` — platforms that automated packaging surfaces should stage for this repo
-
-`scripts/package_skills.py`, `just ci`, and any future packaging workflow all consume that same manifest, so new binaries only need one registry entry rather than parallel updates in multiple places.
-
-Environment flags:
-
-- `AGENT_TOOLING_SKIP_RUST=1` — skip Rust installation in `scripts/setup.sh`
-- `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_COMPOSE_BUILD=1` — skip the `docker-architect-compose` prebuild step in setup/maintenance
-- `AGENT_TOOLING_SKIP_DOCKER_ARCHITECT_IMAGE_BUILD=1` — skip the `docker-architect-image` prebuild step in setup/maintenance
-- `AGENT_TOOLING_DIST_BUILD_MODE=auto|container|host` — choose host or containerized dist builds
-- `AGENT_TOOLING_RUST_IMAGE=<image>` — override the Rust container image used for Linux dist builds
-
-Deprecated `AGENT_SKILLS_*` names remain accepted as aliases.
+Setup flags remain documented by `scripts/setup.sh` and `scripts/maintenance.sh`. Plugin installation uses the explicit installer described above.

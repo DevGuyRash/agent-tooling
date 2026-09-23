@@ -1,0 +1,105 @@
+version = 1
+receipt_dir = "packaging/receipts"
+
+[tasks.docker_architect_compose]
+inputs = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/**", "scripts/rust_release.py", "scripts/build_rust_artifacts.py", "plugins/docker-architect/skills/docker-architect/references/compose-defaults/defaults.v1.yaml", "plugins/docker-architect/skills/docker-architect/references/image-knowledge/knowledge.v1.yaml"]
+command = ["{python}", "scripts/build_rust_artifacts.py"]
+timeout = 1800
+tools = ["cargo", "rustc", "cargo-zigbuild", "zig"]
+environment = { CARGO_NET_OFFLINE = "true" }
+[[tasks.docker_architect_compose.outputs]]
+source = "_out/docker-architect-compose"
+destinations = ["plugins/docker-architect/skills/docker-architect/dist/linux-x86_64/docker-architect-compose"]
+executable = true
+
+[tasks.docker_architect_compose.parameters.rust]
+package = "docker-architect-compose"
+binary = "docker-architect-compose"
+platform = "linux-x86_64"
+launcher = "scripts/docker-architect-compose"
+smoke_args = ["--help"]
+[tasks.docker_architect_compose.parameters.rust.targets.linux-x86_64]
+cargo_target = "x86_64-unknown-linux-gnu"
+recipe = "cargo-zigbuild"
+recipe_version = "0.23.4"
+zig_version = "0.16.0"
+
+[tasks.docker_architect_image]
+inputs = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/**", "scripts/rust_release.py", "scripts/build_rust_artifacts.py", "plugins/docker-architect/skills/docker-architect/references/compose-defaults/defaults.v1.yaml", "plugins/docker-architect/skills/docker-architect/references/image-knowledge/knowledge.v1.yaml"]
+command = ["{python}", "scripts/build_rust_artifacts.py"]
+timeout = 1800
+tools = ["cargo", "rustc", "cargo-zigbuild", "zig"]
+environment = { CARGO_NET_OFFLINE = "true" }
+[[tasks.docker_architect_image.outputs]]
+source = "_out/docker-architect-image"
+destinations = ["plugins/docker-architect/skills/docker-architect/dist/linux-x86_64/docker-architect-image"]
+executable = true
+
+[tasks.docker_architect_image.parameters.rust]
+package = "docker-architect-image"
+binary = "docker-architect-image"
+platform = "linux-x86_64"
+launcher = "scripts/docker-architect-image"
+smoke_args = ["--help"]
+[tasks.docker_architect_image.parameters.rust.targets.linux-x86_64]
+cargo_target = "x86_64-unknown-linux-gnu"
+recipe = "cargo-zigbuild"
+recipe_version = "0.23.4"
+zig_version = "0.16.0"
+
+[tasks.visual_library]
+inputs = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/package.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build-theme.mjs", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/components.css"]
+command = ["node", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/build.mjs", "--replace"]
+tools = ["node", "tsc"]
+[[tasks.visual_library.outputs]]
+source = "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/agentic-visuals.js"
+destinations = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/agentic-visuals.js"]
+[[tasks.visual_library.outputs]]
+source = "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/agentic-startup.js"
+destinations = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/agentic-startup.js"]
+[[tasks.visual_library.outputs]]
+source = "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/agentic-visuals.css"
+destinations = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/agentic-visuals.css"]
+
+[tasks.mermaid_catalog_bundled]
+inputs = ["scripts/update_mermaid_catalog.py", "packaging/sources/mermaid/upstream.json", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/mermaid.min.js", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/integrity.json"]
+command = ["{python}", "scripts/update_mermaid_catalog.py", "--write", "--upstream-fixture", "packaging/sources/mermaid/upstream.json", "--profile", "bundled", "--output", "_out/catalog.md"]
+tools = ["node"]
+[[tasks.mermaid_catalog_bundled.outputs]]
+source = "_out/catalog.md"
+destinations = ["plugins/agentic-design-and-evaluation/skills/split-testing/references/mermaid-diagrams.md"]
+
+[tasks.mermaid_catalog_upstream]
+inputs = ["scripts/update_mermaid_catalog.py", "packaging/sources/mermaid/upstream.json"]
+command = ["{python}", "scripts/update_mermaid_catalog.py", "--write", "--upstream-fixture", "packaging/sources/mermaid/upstream.json", "--profile", "upstream", "--output", "_out/catalog.md"]
+[[tasks.mermaid_catalog_upstream.outputs]]
+source = "_out/catalog.md"
+destinations = ["plugins/visualization/skills/mermaid/references/mermaid-diagrams.md"]
+
+[tasks.mermaid_license]
+inputs = ["packaging/sources/mermaid/LICENSE"]
+[[tasks.mermaid_license.outputs]]
+source = "packaging/sources/mermaid/LICENSE"
+destinations = ["plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/LICENSE", "plugins/visualization/licenses/mermaid/LICENSE"]
+
+[tasks.mermaid_refresh]
+inputs = ["scripts/update_mermaid_catalog.py"]
+command = ["{python}", "scripts/update_mermaid_catalog.py", "--snapshot-only", "--fetch", "--save-upstream", "_out/upstream.json"]
+automatic = false
+cache = false
+timeout = 300
+[[tasks.mermaid_refresh.outputs]]
+source = "_out/upstream.json"
+destinations = ["packaging/sources/mermaid/upstream.json"]
+
+[tasks.visual_previews]
+inputs = ["scripts/tests/visuals/generate.py", "scripts/tests/visuals/render_corpus.cjs", "scripts/tests/visuals/mermaid-fixtures/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/examples/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/src/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/dist/**", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/styles/agentic-visuals.css", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/assemble.py", "plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/**"]
+command = ["{python}", "scripts/tests/visuals/generate.py", "--skip-build-check", "--output", "_out/corpus"]
+automatic = false
+needs = ["visual_library", "mermaid_license"]
+tools = ["node", "tsc"]
+receipt = ".local/context/visual-library-previews.receipt.json"
+[[tasks.visual_previews.outputs]]
+source = "_out/corpus"
+destinations = [".local/context/visual-library-previews"]
+directory = true

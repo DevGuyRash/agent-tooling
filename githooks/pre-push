@@ -1,9 +1,5 @@
 #!/usr/bin/env sh
 set -eu
 
-if ! command -v just >/dev/null 2>&1; then
-  echo "error: just is required for this repo's managed pre-push hook" >&2
-  exit 1
-fi
-
-just ci
+root=$(git rev-parse --show-toplevel)
+exec python3 -B "$root/scripts/artifacts.py" --repo "$root" pre-push "$@"
