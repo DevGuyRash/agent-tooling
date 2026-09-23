@@ -1,7 +1,7 @@
 {
   "name": "agentic-design-and-evaluation",
-  "version": "1.1.3",
-  "description": "Design AI prompts and context, audit delivered skills and plugins, and conduct domain-general comparisons with one shared foundation.",
+  "version": "1.2.0",
+  "description": "Design AI instructions and context, assess skills and plugins, compare alternatives, and make supported improvements from retained evidence.",
   "author": {
     "name": "Agent Tooling Contributors"
   },
@@ -13,13 +13,14 @@
     "plugins",
     "audit",
     "split-testing",
-    "comparative-evidence"
+    "comparative-evidence",
+    "self-healing"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Agentic Design & Evaluation",
-    "shortDescription": "Design prompts and context; audit and compare",
-    "longDescription": "Design AI prompts and context, audit delivered skills and plugins, and conduct domain-general comparisons with one shared foundation.",
+    "shortDescription": "Design, compare, and improve from evidence",
+    "longDescription": "Design AI instructions and context, assess skills and plugins, compare alternatives, and make supported improvements from retained evidence.",
     "developerName": "Agent Tooling Contributors",
     "category": "Developer Tools",
     "capabilities": [

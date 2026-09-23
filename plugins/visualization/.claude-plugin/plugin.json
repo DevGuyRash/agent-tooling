@@ -1,0 +1,10 @@
+{
+  "name": "visualization",
+  "version": "0.1.0",
+  "description": "Author useful visuals and Mermaid diagrams with task-appropriate composition, faithful sources, and explicit delivery requirements.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "displayName": "Visualization"
+}

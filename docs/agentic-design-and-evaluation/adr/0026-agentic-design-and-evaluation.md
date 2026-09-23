@@ -1,6 +1,6 @@
 # ADR 0026: Deliver four capabilities as one complete plugin
 
-- Status: Accepted
+- Status: Superseded by ADR 0027 for capability composition; the complete-plugin distribution boundary remains applicable.
 - Scope: Agentic Design & Evaluation packaging and resource ownership
 
 ## Context

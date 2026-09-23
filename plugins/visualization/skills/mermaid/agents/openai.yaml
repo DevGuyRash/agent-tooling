@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mermaid"
+  short_description: "Author faithful Mermaid diagrams"
+  default_prompt: "Use $mermaid for this visual request."

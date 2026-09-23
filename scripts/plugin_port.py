@@ -462,7 +462,14 @@ def normalize_mcp_config(data: dict[str, Any], *, target: str) -> dict[str, Any]
     return {"mcpServers": normalized}
 
 
+def is_private_operational(path: Path, root: Path) -> bool:
+    """Repository-local evidence and runtime state are not plugin payloads."""
+    return any(part == ".local" or part.startswith(".local-") for part in path.relative_to(root).parts)
+
+
 def is_generated_junk(path: Path, root: Path) -> bool:
+    if is_private_operational(path, root):
+        return True
     relative = path.relative_to(root)
     if relative.name in GENERATED_JUNK_DIRECTORY_NAMES:
         return True
@@ -499,8 +506,11 @@ def validate_symlink_tree(root: Path, *, exit_code: int = EXIT_USER_ERROR) -> No
         onerror=remember_walk_error,
         followlinks=False,
     ):
+        directory_names[:] = [name for name in directory_names if not is_private_operational(Path(directory) / name, root)]
         for name in sorted((*directory_names, *file_names)):
             link = Path(directory) / name
+            if is_private_operational(link, root):
+                continue
             if not link.is_symlink():
                 continue
             relative = link.relative_to(root).as_posix()

@@ -19,8 +19,8 @@ from scripts import plugin_port
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / 'plugins' / 'agentic-design-and-evaluation'
-SLUGS = {'prompt-context-design', 'skill-auditor', 'split-testing', 'foundational-knowledge'}
-RETIRED = {'skill-auditor', 'split-testing'}
+SLUGS = {'prompt-context-design', 'skill-auditor', 'split-testing', 'foundational-knowledge', 'self-healing'}
+RETIRED = {'skill-auditor', 'split-testing', 'friction-diagnostics'}
 
 
 def read_json(path):
@@ -70,6 +70,32 @@ class VisualConsumerHTML(HTMLParser):
 
 
 class AgenticPackageTests(unittest.TestCase):
+    def test_independent_visualization_delivery_has_its_own_catalog_and_license(self):
+        source = REPO / 'plugins/visualization'
+        expected = (source / 'skills/mermaid/references/mermaid-diagrams.md').read_bytes()
+        license_bytes = (REPO / 'packaging/sources/mermaid/LICENSE').read_bytes()
+        with tempfile.TemporaryDirectory(prefix='visualization-consumer-') as temporary:
+            root = Path(temporary)
+            for host in ('codex', 'claude'):
+                target = root / host
+                result = subprocess.run([sys.executable, str(REPO / 'scripts/plugin_port.py'), 'convert',
+                    str(source), '--to', host, '--out', str(target), '--mode', 'strict', '--summary', 'json'],
+                    cwd=root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                catalog = target / 'skills/mermaid/references/mermaid-diagrams.md'
+                self.assertEqual(catalog.read_bytes(), expected)
+                self.assertEqual((target / 'licenses/mermaid/LICENSE').read_bytes(), license_bytes)
+                self.assertIn('Documentation source:', catalog.read_text())
+                self.assertIn('https://', catalog.read_text())
+                self.assertNotIn('packaging/sources/', catalog.read_text())
+                self.assertFalse(list(target.rglob('mermaid.min.js')))
+
+    def test_self_healing_distribution_is_guidance_with_resolvable_resources(self):
+        skill = PLUGIN / 'skills/self-healing'
+        files = {path.relative_to(skill).as_posix() for path in skill.rglob('*') if path.is_file()}
+        self.assertEqual(files, {'SKILL.md', 'agents/openai.yaml', 'references/investigation.md'})
+        self.assertFalse((PLUGIN / 'hooks').exists())
+
     def exercise_converted_visual_consumer(self, staged, cwd, expected_assets):
         """Use the converted runtime/exporter; no compilation or source imports."""
         node = shutil.which('node')
@@ -215,7 +241,7 @@ process.stdout.write(report.innerHTML);
             if host == 'claude':
                 self.assertEqual(entry['version'], claude['version'])
 
-    def test_four_entries_have_consistent_portable_and_ui_metadata(self):
+    def test_entries_have_consistent_portable_and_ui_metadata(self):
         roots = {p.parent.name: p for p in (PLUGIN / 'skills').glob('*/SKILL.md')}
         self.assertEqual(set(roots), SLUGS)
         for slug, path in roots.items():
@@ -256,7 +282,7 @@ process.stdout.write(report.innerHTML);
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / 'source'
-            shutil.copytree(PLUGIN, source)
+            shutil.copytree(PLUGIN, source, ignore=plugin_port.copytree_generated_junk_ignore(PLUGIN))
             cwd = root / 'consumer'
             cwd.mkdir()
             artifacts = []

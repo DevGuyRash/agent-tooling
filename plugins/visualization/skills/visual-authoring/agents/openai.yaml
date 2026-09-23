@@ -1,0 +1,4 @@
+interface:
+  display_name: "Visual Authoring"
+  short_description: "Create useful SVG and HTML visuals"
+  default_prompt: "Use $visual-authoring for this visual request."

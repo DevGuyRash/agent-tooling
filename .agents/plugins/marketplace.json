@@ -41,18 +41,6 @@
       "category": "Productivity"
     },
     {
-      "name": "friction-diagnostics",
-      "source": {
-        "source": "local",
-        "path": "./plugins/friction-diagnostics"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Diagnostics"
-    },
-    {
       "name": "goalspec",
       "source": {
         "source": "local",
@@ -111,7 +99,7 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Developer Tools",
-      "description": "Design prompts and context; audit and compare"
+      "description": "Design, compare, and improve from evidence"
     },
     {
       "name": "chatgpt-browser",
@@ -125,6 +113,19 @@
       },
       "category": "Productivity",
       "description": "Operate ChatGPT reliably through an authorized browser"
+    },
+    {
+      "name": "visualization",
+      "source": {
+        "source": "local",
+        "path": "./plugins/visualization"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity",
+      "description": "Author useful visuals and Mermaid diagrams"
     }
   ]
 }

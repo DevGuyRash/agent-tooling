@@ -31,6 +31,18 @@ def read_json(path: Path) -> dict[str, object]:
 
 
 class PluginPortTests(unittest.TestCase):
+    def test_private_operational_state_is_outside_converted_payload(self) -> None:
+        source = self.root / 'source'
+        self.write_codex_plugin(source)
+        write(source / '.local/context/private.md', 'retained private evidence')
+        write(source / '.local-test/reports/private.json', '{"private":true}')
+        (source / '.local/browser-socket').symlink_to('/missing-private-runtime-socket')
+        output = self.root / 'converted'
+        plugin_port.convert_plugin(source, 'claude', output, mode='strict', overwrite=False)
+        self.assertFalse((output / '.local').exists())
+        self.assertFalse((output / '.local-test').exists())
+        self.assertTrue((output / 'skills/authoring-goals/SKILL.md').is_file())
+
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory(prefix="plugin-port-test-")
         self.root = Path(self.tmpdir.name)

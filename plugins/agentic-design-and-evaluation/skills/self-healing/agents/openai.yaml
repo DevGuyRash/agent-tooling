@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self-Healing"
+  short_description: "Capture evidence and make supported improvements"
+  default_prompt: "Use $self-healing to investigate this observation or improvement opportunity within the current mandate."

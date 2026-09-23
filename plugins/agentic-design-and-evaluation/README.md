@@ -1,12 +1,13 @@
 # Agentic Design & Evaluation
 
-Design useful AI instructions and context, assess delivered skills and plugins, and obtain comparative evidence across domains. Four independently callable entries share one complete foundation:
+Design useful AI instructions and context, assess delivered skills and plugins, and obtain comparative evidence across domains. Five independently callable entries share one complete foundation:
 
 | Entry | Use it for |
 | --- | --- |
 | [Prompt and Context Design](skills/prompt-context-design/SKILL.md) | Writing, revising, or assessing prompts and context; instruction content for new skills; continuity and delegation. |
 | [Skill Auditor](skills/skill-auditor/SKILL.md) | Reviewing an existing skill or plugin's instructions, discovery, resources, composition, execution, and usefulness. |
 | [Split Testing](skills/split-testing/SKILL.md) | Designing, conducting, and interpreting a genuine comparison, including non-AI work. This is the sole maintained owner of comparative methodology. |
+| [Self-Healing](skills/self-healing/SKILL.md) | Retaining consequential observations and making supported improvements across domains, including a warranted no-change result. |
 | [Foundational Knowledge](skills/foundational-knowledge/SKILL.md) | Understanding the shared knowledge and the governing architecture's authoring scope. |
 
 A request to write a prompt can finish with the prompt. Ordinary draft checking is part of authoring. A comparison that needs new observations includes obtaining them when authorized and feasible.
@@ -36,11 +37,11 @@ Split Testing's [workspace helper](skills/split-testing/references/workspaces.md
 
 Its [visual components](skills/split-testing/assets/visuals/catalog.md) support composable comparison reports, optional workspace navigation, focused evidence inspection and grounded interactive views, with a browser-ready bundle and an optional Python 3.10+ assembler for a single offline HTML deliverable. Report readers need only a modern browser. [Development and assembly guidance](skills/split-testing/assets/visuals/PACKAGING.md) separates report authoring from the pinned Node.js/TypeScript development setup.
 
-Friction Diagnostics is installed separately for incident capture and mending. Its records can inform an authorized investigation.
+Self-Healing uses the executor's available tools to preserve observations, investigate evidence and carry out supported improvements. Its [investigation guidance](skills/self-healing/references/investigation.md) addresses reproduction, intervention choice, tool necessity and useful completion.
 
 ## Installation migration
 
-This package replaces the plugin identities `skill-auditor` and `split-testing`. Install and verify `agentic-design-and-evaluation@agent-tooling` on each intended host before removing those two selected obsolete installations. Preserve unrelated plugins and scopes. Existing sessions may retain the former cached instructions; use a fresh session to see the newly installed catalog.
+This package replaces the plugin identities `skill-auditor`, `split-testing`, and `friction-diagnostics`. Install and verify `agentic-design-and-evaluation@agent-tooling` on each intended host before retiring those selected installations. Preserve saved observations, native evidence and unrelated plugins. Retire the former Friction Diagnostics command hooks in their actual installation scopes. Use a fresh session to resolve the installed catalog and resources.
 
 For this repository, use `scripts/install-all --include agentic-design-and-evaluation` from the repository root after publication to its canonical GitHub marketplace. Omit `--source` for normal installation. The installer bootstraps selected packages; removing old catalog entries does not automatically remove old installed identities. Follow the repository's explicit selected-retirement procedure and host CLI discovery rather than editing caches by hand.
 

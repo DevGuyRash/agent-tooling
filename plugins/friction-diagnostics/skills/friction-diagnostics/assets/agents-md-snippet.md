@@ -1,3 +1,0 @@
-## Friction diagnostics
-
-WHEN `.local/reports/friction/known-traps.md` exists THEN you SHALL read it before acting (it is at most 15 one-line traps). WHEN reality diverges from what you predicted AND recording it would change a future session's behavior THEN you SHALL file it at that moment using the `friction-diagnostics` skill. WHEN the divergence matches a known trap or an open event THEN you SHALL file `--recur <event-id>` instead of a new event. You SHALL NOT file outcomes you predicted or engineered (intended test failures, expected error paths, probes), nor task status. WHEN you filed nothing AND the user did not raise friction diagnostics THEN you SHALL NOT mention friction diagnostics, or the decision not to file, anywhere in your response.
