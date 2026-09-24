@@ -4,7 +4,7 @@
   "license": "MIT",
   "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.0.0.tgz",
   "packageIntegrity": "sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==",
-  "artifactSha256": "5d0da1e481c6c29902b4dcb4dad8e6e641decf3486a4609e904a404b0154170a",
+  "artifactSha256": "8cf1eb89bbf54f66153f49a6cad4d01664d28b85eb507152b4daa0095bf0c911",
   "upstreamArtifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
   "localPatches": [
     {
@@ -20,6 +20,31 @@
     {
       "id": "venn-measured-name-note-regions",
       "description": "Measure connected styled name and note rows, then place them within their semantic regions using bounded interval search. Preserve source, note identities, set values and circle geometry; expose an actionable diagnostic when placement fails.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "diamond-callback-ownership",
+      "description": "Use the decision shape's own intersection helper when the block renderer copies its callback onto a graph node. Preserve polygon and endpoint geometry.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "architecture-group-scoped-alignments",
+      "description": "Infer grid alignments within each declared parent group; preserve explicit cross-group author hints. Prevent unrelated services and junctions from being forced inside group boundaries.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "architecture-owned-layout-lifecycle",
+      "description": "Own the temporary Cytoscape container directly, remove it after construction, and release each numerical layout core on preparation, layout or drawing failure and after successful output.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "elk-report-layout-postprocessor",
+      "description": "Expose a scoped numerical ELK postprocessor and preserve its obstacle-aware routes through native adaptation; keep native straightening for untouched layouts and restore the prior processor after each render.",
+      "reproducer": "scripts/patch_mermaid_vendor.py"
+    },
+    {
+      "id": "architecture-measured-service-footprints",
+      "description": "Use complete measured service footprints for architecture spacing and group bounds; retain icon anchors and provide scoped shared routing for complete group connections and their qualifiers.",
       "reproducer": "scripts/patch_mermaid_vendor.py"
     }
   ],

@@ -1,0 +1,357 @@
+[
+  {
+    "name": "wide-group-right-border",
+    "source": "architecture-beta\n  group wide(cloud)[Wider source group]\n  group receiving(cloud)[Receiving group]\n  service a(server)[First] in wide\n  service b(server)[Second] in wide\n  service c(server)[Third] in wide\n  service d(server)[Fourth] in wide\n  service e(server)[Fifth] in wide\n  service destination(server)[Destination] in receiving\n  align row a b c d e destination\n  a:R -- L:b\n  b:R -- L:c\n  c:R -- L:d\n  d:R -- L:e\n  a{group}:R -- L:destination{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "tall-caption-bottom-border",
+    "source": "architecture-beta\n group g(cloud)[Source group]\n service a(server)[Long wrapped source caption] in g\n service b(server)[Target]\n a{group}:B --> T:b",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-L-L-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> L:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-L-R-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> R:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-L-T-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> T:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-L-B-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> B:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-R-L-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> L:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-R-R-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> R:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-R-T-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> T:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-R-B-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> B:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-T-L-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> L:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-T-R-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> R:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-T-T-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> T:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-T-B-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> B:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-B-L-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> L:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-B-R-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> R:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-B-T-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> T:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-B-B-height-104",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> B:b{group}\n",
+    "captionHeight": 104
+  },
+  {
+    "name": "group-directions-L-L-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> L:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-L-R-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> R:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-L-T-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> T:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-L-B-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:L --> B:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-R-L-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> L:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-R-R-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> R:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-R-T-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> T:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-R-B-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:R --> B:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-T-L-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> L:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-T-R-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> R:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-T-T-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> T:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-T-B-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:T --> B:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-B-L-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> L:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-B-R-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> R:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-B-T-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> T:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-directions-B-B-height-160",
+    "source": "architecture-beta\n  group source(cloud)[Source]\n  group target(cloud)[Target]\n  service a(server)[Source service] in source\n  service b(server)[Target service] in target\n  a{group}:B --> B:b{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "sibling-groups-in-common-parent",
+    "source": "architecture-beta\n group p(cloud)[Common parent]\n group g(cloud)[First group] in p\n group h(cloud)[Second group] in p\n service a(server)[First] in g\n service b(server)[Second] in h\n a{group}:B --> T:b{group}",
+    "captionHeight": 160
+  },
+  {
+    "name": "nested-group-to-service-in-parent",
+    "source": "architecture-beta\n group p(cloud)[Common parent]\n group g(cloud)[First group] in p\n service a(server)[First] in g\n service b(server)[Second] in p\n a{group}:R --> L:b",
+    "captionHeight": 160
+  },
+  {
+    "name": "service-in-parent-to-nested-group",
+    "source": "architecture-beta\n group p(cloud)[Common parent]\n group g(cloud)[Second group] in p\n service a(server)[First] in p\n service b(server)[Second] in g\n a:R --> L:b{group}",
+    "captionHeight": 160
+  },
+  {
+    "name": "group-to-junction",
+    "source": "architecture-beta\n group g(cloud)[First group]\n service a(server)[First] in g\n junction j\n a{group}:R --> L:j",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-to-group",
+    "source": "architecture-beta\n group g(cloud)[Second group]\n service a(server)[Second] in g\n junction j\n j:R --> L:a{group}",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-L-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:L --> L:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-L-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:L --> L:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-R-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:L --> R:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-R-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:L --> R:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-T-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:L --> T:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-T-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:L --> T:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-B-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:L --> B:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-L-B-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:L --> B:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-L-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:R --> L:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-L-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:R --> L:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-R-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:R --> R:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-R-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:R --> R:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-T-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:R --> T:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-T-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:R --> T:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-B-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:R --> B:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-R-B-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:R --> B:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-L-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:T --> L:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-L-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:T --> L:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-R-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:T --> R:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-R-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:T --> R:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-T-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:T --> T:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-T-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:T --> T:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-B-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:T --> B:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-T-B-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:T --> B:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-L-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:B --> L:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-L-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:B --> L:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-R-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:B --> R:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-R-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:B --> R:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-T-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:B --> T:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-T-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:B --> T:a{group}\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-B-False",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  a{group}:B --> B:j\n",
+    "captionHeight": 160
+  },
+  {
+    "name": "junction-side-ownership-B-B-True",
+    "source": "architecture-beta\n  group g(cloud)[Group]\n  service a(server)[Service] in g\n  junction j\n  j:B --> B:a{group}\n",
+    "captionHeight": 160
+  }
+]

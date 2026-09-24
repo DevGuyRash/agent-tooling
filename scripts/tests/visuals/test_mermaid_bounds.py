@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused contracts for Mermaid full-drawing bounds."""
+"""Focused contracts for Mermaid bounds, inherited themes and failure recovery."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,7 +33,7 @@ class MermaidBoundsTests(unittest.TestCase):
                     "commonjs",
                     "--outDir",
                     output,
-                    str(VISUALS / "src/mermaid.ts"),
+                    str(VISUALS / "src/index.ts"),
                 ],
                 capture_output=True,
                 text=True,
@@ -48,6 +48,16 @@ class MermaidBoundsTests(unittest.TestCase):
             )
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
             self.assertIn("Mermaid bounds contract passed", check.stdout)
+            for name in ["context", "failure"]:
+                with self.subTest(contract=name):
+                    result = subprocess.run(
+                        [node, str(HERE / f"mermaid_{name}_contract.cjs"), output],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(f"Mermaid {name} contract passed", result.stdout)
 
 
 if __name__ == "__main__":

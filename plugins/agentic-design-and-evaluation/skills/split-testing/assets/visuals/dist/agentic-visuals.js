@@ -8194,6 +8194,7 @@ define("structured", ["require", "exports", "core"], function (require, exports,
 define("graph-layout", ["require", "exports", "text-layout"], function (require, exports, text_layout_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.routeOrthogonal = routeOrthogonal;
     exports.layoutGraph = layoutGraph;
     const center = (rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
     const inflate = (rect, space) => ({ x: rect.x - space, y: rect.y - space, width: rect.width + space * 2, height: rect.height + space * 2 });
@@ -8251,10 +8252,11 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
         }
     }
     /** Orthogonal visibility-grid search. Obstacles, rather than node order, determine detours. */
-    function route(start, finish, obstacles) {
+    function routeOrthogonal(start, finish, obstacles, directions = {}) {
         if (samePoint(start, finish))
             return [start];
-        const extent = (0, text_layout_4.unionBounds)(obstacles, 28);
+        const extent = (0, text_layout_4.unionBounds)(directions.start || directions.finish
+            ? [...obstacles, { ...start, width: 0, height: 0 }, { ...finish, width: 0, height: 0 }] : obstacles, 28);
         const xs = [...new Set([start.x, finish.x, extent.x, extent.x + extent.width, ...obstacles.flatMap(rect => [rect.x, rect.x + rect.width])])].sort((a, b) => a - b);
         const ys = [...new Set([start.y, finish.y, extent.y, extent.y + extent.height, ...obstacles.flatMap(rect => [rect.y, rect.y + rect.height])])].sort((a, b) => a - b);
         // Native font metrics are fractional; equivalent inflated boundaries can differ by an ULP.
@@ -8298,6 +8300,12 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
                 if (x < 0 || x >= xs.length || y < 0 || y >= ys.length)
                     continue;
                 const nextPoint = { x: xs[x], y: ys[y] };
+                if (directions.start && samePoint(nextPoint, start))
+                    continue;
+                if (current.key === initial.key && directions.start && (dx !== directions.start.x || dy !== directions.start.y))
+                    continue;
+                if (samePoint(nextPoint, finish) && directions.finish && (dx !== -directions.finish.x || dy !== -directions.finish.y))
+                    continue;
                 if (!clear(point, nextPoint))
                     continue;
                 const cost = current.cost + Math.abs(nextPoint.x - point.x) + Math.abs(nextPoint.y - point.y) + (current.direction && current.direction !== direction ? 18 : 0);
@@ -8419,7 +8427,7 @@ define("graph-layout", ["require", "exports", "text-layout"], function (require,
             const from = stub(first, sides[edge.index].source, clearance), to = stub(last, sides[edge.index].target, clearance);
             const labelLeft = { x: edge.box.x, y: edge.box.y + edge.box.height / 2 }, labelRight = { x: edge.box.x + edge.box.width, y: labelLeft.y };
             const before = stub(labelLeft, "left", clearance), after = stub(labelRight, "right", clearance);
-            edge.points = simplify([first, ...route(from, before, obstacles), labelLeft, labelRight, ...route(after, to, obstacles), last]);
+            edge.points = simplify([first, ...routeOrthogonal(from, before, obstacles), labelLeft, labelRight, ...routeOrthogonal(after, to, obstacles), last]);
             const prior = edge.points[edge.points.length - 2], length = Math.hypot(last.x - prior.x, last.y - prior.y), ux = (last.x - prior.x) / length, uy = (last.y - prior.y) / length;
             edge.arrow = [last, { x: last.x - ux * 9 - uy * 4, y: last.y - uy * 9 + ux * 4 }, { x: last.x - ux * 9 + uy * 4, y: last.y - uy * 9 - ux * 4 }];
         }
@@ -9175,7 +9183,275 @@ define("figure-tools", ["require", "exports", "floating-panel", "figures", "figu
         };
     }
 });
-define("mermaid", ["require", "exports", "figures", "identity"], function (require, exports, figures_7, identity_4) {
+define("elk-layout", ["require", "exports", "graph-layout", "text-layout"], function (require, exports, graph_layout_2, text_layout_6) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.segmentCrossesBox = segmentCrossesBox;
+    exports.repairElkLayout = repairElkLayout;
+    const center = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    const inflate = (box, gap) => ({ x: box.x - gap, y: box.y - gap, width: box.width + gap * 2, height: box.height + gap * 2 });
+    const overlap = (a, b, gap = 0) => a.x < b.x + b.width + gap && a.x + a.width + gap > b.x && a.y < b.y + b.height + gap && a.y + a.height + gap > b.y;
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+    const boxOf = (node) => ({ x: node.x, y: node.y, width: node.width, height: node.height });
+    const measurable = (box) => [box.x, box.y, box.width, box.height].every(finite) && box.width > 0 && box.height > 0;
+    /** Preserve vertical placement and move only residual collisions rightward.
+     * Forbidden intervals make this a finite projection, not an iterative force
+     * simulation whose stopping condition could leave some boxes overlapping.
+     */
+    function separateResidualBoxes(nodes, gap) {
+        const placed = [];
+        const order = [...nodes].sort((a, b) => a.x - b.x || a.y - b.y || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        for (const node of order) {
+            const intervals = placed.filter(box => node.y < box.y + box.height + gap && node.y + node.height + gap > box.y)
+                .map(box => [box.x - node.width - gap, box.x + box.width + gap]).sort((a, b) => a[0] - b[0]);
+            let x = node.x;
+            for (const [left, right] of intervals)
+                if (x > left && x < right)
+                    x = right;
+            node.x = x;
+            placed.push(boxOf(node));
+        }
+    }
+    /** A segment entering a box's interior, including diagonal engine routes. */
+    function segmentCrossesBox(a, b, box) {
+        const epsilon = 1e-6;
+        let low = 0, high = 1;
+        for (const [origin, delta, minimum, maximum] of [
+            [a.x, b.x - a.x, box.x + epsilon, box.x + box.width - epsilon],
+            [a.y, b.y - a.y, box.y + epsilon, box.y + box.height - epsilon],
+        ]) {
+            if (Math.abs(delta) <= epsilon) {
+                if (origin < minimum || origin > maximum)
+                    return false;
+            }
+            else {
+                const p = (minimum - origin) / delta, q = (maximum - origin) / delta;
+                low = Math.max(low, Math.min(p, q));
+                high = Math.min(high, Math.max(p, q));
+            }
+            if (low > high)
+                return false;
+        }
+        return high >= low;
+    }
+    function pointsOf(edge) {
+        const section = edge.sections?.[0];
+        return section ? [section.startPoint, ...(section.bendPoints || []), section.endPoint] : [];
+    }
+    function crosses(points, box) {
+        return points.slice(1).some((point, index) => segmentCrossesBox(points[index], point, box));
+    }
+    function facing(box, point) {
+        const c = center(box), x = point.x - c.x, y = point.y - c.y;
+        return Math.abs(x) / box.width >= Math.abs(y) / box.height ? x >= 0 ? 'right' : 'left' : y >= 0 ? 'bottom' : 'top';
+    }
+    function port(box, side, fraction) {
+        const margin = Math.min(14, Math.min(box.width, box.height) / 3);
+        return side === 'left' || side === 'right'
+            ? { x: box.x + (side === 'right' ? box.width : 0), y: box.y + margin + (box.height - 2 * margin) * fraction }
+            : { x: box.x + margin + (box.width - 2 * margin) * fraction, y: box.y + (side === 'bottom' ? box.height : 0) };
+    }
+    function stub(point, side, gap) {
+        return { x: point.x + (side === 'left' ? -gap : side === 'right' ? gap : 0), y: point.y + (side === 'top' ? -gap : side === 'bottom' ? gap : 0) };
+    }
+    /** Repair incomplete flat ELK geometry without changing source, graph topology,
+     * node sizes or the selected layout. Compound frames and multi-section edges
+     * retain the native hierarchy-aware adapter; their coordinates have other owners.
+     */
+    async function repairElkLayout(graph, layout) {
+        const nodes = graph.children || [], edges = graph.edges || [];
+        if (!nodes.length || nodes.some(node => node.children !== undefined || !measurable(node))
+            || edges.some(edge => edge.sources?.length !== 1 || edge.targets?.length !== 1 || (edge.sections?.length || 0) > 1))
+            return graph;
+        const nodeById = new Map(nodes.map(node => [node.id, node]));
+        const portById = new Map();
+        for (const node of nodes)
+            for (const p of node.ports || [])
+                portById.set(p.id, { node, port: p });
+        const owner = (id) => nodeById.get(id) || portById.get(id)?.node;
+        if (edges.some(edge => !owner(edge.sources[0]) || !owner(edge.targets[0])))
+            return graph;
+        const labels = edges.flatMap(edge => (edge.labels || []).map(label => ({ edge, label })));
+        const nodeOverlap = nodes.some((node, i) => nodes.slice(i + 1).some(other => overlap(boxOf(node), boxOf(other))));
+        const badRoute = (edge) => {
+            const points = pointsOf(edge), source = owner(edge.sources[0]), target = owner(edge.targets[0]);
+            if (points.length < 2 || points.some(point => !point || !finite(point.x) || !finite(point.y)))
+                return true;
+            if (nodes.some(node => node !== source && node !== target && crosses(points, boxOf(node))))
+                return true;
+            if (labels.some(other => other.edge !== edge && measurable(other.label) && crosses(points, other.label)))
+                return true;
+            return (edge.labels || []).some(label => {
+                if (!(label.width && label.height))
+                    return false;
+                if (!finite(label.x) || !finite(label.y))
+                    return true;
+                const box = label;
+                if (nodes.some(node => overlap(box, boxOf(node))))
+                    return true;
+                if (labels.some(other => other.label !== label && finite(other.label.x) && finite(other.label.y) && overlap(box, other.label)))
+                    return true;
+                return !crosses(points, inflate(box, 8));
+            });
+        };
+        if (!nodeOverlap && !edges.some(badRoute))
+            return graph;
+        const options = graph.layoutOptions || {};
+        const requestedGap = Number(options['elk.spacing.nodeNode'] ?? options['spacing.nodeNode'] ?? options['spacing.baseValue'] ?? 40);
+        const gap = Math.max(32, Number.isFinite(requestedGap) ? requestedGap : 40), clearance = 10;
+        if (nodes.some((node, i) => nodes.slice(i + 1).some(other => overlap(boxOf(node), boxOf(other), gap)))) {
+            // SporeOverlap is the bundled overlap-removal processor, not a replacement
+            // ranked graph layout. Give it only measured boxes and existing positions.
+            const separated = await layout({ id: graph.id, layoutOptions: { 'elk.algorithm': 'elk.sporeOverlap', 'elk.spacing.nodeNode': gap },
+                children: nodes.map(node => ({ id: node.id, x: node.x - gap / 2, y: node.y - gap / 2,
+                    width: node.width + gap, height: node.height + gap })), edges: [] });
+            const positions = new Map((separated.children || []).map(node => [node.id, node]));
+            for (const node of nodes) {
+                const position = positions.get(node.id);
+                if (!position || !finite(position.x) || !finite(position.y))
+                    throw new Error('ELK could not separate the diagram boxes. Choose another layout; the exact source remains available.');
+                node.x = position.x + gap / 2;
+                node.y = position.y + gap / 2;
+            }
+            separateResidualBoxes(nodes, gap);
+            if (nodes.some((node, i) => nodes.slice(i + 1).some(other => overlap(boxOf(node), boxOf(other), clearance * 2 + 1)))) {
+                throw new Error('ELK left overlapping diagram boxes. Choose another layout; the exact source remains available.');
+            }
+        }
+        const occupied = nodes.map(boxOf);
+        const plans = edges.map(edge => {
+            const source = owner(edge.sources[0]), target = owner(edge.targets[0]), from = center(boxOf(source)), to = center(boxOf(target));
+            const items = (edge.labels || []).filter(label => (label.width || 0) > 0 && (label.height || 0) > 0);
+            const width = Math.max(12, ...items.map(label => label.width)), height = Math.max(12, items.reduce((sum, label) => sum + label.height + 8, 0));
+            const desired = source === target ? { x: from.x + source.width / 2 + width / 2 + gap, y: from.y } : { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+            const candidates = [desired];
+            for (let ring = 1; ring <= 12; ring++)
+                for (const [dx, dy] of [[0, -1], [0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1]]) {
+                    candidates.push({ x: desired.x + dx * ring * (width / 2 + gap), y: desired.y + dy * ring * (height / 2 + gap) });
+                }
+            let box;
+            for (const candidate of candidates) {
+                const proposed = { x: candidate.x - width / 2, y: candidate.y - height / 2, width, height };
+                if (!occupied.some(other => overlap(proposed, other, clearance * 2 + 4))) {
+                    box = proposed;
+                    break;
+                }
+            }
+            if (!box) {
+                const bounds = (0, text_layout_6.unionBounds)(occupied);
+                box = { x: desired.x - width / 2, y: bounds.y + bounds.height + gap, width, height };
+            }
+            occupied.push(box);
+            let y = box.y;
+            for (const label of items) {
+                label.x = box.x + (box.width - label.width) / 2;
+                label.y = y;
+                y += label.height + 8;
+            }
+            const sourcePort = portById.get(edge.sources[0]), targetPort = portById.get(edge.targets[0]);
+            const suppliedPoint = (p) => p && finite(p.port.x) && finite(p.port.y)
+                ? { x: p.node.x + p.port.x + (p.port.width || 0) / 2, y: p.node.y + p.port.y + (p.port.height || 0) / 2 } : null;
+            const first = suppliedPoint(sourcePort), last = suppliedPoint(targetPort);
+            const sourceSide = facing(boxOf(source), first || center(box));
+            let targetSide = facing(boxOf(target), last || center(box));
+            if (source === target && sourceSide === targetSide && !last)
+                targetSide = { left: 'top', top: 'right', right: 'bottom', bottom: 'left' }[sourceSide];
+            return { edge, source, target, box, first, last, sourceSide, targetSide };
+        });
+        const counts = new Map(), used = new Map();
+        for (const plan of plans)
+            for (const end of ['source', 'target']) {
+                const key = JSON.stringify([plan[end].id, plan[end + 'Side']]);
+                counts.set(key, (counts.get(key) || 0) + 1);
+            }
+        const attachment = (plan, end) => {
+            const side = plan[end + 'Side'];
+            const key = JSON.stringify([plan[end].id, side]), n = (used.get(key) || 0) + 1;
+            used.set(key, n);
+            return (end === 'source' ? plan.first : plan.last) || port(boxOf(plan[end]), side, n / (counts.get(key) + 1));
+        };
+        const obstacles = occupied.map(box => inflate(box, clearance));
+        for (const plan of plans) {
+            const first = attachment(plan, 'source'), last = attachment(plan, 'target');
+            const from = stub(first, plan.sourceSide, clearance), to = stub(last, plan.targetSide, clearance);
+            const left = { x: plan.box.x, y: plan.box.y + plan.box.height / 2 }, right = { x: plan.box.x + plan.box.width, y: left.y };
+            const points = [first, ...(0, graph_layout_2.routeOrthogonal)(from, stub(left, 'left', clearance), obstacles), left, right,
+                ...(0, graph_layout_2.routeOrthogonal)(stub(right, 'right', clearance), to, obstacles), last];
+            const unique = points.filter((p, i) => !i || p.x !== points[i - 1].x || p.y !== points[i - 1].y);
+            plan.edge.sections = [{ ...(plan.edge.sections?.[0] || {}), id: plan.edge.sections?.[0]?.id || plan.edge.id + '--route',
+                    startPoint: unique[0], endPoint: unique[unique.length - 1], bendPoints: unique.slice(1, -1) }];
+        }
+        const scene = (0, text_layout_6.unionBounds)([...occupied, ...edges.flatMap(edge => pointsOf(edge).map(point => ({ ...point, width: 0, height: 0 })))], 16);
+        const dx = -scene.x, dy = -scene.y;
+        for (const node of nodes) {
+            node.x += dx;
+            node.y += dy;
+        }
+        for (const edge of edges) {
+            for (const point of pointsOf(edge)) {
+                point.x += dx;
+                point.y += dy;
+            }
+            for (const label of edge.labels || [])
+                if (finite(label.x) && finite(label.y)) {
+                    label.x += dx;
+                    label.y += dy;
+                }
+        }
+        graph.width = scene.width;
+        graph.height = scene.height;
+        // The native adapter must retain these obstacle-aware detours. Its cosmetic
+        // terminal straightening checks edge crossings but not node/label obstacles.
+        graph.__avPreserveRoutes = true;
+        return graph;
+    }
+});
+define("architecture-layout", ["require", "exports", "graph-layout", "elk-layout"], function (require, exports, graph_layout_3, elk_layout_1) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.routeArchitectureConnection = void 0;
+    const vectors = { L: { x: -1, y: 0 }, R: { x: 1, y: 0 }, T: { x: 0, y: -1 }, B: { x: 0, y: 1 } };
+    const move = (point, vector, distance) => ({ x: point.x + vector.x * distance, y: point.y + vector.y * distance });
+    const same = (a, b) => a.x === b.x && a.y === b.y;
+    /** Keep declared icon/group ports while routing outside the supplied footprints. */
+    const routeArchitectureConnection = input => {
+        const { start, end, obstacles } = input, fromDirection = vectors[input.sourceDirection], toDirection = vectors[input.targetDirection];
+        if (!fromDirection || !toDirection || ![start.x, start.y, end.x, end.y, ...obstacles.flatMap(box => [box.x, box.y, box.width, box.height])].every(Number.isFinite)) {
+            throw new TypeError('Architecture connections need finite measured bounds and L, R, T or B side directions.');
+        }
+        const space = Number.isFinite(input.clearance) ? Math.max(4, input.clearance) : 16;
+        for (const clearance of [space, space / 2, 2, 0]) {
+            const from = move(start, fromDirection, clearance), to = move(end, toDirection, clearance);
+            if (obstacles.some(box => (0, elk_layout_1.segmentCrossesBox)(start, from, box) || (0, elk_layout_1.segmentCrossesBox)(to, end, box)))
+                continue;
+            const padded = obstacles.map(box => ({ x: box.x - clearance, y: box.y - clearance, width: box.width + clearance * 2, height: box.height + clearance * 2 }));
+            let route;
+            try {
+                route = (0, graph_layout_3.routeOrthogonal)(from, to, padded, { start: fromDirection, finish: toDirection });
+            }
+            catch (error) {
+                if (!(error instanceof TypeError))
+                    throw error;
+                continue;
+            }
+            const points = [start, ...route, end].filter((point, i, all) => !i || !same(point, all[i - 1]));
+            if (points.length < 2 || points.slice(1).some((point, i) => obstacles.some(box => (0, elk_layout_1.segmentCrossesBox)(points[i], point, box))))
+                continue;
+            const first = points[1], beforeLast = points[points.length - 2];
+            if ((first.x - start.x) * fromDirection.x + (first.y - start.y) * fromDirection.y <= 0
+                || (beforeLast.x - end.x) * toDirection.x + (beforeLast.y - end.y) * toDirection.y <= 0)
+                continue;
+            // A qualifier follows an actual route segment, with space determined by it.
+            const segments = points.slice(1).map((point, i) => ({ a: points[i], b: point, length: Math.hypot(point.x - points[i].x, point.y - points[i].y) }));
+            const longest = segments.reduce((a, b) => b.length > a.length ? b : a);
+            return { points, label: { x: (longest.a.x + longest.b.x) / 2, y: (longest.a.y + longest.b.y) / 2 },
+                labelSpan: longest.length, labelAngle: longest.a.y === longest.b.y ? 0 : -90 };
+        }
+        throw new TypeError('The architecture connection cannot clear its measured frames. Increase spacing or select different attachment sides; the original source remains available.');
+    };
+    exports.routeArchitectureConnection = routeArchitectureConnection;
+});
+define("mermaid", ["require", "exports", "figures", "identity", "elk-layout", "architecture-layout"], function (require, exports, figures_7, identity_4, elk_layout_2, architecture_layout_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.scopeDiagram = scopeDiagram;
@@ -9184,6 +9460,30 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
     let renderQueue = Promise.resolve();
     let sequence = 0;
     const MIN_LAYOUT_WIDTH = 900;
+    /** Offscreen scenes have no report ancestor. Retain effective custom properties
+     * and inherited typography so theme-dependent paint participates in measurement.
+     * Do not copy display, visibility or layout from a potentially collapsed figure.
+     */
+    function diagramStyles(computed) {
+        const names = new Set(['font', 'color', 'color-scheme', 'letter-spacing', 'word-spacing', 'line-height', 'text-transform', 'direction', 'writing-mode']);
+        for (const name of Array.from(computed || []))
+            if (name.startsWith('--') || name.startsWith('font-'))
+                names.add(name);
+        return Object.fromEntries([...names].sort().map(name => [name, computed?.getPropertyValue(name).trim() || '']).filter(([, value]) => value));
+    }
+    function diagramStaging(document, styles, width) {
+        const staging = document.createElement('div');
+        staging.setAttribute('data-av-mermaid-staging', '');
+        staging.setAttribute('aria-hidden', 'true');
+        // Opacity suppresses paint without changing visibility or native geometry.
+        staging.style.cssText = 'position:absolute;left:-100000px;top:0;opacity:0;pointer-events:none;max-width:none;';
+        for (const [name, value] of Object.entries(styles))
+            staging.style.setProperty(name, value);
+        if (width !== undefined)
+            staging.style.setProperty('width', width + 'px');
+        document.body.appendChild(staging);
+        return staging;
+    }
     /** Scope renderer-owned IDs without changing exact source or relying on a family whitelist. */
     function scopeDiagram(svg, prefix) {
         const nodes = [svg, ...Array.from(svg.querySelectorAll('*'))];
@@ -9494,7 +9794,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
      * retained, but cannot clip actual glyphs, strokes or overflowing HTML labels.
      * Browser text metrics refine geometry; no source wording or value is changed.
      */
-    function diagramBounds(svg, document) {
+    function diagramBounds(svg, document, inheritedStyles = {}) {
         let bounds = (svg.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
         const vendorViewport = bounds.length === 4 && bounds.every(Number.isFinite) && bounds[2] > 0 && bounds[3] > 0;
         const pixels = (value) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? parseFloat(value) : 0;
@@ -9503,13 +9803,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
             const height = pixels(svg.getAttribute('height'));
             bounds = [0, 0, width, height];
         }
-        const staging = document.createElement('div');
-        staging.setAttribute('data-av-mermaid-staging', '');
-        staging.setAttribute('aria-hidden', 'true');
-        // opacity suppresses paint without changing inherited visibility, which native
-        // geometry and authored visibility rules both depend on during measurement.
-        staging.style.cssText = 'position:absolute;left:-100000px;top:0;opacity:0;pointer-events:none;';
-        document.body.appendChild(staging);
+        const staging = diagramStaging(document, inheritedStyles);
         staging.appendChild(svg);
         const originalStyle = svg.getAttribute('style');
         try {
@@ -9642,11 +9936,22 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
         }
         return false;
     }
+    /** Native themes derive related fills and text together. Mixing report colors
+     * into an authored palette can leave white edge labels on a light background.
+     * Font-only overrides still use the report palette.
+     */
+    function hasAuthoredPalette(config) {
+        if (typeof config.theme === 'string' && config.theme.trim())
+            return true;
+        const variables = config.themeVariables;
+        return !!variables && typeof variables === 'object' && !Array.isArray(variables)
+            && Object.keys(variables).some(name => name !== 'fontFamily' && name !== 'fontSize');
+    }
     function attachMermaid(root, ready) {
         const document = root.ownerDocument, view = document.defaultView;
         const diagrams = [...(root.matches('[data-av-mermaid]') ? [root] : []), ...Array.from(root.querySelectorAll('[data-av-mermaid]'))];
         const namespaces = new WeakMap(), keys = new WeakMap(), generations = new WeakMap();
-        const sourceFonts = new WeakMap();
+        const sourceDefaults = new WeakMap();
         const original = diagrams.map(element => ({ element, output: element.querySelector('[data-av-mermaid-output]'), children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector('[data-av-mermaid-status]'), text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), busy: element.getAttribute('aria-busy'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector('[data-av-zoom-target]'), attributes: Array.from(element.querySelector('[data-av-zoom-target]')?.attributes || []).map(attribute => [attribute.name, attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
         let stopped = false;
         let refreshStarted = false, resizeDirty = false, resizeJob = null;
@@ -9686,6 +9991,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 }
                 const source = element.getAttribute('data-av-mermaid-source') || '';
                 const css = view?.getComputedStyle?.(figure);
+                const inheritedStyles = diagramStyles(css);
                 const roles = { background: ['--av-plot', '#ffffff'], primaryColor: ['--av-sheet', '#f4f5fa'], primaryTextColor: ['--av-ink', '#172032'], primaryBorderColor: ['--av-line-strong', '#66758a'], lineColor: ['--av-axis', '#66758a'], secondaryColor: ['--av-subtle', '#ecf1f5'], tertiaryColor: ['--av-inspector-surface', '#f4edf6'], noteBkgColor: ['--av-inspector-surface', '#f4edf6'], noteTextColor: ['--av-ink', '#172032'], noteBorderColor: ['--av-line-strong', '#66758a'] };
                 const probes = document.createElement('span');
                 probes.setAttribute('data-av-review-ui', '');
@@ -9704,7 +10010,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                 }
                 const width = renderWidth(element, figure, output);
                 observedWidths.set(element, width);
-                const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config'), width]);
+                const key = JSON.stringify([source, palette, inheritedStyles, element.getAttribute('data-av-mermaid-config'), width]);
                 if (requested.get(element)?.key === key)
                     return requested.get(element).job;
                 if (keys.get(element) === key) {
@@ -9734,15 +10040,15 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                     const supplied = JSON.parse(element.getAttribute('data-av-mermaid-config') || '{}');
                     if (!supplied || Array.isArray(supplied) || typeof supplied !== 'object')
                         throw new Error('Mermaid configuration must be an object.');
-                    let sourceFont = sourceFonts.get(element);
+                    let sourceFont = sourceDefaults.get(element);
                     if (sourceFont?.source !== source) {
                         // Let the bundled parser interpret frontmatter and directives. Keep
-                        // only their font defaults, once per source; width/theme changes do
+                        // their font and palette choices, once per source; width/theme changes do
                         // not parse again. Rendering still receives the exact original text.
                         const parsed = runtime.parse ? await runtime.parse(source) : false;
                         const config = parsed && parsed.config || {};
-                        sourceFont = { source, nested: hasDiagramFont(config), family: typeof config.fontFamily === 'string' ? config.fontFamily : undefined, theme: typeof config.themeVariables?.fontFamily === 'string' ? config.themeVariables.fontFamily : undefined };
-                        sourceFonts.set(element, sourceFont);
+                        sourceFont = { source, nested: hasDiagramFont(config), family: typeof config.fontFamily === 'string' ? config.fontFamily : undefined, theme: typeof config.themeVariables?.fontFamily === 'string' ? config.themeVariables.fontFamily : undefined, palette: hasAuthoredPalette(config) };
+                        sourceDefaults.set(element, sourceFont);
                     }
                     if (stopped || generations.get(element) !== generation)
                         return;
@@ -9754,21 +10060,31 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                     // Empty (not null) disables Mermaid's global override of an explicit
                     // per-diagram font; null would restore the vendor's global default.
                     const fontFamily = sourceFont.family ?? supplied.fontFamily ?? (sourceFont.nested || hasDiagramFont(supplied) ? '' : themeFont);
-                    runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...palette, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_4.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
+                    const colorDefaults = sourceFont.palette || hasAuthoredPalette(supplied) ? {} : palette;
+                    runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...colorDefaults, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: (0, identity_4.fingerprint)(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
                     let id = 'av-mermaid-' + (++sequence);
                     while (document.getElementById(id) || document.getElementById('d' + id))
                         id = 'av-mermaid-' + (++sequence);
-                    const staging = document.createElement('div');
-                    staging.setAttribute('data-av-mermaid-staging', '');
-                    staging.setAttribute('aria-hidden', 'true');
-                    staging.style.cssText = `position:absolute;left:-100000px;top:0;width:${width}px;max-width:none;opacity:0;pointer-events:none;`;
-                    document.body.appendChild(staging);
-                    let result;
+                    const staging = diagramStaging(document, inheritedStyles, width);
+                    let result, previousPostprocessor = null, ownsPostprocessor = false;
+                    let previousArchitectureRouter = null, ownsArchitectureRouter = false;
                     try {
+                        if (runtime.setElkLayoutPostprocessor) {
+                            previousPostprocessor = runtime.setElkLayoutPostprocessor(elk_layout_2.repairElkLayout);
+                            ownsPostprocessor = true;
+                        }
+                        if (runtime.setArchitectureRouter) {
+                            previousArchitectureRouter = runtime.setArchitectureRouter(architecture_layout_1.routeArchitectureConnection);
+                            ownsArchitectureRouter = true;
+                        }
                         result = await runtime.render(id, source, staging);
                     }
                     finally {
                         staging.remove();
+                        if (ownsArchitectureRouter)
+                            runtime.setArchitectureRouter(previousArchitectureRouter);
+                        if (ownsPostprocessor)
+                            runtime.setElkLayoutPostprocessor(previousPostprocessor);
                     }
                     if (stopped || generations.get(element) !== generation)
                         return;
@@ -9790,7 +10106,7 @@ define("mermaid", ["require", "exports", "figures", "identity"], function (requi
                     const plot = output.querySelector('[data-av-plot]'), live = plot?.querySelector('[data-av-zoom-target]');
                     if (!plot || !live)
                         throw new Error('The diagram viewport is unavailable.');
-                    const bounds = diagramBounds(incoming, document);
+                    const bounds = diagramBounds(incoming, document, inheritedStyles);
                     // Preserve the viewport node and its handlers when a theme rerenders the diagram.
                     for (const name of ['id', 'class', 'viewBox', 'preserveAspectRatio', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) {
                         const value = incoming.getAttribute(name);
@@ -10512,7 +10828,7 @@ define("plot-navigation", ["require", "exports"], function (require, exports) {
         };
     }
 });
-define("interaction", ["require", "exports", "comparison-reader", "startup", "report-search", "inspectors", "item-selection", "utility-panels", "notifications", "command-bar", "review-targets", "text-layout", "layout-refinement", "figure-tools", "mermaid", "figures", "plot-navigation", "preferences", "notebook"], function (require, exports, comparison_reader_1, startup_1, report_search_1, inspectors_1, item_selection_4, utility_panels_1, notifications_1, command_bar_7, review_targets_4, text_layout_6, layout_refinement_1, figure_tools_1, mermaid_1, figures_8, plot_navigation_1, preferences_2, notebook_2) {
+define("interaction", ["require", "exports", "comparison-reader", "startup", "report-search", "inspectors", "item-selection", "utility-panels", "notifications", "command-bar", "review-targets", "text-layout", "layout-refinement", "figure-tools", "mermaid", "figures", "plot-navigation", "preferences", "notebook"], function (require, exports, comparison_reader_1, startup_1, report_search_1, inspectors_1, item_selection_4, utility_panels_1, notifications_1, command_bar_7, review_targets_4, text_layout_7, layout_refinement_1, figure_tools_1, mermaid_1, figures_8, plot_navigation_1, preferences_2, notebook_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.enhanceVisuals = enhanceVisuals;
@@ -12103,7 +12419,7 @@ define("interaction", ["require", "exports", "comparison-reader", "startup", "re
             select.parentNode?.insertBefore(wrap, select);
             wrap.appendChild(select);
             const measure = () => { if (cleaned)
-                return; const font = window?.getComputedStyle?.(select).font || '14px sans-serif', width = (0, text_layout_6.browserTextMeasure)(document, font) || text_layout_6.estimateTextWidth; let widest = 0; for (const option of Array.from(select.options))
+                return; const font = window?.getComputedStyle?.(select).font || '14px sans-serif', width = (0, text_layout_7.browserTextMeasure)(document, font) || text_layout_7.estimateTextWidth; let widest = 0; for (const option of Array.from(select.options))
                 widest = Math.max(widest, width(option.textContent || '')); wrap.style.setProperty('--av-select-content-width', Math.ceil(widest) + 'px'); };
             measure();
             void document.fonts?.ready.then(measure);
@@ -12176,7 +12492,7 @@ define("explorers", ["require", "exports", "core", "structured", "landscape"], f
         return (0, core_13.card)(input, `<div class="av-observatory" data-av-explorer>${(0, core_13.explorerControls)("Question", choices)}<div class="av-object-list">${issues || '<p class="av-empty">No unanswered questions supplied.</p>'}</div></div><details class="av-data" data-av-content-view="data"><summary>Complete unknowns map</summary>${complete}</details>`, "uncertainty");
     }
 });
-define("index", ["require", "exports", "model", "atelier", "preferences", "interaction", "explorers", "core", "structured", "quantitative", "qualitative", "landscape", "story", "notebook", "categories", "text-layout", "figures"], function (require, exports, model_1, atelier_1, preferences_3, interaction_1, explorers_1, core_14, structured_4, quantitative_3, qualitative_3, landscape_3, story_2, notebook_3, categories_4, text_layout_7, figures_9) {
+define("index", ["require", "exports", "model", "atelier", "preferences", "interaction", "explorers", "core", "structured", "quantitative", "qualitative", "landscape", "story", "notebook", "categories", "text-layout", "figures"], function (require, exports, model_1, atelier_1, preferences_3, interaction_1, explorers_1, core_14, structured_4, quantitative_3, qualitative_3, landscape_3, story_2, notebook_3, categories_4, text_layout_8, figures_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerVisualAdapter = exports.mermaidDiagram = exports.visualFigure = exports.browserTextMeasure = exports.createChartContext = exports.researchNotebook = exports.readingGuide = exports.comparisonLanes = exports.storyPanel = exports.reportBrief = exports.inlineText = exports.argumentMap = exports.decisionHistory = exports.constraintMap = exports.reliabilityProfile = exports.confidenceProvenance = exports.unknownsMap = exports.evidenceFreshness = exports.renderExtension = exports.effortTable = exports.nativeArtifactViewer = exports.scenarioExplorer = exports.failureTaxonomy = exports.evidenceLineage = exports.uncertaintyPanel = exports.disagreementMap = exports.evidenceExcerpts = exports.scatterPlot = exports.trajectory = exports.distribution = exports.intervalPlot = exports.pairedComparison = exports.heatmap = exports.conditionalRecommendations = exports.constraintSatisfaction = exports.coverageMatrix = exports.comparisonMatrix = exports.annotatedTable = exports.escapeText = exports.uncertaintyObservatory = exports.comparisonJourney = exports.enhanceVisuals = exports.sectionGroup = exports.reportSection = exports.reportSurface = exports.appearanceSettings = void 0;
@@ -12224,7 +12540,7 @@ define("index", ["require", "exports", "model", "atelier", "preferences", "inter
     Object.defineProperty(exports, "readingGuide", { enumerable: true, get: function () { return story_2.readingGuide; } });
     Object.defineProperty(exports, "researchNotebook", { enumerable: true, get: function () { return notebook_3.researchNotebook; } });
     Object.defineProperty(exports, "createChartContext", { enumerable: true, get: function () { return categories_4.createChartContext; } });
-    Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_7.browserTextMeasure; } });
+    Object.defineProperty(exports, "browserTextMeasure", { enumerable: true, get: function () { return text_layout_8.browserTextMeasure; } });
     Object.defineProperty(exports, "visualFigure", { enumerable: true, get: function () { return figures_9.visualFigure; } });
     Object.defineProperty(exports, "mermaidDiagram", { enumerable: true, get: function () { return figures_9.mermaidDiagram; } });
     Object.defineProperty(exports, "registerVisualAdapter", { enumerable: true, get: function () { return figures_9.registerVisualAdapter; } });

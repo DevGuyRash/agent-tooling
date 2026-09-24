@@ -158,4 +158,35 @@ function fixture() {
   assert.equal(rangeReads, 0, 'ancestor-hidden HTML text is not range-measured for expansion');
 }
 
-console.log('Mermaid bounds contract passed: clipped/transparent SVG text stays excluded and only visible HTML overflow may enlarge the scene.');
+// A report-scoped stroke can be the only paint on a C4/system boundary. In
+// the screenshot counterexample its lower edge disappeared during offscreen
+// measurement because var(--av-line-strong) had no report ancestor to resolve.
+for (const property of ['--av-line-strong', '--author-boundary']) {
+  const { document, svg } = fixture();
+  const baseComputed = document.defaultView.getComputedStyle;
+  document.defaultView.getComputedStyle = element => {
+    const base = baseComputed(element);
+    return {
+      ...base,
+      getPropertyValue(name) {
+        const value = base.getPropertyValue(name);
+        if (name !== 'stroke' || value !== `var(${property})`) return value;
+        for (let owner = element; owner; owner = owner.parentElement) {
+          const inherited = owner.style.getPropertyValue(property);
+          if (inherited) return inherited;
+        }
+        return 'none'; // An unresolved stroke variable has no initial paint.
+      },
+    };
+  };
+  const boundary = append(svg, 'rect', { fill: 'none', stroke: `var(${property})`, 'stroke-width': '2' });
+  boundary.getScreenCTM = () => matrix;
+  boundary.getBoundingClientRect = () => rect(5, 5, 135, 115);
+  const bounds = diagramBounds(svg, document, { [property]: '#445566' });
+  assert(bounds[0] + bounds[2] > 135 && bounds[1] + bounds[3] > 115,
+    'Theme-dependent boundaries, including author-defined roles, must remain inside the fitted scene');
+  assert.equal(boundary.getAttribute('stroke'), `var(${property})`, 'Measurement preserves the authored theme reference');
+  assert.equal(document.querySelectorAll('[data-av-mermaid-staging]').length, 0);
+}
+
+console.log('Mermaid bounds contract passed: clipped/transparent text stays excluded, visible HTML overflow and theme-dependent boundaries remain inside the scene.');

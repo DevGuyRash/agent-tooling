@@ -15,6 +15,9 @@ VENDOR = REPOSITORY / "plugins/agentic-design-and-evaluation/skills/split-testin
 
 
 class MermaidVendorPatchTests(unittest.TestCase):
+    def test_diamond_callback_survives_block_graph_copy(self):
+        subprocess.run(["node", str(REPOSITORY / "scripts/tests/visuals/diamond_intersection.cjs")], check=True)
+
     def test_venn_label_regions_preserve_membership(self):
         subprocess.run(["node", str(REPOSITORY / "scripts/tests/visuals/venn_geometry.cjs")], check=True)
 

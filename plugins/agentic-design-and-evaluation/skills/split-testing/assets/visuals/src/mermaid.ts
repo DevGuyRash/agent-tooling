@@ -1,15 +1,39 @@
 import { figureOf, figureTitle } from './figures';
 import { fingerprint } from './identity';
+import { repairElkLayout, ElkPostprocessor } from './elk-layout';
+import { routeArchitectureConnection, ArchitectureRouter } from './architecture-layout';
 interface MermaidRuntime {
   initialize(config: Record<string, unknown>): void;
   parse?(source: string): Promise<{ config?: Record<string, unknown> & { themeVariables?: Record<string, unknown> } } | false>;
   render(id: string, source: string, container?: Element): Promise<{ svg: string; bindFunctions?: (element: Element) => void }>;
   getRegisteredDiagramsMetadata(): { id: string }[];
+  setElkLayoutPostprocessor?(postprocessor: ElkPostprocessor | null): ElkPostprocessor | null;
+  setArchitectureRouter?(router: ArchitectureRouter | null): ArchitectureRouter | null;
 }
 let renderQueue: Promise<void> = Promise.resolve();
 let sequence = 0;
 const MIN_LAYOUT_WIDTH = 900;
 export interface DiagramController { refresh(): Promise<void>; whenIdle(): Promise<void>; cleanup(): void }
+type DiagramStyles = Readonly<Record<string, string>>;
+/** Offscreen scenes have no report ancestor. Retain effective custom properties
+ * and inherited typography so theme-dependent paint participates in measurement.
+ * Do not copy display, visibility or layout from a potentially collapsed figure.
+ */
+function diagramStyles(computed?: CSSStyleDeclaration): DiagramStyles {
+  const names = new Set(['font', 'color', 'color-scheme', 'letter-spacing', 'word-spacing', 'line-height', 'text-transform', 'direction', 'writing-mode']);
+  for (const name of Array.from(computed || [])) if (name.startsWith('--') || name.startsWith('font-')) names.add(name);
+  return Object.fromEntries([...names].sort().map(name => [name, computed?.getPropertyValue(name).trim() || '']).filter(([, value]) => value));
+}
+function diagramStaging(document: Document, styles: DiagramStyles, width?: number): HTMLElement {
+  const staging = document.createElement('div');
+  staging.setAttribute('data-av-mermaid-staging', ''); staging.setAttribute('aria-hidden', 'true');
+  // Opacity suppresses paint without changing visibility or native geometry.
+  staging.style.cssText = 'position:absolute;left:-100000px;top:0;opacity:0;pointer-events:none;max-width:none;';
+  for (const [name, value] of Object.entries(styles)) staging.style.setProperty(name, value);
+  if (width !== undefined) staging.style.setProperty('width', width + 'px');
+  document.body.appendChild(staging);
+  return staging;
+}
 /** Scope renderer-owned IDs without changing exact source or relying on a family whitelist. */
 export function scopeDiagram(svg: SVGElement, prefix: string): void {
   const nodes = [svg, ...Array.from(svg.querySelectorAll<Element>('*'))];
@@ -237,7 +261,7 @@ function paintedBounds(svg: SVGElement, document: Document, viewport: number[]):
  * retained, but cannot clip actual glyphs, strokes or overflowing HTML labels.
  * Browser text metrics refine geometry; no source wording or value is changed.
  */
-export function diagramBounds(svg: SVGElement, document: Document): number[] {
+export function diagramBounds(svg: SVGElement, document: Document, inheritedStyles: DiagramStyles = {}): number[] {
   let bounds = (svg.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
   const vendorViewport = bounds.length === 4 && bounds.every(Number.isFinite) && bounds[2] > 0 && bounds[3] > 0;
   const pixels = (value: string | null) => value && /^\d+(?:\.\d+)?(?:px)?$/.test(value.trim()) ? parseFloat(value) : 0;
@@ -246,12 +270,7 @@ export function diagramBounds(svg: SVGElement, document: Document): number[] {
     const height = pixels(svg.getAttribute('height'));
     bounds = [0, 0, width, height];
   }
-  const staging = document.createElement('div'); staging.setAttribute('data-av-mermaid-staging', '');
-  staging.setAttribute('aria-hidden', 'true');
-  // opacity suppresses paint without changing inherited visibility, which native
-  // geometry and authored visibility rules both depend on during measurement.
-  staging.style.cssText = 'position:absolute;left:-100000px;top:0;opacity:0;pointer-events:none;';
-  document.body.appendChild(staging); staging.appendChild(svg);
+  const staging = diagramStaging(document, inheritedStyles); staging.appendChild(svg);
   const originalStyle = svg.getAttribute('style');
   try {
     if (bounds[2] > 0 && bounds[3] > 0) {
@@ -347,11 +366,22 @@ function hasDiagramFont(config: Record<string, unknown>): boolean {
   return false;
 }
 
+/** Native themes derive related fills and text together. Mixing report colors
+ * into an authored palette can leave white edge labels on a light background.
+ * Font-only overrides still use the report palette.
+ */
+function hasAuthoredPalette(config: Record<string, unknown>): boolean {
+  if (typeof config.theme === 'string' && config.theme.trim()) return true;
+  const variables = config.themeVariables;
+  return !!variables && typeof variables === 'object' && !Array.isArray(variables)
+    && Object.keys(variables).some(name => name !== 'fontFamily' && name !== 'fontSize');
+}
+
 export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) => void): DiagramController {
   const document = root.ownerDocument, view = document.defaultView;
   const diagrams = [...(root.matches('[data-av-mermaid]') ? [root] : []), ...Array.from(root.querySelectorAll<HTMLElement>('[data-av-mermaid]'))];
   const namespaces = new WeakMap<HTMLElement, string>(), keys = new WeakMap<HTMLElement, string>(), generations = new WeakMap<HTMLElement, number>();
-  const sourceFonts = new WeakMap<HTMLElement, { source: string; nested: boolean; family?: string; theme?: string }>();
+  const sourceDefaults = new WeakMap<HTMLElement, { source: string; nested: boolean; family?: string; theme?: string; palette: boolean }>();
   const original = diagrams.map(element => ({ element, output: element.querySelector<HTMLElement>('[data-av-mermaid-output]')!, children: Array.from(element.querySelector('[data-av-mermaid-output]')?.childNodes || []), status: element.querySelector<HTMLElement>('[data-av-mermaid-status]')!, text: element.querySelector('[data-av-mermaid-status]')?.textContent || '', state: element.getAttribute('data-av-mermaid-state'), busy: element.getAttribute('aria-busy'), hidden: element.querySelector('[data-av-mermaid-output]')?.getAttribute('hidden'), svg: element.querySelector<SVGElement>('[data-av-zoom-target]'), attributes: Array.from(element.querySelector<SVGElement>('[data-av-zoom-target]')?.attributes || []).map(attribute=>[attribute.name,attribute.value]), svgChildren: Array.from(element.querySelector('[data-av-zoom-target]')?.childNodes || []) }));
   let stopped = false;
   let refreshStarted = false, resizeDirty = false, resizeJob: Promise<void> | null = null;
@@ -377,6 +407,7 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
       if (!runtime) { element.setAttribute('data-av-mermaid-state','error'); element.removeAttribute('aria-busy'); status.textContent = 'Mermaid is not embedded. Reassemble with --feature mermaid. The original source remains available.'; return Promise.resolve(); }
       const source = element.getAttribute('data-av-mermaid-source') || '';
       const css = view?.getComputedStyle?.(figure);
+      const inheritedStyles = diagramStyles(css);
       const roles={background:['--av-plot','#ffffff'],primaryColor:['--av-sheet','#f4f5fa'],primaryTextColor:['--av-ink','#172032'],primaryBorderColor:['--av-line-strong','#66758a'],lineColor:['--av-axis','#66758a'],secondaryColor:['--av-subtle','#ecf1f5'],tertiaryColor:['--av-inspector-surface','#f4edf6'],noteBkgColor:['--av-inspector-surface','#f4edf6'],noteTextColor:['--av-ink','#172032'],noteBorderColor:['--av-line-strong','#66758a']};
       const probes=document.createElement('span');probes.setAttribute('data-av-review-ui','');probes.hidden=true;
       const colorNodes=Object.entries(roles).map(([name,[token,fallback]])=>{const node=document.createElement('span');node.style.setProperty('color',`var(${token})`);probes.appendChild(node);return {name,node,fallback};});
@@ -385,7 +416,7 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
       try{for(const {name,node,fallback}of colorNodes){const resolved=view?.getComputedStyle?.(node).color;palette[name]=resolved&&!resolved.includes('var(')?resolved:fallback;}}finally{probes.remove();}
       const width=renderWidth(element,figure,output);
       observedWidths.set(element,width);
-      const key = JSON.stringify([source, palette, element.getAttribute('data-av-mermaid-config'), width]);
+      const key = JSON.stringify([source, palette, inheritedStyles, element.getAttribute('data-av-mermaid-config'), width]);
       if (requested.get(element)?.key === key) return requested.get(element)!.job;
       if (keys.get(element) === key) {
         generations.set(element, (generations.get(element) || 0) + 1);
@@ -403,15 +434,15 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
         if (stopped || generations.get(element) !== generation) return;
         const supplied = JSON.parse(element.getAttribute('data-av-mermaid-config') || '{}');
         if (!supplied || Array.isArray(supplied) || typeof supplied !== 'object') throw new Error('Mermaid configuration must be an object.');
-        let sourceFont = sourceFonts.get(element);
+        let sourceFont = sourceDefaults.get(element);
         if (sourceFont?.source !== source) {
           // Let the bundled parser interpret frontmatter and directives. Keep
-          // only their font defaults, once per source; width/theme changes do
+          // their font and palette choices, once per source; width/theme changes do
           // not parse again. Rendering still receives the exact original text.
           const parsed = runtime.parse ? await runtime.parse(source) : false;
           const config = parsed && parsed.config || {};
-          sourceFont = { source, nested: hasDiagramFont(config), family: typeof config.fontFamily === 'string' ? config.fontFamily : undefined, theme: typeof config.themeVariables?.fontFamily === 'string' ? config.themeVariables.fontFamily : undefined };
-          sourceFonts.set(element, sourceFont);
+          sourceFont = { source, nested: hasDiagramFont(config), family: typeof config.fontFamily === 'string' ? config.fontFamily : undefined, theme: typeof config.themeVariables?.fontFamily === 'string' ? config.themeVariables.fontFamily : undefined, palette: hasAuthoredPalette(config) };
+          sourceDefaults.set(element, sourceFont);
         }
         if (stopped || generations.get(element) !== generation) return;
         // Mermaid uses its top-level font for geometry and themeVariables for
@@ -422,10 +453,21 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
         // Empty (not null) disables Mermaid's global override of an explicit
         // per-diagram font; null would restore the vendor's global default.
         const fontFamily = sourceFont.family ?? supplied.fontFamily ?? (sourceFont.nested || hasDiagramFont(supplied) ? '' : themeFont);
-        runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...palette, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: fingerprint(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
+        const colorDefaults = sourceFont.palette || hasAuthoredPalette(supplied) ? {} : palette;
+        runtime.initialize({ ...supplied, fontFamily, theme: supplied.theme || 'base', themeVariables: { ...colorDefaults, fontFamily: themeFont, ...supplied.themeVariables }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, deterministicIds: true, deterministicIDSeed: fingerprint(source + (figure.id || 'diagram')), secure: ['securityLevel', 'startOnLoad', 'secure'] });
         let id = 'av-mermaid-' + (++sequence); while(document.getElementById(id)||document.getElementById('d'+id))id='av-mermaid-'+(++sequence);
-        const staging=document.createElement('div');staging.setAttribute('data-av-mermaid-staging','');staging.setAttribute('aria-hidden','true');staging.style.cssText=`position:absolute;left:-100000px;top:0;width:${width}px;max-width:none;opacity:0;pointer-events:none;`;document.body.appendChild(staging);
-        let result: {svg:string}; try { result = await runtime.render(id, source, staging); } finally { staging.remove(); }
+        const staging = diagramStaging(document, inheritedStyles, width);
+        let result: {svg:string}, previousPostprocessor: ElkPostprocessor | null = null, ownsPostprocessor = false;
+        let previousArchitectureRouter: ArchitectureRouter | null = null, ownsArchitectureRouter = false;
+        try {
+          if (runtime.setElkLayoutPostprocessor) { previousPostprocessor = runtime.setElkLayoutPostprocessor(repairElkLayout); ownsPostprocessor = true; }
+          if (runtime.setArchitectureRouter) { previousArchitectureRouter = runtime.setArchitectureRouter(routeArchitectureConnection); ownsArchitectureRouter = true; }
+          result = await runtime.render(id, source, staging);
+        } finally {
+          staging.remove();
+          if (ownsArchitectureRouter) runtime.setArchitectureRouter!(previousArchitectureRouter);
+          if (ownsPostprocessor) runtime.setElkLayoutPostprocessor!(previousPostprocessor);
+        }
         if (stopped || generations.get(element) !== generation) return;
         // Strict Mermaid output is the renderer's SVG. No evidence is evaluated as code.
         const template = document.createElement('template'); template.innerHTML = result.svg;
@@ -435,7 +477,7 @@ export function attachMermaid(root: HTMLElement, ready: (figure: HTMLElement) =>
         scopeDiagram(incoming,namespace); incoming.setAttribute('data-av-mermaid-scene', '');
         const plot = output.querySelector<HTMLElement>('[data-av-plot]'), live = plot?.querySelector<SVGElement>('[data-av-zoom-target]');
         if (!plot || !live) throw new Error('The diagram viewport is unavailable.');
-        const bounds = diagramBounds(incoming, document);
+        const bounds = diagramBounds(incoming, document, inheritedStyles);
         // Preserve the viewport node and its handlers when a theme rerenders the diagram.
         for (const name of ['id', 'class', 'viewBox', 'preserveAspectRatio', 'role', 'aria-label', 'aria-describedby', 'aria-labelledby', 'data-av-mermaid-scene']) { const value = incoming.getAttribute(name); if (value !== null) live.setAttribute(name, value); else live.removeAttribute(name); }
         // Authored accTitle/accDescr references survive scoping. An unlabeled

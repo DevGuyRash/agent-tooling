@@ -52,5 +52,5 @@ for (const fixture of fixtures) {
 assert(fixtures.some(item => item.layout === 'cose-bilkent' && item.family === 'mindmap' && item.expectedState === 'ready'), 'Demonstrate CoSE-Bilkent on its supported mindmap family');
 assert.equal(fixtures.filter(item => item.kind === 'edge/error candidate').length, 4, 'Retain every historical edge/error candidate');
 assert.equal(fixtures.filter(item => item.kind === 'renderer regression').length, 1, 'Retain the pinned block-routing renderer regression');
-assert.equal(fixtures.filter(item => item.expectedState === 'error').length, 4, 'Intentional native failures changed unexpectedly');
+assert(fixtures.some(item => item.file === 'block-diamond-routing.mmd' && item.expectedState === 'ready'), 'Valid block diamond routing must expect success after the callback repair');
 console.log(JSON.stringify({registry, actualFamilies:actualRegistry, fixtureCount: fixtures.length, sentinels: sentinels.map(item => item.file), expectedDiagnostics: fixtures.filter(item=>item.expectedState==='error').map(item=>({file:item.file,kind:item.failureKind,message:item.expectedDiagnostic}))}));

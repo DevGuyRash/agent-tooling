@@ -11,7 +11,8 @@
     "file": "architecture.mmd",
     "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/architecture.md",
     "kind": "diagram",
-    "expectedState": "ready"
+    "expectedState": "ready",
+    "note": "Nested groups retain their declared members. The Analyst browser is ungrouped; the fanout junction belongs to Review platform rather than Evidence storage."
   },
   {
     "family": "block",
@@ -312,9 +313,8 @@
     "file": "block-diamond-routing.mmd",
     "reference": "https://github.com/mermaid-js/mermaid/blob/98a0945418c76238f15df2afaddbba4272656c3b/packages/mermaid/src/docs/syntax/block.md",
     "kind": "renderer regression",
-    "expectedState": "error",
-    "failureKind": "vendor-renderer-regression",
-    "expectedDiagnostic": "this.calcIntersect is not a function"
+    "expectedState": "ready",
+    "note": "Diamond decisions, connected labels and multi-column nesting exercise edge routing."
   },
   {
     "family": "error",
@@ -383,7 +383,7 @@
     "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
     "kind": "layout candidate",
     "expectedState": "ready",
-    "visualLimitation": "The bundled stress-layout adapter overlaps many node boxes and edge labels in this cyclic topology. Authored node/rank spacing does not reach this algorithm, so it remains a renderer-ready visual failure. The exact source and layered ELK or Dagre comparisons preserve readable relationship context."
+    "note": "The requested layout supplies node placement. The shared geometry repair separates overlapping boxes and supplies unobstructed routes and label positions when needed, retaining the original relationships and source."
   },
   {
     "family": "flowchart-v2",
@@ -400,7 +400,7 @@
     "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
     "kind": "layout candidate",
     "expectedState": "ready",
-    "visualLimitation": "This retained cyclic topology renders, but the multi-root tree layout leaves branch and feedback labels detached from their edges. Use the exact source to inspect those qualifiers; the layered ELK and Dagre fixtures provide routed comparison views."
+    "note": "The requested layout supplies node placement. The shared geometry repair separates overlapping boxes and supplies unobstructed routes and label positions when needed, retaining the original relationships and source."
   },
   {
     "family": "flowchart-v2",
@@ -409,7 +409,7 @@
     "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
     "kind": "layout candidate",
     "expectedState": "ready",
-    "visualLimitation": "This overlap-removal layout separates node boxes but does not provide a readable route for every relationship in this topology. Edges cross other boxes and branch labels can overlap. Rendering completion is not a visual qualification."
+    "note": "The requested layout supplies node placement. The shared geometry repair separates overlapping boxes and supplies unobstructed routes and label positions when needed, retaining the original relationships and source."
   },
   {
     "family": "flowchart-v2",
@@ -418,7 +418,7 @@
     "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
     "kind": "layout candidate",
     "expectedState": "ready",
-    "visualLimitation": "This packing layout places the nodes in boxes without preserving readable paths for all relationships. Several connections run behind other nodes and branch labels can overlap. The full source and the layered ELK comparison retain the relationship context."
+    "note": "The requested layout supplies node placement. The shared geometry repair separates overlapping boxes and supplies unobstructed routes and label positions when needed, retaining the original relationships and source."
   },
   {
     "family": "flowchart-v2",
@@ -427,7 +427,7 @@
     "reference": "Bundled registerDefaultLayoutLoaders and ELK_ALGORITHMS in upstream/mermaid.js",
     "kind": "layout candidate",
     "expectedState": "ready",
-    "visualLimitation": "This rectangle-packing candidate renders with overlapping decision geometry and incomplete or obscured relationship paths in this topology. It is retained as a visual limitation, with exact source available and a layered ELK comparison."
+    "note": "The requested layout supplies node placement. The shared geometry repair separates overlapping boxes and supplies unobstructed routes and label positions when needed, retaining the original relationships and source."
   },
   {
     "family": "flowchart-v2",

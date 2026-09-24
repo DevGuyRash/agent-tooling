@@ -34,15 +34,20 @@ def css_length(expression, variables, width, rem):
 
 
 class ExplorationLayoutTests(unittest.TestCase):
-    def test_inspector_wrapping_preserves_canvas_width_across_the_transition(self):
+    def test_static_inspector_wrapping_preserves_canvas_width_across_the_transition(self):
         css = (ROOT / "styles/components.css").read_text()
         rules = dict(re.findall(r"([^{}]+)\{([^{}]+)\}", css))
         layout = next(body for selector, body in rules.items()
                       if "--av-exploration-canvas:" in body)
         variables = dict(re.findall(r"(--av-exploration-[\w-]+):\s*([^;]+);", layout))
         self.assertIn("flex-wrap: wrap", layout)
-        plot = next(body for selector, body in rules.items()
-                    if selector.strip() == ".av-explorer:has(> .av-inspector) > :is(.av-plot-shell, .av-scatter-scenes)")
+        plots = [(selector, body) for selector, body in rules.items()
+                 if selector.strip().endswith("> :is(.av-plot-shell, .av-scatter-scenes)")
+                 and "--av-exploration-canvas" in body]
+        self.assertEqual(len(plots), 1, "The static plot has one width owner")
+        selector, plot = plots[0]
+        self.assertIn(":not([data-av-inspector-layout])", selector,
+                      "Static flex sizing yields to the enhanced inspector's width owner")
         # Shrink/grow are zero: the authored expression determines the canvas.
         expression = re.search(r"flex:\s*0\s+0\s+(.+?);", plot).group(1)
         for rem in (12, 16, 24):

@@ -1,6 +1,6 @@
 {
   "upstreamSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
-  "artifactSha256": "5d0da1e481c6c29902b4dcb4dad8e6e641decf3486a4609e904a404b0154170a",
+  "artifactSha256": "8cf1eb89bbf54f66153f49a6cad4d01664d28b85eb507152b4daa0095bf0c911",
   "patches": [
     {
       "id": "c4-container-width",
@@ -46,6 +46,132 @@
           "name": "layout-text-after-style-and-reparent",
           "before": "Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")",
           "after": "E.length>0&&eDi(h,J,{select:()=>V},E,N,S);Ll(P,D,L,h?.useMaxWidth??!0)},\"draw\");i(k$,\"stableSetsKey\")"
+        }
+      ]
+    },
+    {
+      "id": "diamond-callback-ownership",
+      "description": "Use the decision shape's own intersection helper when the block renderer copies its callback onto a graph node. Preserve polygon and endpoint geometry.",
+      "replacements": [
+        {
+          "before": "r.intersect=function(E){return this.calcIntersect(r,E)}",
+          "after": "r.intersect=function(E){return r.calcIntersect(r,E)}"
+        }
+      ]
+    },
+    {
+      "id": "architecture-group-scoped-alignments",
+      "description": "Infer grid alignments within each declared parent group; preserve explicit cross-group author hints. Prevent unrelated services and junctions from being forced inside group boundaries.",
+      "replacements": [
+        {
+          "before": "function fLi(t,r,a,s=[]){let l=i((C,E)=>{let S=new Map;for(let[R,L]of C.entries()){let D=`${R}`,M=0,N=[...L.entries()];if(N.length===1){S.set(D,N[0][1]);continue}for(let F=0;F<N.length-1;F++)for(let O=F+1;O<N.length;O++){let[P,G]=N[F],[q,X]=N[O];if(a.get($6e(P,q))===E)S.set(D,[...S.get(D)??[],...G,...X]);else if(P===\"default\"||q===\"default\")S.set(D,[...S.get(D)??[],...G,...X]);else{let J=`${D}-${M++}`;S.set(J,G);let W=`${D}-${M++}`;S.set(W,X)}}}return S},\"flattenAlignments\"),h=r.map(C=>{let E=new Map,S=new Map;return C.forEach(([R,L],D)=>{let M=t.getNode(D)?.in??\"default\",N=E.get(L)??new Map;E.has(L)||E.set(L,N);let F=S.get(R)??new Map;S.has(R)||S.set(R,F);for(let O of[N,F]){let P=O.get(M)??[];O.has(M)||O.set(M,P),P.push(D)}}),{horiz:[...l(E,\"horizontal\").values()].filter(R=>R.length>1),vert:[...l(S,\"vertical\").values()].filter(R=>R.length>1)}}),[f,d]=h.reduce(([C,E],{horiz:S,vert:R})=>[[...C,...S],[...E,...R]],[[],[]]),g=new Set;s.forEach(C=>C.members.forEach(E=>g.add(E)));let b=i(C=>C.filter(E=>!E.some(S=>g.has(S))),\"dropOverlapping\"),v=b(f),T=b(d);return s.forEach(C=>{C.members.length<2||(C.direction===\"row\"?v.push([...C.members]):T.push([...C.members]))}),{horizontal:v,vertical:T}}",
+          "afterFile": "mermaid-patches/architecture-alignments.js"
+        }
+      ]
+    },
+    {
+      "id": "architecture-owned-layout-lifecycle",
+      "description": "Own the temporary Cytoscape container directly, remove it after construction, and release each numerical layout core on preparation, layout or drawing failure and after successful output.",
+      "replacements": [
+        {
+          "before": "function pLi(t,r,a,s,l,{spatialMaps:h,groupAlignments:f}){return new Promise(d=>{let g=fn(\"body\").append(\"div\").attr(\"id\",\"cy\").attr(\"style\",\"display:none\"),b=c3({container:document.getElementById(\"cy\"),style:",
+          "after": "function pLi(t,r,a,s,l,{spatialMaps:h,groupAlignments:f}){return new Promise(d=>{let b;try{let g=fn(\"body\").append(\"div\").attr(\"style\",\"display:none\");b=(()=>{try{return c3({container:g.node(),style:"
+        },
+        {
+          "before": "layout:{name:\"grid\",boundingBox:{x1:0,x2:100,y1:0,y2:100}}});g.remove(),uLi(a,b)",
+          "after": "layout:{name:\"grid\",boundingBox:{x1:0,x2:100,y1:0,y2:100}}})}finally{g.remove()}})();uLi(a,b)"
+        },
+        {
+          "before": "b.ready(N=>{Pe.info(\"Ready\",N),d(b)})})}var utn",
+          "after": "b.ready(N=>{Pe.info(\"Ready\",N),d(b)})}catch(N){b?.destroy();throw N}})}var utn"
+        },
+        {
+          "before": "let S=await pLi(h,f,d,g,l,b);await atn(T,S,l,r),await stn(E,S,l,r),cLi(l,S),Uk(void 0,v,l.getConfigField(\"padding\"),l.getConfigField(\"useMaxWidth\"))",
+          "after": "let S=await pLi(h,f,d,g,l,b);try{await atn(T,S,l,r),await stn(E,S,l,r),cLi(l,S),Uk(void 0,v,l.getConfigField(\"padding\"),l.getConfigField(\"useMaxWidth\"))}finally{S.destroy()}"
+        }
+      ]
+    },
+    {
+      "id": "elk-report-layout-postprocessor",
+      "description": "Expose a scoped numerical ELK postprocessor and preserve its obstacle-aware routes through native adaptation; keep native straightening for untouched layouts and restore the prior processor after each render.",
+      "replacements": [
+        {
+          "before": "mermaid=(()=>{var vFn=Object.create;",
+          "after": "mermaid=(()=>{var avElkLayoutPostprocessor=null,avArchitectureRouter=null;var vFn=Object.create;"
+        },
+        {
+          "before": "getRegisteredDiagramsMetadata:Mzi},Nzi=H7;",
+          "after": "getRegisteredDiagramsMetadata:Mzi,setElkLayoutPostprocessor(t){if(t!==null&&typeof t!==\"function\")throw new TypeError(\"ELK postprocessor must be a function or null\");const r=avElkLayoutPostprocessor;return avElkLayoutPostprocessor=t,r}},Nzi=H7;"
+        },
+        {
+          "before": "return a.debug(\"APA01 after - success\"),a.debug(\"APA01 layout result:\",l),l",
+          "after": "return avElkLayoutPostprocessor&&(l=await avElkLayoutPostprocessor(l,g=>t.layout(g))),a.debug(\"APA01 after - success\"),a.debug(\"APA01 layout result:\",l),l"
+        },
+        {
+          "name": "preserve-repaired-detours",
+          "before": "h=t.config.elk?.straightenEdges!==!1,f=new Map(t.nodes.map(g=>[g.id,g]))",
+          "after": "h=t.config.elk?.straightenEdges!==!1&&!r.__avPreserveRoutes,f=new Map(t.nodes.map(g=>[g.id,g]))"
+        }
+      ]
+    },
+    {
+      "id": "architecture-measured-service-footprints",
+      "description": "Use complete measured service footprints for architecture spacing and group bounds; retain icon anchors and provide scoped shared routing for complete group connections and their qualifiers.",
+      "replacements": [
+        {
+          "name": "measure-complete-service",
+          "before": "let{width:b,height:v}=f.node().getBBox();h.width=b,h.height=v,t.setElementForId(h.id,f)",
+          "after": "let b=f.node().getBBox();h.width=b.width,h.height=b.height,h.avMeasuredBounds={x:b.x,y:b.y,width:b.width,height:b.height},t.setElementForId(h.id,f)"
+        },
+        {
+          "name": "layout-measured-footprints",
+          "before": "function oLi(t,r,a){t.forEach(s=>{r.add({group:\"nodes\",data:{type:\"service\",id:s.id,icon:s.icon,label:s.title,parent:s.in,width:a.getConfigField(\"iconSize\"),height:a.getConfigField(\"iconSize\")},classes:\"node-service\"})})}",
+          "afterFile": "mermaid-patches/architecture-footprints.js"
+        },
+        {
+          "name": "use-measured-svg-labels",
+          "before": "selector:\".node-service\",style:{label:\"data(label)\",width:\"data(width)\",height:\"data(height)\"}",
+          "after": "selector:\".node-service\",style:{width:\"data(width)\",height:\"data(height)\"}"
+        },
+        {
+          "name": "retain-source-icon-anchor",
+          "before": "sourceEndpoint:g===\"L\"?\"0 50%\":g===\"R\"?\"100% 50%\":g===\"T\"?\"50% 0\":\"50% 100%\"",
+          "after": "sourceEndpoint:avArchitectureIconEndpoint(r,s,g)"
+        },
+        {
+          "name": "retain-target-icon-anchor",
+          "before": "targetEndpoint:b===\"L\"?\"0 50%\":b===\"R\"?\"100% 50%\":b===\"T\"?\"50% 0\":\"50% 100%\"",
+          "after": "targetEndpoint:avArchitectureIconEndpoint(r,l,b)"
+        },
+        {
+          "name": "attach-to-painted-group-borders",
+          "before": "if(E&&(Zy(T)?N+=T===\"L\"?-X:X:F+=T===\"T\"?-X:X+18),D&&(Zy(R)?G+=R===\"L\"?-X:X:q+=R===\"T\"?-X:X+18),!E&&a.getNode(v)?.type===\"junction\"",
+          "after": "if(E&&({x:N,y:F}=avArchitectureGroupEndpoint(r,v,T,{x:N,y:F},h)),D&&({x:G,y:q}=avArchitectureGroupEndpoint(r,S,R,{x:G,y:q},h)),!E&&a.getNode(v)?.type===\"junction\""
+        },
+        {
+          "name": "scoped-group-router",
+          "before": "getRegisteredDiagramsMetadata:Mzi,setElkLayoutPostprocessor(t)",
+          "after": "setArchitectureRouter(t){if(t!==null&&typeof t!==\"function\")throw new TypeError(\"Architecture router must be a function or null\");const r=avArchitectureRouter;return avArchitectureRouter=t,r},getRegisteredDiagramsMetadata:Mzi,setElkLayoutPostprocessor(t)"
+        },
+        {
+          "name": "paint-complete-group-route",
+          "before": "Z.insert(\"path\").attr(\"d\",`M ${N},${F} L ${O},${P} L${G},${q} `)",
+          "after": "Z.insert(\"path\").attr(\"d\",avGroupRoute?avGroupRoute.points.map((point,index)=>`${index?\"L\":\"M\"} ${point.x},${point.y}`).join(\" \"):`M ${N},${F} L ${O},${P} L${G},${q} `)"
+        },
+        {
+          "name": "measure-route-qualifier-space",
+          "before": "J===\"X\"?W=Math.abs(N-G):J===\"Y\"?W=Math.abs(F-q)/1.5:W=Math.abs(N-G)/2;let V=Z.append(\"g\")",
+          "after": "avGroupRoute?W=Math.max(1,avGroupRoute.labelSpan-8):J===\"X\"?W=Math.abs(N-G):J===\"Y\"?W=Math.abs(F-q)/1.5:W=Math.abs(N-G)/2;let V=Z.append(\"g\")"
+        },
+        {
+          "name": "place-qualifier-on-route",
+          "before": "J===\"X\")V.attr(\"transform\",\"translate(\"+O+\", \"+P+\")\")",
+          "after": "avGroupRoute)V.attr(\"transform\",`translate(${O}, ${P}) rotate(${avGroupRoute.labelAngle})`);else if(J===\"X\")V.attr(\"transform\",\"translate(\"+O+\", \"+P+\")\")"
+        },
+        {
+          "name": "route-group-footprints",
+          "before": "q+=R===\"T\"?f:-f),b[0]._private.rscratch){let Z=t.insert(\"g\")",
+          "after": "q+=R===\"T\"?f:-f),b[0]._private.rscratch){let avGroupRoute=(E||D)?avArchitectureGroupRoute(r,v,S,E,D,{x:N,y:F},{x:G,y:q},T,R,h):null;if(avGroupRoute)({x:O,y:P}=avGroupRoute.label);else if(E||D)({x:O,y:P}=avArchitectureGroupMidpoint({x:N,y:F},{x:G,y:q},T,R));let Z=t.insert(\"g\")"
         }
       ]
     }

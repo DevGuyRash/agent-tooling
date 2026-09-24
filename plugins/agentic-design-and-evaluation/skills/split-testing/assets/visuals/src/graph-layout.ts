@@ -56,9 +56,10 @@ class Queue {
 }
 
 /** Orthogonal visibility-grid search. Obstacles, rather than node order, determine detours. */
-function route(start: GraphPoint, finish: GraphPoint, obstacles: Bounds[]): GraphPoint[] {
+export function routeOrthogonal(start: GraphPoint, finish: GraphPoint, obstacles: Bounds[], directions: { start?: GraphPoint; finish?: GraphPoint } = {}): GraphPoint[] {
   if (samePoint(start, finish)) return [start];
-  const extent = unionBounds(obstacles, 28);
+  const extent = unionBounds(directions.start || directions.finish
+    ? [...obstacles, { ...start, width: 0, height: 0 }, { ...finish, width: 0, height: 0 }] : obstacles, 28);
   const xs = [...new Set([start.x, finish.x, extent.x, extent.x + extent.width, ...obstacles.flatMap(rect => [rect.x, rect.x + rect.width])])].sort((a, b) => a - b);
   const ys = [...new Set([start.y, finish.y, extent.y, extent.y + extent.height, ...obstacles.flatMap(rect => [rect.y, rect.y + rect.height])])].sort((a, b) => a - b);
   // Native font metrics are fractional; equivalent inflated boundaries can differ by an ULP.
@@ -93,6 +94,9 @@ function route(start: GraphPoint, finish: GraphPoint, obstacles: Bounds[]): Grap
       const x = current.x + dx, y = current.y + dy;
       if (x < 0 || x >= xs.length || y < 0 || y >= ys.length) continue;
       const nextPoint = { x: xs[x], y: ys[y] };
+      if (directions.start && samePoint(nextPoint, start)) continue;
+      if (current.key === initial.key && directions.start && (dx !== directions.start.x || dy !== directions.start.y)) continue;
+      if (samePoint(nextPoint, finish) && directions.finish && (dx !== -directions.finish.x || dy !== -directions.finish.y)) continue;
       if (!clear(point, nextPoint)) continue;
       const cost = current.cost + Math.abs(nextPoint.x - point.x) + Math.abs(nextPoint.y - point.y) + (current.direction && current.direction !== direction ? 18 : 0);
       const nextKey = key(x, y, direction);
@@ -185,7 +189,7 @@ export function layoutGraph(nodeInputs: GraphNodeInput[], edgeInputs: GraphEdgeI
     const from = stub(first, sides[edge.index].source, clearance), to = stub(last, sides[edge.index].target, clearance);
     const labelLeft = { x: edge.box.x, y: edge.box.y + edge.box.height / 2 }, labelRight = { x: edge.box.x + edge.box.width, y: labelLeft.y };
     const before = stub(labelLeft, "left", clearance), after = stub(labelRight, "right", clearance);
-    edge.points = simplify([first, ...route(from, before, obstacles), labelLeft, labelRight, ...route(after, to, obstacles), last]);
+    edge.points = simplify([first, ...routeOrthogonal(from, before, obstacles), labelLeft, labelRight, ...routeOrthogonal(after, to, obstacles), last]);
     const prior = edge.points[edge.points.length - 2], length = Math.hypot(last.x - prior.x, last.y - prior.y), ux = (last.x - prior.x) / length, uy = (last.y - prior.y) / length;
     edge.arrow = [last, { x: last.x - ux * 9 - uy * 4, y: last.y - uy * 9 + ux * 4 }, { x: last.x - ux * 9 + uy * 4, y: last.y - uy * 9 - ux * 4 }];
   }

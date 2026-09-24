@@ -4,7 +4,7 @@
 Documentation source: [Mermaid 69778e6e995c](https://github.com/mermaid-js/mermaid/tree/69778e6e995cd72c6cb524449d8e08ee3d231628/packages/mermaid/src/docs/syntax).
 Descriptions are excerpts from official documentation. Follow the linked source for syntax and qualifications.
 
-Packaged renderer: **Mermaid 12.0.0**, artifact SHA-256 `5d0da1e481c6c29902b4dcb4dad8e6e641decf3486a4609e904a404b0154170a`.
+Packaged renderer: **Mermaid 12.0.0**, artifact SHA-256 `8cf1eb89bbf54f66153f49a6cad4d01664d28b85eb507152b4daa0095bf0c911`.
 The renderer registers 39 entries. Starter observations come from documented examples inspected against this artifact.
 
 ## Registered renderer entries

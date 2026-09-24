@@ -124,7 +124,7 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(sum(item["kind"] == "renderer regression" for item in index), 1)
         self.assertEqual(
             {item["file"] for item in index if item["expectedState"] == "error"},
-            {"frontmatter-error.mmd", "layout-cose-bilkent.mmd", "invalid-source.mmd", "block-diamond-routing.mmd"},
+            {"frontmatter-error.mmd", "layout-cose-bilkent.mmd", "invalid-source.mmd"},
         )
         indexed = {item["file"] for item in index}
         on_disk = {path.name for path in FIXTURES.glob("*.mmd")}
