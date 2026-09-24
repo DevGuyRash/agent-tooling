@@ -120,18 +120,21 @@ def run(
     if dry_run:
         print("+ " + shlex.join(argv))
         return ""
-    completed = subprocess.run(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        timeout=600,
-        env=environment,
-    )
+    try:
+        completed = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=600,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise InstallError(f"command timed out: {shlex.join(argv)}; inspect before retrying") from exc
     if completed.returncode:
         detail = (completed.stderr or completed.stdout).strip()
         raise InstallError(f"command failed ({completed.returncode}): {shlex.join(argv)}" + (f": {detail}" if detail else ""))
@@ -429,6 +432,8 @@ def mutation(command: str, host: str, operation: str, plugin_id: str | None, arg
         return [command, "plugin", "add", plugin_id]
     if operation == "install":
         return [command, "plugin", "install", "--scope", args.claude_scope, plugin_id]
+    if operation == "uninstall":
+        return [command, "plugin", "uninstall", "--scope", args.claude_scope, "--keep-data", plugin_id]
     return [command, "plugin", "update", "--scope", args.claude_scope, plugin_id]
 
 
@@ -445,16 +450,17 @@ def claude_registry_data(raw: bytes) -> dict:
     return data
 
 
-def replace_registry(path: Path, expected: bytes | None, data: dict, mode: int) -> None:
+def replace_claude_document(path: Path, expected: bytes | None, data: dict, mode: int,
+                           label: str) -> None:
     # The lifecycle lock coordinates this installer and syscfg. Detect an
     # intervening writer as well; never resolve a conflict by overwriting it.
     current = path.read_bytes() if path.exists() else None
     if current != expected:
-        raise InstallError("Claude plugin registry changed during preservation; inspect before retrying")
+        raise InstallError(f"Claude {label} changed during preservation; inspect before retrying")
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
-                                         prefix=".installed-plugins-preserve-", delete=False) as handle:
+                                         prefix=".plugin-install-preserve-", delete=False) as handle:
             temporary = Path(handle.name)
             os.chmod(handle.name, mode)
             json.dump(data, handle, indent=2)
@@ -462,7 +468,7 @@ def replace_registry(path: Path, expected: bytes | None, data: dict, mode: int) 
             handle.flush()
             os.fsync(handle.fileno())
         if (path.read_bytes() if path.exists() else None) != expected:
-            raise InstallError("Claude plugin registry changed during preservation; inspect before retrying")
+            raise InstallError(f"Claude {label} changed during preservation; inspect before retrying")
         os.replace(temporary, path)
     finally:
         if temporary is not None:
@@ -507,7 +513,7 @@ def preserve_claude_registry(plan: HostPlan, args: argparse.Namespace,
         try:
             after = claude_registry_data(observed or b"")
         except InstallError:
-            replace_registry(path, observed, before, mode)
+            replace_claude_document(path, observed, before, mode, "plugin registry")
             raise InstallError("Claude registry became unreadable during the transaction; restored the pre-operation registry")
         repaired = copy.deepcopy(after)
         conflicts: list[str] = []
@@ -533,11 +539,138 @@ def preserve_claude_registry(plan: HostPlan, args: argparse.Namespace,
                 elif len(matches) != 1 or matches[0] != entry:
                     conflicts.append(plugin_id)
         if repaired != after:
-            replace_registry(path, observed, repaired, mode)
+            replace_claude_document(path, observed, repaired, mode, "plugin registry")
         if restored:
             log(f"preserved {restored} missing non-selected Claude registration(s) after the installation transaction")
         if conflicts:
             raise InstallError("protected Claude registry data changed; preserved missing records but did not overwrite conflicts: " + ", ".join(sorted(set(conflicts))))
+
+
+def claude_settings_path(args: argparse.Namespace, environment: Mapping[str, str]) -> Path:
+    if args.claude_scope == "user":
+        return Path(environment.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser().resolve() / "settings.json"
+    root = args.claude_project_path
+    if args.claude_scope == "local":
+        # Native project installs write at cwd; local installs use its Git root.
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                                env=environment, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            root = Path(result.stdout.strip())
+    return root / ".claude" / ("settings.local.json" if args.claude_scope == "local" else "settings.json")
+
+
+def claude_settings_data(raw: bytes | None) -> dict:
+    try:
+        data = json.loads(raw) if raw is not None else {}
+    except (ValueError, UnicodeError) as exc:
+        raise InstallError("Claude settings are unreadable; cannot preserve plugin activation") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("enabledPlugins", {}), dict):
+        raise InstallError("Claude settings have an unsupported enabledPlugins value")
+    return data
+
+
+def activation_recovery_path() -> Path:
+    return receipt_path().with_name("install-all-activation.json")
+
+
+def read_activation_recovery() -> dict:
+    path = activation_recovery_path()
+    if path.is_symlink():
+        raise InstallError("Claude activation recovery file is symlinked; inspect before retrying")
+    if not path.exists():
+        return {"schema_version": 1, "settings": {}}
+    try:
+        data = json.loads(path.read_bytes())
+    except (ValueError, UnicodeError) as exc:
+        raise InstallError("Claude activation recovery file is unreadable; inspect before retrying") from exc
+    if (not isinstance(data, dict) or data.get("schema_version") != 1
+            or not isinstance(data.get("settings"), dict)
+            or any(not Path(key).is_absolute() or not isinstance(values, dict)
+                   or any(value is not None and not isinstance(value, bool) for value in values.values())
+                   for key, values in data["settings"].items())):
+        raise InstallError("Claude activation recovery file has an unsupported format")
+    return data
+
+
+@contextlib.contextmanager
+def preserve_claude_activation(plan: HostPlan, args: argparse.Namespace,
+                               environment: Mapping[str, str]) -> Iterator[None]:
+    """Retain scoped activation choices, including when a reinstall fails."""
+    if plan.host != "claude" or args.dry_run:
+        yield
+        return
+    path = claude_settings_path(args, environment)
+    recovery = read_activation_recovery()
+    pending = recovery["settings"].get(str(path), {})
+    saved = {key: value for key, value in pending.items() if key in plan.selected}
+    if not saved and not (plan.install or plan.update):
+        yield
+        return
+    if path.is_symlink():
+        raise InstallError("cannot preserve symlinked Claude settings; no mutation attempted")
+    before = claude_settings_data(path.read_bytes() if path.exists() else None)
+    enabled = before.get("enabledPlugins", {})
+    # A new install enables the plugin unless this scope already has a choice.
+    # Updates retain absence as well as true/false, preserving scope inheritance.
+    for key in (*plan.install, *plan.update):
+        if key not in saved and (key in enabled or key in plan.update):
+            saved[key] = enabled.get(key)
+    if any(key in enabled and not isinstance(enabled[key], bool) for key in saved):
+        raise InstallError("Claude plugin activation values must be true or false")
+    for key, value in saved.items():
+        if key in pending and enabled.get(key) is False and value is not False:
+            raise InstallError(f"Claude activation changed since the interrupted install: {key}; inspect recovery state before retrying")
+    if saved and any(key not in pending or pending[key] != value for key, value in saved.items()):
+        recovery["settings"].setdefault(str(path), {}).update(saved)
+        write_receipt(activation_recovery_path(), recovery)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    try:
+        yield
+    finally:
+        observed = path.read_bytes() if path.exists() else None
+        after = claude_settings_data(observed)
+        repaired = copy.deepcopy(after)
+        current = repaired.get("enabledPlugins", {})
+        for key, value in saved.items():
+            if current.get(key) == value:
+                continue
+            if key in current and current[key] is not True:
+                raise InstallError(f"Claude activation changed during installation: {key}; inspect before retrying")
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        if current or "enabledPlugins" in repaired:
+            repaired["enabledPlugins"] = current
+        if repaired != after:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            replace_claude_document(path, observed, repaired, mode, "settings")
+
+
+def complete_claude_activation(plan: HostPlan, args: argparse.Namespace,
+                               environment: Mapping[str, str]) -> None:
+    if plan.host != "claude":
+        return
+    recovery = read_activation_recovery()
+    key = str(claude_settings_path(args, environment))
+    pending = recovery["settings"].get(key)
+    if pending is None or not any(plugin_id in pending for plugin_id in plan.selected):
+        return
+    for plugin_id in plan.selected:
+        pending.pop(plugin_id, None)
+    if not pending:
+        del recovery["settings"][key]
+    if recovery["settings"]:
+        write_receipt(activation_recovery_path(), recovery)
+    else:
+        activation_recovery_path().unlink()
+
+
+def needs_claude_reinstall(plan: HostPlan, plugin_id: str, args: argparse.Namespace) -> bool:
+    return plan.host == "claude" and (
+        args.force or args.replace_marketplace
+        or plan.state.installed[plugin_id].version == plan.selected[plugin_id].version
+    )
 
 
 def apply(plan: HostPlan, args: argparse.Namespace, environment: Mapping[str, str]) -> None:
@@ -567,6 +700,23 @@ def apply(plan: HostPlan, args: argparse.Namespace, environment: Mapping[str, st
             environment=environment,
         )
     for plugin_id in plan.update:
+        if needs_claude_reinstall(plan, plugin_id, args):
+            installed = plan.state.installed
+            if plan.replace_marketplace and not args.dry_run:
+                installed = discover(plan.host, command, environment,
+                                     claude_scope=args.claude_scope,
+                                     claude_project_path=args.claude_project_path).installed
+            if plugin_id in installed:
+                run(mutation(command, plan.host, "uninstall", plugin_id, args),
+                    dry_run=args.dry_run, environment=environment)
+            # Native update compares versions and can retain stale same-version
+            # bytes. Reinstall through the native CLI to rematerialize its cache.
+            try:
+                run(mutation(command, plan.host, "install", plugin_id, args),
+                    dry_run=args.dry_run, environment=environment)
+            except InstallError as exc:
+                raise InstallError(f"Claude reinstall incomplete for {plugin_id}; rerun install-all to finish. {exc}") from exc
+            continue
         run(
             mutation(command, plan.host, "update", plugin_id, args),
             dry_run=args.dry_run,
@@ -714,6 +864,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with contextlib.ExitStack() as protections:
                     for plan in plans:
                         protections.enter_context(preserve_claude_registry(plan, args, environment, transaction_mutates=any(p.mutates for p in plans)))
+                        protections.enter_context(preserve_claude_activation(plan, args, environment))
                     for plan in plans:
                         apply(plan, args, environment)
                 if args.dry_run:
@@ -727,7 +878,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         installed = observed.installed.get(plugin_id)
                         if installed is None or installed.version != identity.version:
                             raise InstallError(f"{plan.host} plugin verification failed: {plugin_id} expected {identity.version}")
-                        if installed.root is not None and hash_tree(installed.root) != identity.digest:
+                        if installed.root is None:
+                            raise InstallError(f"{plan.host} installed plugin path is unavailable: {plugin_id}; update the host CLI before retrying")
+                        if hash_tree(installed.root) != identity.digest:
                             raise InstallError(f"{plan.host} plugin content verification failed: {plugin_id}")
                     next_hosts[plan.host] = {
                         "source": args.resolved_source,
@@ -738,12 +891,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 next_receipt = {"schema_version": 1, "marketplace": MARKETPLACE, "hosts": next_hosts}
                 if receipt != next_receipt:
                     write_receipt(receipt_file, next_receipt)
+                for plan in plans:
+                    complete_claude_activation(plan, args, environment)
                 if any(plan.install or plan.update for plan in plans):
                     log("restart open Codex/Claude sessions because a plugin root was replaced")
                 else:
                     log("all selected plugins are current")
         return 0
-    except (InstallError, OSError) as exc:
+    except (InstallError, OSError, subprocess.TimeoutExpired) as exc:
         log(f"error: {exc}")
         return 1
 

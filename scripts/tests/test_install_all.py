@@ -59,6 +59,8 @@ def write_fake_cli(path: Path, command_name: str) -> None:
                 print(json.dumps(payload))
             elif sys.argv[1:] == ["plugin", "list", "--json"]:
                 payload = state["installed"]
+                for item in payload:
+                    item.setdefault("installPath", str(Path(os.environ["AGENT_TOOLING_FAKE_GIT_SOURCE"]) / "plugins" / item["pluginId"].split("@", 1)[0]))
                 print(json.dumps({{"installed": payload}} if {command_name!r} == "codex" else payload))
             elif sys.argv[1:4] == ["plugin", "marketplace", "add"]:
                 args = sys.argv[1:]
@@ -71,6 +73,15 @@ def write_fake_cli(path: Path, command_name: str) -> None:
             elif sys.argv[1:4] in (["plugin", "marketplace", "upgrade"], ["plugin", "marketplace", "update"]):
                 if os.environ.get("AGENT_TOOLING_FAKE_CLIENT_RUNS_GIT") == "1":
                     subprocess.run(["git", "--version"], check=True, stdin=subprocess.DEVNULL)
+            elif sys.argv[1:3] == ["plugin", "uninstall"]:
+                args = sys.argv[1:]
+                selector = args[-1]
+                scope = args[args.index("--scope") + 1]
+                project_path = os.getcwd() if scope != "user" else None
+                state["installed"] = [item for item in state["installed"] if
+                    (item["pluginId"], item.get("scope", "user"), item.get("projectPath")) !=
+                    (selector, scope, project_path)]
+                save()
             elif sys.argv[1:3] in (["plugin", "add"], ["plugin", "install"], ["plugin", "update"]):
                 args = sys.argv[1:]
                 selector = next(value for value in args[2:] if "@" in value)
@@ -161,6 +172,8 @@ def write_stateful_fake_cli(path: Path, command_name: str, state_path: Path) -> 
                 print(json.dumps({{"marketplaces": items}} if {command_name!r} == "codex" else items))
             elif args == ["plugin", "list", "--json"]:
                 installed = state["installed"]
+                for item in installed:
+                    item.setdefault("installPath", str(Path({str(REPO_ROOT)!r}) / "plugins" / item["pluginId"].split("@", 1)[0]))
                 print(json.dumps({{"installed": installed}} if {command_name!r} == "codex" else installed))
             elif args[:3] == ["plugin", "marketplace", "add"]:
                 source = next(value for value in args[3:] if not value.startswith("-") and value not in ("user", "project", "local", ".agents/plugins", ".claude-plugin", "plugins", "main"))
@@ -168,6 +181,9 @@ def write_stateful_fake_cli(path: Path, command_name: str, state_path: Path) -> 
                 save()
             elif args[:3] in (["plugin", "marketplace", "upgrade"], ["plugin", "marketplace", "update"]):
                 pass
+            elif args[:2] == ["plugin", "uninstall"]:
+                state["installed"] = [item for item in state["installed"] if item["pluginId"] != args[-1]]
+                save()
             elif args[:2] in (["plugin", "add"], ["plugin", "install"], ["plugin", "update"]):
                 selector = next(value for value in args[2:] if "@" in value)
                 version = os.environ["AGENT_TOOLING_FAKE_VERSION"]
@@ -202,6 +218,7 @@ def mutation_calls(calls: list[dict[str, object]]) -> list[dict[str, object]]:
         ("plugin", "add"),
         ("plugin", "install"),
         ("plugin", "update"),
+        ("plugin", "uninstall"),
     }
     return [
         call
@@ -595,7 +612,8 @@ class InstallAllTests(unittest.TestCase):
             self.assertEqual(
                 [
                     {"command": "codex", "args": ["plugin", "add", "goalspec@agent-tooling"]},
-                    {"command": "claude", "args": ["plugin", "update", "--scope", "user", "goalspec@agent-tooling"]},
+                    {"command": "claude", "args": ["plugin", "uninstall", "--scope", "user", "--keep-data", "goalspec@agent-tooling"]},
+                    {"command": "claude", "args": ["plugin", "install", "--scope", "user", "goalspec@agent-tooling"]},
                 ],
                 forced_mutations,
             )
@@ -616,6 +634,9 @@ class InstallAllTests(unittest.TestCase):
     def test_failed_update_preserves_previous_receipt(self) -> None:
         with tempfile.TemporaryDirectory(prefix="install-all-failed-receipt-") as tmp:
             temp_root = Path(tmp)
+            previous_cache = temp_root / "previous-cache"
+            previous_cache.mkdir()
+            (previous_cache / "payload.txt").write_text("previous version", encoding="utf-8")
             receipt = temp_root / "state" / "agent-tooling" / "install-all.json"
             receipt.parent.mkdir(parents=True)
             prior = {
@@ -628,7 +649,7 @@ class InstallAllTests(unittest.TestCase):
                         "plugins": {
                             "goalspec@agent-tooling": {
                                 "version": "0.0.1",
-                                "digest": "a" * 64,
+                                "digest": hash_tree(previous_cache),
                             }
                         },
                     }
@@ -659,6 +680,7 @@ class InstallAllTests(unittest.TestCase):
                             "pluginId": "goalspec@agent-tooling",
                             "version": "0.0.1",
                             "enabled": True,
+                            "installPath": str(previous_cache),
                         }
                     ]
                 },

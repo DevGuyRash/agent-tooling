@@ -32,6 +32,13 @@ elif args==['plugin','list','--json']:
     else:
         rows=[{'pluginId':key,'enabled':True,**entry} for key,entries in read(registry)['plugins'].items() for entry in entries]
         print(json.dumps(rows))
+elif args[:2]==['plugin','uninstall']:
+    scope=args[args.index('--scope')+1]
+    project=os.getcwd() if scope!='user' else None
+    data=read(registry)
+    data['plugins']['target@agent-tooling']=[e for e in data['plugins'].get('target@agent-tooling',[])
+        if (e.get('scope'),e.get('projectPath'))!=(scope,project)]
+    write(registry,data)
 elif args[:2] in (['plugin','add'],['plugin','install'],['plugin','update']):
     scope=args[args.index('--scope')+1] if '--scope' in args else 'user'
     if os.environ.get('FAULT')=='wrong-user' and name=='claude':scope='project'
@@ -92,7 +99,7 @@ class InstallerScopeProcessTests(unittest.TestCase):
             proc=subprocess.run(argv,cwd=work,env=env,text=True,capture_output=True)
             after=json.loads(registry.read_text())
             calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
-            mutations=[c for c in calls if c['args'][:2] in (['plugin','add'],['plugin','install'],['plugin','update'])]
+            mutations=[c for c in calls if c['args'][:2] in (['plugin','add'],['plugin','install'],['plugin','update'],['plugin','uninstall'])]
             receipt=root/'state/agent-tooling/install-all.json'
             return proc,before,after,mutations,(json.loads(receipt.read_text()) if receipt.exists() else None),registry.read_bytes()==original,str(work)
 
