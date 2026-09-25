@@ -1,0 +1,31 @@
+:root { color-scheme: light; font: 16px/1.55 system-ui, sans-serif; color: #183135; background: #f3f7f6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header, main, footer { width: min(1050px, calc(100% - 40px)); margin: auto; }
+header { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; padding: 22px 0; border-bottom: 1px solid #bacdca; }
+header .brand { font-weight: 800; margin-right: auto; letter-spacing: -.03em; }
+nav { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
+a { color: #075c66; text-underline-offset: 4px; }
+button, select, input { font: inherit; border: 1px solid #90aca8; border-radius: 8px; padding: 8px 13px; color: inherit; background: white; }
+button { cursor: pointer; }
+button.primary { background: #175f61; color: white; border-color: #175f61; }
+button:hover { filter: brightness(.96); }
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #d39c32; outline-offset: 3px; }
+main { padding: 32px 0 60px; }
+h1 { font-size: clamp(2rem, 6vw, 3.3rem); line-height: 1.1; letter-spacing: -.045em; margin: 12px 0 22px; }
+h2 { font-size: 1.45rem; line-height: 1.2; }
+p { max-width: 74ch; }
+.eyebrow { text-transform: uppercase; font-size: .78rem; font-weight: 750; letter-spacing: .1em; color: #476c66; }
+.card { background: white; border: 1px solid #c6d8d4; border-radius: 15px; padding: 22px; margin: 20px 0; }
+.muted { color: #506866; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 18px; margin: 20px 0; }
+label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.notice { padding: 12px 16px; border-left: 4px solid #b98921; background: #fff8e5; }
+dialog { border: 1px solid #769f9b; border-radius: 16px; width: min(620px, calc(100% - 32px)); color: inherit; padding: 24px; }
+dialog::backdrop { background: #18313588; }
+dialog .actions { display: flex; justify-content: end; gap: 10px; margin-top: 22px; }
+dl { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr; gap: 12px 20px; }
+dt { font-weight: 650; } dd { margin: 0; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
+footer { color: #506866; font-size: .86rem; padding: 18px 0; border-top: 1px solid #c6d8d4; }
+@media (max-width: 550px) { header, main, footer { width: calc(100% - 28px); } .card { padding: 17px; } nav { gap: 12px; } dl { grid-template-columns: 1fr; gap: 3px; } dd { margin-bottom: 12px; } }

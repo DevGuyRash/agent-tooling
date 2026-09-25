@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Field Notes — Browser Survey Fixture</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui;color:#182b39;background:#edf4f7}header,main,footer{padding:1rem clamp(1rem,4vw,3rem)}header{background:#163c51;color:white}header a{color:#d5f3ff}nav{display:flex;gap:1rem;flex-wrap:wrap}button,input,select{font:inherit;padding:.55rem .8rem}button{cursor:pointer}section{padding:1rem;margin-block:1rem;background:white;border:1px solid #bbd0dc;border-radius:.6rem}.pair{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.scroll-box{height:220px;overflow:auto;border:2px solid #588297}.wide{width:1100px;height:460px;background:repeating-linear-gradient(35deg,#cee8e6 0px,#cee8e6 50px,#cddded 50px,#cddded 100px)}#virtual{position:relative;height:200px;overflow:auto}#spacer{height:3600px}#virtual-rows{position:absolute;top:0;left:0;right:0;background:#e3eeee}.row{height:36px;padding:.3rem}.error{color:#9c2438}dialog{max-width:90vw;border:1px solid #7e99a7;border-radius:.5rem}iframe{width:100%;height:130px;border:1px solid #809ba6}footer{min-height:500px;background:#d4e5eb}@media(max-width:600px){.pair{grid-template-columns:1fr}}@media(prefers-color-scheme:dark){body{background:#172831;color:#e3edf1}section{background:#263b48}#virtual-rows{background:#324a50}footer{background:#223944}}
+</style>
+<style>.pair>section{min-width:0}</style>
+<header><h1>Field Notes</h1><nav aria-label="Primary"><a href="/next?filter=small#details">Explore</a><a href="/next?filter=large#details">Explore</a><a href="#measurements">Measurements</a><a href="/next?filter=small#details">Explore</a></nav></header>
+<main>
+<section><h2>Choose a view</h2><div role="tablist" aria-label="Data view"><button role="tab" aria-selected="true" id="summary-tab">Summary</button><button role="tab" aria-selected="false" id="details-tab">Details</button></div><div id="tab-panel">The summary shows an initial observation.</div><label>Sample size <select id="sample"><option>Small sample</option><option>Large sample</option></select></label><button id="open-dialog">Review note</button><button id="popup">Open companion</button><button id="expected-error">Exercise expected error</button></section>
+<section id="measurements"><h2>Measurements</h2><p id="delayed-status" role="status">Loading illustration…</p><img id="delayed-image" src="/slow-image.svg" width="240" height="110" alt="Delayed synthetic illustration"><div id="shadow-host"></div><label>Contact <input type="text" value="synthetic contact"></label><label>Password <input type="password" value="synthetic-hidden-value"></label></section>
+<div class="pair"><section><h2>Two dimensional canvas</h2><div class="scroll-box" aria-label="Scrollable canvas" id="canvas-scroll"><div class="wide"><span>Canvas top left</span><p style="padding:260px 0 0 900px">Canvas end</p></div></div></section><section><h2>Virtualized records</h2><div id="virtual" class="scroll-box" aria-label="Virtualized records"><div id="spacer"></div><div id="virtual-rows"></div></div></section></div>
+<section><h2>Embedded observations</h2><iframe name="embedded" title="Embedded survey fixture" src="/frame"></iframe></section>
+<section><h2>Repeated identities</h2><button id="duplicate">Repeated action</button><button id="duplicate">Repeated action</button><a href="/next?label=%CE%94#%E6%B8%AC%E5%AE%9A">Δ 測定 → next</a><div id="grow" class="scroll-box" aria-label="Growing records"><div id="grow-content" style="height:500px">More records appear at the end.</div></div></section>
+</main>
+<footer><h2>End of the observed document</h2><p>Footer remains a useful scroll target.</p></footer>
+<dialog id="review-dialog"><h2>Review note</h2><label>Note <textarea id="note"></textarea></label><button id="save-note">Save note</button><button id="close-dialog">Close review</button><p id="saved-note" role="status"></p></dialog>
+<script>
+const query=new URLSearchParams(location.search);
+const panel=document.querySelector('#tab-panel');
+document.querySelector('#details-tab').onclick=()=>{document.querySelector('#details-tab').setAttribute('aria-selected','true');document.querySelector('#summary-tab').setAttribute('aria-selected','false');panel.innerHTML='<p>Detailed measurements</p><a href="/next?from=details#new">More detail</a>';location.hash='details'};
+document.querySelector('#summary-tab').onclick=()=>{document.querySelector('#summary-tab').setAttribute('aria-selected','true');document.querySelector('#details-tab').setAttribute('aria-selected','false');panel.textContent='The summary shows an initial observation.';location.hash='summary'};
+document.querySelector('#open-dialog').onclick=()=>document.querySelector('#review-dialog').showModal();
+document.querySelector('#close-dialog').onclick=()=>document.querySelector('#review-dialog').close();
+document.querySelector('#save-note').onclick=()=>{localStorage.setItem('survey-note',document.querySelector('#note').value);document.querySelector('#saved-note').textContent='Note saved';};
+document.querySelector('#popup').onclick=()=>window.open('/next?popup=yes#companion','companion');
+document.querySelector('#expected-error').onclick=()=>{console.error('Expected synthetic error');fetch('/expected-failure');setTimeout(()=>{throw new Error('Expected synthetic page error')},0)};
+document.querySelector('#delayed-image').onload=()=>document.querySelector('#delayed-status').textContent='Illustration ready';
+const shadow=document.querySelector('#shadow-host').attachShadow({mode:'open'});shadow.innerHTML='<p>Open shadow content</p><button aria-label="Shadow action">Shadow action</button><a href="/next?shadow=yes#inside">Shadow destination</a>';
+const virtual=document.querySelector('#virtual'),rows=document.querySelector('#virtual-rows');function paintRows(){const start=Math.floor(virtual.scrollTop/36);rows.style.transform=`translateY(${start*36}px)`;rows.innerHTML=Array.from({length:7},(_,index)=>`<div class="row" data-item="${start+index}">Record ${start+index+1}</div>`).join('')}virtual.addEventListener('scroll',paintRows);paintRows();
+if(query.has('growing'))document.querySelector('#grow').addEventListener('scroll',()=>{const el=document.querySelector('#grow'),content=document.querySelector('#grow-content');if(el.scrollTop+el.clientHeight>=el.scrollHeight-5)content.style.height=(content.offsetHeight+400)+'px'});
+if(query.has('unstable')){const el=document.createElement('div');el.id='unstable';el.style.height='30px';document.body.prepend(el);setInterval(()=>el.style.width=(50+Math.random()*300)+'px',40)}
+if(query.has('overflow'))document.querySelector('main').style.minWidth='950px';
+if(query.has('broken-image')){const img=new Image();img.src='/missing.png';img.alt='Intentionally missing image';document.querySelector('main').prepend(img)}
+if(query.has('continuous'))setInterval(()=>fetch('/tick').catch(()=>{}),40);
+</script></html>
