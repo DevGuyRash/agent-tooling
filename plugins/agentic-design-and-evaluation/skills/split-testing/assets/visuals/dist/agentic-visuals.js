@@ -3375,7 +3375,7 @@ define("review-targets", ["require", "exports", "exact-json", "identity", "figur
             const block = current?.matches('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,blockquote,pre,li,dt,dd,tr');
             if (block)
                 parts.push('\n');
-            const badge = current?.matches('.av-badge');
+            const badge = current?.matches('.av-status');
             if (badge)
                 parts.push(' ');
             if (current?.matches('td,th'))

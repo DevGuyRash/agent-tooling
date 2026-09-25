@@ -51,7 +51,7 @@ export function readableReviewText(element: Element): string {
     if(current?.tagName.toLowerCase()==='br'){parts.push('\n');return;}
     const block=current?.matches('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,blockquote,pre,li,dt,dd,tr');
     if(block)parts.push('\n');
-    const badge=current?.matches('.av-badge');if(badge)parts.push(' ');
+    const badge=current?.matches('.av-status');if(badge)parts.push(' ');
     if(current?.matches('td,th'))parts.push('\t');
     for(const child of reviewChildren(node))visit(child);
     if(badge)parts.push(' ');

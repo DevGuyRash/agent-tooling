@@ -21,6 +21,10 @@ function openNote(api,f,text){assert(api.click(action(f.card,'new-note')));const
 function notebook(f){return attachNotebooks(f.root,{now:()=>at,reveal:()=>{},navigate:()=>{}});}
 async function exported(api,f){api.click(f.book.querySelector('[data-av-notebook-action="export"]'));await api.whenIdle();const url=f.book.querySelector('[data-av-notebook-action="download"]').getAttribute('href');return JSON.parse(decodeURIComponent(url.slice(url.indexOf(',')+1)));}
 (async()=>{
+ const prose=fixture().parse('<section><h2>Question?</h2><p>Context.'+moduleOf('core').status('uncertain')+'</p></section>').firstChild;
+ const review=moduleOf('review-targets');
+ assert.match(review.readableReviewText(prose),/Question\?\n+Context\. uncertain/,'Report context separates prose and real renderer status labels');
+ assert.equal(review.reviewText(prose),'Question?Context.uncertain','Handoff formatting leaves exact quote offsets intact');
  for(const text of ['', 'a','漢字 👩🏽‍🚀','\ud800','a'.repeat(511)])assert.equal(fingerprint(text),'sha256-utf16le:'+crypto.createHash('sha256').update(Buffer.from(text,'utf16le')).digest('hex'));
  const f=setup(),reg=createTargetRegistry(f.root,'r1'),anchor=reg.anchor(f.card);assert.equal(reg.resolve(anchor).status,'resolved');assert.equal(anchor.target.sources[0].href,'https://example.org/original');
  f.card.querySelector('p').textContent='Changed findings';assert.equal(reg.resolve(anchor).status,'changed');f.card.remove();assert.equal(reg.resolve(anchor).status,'missing');reg.cleanup();
