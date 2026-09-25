@@ -29,7 +29,7 @@ Current local plugins:
 - `plugins/excel-foundry/`
 - `plugins/visualization/`
 - `plugins/goalspec/` exposes `goalspec` for both Codex and Claude and bundles the agnostic `$authoring-goals` skill payload.
-- `plugins/playwright-testing/`
+- [Playwright Testing](plugins/playwright-testing/README.md) provides outcome-oriented test design and execution, Browser Survey, and shared capture, evidence and isolated-session helpers.
 - `plugins/project-harness/`
 - [Agentic Design & Evaluation](plugins/agentic-design-and-evaluation/README.md) provides Prompt and Context Design, Skill Auditor, Split Testing, Self-Healing, and Foundational Knowledge. Its shared references are the maintained masters; Split Testing owns comparative methodology. Entries support the same assignment without automatic workflow chaining. Self-Healing uses the assignment’s existing tools and retained evidence.
 

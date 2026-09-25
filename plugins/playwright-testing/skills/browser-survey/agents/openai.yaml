@@ -1,0 +1,4 @@
+interface:
+  display_name: "Browser Survey"
+  short_description: "Explore sites and capture useful browser evidence"
+  default_prompt: "Use $browser-survey to investigate this application and capture reproducible evidence of its important states."

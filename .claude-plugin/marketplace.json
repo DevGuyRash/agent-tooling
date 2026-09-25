@@ -32,8 +32,8 @@
     {
       "name": "playwright-testing",
       "source": "./plugins/playwright-testing",
-      "description": "Outcome-first, non-brittle e2e tests",
-      "version": "1.2.2"
+      "description": "Browser tests, application surveys, and reproducible evidence with headless or isolated headed execution",
+      "version": "1.3.0"
     },
     {
       "name": "project-harness",
