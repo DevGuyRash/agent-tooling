@@ -22,7 +22,11 @@ function enters(a,b,box) {
   const failures=[];
   for(let attempt=1;attempt<=3;attempt++)for(const fixture of JSON.parse(fs.readFileSync(path.join(__dirname,'architecture-group-regressions.json'),'utf8'))) {
     context.db=(await context.mermaid.mermaidAPI.getDiagramFromText(fixture.source)).db;
-    for(const service of context.db.getServices())service.avMeasuredBounds={x:0,y:0,width:80,height:fixture.captionHeight};
+    for(const service of context.db.getServices()) {
+      const height=Math.max(104,fixture.captionHeight);
+      service.avMeasuredBounds={x:0,y:0,width:80,height};
+      service.avCaptionBounds={x:0,y:88,width:80,height:height-88};
+    }
     let result;
     try { result=await vm.runInContext(`(async()=>{
       const size=db.getConfigField('iconSize');
@@ -50,13 +54,15 @@ function enters(a,b,box) {
         const records=[],element=tag=>{const record={tag,attributes:{}};records.push(record);return{insert:element,append:element,attr(name,value){record.attributes[name]=value;return this;}};};
         await units.drawEdges(element('edges'),cy,db,'probe');
         const frames=Object.fromEntries(cy.nodes().filter(n=>n.data('type')==='group').map(n=>{const b=n.boundingBox();return[n.id(),{x1:b.x1+size/2,x2:b.x2+size/2,y1:b.y1+size/2,y2:b.y2+size/2}];}));
-        return{connections,frames,paths:records.filter(r=>r.tag==='path').map(r=>r.attributes)};
+        const captions=cy.nodes().filter(n=>n.data('avCaptionBounds')).map(n=>{const b=n.data('avCaptionBounds'),p=n.position();return{x1:p.x+b.x,x2:p.x+b.x+b.width,y1:p.y+b.y,y2:p.y+b.y+b.height};});
+        return{connections,frames,captions,paths:records.filter(r=>r.tag==='path').map(r=>r.attributes)};
       } finally {cy.destroy();}
     })()`,context,{timeout:20000}); }
     catch(error) { failures.push({fixture:fixture.name,attempt,error:String(error.message)}); continue; }
     for(const connection of result.connections) {
       const shape=result.paths.find(p=>p.id===connection.id);assert(shape,'Original relationships retain their native path identity');
       const points=shape.d.replace(/[ML]/g,'').trim().split(/\s+/).map(p=>p.split(',').map(Number));
+      for(const caption of result.captions)if(points.slice(1).some((p,i)=>enters(points[i],p,caption)))failures.push({fixture:fixture.name,attempt,reason:'caption crossed',path:shape.d,caption});
       for(let i=1;i<points.length-1;i++) {
         const a=points[i-1],b=points[i],c=points[i+1],x=b[0]-a[0],y=b[1]-a[1],dx=c[0]-b[0],dy=c[1]-b[1];
         if(Math.abs(x*dy-y*dx)<1e-7&&x*dx+y*dy<0)failures.push({fixture:fixture.name,attempt,reason:'collinear reversal',path:shape.d});
@@ -64,7 +70,7 @@ function enters(a,b,box) {
       for(const group of [connection.sourceGroup,connection.targetGroup].filter(Boolean)) {
         if(points.slice(1).some((p,i)=>enters(points[i],p,result.frames[group])))failures.push({fixture:fixture.name,attempt,connection:connection.id,group,path:shape.d});
       }
-      if(connection.sourceGroup||connection.targetGroup) {
+      {
         const vectors={L:[-1,0],R:[1,0],T:[0,-1],B:[0,1]};
         for(const [point,outside,side] of [[points[0],points[1],connection.sourceDirection],[points.at(-1),points.at(-2),connection.targetDirection]]) {
           const v=vectors[side],x=outside[0]-point[0],y=outside[1]-point[1];

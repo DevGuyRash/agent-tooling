@@ -11,6 +11,26 @@ function avArchitectureFootprint(iconSize, box) {
   };
 }
 
+function avArchitectureMeasureEdgeWidth(root) {
+  const probe = root.append('path').attr('class', 'edge');
+  try {
+    const node = probe.node(), view = node.ownerDocument?.defaultView;
+    const width = Number.parseFloat(view?.getComputedStyle(node).strokeWidth || '3');
+    return Number.isFinite(width) ? Math.max(0, width) : 3;
+  } finally { probe.remove(); }
+}
+
+function avArchitectureMeasureCaption(selection, service, iconSize, strokeWidth) {
+  const box = selection.node().getBBox();
+  // Leave an exit channel for the painted stroke, including its antialiasing.
+  // Existing larger title gaps remain intact; the icon-side ports never move.
+  const clearance = strokeWidth / 2 + 1;
+  const gap = Math.max(box.y, 8, iconSize / 10, clearance * 2 + 2);
+  selection.attr('transform', `translate(${iconSize / 2}, ${iconSize + gap - box.y})`);
+  service.avEdgeWidth = strokeWidth;
+  service.avCaptionBounds = { x: box.x + iconSize / 2, y: iconSize + gap, width: box.width, height: box.height };
+}
+
 function avArchitectureIconEndpoint(cy, id, direction) {
   const icon = cy.getElementById(id).data('iconSize');
   const [x, y] = { L: [0, .5], R: [1, .5], T: [.5, 0], B: [.5, 1] }[direction];
@@ -38,7 +58,7 @@ function avArchitectureGroupMidpoint(start, end, sourceDirection, targetDirectio
   return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
 }
 
-function avArchitectureGroupRoute(cy, sourceId, targetId, sourceGroup, targetGroup, start, end, sourceDirection, targetDirection, iconSize) {
+function avArchitectureConnectionRoute(cy, sourceId, targetId, sourceGroup, targetGroup, start, end, sourceDirection, targetDirection, iconSize) {
   if (!avArchitectureRouter) return null;
   const source = cy.getElementById(sourceId), target = cy.getElementById(targetId);
   const first = sourceGroup && source.parent().length ? source.parent() : source;
@@ -54,6 +74,12 @@ function avArchitectureGroupRoute(cy, sourceId, targetId, sourceGroup, targetGro
       const point = node.position(); boxes.push({ x: point.x, y: point.y, width: iconSize, height: iconSize });
     } else {
       const box = node.boundingBox(); boxes.push({ x: box.x1 + offset, y: box.y1 + offset, width: box.w, height: box.h });
+    }
+    const caption = node.data('avCaptionBounds');
+    if (caption && caption.width > 0 && caption.height > 0) {
+      const point = node.position(), clearance = (node.data('avEdgeWidth') ?? 3) / 2 + 1;
+      boxes.push({ x: point.x + caption.x - clearance, y: point.y + caption.y - clearance,
+        width: caption.width + clearance * 2, height: caption.height + clearance * 2 });
     }
   }
   const obstacles = boxes.filter((box, i) => !boxes.some((other, j) => j !== i
@@ -71,6 +97,8 @@ function oLi(services, cy, db) {
       data: {
         type: 'service', id: service.id, icon: service.icon,
         label: service.title, parent: service.in, iconSize,
+        avCaptionBounds: service.avCaptionBounds,
+        avEdgeWidth: service.avEdgeWidth,
         width: footprint.width, height: footprint.height,
       },
       classes: 'node-service',

@@ -1,6 +1,6 @@
 {
   "upstreamSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
-  "artifactSha256": "8cf1eb89bbf54f66153f49a6cad4d01664d28b85eb507152b4daa0095bf0c911",
+  "artifactSha256": "a8ef9dc90d75b4bc9a204a56e6d5aab745eccce3cc2b0de08989895bc4414705",
   "patches": [
     {
       "id": "c4-container-width",
@@ -116,8 +116,18 @@
     },
     {
       "id": "architecture-measured-service-footprints",
-      "description": "Use complete measured service footprints for architecture spacing and group bounds; retain icon anchors and provide scoped shared routing for complete group connections and their qualifiers.",
+      "description": "Use complete measured service footprints for spacing and group bounds; retain icon anchors and route ordinary and group connections around separately measured captions and node obstacles.",
       "replacements": [
+        {
+          "name": "measure-painted-edge-width",
+          "before": "otn=i(async function(t,r,a,s){let l=Qt();for(let h of a)",
+          "after": "otn=i(async function(t,r,a,s){let l=Qt(),avEdgeWidth=avArchitectureMeasureEdgeWidth(r);for(let h of a)"
+        },
+        {
+          "name": "measure-caption-at-icon-anchor",
+          "before": "T.attr(\"dy\",\"1em\").attr(\"alignment-baseline\",\"middle\").attr(\"dominant-baseline\",\"middle\").attr(\"text-anchor\",\"middle\"),T.attr(\"transform\",\"translate(\"+d/2+\", \"+d+\")\")",
+          "after": "T.attr(\"dy\",\"1em\").attr(\"alignment-baseline\",\"middle\").attr(\"dominant-baseline\",\"middle\").attr(\"text-anchor\",\"middle\"),T.attr(\"transform\",\"translate(\"+d/2+\", \"+d+\")\"),avArchitectureMeasureCaption(T,h,d,avEdgeWidth)"
+        },
         {
           "name": "measure-complete-service",
           "before": "let{width:b,height:v}=f.node().getBBox();h.width=b,h.height=v,t.setElementForId(h.id,f)",
@@ -169,9 +179,9 @@
           "after": "avGroupRoute)V.attr(\"transform\",`translate(${O}, ${P}) rotate(${avGroupRoute.labelAngle})`);else if(J===\"X\")V.attr(\"transform\",\"translate(\"+O+\", \"+P+\")\")"
         },
         {
-          "name": "route-group-footprints",
+          "name": "route-all-measured-footprints",
           "before": "q+=R===\"T\"?f:-f),b[0]._private.rscratch){let Z=t.insert(\"g\")",
-          "after": "q+=R===\"T\"?f:-f),b[0]._private.rscratch){let avGroupRoute=(E||D)?avArchitectureGroupRoute(r,v,S,E,D,{x:N,y:F},{x:G,y:q},T,R,h):null;if(avGroupRoute)({x:O,y:P}=avGroupRoute.label);else if(E||D)({x:O,y:P}=avArchitectureGroupMidpoint({x:N,y:F},{x:G,y:q},T,R));let Z=t.insert(\"g\")"
+          "after": "q+=R===\"T\"?f:-f),b[0]._private.rscratch){let avGroupRoute=avArchitectureConnectionRoute(r,v,S,E,D,{x:N,y:F},{x:G,y:q},T,R,h);if(avGroupRoute)({x:O,y:P}=avGroupRoute.label);else if(E||D)({x:O,y:P}=avArchitectureGroupMidpoint({x:N,y:F},{x:G,y:q},T,R));let Z=t.insert(\"g\")"
         }
       ]
     }

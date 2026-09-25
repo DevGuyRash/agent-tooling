@@ -6,7 +6,7 @@ import { readerDate } from './review-presentation';
 import { selectedFigureItems } from './item-selection';
 import { NotificationMessage } from './notifications';
 import { fingerprint } from './identity';
-import { createTargetRegistry, TargetRegistry } from './review-targets';
+import { createTargetRegistry, readableReviewText, TargetRegistry } from './review-targets';
 import { attachContextReview, ContextReviewController } from './context-review';
 import { ReviewChange, emptyReviewRecords } from './review-state';
 import { annotatedReport, reviewHandoff, retainReportRecipe, readReviewSeed } from './review-export';
@@ -715,7 +715,7 @@ export function attachNotebooks(root: HTMLElement, hooks: NotebookHooks): Notebo
           const operation = (async () => {
             await Promise.all((action === "export-report" ? [...peers.values()] : [session]).map(other=>refreshForExport(other)));
             if (cleaned) return;
-            const copy = session.reviewUI?.exportNotebook(snapshot(session)) || snapshot(session), question = session.scope.querySelector('[data-av-report-brief],.av-report-brief')?.textContent?.trim() || '';
+            const copy = session.reviewUI?.exportNotebook(snapshot(session)) || snapshot(session), brief = session.scope.querySelector('[data-av-report-brief],.av-report-brief'), question = brief ? readableReviewText(brief) : '';
             if (action === "export-report") {
               if([...peers.values()].some(other=>other.seedInvalid))throw new Error('Recover or correct the embedded review before creating a new annotated report. Your current notes remain exportable as notebook data.');
               const reports = {...(readReviewSeed(document)?.reports||{}),...Object.fromEntries([...peers].map(([scope, other]) => [scope.id, other.reviewUI?.exportNotebook(snapshot(other)) || snapshot(other)]))};

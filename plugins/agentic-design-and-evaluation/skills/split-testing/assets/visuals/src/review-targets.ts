@@ -39,6 +39,27 @@ function reviewNodes(element: Node): {node:Node;start:number;end:number}[] {
   visit(element);return nodes;
 }
 export function reviewText(element: Element): string {return reviewNodes(element).map(item=>item.node.textContent||'').join('');}
+/** Human-readable context; exact text offsets and target identities use reviewText. */
+export function readableReviewText(element: Element): string {
+  const parts:string[]=[];
+  const visit=(node:Node):void=>{
+    const original=substitutes.get(node);if(original){visit(original);return;}
+    if(node.nodeType===3){parts.push(node.textContent||'');return;}
+    if(node.nodeType!==1&&node.nodeType!==11)return;
+    const current=node.nodeType===1?node as Element:null;
+    if(current?.matches(excluded+',.av-focus-dialog'))return;
+    if(current?.tagName.toLowerCase()==='br'){parts.push('\n');return;}
+    const block=current?.matches('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,blockquote,pre,li,dt,dd,tr');
+    if(block)parts.push('\n');
+    const badge=current?.matches('.av-badge');if(badge)parts.push(' ');
+    if(current?.matches('td,th'))parts.push('\t');
+    for(const child of reviewChildren(node))visit(child);
+    if(badge)parts.push(' ');
+    if(block)parts.push('\n');
+  };
+  visit(element);
+  return parts.join('').replace(/[ \t]*\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
 function reviewOffset(root:Element,boundary:Node,at:number):number|null {
   let count=0,result:number|null=null;
   const visit=(node:Node):void=>{

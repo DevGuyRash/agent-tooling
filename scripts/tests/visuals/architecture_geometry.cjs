@@ -5,7 +5,7 @@ const { routeArchitectureConnection } = require(path.resolve(process.argv[2], 'a
 let source = fs.readFileSync(path.join(root, 'plugins/agentic-design-and-evaluation/skills/split-testing/assets/visuals/vendor/mermaid/mermaid.min.js'), 'utf8');
 const hook = 'i(pLi,"layoutArchitecture");';
 assert.equal(source.split(hook).length, 2, 'Pinned numeric test access must be unique');
-source = source.replace(hook, hook + 'globalThis.avArchitectureUnits={cytoscape:c3,align:fLi,relative:dLi,seed:B0t,groups:uLi,services:oLi,junctions:lLi,edges:hLi,endpoint:Xse.manualEndptToPx,groupEndpoint:avArchitectureGroupEndpoint,drawEdges:atn,drawGroups:stn};');
+source = source.replace(hook, hook + 'globalThis.avArchitectureUnits={cytoscape:c3,align:fLi,relative:dLi,seed:B0t,groups:uLi,services:oLi,junctions:lLi,edges:hLi,endpoint:Xse.manualEndptToPx,groupEndpoint:avArchitectureGroupEndpoint,measureCaption:avArchitectureMeasureCaption,measureEdgeWidth:avArchitectureMeasureEdgeWidth,drawEdges:atn,drawGroups:stn};');
 const context = vm.createContext({ console: { log() {}, warn() {}, error() {} }, structuredClone, setTimeout, clearTimeout, setInterval, clearInterval, performance, TextEncoder, TextDecoder, URL });
 vm.runInContext(source, context, { timeout: 20000 });
 context.mermaid.initialize({ startOnLoad: false });
@@ -14,6 +14,16 @@ context.mermaid.setArchitectureRouter(routeArchitectureConnection);
   const original = fs.readFileSync(path.join(__dirname, 'mermaid-fixtures/architecture.mmd'), 'utf8');
   const diagram = await context.mermaid.mermaidAPI.getDiagramFromText(original);
   const db = diagram.db, units = context.avArchitectureUnits;
+  for(const stroke of [3,12]) {
+    let removed=0;
+    const probe={attr(){return this;},node(){return{ownerDocument:{defaultView:{getComputedStyle:()=>({strokeWidth:stroke+'px'})}}};},remove(){removed++;}};
+    assert.equal(units.measureEdgeWidth({append:()=>probe}),stroke,'Connection spacing uses the actual themed stroke');
+    assert.equal(removed,1,'The edge-style probe releases its temporary SVG node');
+    const service={},label={attr(){return this;},node(){return{getBBox:()=>({x:-50,y:3,width:100,height:44})};}};
+    units.measureCaption(label,service,80,stroke);
+    assert(service.avCaptionBounds.y-80>stroke+2,'A short native glyph gap leaves room for the complete painted connection');
+    assert.equal(service.avCaptionBounds.width,100,'Spacing does not shrink or truncate a caption');
+  }
   const { spatialMaps, groupAlignments } = db.getDataStructures();
   const hints = db.getLayoutHints(), alignments = units.align(db, spatialMaps, groupAlignments, hints);
   context.unitDb = db; context.units = units; context.alignments = alignments;
@@ -53,15 +63,17 @@ context.mermaid.setArchitectureRouter(routeArchitectureConnection);
 
   const servicesStart=source.indexOf('otn=i(async function'),servicesEnd=source.indexOf(',ltn=',servicesStart);
   assert(servicesStart>0&&servicesEnd>servicesStart);
-  let measurements;
-  const selection=()=>({id:'',append(){return selection();},attr(name,value){if(name==='id')this.id=value;return this;},html(){return this;},node(){return{getBBox:()=>measurements[this.id.split('-service-')[1]]};}});
+  let measurements, captionMeasurement;
+  const selection=()=>({id:'',append(){return selection();},remove(){},attr(name,value){if(name==='id')this.id=value;return this;},html(){return this;},node(){return{getBBox:()=>measurements[this.id.split('-service-')[1]]||captionMeasurement};}});
   const drawServices=vm.runInNewContext('('+source.slice(servicesStart+4,servicesEnd)+')',{
-    i:fn=>fn,Qt:()=>({}),ef:async()=>{},z0:async()=>'',T$:{prefix:'architecture'},
+    i:fn=>fn,Qt:()=>({}),ef:async()=>{},z0:async()=>'',T$:{prefix:'architecture'},avArchitectureMeasureCaption:units.measureCaption,avArchitectureMeasureEdgeWidth:units.measureEdgeWidth,
   });
   for(const [profile,extra,width,left,top] of [['caption',24,80,0,0],['wrapped',72,128,-24,0],['large-font',100,160,-32,-8]]) {
     measurements=Object.fromEntries(db.getServices().map(service=>[service.id,{x:left,y:top,width,height:80+extra}]));
+    captionMeasurement={x:left-40,y:3,width,height:extra+top-8};
     await drawServices(db,selection(),db.getServices(),'measured');
     for(const service of db.getServices())assert.equal(JSON.stringify(service.avMeasuredBounds),JSON.stringify(measurements[service.id]),'Complete getBBox geometry reaches the service model');
+    for(const service of db.getServices())assert.equal(JSON.stringify(service.avCaptionBounds),JSON.stringify({x:left,y:88,width,height:extra+top-8}),'Caption bounds retain the actual title-group translation');
     const measuredBoxes=vm.runInContext(layoutProbe,context,{timeout:20000});
     const measuredById=new Map(Array.from(measuredBoxes,item=>[item.id,item]));
     for(const group of db.getGroups())for(const service of db.getServices()) {

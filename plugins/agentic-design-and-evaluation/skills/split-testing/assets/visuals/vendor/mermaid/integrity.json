@@ -4,7 +4,7 @@
   "license": "MIT",
   "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.0.0.tgz",
   "packageIntegrity": "sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==",
-  "artifactSha256": "8cf1eb89bbf54f66153f49a6cad4d01664d28b85eb507152b4daa0095bf0c911",
+  "artifactSha256": "a8ef9dc90d75b4bc9a204a56e6d5aab745eccce3cc2b0de08989895bc4414705",
   "upstreamArtifactSha256": "28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073",
   "localPatches": [
     {

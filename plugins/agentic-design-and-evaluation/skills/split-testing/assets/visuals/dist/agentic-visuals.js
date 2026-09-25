@@ -3310,6 +3310,7 @@ define("review-targets", ["require", "exports", "exact-json", "identity", "figur
     exports.registerReviewPlaceholder = registerReviewPlaceholder;
     exports.registerReviewOrder = registerReviewOrder;
     exports.reviewText = reviewText;
+    exports.readableReviewText = readableReviewText;
     exports.createTargetRegistry = createTargetRegistry;
     const substitutes = new WeakMap();
     function registerReviewPlaceholder(marker, element) { substitutes.set(marker, element); return () => substitutes.delete(marker); }
@@ -3349,6 +3350,46 @@ define("review-targets", ["require", "exports", "exact-json", "identity", "figur
         return nodes;
     }
     function reviewText(element) { return reviewNodes(element).map(item => item.node.textContent || '').join(''); }
+    /** Human-readable context; exact text offsets and target identities use reviewText. */
+    function readableReviewText(element) {
+        const parts = [];
+        const visit = (node) => {
+            const original = substitutes.get(node);
+            if (original) {
+                visit(original);
+                return;
+            }
+            if (node.nodeType === 3) {
+                parts.push(node.textContent || '');
+                return;
+            }
+            if (node.nodeType !== 1 && node.nodeType !== 11)
+                return;
+            const current = node.nodeType === 1 ? node : null;
+            if (current?.matches(excluded + ',.av-focus-dialog'))
+                return;
+            if (current?.tagName.toLowerCase() === 'br') {
+                parts.push('\n');
+                return;
+            }
+            const block = current?.matches('p,div,section,article,header,footer,h1,h2,h3,h4,h5,h6,blockquote,pre,li,dt,dd,tr');
+            if (block)
+                parts.push('\n');
+            const badge = current?.matches('.av-badge');
+            if (badge)
+                parts.push(' ');
+            if (current?.matches('td,th'))
+                parts.push('\t');
+            for (const child of reviewChildren(node))
+                visit(child);
+            if (badge)
+                parts.push(' ');
+            if (block)
+                parts.push('\n');
+        };
+        visit(element);
+        return parts.join('').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
     function reviewOffset(root, boundary, at) {
         let count = 0, result = null;
         const visit = (node) => {
@@ -6462,7 +6503,7 @@ define("notebook", ["require", "exports", "exact-json", "review-presentation", "
                             await Promise.all((action === "export-report" ? [...peers.values()] : [session]).map(other => refreshForExport(other)));
                             if (cleaned)
                                 return;
-                            const copy = session.reviewUI?.exportNotebook(snapshot(session)) || snapshot(session), question = session.scope.querySelector('[data-av-report-brief],.av-report-brief')?.textContent?.trim() || '';
+                            const copy = session.reviewUI?.exportNotebook(snapshot(session)) || snapshot(session), brief = session.scope.querySelector('[data-av-report-brief],.av-report-brief'), question = brief ? (0, review_targets_1.readableReviewText)(brief) : '';
                             if (action === "export-report") {
                                 if ([...peers.values()].some(other => other.seedInvalid))
                                     throw new Error('Recover or correct the embedded review before creating a new annotated report. Your current notes remain exportable as notebook data.');
