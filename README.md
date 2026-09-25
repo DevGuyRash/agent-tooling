@@ -85,6 +85,7 @@ Local tests:
 - `just test-plugin-port` runs deterministic unit tests.
 - `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CLAUDE=1 just test-plugin-port-live` runs Claude CLI checks when `claude` is installed.
 - `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CODEX=1 just test-plugin-port-live` runs Codex temp-marketplace checks when `codex` is installed.
+- Set `PLUGIN_PORT_CODEX_BIN=/absolute/path/to/codex` to select a native executable when the `codex` wrapper chooses a different profile. The test confirms a unique skill marker from the temporary profile before registering or installing its fixture.
 - Live tests use temporary directories and a temporary `CODEX_HOME`; they do not install into the user's normal plugin state.
 
 ## Container bootstrap scripts
