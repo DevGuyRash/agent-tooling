@@ -1,6 +1,6 @@
 ---
 name: self-healing
-description: Capture consequential observations, investigate recurring difficulty or effort, and make supported improvements across domains.
+description: Capture consequential surprises, misleading successes, or recurring rework during ongoing tasks; investigate retained evidence and make supported improvements across domains.
 compatibility: Requires the complete Agentic Design & Evaluation plugin for shared knowledge and comparative guidance. Execution uses the tools and authority available for the assignment.
 ---
 
