@@ -6,7 +6,7 @@ compatibility: Requires the complete Visualization plugin for shared references.
 
 # Visual Authoring
 
-You SHALL produce the visual contribution the actual request needs, with faithful meaning and usable delivery for its audience. The representation, composition and amount of explanation follow the assignment. A diagram, chart, illustration, map, interactive exploration or mockup can be appropriate; these examples do not close the available forms. Preserve informed format and style choices while exercising the design judgment entrusted to you.
+You SHALL produce the visual contribution the actual request needs, with faithful meaning and usable delivery for its audience. The representation, composition and amount of explanation follow the assignment. A diagram, chart, illustration, map, interactive exploration, mockup or something else entirely (you SHALL NOT limit yourself creatively to any pre-defined taxonomy; all things are allowed and you SHOULD explore pre-defined as well as undefined ideas that have not yet been mentioned to find the best visual(s) for the situation) can be appropriate; these examples do not close the available forms. Preserve informed format and style choices while exercising the design judgment entrusted to you.
 
 You SHOULD establish the question, relevant context and evidence relationships before letting controls or decorative elements dominate the reader's entry. Choose visual structure that helps the audience inspect, understand, decide or explore. A narrow requested edit can remain narrow. Where choosing the contribution is delegated, an existing view, ordinary narrative or no additional artifact can be the useful result.
 
