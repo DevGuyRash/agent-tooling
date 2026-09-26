@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("update_mermaid_catalog", REPO / "scripts/update_mermaid_catalog.py")
@@ -110,6 +111,11 @@ class MermaidCatalogTests(unittest.TestCase):
         source = "---\nconfig: {}\n---\n%% comment\nnewFuture type\n"
         self.assertEqual(catalog.fixture_starter(source, ""), "newFuture")
 
+    def test_documented_examples_follow_valid_markdown_fence_variations(self):
+        source = '~~~~ mermaid-example {title="New"}\nfuture-v7\n~~~~~\n\n````text\n```mermaid\nnot-an-example\n```\n````\n\n``` mermaid\n---\nconfig: {}\n---\nsecond-v9\n```\n'
+        examples = list(catalog.documented_examples(source))
+        self.assertEqual([catalog.fixture_starter(x, '') for x in examples], ['future-v7', 'second-v9'])
+
     def test_missing_descriptions_are_explicit(self):
         result = catalog.build_markdown(payload({"empty.md": "# Empty\n\n```mermaid\nfresh\n```\n"}), "upstream")
         self.assertIn("Description unavailable", result)
@@ -139,27 +145,169 @@ class MermaidCatalogTests(unittest.TestCase):
 
     def test_live_nested_capture_can_replay_offline(self):
         commit = "2" * 40
-        pages = {"a.md": "# A\n\nA definition.", "nested/b.md": "# B\n\n> A different definition."}
+        pages = {"a.md": "# A\n\nA definition.", "nested/b.mdx": "# B\n\n> A different definition."}
+        docs_path, homepage = "new/docs/syntax", "https://docs.example/mermaid/"
         calls = []
         def fetch(url):
             calls.append(url)
-            if url.endswith("/commits/" + catalog.UPSTREAM_BRANCH):
+            if url == catalog.UPSTREAM_API:
+                return json.dumps({"default_branch": "new/default", "homepage": homepage}).encode()
+            if url.endswith("/commits/new%2Fdefault"):
                 return json.dumps({"sha": commit}).encode()
-            if "/contents/" in url:
-                entries = [{"name": "b.md", "type": "file"}] if "/nested?" in url else [{"name": "a.md", "type": "file"}, {"name": "nested", "type": "dir"}]
-                self.assertIn("ref=" + commit, url)
-                return json.dumps(entries).encode()
+            if "/git/trees/" in url:
+                self.assertIn(commit, url)
+                return json.dumps({"truncated": False, "tree": [{"path": docs_path + "/" + name, "type": "blob"} for name in pages]}).encode()
+            if url == homepage:
+                return b'<a href="start/">Docs</a>'
+            if url == homepage + "start/":
+                return b'<a href="../syntax/a.html">A</a>'
+            if url.startswith(homepage + "syntax/"):
+                return f'<link rel="canonical" href="{url}"><h1>Documented topic</h1>'.encode()
             self.assertIn(commit, url)
-            if url.endswith(catalog.SIDEBAR_PATH):
-                return b"{link: '/syntax/a'}"
-            return pages[url.split(catalog.DOCS_PATH + "/", 1)[1]].encode()
+            return pages[url.split(docs_path + "/", 1)[1]].encode()
         with patch.object(catalog, "fetch", side_effect=fetch):
             code, _, error = self.call("--snapshot-only", "--fetch", "--save-upstream", str(self.fixture))
             self.assertEqual(code, 0, error)
         self.assertEqual(json.loads(self.fixture.read_text())["pages"], pages)
+        saved = json.loads(self.fixture.read_text())
+        self.assertEqual(saved["source"]["docs_path"], docs_path)
+        self.assertEqual(saved["source"]["default_branch"], "new/default")
+        self.assertEqual(saved["published_links"]["nested/b.mdx"], homepage + "syntax/nested/b.html")
         with patch.object(catalog, "fetch", side_effect=AssertionError("offline calls network")):
             self.assertEqual(self.call("--write", "--profile", "upstream", "--upstream-fixture", str(self.fixture), "--output", str(self.output))[0], 0)
             self.assertEqual(self.call("--check", "--profile", "upstream", "--upstream-fixture", str(self.fixture), "--output", str(self.output))[0], 0)
+        self.assertIn(homepage + "syntax/nested/b.html", self.output.read_text())
+        self.assertIn("/tree/HEAD/new/docs/syntax", self.output.read_text())
+        self.assertIn(f"/blob/{commit}/new/docs/syntax/nested/b.mdx", self.output.read_text())
+
+    def test_notices_after_or_adjacent_to_intro_stay_separate(self):
+        for gap in ("\n", "\n\n"):
+            body = "# Example\n\nA diagram explains the event." + gap + "> **Warning**\n> Syntax may change.\n\n## Syntax\n"
+            description, notes = catalog.page_introduction(body)
+            self.assertEqual(description, "A diagram explains the event.")
+            self.assertEqual(notes, ["**Warning** Syntax may change."])
+            result = catalog.build_markdown(payload({"example.md": body}), "upstream")
+            row = next(line for line in result.splitlines() if line.startswith("| Example |"))
+            self.assertNotIn("Warning", row)
+            self.assertIn("**Warning** Syntax may change.", result)
+        description, notes = catalog.page_introduction('# Topic\n\n> An explanatory description.\n>\n> **Warning**\n> Syntax may change.\n')
+        self.assertEqual(description, 'An explanatory description.')
+        self.assertEqual(notes, ['**Warning** Syntax may change.'])
+
+    def test_nested_fences_do_not_turn_code_into_prose(self):
+        body = "# Example\n\n````text\n```\nmisleading description\n````\n\nActual description.\n"
+        self.assertEqual(catalog.page_description(body), "Actual description.")
+
+    def test_description_excerpt_keeps_complete_sentence_and_identifier(self):
+        body = "# Example\n\nA diagram describes an a_b relationship. Additional background with [a relative link](../other.md).\n"
+        self.assertEqual(catalog.description_excerpt(body), "A diagram describes an a_b relationship.")
+        self.assertEqual(catalog.description_excerpt('# Topic\n\n"A full sentence. More source prose follows." Attribution'), '"A full sentence."')
+        self.assertEqual(catalog.page_description('# Topic\n\n![Banner](image.svg)\n\nA useful explanation.'), 'A useful explanation.')
+
+    def test_relative_notice_links_travel_with_the_generated_reference(self):
+        snapshot=payload({'nested/future.md':'# Future\n\nA description.\n\n> **Warning**\n> Read [the contract](../contract.md).\n'})
+        result=catalog.build_markdown(snapshot,'upstream')
+        self.assertNotIn('](../contract.md)',result)
+        self.assertIn('/blob/'+('1'*40)+'/'+catalog.DOCS_PATH+'/contract.md',result)
+
+    def test_published_links_reject_soft_404s_and_external_canonicals(self):
+        docs = ["new.md", "missing.md", "moved.md", "external.md"]
+        routes = ["https://docs.example/syntax/new.html"]
+        def fetch(url):
+            if url.endswith('/missing.html'):
+                raise catalog.MissingResource('HTTP 404')
+            if url.endswith('/moved.html'):
+                return b'<link rel="canonical" href="/index.html"><h1>Welcome</h1>'
+            if url.endswith('/external.html'):
+                return b'<link rel="canonical" href="https://elsewhere.example/syntax/external.html"><h1>External</h1>'
+            return b'<link rel="canonical" href="/syntax/new.html"><h1>New diagram</h1>'
+        with patch.object(catalog, "fetch", side_effect=fetch):
+            links = catalog.discover_published_links(docs, {name: '# Topic' for name in docs}, 'https://docs.example/', routes)
+        self.assertEqual(links, {'new.md': routes[0], 'missing.md': None, 'moved.md': None, 'external.md': None})
+
+    def test_truncated_upstream_tree_preserves_accepted_output(self):
+        responses = [json.dumps({'default_branch': 'main', 'homepage': 'https://docs.example/'}).encode(),
+                     json.dumps({'sha': 'a'*40}).encode(), json.dumps({'truncated': True, 'tree': []}).encode()]
+        self.output.write_text('accepted')
+        with patch.object(catalog, 'fetch', side_effect=responses):
+            code, _, error = self.call('--write', '--fetch', '--output', str(self.output))
+        self.assertEqual(code, 2)
+        self.assertIn('incomplete', error)
+        self.assertEqual(self.output.read_text(), 'accepted')
+
+    def test_empty_document_and_registry_are_rejected(self):
+        with self.assertRaises(catalog.CatalogError):
+            catalog.validate_pages({'empty.md':'  '}, ['empty.md'])
+        with patch.object(catalog, 'run_node', return_value=[]), self.assertRaises(catalog.CatalogError):
+            catalog.bundled_registry()
+
+    def test_output_and_snapshot_symlinks_are_refused_before_fetch(self):
+        self.output.write_text('accepted')
+        link = self.root/'link';link.symlink_to(self.output)
+        with patch.object(catalog, 'fetch', side_effect=AssertionError('network before refusal')):
+            self.assertEqual(self.call('--write','--fetch','--output',str(link))[0], 2)
+            self.assertEqual(self.call('--snapshot-only','--fetch','--save-upstream',str(link))[0], 2)
+        self.assertEqual(self.output.read_text(), 'accepted')
+
+    def test_retry_is_bounded_and_honors_backoff(self):
+        response = io.BytesIO(b'complete')
+        busy = HTTPError('https://example.test', 429, 'busy', {'Retry-After':'2'}, None)
+        with patch.object(catalog, 'urlopen', side_effect=[busy, response]) as request, patch.object(catalog.time, 'sleep') as sleep:
+            self.assertEqual(catalog.fetch('https://example.test'), b'complete')
+            self.assertEqual(request.call_count, 2)
+            sleep.assert_called_once_with(2)
+        with patch.object(catalog, 'urlopen', side_effect=URLError('unavailable')) as request, patch.object(catalog.time, 'sleep'):
+            with self.assertRaises(catalog.CatalogError):catalog.fetch('https://example.test')
+            self.assertEqual(request.call_count, 3)
+        long_wait = HTTPError('https://example.test', 429, 'busy', {'Retry-After':'90'}, None)
+        with patch.object(catalog, 'urlopen', side_effect=long_wait) as request, patch.object(catalog.time, 'sleep') as sleep:
+            with self.assertRaises(catalog.CatalogError):catalog.fetch('https://example.test')
+            self.assertEqual(request.call_count, 1);sleep.assert_not_called()
+
+    def test_large_response_is_refused_without_retry(self):
+        with patch.object(catalog, 'MAX_RESPONSE_BYTES', 8), patch.object(catalog, 'urlopen', return_value=io.BytesIO(b'123456789')) as request:
+            with self.assertRaises(catalog.CatalogError):catalog.fetch('https://example.test')
+            self.assertEqual(request.call_count, 1)
+
+    def test_document_source_is_selected_by_its_site_config(self):
+        paths = ['docs/syntax/generated.md', 'moved/docs/syntax/source.md', 'moved/docs/.vitepress/config.mts']
+        def fetch(url):
+            if url == catalog.UPSTREAM_API:return json.dumps({'default_branch':'next', 'homepage':'https://docs.example/'}).encode()
+            if '/commits/' in url:return json.dumps({'sha':'b'*40}).encode()
+            if '/git/trees/' in url:return json.dumps({'truncated':False,'tree':[{'path':path,'type':'blob'} for path in paths]}).encode()
+            if url.endswith('config.mts'):return b'export default {}'
+            self.assertTrue(url.endswith('moved/docs/syntax/source.md'))
+            return b'# Source\n\nThe maintained source.'
+        with patch.object(catalog,'fetch',side_effect=fetch), patch.object(catalog,'published_navigation',return_value=('https://docs.example/','<nav/>',[])), patch.object(catalog,'discover_published_links',return_value={'source.md':None}):
+            actual=catalog.load_live_upstream()
+        self.assertEqual(actual['docs'],['source.md'])
+        rendered=catalog.build_markdown(actual,'upstream')
+        self.assertIn('/blob/HEAD/moved/docs/syntax/source.md',rendered)
+        self.assertIn('/blob/'+('b'*40)+'/moved/docs/syntax/source.md',rendered)
+
+    def test_published_fetch_failure_does_not_downgrade_the_reference(self):
+        with patch.object(catalog,'fetch',side_effect=catalog.CatalogError('service unavailable')):
+            with self.assertRaises(catalog.CatalogError):
+                catalog.discover_published_links(['new.md'],{'new.md':'# New'},'https://docs.example/',['https://docs.example/syntax/new.html'])
+
+    def test_registry_diagnostics_do_not_dump_minified_source_or_stack(self):
+        response=subprocess.CompletedProcess([],1,'','long minified source\nTypeError: registry interface changed\n    at function.js:1:20\n')
+        with patch.object(catalog.subprocess,'run',return_value=response), patch.object(catalog.shutil,'which',return_value='/node'):
+            with self.assertRaises(catalog.CatalogError) as raised:catalog.run_node('source')
+        self.assertIn('registry interface changed',str(raised.exception))
+        self.assertNotIn('minified',str(raised.exception))
+        self.assertNotIn('function.js',str(raised.exception))
+
+    def test_offline_cli_runs_from_an_unrelated_working_directory(self):
+        self.fixture.write_text(json.dumps(payload()))
+        cmd = [sys.executable, str(REPO/'scripts/update_mermaid_catalog.py'), '--write', '--profile', 'upstream', '--upstream-fixture', str(self.fixture), '--output', str(self.output)]
+        process = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn('newFamily-v4', self.output.read_text())
+        before = self.output.read_bytes()
+        process = subprocess.run([*cmd[:2], '--check', *cmd[3:]], cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(self.output.read_bytes(), before)
 
     def test_capture_and_input_collision_protect_original_bytes(self):
         self.fixture.write_text(json.dumps(payload()))
