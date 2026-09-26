@@ -37,7 +37,7 @@ test('portable gallery supports offline search, pagination, original context, mo
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (/^https?:/.test(request.url())) externalRequests.push(request.url()); });
   await page.goto(pathToFileURL(gallery.indexPath).href);
-  await page.getByRole('status').filter({ hasText: '51 matching observations' }).waitFor();
+  await page.getByRole('status').filter({ hasText: '50 matching captures' }).waitFor();
   assert.equal(await page.locator('article.card').count(), 24);
   assert.equal(await page.evaluate(() => globalThis.attacked), undefined);
   await page.getByRole('button', { name: 'Next', exact: true }).click();
@@ -62,6 +62,7 @@ test('portable gallery supports offline search, pagination, original context, mo
   assert.equal(await page.locator('html').getAttribute('data-appearance'), 'light');
   await page.screenshot({ path: path.join(root, 'desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth + 1, undefined, { timeout: 2000 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByLabel('Search', { exact: true }).fill('State 49');
   assert.equal(await page.locator('article.card').count(), 1);
@@ -98,7 +99,7 @@ test('appearance filter consumes real capture observations across light and dark
   const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(pathToFileURL(gallery.indexPath).href);
-  await page.getByRole('status').filter({ hasText: '2 matching observations' }).waitFor();
+  await page.getByRole('status').filter({ hasText: '2 matching captures' }).waitFor();
   const options = await page.locator('#scheme option').allTextContents();
   assert.deepEqual(options, ['All appearances', 'dark', 'light']);
   for (const colorScheme of ['dark', 'light']) {

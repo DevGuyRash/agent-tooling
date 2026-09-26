@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp,mkdir,rm,readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import { createEvidenceRun } from '../../../plugins/playwright-testing/runtime/evidence.mjs';
+import { renderGallery } from '../../../plugins/playwright-testing/runtime/gallery.mjs';
+const runtime=process.env.PW_TEST_PLAYWRIGHT_PATH;
+
+test('Flow follows mixed screenshot proportions, packs short cards, and preserves a per-gallery Contact sheet choice', {skip:!runtime,timeout:60000},async t=>{
+ const parent=process.env.PW_TEST_GALLERY_OUTPUT||tmpdir();await mkdir(parent,{recursive:true});
+ const root=await mkdtemp(path.join(parent,'gallery-layout-'));if(!process.env.PW_TEST_GALLERY_OUTPUT)t.after(()=>rm(root,{recursive:true,force:true}));
+ const {chromium}=createRequire(import.meta.url)(runtime);const browser=await chromium.launch({headless:true,channel:'chromium',chromiumSandbox:true});t.after(()=>browser.close());
+ const run=await createEvidenceRun({outputDir:path.join(root,'run')});
+ const makeImage=async(width,height,type,color)=>{
+  const page=await browser.newPage({viewport:{width,height}});
+  await page.setContent(`<style>body{margin:0;background:${color};color:white;font:24px system-ui;padding:20px}</style><h1>${width} × ${height}</h1><p>Original ${type} evidence</p>`);
+  const ref=await run.storeBlob(await page.screenshot({type}),{mime:`image/${type}`,extension:type==='jpeg'?'jpg':'png'});await page.close();return ref;
+ };
+ const tall=await makeImage(400,900,'png','#315670'),wide=await makeImage(720,180,'jpeg','#6d3d35'),square=await makeImage(420,420,'png','#23644f');
+ for(const [id,label,images] of [['tall','Portrait screenshot',[tall]],['wide','Short element crop',[wide]],['square','Square capture',[square]],['sequence','Sequence with different frame shapes',[wide,tall]]])await run.record({id,type:'capture',label,status:'complete',images});
+ await run.finish();await run.close();const journal=await readFile(path.join(run.outputDir,'observations.ndjson'));
+ const gallery=await renderGallery(run.outputDir);
+ const context=await browser.newContext({viewport:{width:1124,height:900},colorScheme:'dark'});await context.setOffline(true);
+ const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(pathToFileURL(gallery.indexPath).href);
+ await page.getByRole('status').filter({hasText:'4 matching captures'}).waitFor();
+ const settle=async()=>page.evaluate(async()=>{await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});
+ const cards=page.locator('article.card');
+ for(const image of await cards.locator('img').all())await image.evaluate(img=>img.decode());await settle();
+ assert.equal(await page.getByLabel('Layout',{exact:true}).inputValue(),'flow');
+ const measure=()=>cards.evaluateAll(nodes=>nodes.map(card=>{const rect=node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}};return{card:rect(card),preview:rect(card.querySelector('.image-preview')),header:rect(card.querySelector('header')),image:rect(card.querySelector('img')),footer:rect(card.querySelector('footer')),natural:{width:card.querySelector('img').naturalWidth,height:card.querySelector('img').naturalHeight}}}));
+ let boxes=await measure();
+ for(const i of [0,1,2]){
+  const b=boxes[i];assert.ok(Math.abs(b.preview.height-b.preview.width*b.natural.height/b.natural.width)<3,'Single captures follow their own pixel proportions.');
+  assert.ok(Math.abs(b.preview.y-b.header.bottom)<2,'No automatic spacer appears above the image.');
+  assert.ok(Math.abs(b.footer.y-b.preview.bottom)<2,'No automatic spacer appears below the image.');
+ }
+ assert.ok(boxes[2].card.y<boxes[0].card.bottom,'A short following card fills the available column instead of waiting below the tall neighbor.');
+ const noOverlap=items=>{for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){const a=items[i].card,b=items[j].card;assert.ok(a.right<=b.x+1||b.right<=a.x+1||a.bottom<=b.y+1||b.bottom<=a.y+1,'Natural-height cards do not overlap.')}};
+ noOverlap(boxes);
+ await page.screenshot({path:path.join(root,'flow-desktop.png'),fullPage:true});
+ const sequence=cards.filter({has:page.getByRole('link',{name:'Sequence with different frame shapes',exact:true})});
+ const before=await sequence.boundingBox();await sequence.locator('.frame-navigation button').last().click();await sequence.locator('img').evaluate(img=>img.decode());await settle();
+ const after=await sequence.boundingBox();assert.ok(Math.abs(after.height-before.height)<1,'Each sequence reserves its own largest frame, independent of neighboring cards.');
+ assert.equal(await sequence.locator('.frame-navigation span').textContent(),'2 / 2');
+ await page.getByLabel('Layout',{exact:true}).selectOption('contact');await settle();
+ boxes=await measure();noOverlap(boxes);
+ for(const b of boxes)assert.ok(Math.abs(b.preview.height-b.preview.width*10/16)<3,'Contact-sheet previews use a uniform frame without stretching the source.');
+ assert.equal(await sequence.locator('.frame-navigation span').textContent(),'2 / 2','Changing layout preserves the selected frame.');
+ await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(root,'contact-desktop.png'),fullPage:true});
+ await page.reload();await page.getByRole('status').waitFor();assert.equal(await page.getByLabel('Layout',{exact:true}).inputValue(),'contact');
+ await page.getByRole('link',{name:'Portrait screenshot',exact:true}).click();await page.getByRole('link',{name:'← Evidence gallery',exact:true}).click();assert.equal(await page.getByLabel('Layout',{exact:true}).inputValue(),'contact');
+ await page.getByLabel('Layout',{exact:true}).selectOption('flow');await page.setViewportSize({width:390,height:844});await settle();
+ boxes=await measure();noOverlap(boxes);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+ assert.ok(boxes.every(b=>Math.abs(b.card.x-boxes[0].card.x)<1),'Phone layout uses one column.');
+ await page.screenshot({path:path.join(root,'flow-phone.png')});
+ const independent=await createEvidenceRun({outputDir:path.join(root,'independent')});const copied=await independent.storeBlob(await readFile(path.join(run.outputDir,wide.path)),{mime:'image/jpeg',extension:'jpg'});await independent.record({type:'capture',label:'Another gallery',images:[copied]});await independent.finish();await independent.close();
+ const second=await renderGallery(independent.outputDir);
+ await page.getByLabel('Layout',{exact:true}).selectOption('contact');await page.goto(pathToFileURL(second.indexPath).href);await page.getByRole('status').waitFor();assert.equal(await page.getByLabel('Layout',{exact:true}).inputValue(),'flow','The preference belongs to the original evidence run.');
+ const blocked=await browser.newContext();await blocked.addInitScript(()=>{for(const name of ['getItem','setItem'])Storage.prototype[name]=()=>{throw new DOMException('Unavailable','SecurityError')}});const blockedPage=await blocked.newPage();await blockedPage.goto(pathToFileURL(gallery.indexPath).href);await blockedPage.getByRole('status').waitFor();await blockedPage.getByLabel('Layout',{exact:true}).selectOption('contact');assert.equal(await blockedPage.locator('.grid').getAttribute('data-layout'),'contact');await blocked.close();
+ assert.deepEqual(await readFile(path.join(run.outputDir,'observations.ndjson')),journal);assert.deepEqual(errors,[]);
+ t.diagnostic(`Mixed-size layout evidence: ${root}`);
+});

@@ -1,7 +1,7 @@
 {
   "name": "playwright-testing",
   "displayName": "Playwright Testing",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Design and run browser tests, investigate application states, and collect reproducible visual evidence with headless or isolated headed Playwright execution.",
   "author": {
     "name": "Agent Tooling Contributors"
