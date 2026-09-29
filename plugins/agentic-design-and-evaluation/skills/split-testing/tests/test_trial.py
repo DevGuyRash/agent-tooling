@@ -158,6 +158,16 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertIn("2 derived arms", r.stdout)
         arms = json.loads(plan.read_text())["arms"]
         self.assertEqual(sorted(arms), ["good~r1", "good~r2"])
+        rel = os.path.relpath(self.tmp / "keys.env")
+        r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer", str(consumer),
+                         "--executor", json.dumps({"executor": "command", "command": "true", "env_file": rel}),
+                         "--plan", str(self.tmp / "gen" / "rel.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        derived = json.loads((self.tmp / "gen" / "rel.json").read_text())["arms"]["good~r1"]["env_file"]
+        self.assertEqual((self.tmp / "gen" / derived).resolve(), (self.tmp / "keys.env").resolve())
+        r = self.run_cli("derive", str(self.out), "--scenario", "make-file", "--artifact", "out.txt", "--consumer", str(consumer),
+                         "--executor", "not json", "--plan", str(plan))
+        self.assertIn("--executor is not valid JSON", r.stderr)
         out2 = self.tmp / "out2"
         self.run_cli("run", str(plan), "--out", str(out2))
         s = self.run_cli("summarize", str(out2), "--group").stdout
@@ -299,6 +309,9 @@ class TrialRunnerTest(unittest.TestCase):
         finally:
             os.environ.pop("TRIAL_TEST_MODEL", None)
             del os.environ["TRIAL_TEST_EFFORT"]
+        self._plan({"c": {"executor": "claude", "model": "m", "env_file": "missing.env"}})
+        with self.assertRaisesRegex(trial.TrialError, "missing.env does not exist"):
+            trial.load_plan(self.tmp / "plan.json", None, None, None)
         for model, error in [("${TRIAL_TEST_UNSET}", "TRIAL_TEST_UNSET}, which is unset or empty"),
                              ("${TRIAL_TEST_UNSET:-${TRIAL_TEST_B:-x}}", "without nesting"),
                              ("${TRIAL_TEST_UNSET", "without nesting"), (5, "model must be a string")]:
@@ -322,6 +335,8 @@ class TrialRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(trial.TrialError, "only \\*"):
             trial.latest_model("gpt-?-luna", ids)
         self.assertEqual(trial.latest_model("m-*-*", ["m-" + "1-" * 200 + "1", "m-5-5"]), "m-5-5")  # overlong IDs skipped
+        with self.assertRaisesRegex(trial.TrialError, "at most three"):
+            trial.latest_model("m-*-*-*-*", ids)
         os.environ["TRIAL_MODELS_FILE"] = str(self._models_file())
         try:
             with self.assertRaises(trial.TrialError) as caught:
@@ -449,6 +464,40 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
         self.assertTrue(json.loads(stale.read_text())["passed"])
 
+    def test_a_judge_that_gives_no_verdict_changes_nothing(self):
+        good = {"good": {"executor": "command", "command": 'echo hi > out.txt; faketool x'}}
+        self.assertEqual(self.run_cli("run", self._plan(good), "--out", str(self.out)).returncode, 0)
+        s = self.tmp / "scenarios" / "make-file" / "scenario.json"
+        s.write_text(json.dumps(dict(json.loads(s.read_text()), judge={"question": "q?", "pass_when": "it passes"})))
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        judges = {}
+        for name, reply in [("works", '{"structured_output": {"verdict": "pass", "reason": "ok"}}'), ("broken", '{"structured_output": [1]}')]:
+            fake = self.tmp / "bin" / name
+            write(fake, f"#!/bin/sh\ncat >/dev/null\necho '{reply}'\n", 0o755)
+            judges[name] = {"executor": "claude", "model": name, "binary": str(fake), "base_url": "http://proxy.invalid",
+                            "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--judge", json.dumps(judges["works"])).returncode, 0)
+        stored = json.loads((self.out / "plan.json").read_text())
+        self.assertIn("judge", stored["scenarios"][0])  # the spec it judged with
+        r = self.run_cli("run", self._plan(good), "--out", str(self.out))
+        self.assertIn("has no judge", r.stderr)
+        verdict = self.out / "runs" / "make-file__good__r1" / "judge" / "verdict.json"
+        self.assertTrue(verdict.exists())
+        r = self.run_cli("recheck", str(self.out), "--judge", json.dumps(judges["broken"]))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("nothing was changed", r.stderr)
+        self.assertEqual(json.loads((self.out / "plan.json").read_text())["judge"]["model"], "works")
+        self.assertTrue(verdict.exists() and self.results()["make-file__good__r1"]["passed"])
+        self.assertFalse((verdict.parent.parent / "judge.next").exists())
+        r = self.run_cli("run", self._plan(good, judges["broken"]), "--out", str(self.tmp / "fresh"))
+        self.assertIn("invalid 1: judge-error", r.stdout)  # invalid, never a failure of the arm
+        self.assertIsNone(json.loads((self.tmp / "fresh" / "runs" / "make-file__good__r1" / "result.json").read_text())["passed"])
+        for bad, error in [('"claude"', "must be a JSON object"), ("null", "must be a JSON object"), ("{", "not valid JSON")]:
+            r = self.run_cli("recheck", str(self.out), "--judge", bad)
+            self.assertEqual(r.returncode, 2, bad)
+            self.assertIn(error, r.stderr)
+
     def test_one_run_or_recheck_uses_a_run_directory_at_a_time(self):
         self.out.mkdir()
         with trial._lock(self.out):
@@ -497,14 +546,16 @@ class TrialRunnerTest(unittest.TestCase):
             self.assertEqual({k for port, _, k in seen if port == target.server_address[1]}, {None})
             port = relay.server_address[1]
             crlf = self.tmp / "crlf.env"
-            crlf.write_bytes(b"CRLF_KEY=secret-crlf\r\n")
+            crlf.write_bytes("CRLF_KEY=secret-crlf\r\nQUOTE_KEY=secret\u201dquote\n".encode())
             for args, error in [(["--base-url", f"http://u:secret@127.0.0.1:{port}"], "carries credentials"),
                                 (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(self.tmp / "missing.env")], "does not exist"),
                                 (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(env_file), "--api-key-var", "TRIAL_UNSET"],
                                  "TRIAL_UNSET is unset or empty in"),
                                 (["--base-url", f"http://127.0.0.1:{port}/a#secret"], "a fragment"),
                                 (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(crlf), "--api-key-var", "CRLF_KEY"],
-                                 "holds a line break")]:
+                                 "holds a line break"),
+                                (["--base-url", f"http://127.0.0.1:{port}", "--env-file", str(crlf), "--api-key-var", "QUOTE_KEY"],
+                                 "non-ASCII character")]:
                 r = self.run_cli("models", *args)
                 self.assertEqual(r.returncode, 2, args)
                 self.assertIn(error, r.stderr)

@@ -115,20 +115,28 @@ def load_plan(path: Path, repeats: int | None, only: list[str] | None, arms: lis
     for name, arm in plan["arms"].items():
         if arms and name not in arms:
             continue
-        selected[name] = _with_instructions(resolve_arm(arm, f"arm '{name}'", stored, query, base), base, f"arm '{name}'")
+        selected[name] = _with_instructions(_check_env_file(resolve_arm(arm, f"arm '{name}'", stored, query, base), f"arm '{name}'"),
+                                            base, f"arm '{name}'")
     if not selected:
         raise TrialError("no arms selected; valid arms: " + ", ".join(plan["arms"]))
     plan["arms"] = selected
     plan["scenarios"] = scenarios
-    if plan.get("judge"):
-        plan["judge"] = _check_judge(resolve_arm(plan["judge"], "judge", stored, query, base), "judge")
+    if plan.get("judge") is not None:
+        plan["judge"] = _check_env_file(resolve_arm(_check_judge(plan["judge"], "judge"), "judge", stored, query, base), "judge")
     return plan
 
 
-def _check_judge(judge: dict, where: str) -> dict:
-    if judge.get("executor") not in ("codex", "claude") or not judge.get("model"):
-        raise TrialError(f"{where} needs an executor and a model; valid judge executors: codex, claude")
+def _check_judge(judge, where: str) -> dict:
+    if not isinstance(judge, dict) or judge.get("executor") not in ("codex", "claude") or not judge.get("model"):
+        raise TrialError(f"{where} must be a JSON object with an executor and a model; valid judge executors: codex, claude")
     return judge
+
+
+def _check_env_file(arm: dict, where: str) -> dict:
+    """An agent executor given an env_file that does not exist would run without its key."""
+    if arm.get("executor") in ("codex", "claude") and arm.get("env_file") and not Path(arm["env_file"]).exists():
+        raise TrialError(f"{where} env_file {arm['env_file']} does not exist")
+    return arm
 
 
 def _with_instructions(arm: dict, base: Path, where: str) -> dict:
@@ -253,8 +261,8 @@ def _version_key(parts: tuple[str, ...]):
 def latest_model(pattern: str, ids: list[str], where: str = "model", flags: str = "") -> str:
     """The ID matching PATTERN whose wildcard parts form the highest numeric version. Each * matches a version
     number only (digits joined by '.' or '-'), so variants such as '-thinking' never match."""
-    if any(c in pattern for c in "?[]"):
-        raise TrialError(f"{where}: latest:{pattern} can use only *, which stands for a version number")
+    if any(c in pattern for c in "?[]") or pattern.count("*") > 3:
+        raise TrialError(f"{where}: latest:{pattern} can use only *, at most three times, each standing for a version number")
     rx = re.compile(r"([0-9]+(?:[.-][0-9]+)*)".join(re.escape(piece) for piece in pattern.split("*")))
     matches = [(m.groups(), i) for i in ids if len(i) <= 256 and (m := rx.fullmatch(i))]
     if not matches:
@@ -272,7 +280,7 @@ url, anthropic = sys.argv[1], sys.argv[2] == 'anthropic'
 key = os.environ.get('TRIAL_MODELS_KEY', '')
 if sys.argv[3] == 'key' and not key:
     sys.exit('NO_KEY')
-if '\\r' in key or '\\n' in key:
+if not key.isascii() or '\\r' in key or '\\n' in key:
     sys.exit('BAD_KEY')
 ids, after = [], None
 try:
@@ -350,7 +358,8 @@ def available_models(arm: dict, where: str = "models") -> list[str]:
             if reason == "NO_KEY":
                 reason = f"{var} is unset or empty in {env_file}"
             elif reason == "BAD_KEY":
-                reason = f"{var} in {env_file} holds a line break (a CRLF line ending?), which a request header cannot carry"
+                reason = (f"{var} in {env_file} holds a line break or a non-ASCII character (a CRLF line ending or a pasted "
+                          "quote?), which a request header cannot carry")
             elif reason in ("HTTP 401", "HTTP 403") and not prefix and var:
                 reason += f" (no key was sent: {env_file} does not exist; set env_file, or --env-file for `trial.py models`)"
             elif reason in ("HTTP 401", "HTTP 403") and not prefix:
@@ -473,7 +482,7 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
     for name, arm in plan["arms"].items():
         _refuse_changes(f"arm '{name}'", arm, [r for r in results if r.get("arm") == name], "identity",
                         stored.get("arms", {}).get(name), out, "restore them or use a new --out")
-    specs = {sp["name"]: sp for sp in [*stored.get("scenarios", []), *plan["scenarios"]]}
+    specs = {**{sp["name"]: _current(sp) for sp in stored.get("scenarios", [])}, **{sp["name"]: sp for sp in plan["scenarios"]}}
     # A scenario the directory's plan.json does not list may be judged; a verdict there counts.
     judged_scenario = lambda r: (specs.get(r.get("scenario")) or {"judge": "unknown"}).get("judge")
     judged = [r for r in results if r.get("status") == "ok" and r.get("judge") and judged_scenario(r)]
@@ -959,12 +968,15 @@ def _judge_confinement(job_dir: Path, jd: Path, readable: list[Path]) -> list[st
     return confine_prefix(job_dir, readable, chdir=jd / "work") if shutil.which("bwrap") else []
 
 
-def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
-    """Blind verdict on one run: the judge sees the task and evidence, never the arm."""
+def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"):
+    """Blind verdict on one run, kept in job_dir/name: the judge sees the task and evidence, never the arm."""
     j = spec.get("judge")
     if not j or not plan.get("judge"):
         return None
-    evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
+    try:
+        evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
+    except Exception as exc:
+        return {"verdict": "error", "reason": f"judge_context: {type(exc).__name__}: {exc}"}
     prompt = (
         "You are judging one run of an AI agent on a task. You see the task it was given, the agent's "
         "final message, and evidence about the resulting state. Judge only the question below against "
@@ -976,7 +988,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
-    jd = job_dir / "judge"
+    jd = job_dir / name
     jd.mkdir(exist_ok=True)
     (jd / "work").mkdir(exist_ok=True)
     (jd / "harness").mkdir(exist_ok=True)
@@ -1012,7 +1024,7 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         try:
             out = json.loads(raw)
             (jd / "verdict.json").write_text(json.dumps(out.get("structured_output") or json.loads(out["result"])))
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             pass
     try:
         verdict = json.loads(_read(jd / "verdict.json"))
@@ -1145,7 +1157,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     if status == "ok" and "check_error" not in checks:
         passed = all(checks.get(name) is True for name in required)
         if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
-            passed = passed and (verdict or {}).get("verdict") == "pass"
+            v = (verdict or {}).get("verdict")
+            passed = None if v == "error" else passed and v == "pass"
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": passed, "checks": checks, "judge": verdict, "usage": run.usage,
               "commands": len(run.commands),
@@ -1162,6 +1175,10 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     """A second-stage plan: each artifact an earlier run produced becomes an arm's instructions.
 
     Arm names are '<source arm>~r<repeat>', so `summarize --group` pools each source arm's artifacts."""
+    base = dict(base or {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}", "effort": "high"})
+    env_file = base.get("env_file")
+    if isinstance(env_file, str) and env_file and "${" not in env_file and not Path(env_file).expanduser().is_absolute():
+        base["env_file"] = os.path.relpath(Path(env_file).resolve(), plan_path.parent.resolve())  # plans read it plan-relative
     arms_dir = plan_path.parent / (plan_path.stem + "-arms")
     arms_dir.mkdir(parents=True, exist_ok=True)
     arms = {}
@@ -1174,8 +1191,7 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
         name = f"{result['arm']}~r{result['repeat']}"
         target = arms_dir / f"{name.replace('~', '__')}.md"
         shutil.copy(produced, target)
-        arms[name] = dict(base or {"executor": "codex", "model": "${TRIAL_CODEX_MODEL:-latest:gpt-*-luna}", "effort": "high"},
-                          instructions=str(target.relative_to(plan_path.parent)))
+        arms[name] = dict(base, instructions=str(target.relative_to(plan_path.parent)))
     if not arms:
         raise TrialError(f"no finished '{scenario}' runs with {artifact} under {out / 'runs'}")
     plan = {"name": plan_path.stem, "repeats": repeats, "seed": 1, "arms": arms,
@@ -1197,7 +1213,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
         plan = _stored_plan(out)
         specs = {s["name"]: _current(s) for s in plan["scenarios"]}
         loaded, _ = _load_results(out)
-        if judge:
+        if judge is not None:
             if only and any(r.get("scenario") not in only and r.get("status") == "ok" and (specs.get(r.get("scenario")) or {}).get("judge")
                             for _, r in loaded):
                 raise TrialError("--judge becomes the judge of the whole run directory, so it re-judges every run; "
@@ -1206,7 +1222,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
             if missing:
                 raise TrialError(f"{out} holds runs of scenarios its plan.json does not list ({', '.join(missing)}), which "
                                  "--judge cannot re-judge; run the full plan into the directory first, or use a new --out")
-            plan, rejudge = dict(plan, judge=_check_judge(resolve_arm(judge, "judge", plan), "--judge")), True
+            plan, rejudge = dict(plan, judge=_check_env_file(resolve_arm(_check_judge(judge, "--judge"), "judge", plan), "--judge")), True
         if only:
             loaded = [(path, r) for path, r in loaded if r["scenario"] in only]
 
@@ -1220,19 +1236,40 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
         with cf.ThreadPoolExecutor(jobs) as pool:
             scored = [x for x in pool.map(score, loaded) if x]
         broken = sorted(r["job"] for _, r, spec, checks in scored
-                        if judge and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
+                        if judge is not None and r["status"] == "ok" and spec.get("judge") and "check_error" in checks)
         if broken:
             raise TrialError(f"--judge re-judges every run, but the checks of {', '.join(broken[:5])}"
                              f"{' and others' if len(broken) > 5 else ''} fail to run; fix them (a plain `trial.py recheck` "
                              "shows the errors), or use a new --out")
 
-        def finish(item):
+        def judge_one(item):
+            """A new verdict in judge.next/; the stored judge/ stays until every verdict is in."""
             path, result, spec, checks = item
-            if rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks:
+            if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
+                return None
+            shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
+            return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent,
+                             isolated_env(path.parent, out, spec), "judge.next")
+
+        try:
+            with cf.ThreadPoolExecutor(jobs) as pool:
+                verdicts = list(pool.map(judge_one, scored))
+            failed = [item[1]["job"] for item, v in zip(scored, verdicts) if v and v.get("verdict") == "error"]
+            if judge is not None and failed:
+                raise TrialError(f"the new judge produced no verdict for {', '.join(failed[:5])}"
+                                 f"{' and others' if len(failed) > 5 else ''} (see judge.next/ in a run while it runs, or "
+                                 "the judge's stderr); nothing was changed")
+        except BaseException:
+            for path, *_ in scored:
+                shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
+            raise
+
+        def finish(item, verdict):
+            path, result, spec, checks = item
+            if verdict is not None:
                 shutil.rmtree(path.parent / "judge", ignore_errors=True)
-                run = Run(path.parent, result["status"])
-                result["judge"] = judge_run(plan, spec, run, _load_checks(spec), path.parent, isolated_env(path.parent, out, spec))
-                result["judge"]["judge_model"] = plan["judge"].get("model", plan["judge"]["executor"])
+                os.replace(path.parent / "judge.next", path.parent / "judge")
+                result["judge"] = dict(verdict, judge_model=plan["judge"].get("model", plan["judge"]["executor"]))
                 result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)
                 _prune(path.parent)
             passed = None
@@ -1241,7 +1278,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
                 passed = all(checks.get(n) is True for n in spec.get("required", []))
                 if spec.get("judge") and plan.get("judge") and spec.get("judge_required", True):
                     if _judged_by(result, plan["judge"]):
-                        passed = passed and result["judge"].get("verdict") == "pass"
+                        v = result["judge"].get("verdict")
+                        passed = None if v == "error" else passed and v == "pass"
                     else:  # unjudged, or judged by another judge: invalid until re-judged
                         passed, result["judge_stale"] = None, True
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
@@ -1249,9 +1287,10 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
             return 1
 
         with cf.ThreadPoolExecutor(jobs) as pool:
-            count = sum(pool.map(finish, scored))
-        if judge:
+            count = sum(pool.map(finish, scored, verdicts))
+        if judge is not None:
             plan["resolved"] = _record_resolutions(plan.get("resolved"), [plan["judge"]])
+            plan["scenarios"] = [specs.get(sp["name"], sp) for sp in plan["scenarios"]]  # as judged
             _write_json(out / "plan.json", plan)
         return count
 
@@ -1306,9 +1345,7 @@ def summarize(out: Path, as_json=False, group=False):
             ok = [r for r in rs if r["passed"] is not None]
             k = sum(1 for r in ok if r["passed"])
             table[(s, a)] = {"passed": k, "valid": len(ok), "runs": len(rs),
-                             "invalid": sorted({(r["status"] if r["status"] != "ok" else
-                                                 "judge-stale" if r.get("judge_stale") else "check-error")
-                                                for r in rs if r["passed"] is None}),
+                             "invalid": sorted({_invalid_reason(r) for r in rs if r["passed"] is None}),
                              "interval": wilson(k, len(ok)),
                              "checks": _check_rates(ok)}
     if as_json:
@@ -1316,7 +1353,7 @@ def summarize(out: Path, as_json=False, group=False):
     lines = [f"# Trial summary: {out.name}", "",
              "Passed / valid runs (95% Wilson interval). A run is valid when the executor finished "
              "and its checks ran; invalid runs are listed separately (judge-stale: no verdict from the run "
-             "directory's judge; `trial.py recheck --rejudge` judges it).", "",
+             "directory's judge, which `trial.py recheck --rejudge` gives; judge-error: the judge gave no verdict).", "",
              "| Scenario | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
     for s in scenarios:
         cells = []
@@ -1350,6 +1387,14 @@ def summarize(out: Path, as_json=False, group=False):
     return "\n".join(lines)
 
 
+def _invalid_reason(r: dict) -> str:
+    if r["status"] != "ok":
+        return r["status"]
+    if r.get("judge_stale"):
+        return "judge-stale"
+    return "judge-error" if (r.get("judge") or {}).get("verdict") == "error" else "check-error"
+
+
 def _check_rates(results):
     names = sorted({n for r in results for n in r.get("checks", {})})
     rates = {}
@@ -1368,6 +1413,13 @@ def _check_rates(results):
 
 
 # ---------------------------------------------------------------- cli
+
+def _json_arg(text: str, flag: str):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TrialError(f"{flag} is not valid JSON: {exc.msg} at character {exc.pos}") from None
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="trial.py", description=(__doc__ or "").split("\n\n")[0])
@@ -1432,11 +1484,15 @@ def main(argv=None):
                 print("\n".join(sorted(i for i in ids if not a.match or fnmatch.fnmatch(i, a.match))))
             return 0
         if a.cmd == "derive":
-            n = derive(a.out, a.scenario, a.artifact, a.consumer, json.loads(a.executor), a.repeats, a.plan)
+            base = _json_arg(a.executor, "--executor")
+            if not isinstance(base, dict):
+                raise TrialError("--executor must be a JSON object, e.g. {\"executor\": \"codex\", \"model\": \"gpt-6-luna\"}")
+            n = derive(a.out, a.scenario, a.artifact, a.consumer, base, a.repeats, a.plan)
             print(f"wrote {a.plan} with {n} derived arms")
             return 0
         if a.cmd == "recheck":
-            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, json.loads(a.judge) if a.judge else None, a.only.split(',') if a.only else None)} runs")
+            judge = _check_judge(_json_arg(a.judge, "--judge"), "--judge") if a.judge is not None else None
+            print(f"rechecked {recheck(a.out, a.rejudge, a.jobs, judge, a.only.split(',') if a.only else None)} runs")
             print(summarize(a.out))
             return 0
         only, arms = (a.only.split(",") if a.only else None), (a.arms.split(",") if a.arms else None)
