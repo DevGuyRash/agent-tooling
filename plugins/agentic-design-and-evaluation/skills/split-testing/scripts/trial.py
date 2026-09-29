@@ -60,6 +60,7 @@ import argparse
 import concurrent.futures as cf
 import contextlib
 import datetime as dt
+import errno
 import fcntl
 import fnmatch
 import hashlib
@@ -556,8 +557,24 @@ def _key_prefix(env_file: Path | None, var: str | None, target: str | None = Non
             str(env_file), var, target or var]
 
 
+def _open_record(path: Path):
+    """Open a run record for appending. An agent can replace the record between turns; a link or special file
+    it left there is removed, never followed or waited on."""
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags, 0o644)
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            return os.fdopen(fd, "ab")
+        os.close(fd)
+    except OSError as exc:
+        if exc.errno not in (errno.ELOOP, errno.ENXIO, errno.EISDIR):
+            raise
+    _remove(path)
+    return os.fdopen(os.open(path, flags | os.O_EXCL, 0o644), "ab")
+
+
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path):
-    with open(stdout_path, "ab") as out, open(stderr_path, "ab") as err:
+    with _open_record(stdout_path) as out, _open_record(stderr_path) as err:
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=out,
                                 stderr=err, start_new_session=True)
         try:
@@ -697,16 +714,16 @@ def run_claude(arm, spec, job_dir: Path, env):
     timeout = spec.get("timeout_s", 900)
     for i, prompt in enumerate([spec["prompt"], *spec.get("followups", [])]):
         c = prefix + cmd + (["--continue"] if i else [])
-        before = len(_read(job_dir / "events.jsonl").splitlines())
+        before = len(_read(job_dir / "events.jsonl", follow=False).splitlines())
         code, timed_out = _run(c, cwd=job_dir / "work", env=env, stdin_text=prompt, timeout=timeout,
                                stdout_path=job_dir / "events.jsonl", stderr_path=job_dir / "stderr.log")
-        for line in _read(job_dir / "events.jsonl").splitlines()[before:]:
+        for line in _read(job_dir / "events.jsonl", follow=False).splitlines()[before:]:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if event.get("type") == "result" and isinstance(event.get("result"), str):
-                (job_dir / f"final-{i}.md").write_text(event["result"])
+            if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
+                _write_atomic(job_dir / f"final-{i}.md", event["result"].encode())
         if timed_out:
             return "timeout"
         if code != 0:
@@ -733,7 +750,7 @@ EXECUTORS = {"codex": run_codex, "claude": run_claude, "command": run_command}
 
 def _thread_id(events: Path):
     if events.exists():
-        for line in events.read_text().splitlines():
+        for line in _read(events, follow=False).splitlines():
             if '"thread.started"' in line:
                 try:
                     return json.loads(line)["thread_id"]
@@ -830,6 +847,9 @@ class Run:
         caches, and special files (FIFOs, sockets, devices) left out, for checks that run or change agent
         code; the caller removes its parent."""
         dst = Path(tempfile.mkdtemp(prefix="check-", dir=self.dir)) / "w"
+        if self.workdir.is_symlink() or not self.workdir.is_dir():  # the agent replaced it: nothing of its own to copy
+            dst.mkdir()
+            return dst
         shutil.copytree(self.workdir, dst, symlinks=True, ignore=_skip_for_copy)
         return dst
 
@@ -881,11 +901,23 @@ def _load_results(out: Path):
     return results, skipped
 
 
-def _read(p: Path) -> str:
+def _read(p: Path, follow: bool = True) -> str:
+    """A regular file's text, or "": a FIFO or device an agent planted would block or never end, and with
+    follow False a link it planted in place of a record is not followed."""
     try:
-        return p.read_text(errors="replace")
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else os.O_NOFOLLOW))
     except OSError:
         return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):  # a directory, FIFO, or device
+            return ""
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read()
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    return data.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _message_text(e):
@@ -963,6 +995,21 @@ JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
                                "reason": {"type": "string"}}}
 
 
+def _remove(path: Path):
+    """Remove what is at path: a link or file is unlinked, never followed; a directory is removed with its contents."""
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _fresh_dir(path: Path) -> Path:
+    """An empty directory at path, replacing whatever an agent left there."""
+    _remove(path)
+    path.mkdir()
+    return path
+
+
 def _judge_confinement(job_dir: Path, jd: Path, readable: list[Path]) -> list[str]:
     """The judge reads text an agent wrote, so it runs with the user's home hidden, like the agents."""
     return confine_prefix(job_dir, readable, chdir=jd / "work") if shutil.which("bwrap") else []
@@ -988,17 +1035,16 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
         + "verdict is 'pass' when " + j["pass_when"] + "; 'fail' when it clearly does not; 'unclear' "
         "only when the evidence cannot decide. reason is one sentence of at most 40 words."
     )
-    jd = job_dir / name
-    jd.mkdir(exist_ok=True)
-    (jd / "work").mkdir(exist_ok=True)
-    (jd / "harness").mkdir(exist_ok=True)
+    jd = _fresh_dir(job_dir / name)
+    (jd / "work").mkdir()
+    (jd / "harness").mkdir()
     (jd / "prompt.md").write_text(prompt)
     jarm = dict(plan["judge"])
     if jarm["executor"] == "codex":
         schema = jd / "schema.json"
         schema.write_text(json.dumps(JUDGE_SCHEMA))
         home = jd / "home"
-        home.mkdir(exist_ok=True)
+        home.mkdir()
         (home / "config.toml").write_text(_provider_config(jarm["model"], jarm.get("effort", "high")))
         cache = CODEX_HOME_SRC / "models_cache.json"
         if cache.exists():
@@ -1020,14 +1066,14 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env, name="judge"
             cmd += ["--effort", jarm["effort"]]
         _run(cmd, cwd=jd / "work", env=jenv, stdin_text=prompt, timeout=600,
              stdout_path=jd / "verdict.raw.json", stderr_path=jd / "stderr.log")
-        raw = _read(jd / "verdict.raw.json")
+        raw = _read(jd / "verdict.raw.json", follow=False)
         try:
             out = json.loads(raw)
-            (jd / "verdict.json").write_text(json.dumps(out.get("structured_output") or json.loads(out["result"])))
+            _write_atomic(jd / "verdict.json", json.dumps(out.get("structured_output") or json.loads(out["result"])).encode())
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             pass
     try:
-        verdict = json.loads(_read(jd / "verdict.json"))
+        verdict = json.loads(_read(jd / "verdict.json", follow=False))
     except json.JSONDecodeError:
         verdict = None
     if not (isinstance(verdict, dict) and isinstance(verdict.get("verdict"), str)):
@@ -1086,13 +1132,20 @@ PRUNE = ("home/.tmp", "home/skills", "home/models_cache.json", "judge/home/.tmp"
 
 
 def _prune(job_dir: Path):
-    """Remove per-run caches that hold no evidence (host plugin catalogs, bundled skill copies)."""
+    """Remove per-run caches that hold no evidence (host plugin catalogs, bundled skill copies). A path through a
+    link an agent planted is skipped, and a link in a cache's place is removed, never its target."""
     for rel in PRUNE:
-        target = job_dir / rel
-        if target.is_dir():
-            shutil.rmtree(target, ignore_errors=True)
-        elif target.exists():
-            target.unlink()
+        target = job_dir
+        for part in Path(rel).parts[:-1]:
+            target = target / part
+            if target.is_symlink() or not target.is_dir():
+                break
+        else:
+            target = target / Path(rel).name
+            if target.is_symlink() or (target.exists() and not target.is_dir()):
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
 
 
 def _check_space(out: Path):
@@ -1185,8 +1238,10 @@ def derive(out: Path, scenario: str, artifact: str, consumer: Path, base: dict, 
     for path, result in _load_results(out)[0]:
         if result.get("scenario") != scenario:
             continue
-        produced = path.parent / "work" / artifact
-        if result.get("status") != "ok" or not produced.is_file():
+        work = path.parent / "work"
+        produced = work / artifact
+        if (result.get("status") != "ok" or work.is_symlink() or not work.is_dir() or produced.is_symlink()
+                or not produced.is_file() or not produced.resolve().is_relative_to(path.parent.resolve() / "work")):
             continue
         name = f"{result['arm']}~r{result['repeat']}"
         target = arms_dir / f"{name.replace('~', '__')}.md"
@@ -1247,9 +1302,14 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
             path, result, spec, checks = item
             if not (rejudge and result["status"] == "ok" and spec.get("judge") and plan.get("judge") and "check_error" not in checks):
                 return None
-            shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
-            return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent,
-                             isolated_env(path.parent, out, spec), "judge.next")
+            # The agent's harness and tools directories may be links it planted; the judge needs neither.
+            env_dir = Path(tempfile.mkdtemp(prefix="judge-env-", dir=path.parent))
+            (env_dir / "harness").mkdir()
+            try:
+                return judge_run(plan, spec, Run(path.parent, result["status"]), _load_checks(spec), path.parent,
+                                 isolated_env(env_dir, out, spec), "judge.next")
+            finally:
+                shutil.rmtree(env_dir, ignore_errors=True)
 
         try:
             with cf.ThreadPoolExecutor(jobs) as pool:
@@ -1261,13 +1321,13 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None) -> int:
                                  "the judge's stderr); nothing was changed")
         except BaseException:
             for path, *_ in scored:
-                shutil.rmtree(path.parent / "judge.next", ignore_errors=True)
+                _remove(path.parent / "judge.next")
             raise
 
         def finish(item, verdict):
             path, result, spec, checks = item
             if verdict is not None:
-                shutil.rmtree(path.parent / "judge", ignore_errors=True)
+                _remove(path.parent / "judge")
                 os.replace(path.parent / "judge.next", path.parent / "judge")
                 result["judge"] = dict(verdict, judge_model=plan["judge"].get("model", plan["judge"]["executor"]))
                 result["judge_identity"] = _identity(plan["judge"], JUDGE_FIELDS)

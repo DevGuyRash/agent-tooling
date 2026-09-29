@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -46,7 +47,7 @@ class TrialRunnerTest(unittest.TestCase):
         subprocess.run(["rm", "-rf", str(self.tmp)])
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=300)
 
     def results(self):
         return {p.parent.name: json.loads(p.read_text()) for p in (self.out / "runs").glob("*/result.json")}
@@ -270,6 +271,53 @@ class TrialRunnerTest(unittest.TestCase):
             trial._key_prefix(env_file, "BAD; rm -rf /", None)
 
     @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_links_an_agent_plants_never_lead_the_runner_outside_the_run(self):
+        victims = self.tmp / "victims"
+        for d in ("home/skills", "harness/home/.cache/keep", "judge"):
+            (victims / d).mkdir(parents=True)
+        (victims / "home" / "models_cache.json").write_text("keep")
+        (victims / "final.txt").write_text("original")
+        (victims / "events.jsonl").write_text('{"type": "result", "result": "HOST-SECRET"}\n')
+        (victims / "secret.txt").write_text("HOST-SECRET")
+        (victims / "artifact.md").write_text("HOST-SECRET")
+        state = lambda: sorted((str(p.relative_to(victims)), p.read_bytes() if p.is_file() else None) for p in victims.rglob("*"))
+        before = state()
+        fake = self.tmp / "bin" / "claude"
+        write(fake, "#!/bin/sh\ncat >/dev/null\n"
+                    "case \"$*\" in *--json-schema*) echo '{\"structured_output\": {\"verdict\": \"pass\", \"reason\": \"ok\"}}'; exit 0;; esac\n"
+                    "rm -f out.txt; mkfifo out.txt\n"  # a check reading it must not hang
+                    "echo '{\"type\": \"result\", \"result\": \"agent done\"}'\n"
+                    f"cd .. && rm -rf judge harness home final-0.md events.jsonl && ln -s {victims}/final.txt final-0.md && "
+                    f"ln -s {victims}/judge judge && ln -s {victims}/harness harness && ln -s {victims}/home home && "
+                    f"ln -s {victims}/events.jsonl events.jsonl\n", 0o755)
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\n")
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "go", "followups": ["again"], "required": [],
+                                               "sandbox": "confined" if shutil.which("bwrap") else "workspace-write",
+                                               "judge": {"question": "q?", "pass_when": "it passes"}}))
+        write(s / "check.py", "def check(run):\n    return {'final': run.final_message, 'out': run.file('out.txt')}\n")
+        claude = {"executor": "claude", "model": "m", "binary": str(fake), "base_url": "http://proxy.invalid",
+                  "api_key_var": "TRIAL_TEST_KEY", "env_file": str(env_file)}
+        r = self.run_cli("run", self._plan({"c": claude}, claude), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.out / "runs" / "make-file__c__r1" / "work" / "out.txt").st_mode))
+        self.assertNotIn("HOST-SECRET", json.dumps(self.results()["make-file__c__r1"]))
+        self.assertEqual(state(), before)
+        self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)
+        self.assertEqual(state(), before)
+        # derive copies only a regular file inside the run's working directory
+        cmd = {"executor": "command", "command": f"ln -s {victims}/secret.txt artifact.md"}
+        swap = {"executor": "command", "command": f"cd .. && rm -rf work events.jsonl && mkdir events.jsonl && ln -s {victims} work"}
+        r = self.run_cli("run", self._plan({"k": cmd, "w": swap}), "--out", str(self.tmp / "out2"))
+        self.assertEqual(r.returncode, 0, r.stderr)  # a directory in a record's place ends nothing
+        swapped = trial.Run(self.tmp / "out2" / "runs" / "make-file__w__r1", "ok")
+        self.assertEqual(list(swapped.copy_workdir().iterdir()), [])
+        r = self.run_cli("derive", str(self.tmp / "out2"), "--scenario", "make-file", "--artifact", "artifact.md",
+                         "--consumer", str(s), "--plan", str(self.tmp / "derived.json"))
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(state(), before)
+
     def test_processes_a_confined_run_starts_end_with_it(self):
         write(self.tmp / "plan.json", json.dumps({"name": "pid", "repeats": 1, "scenarios": ["scenarios/make-file"],
             "arms": {"a": {"executor": "command", "command": '(sleep 3; touch "$TRIAL_JOB_DIR/survivor") & exit 0'}}}))
