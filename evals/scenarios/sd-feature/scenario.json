@@ -1,0 +1,6 @@
+{
+  "description": "A small Python feature in a repository with tests. Measures correctness, verification volume, and fragmentation of one requested change.",
+  "prompt": "Add a low_stock(threshold) method to Inventory that returns the names of items whose count is at or below the threshold, sorted by name.",
+  "timeout_s": 1500,
+  "required": ["feature_works", "existing_tests_pass", "single_change"]
+}

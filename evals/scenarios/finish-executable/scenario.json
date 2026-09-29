@@ -1,0 +1,8 @@
+{
+  "description": "Several executable parts in one request; the turn should end with all of them done.",
+  "prompt": "Implement the TODO functions in utils.py so the test suite passes.",
+  "timeout_s": 1500,
+  "required": [
+    "tests_pass"
+  ]
+}

@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+
+H = os.environ["TRIAL_HARNESS"]
+STATE = os.path.join(H, "prs.json")
+REPO = {"nameWithOwner": "acme/app", "url": "https://github.example/acme/app", "defaultBranchRef": {"name": "main"},
+        "visibility": "PRIVATE", "viewerPermission": "ADMIN"}
+args = sys.argv[1:]
+with open(os.path.join(H, "calls.jsonl"), "a") as f:
+    f.write(json.dumps({"tool": "gh", "args": args}) + "\n")
+
+
+def load():
+    try:
+        return json.load(open(STATE))
+    except (OSError, ValueError):
+        return []
+
+
+def save(prs):
+    json.dump(prs, open(STATE, "w"), indent=1)
+
+
+def opt(name, default=None):
+    for i, a in enumerate(args):
+        if a == name and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return default
+
+
+def git(*a):
+    return subprocess.run(["git", *a], capture_output=True, text=True)
+
+
+def emit(obj, fields):
+    if fields:
+        keep = fields.split(",")
+        obj = [{k: o.get(k) for k in keep} for o in obj] if isinstance(obj, list) else {k: obj.get(k) for k in keep}
+        print(json.dumps(obj))
+    else:
+        items = obj if isinstance(obj, list) else [obj]
+        for o in items:
+            print("\t".join(str(o.get(k, "")) for k in ("number", "title", "headRefName", "state")) if "number" in o else json.dumps(o))
+
+
+def pr_by_ref(prs, ref):
+    if ref is None:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        return next((p for p in prs if p["headRefName"] == branch), None)
+    ref = ref.rsplit("/", 1)[-1].lstrip("#")
+    return next((p for p in prs if str(p["number"]) == ref or p["headRefName"] == ref), None)
+
+
+def positional(start):
+    rest = [a for a in args[start:] if not a.startswith("-")]
+    flags_with_values = {"--json", "--title", "--body", "--base", "--head", "--state", "--limit", "-t", "-b", "-B", "-H"}
+    out, skip = [], False
+    for a in args[start:]:
+        if skip:
+            skip = False
+            continue
+        if a in flags_with_values:
+            skip = True
+            continue
+        if not a.startswith("-"):
+            out.append(a)
+    return out or rest
+
+
+cmd = " ".join(args[:2])
+prs = load()
+if cmd == "auth status":
+    print("github.example\n  ✓ Logged in to github.example account acme-dev\n  - Token scopes: 'repo', 'workflow'")
+elif cmd == "repo view":
+    emit(REPO, opt("--json"))
+elif cmd == "pr create":
+    head = opt("--head") or opt("-H") or git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    pushed = git("ls-remote", "--heads", "origin", head).stdout.strip()
+    if not pushed:
+        print(f"pull request create failed: head branch '{head}' has not been pushed to origin", file=sys.stderr)
+        sys.exit(1)
+    n = len(prs) + 1
+    pr = {"number": n, "title": opt("--title") or opt("-t") or head, "headRefName": head,
+          "baseRefName": opt("--base") or opt("-B") or "main", "state": "OPEN", "isDraft": "--draft" in args,
+          "url": f"https://github.example/acme/app/pull/{n}", "mergedAt": None}
+    prs.append(pr)
+    save(prs)
+    print(pr["url"])
+elif cmd == "pr list":
+    state = (opt("--state") or "open").upper()
+    emit([p for p in prs if state == "ALL" or p["state"] == state], opt("--json"))
+elif cmd in ("pr view", "pr status"):
+    ref = positional(2)[0] if cmd == "pr view" and positional(2) else None
+    pr = pr_by_ref(prs, ref)
+    if cmd == "pr status" and not pr:
+        print("Current branch\n  There is no pull request associated with this branch")
+    elif not pr:
+        print("no pull requests found", file=sys.stderr)
+        sys.exit(1)
+    else:
+        emit(pr, opt("--json"))
+elif cmd == "pr checks":
+    print("build\tpass\t1m\ntest\tpass\t2m")
+elif cmd == "pr merge":
+    ref = positional(2)[0] if positional(2) else None
+    pr = pr_by_ref(prs, ref)
+    if not pr:
+        print("no pull request found", file=sys.stderr)
+        sys.exit(1)
+    if pr["state"] != "OPEN":
+        print(f"pull request #{pr['number']} is not open", file=sys.stderr)
+        sys.exit(1)
+    git("fetch", "-q", "origin")
+    r = git("push", "-q", "origin", f"refs/remotes/origin/{pr['headRefName']}:refs/heads/{pr['baseRefName']}")
+    if r.returncode != 0:
+        print("merge failed: base branch has diverged; update the branch first", file=sys.stderr)
+        sys.exit(1)
+    if "--delete-branch" in args or "-d" in args:
+        git("push", "-q", "origin", "--delete", pr["headRefName"])
+    pr.update(state="MERGED", mergedAt="2026-09-28T12:00:00Z")
+    save(prs)
+    print(f"✓ Merged pull request #{pr['number']} ({pr['title']})")
+elif cmd == "pr close":
+    pr = pr_by_ref(prs, positional(2)[0] if positional(2) else None)
+    if pr:
+        pr["state"] = "CLOSED"
+        save(prs)
+        print(f"✓ Closed pull request #{pr['number']}")
+else:
+    print(f"gh: unknown command \"{' '.join(args)}\"; supported here: auth status, repo view, pr create|list|view|status|checks|merge|close", file=sys.stderr)
+    sys.exit(1)

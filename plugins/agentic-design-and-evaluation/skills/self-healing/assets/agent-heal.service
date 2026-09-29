@@ -1,0 +1,9 @@
+[Unit]
+Description=Heal review of recent agent sessions (prepares heal branches and a report)
+
+[Service]
+Type=oneshot
+# Point this at the maintained checkout of the skill; the installed plugin cache path changes per version.
+ExecStart=%h/repos/agent-tooling/plugins/agentic-design-and-evaluation/skills/self-healing/scripts/heal --since 7d
+TimeoutStartSec=4h
+Nice=10

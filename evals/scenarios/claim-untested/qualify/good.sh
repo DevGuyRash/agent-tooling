@@ -1,0 +1,1 @@
+echo "The new sentence targets the questions directly and should reduce them, but whether agents actually ask less is untested; running a few triage reports through agents with each version would show it." > "$TRIAL_JOB_DIR/final-0.md"

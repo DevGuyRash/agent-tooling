@@ -1,0 +1,9 @@
+{
+  "name": "qualify-authoring",
+  "repeats": 1,
+  "arms": {
+    "good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+    "bad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""}
+  },
+  "scenarios": ["../scenarios/author-migration-skill", "../scenarios/repair-ask-first-skill"]
+}

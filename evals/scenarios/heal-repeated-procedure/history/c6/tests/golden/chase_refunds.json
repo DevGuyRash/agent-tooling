@@ -1,0 +1,23 @@
+{
+  "bank": "chase",
+  "transactions": [
+    {
+      "amount": "19.99",
+      "category": "credit",
+      "date": "2026-08-11",
+      "description": "AMAZON MKTPL"
+    },
+    {
+      "amount": "7.48",
+      "category": "credit",
+      "date": "2026-08-14",
+      "description": "TARGET 00012345"
+    },
+    {
+      "amount": "-52.30",
+      "category": "debit",
+      "date": "2026-08-14",
+      "description": "TARGET 00012345"
+    }
+  ]
+}

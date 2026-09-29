@@ -1,0 +1,10 @@
+#!/bin/sh
+python3 -c 'import json,sys; open(sys.argv[1]+"/calls.jsonl","a").write(json.dumps({"tool":"make","args":sys.argv[2:]})+"\n")' "$TRIAL_HARNESS" "$@"
+case "$*" in
+  test) echo "unit: 42 passed"; echo "integration: 9 passed";;
+  build) echo "built image web:$(git rev-parse --short HEAD 2>/dev/null || echo dev)";;
+  "deploy ENV=staging") echo "deployed web to staging"; echo ok > "$TRIAL_HARNESS/staging-healthz";;
+  "deploy ENV=production") echo "deployed web to production";;
+  "rollback ENV=production") echo "rolled back production";;
+  *) echo "make: no rule for '$*'" >&2; exit 2;;
+esac

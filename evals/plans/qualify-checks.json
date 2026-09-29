@@ -1,0 +1,50 @@
+{
+  "name": "qualify-checks",
+  "repeats": 1,
+  "arms": {
+    "good": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""
+    },
+    "bad": {
+      "executor": "command",
+      "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""
+    },
+    "noop": {
+      "executor": "command",
+      "command": "true"
+    }
+  },
+  "scenarios": [
+    "../scenarios/gate-deploy",
+    "../scenarios/pr-no-merge",
+    "../scenarios/land-granted",
+    "../scenarios/residue-focused-prs",
+    "../scenarios/upsert-instructions",
+    "../scenarios/handoff-vs-user",
+    "../scenarios/small-change-proportion",
+    "../scenarios/finish-executable",
+    "../scenarios/away-release",
+    "../scenarios/answer-only",
+    "../scenarios/gate-continue",
+    "../scenarios/continue-after-done",
+    "../scenarios/heartbeat-resume",
+    "../scenarios/approved-phases-continue",
+    "../scenarios/requested-polling",
+    "../scenarios/merge-when-ci-passes",
+    "../scenarios/use-deploy-skill",
+    "../scenarios/author-migration-skill",
+    "../scenarios/repair-ask-first-skill",
+    "../scenarios/author-brief",
+    "../scenarios/author-unattended",
+    "../scenarios/consolidate-rules",
+    "../scenarios/heal-repeated-procedure",
+    "../scenarios/heal-mixed",
+    "../scenarios/heal-clean",
+    "../scenarios/audit-skill",
+    "../scenarios/claim-untested",
+    "../scenarios/choose-implementation",
+    "../scenarios/sd-feature",
+    "../scenarios/sd-bugfix"
+  ]
+}

@@ -1,19 +1,11 @@
 ---
 name: prompt-context-design
-description: Write, revise, or assess AI prompts and execution plans, and arrange the instructions, context, and handoffs needed to carry out a task.
-compatibility: Requires the complete Agentic Design & Evaluation plugin, including its shared foundation and authoring charter.
+description: Write or revise instructions another AI will follow, such as prompts, skills, AGENTS.md or CLAUDE.md files, briefs for delegated agents, and prompts for recurring or unattended work.
+compatibility: Requires the complete Agentic Design & Evaluation plugin, including its authoring guidance and the Split Testing trial runtime.
 ---
 
 # Prompt and Context Design
 
-You SHALL produce the instruction, context arrangement, assessment, or other contribution the user needs. A narrow edit can be the whole assignment. When selecting the intervention is delegated, you MAY consider whether changed information, tools, permissions, continuity, or no new artifact would serve the purpose. You SHALL preserve informed choices and make ordinary design decisions within the mandate.
+The [authoring guidance](../foundational-knowledge/references/governing-architecture.md) applies to the text you deliver. [Briefs and context](references/briefs-and-context.md) covers briefs for delegated agents, prompts for continuing and unattended work, and what a recipient actually receives.
 
-When creating or revising instructions for another AI, you SHALL apply the [governing architecture](../foundational-knowledge/references/governing-architecture.md). Assess existing instructions against the requirements they actually adopt.
-
-Consult [foundational knowledge](../foundational-knowledge/references/foundational-knowledge.md) for delegation, context, and independent understanding. If a required resource is unavailable, you SHALL report the incomplete installation and the affected work.
-
-For instruction or execution-plan design and editing, use [designing instructions](references/designing-instructions.md). For source selection, retrieval, attachments, or context pressure, use [arranging context](references/arranging-context.md). For ongoing work and delegation, use [continuation and handoffs](references/continuation-and-handoffs.md). You SHOULD read what contributes to the assignment.
-
-For skill packaging, consult [portable skills](../skill-auditor/references/open-standard.md) and [host delivery](../skill-auditor/references/host-contracts.md). For comparative evidence, use [Split Testing](../split-testing/SKILL.md).
-
-You SHALL deliver usable work with the meaning, authority, source material or reliable access, and completion interface its recipient needs. You SHOULD check the consequential properties of the delivered work and distinguish those checks from a demonstrated improvement in model behavior.
+Whether text helps is a question about behavior. You SHALL NOT claim that instructions work or improve behavior unless you observed it: a scenario that exercises the concern, repeated enough to tell the result from luck, against the same scenario without the text, using the [trial runtime](../split-testing/references/trials.md). Otherwise you SHALL call them untested.

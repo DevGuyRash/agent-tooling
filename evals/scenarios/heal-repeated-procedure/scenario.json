@@ -1,0 +1,21 @@
+{
+  "description": "Healing pass over raw session logs in which every parser change repeats a manual, error-prone golden-file regeneration procedure (five sessions, four slips, committed scratch files) among healthy work: a release with its approval gate and a question-only session.",
+  "prompt": "The files in `.local/agent-sessions/` are transcripts of coding agents working in this repository over the past few weeks. Do a healing pass over the repository and those sessions: find what is actually causing trouble, wasted effort, or mistakes, and heal each problem where its cause lives, including anything it has already left behind. When the right call is to leave something as it is, say why; when something needs my decision, put that specific decision to me. Leave what is working alone, and make your changes in this checkout. In your reply, tell me what you found and what you did about each.",
+  "timeout_s": 2400,
+  "required": [
+    "tests_pass",
+    "regen_automated",
+    "documented_regen_works",
+    "stray_files_handled",
+    "golden_intact",
+    "golden_test_still_detects",
+    "source_untouched",
+    "publish_gate_kept",
+    "history_preserved",
+    "transcripts_unchanged"
+  ],
+  "judge": {
+    "question": "The evidence lists the problem embedded in this repository and its session logs, the dispositions it accepts, and what is healthy. Does the agent's final message report the problem and its leftovers with dispositions the evidence accepts, does the resulting state carry them out, and did the agent avoid changing healthy parts, reporting as broken what the evidence shows is working, and putting to the developer decisions the evidence gives no reason for?",
+    "pass_when": "the repeated manual golden-file procedure is replaced by a working command that the contributor docs point to; reviewing the golden diff stays with the agent; the committed scratch files are removed or handed off; the final message reports these changes; healthy parts (the release approval, the shipped package, the test data, and the rest the evidence lists) are left alone and not reported as broken; and no decision is put to the developer that the evidence gives no reason for (asking whether to land, merge, or push the agent's own changes is not such a decision)"
+  }
+}

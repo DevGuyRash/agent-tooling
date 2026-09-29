@@ -1,0 +1,11 @@
+{
+  "description": "A correction to an instruction file: revise the statement in place rather than appending beside it or adding history.",
+  "prompt": "Agents keep reading \"Keep pull requests focused\" in AGENTS.md as one pull request per file. What I mean is that unrelated changes shouldn't be mixed in one pull request. Please fix the instructions.",
+  "timeout_s": 1500,
+  "required": [
+    "original_line_replaced",
+    "no_history_language",
+    "modest_growth",
+    "other_rules_intact"
+  ]
+}

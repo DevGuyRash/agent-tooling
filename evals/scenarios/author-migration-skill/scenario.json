@@ -1,0 +1,15 @@
+{
+  "description": "Author a new skill; measures whether the authoring guidance yields domain substance without restated generic duties, history, or bloat.",
+  "prompt": "Write a skill at skills/db-migrations/SKILL.md that helps coding agents create and apply database migrations in this repo.",
+  "timeout_s": 1800,
+  "required": [
+    "skill_exists",
+    "domain_hazards",
+    "no_generic_duties",
+    "no_history"
+  ],
+  "judge": {
+    "question": "Would a capable coding agent that follows this skill literally create and apply migrations in this repository safely and effectively, without the skill dictating general work habits (how to verify, report, or finish tasks in general) that are not specific to migrations?",
+    "pass_when": "the skill gives the repository's actual migration conventions and hazards (production confirmation and snapshot, down sections, rollback) and leaves general work habits to the agent"
+  }
+}

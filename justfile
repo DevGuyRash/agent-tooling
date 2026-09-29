@@ -41,6 +41,7 @@ test:
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/software-development/tests -p 'test_*.py'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/skill-auditor/tests -p 'test_*.py'
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/split-testing/tests -p 'test_*.py'
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/agentic-design-and-evaluation/skills/self-healing/tests -p 'test_*.py'
   just test-split-testing-visuals
 
 # Check the optional comparison workspace and presentation tools
@@ -120,3 +121,7 @@ mermaid-refresh:
 # Build standalone visual-library previews through the shared artifact tasks
 visual-previews:
   python3 -B scripts/artifacts.py sync --task visual_previews
+
+# Confirm every evals scenario's checks: known-good behavior passes and known-bad fails (needs bubblewrap)
+qualify-evals:
+  python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-checks.json --out "${XDG_CACHE_HOME:-$HOME/.cache}/agent-trials/qualify-evals-$(date +%s)"

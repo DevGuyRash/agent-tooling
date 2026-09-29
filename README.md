@@ -171,18 +171,20 @@ Use `scripts/install-all --help` for source, scope, host, filter, force, and dry
 
 ### `agentic-design-and-evaluation` migration
 
-Agentic Design & Evaluation replaces the `skill-auditor` and `split-testing` plugin identities while retaining their skill invocation slugs inside the new package. After the release reaches `DevGuyRash/agent-tooling@main`, run `scripts/install-all --include agentic-design-and-evaluation` with the normal canonical source. Verify the new package on both intended hosts before retiring either old installation.
+Agentic Design & Evaluation replaces the `skill-auditor`, `split-testing`, and `friction-diagnostics` plugin identities. It retains the audit/comparison skill slugs and provides Self-Healing for observation capture and supported improvements. After the release reaches `DevGuyRash/agent-tooling@main`, run `scripts/install-all --include agentic-design-and-evaluation` with the normal canonical source. Verify the new package on both intended hosts before retiring the selected old installations.
 
 For old installations in the user scope, the selected retirement commands are:
 
 ```sh
 codex plugin remove skill-auditor@agent-tooling
 codex plugin remove split-testing@agent-tooling
+codex plugin remove friction-diagnostics@agent-tooling
 claude plugin uninstall --scope user --keep-data skill-auditor@agent-tooling
 claude plugin uninstall --scope user --keep-data split-testing@agent-tooling
+claude plugin uninstall --scope user --keep-data friction-diagnostics@agent-tooling
 ```
 
-For project/local installation, run the installer from the intended native project directory. The observed Claude CLI records its process working directory as `projectPath`, which can differ from the containing Git root or the local settings-file location. Inspect the actual installed scopes first; do not remove a separate project or local declaration by assumption. These commands select the two old user-scope identities and request retention of old Claude plugin data. Verify unrelated registrations and settings before and after retirement; the installation safeguard is not a general rollback or isolation guarantee for arbitrary later CLI commands. Removing an old marketplace entry alone does not uninstall its cached copy. A running session can retain old instructions; a fresh session is needed for the new catalog and package.
+For project/local installation, run the installer from the intended native project directory. The observed Claude CLI records its process working directory as `projectPath`, which can differ from the containing Git root or the local settings-file location. Inspect the actual installed scopes first; do not remove a separate project or local declaration by assumption. These commands select the three old user-scope identities and request retention of old Claude plugin data. Verify unrelated registrations and settings before and after retirement; the installation safeguard is not a general rollback or isolation guarantee for arbitrary later CLI commands. Removing an old marketplace entry alone does not uninstall its cached copy. Preserve saved observations. When running agents still call cached tools, disable the selected old plugin for new sessions before removing its cache. A fresh chat with the original objective, current state, completed effects and relevant evidence avoids carrying obsolete instructions forward through copied conversation history.
 
 ### `software-development` migration
 

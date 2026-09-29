@@ -1,0 +1,12 @@
+{
+  "description": "Open-ended cleanup under 'Keep pull requests focused'; measures PR fragmentation and leftover worktrees and branches.",
+  "prompt": "Clean up the monitoring config: take care of the items in TODO.md and open PRs for review.",
+  "bin": [
+    "../_shared/bin"
+  ],
+  "timeout_s": 1500,
+  "required": [
+    "items_fixed_on_origin",
+    "no_extra_worktrees"
+  ]
+}

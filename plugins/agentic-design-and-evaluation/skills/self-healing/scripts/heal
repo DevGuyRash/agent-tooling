@@ -1,0 +1,90 @@
+#!/usr/bin/env sh
+# Start a heal review as a fresh headless agent session on any installed host.
+#
+#   heal [--host codex|claude|gemini] [--since 7d|YYYY-MM-DD] [--repos DIR] [--land]
+#        [--model NAME] [--dry-run]
+#
+# It writes a dated evidence digest to ~/.local/state/agent-heal/ (so evidence outlives
+# host log cleanup), then runs the Self-Healing instructions with a launch message naming
+# the window, the repositories in scope, and whether landing is granted. Exit status is the
+# host CLI's; the review's result is ~/.local/state/agent-heal/report.md and any `heal` branches.
+set -eu
+
+skill_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+state="${XDG_STATE_HOME:-$HOME/.local/state}/agent-heal"
+host=""
+since="7d"
+repos="$HOME/repos"
+land="no"
+model=""
+dry="no"
+
+usage() {
+  printf 'usage: heal [--host codex|claude|gemini] [--since 7d|YYYY-MM-DD] [--repos DIR] [--land] [--model NAME] [--dry-run]\n' >&2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host) host=${2:?}; shift 2 ;;
+    --since) since=${2:?}; shift 2 ;;
+    --repos) repos=${2:?}; shift 2 ;;
+    --land) land="yes"; shift ;;
+    --model) model=${2:?}; shift 2 ;;
+    --dry-run) dry="yes"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'error: unknown option %s\n' "$1" >&2; usage; exit 2 ;;
+  esac
+done
+
+if [ -z "$host" ]; then
+  for h in codex claude gemini; do
+    if command -v "$h" >/dev/null 2>&1; then host=$h; break; fi
+  done
+fi
+case "$host" in
+  codex|claude|gemini) command -v "$host" >/dev/null 2>&1 || { printf 'error: %s is not on PATH\nhint: pass --host with an installed CLI\n' "$host" >&2; exit 2; } ;;
+  "") printf 'error: no agent CLI found\nhint: install codex, claude, or gemini, or pass --host\n' >&2; exit 2 ;;
+  *) printf 'error: unknown host "%s"\nvalid hosts: codex, claude, gemini\n' "$host" >&2; exit 2 ;;
+esac
+
+day=$(date -u +%Y-%m-%d)
+digest="$state/digest-$day.md"
+if [ "$dry" != "yes" ]; then
+  mkdir -p "$state"
+  python3 "$skill_dir/scripts/digest.py" --since "$since" --repos "$repos" --friction "$repos" > "$digest.tmp"
+  mv "$digest.tmp" "$digest"
+fi
+
+if [ "$land" = "yes" ]; then
+  landing="You may land supported changes under each repository's own rules."
+else
+  landing="Prepare supported changes on heal branches without landing them."
+fi
+
+prompt_file=$(mktemp "${TMPDIR:-/tmp}/heal-prompt.XXXXXX")
+trap 'rm -f "$prompt_file"' EXIT INT TERM
+{
+  # The skill body without its frontmatter, then the launch message.
+  awk 'BEGIN{n=0} /^---$/ && n<2 {n++; next} n>=2' "$skill_dir/SKILL.md"
+  printf '\n---\n\nLaunch message: review agent sessions since %s across the repositories under %s. %s ' "$since" "$repos" "$landing"
+  printf 'This skill lives at %s, so scripts/ means %s/scripts. ' "$skill_dir" "$skill_dir"
+  printf 'This run'"'"'s evidence digest is %s. ' "$digest"
+  printf 'Write your report to %s/report.md, replacing the previous one.\n' "$state"
+} > "$prompt_file"
+
+case "$host" in
+  codex)
+    set -- codex exec --skip-git-repo-check -C "$HOME" -s danger-full-access ${model:+-m "$model"} - ;;
+  claude)
+    set -- claude -p --permission-mode acceptEdits --allowed-tools "Bash Read Edit Write Glob Grep" ${model:+--model "$model"} ;;
+  gemini)
+    set -- gemini --approval-mode yolo ${model:+-m "$model"} -p "Follow the instructions on stdin." ;;
+esac
+
+if [ "$dry" = "yes" ]; then
+  printf 'digest: %s\nprompt: %s bytes\ncommand: %s\n' "$digest" "$(wc -c < "$prompt_file" | tr -d ' ')" "$*"
+  exit 0
+fi
+
+cd "$HOME"
+"$@" < "$prompt_file"

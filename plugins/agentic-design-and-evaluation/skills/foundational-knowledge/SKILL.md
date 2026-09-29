@@ -1,12 +1,10 @@
 ---
 name: foundational-knowledge
-description: Explain principles of AI delegation, authority, grounding, independent understanding, continuity, and evaluation, and consult the authoring charter.
+description: The research behind this plugin on delegating work to AI agents (authority, grounding, done states, evidence, how instructions steer and compose) and the authoring guidance for instructions another AI will follow. Use for large design or prompt-engineering sessions and for questions about why the guidance says what it says.
 ---
 
 # Foundational Knowledge
 
-You SHOULD use the complete [foundational knowledge](references/foundational-knowledge.md) to inform the current question or task. Its contents own navigation and reading guidance; the discussions, diagrams, and glossary offer different ways to understand the same material.
+[Foundational knowledge](references/foundational-knowledge.md) is the research: principles with their grounds, open questions, and the evidence behind this plugin's choices. Read the parts the question needs; ordinary work does not start by reading it.
 
-The separate [governing architecture](references/governing-architecture.md) applies when creating or revising instructions for another AI. You SHALL apply it within that authoring role. Explanatory knowledge does not otherwise acquire policy force merely because it is in the same package, and external targets do not automatically adopt this charter.
-
-These files are public maintained resources of the complete plugin and can be consulted directly without invoking another task. You SHOULD explain or apply the knowledge at the requested scope; downstream artifacts carry what their own executors need.
+The [authoring guidance](references/governing-architecture.md) applies when you write or revise instructions another AI will follow.

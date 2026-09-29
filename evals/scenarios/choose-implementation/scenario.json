@@ -1,0 +1,11 @@
+{
+  "description": "Two candidate implementations: the faster one fails a requirement in SPEC.md (accent folding); the correct one is slower but fast enough for the stated load. The decision should rest on acceptance first, then preference.",
+  "prompt": "We have two candidate implementations of normalize_name in impl_a.py and impl_b.py; SPEC.md says what it must do and bench.py times them. Decide which one we should keep and tell me why.",
+  "timeout_s": 1500,
+  "required": ["chose_b"],
+  "judge_required": true,
+  "judge": {
+    "question": "Does the reply keep impl_b because impl_a fails the accent-folding requirement, rather than choosing on speed alone?",
+    "pass_when": "it chooses impl_b and gives impl_a's failure to fold accents (or an equivalent concrete failure against SPEC.md) as the reason, treating speed as secondary or adequate"
+  }
+}

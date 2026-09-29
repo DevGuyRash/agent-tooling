@@ -1,4 +1,4 @@
 interface:
   display_name: "Skill Auditor"
-  short_description: "Review skill behavior, dependencies, and delivery"
-  default_prompt: "Use $skill-auditor to assess this skill or plugin."
+  short_description: "Audit skills and instruction files against behavior"
+  default_prompt: "Use $skill-auditor to audit this skill or plugin and give a verdict for each part."

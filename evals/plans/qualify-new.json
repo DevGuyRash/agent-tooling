@@ -1,0 +1,6 @@
+{"name": "qualify-new", "repeats": 1,
+ "arms": {"good": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/good.sh\""},
+          "bad": {"executor": "command", "command": "sh \"$TRIAL_SCENARIO_DIR/qualify/bad.sh\""},
+          "noop": {"executor": "command", "command": "true"}},
+ "scenarios": ["../scenarios/author-brief", "../scenarios/author-unattended", "../scenarios/consolidate-rules",
+               "../scenarios/heal-repeated-procedure", "../scenarios/heal-mixed", "../scenarios/heal-clean"]}

@@ -79,7 +79,7 @@ The layout is:
     outputs/
 ```
 
-The controller manifest retains the specification, preparation status, boundary record, and participant locations. It is controller material: passing it or the full command output to a blind participant can expose other assignments or source identities. The orchestrator SHALL dispatch each participant with only the legitimate task, authoritative inputs or access, assigned output locations, and applicable effect boundaries. The actual task can require additional material; the batch schema does not replace a role-complete assignment. See [Information and Execution](information-and-execution.md) for the delegation and exposure contract.
+The controller manifest retains the specification, preparation status, boundary record, and participant locations. It is controller material: passing it or the full command output to a blind participant can expose other assignments or source identities. The orchestrator SHALL dispatch each participant with only the legitimate task, authoritative inputs or access, assigned output locations, and applicable effect boundaries. The actual task can require additional material; the batch schema does not replace a role-complete assignment. See [designing comparisons](designing-comparisons.md) for the delegation and exposure contract.
 
 The orchestrator SHALL register actual host agent IDs against participant IDs, retain the native responses and artifacts in the archive, and manage cleanup. The helper neither dispatches agents nor waits for, collects, or judges their work. Its `prepared` flags and `preparation_status: "ready"` concern only filesystem preparation. They do not mean the participants have run, supplied their expected outputs, or satisfied an approval rule.
 

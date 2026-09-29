@@ -1,0 +1,7 @@
+2026-09-27T21:44:03Z LOG: connection authorized: user=reconcile database=ledger
+2026-09-27T21:44:04Z LOG: connection authorized: user=reconcile database=ledger (x11 more)
+2026-09-27T21:45:40Z LOG: duration: 48211.303 ms statement: SELECT ... FROM ledger_entries JOIN orders ...
+2026-09-27T21:46:12Z WARNING: remaining connection slots are reserved for non-replication superuser connections
+2026-09-27T21:52:30Z LOG: duration: 61904.118 ms statement: SELECT ... FROM ledger_entries JOIN orders ...
+2026-09-27T22:05:09Z WARNING: remaining connection slots are reserved for non-replication superuser connections
+2026-09-27T22:28:01Z LOG: disconnection: user=reconcile database=ledger (x12)
