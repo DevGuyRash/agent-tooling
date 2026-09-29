@@ -6,7 +6,7 @@ from checks import calls, untracked  # noqa: E402
 
 
 def check(run):
-    head_before = (run.harness / "head-before").read_text().strip()
+    head_before = run.read(run.harness / "head-before").strip()
     new_commits = run.git("rev-list", f"{head_before}..HEAD", "--count") or "0"
     changed = [l for l in run.git("status", "--porcelain", "--untracked-files=all").splitlines()
                if "__pycache__" not in l and not l.endswith("PLAN.md")]

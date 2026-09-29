@@ -55,9 +55,11 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import threading
 import tomllib
@@ -140,11 +142,17 @@ def _provider_config(model: str, effort: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _env_file_prefix(env_file: Path | None) -> list[str]:
-    """Load the provider credential file into the child process only; never read here."""
-    if env_file and env_file.exists():
-        return ["sh", "-c", 'set -a; . "$0" >/dev/null 2>&1; set +a; exec "$@"', str(env_file)]
-    return []
+def _key_prefix(env_file: Path | None, var: str | None, target: str | None = None) -> list[str]:
+    """Export one variable from the provider credential file, as `target` (default: its own name), to the
+    command that follows. A subshell sources the file, so nothing else in it is exported, and the value is
+    never read here. Run it outside bubblewrap: the sandbox then inherits the variable, never the file."""
+    if not (env_file and env_file.exists() and var):
+        return []
+    for name in (var, target or var):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise TrialError(f"invalid environment variable name {name!r} for the provider key")
+    return ["sh", "-c", 'k=$(. "$0" >/dev/null 2>&1; eval "printf %s \\"\\${$1-}\\""); eval "export $2=\\"\\$k\\""; shift 2; exec "$@"',
+            str(env_file), var, target or var]
 
 
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path):
@@ -160,18 +168,20 @@ def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path):
             return None, True
 
 
-def confine_prefix(job_dir: Path, readable: list[Path]) -> list[str]:
-    """Wrap a command in bubblewrap: the host is read-only, the user's home is hidden, and only
-    the run directory is writable. Network stays available for model APIs."""
+def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writable=True, chdir: Path | None = None) -> list[str]:
+    """Wrap a command in bubblewrap: the host is read-only, the user's home is hidden, the command and
+    everything it starts live in their own process namespace and end with it, and only the run
+    directory is writable. Network stays available for model APIs unless network is False."""
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise TrialError("confined runs need bubblewrap (bwrap); install it or set \"sandbox\" explicitly")
     cmd = [bwrap, "--ro-bind", "/", "/", "--tmpfs", str(Path.home()), "--dev", "/dev", "--proc", "/proc",
-           "--tmpfs", "/tmp", "--die-with-parent"]
+           "--tmpfs", "/tmp", "--unshare-pid", "--die-with-parent"] + ([] if network else ["--unshare-net"])
     for path in readable:
         if path.exists():
             cmd += ["--ro-bind", str(path), str(path)]
-    return cmd + ["--bind", str(job_dir), str(job_dir), "--chdir", str(job_dir / "work"), "--"]
+    return cmd + ["--bind" if writable else "--ro-bind", str(job_dir), str(job_dir),
+                  "--chdir", str(chdir or job_dir / "work"), "--"]
 
 
 def _codex_sandbox(spec):
@@ -179,6 +189,11 @@ def _codex_sandbox(spec):
     any other value is passed to Codex's own sandbox."""
     mode = spec.get("sandbox", "confined")
     return ("danger-full-access", True) if mode == "confined" else (mode, False)
+
+
+def _codex_readable(codex: str) -> list[Path]:
+    install = Path(codex).resolve().parents[3] if Path(codex).exists() else Path(codex).parent
+    return [install, Path(codex).parent]
 
 
 def run_codex(arm, spec, job_dir: Path, env):
@@ -192,13 +207,12 @@ def run_codex(arm, spec, job_dir: Path, env):
         shutil.copy(arm["instructions"], home / "AGENTS.md")
     env = dict(env, CODEX_HOME=str(home))
     env_file = Path(arm.get("env_file", CODEX_HOME_SRC / "codex.env"))
-    prefix = _env_file_prefix(env_file)
+    prefix = _key_prefix(env_file, arm.get("api_key_var") or _provider_key_var())
     codex = arm.get("binary") or shutil.which("codex", path=str(Path.home() / ".npm-global/bin")) or "codex"
     sandbox, confined = _codex_sandbox(spec)
-    if confined:
-        install = Path(codex).resolve().parents[3] if Path(codex).exists() else Path(codex).parent
-        prefix = confine_prefix(job_dir, [install, Path(codex).parent, env_file,
-                                          *[Path(p).expanduser() for p in arm.get("readable", [])]]) + prefix
+    if confined:  # the key is exported outside, then bwrap inherits it; the credential file stays hidden
+        prefix = prefix + confine_prefix(job_dir, [*_codex_readable(codex),
+                                                   *[Path(p).expanduser() for p in arm.get("readable", [])]])
     common = ["--skip-git-repo-check", "-s", sandbox,
               "-m", arm["model"], "-c", f"model_reasoning_effort={arm.get('effort', 'medium')}",
               "--add-dir", str(job_dir / "harness"), "--json"]
@@ -251,9 +265,7 @@ def _claude_proxy(arm, env):
     if not var or not env_file.exists():
         raise TrialError("claude arm with base_url needs api_key_var and env_file (or a Codex provider config)")
     # The key moves from the env file into ANTHROPIC_API_KEY inside the child only; nothing here reads it.
-    return dict(env, ANTHROPIC_BASE_URL=arm["base_url"]), [
-        "sh", "-c", 'set -a; . "$0" >/dev/null 2>&1; set +a; eval "export ANTHROPIC_API_KEY=\\$$1"; shift; exec "$@"',
-        str(env_file), var]
+    return dict(env, ANTHROPIC_BASE_URL=arm["base_url"]), _key_prefix(env_file, var, "ANTHROPIC_API_KEY")
 
 
 def run_claude(arm, spec, job_dir: Path, env):
@@ -327,6 +339,13 @@ def _thread_id(events: Path):
 
 # ---------------------------------------------------------------- run record
 
+GIT_HARDENING = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=",
+                 "-c", "core.pager=cat", "-c", "protocol.allow=never", "-c", "core.sshCommand=false",
+                 "-c", "credential.helper=", "-c", "gpg.program=false", "-c", "core.alternateRefsCommand=false"]
+GIT_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8", "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
+
+
 class Run:
     """What a check sees: the resulting state and the native record of one run."""
 
@@ -336,29 +355,83 @@ class Run:
         self.harness = job_dir / "harness"
         self.status = status
         self.events = []
-        for line in _read(job_dir / "events.jsonl").splitlines():
+        for line in self.read(job_dir / "events.jsonl").splitlines():
             try:
-                self.events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(event, dict):  # a command arm may print JSON scalars or lists
+                self.events.append(event)
         self.messages = [t for t in (_message_text(e) for e in self.events) if t]
         finals = sorted(job_dir.glob("final-*.md"))
-        self.final_message = _read(finals[-1]) if finals else (self.messages[-1] if self.messages else "")
+        self.final_message = self.read(finals[-1]) if finals else (self.messages[-1] if self.messages else "")
         self.commands = [c for c in (_command_text(e) for e in self.events) if c]
         self.calls = []
-        for line in _read(self.harness / "calls.jsonl").splitlines():
+        for line in self.read(self.harness / "calls.jsonl").splitlines():
             try:
                 self.calls.append(json.loads(line))
             except json.JSONDecodeError:
                 self.calls.append({"raw": line})
         self.usage = _usage(self.events)
 
+    def read(self, p: Path) -> str:
+        """Read a file only if it resolves inside the run directory: an agent can plant links to host files."""
+        try:
+            if not p.resolve().is_relative_to(self.dir.resolve()):
+                return ""
+        except (OSError, RuntimeError):
+            return ""
+        return _read(p)
+
+    def _git(self, args, cwd):
+        """Git on the agent's repository, whose configuration the agent controls: known command-running
+        settings are overridden, and git runs confined (read-only, no network) where bubblewrap exists."""
+        cmd = ["git", *GIT_HARDENING, *args]
+        cwd = Path(cwd or self.workdir)
+        if shutil.which("bwrap") and cwd.exists():
+            cmd = confine_prefix(self.dir, [], network=False, writable=False, chdir=cwd) + cmd
+        try:
+            return subprocess.run(cmd, cwd=cwd if cwd.exists() else self.dir, env=GIT_ENV, capture_output=True,
+                                  text=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
     def git(self, *args, cwd=None) -> str:
-        r = subprocess.run(["git", *args], cwd=cwd or self.workdir, capture_output=True, text=True)
-        return r.stdout.strip() if r.returncode == 0 else ""
+        r = self._git(args, cwd)
+        return r.stdout.strip() if r is not None and r.returncode == 0 else ""
+
+    def git_rc(self, *args, cwd=None) -> int | None:
+        r = self._git(args, cwd)
+        return None if r is None else r.returncode
 
     def file(self, rel: str) -> str:
-        return _read(self.workdir / rel)
+        return self.read(self.workdir / rel)
+
+    def copy_workdir(self) -> Path:
+        """A fresh copy of the working directory under the run directory, links kept as links and .git and
+        caches left out, for checks that run or change agent code; the caller removes its parent."""
+        dst = Path(tempfile.mkdtemp(prefix="check-", dir=self.dir)) / "w"
+        shutil.copytree(self.workdir, dst, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        return dst
+
+    def sandboxed(self, cmd, cwd=None, timeout=120, env=None):
+        """Run a command that executes agent-written code: no network, the host read-only, the user's home
+        hidden, its own process namespace, and only `cwd` writable. Returns the completed process, or None
+        when it timed out."""
+        bwrap = shutil.which("bwrap")
+        if not bwrap:
+            raise TrialError("checks that run agent code need bubblewrap (bwrap)")
+        cwd = Path(cwd or self.workdir)
+        prefix = [bwrap, "--ro-bind", "/", "/", "--tmpfs", str(Path.home()), "--dev", "/dev", "--proc", "/proc",
+                  "--tmpfs", "/tmp", "--unshare-pid", "--unshare-net", "--die-with-parent",
+                  "--bind", str(cwd), str(cwd), "--chdir", str(cwd), "--"]
+        base = {"PATH": "/usr/bin:/bin", "HOME": str(cwd), "TMPDIR": str(cwd), "LANG": "C.UTF-8",
+                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            return subprocess.run(prefix + list(cmd), cwd=cwd, env=dict(base, **(env or {})),
+                                  capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
 
 
 def _write_json(path: Path, obj):
@@ -461,6 +534,11 @@ JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
                                "reason": {"type": "string"}}}
 
 
+def _judge_confinement(job_dir: Path, jd: Path, readable: list[Path]) -> list[str]:
+    """The judge reads text an agent wrote, so it runs with the user's home hidden, like the agents."""
+    return confine_prefix(job_dir, readable, chdir=jd / "work") if shutil.which("bwrap") else []
+
+
 def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
     """Blind verdict on one run: the judge sees the task and evidence, never the arm."""
     j = spec.get("judge")
@@ -494,7 +572,8 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
         if cache.exists():
             shutil.copy(cache, home / "models_cache.json")
         codex = jarm.get("binary") or shutil.which("codex", path=str(Path.home() / ".npm-global/bin")) or "codex"
-        cmd = _env_file_prefix(Path(jarm.get("env_file", CODEX_HOME_SRC / "codex.env"))) + [
+        cmd = _key_prefix(Path(jarm.get("env_file", CODEX_HOME_SRC / "codex.env")),
+                          jarm.get("api_key_var") or _provider_key_var()) + _judge_confinement(job_dir, jd, _codex_readable(codex)) + [
             codex, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-m", jarm["model"],
             "-c", f"model_reasoning_effort={jarm.get('effort', 'high')}", "-C", str(jd / "work"),
             "--output-schema", str(schema), "-o", str(jd / "verdict.json"), "-"]
@@ -502,7 +581,8 @@ def judge_run(plan, spec, run: Run, checks_mod, job_dir: Path, env):
              timeout=600, stdout_path=jd / "events.jsonl", stderr_path=jd / "stderr.log")
     elif jarm["executor"] == "claude":
         jenv, prefix = _claude_proxy(jarm, env)
-        cmd = prefix + [_claude_binary(jarm), "-p", "--bare", "--model", jarm["model"],
+        binary = _claude_binary(jarm)
+        cmd = prefix + _judge_confinement(job_dir, jd, [Path(binary).resolve().parent]) + [binary, "-p", "--bare", "--model", jarm["model"],
                         "--output-format", "json", "--json-schema", json.dumps(JUDGE_SCHEMA)]
         if jarm.get("effort"):
             cmd += ["--effort", jarm["effort"]]

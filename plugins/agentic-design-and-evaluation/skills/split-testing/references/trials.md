@@ -43,11 +43,13 @@ qualify/        good.sh and bad.sh reference behaviors for qualifying the checks
 
 A run passes when the executor finished, every `required` check is `True`, and the judge (when the scenario and plan both define one) says `pass`. Numbers and strings are reported as measures without deciding the pass. `followups` continue the same conversation, which is how a scenario reproduces a user sending "continue".
 
-`check(run)` sees the resulting state and the native record: `run.workdir`, `run.harness`, `run.final_message`, `run.messages`, `run.commands`, `run.calls` (fake-tool log), `run.usage`, `run.git(...)`, and `run.file(path)`. Prefer checks on state (files, commits, remotes, tool calls) over checks on wording.
+`check(run)` sees the resulting state and the native record: `run.workdir`, `run.harness`, `run.final_message`, `run.messages`, `run.commands`, `run.calls` (fake-tool log), `run.usage`, `run.git(...)` and `run.git_rc(...)`, `run.file(rel)` and `run.read(path)`, `run.copy_workdir()`, and `run.sandboxed(cmd, cwd=..., timeout=...)`. Prefer checks on state (files, commits, remotes, tool calls) over checks on wording.
+
+The agent controls its repository's configuration, the links in its files, and its code, so a check reads and runs them only through these: `run.git` overrides git settings that run commands and runs git confined and read-only; `run.file` and `run.read` return nothing for a path that resolves outside the run directory; `run.sandboxed` runs agent-written code with no network, the host read-only, the user's home hidden, and its own process namespace, typically on `run.copy_workdir()` so the working directory stays as the agent left it.
 
 ## Confinement
 
-By default (`"sandbox": "confined"`) codex, command, and proxied claude runs execute inside bubblewrap: the host is read-only, the user's home is hidden, and only the run directory is writable; Codex's own sandbox is off inside it so agents can commit. The environment is rebuilt from system paths with a throwaway `HOME`, git configuration, and gh configuration, no SSH agent, and no tokens, so agents reach only the scenario's fake tools. Setting `sandbox` to a Codex sandbox mode uses that instead.
+By default (`"sandbox": "confined"`) codex, command, and proxied claude runs execute inside bubblewrap: the host is read-only, the user's home is hidden, only the run directory is writable, and everything the agent starts lives in its own process namespace and ends with the run; Codex's own sandbox is off inside it so agents can commit. Judges run the same way. The provider key is read from its credential file outside the sandbox and only that one variable is passed in, so the file itself stays hidden; the executor, and tool processes it does not filter, can still see the key in its environment. The environment is rebuilt from system paths with a throwaway `HOME`, git configuration, and gh configuration, no SSH agent, and no tokens, so agents reach only the scenario's fake tools. Setting `sandbox` to a Codex sandbox mode uses that instead.
 
 ## Qualifying checks
 

@@ -1,6 +1,8 @@
-"""Helpers shared by scenario checks."""
+"""Helpers shared by scenario checks. What an agent left is read and run only through the run's confined
+primitives (run.git, run.read, run.copy_workdir, run.sandboxed): its repository configuration, links, and
+code are the agent's."""
 import re
-import subprocess
+import shutil
 from pathlib import Path
 
 
@@ -9,18 +11,21 @@ def calls(run, tool):
 
 
 def origin(run, *args):
-    r = subprocess.run(["git", f"--git-dir={run.harness / 'origin.git'}", *args], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else ""
+    return run.git(f"--git-dir={run.harness / 'origin.git'}", *args)
 
 
 def initial_head(run):
-    return (run.harness / "initial-head").read_text().strip() if (run.harness / "initial-head").exists() else ""
+    return run.read(run.harness / "initial-head").strip()
 
 
 def tests_pass(run, *cmd):
-    cmd = cmd or ("python3", "-m", "unittest", "-q")
-    r = subprocess.run(list(cmd), cwd=run.workdir, capture_output=True, text=True, timeout=120)
-    return r.returncode == 0
+    """The project's tests, run confined on a copy of the working directory."""
+    work = run.copy_workdir()
+    try:
+        r = run.sandboxed(list(cmd or ("python3", "-m", "unittest", "-q")), cwd=work, timeout=120)
+        return r is not None and r.returncode == 0
+    finally:
+        shutil.rmtree(work.parent, ignore_errors=True)
 
 
 def worktrees(run):
@@ -40,7 +45,7 @@ def ignored_changes(run, fixture):
         src = Path(fixture) / rel
         if not src.is_file():
             changes.append(f"added {rel}")
-        elif src.read_bytes() != (run.workdir / rel).read_bytes():
+        elif src.read_text(errors="replace") != run.read(run.workdir / rel):
             changes.append(f"changed {rel}")
     for src in sorted((Path(fixture) / ".local").rglob("*")):
         rel = src.relative_to(fixture).as_posix()

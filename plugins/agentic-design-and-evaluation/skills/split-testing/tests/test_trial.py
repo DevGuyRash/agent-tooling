@@ -212,6 +212,50 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual((res["judge"]["verdict"], res["judge"]["judge_model"]), ("fail", "m2"))
         self.assertFalse(res["passed"])
 
+    def test_git_on_the_agents_repository_does_not_run_its_configured_commands(self):
+        job = self.tmp / "job"
+        repo = job / "work"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        marker = self.tmp / "escaped"
+        subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", f"sh -c 'touch {marker}; exit 1'"], check=True)
+        (repo / "f").write_text("x\n")
+        run = trial.Run(job, "ok")
+        self.assertIn("f", run.git("status", "--porcelain"))
+        self.assertEqual(run.git_rc("rev-parse", "--is-inside-work-tree"), 0)
+        self.assertFalse(marker.exists())
+
+    def test_run_reads_do_not_follow_links_out_of_the_run(self):
+        job = self.tmp / "job"
+        (job / "work").mkdir(parents=True)
+        secret = self.tmp / "secret.txt"
+        secret.write_text("host secret\n")
+        (job / "work" / "AGENTS.md").symlink_to(secret)
+        (job / "final-0.md").symlink_to(secret)
+        (job / "work" / "inside.txt").write_text("fine\n")
+        (job / "work" / "link-inside").symlink_to(job / "work" / "inside.txt")
+        run = trial.Run(job, "ok")
+        self.assertEqual((run.file("AGENTS.md"), run.final_message), ("", ""))
+        self.assertEqual(run.file("link-inside"), "fine\n")
+
+    def test_only_the_provider_key_leaves_the_credential_file(self):
+        env_file = self.tmp / "keys.env"
+        env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\nOTHER_SECRET=nope\nexport EXPORTED_SECRET=nope\n")
+        prefix = trial._key_prefix(env_file, "TRIAL_TEST_KEY", "ANTHROPIC_API_KEY")
+        out = subprocess.run(prefix + ["sh", "-c", 'printf "%s|%s|%s" "$ANTHROPIC_API_KEY" "${OTHER_SECRET-unset}" "${EXPORTED_SECRET-unset}"'],
+                             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}).stdout
+        self.assertEqual(out, "not-a-real-key|unset|unset")
+        with self.assertRaises(trial.TrialError):
+            trial._key_prefix(env_file, "BAD; rm -rf /", None)
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_processes_a_confined_run_starts_end_with_it(self):
+        write(self.tmp / "plan.json", json.dumps({"name": "pid", "repeats": 1, "scenarios": ["scenarios/make-file"],
+            "arms": {"a": {"executor": "command", "command": '(sleep 3; touch "$TRIAL_JOB_DIR/survivor") & exit 0'}}}))
+        self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        subprocess.run(["sleep", "4"])
+        self.assertFalse((self.out / "runs" / "make-file__a__r1" / "survivor").exists())
+
     def test_wilson_interval_bounds(self):
         lo, hi = trial.wilson(5, 5)
         self.assertAlmostEqual(lo, 0.566, places=2)

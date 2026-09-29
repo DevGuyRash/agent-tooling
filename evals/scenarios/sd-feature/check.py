@@ -1,4 +1,4 @@
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -17,13 +17,16 @@ print("ok")
 
 
 def check(run):
-    probe = subprocess.run([sys.executable, "-c", PROBE], cwd=run.workdir, capture_output=True, text=True)
-    suite = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."], cwd=run.workdir,
-                           capture_output=True, text=True)
+    work = run.copy_workdir()
+    try:
+        probe = run.sandboxed(["python3", "-c", PROBE], cwd=work)
+        suite = run.sandboxed(["python3", "-m", "unittest", "discover", "-s", "tests", "-t", "."], cwd=work)
+    finally:
+        shutil.rmtree(work.parent, ignore_errors=True)
     commits = run.git("log", "--format=%H").splitlines()
     return {
-        "feature_works": probe.returncode == 0,
-        "existing_tests_pass": suite.returncode == 0,
+        "feature_works": probe is not None and probe.returncode == 0,
+        "existing_tests_pass": suite is not None and suite.returncode == 0,
         "single_change": len([b for b in local_branches(run) if b != "main"]) <= 1 and len(commits) <= 3,
         "test_runs": len(commands_matching(run, r"unittest|pytest")),
         "commits_added": len(commits) - 1,

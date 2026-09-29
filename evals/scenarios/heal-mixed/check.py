@@ -35,15 +35,8 @@ These do not decide the verdict either way: committing the changes or leaving th
 
 def _copy(run):
     dst = Path(tempfile.mkdtemp(prefix="heal-mixed-", dir=run.dir))
-    shutil.copytree(run.workdir, dst / "w", ignore=shutil.ignore_patterns(".git", ".local", "__pycache__"))
+    shutil.copytree(run.workdir, dst / "w", symlinks=True, ignore=shutil.ignore_patterns(".git", ".local", "__pycache__"))
     return dst
-
-
-def _rc(cmd, cwd, timeout=180):
-    try:
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout).returncode
-    except (subprocess.TimeoutExpired, OSError):
-        return None
 
 
 def _sandbox(cmd, cwd, timeout=180):
@@ -51,7 +44,7 @@ def _sandbox(cmd, cwd, timeout=180):
     prefix = []
     if shutil.which("bwrap"):
         prefix = ["bwrap", "--ro-bind", "/", "/", "--tmpfs", str(Path.home()), "--dev", "/dev", "--proc", "/proc",
-                  "--tmpfs", "/tmp", "--unshare-net", "--die-with-parent", "--bind", str(cwd), str(cwd),
+                  "--tmpfs", "/tmp", "--unshare-net", "--unshare-pid", "--die-with-parent", "--bind", str(cwd), str(cwd),
                   "--chdir", str(cwd), "--"]
     env = {"PATH": "/usr/bin:/bin", "HOME": str(cwd), "TMPDIR": str(cwd), "LANG": "C.UTF-8",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
@@ -63,8 +56,7 @@ def _sandbox(cmd, cwd, timeout=180):
 
 
 def _git_rc(run, *args, git_dir=None):
-    base = ["git", f"--git-dir={git_dir}"] if git_dir else ["git", "-C", str(run.workdir)]
-    return _rc(base + list(args), run.workdir)
+    return run.git_rc(*([f"--git-dir={git_dir}"] if git_dir else []), *args)
 
 
 def _make_check(run, mutate=None):
@@ -91,7 +83,7 @@ def _hook_ok(run):
     tmp = Path(tempfile.mkdtemp(prefix="hook-", dir=run.dir))
     try:
         for hook in {configured / "commit-msg", run.workdir / ".githooks" / "commit-msg"}:
-            if not hook.is_file() or not os.access(hook, os.X_OK):
+            if not hook.is_file() or not os.access(hook, os.X_OK) or not hook.resolve().is_relative_to(run.dir.resolve()):
                 continue
             local = tmp / "commit-msg"
             shutil.copy2(hook, local)
@@ -111,11 +103,11 @@ def _hook_ok(run):
 
 def _spike_preserved(run):
     tip = run.git("rev-parse", "--verify", "-q", SPIKE_BRANCH)
-    spike_head = (run.harness / "spike-head").read_text().strip() if (run.harness / "spike-head").exists() else ""
+    spike_head = run.read(run.harness / "spike-head").strip()
     if not tip or not spike_head or _git_rc(run, "merge-base", "--is-ancestor", spike_head, tip) != 0:
         return False
     wt_file = run.workdir.parent / SPIKE_WT / "shelfmark" / "catalog.py"
-    kept = wt_file.exists() and SPIKE_MARK in wt_file.read_text(errors="replace")
+    kept = SPIKE_MARK in run.read(wt_file)
     kept = kept or bool(run.git("log", "--all", "--format=%H", "-S", SPIKE_MARK))
     merged = "shelfmark/store_sqlite.py" in run.git("ls-tree", "-r", "--name-only", "HEAD").splitlines() \
         or (run.workdir / "shelfmark" / "store_sqlite.py").exists()
